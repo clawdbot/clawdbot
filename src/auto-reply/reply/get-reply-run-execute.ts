@@ -359,6 +359,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       workspaceDir,
       cwd: normalizeOptionalString(state.sessionEntry?.spawnedCwd),
       config: cfg,
+      toolOverrides: preparedSessionState.sessionEntry?.toolOverrides,
       skillsSnapshot,
       provider,
       model,

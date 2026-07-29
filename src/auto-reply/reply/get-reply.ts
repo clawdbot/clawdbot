@@ -554,11 +554,14 @@ export async function getReplyFromConfig(
   }
   // Utility-model narration is turn-local decoration. Initialize the durable
   // session first, then keep it completely outside model-locked native runs.
+  const optsWithSessionSkillOverrides = sessionEntry.toolOverrides?.skills
+    ? { ...optsWithSkillFilter, skillOverrides: sessionEntry.toolOverrides.skills }
+    : optsWithSkillFilter;
   const resolvedOpts = attachProgressNarratorToReplyOptions({
     cfg,
     agentId,
     userMessage: finalized.agentText,
-    opts: optsWithSkillFilter,
+    opts: optsWithSessionSkillOverrides,
     disabled: sessionModelSelectionLocked,
   });
   const internalResolvedOpts = resolvedOpts as RuntimeInternalGetReplyOptions | undefined;

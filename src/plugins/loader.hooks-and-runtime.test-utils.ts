@@ -1913,6 +1913,49 @@ describe("loadOpenClawPlugins", () => {
     ]);
   });
 
+  it("stores only valid before_agent_reply trigger eligibility", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "reply-hook-trigger-eligibility",
+      filename: "reply-hook-trigger-eligibility.cjs",
+      body: `module.exports = { id: "reply-hook-trigger-eligibility", register(api) {
+    api.on("before_agent_reply", () => undefined, { eligibleTriggers: ["heartbeat", "cron", "heartbeat"] });
+    api.on("before_agent_reply", () => undefined);
+    api.on("before_agent_reply", () => undefined, { eligibleTriggers: [] });
+    api.on("before_agent_reply", () => undefined, { eligibleTriggers: ["heartbeat", "unknown"] });
+    api.on("before_agent_reply", () => undefined, { eligibleTriggers: ["manual"] });
+    api.on("before_agent_reply", () => undefined, { eligibleTriggers: "heartbeat" });
+    api.on("before_agent_reply", () => undefined, { eligibleTriggers: Array(1) });
+    api.on("before_agent_reply", () => undefined, { eligibleTriggers: [, "heartbeat"] });
+    api.on("before_tool_call", () => undefined, { eligibleTriggers: ["heartbeat"] });
+  } };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["reply-hook-trigger-eligibility"],
+        entries: {
+          "reply-hook-trigger-eligibility": {
+            hooks: { allowConversationAccess: true },
+          },
+        },
+      },
+    });
+
+    expect(registry.typedHooks.map((entry) => entry.eligibleTriggers)).toEqual([
+      ["heartbeat", "cron"],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+  });
+
   it("normalizes legacy deactivate typed hooks onto gateway_stop", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

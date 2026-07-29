@@ -64,8 +64,8 @@ const TARGET_LEASE_MS = 60_000;
 const TARGET_LEASE_WAIT_MS = 5_000;
 export {
   MAX_PROPOSAL_SUPPORT_FILES,
-  parseSkillProposalRecord,
-  parseSkillProposalRollback,
+  validateSkillProposalRecord,
+  validateSkillProposalRollback,
 } from "./store-record.js";
 export { readSkillProposalRollback, writeSkillProposalRollback } from "./store-sqlite-rollback.js";
 

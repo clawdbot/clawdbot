@@ -74,6 +74,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "thinkingLevel",
   "cronRunContinuation",
   "fastMode",
+  "toolOverrides",
   "verboseLevel",
   "traceLevel",
   "reasoningLevel",

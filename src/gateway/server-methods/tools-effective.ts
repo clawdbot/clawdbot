@@ -437,6 +437,7 @@ async function resolveReadOnlyToolsEffectiveInventory(
   const projectedMcpTools = buildBundleMcpToolsFromCatalog({
     catalog,
     reservedToolNames: base.groups.flatMap((group) => group.tools.map((tool) => tool.id)),
+    includeSessionDenied: true,
   });
   const filteredMcpTools = filterMcpTools({ context, mcpTools: projectedMcpTools });
   const agentDir = resolveAgentDir(context.cfg, context.agentId);

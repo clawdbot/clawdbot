@@ -682,7 +682,7 @@ async function buildResponsesPayload(
       if (!toolOutput && hasDeclaredTool(body, "message")) {
         return buildToolCallEventsWithArgs("message", {
           action: "send",
-          message: "QA-STRANDED-85714",
+          message: buildStrandedFinalRecoveryText(),
         });
       }
       return buildAssistantEvents("");

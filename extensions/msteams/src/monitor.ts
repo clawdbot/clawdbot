@@ -38,6 +38,8 @@ import {
   type MSTeamsPollStore,
 } from "./polls.js";
 import {
+  looksLikeMSTeamsConversationId,
+  projectStableMSTeamsGroupAllowlist,
   projectStableMSTeamsUserAllowlist,
   projectStableMSTeamsTeamsConfig,
   resolveMSTeamsTeamsConfig,
@@ -115,7 +117,9 @@ export async function monitorMSTeamsProvider(
   const configuredAllowFrom = msteamsCfg.allowFrom;
   const configuredGroupAllowFrom = msteamsCfg.groupAllowFrom;
   let allowFrom = projectStableMSTeamsUserAllowlist(configuredAllowFrom);
-  let groupAllowFrom = projectStableMSTeamsUserAllowlist(configuredGroupAllowFrom);
+  let groupAllowFrom = projectStableMSTeamsGroupAllowlist(
+    configuredGroupAllowFrom ?? configuredAllowFrom,
+  );
   let teamsConfig = projectStableMSTeamsTeamsConfig(msteamsCfg.teams);
   const allowNameMatching = isDangerousNameMatchingEnabled(msteamsCfg);
 
@@ -128,7 +132,9 @@ export async function monitorMSTeamsProvider(
   const cleanAllowEntries = (entries?: string[]) =>
     entries?.map((entry) => cleanAllowEntry(entry)).filter((entry) => entry && entry !== "*") ?? [];
   const isMutableUserEntry = (entry: string) =>
-    !isStableUserId(entry) && !/^accessGroup:/i.test(entry);
+    !isStableUserId(entry) &&
+    !/^accessGroup:/i.test(entry) &&
+    !looksLikeMSTeamsConversationId(normalizeMSTeamsConversationId(entry));
 
   const resolveAllowlistUsers = async (label: string, entries: string[]) => {
     if (entries.length === 0) {
@@ -183,6 +189,11 @@ export async function monitorMSTeamsProvider(
     runtime.error?.(
       `msteams resolve failed; mutable allowlist entries are disabled. ${formatUnknownError(err)}`,
     );
+  }
+
+  if (configuredGroupAllowFrom == null && groupAllowFrom) {
+    // Group fallback must include users resolved from the DM list without admitting DM chats.
+    groupAllowFrom = mergeAllowlist({ existing: groupAllowFrom, additions: allowFrom ?? [] });
   }
 
   msteamsCfg = {

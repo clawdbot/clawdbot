@@ -13,10 +13,10 @@ import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/sessi
 import {
   hashSkillProposalContent,
   importLegacySkillProposal,
-  parseSkillProposalRecord,
-  parseSkillProposalRollback,
   readSkillProposalRecord,
   readSkillProposalRollback,
+  validateSkillProposalRecord,
+  validateSkillProposalRollback,
 } from "../skills/workshop/store.js";
 import type { SkillProposalRecord, SkillProposalRollback } from "../skills/workshop/types.js";
 
@@ -96,13 +96,16 @@ async function readLegacyRollback(
   proposalId: string,
 ): Promise<SkillProposalRollback | undefined> {
   try {
-    const rollback = parseSkillProposalRollback(
+    const rollback = validateSkillProposalRollback(
       await readJson(stateRoot, `${PROPOSALS_DIR}/${proposalId}/rollback.json`, MAX_ROLLBACK_BYTES),
     );
-    if (!rollback || rollback.proposalId !== proposalId) {
+    if (!rollback.ok) {
+      throw new Error(rollback.error.message);
+    }
+    if (rollback.value.proposalId !== proposalId) {
       throw new Error("invalid rollback metadata");
     }
-    return rollback;
+    return rollback.value;
   } catch (error) {
     if (isNotFoundError(error)) {
       return undefined;
@@ -139,10 +142,13 @@ async function migrateProposal(params: {
   stateRoot: Root;
 }): Promise<"imported" | "already-imported"> {
   const proposalDir = `${PROPOSALS_DIR}/${params.proposalId}`;
-  const record = parseSkillProposalRecord(
+  const record = validateSkillProposalRecord(
     await readJson(params.stateRoot, `${proposalDir}/proposal.json`, MAX_RECORD_BYTES),
   );
-  if (!record || record.id !== params.proposalId) {
+  if (!record.ok) {
+    throw new Error(record.error.message);
+  }
+  if (record.value.id !== params.proposalId) {
     throw new Error("invalid proposal metadata");
   }
   const draft = await params.stateRoot.read(`${proposalDir}/PROPOSAL.md`, {
@@ -150,15 +156,15 @@ async function migrateProposal(params: {
     maxBytes: MAX_RECORD_BYTES,
     symlinks: "reject",
   });
-  if (hashSkillProposalContent(draft.buffer.toString("utf8")) !== record.draftHash) {
+  if (hashSkillProposalContent(draft.buffer.toString("utf8")) !== record.value.draftHash) {
     throw new Error("proposal draft hash does not match proposal metadata");
   }
   const rollback = await readLegacyRollback(params.stateRoot, params.proposalId);
-  const workspaceDir = proposalWorkspace(record);
+  const workspaceDir = proposalWorkspace(record.value);
   const ownerAgentId = inferOwnerAgentId({
     config: params.config,
     env: params.env,
-    record,
+    record: record.value,
     workspaceDir,
   });
   if (!ownerAgentId) {
@@ -167,13 +173,13 @@ async function migrateProposal(params: {
     );
   }
   const result = importLegacySkillProposal({
-    record,
+    record: record.value,
     rollback,
     ownerAgentId,
     workspaceDir,
     store: { env: params.env },
   });
-  await verifyImportedProposal({ env: params.env, record, rollback });
+  await verifyImportedProposal({ env: params.env, record: record.value, rollback });
   if (rollback) {
     await params.stateRoot.remove(`${proposalDir}/rollback.json`);
   }

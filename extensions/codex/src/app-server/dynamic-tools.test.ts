@@ -203,7 +203,7 @@ describe("createCodexDynamicToolBridge", () => {
   it("keeps OpenClaw control-path tools direct while deferring broad tools", () => {
     const bridge = createCodexDynamicToolBridge({
       tools: [
-        createTool({ name: "web_search" }),
+        createTool({ name: "web_search", resultContentSource: "network" }),
         createTool({ name: "message" }),
         createTool({ name: HEARTBEAT_RESPONSE_TOOL_NAME }),
         createTool({ name: "agents_list" }),
@@ -239,6 +239,8 @@ describe("createCodexDynamicToolBridge", () => {
     expectNoNamespace(agentsList);
     expectNoNamespace(sessionsSpawn);
     expectNoNamespace(sessionsYield);
+    expect(bridge.resultContentSourceForTool("web_search")).toBe("network");
+    expect(bridge.resultContentSourceForTool("message")).toBeUndefined();
   });
 
   it("keeps configured direct tools in the initial Codex tool context", () => {

@@ -1,4 +1,3 @@
-import { constants, copyFileSync, linkSync } from "node:fs";
 import fs from "node:fs/promises";
 import {
   publishFileExclusive,
@@ -26,7 +25,6 @@ export {
 } from "@openclaw/fs-safe/durability";
 
 type DirectoryDurabilityOutcome = DirectorySyncOutcome | { status: "not-needed" };
-const HARD_LINK_UNSUPPORTED_CODES = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "EXDEV"]);
 
 function isUnsupportedDirectorySyncError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException).code;
@@ -139,18 +137,6 @@ export async function publishFileNoClobber(
   }
 
   return { ...published, durability: degraded ? "degraded" : "durable" };
-}
-
-/** Synchronous no-clobber publication for critical sections that cannot yield. */
-export function publishFileNoClobberSync(sourcePath: string, targetPath: string): void {
-  try {
-    linkSync(sourcePath, targetPath);
-  } catch (error) {
-    if (!HARD_LINK_UNSUPPORTED_CODES.has((error as NodeJS.ErrnoException).code ?? "")) {
-      throw error;
-    }
-    copyFileSync(sourcePath, targetPath, constants.COPYFILE_EXCL);
-  }
 }
 
 /** Compatibility adapter for former best-effort call sites. */

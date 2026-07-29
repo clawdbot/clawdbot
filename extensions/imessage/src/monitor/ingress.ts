@@ -1,5 +1,6 @@
 // iMessage plugin module owns raw-row durable admission and replay.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
@@ -15,12 +16,6 @@ import type { IMessagePayload } from "./types.js";
 
 const IMESSAGE_INGRESS_PAYLOAD_VERSION = 1;
 const IMESSAGE_INGRESS_DRAIN_INTERVAL_MS = 1_000;
-const IMESSAGE_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-// Match or exceed the retired GUID guard's 4h / 10k persistent window.
-const IMESSAGE_INGRESS_COMPLETED_TTL_MS = 4 * 60 * 60 * 1_000;
-const IMESSAGE_INGRESS_COMPLETED_MAX_ENTRIES = 10_000;
-const IMESSAGE_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const IMESSAGE_INGRESS_FAILED_MAX_ENTRIES = 1_000;
 
 type IMessageIngressPayload = {
   version: number;
@@ -57,12 +52,7 @@ type IMessageIngressDispatch = (
   provenance?: { catchup?: boolean },
 ) => Promise<IMessageIngressDispatchResult | void> | IMessageIngressDispatchResult | void;
 
-class IMessageIngressPayloadError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "IMessageIngressPayloadError";
-  }
-}
+const IMessageIngressPayloadError = createChannelIngressError("IMessageIngressPayloadError");
 
 function rawMessageRecord(raw: unknown): Record<string, unknown> | null {
   if (!isRecord(raw)) {
@@ -248,12 +238,11 @@ export function createIMessageDurableIngress(options: {
       });
     },
     pollIntervalMs: IMESSAGE_INGRESS_DRAIN_INTERVAL_MS,
+    // Match or exceed the retired GUID guard's 4h / 10k persistent window.
     retention: {
-      pruneIntervalMs: IMESSAGE_INGRESS_PRUNE_INTERVAL_MS,
-      completedTtlMs: IMESSAGE_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: IMESSAGE_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: IMESSAGE_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: IMESSAGE_INGRESS_FAILED_MAX_ENTRIES,
+      completedTtlMs: 4 * 60 * 60 * 1_000,
+      completedMaxEntries: 10_000,
+      failedMaxEntries: 1_000,
     },
     appendRetryDelaysMs: [0],
     onDurableAdmission: async (event) => {

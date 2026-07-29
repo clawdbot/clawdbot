@@ -37,6 +37,7 @@ describe("Agent-specific tool filtering", () => {
     }),
     readFile: async () => Buffer.from(""),
     writeFile: async () => {},
+    createFileExclusive: async () => "created",
     mkdirp: async () => {},
     remove: async () => {},
     rename: async () => {},

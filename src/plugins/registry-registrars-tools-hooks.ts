@@ -32,6 +32,7 @@ import {
   DEPRECATED_PLUGIN_HOOKS,
   isConversationHookName,
   isDeprecatedPluginHookName,
+  isPluginHookAgentTrigger,
   isPluginHookName,
   isPromptInjectionHookName,
 } from "./types.js";
@@ -43,11 +44,23 @@ import type {
   OpenClawPluginToolOptions,
   PluginHookHandlerMap,
   PluginHookName,
+  PluginHookRegistrationOptions,
   PluginHookRegistration as TypedPluginHookRegistration,
 } from "./types.js";
 
 const LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT = getPluginCompatRecord("legacy-deactivate-hook-alias");
 const LEGACY_SUBAGENT_SPAWNING_HOOK_COMPAT = getPluginCompatRecord("legacy-subagent-spawning-hook");
+
+function normalizeEligibleTriggers(value: unknown) {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const triggers = Array.from(value);
+  if (triggers.length === 0 || !triggers.every(isPluginHookAgentTrigger)) {
+    return undefined;
+  }
+  return uniqueValues(triggers);
+}
 
 function formatLegacyDeactivateHookAliasDiagnostic(): string {
   const removeAfter =
@@ -381,7 +394,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     hookName: K,
     handler: PluginHookHandlerMap[K],
-    opts?: { priority?: number; registrationId?: string; timeoutMs?: number },
+    opts?: PluginHookRegistrationOptions<K>,
     policy?: PluginTypedHookPolicy,
   ) => {
     if (!isPluginHookName(hookName)) {
@@ -446,6 +459,10 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       }
     }
     const timeoutMs = resolveTypedHookTimeoutMs({ hookName: effectiveHookName, opts, policy });
+    const eligibleTriggers =
+      effectiveHookName === "before_agent_reply"
+        ? normalizeEligibleTriggers(opts?.eligibleTriggers)
+        : undefined;
     record.hookCount += 1;
     registry.typedHooks.push({
       pluginId: record.id,
@@ -454,6 +471,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       handler: effectiveHandler,
       priority: opts?.priority,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(eligibleTriggers ? { eligibleTriggers } : {}),
       source: record.source,
     } as TypedPluginHookRegistration);
   };

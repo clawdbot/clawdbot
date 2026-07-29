@@ -871,6 +871,10 @@ export const en: TranslationMap = {
   },
   agents: {
     noAgents: "No agents",
+    defaults: {
+      title: "Agent defaults",
+      description: "Defaults every agent inherits unless overridden.",
+    },
     copyId: "Copy ID",
     copyIdTitle: "Copy agent ID to clipboard",
     default: "Default",
@@ -1218,10 +1222,9 @@ export const en: TranslationMap = {
     },
   },
   // Historical namespace from the pre-restructure "quick settings" page; its
-  // keys now serve Models, General, Privacy & Security, Appearance, and Profile.
+  // keys now serve Models, Privacy & Security, Appearance, and Profile.
   // Renaming would force retranslation of every key, so the name stays.
   quickSettings: {
-    intro: "Settings sync to your Gateway configuration file.",
     language: "Language",
     model: {
       title: "Model & Thinking",
@@ -1748,7 +1751,6 @@ export const en: TranslationMap = {
     forward: "Forward",
     chat: "Chat",
     settings: "Settings",
-    settingsGeneral: "General",
     askOpenClaw: "Ask OpenClaw",
     settingsGroupConnections: "Connections",
     settingsGroupAgents: "Agents & Tools",
@@ -1932,7 +1934,7 @@ export const en: TranslationMap = {
     chat: "Gateway chat for quick interventions.",
     dashboards: "Threads that open on their dashboard face.",
     custodian: "System setup and care.",
-    config: "Language and shortcuts to core settings.",
+    config: "Legacy settings route; opens Appearance.",
     profile: "Your display name, avatar, and identity on this gateway.",
     communications: "Messages and text-to-speech settings.",
     appearance: "Theme, UI, and setup wizard settings.",
@@ -1998,7 +2000,9 @@ export const en: TranslationMap = {
       intro: "No existing AI access was detected. Install one of these tools, then check again.",
     },
     unavailable: {
-      title: "Detected, but not auto-tested",
+      title: "Found, but needs attention",
+      signIn: "Sign in with {provider}",
+      useApiKey: "Use API key",
     },
     signIn: {
       title: "Sign in with a provider",
@@ -4824,6 +4828,13 @@ export const en: TranslationMap = {
       duplicatesCollapsed: "{count} consecutive identical messages collapsed",
       contextFor: "Message context for {timestamp}",
     },
+    mediaPlayer: {
+      play: "Play",
+      pause: "Pause",
+      seek: "Seek media",
+      download: "Download {filename}",
+      videoUnavailable: "Can't play this format — download instead.",
+    },
     modelControls: {
       current: "Current",
       default: "Default",
@@ -4983,6 +4994,34 @@ export const en: TranslationMap = {
       attachPhoto: "Photo",
       attachFile: "Attach file",
       attachFileOption: "File",
+      menu: {
+        back: "Back",
+        skills: "Skills",
+        connectors: "Connectors",
+        webSearch: "Web search",
+        managePlugins: "Manage plugins",
+        manageSkills: "Manage skills",
+        browseConnectors: "Browse connectors",
+        addMcpServer: "Add MCP server…",
+        toolAccess: "Tool access",
+        enabledCount: "{count} on",
+        loadingSkills: "Loading skills…",
+        skillsLoadFailed: "Couldn’t load skills.",
+        noSkills: "No skills available.",
+        noConnectors: "No MCP servers configured.",
+        depsMissing: "deps missing",
+        skillBlocked: "not available for this agent",
+        sessionTag: "session",
+        offlineBlocked: "Connect to the gateway to change session capabilities.",
+        readOnlyBlocked: "Write access is required to change session capabilities.",
+        adminBlocked: "Admin access is required to manage connectors.",
+        savingBlocked: "Wait for the current session capability change to finish.",
+      },
+      overrides: {
+        count: "{count} session overrides",
+        countOne: "{count} session override",
+        clear: "Clear session overrides",
+      },
       contextUsage: {
         title: "Context usage details",
         open: "Open context usage details",

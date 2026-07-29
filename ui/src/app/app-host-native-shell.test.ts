@@ -59,7 +59,7 @@ describe("OpenClaw native shell", () => {
     shell.handleDocumentKeydown(event);
 
     expect(event.defaultPrevented).toBe(true);
-    expect(navigate).toHaveBeenCalledWith("config", undefined);
+    expect(navigate).toHaveBeenCalledWith("appearance", undefined);
   });
 
   it("opens Settings with Ctrl-Shift-Comma", () => {
@@ -81,7 +81,7 @@ describe("OpenClaw native shell", () => {
     shell.handleDocumentKeydown(event);
 
     expect(event.defaultPrevented).toBe(true);
-    expect(navigate).toHaveBeenCalledWith("config", undefined);
+    expect(navigate).toHaveBeenCalledWith("appearance", undefined);
   });
 
   it("toggles the navigation sidebar when the native macOS titlebar button fires", () => {

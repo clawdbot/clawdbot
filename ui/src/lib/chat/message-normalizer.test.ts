@@ -538,6 +538,8 @@ describe("message-normalizer", () => {
               kind: "image",
               label: "test image.png",
               mimeType: "image/png",
+              width: 1280,
+              height: 720,
             },
           },
         ],
@@ -551,6 +553,8 @@ describe("message-normalizer", () => {
             kind: "image",
             label: "test image.png",
             mimeType: "image/png",
+            width: 1280,
+            height: 720,
           },
         },
       ]);

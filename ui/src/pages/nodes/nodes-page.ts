@@ -3,14 +3,16 @@ import { initialState, Task } from "@lit/task";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { PresenceEntry } from "../../api/types.ts";
-import { titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { t } from "../../i18n/index.ts";
 import { currentConfigObject } from "../../lib/config/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import {
@@ -40,6 +42,8 @@ import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderNodes } from "./view.ts";
 import type { InventoryRemovalPrompt } from "./view.types.ts";
+
+const NODES_DOCS_URL = "https://docs.openclaw.ai/nodes";
 
 export type NodesRouteData = {
   // Client identity alone cannot distinguish provider replacement or reconnect epochs.
@@ -370,6 +374,9 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("nodes")}</div>
+          <div class="page-subtitle">
+            ${subtitleForRoute("nodes")} ${renderDocsLink(NODES_DOCS_URL, t("common.learnMore"))}
+          </div>
         </div>
       </section>
       ${renderSettingsWorkspace(

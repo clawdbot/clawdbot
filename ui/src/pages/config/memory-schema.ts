@@ -7,7 +7,7 @@
 // from search would pull lit, hub-tabs, and settings-ui into the startup chunk.
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
-import { resolveSlotSelection } from "../../../../src/plugins/slots.ts";
+import { defaultSlotIdForKey, resolveSlotSelection } from "../../../../src/plugins/slots.ts";
 import { memoryTabFromPath, pathForMemoryTab, type MemoryRouteTab } from "../../app-route-paths.ts";
 
 export type MemoryTab = MemoryRouteTab;
@@ -24,6 +24,8 @@ export type MemoryEngineSelection =
   | { kind: "auto"; engineId: string }
   | { kind: "off" }
   | { kind: "pinned"; engineId: string };
+
+export const DEFAULT_MEMORY_ENGINE_ID = defaultSlotIdForKey("memory");
 
 /** Scroll target for `memory.backend`, which Settings curates out of the editor. */
 export const MEMORY_BACKEND_ANCHOR_ID = "memory-backend";
