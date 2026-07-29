@@ -177,7 +177,8 @@ const ReadCardSchema = Type.Object(
     token: claimTokenField(),
     proofView: Type.Optional(
       Type.Literal("bounded", {
-        description: "Return only the newest proof window with proofPage metadata.",
+        description:
+          "Request the newest proof window with proofPage metadata. Omitted reads use the same bounded view.",
       }),
     ),
   },
@@ -341,28 +342,16 @@ export function createWorkboardTools(params: {
       name: "workboard_read",
       label: "Workboard Read",
       description:
-        "Read one Workboard card with complete proof history by default. Set proofView to bounded for the newest proof window. Worker context remains bounded.",
+        "Read one Workboard card with the newest bounded proof window and proofPage metadata. Use workboard_proof_list for older proof. Worker context remains bounded.",
       parameters: ReadCardSchema,
       execute: async (_toolCallId, rawParams) => {
-        const record = rawParams as Record<string, unknown>;
-        const id = readStringParam(record, "id", { required: true });
-        const bounded = record.proofView === "bounded";
-        if (bounded) {
-          const card = await store.getBounded(id);
-          if (!card) {
-            throw new Error(`card not found: ${id}`);
-          }
-          return jsonResult({
-            card,
-            workerContext: await store.buildWorkerContext(id),
-          });
-        }
-        const card = await store.get(id);
+        const id = readStringParam(rawParams as Record<string, unknown>, "id", { required: true });
+        const card = await store.getBounded(id);
         if (!card) {
           throw new Error(`card not found: ${id}`);
         }
         return jsonResult({
-          card: redactClaimToken(card),
+          card,
           workerContext: await store.buildWorkerContext(id),
         });
       },

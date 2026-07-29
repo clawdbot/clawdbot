@@ -100,14 +100,16 @@ order cannot change, and their timestamps and evidence fields are immutable. A
 pending `unknown` status may resolve to `passed`, `failed`, or `skipped`;
 duplicate ids and other attempts to rewrite or truncate history are rejected.
 
-Existing Gateway and agent-tool card responses retain complete proof history.
-Clients can explicitly request a bounded view where supported. The bounded
-proof array stays in chronological order and is limited to 40 records and a
-24 KiB UTF-8 JSON budget. This is a proof-array output boundary, not a full-card
-size limit, and it does not discard other card metadata or canonical proof rows.
+Existing Gateway card responses retain complete proof history unless a client
+explicitly requests a bounded view. The model-facing `workboard_read` agent
+tool always uses the bounded view; older proof is available only through
+`workboard_proof_list`. The bounded proof array stays in chronological order
+and is limited to 40 records and a 24 KiB UTF-8 JSON budget. This is a
+proof-array output boundary, not a full-card size limit, and it does not discard
+other card metadata or canonical proof rows.
 
-Every explicitly bounded card view includes top-level `proofPage`, including
-cards with no proof:
+Every bounded card view includes top-level `proofPage`, including cards with no
+proof:
 
 ```json
 {
@@ -127,13 +129,14 @@ cursor in that case.
 
 Gateway `workboard.cards.list` returns complete proof history by default.
 Passing `{ "proofView": "bounded" }` opts into bounded card views without
-changing the existing response contract. Agent tool `workboard_read` follows
-the same rule: it returns the complete card by default and accepts
-`proofView: "bounded"` for an explicit bounded card view; its separate worker
-context remains bounded. Other existing Gateway and agent-tool card responses,
-Gateway `workboard.cards.export`, and local CLI JSON keep complete proof history
-and omit `proofPage`. `workboard_list` remains a compact summary without proof
-history. Claim tokens remain redacted on every card response.
+changing the existing response contract. Agent tool `workboard_read` always
+returns a bounded card view whether `proofView` is omitted or explicitly set to
+`"bounded"`; its separate worker context remains bounded. Use
+`workboard_proof_list` to page through older proof. Other existing Gateway and
+agent-tool card responses, Gateway `workboard.cards.export`, and local CLI JSON
+keep complete proof history and omit `proofPage`. `workboard_list` remains a
+compact summary without proof history. Claim tokens remain redacted on every
+card response.
 
 The open dashboard updates from `plugin.workboard.changed` invalidations. Each
 event contains only a store epoch and revision; the UI then rereads
@@ -184,7 +187,7 @@ rule as linked sessions (see [Session lifecycle sync](#session-lifecycle-sync)).
 | Tool                                                                                                                                             | Purpose                                                                                                                                                                                   |
 | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `workboard_list`                                                                                                                                 | List compact cards with claim/diagnostic state; optional board filter.                                                                                                                    |
-| `workboard_read`                                                                                                                                 | Return one complete card plus bounded worker context; pass `proofView: "bounded"` to explicitly request only the newest proof window on the card.                                         |
+| `workboard_read`                                                                                                                                 | Return one card with the newest bounded proof window, `proofPage` metadata, and bounded worker context.                                                                                   |
 | `workboard_create`                                                                                                                               | Create a card with optional parents, tenant, skills, board, workspace metadata, idempotency key, runtime limit, retry budget.                                                             |
 | `workboard_link`                                                                                                                                 | Link a parent to a child card. Children stay `todo` until every parent reaches `done`, then dispatch promotion moves them to `ready`.                                                     |
 | `workboard_claim`                                                                                                                                | Claim a card for the calling agent; moves `backlog`/`todo`/`ready` into `running`.                                                                                                        |
@@ -216,9 +219,9 @@ already has the same terminal status is reused unchanged. Completion proof witho
 `proofId` remains append-only, so a later retry cannot rewrite older history merely because
 its command or note is identical.
 
-`workboard_read` accepts `{ id, token?, proofView? }`. Omit `proofView` for the
-existing complete-proof response, or set it to `bounded` to receive
-`proofPage` plus the newest proof window.
+`workboard_read` accepts `{ id, token?, proofView? }`. Omitting `proofView` and
+setting it to `bounded` both return `proofPage` plus the newest proof window.
+Use `workboard_proof_list` for older proof.
 
 `workboard_proof_list` accepts `{ id, cursor?, limit? }` and returns
 `{ proof, total, hasMore, nextCursor? }`. The default and maximum limit is 40;

@@ -11,6 +11,8 @@ import { WorkboardStore } from "./store.js";
 import { createWorkboardTools } from "./tools.js";
 import { guardWorkboardToolsForWorkspaceAccess } from "./workspace-access.js";
 
+const EMBEDDED_PROOF_BYTES = 24 * 1024;
+
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
   const entries = new Map<string, T>();
   return {
@@ -241,13 +243,14 @@ describe("workboard tools", () => {
     );
   });
 
-  it("keeps existing card responses complete and offers explicit bounded proof views", async () => {
+  it("defaults model reads to a hard-bounded proof window while mutations stay canonical", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const proof = Array.from({ length: 100 }, (_, index) => ({
       id: `proof-${index}`,
       status: "passed" as const,
       createdAt: index + 1,
       label: `Proof ${index}`,
+      note: "🧪".repeat(1000),
     }));
     const card = await store.create({ title: "Tool projection", metadata: { proof } });
     const tools = new Map(
@@ -258,19 +261,37 @@ describe("workboard tools", () => {
       }).map((tool) => [tool.name, tool]),
     );
 
-    const read = readPayload(await tools.get("workboard_read")?.execute("read", { id: card.id }));
-    expect((read.card as { metadata?: { proof?: unknown[] } }).metadata?.proof).toHaveLength(100);
-    expect(read.card).not.toHaveProperty("proofPage");
+    const readParameters = tools.get("workboard_read")?.parameters as
+      | { properties?: Record<string, unknown> }
+      | undefined;
+    expect(readParameters?.properties).toHaveProperty("proofView");
 
-    const boundedRead = readPayload(
+    const read = readPayload(await tools.get("workboard_read")?.execute("read", { id: card.id }));
+    const embeddedProof =
+      (read.card as { metadata?: { proof?: Array<{ id: string }> } }).metadata?.proof ?? [];
+    expect(embeddedProof.length).toBeGreaterThan(0);
+    expect(embeddedProof.length).toBeLessThan(40);
+    expect(embeddedProof.at(-1)?.id).toBe("proof-99");
+    expect(Buffer.byteLength(JSON.stringify(embeddedProof), "utf8")).toBeLessThanOrEqual(
+      EMBEDDED_PROOF_BYTES,
+    );
+    expect(read.card).toMatchObject({
+      proofPage: {
+        total: 100,
+        hasMore: true,
+        nextCursor: expect.any(String),
+      },
+    });
+    const explicitBoundedRead = readPayload(
       await tools
         .get("workboard_read")
-        ?.execute("read-bounded", { id: card.id, proofView: "bounded" }),
+        ?.execute("read-explicit-bounded", { id: card.id, proofView: "bounded" }),
     );
-    expect((boundedRead.card as { metadata?: { proof?: unknown[] } }).metadata?.proof).toHaveLength(
-      40,
-    );
-    expect(boundedRead.card).toMatchObject({ proofPage: { total: 100, hasMore: true } });
+    expect(explicitBoundedRead.card).toMatchObject({
+      proofPage: { total: 100, hasMore: true },
+    });
+    const olderCursor = (read.card as { proofPage: { nextCursor?: string } }).proofPage.nextCursor;
+    const oldestEmbeddedId = expectDefined(embeddedProof[0], "oldest embedded Workboard proof").id;
 
     const commented = readPayload(
       await tools.get("workboard_comment")?.execute("comment", {
@@ -294,29 +315,26 @@ describe("workboard tools", () => {
       ((added.card as { metadata?: { proof?: unknown[] } }).metadata?.proof ?? []).length,
     ).toBe(101);
 
-    const first = readPayload(
-      await tools.get("workboard_proof_list")?.execute("proof-list-1", {
+    const older = readPayload(
+      await tools.get("workboard_proof_list")?.execute("proof-list-older", {
         id: card.id,
         limit: 40,
+        cursor: olderCursor,
       }),
     );
-    const second = readPayload(
-      await tools.get("workboard_proof_list")?.execute("proof-list-2", {
-        id: card.id,
-        limit: 40,
-        cursor: first.nextCursor,
-      }),
-    );
-    expect(first).toMatchObject({ total: 101, hasMore: true });
-    expect(first.proof).toHaveLength(40);
-    expect(second.proof).toHaveLength(40);
+    const olderProof = older.proof as Array<{ id: string }>;
+    expect(older).toMatchObject({ total: 101, hasMore: true });
+    expect(olderProof).toHaveLength(40);
+    expect(olderProof).not.toContainEqual(expect.objectContaining({ id: oldestEmbeddedId }));
+    const newestOlderId = expectDefined(olderProof.at(-1), "newest older Workboard proof").id;
+    expect(Number(newestOlderId.split("-")[1])).toBe(Number(oldestEmbeddedId.split("-")[1]) - 1);
 
     const canonical = await store.get(card.id);
     expect(canonical?.metadata?.proof).toHaveLength(101);
     expect(canonical).not.toHaveProperty("proofPage");
   });
 
-  it("keeps bounded sqlite tool reads off canonical proof hydration", async () => {
+  it("keeps default sqlite tool reads off canonical proof hydration", async () => {
     // openclaw-temp-dir: allow extension tests cannot import repo-only test helpers
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-tool-bounded-"));
     const stores = createWorkboardSqliteStores({ dbPath: path.join(dir, "workboard.sqlite") });
@@ -353,9 +371,7 @@ describe("workboard tools", () => {
       };
 
       const result = readPayload(
-        await tools
-          .get("workboard_read")
-          ?.execute("sqlite-bounded", { id: card.id, proofView: "bounded" }),
+        await tools.get("workboard_read")?.execute("sqlite-bounded", { id: card.id }),
       );
       expect(result.card).toMatchObject({ proofPage: { total: 100, hasMore: true } });
       expect(result.workerContext).toContain("Proof 99");
