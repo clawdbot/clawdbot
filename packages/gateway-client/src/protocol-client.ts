@@ -165,7 +165,7 @@ type PendingRequest = {
 export class GatewayProtocolClient<TPlan> {
   private socket: GatewayProtocolSocket | null = null;
   private readonly pending = new Map<string, PendingRequest>();
-  private listeners = new Set<(event: EventFrame) => void>();
+  private listeners = new Map<(event: EventFrame) => void, object>();
   private stopped = true;
   private generation = 0;
   private lastSeq: number | null = null;
@@ -312,8 +312,18 @@ export class GatewayProtocolClient<TPlan> {
   }
 
   addEventListener(listener: (event: EventFrame) => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    let subscription = this.listeners.get(listener);
+    if (!subscription) {
+      subscription = {};
+      this.listeners.set(listener, subscription);
+    }
+    return () => {
+      // An old disposer must not remove the same callback after a new owner
+      // subscribes it during reconnect or synchronous event dispatch.
+      if (this.listeners.get(listener) === subscription) {
+        this.listeners.delete(listener);
+      }
+    };
   }
 
   closeSocket(code?: number, reason?: string): void {
@@ -572,9 +582,17 @@ export class GatewayProtocolClient<TPlan> {
         }
         this.lastSeq = seq;
       }
+      // An owner may replace the socket while handling this frame. Snapshot
+      // first so replacement listeners cannot inherit a retired event.
+      const listeners = [...this.listeners];
       this.invoke("event", () => this.opts.onEvent?.(parsed));
-      for (const listener of this.listeners) {
-        this.invoke("event listener", () => listener(parsed));
+      for (const [listener, subscription] of listeners) {
+        if (!this.isActive(socket, generation)) {
+          return;
+        }
+        if (this.listeners.get(listener) === subscription) {
+          this.invoke("event listener", () => listener(parsed));
+        }
       }
       return;
     }
