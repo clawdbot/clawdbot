@@ -521,6 +521,7 @@ describe("createSynologyChatPlugin", () => {
 
     it("sendText returns an honest empty-id result on success", async () => {
       const plugin = synologyChatPlugin;
+      const malformedLink = `[${"\\".repeat(32)}`;
       const result = await plugin.outbound.sendText({
         cfg: {
           channels: {
@@ -532,17 +533,22 @@ describe("createSynologyChatPlugin", () => {
             },
           },
         },
-        text: "hello",
+        text: `**Read** [the docs](https://example.com/a_(b)) [titled](https://example.com "Documentation") \`[literal](https://example.com)\` \\[escaped](https://example.com) [x > y](https://example.com) [bad](<https://example.com) [bad title](https://example.com "oops') ![logo](https://example.com/logo.png) ${malformedLink}`,
         to: "user1",
       });
       expect(result.channel).toBe("synology-chat");
       expect(result.chatId).toBe("user1");
-      // The webhook ack carries no platform message id; the result must not fabricate one.
       expect(result.messageId).toBe("");
       expect(result.receipt.primaryPlatformMessageId).toBeUndefined();
       expect(result.receipt.platformMessageIds).toHaveLength(0);
       expect(result.receipt.parts).toHaveLength(0);
       expect(result.receipt.threadId).toBe("user1");
+      expect(mockSendMessage).toHaveBeenLastCalledWith(
+        "https://nas/incoming",
+        `**Read** <https://example.com/a_(b)|the docs> <https://example.com|titled> \`[literal](https://example.com)\` \\[escaped](https://example.com) [x > y](https://example.com) [bad](<https://example.com) [bad title](https://example.com "oops') ![logo](https://example.com/logo.png) ${malformedLink}`,
+        "user1",
+        true,
+      );
     });
 
     it("sendMedia returns an honest empty-id result on success", async () => {
@@ -561,6 +567,7 @@ describe("createSynologyChatPlugin", () => {
         mediaUrl: "https://example.com/img.png",
         to: "user1",
       });
+
       expect(result.channel).toBe("synology-chat");
       expect(result.chatId).toBe("user1");
       expect(result.messageId).toBe("");
@@ -568,6 +575,12 @@ describe("createSynologyChatPlugin", () => {
       expect(result.receipt.platformMessageIds).toHaveLength(0);
       expect(result.receipt.parts).toHaveLength(0);
       expect(result.receipt.threadId).toBe("user1");
+      expect(mockSendFileUrl).toHaveBeenLastCalledWith(
+        "https://nas/incoming",
+        "https://example.com/img.png",
+        "user1",
+        true,
+      );
     });
 
     it("sendMedia throws when missing incomingUrl", async () => {
