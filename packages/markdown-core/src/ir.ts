@@ -1,4 +1,5 @@
 // Markdown Core module implements ir behavior.
+import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import MarkdownIt from "markdown-it";
 import markdownItCjkFriendly from "markdown-it-cjk-friendly";
 import { HTML_TAG_RE } from "markdown-it/lib/common/html_re.mjs";
@@ -1447,6 +1448,26 @@ function sliceListMarker(
 }
 
 export function sliceMarkdownIR(ir: MarkdownIR, start: number, end: number): MarkdownIR {
+  const textLength = ir.text.length;
+  let normalizedStart = start < 0 ? Math.max(textLength + start, 0) : Math.min(start, textLength);
+  let normalizedEnd = end < 0 ? Math.max(textLength + end, 0) : Math.min(end, textLength);
+
+  if (normalizedStart < normalizedEnd) {
+    // Normalize once so text, formatting, links, and structural metadata share
+    // the same complete-code-point boundaries.
+    const safeStart = avoidTrailingHighSurrogateBreak(ir.text, 0, normalizedStart);
+    if (safeStart !== normalizedStart) {
+      normalizedStart = safeStart < normalizedStart ? safeStart : normalizedStart - 1;
+    }
+
+    const safeEnd = avoidTrailingHighSurrogateBreak(ir.text, 0, normalizedEnd);
+    if (safeEnd !== normalizedEnd) {
+      normalizedEnd = safeEnd > normalizedEnd ? safeEnd : normalizedEnd + 1;
+    }
+  }
+
+  start = normalizedStart;
+  end = normalizedEnd;
   const metadataIR = ir as MarkdownIRWithMetadata;
   const annotations = sliceAnnotationSpans(ir.annotations ?? [], start, end);
   const listItems = ((ir.listItems ?? []) as MarkdownListItemWithMetadata[]).flatMap((item) => {
