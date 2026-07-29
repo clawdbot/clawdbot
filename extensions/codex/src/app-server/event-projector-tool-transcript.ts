@@ -157,21 +157,23 @@ export class CodexToolTranscriptProjection {
     });
   }
 
-  recordDynamicToolResult(params: {
-    callId: string;
-    tool: string;
-    success: boolean;
-    contentItems: CodexDynamicToolCallOutputContentItem[];
-    details?: unknown;
-    resultContentSource?: "network";
-  }): void {
+  recordDynamicToolResult(
+    params: {
+      callId: string;
+      tool: string;
+      success: boolean;
+      contentItems: CodexDynamicToolCallOutputContentItem[];
+      details?: unknown;
+    },
+    resultContentSource?: "network",
+  ): void {
     this.recordToolResult({
       id: params.callId,
       name: params.tool,
       text: collectDynamicToolContentText(params.contentItems),
       isError: !params.success,
       details: params.details,
-      ...(params.resultContentSource ? { resultContentSource: params.resultContentSource } : {}),
+      ...(resultContentSource ? { resultContentSource } : {}),
     });
   }
 
