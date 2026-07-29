@@ -60,6 +60,21 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
   ): string {
+    const parent = this.appendParentId ? this.byId.get(this.appendParentId) : undefined;
+    if (
+      options?.idempotencyLookup !== "caller-checked" &&
+      message.role === "user" &&
+      parent?.type === "message" &&
+      parent.message.role === "user" &&
+      "idempotencyKey" in message &&
+      typeof message.idempotencyKey === "string" &&
+      message.idempotencyKey.length > 0 &&
+      "idempotencyKey" in parent.message &&
+      parent.message.idempotencyKey === message.idempotencyKey
+    ) {
+      // Reuse the ingress-persisted user so descendants keep its canonical SQLite parent.
+      return parent.id;
+    }
     const entry: SessionMessageEntry = {
       type: "message",
       id: generateSessionEntryId(this.byId),

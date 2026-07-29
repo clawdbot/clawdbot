@@ -550,7 +550,84 @@ describe("SessionManager.open", () => {
     });
   });
 
-  it("persists a deduped runtime user entry before its SQLite descendants", async () => {
+  it("preserves distinct keyed user turns with the same visible text", () => {
+    const sessionManager = SessionManager.inMemory();
+    const first = sessionManager.appendMessage({
+      role: "user",
+      content: "same question",
+      idempotencyKey: "first-run:user",
+      timestamp: 1,
+    });
+    const second = sessionManager.appendMessage({
+      role: "user",
+      content: "same question",
+      idempotencyKey: "second-run:user",
+      timestamp: 2,
+    });
+
+    expect(second).not.toBe(first);
+    expect(sessionManager.getEntries().filter((entry) => entry.type === "message")).toHaveLength(2);
+  });
+
+  it("allows an explicitly caller-checked keyed user append", () => {
+    const sessionManager = SessionManager.inMemory();
+    const message = {
+      role: "user" as const,
+      content: "caller-owned user",
+      idempotencyKey: "caller-checked:user",
+      timestamp: 1,
+    };
+    const first = sessionManager.appendMessage(message);
+
+    expect(sessionManager.appendMessage(message, { idempotencyLookup: "caller-checked" })).not.toBe(
+      first,
+    );
+  });
+
+  it("rejects a keyed user collision outside the current SQLite append parent", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-runtime-user-ancestor";
+    const sessionKey = "agent:main:dashboard:sqlite-runtime-user-ancestor";
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    const marker = formatSqliteSessionFileMarker(scope);
+    const userMessage = {
+      role: "user" as const,
+      content: "question",
+      idempotencyKey: "runtime-user-ancestor:user",
+      timestamp: 1,
+    };
+    await upsertSessionEntry(scope, { sessionFile: marker, sessionId, updatedAt: 1 });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "pre-persisted-user",
+      message: userMessage,
+      now: 1,
+    });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "persisted-assistant",
+      message: buildAssistantMessage("answer"),
+      parentId: "pre-persisted-user",
+    });
+    const sessionManager = openMarker(marker, sessionKey, dir);
+
+    expect(() => sessionManager.appendMessage(userMessage)).toThrow(
+      "Session transcript parent entry was not persisted",
+    );
+    expect(sessionManager.getLeafId()).toBe("persisted-assistant");
+    expect(
+      (await loadTranscriptEvents(scope)).filter(
+        (event) =>
+          (event as { message?: { role?: string; idempotencyKey?: string } }).message?.role ===
+            "user" &&
+          (event as { message?: { idempotencyKey?: string } }).message?.idempotencyKey ===
+            userMessage.idempotencyKey,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("reuses a pre-persisted user as the canonical SQLite parent", async () => {
     const dir = await makeTempDir();
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "sqlite-runtime-user-parent";
@@ -589,12 +666,18 @@ describe("SessionManager.open", () => {
     if (resumed.kind !== "page") {
       throw new Error(`expected append page, got ${resumed.kind}`);
     }
-    expect(resumed.events.map((row) => (row.event as { id?: string }).id)).toEqual([
-      runtimeUserId,
-      assistantId,
-    ]);
-    const assistantEvent = resumed.events.at(1)?.event as { parentId?: string } | undefined;
-    expect(assistantEvent?.parentId).toBe(runtimeUserId);
+    expect(runtimeUserId).toBe("pre-persisted-user");
+    expect(resumed.events.map((row) => (row.event as { id?: string }).id)).toEqual([assistantId]);
+    expect(resumed.events[0]?.event).toMatchObject({ parentId: "pre-persisted-user" });
+    expect(
+      (await loadTranscriptEvents(scope)).filter(
+        (event) =>
+          (event as { message?: { role?: string; idempotencyKey?: string } }).message?.role ===
+            "user" &&
+          (event as { message?: { idempotencyKey?: string } }).message?.idempotencyKey ===
+            userMessage.idempotencyKey,
+      ),
+    ).toHaveLength(1);
   });
 
   it("preserves root-to-leaf ordering across session branches", () => {

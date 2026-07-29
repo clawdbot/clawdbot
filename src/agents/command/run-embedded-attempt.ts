@@ -156,28 +156,30 @@ export async function runEmbeddedAgentAttempt(params: {
     params.opts.suppressPromptPersistence === true ||
     (params.opts.transcriptMessage === "" && !hasTranscriptMedia);
   const recorderTranscriptText = transcriptBody || undefined;
-  const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
-    ...(!suppressUserTurnPersistence && (recorderTranscriptText || hasTranscriptMedia)
-      ? {
-          input: {
-            text: recorderTranscriptText,
-            ...(hasTranscriptMedia ? { media: transcriptMedia } : {}),
-          },
-        }
-      : {}),
-    target: {
-      sessionId: internalSessionTarget?.sessionId ?? sessionId,
-      agentId: internalSessionTarget?.agentId ?? sessionAgentId,
-      sessionKey: internalSessionTarget?.sessionKey ?? sessionKey ?? sessionId,
-      sessionEntry: internalSessionTarget?.sessionEntry ?? sessionEntry,
-      sessionStore: params.suppressVisibleSessionEffects ? undefined : sessionStore,
-      storePath: internalSessionTarget?.storePath ?? storePath,
-      cwd: cwd ?? workspaceDir,
-      config: cfg,
-    },
-    beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-    errorContext: "agent command user turn transcript",
-  });
+  const userTurnTranscriptRecorder =
+    (internalSessionTarget ? undefined : params.opts.userTurnTranscriptRecorder) ??
+    createUserTurnTranscriptRecorder({
+      ...(!suppressUserTurnPersistence && (recorderTranscriptText || hasTranscriptMedia)
+        ? {
+            input: {
+              text: recorderTranscriptText,
+              ...(hasTranscriptMedia ? { media: transcriptMedia } : {}),
+            },
+          }
+        : {}),
+      target: {
+        sessionId: internalSessionTarget?.sessionId ?? sessionId,
+        agentId: internalSessionTarget?.agentId ?? sessionAgentId,
+        sessionKey: internalSessionTarget?.sessionKey ?? sessionKey ?? sessionId,
+        sessionEntry: internalSessionTarget?.sessionEntry ?? sessionEntry,
+        sessionStore: params.suppressVisibleSessionEffects ? undefined : sessionStore,
+        storePath: internalSessionTarget?.storePath ?? storePath,
+        cwd: cwd ?? workspaceDir,
+        config: cfg,
+      },
+      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      errorContext: "agent command user turn transcript",
+    });
   if (suppressUserTurnPersistence) {
     userTurnTranscriptRecorder.markBlocked();
   }
