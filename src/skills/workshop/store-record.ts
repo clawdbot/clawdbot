@@ -1,3 +1,8 @@
+import type {
+  PluginHookSkillEvaluationFinding,
+  PluginHookSkillProposalEvaluateResult,
+  PluginHookSkillProposalEvaluationOutcome,
+} from "../../plugins/hook-types.js";
 import {
   MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
   normalizeWorkspaceSkillSupportPath,
@@ -39,6 +44,7 @@ export function parseSkillProposalRecord(raw: unknown): SkillProposalRecord | nu
     record.draftFile !== PROPOSAL_DRAFT_FILE ||
     !hasValidProposalOriginProvenance(record) ||
     !isValidSupportFileList(record.supportFiles) ||
+    !isValidEvaluation(record.evaluation) ||
     !record.target ||
     typeof record.target !== "object" ||
     typeof record.target.skillName !== "string" ||
@@ -51,6 +57,123 @@ export function parseSkillProposalRecord(raw: unknown): SkillProposalRecord | nu
     return null;
   }
   return record;
+}
+
+function isValidEvaluation(value: SkillProposalRecord["evaluation"]): boolean {
+  if (value === undefined) {
+    return true;
+  }
+  return (
+    typeof value.id === "string" &&
+    value.id.length > 0 &&
+    value.id.length <= 128 &&
+    typeof value.proposedVersion === "string" &&
+    typeof value.draftHash === "string" &&
+    /^[a-f0-9]{64}$/i.test(value.draftHash) &&
+    (value.trigger === "manual" || value.trigger === "apply") &&
+    typeof value.startedAt === "string" &&
+    typeof value.completedAt === "string" &&
+    (value.correlationId === undefined ||
+      (typeof value.correlationId === "string" && value.correlationId.length <= 256)) &&
+    Array.isArray(value.outcomes) &&
+    value.outcomes.length <= 64 &&
+    value.outcomes.every(isValidEvaluationOutcome)
+  );
+}
+
+function isValidEvaluationOutcome(
+  value: unknown,
+): value is PluginHookSkillProposalEvaluationOutcome {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const outcome = value as PluginHookSkillProposalEvaluationOutcome;
+  if (
+    typeof outcome.evaluatorId !== "string" ||
+    outcome.evaluatorId.length === 0 ||
+    outcome.evaluatorId.length > 128 ||
+    typeof outcome.pluginId !== "string" ||
+    outcome.pluginId.length === 0 ||
+    outcome.pluginId.length > 128 ||
+    (outcome.pluginVersion !== undefined &&
+      (typeof outcome.pluginVersion !== "string" || outcome.pluginVersion.length > 128))
+  ) {
+    return false;
+  }
+  if (outcome.status === "skipped") {
+    return true;
+  }
+  if (outcome.status === "error") {
+    return typeof outcome.error === "string" && outcome.error.length <= 2_000;
+  }
+  return outcome.status === "completed" && isValidEvaluationResult(outcome.result);
+}
+
+function isValidEvaluationResult(value: unknown): value is PluginHookSkillProposalEvaluateResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const result = value as PluginHookSkillProposalEvaluateResult;
+  return (
+    (result.summary === undefined ||
+      (typeof result.summary === "string" && result.summary.length <= 8_000)) &&
+    (result.evaluatorVersion === undefined ||
+      (typeof result.evaluatorVersion === "string" && result.evaluatorVersion.length <= 128)) &&
+    (result.mode === undefined || (typeof result.mode === "string" && result.mode.length <= 128)) &&
+    (result.decision === undefined || ["pass", "revise", "block"].includes(result.decision)) &&
+    (result.decisionReason === undefined ||
+      (typeof result.decisionReason === "string" && result.decisionReason.length <= 2_000)) &&
+    isValidEvaluationFindings(result.findings) &&
+    isValidEvaluationMetrics(result.metrics)
+  );
+}
+
+function isValidEvaluationFindings(value: PluginHookSkillEvaluationFinding[] | undefined): boolean {
+  if (value === undefined) {
+    return true;
+  }
+  return (
+    Array.isArray(value) &&
+    value.length <= 200 &&
+    value.every(
+      (finding) =>
+        finding &&
+        typeof finding === "object" &&
+        typeof finding.ruleId === "string" &&
+        finding.ruleId.length > 0 &&
+        finding.ruleId.length <= 256 &&
+        ["info", "warn", "critical"].includes(finding.severity) &&
+        typeof finding.message === "string" &&
+        finding.message.length > 0 &&
+        finding.message.length <= 4_000 &&
+        (finding.file === undefined ||
+          (typeof finding.file === "string" && finding.file.length <= 1_024)) &&
+        (finding.line === undefined || (Number.isSafeInteger(finding.line) && finding.line >= 1)),
+    )
+  );
+}
+
+function isValidEvaluationMetrics(
+  value: Record<string, string | number | boolean> | undefined,
+): boolean {
+  if (value === undefined) {
+    return true;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const entries = Object.entries(value);
+  return (
+    entries.length <= 64 &&
+    entries.every(
+      ([key, metric]) =>
+        key.length > 0 &&
+        key.length <= 128 &&
+        ((typeof metric === "string" && metric.length <= 4_000) ||
+          (typeof metric === "number" && Number.isFinite(metric)) ||
+          typeof metric === "boolean"),
+    )
+  );
 }
 
 function isValidSupportFileList(value: unknown): boolean {

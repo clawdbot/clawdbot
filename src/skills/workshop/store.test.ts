@@ -31,6 +31,7 @@ describe("Skill Workshop SQLite store", () => {
     const { DatabaseSync } = requireNodeSqlite();
     const existing = new DatabaseSync(databasePath);
     existing.exec(`
+      DROP TABLE skill_workshop_proposal_events;
       DROP TABLE skill_workshop_proposal_origin_runs;
       DROP TABLE skill_workshop_proposal_rollbacks;
       DROP TABLE skill_workshop_proposals;
@@ -49,6 +50,11 @@ describe("Skill Workshop SQLite store", () => {
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
         .get("skill_workshop_proposals"),
     ).toEqual({ name: "skill_workshop_proposals" });
+    expect(
+      reopened.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("skill_workshop_proposal_events"),
+    ).toEqual({ name: "skill_workshop_proposal_events" });
     expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });

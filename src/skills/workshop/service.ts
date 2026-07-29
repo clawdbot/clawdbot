@@ -25,7 +25,13 @@ import {
   renderProposalMarkdown,
   stripProposalFrontmatterForSkill,
 } from "./frontmatter.js";
+import { createSkillProposalEvent, dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { assertProposalContainsNoLiteralSecrets, scanProposalBundle } from "./proposal-scan.js";
+import {
+  assertExpectedDraftHash,
+  evaluateSkillProposal,
+  listSkillProposalEvents,
+} from "./service-evaluation.js";
 import { readRequiredProposal } from "./service-query.js";
 import {
   createSkillProposalId,
@@ -48,6 +54,7 @@ export {
   listSkillProposals,
   resolvePendingSkillProposal,
 } from "./service-query.js";
+export { evaluateSkillProposal, listSkillProposalEvents } from "./service-evaluation.js";
 import {
   MAX_SKILL_PROPOSAL_ORIGIN_RUN_IDS,
   SKILL_WORKSHOP_SCHEMA,
@@ -258,15 +265,28 @@ export async function proposeCreateSkill(
     ...(goal ? { goal } : {}),
     ...(evidence ? { evidence } : {}),
   };
-  await writeSkillProposal({
+  const event = await writeSkillProposal({
     record,
     content: proposalContent,
     supportFiles,
     workspaceDir: input.workspaceDir,
     ownerAgentId: input.agentId,
     maxPending: config.maxPending,
+    event: createSkillProposalEvent({
+      record,
+      type: "created",
+      actor: input.agentId ? { type: "agent", id: input.agentId } : { type: "system" },
+    }),
     store: proposalStoreOptions(input.env),
   });
+  if (event) {
+    await dispatchSkillProposalChanged({
+      event,
+      record,
+      workspaceDir: input.workspaceDir,
+      ...(input.agentId ? { agentId: input.agentId } : {}),
+    });
+  }
   return { record, content: proposalContent };
 }
 
@@ -378,15 +398,28 @@ export async function proposeUpdateSkill(
     ...(goal ? { goal } : {}),
     ...(evidence ? { evidence } : {}),
   };
-  await writeSkillProposal({
+  const event = await writeSkillProposal({
     record,
     content: proposalContent,
     supportFiles,
     workspaceDir: input.workspaceDir,
     ownerAgentId: input.agentId ?? origin?.agentId,
     maxPending: config.maxPending,
+    event: createSkillProposalEvent({
+      record,
+      type: "created",
+      actor: input.agentId ? { type: "agent", id: input.agentId } : { type: "system" },
+    }),
     store: proposalStoreOptions(input.env),
   });
+  if (event) {
+    await dispatchSkillProposalChanged({
+      event,
+      record,
+      workspaceDir: input.workspaceDir,
+      ...(input.agentId ? { agentId: input.agentId } : {}),
+    });
+  }
   return { record, content: proposalContent };
 }
 
@@ -394,7 +427,7 @@ export async function reviseSkillProposal(
   input: SkillProposalReviseInput,
 ): Promise<SkillProposalReadResult> {
   const config = resolveSkillWorkshopConfig(input.config);
-  return await withPendingSkillProposalMutation(input, "revised", async (read) => {
+  const revisedResult = await withPendingSkillProposalMutation(input, "revised", async (read) => {
     const { record } = read;
     assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
     assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
@@ -475,6 +508,7 @@ export async function reviseSkillProposal(
       ...(origin ? { origin } : {}),
       ...originRunProvenance,
     };
+    delete revised.evaluation;
     if (supportFiles.length > 0) {
       revised.supportFiles = supportFileMetadata;
     } else {
@@ -490,15 +524,31 @@ export async function reviseSkillProposal(
     } else {
       delete revised.evidence;
     }
-    await replaceSkillProposalDraft({
+    const event = await replaceSkillProposalDraft({
       record: revised,
       previousSupportFiles,
       content: proposalContent,
       supportFiles,
+      event: createSkillProposalEvent({
+        record: revised,
+        type: "revised",
+        actor: input.agentId ? { type: "agent", id: input.agentId } : { type: "system" },
+        ...(input.correlationId ? { correlationId: input.correlationId } : {}),
+        occurredAt: now,
+      }),
       store: proposalStoreOptions(input.env),
     });
-    return { record: revised, content: proposalContent };
+    return { read: { record: revised, content: proposalContent }, event };
   });
+  if (revisedResult.event) {
+    await dispatchSkillProposalChanged({
+      event: revisedResult.event,
+      record: revisedResult.read.record,
+      workspaceDir: input.workspaceDir,
+      ...(input.agentId ? { agentId: input.agentId } : {}),
+    });
+  }
+  return revisedResult.read;
 }
 
 export async function rejectSkillProposal(
@@ -510,7 +560,7 @@ export async function rejectSkillProposal(
 export async function quarantineSkillProposal(
   input: SkillProposalActionInput,
 ): Promise<SkillProposalRecord> {
-  return await withPendingSkillProposalMutation(input, "quarantined", async (read) => {
+  const result = await withPendingSkillProposalMutation(input, "quarantined", async (read) => {
     const now = new Date().toISOString();
     const record: SkillProposalRecord = {
       ...read.record,
@@ -523,104 +573,177 @@ export async function quarantineSkillProposal(
         state: "quarantined",
       },
     };
-    await updateSkillProposalRecord({ record, store: proposalStoreOptions(input.env) });
-    return record;
+    const event = await updateSkillProposalRecord({
+      record,
+      event: createSkillProposalEvent({
+        record,
+        type: "quarantined",
+        actor: input.agentId ? { type: "agent", id: input.agentId } : { type: "gateway" },
+        ...(input.correlationId ? { correlationId: input.correlationId } : {}),
+        occurredAt: now,
+      }),
+      store: proposalStoreOptions(input.env),
+    });
+    return { record, event };
   });
+  if (result.event) {
+    await dispatchSkillProposalChanged({
+      event: result.event,
+      record: result.record,
+      workspaceDir: input.workspaceDir,
+      ...(input.agentId ? { agentId: input.agentId } : {}),
+    });
+  }
+  return result.record;
 }
 
 export async function applySkillProposal(
   input: SkillProposalActionInput,
 ): Promise<SkillProposalApplyResult> {
-  return await withPendingSkillProposalMutation(input, "applied", async (read) => {
-    const { record, content } = read;
-    const draftHash = hashSkillProposalContent(content);
-    if (draftHash !== record.draftHash) {
-      throw new Error("Proposal draft changed without updating proposal metadata.");
-    }
-    const supportFiles = await readProposalSupportFiles(record, proposalStoreOptions(input.env));
-    const draftFrontmatter = readProposalFrontmatter(content);
-    if (!draftFrontmatter) {
-      throw new Error("Proposal draft must include proposal frontmatter.");
-    }
-    const scan = scanProposalBundle(content, supportFiles);
-    if (scan.state !== "clean") {
-      const updated = {
-        ...record,
-        status: "quarantined" as const,
-        updatedAt: new Date().toISOString(),
-        quarantinedAt: new Date().toISOString(),
-        scan: { ...scan, state: "quarantined" as const },
-        statusReason: "Proposal scan failed.",
+  const initial = await readRequiredProposal(
+    input.proposalId,
+    input.workspaceDir,
+    input.env,
+    input.agentId,
+  );
+  if (initial.record.status !== "pending") {
+    throw new Error(
+      `Only pending proposals can be applied. Current status: ${initial.record.status}.`,
+    );
+  }
+  assertExpectedDraftHash(initial.record.draftHash, input.expectedDraftHash);
+  const evaluated = await evaluateSkillProposal({
+    workspaceDir: input.workspaceDir,
+    ...(input.agentId ? { agentId: input.agentId } : {}),
+    ...(input.env ? { env: input.env } : {}),
+    proposalId: input.proposalId,
+    expectedDraftHash: initial.record.draftHash,
+    ...(input.correlationId ? { correlationId: input.correlationId } : {}),
+    trigger: "apply",
+  });
+  const blocking = evaluated.evaluation.outcomes.find(
+    (outcome) => outcome.status === "completed" && outcome.result.decision === "block",
+  );
+  if (blocking?.status === "completed") {
+    throw new Error(
+      blocking.result.decisionReason ||
+        `Skill proposal apply blocked by evaluator ${blocking.evaluatorId}.`,
+    );
+  }
+  const result = await withPendingSkillProposalMutation(
+    { ...input, expectedDraftHash: evaluated.evaluation.draftHash },
+    "applied",
+    async (read) => {
+      const { record, content } = read;
+      const draftHash = hashSkillProposalContent(content);
+      if (draftHash !== record.draftHash) {
+        throw new Error("Proposal draft changed without updating proposal metadata.");
+      }
+      const supportFiles = await readProposalSupportFiles(record, proposalStoreOptions(input.env));
+      const draftFrontmatter = readProposalFrontmatter(content);
+      if (!draftFrontmatter) {
+        throw new Error("Proposal draft must include proposal frontmatter.");
+      }
+      const scan = scanProposalBundle(content, supportFiles);
+      if (scan.state !== "clean") {
+        const updated = {
+          ...record,
+          status: "quarantined" as const,
+          updatedAt: new Date().toISOString(),
+          quarantinedAt: new Date().toISOString(),
+          scan: { ...scan, state: "quarantined" as const },
+          statusReason: "Proposal scan failed.",
+        };
+        await updateSkillProposalRecord({
+          record: updated,
+          store: proposalStoreOptions(input.env),
+        });
+        throw new Error("Proposal scan failed; proposal was quarantined.");
+      }
+
+      assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
+      assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
+      const workshopConfig = resolveSkillWorkshopConfig(input.config);
+      const symlinkPolicy = {
+        allowWrites: workshopConfig.allowSymlinkTargetWrites,
+        allowedTargetRealPaths: workshopConfig.allowSymlinkTargetWrites
+          ? resolveAllowedSkillSymlinkTargetRealPaths(input.config)
+          : [],
       };
-      await updateSkillProposalRecord({
-        record: updated,
+      await assertWorkspaceSkillWriteTarget({
+        workspaceDir: input.workspaceDir,
+        filePath: record.target.skillFile,
+        symlinkPolicy,
+      });
+      const targetState = await readApplyTargetState(record, supportFiles, input.env);
+      const rollback = createSkillProposalRollback({
+        proposalId: record.id,
+        targetSkillFile: record.target.skillFile,
+        action: record.kind,
+        ...(targetState.previousContent !== null
+          ? { previousContent: targetState.previousContent }
+          : {}),
+        ...(targetState.previousSupportFiles.length > 0
+          ? { supportFiles: targetState.previousSupportFiles }
+          : {}),
+      });
+      await writeSkillProposalRollback({
+        proposalId: record.id,
+        rollback,
         store: proposalStoreOptions(input.env),
       });
-      throw new Error("Proposal scan failed; proposal was quarantined.");
-    }
 
-    assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
-    assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
-    const workshopConfig = resolveSkillWorkshopConfig(input.config);
-    const symlinkPolicy = {
-      allowWrites: workshopConfig.allowSymlinkTargetWrites,
-      allowedTargetRealPaths: workshopConfig.allowSymlinkTargetWrites
-        ? resolveAllowedSkillSymlinkTargetRealPaths(input.config)
-        : [],
-    };
-    await assertWorkspaceSkillWriteTarget({
+      const skillContent = stripProposalFrontmatterForSkill(content);
+      await writeWorkspaceSkill({
+        workspaceDir: input.workspaceDir,
+        skillDir: record.target.skillDir,
+        skillFile: record.target.skillFile,
+        content: skillContent,
+        supportFiles,
+        mode: record.kind,
+        symlinkPolicy,
+      });
+      bumpSkillsSnapshotVersion({
+        workspaceDir: input.workspaceDir,
+        reason: "workshop",
+        changedPath: record.target.skillFile,
+      });
+      const now = new Date().toISOString();
+      const applied: SkillProposalRecord = {
+        ...record,
+        status: "applied",
+        updatedAt: now,
+        appliedAt: now,
+        statusReason: normalizeOptionalString(input.reason),
+        scan,
+      };
+      const event = await updateSkillProposalRecord({
+        record: applied,
+        event: createSkillProposalEvent({
+          record: applied,
+          type: "applied",
+          actor: input.agentId ? { type: "agent", id: input.agentId } : { type: "gateway" },
+          ...(input.correlationId ? { correlationId: input.correlationId } : {}),
+          occurredAt: now,
+          payload: { targetSkillFile: record.target.skillFile },
+        }),
+        store: proposalStoreOptions(input.env),
+      });
+      return {
+        result: { record: applied, targetSkillFile: record.target.skillFile },
+        event,
+      };
+    },
+  );
+  if (result.event) {
+    await dispatchSkillProposalChanged({
+      event: result.event,
+      record: result.result.record,
       workspaceDir: input.workspaceDir,
-      filePath: record.target.skillFile,
-      symlinkPolicy,
+      ...(input.agentId ? { agentId: input.agentId } : {}),
     });
-    const targetState = await readApplyTargetState(record, supportFiles, input.env);
-    const rollback = createSkillProposalRollback({
-      proposalId: record.id,
-      targetSkillFile: record.target.skillFile,
-      action: record.kind,
-      ...(targetState.previousContent !== null
-        ? { previousContent: targetState.previousContent }
-        : {}),
-      ...(targetState.previousSupportFiles.length > 0
-        ? { supportFiles: targetState.previousSupportFiles }
-        : {}),
-    });
-    await writeSkillProposalRollback({
-      proposalId: record.id,
-      rollback,
-      store: proposalStoreOptions(input.env),
-    });
-
-    const skillContent = stripProposalFrontmatterForSkill(content);
-    await writeWorkspaceSkill({
-      workspaceDir: input.workspaceDir,
-      skillDir: record.target.skillDir,
-      skillFile: record.target.skillFile,
-      content: skillContent,
-      supportFiles,
-      mode: record.kind,
-      symlinkPolicy,
-    });
-    bumpSkillsSnapshotVersion({
-      workspaceDir: input.workspaceDir,
-      reason: "workshop",
-      changedPath: record.target.skillFile,
-    });
-    const now = new Date().toISOString();
-    const applied: SkillProposalRecord = {
-      ...record,
-      status: "applied",
-      updatedAt: now,
-      appliedAt: now,
-      statusReason: normalizeOptionalString(input.reason),
-      scan,
-    };
-    await updateSkillProposalRecord({
-      record: applied,
-      store: proposalStoreOptions(input.env),
-    });
-    return { record: applied, targetSkillFile: record.target.skillFile };
-  });
+  }
+  return result.result;
 }
 
 async function readApplyTargetState(
@@ -774,7 +897,7 @@ async function markProposal(
   input: SkillProposalActionInput,
   status: "rejected",
 ): Promise<SkillProposalRecord> {
-  return await withPendingSkillProposalMutation(input, status, async (read) => {
+  const result = await withPendingSkillProposalMutation(input, status, async (read) => {
     const now = new Date().toISOString();
     const record: SkillProposalRecord = {
       ...read.record,
@@ -783,13 +906,35 @@ async function markProposal(
       rejectedAt: now,
       statusReason: normalizeOptionalString(input.reason),
     };
-    await updateSkillProposalRecord({ record, store: proposalStoreOptions(input.env) });
-    return record;
+    const event = await updateSkillProposalRecord({
+      record,
+      event: createSkillProposalEvent({
+        record,
+        type: status,
+        actor: input.agentId ? { type: "agent", id: input.agentId } : { type: "gateway" },
+        ...(input.correlationId ? { correlationId: input.correlationId } : {}),
+        occurredAt: now,
+      }),
+      store: proposalStoreOptions(input.env),
+    });
+    return { record, event };
   });
+  if (result.event) {
+    await dispatchSkillProposalChanged({
+      event: result.event,
+      record: result.record,
+      workspaceDir: input.workspaceDir,
+      ...(input.agentId ? { agentId: input.agentId } : {}),
+    });
+  }
+  return result.record;
 }
 
 async function withPendingSkillProposalMutation<T>(
-  input: Pick<SkillProposalActionInput, "agentId" | "env" | "proposalId" | "workspaceDir">,
+  input: Pick<
+    SkillProposalActionInput,
+    "agentId" | "env" | "expectedDraftHash" | "proposalId" | "workspaceDir"
+  >,
   action: "applied" | "quarantined" | "rejected" | "revised",
   fn: (read: SkillProposalReadResult) => Promise<T>,
 ): Promise<T> {
@@ -813,6 +958,7 @@ async function withPendingSkillProposalMutation<T>(
           `Only pending proposals can be ${action}. Current status: ${read.record.status}.`,
         );
       }
+      assertExpectedDraftHash(read.record.draftHash, input.expectedDraftHash);
       return await fn(read);
     },
     proposalStoreOptions(input.env),

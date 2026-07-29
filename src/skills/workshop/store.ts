@@ -27,6 +27,11 @@ import {
   PROPOSAL_DRAFT_FILE,
 } from "./store-record.js";
 import {
+  appendSkillProposalEvent,
+  listStoredSkillProposalEvents,
+  type NewSkillProposalEvent,
+} from "./store-sqlite-event.js";
+import {
   insertProposal,
   parseSkillProposalRow,
   readStoredProposal,
@@ -51,6 +56,10 @@ import {
   type SkillProposalRollback,
   type SkillProposalSupportFile,
   type SkillProposalSupportFileInput,
+  type SkillProposalEvent,
+  type SkillProposalEvaluation,
+  type SkillProposalEventsListInput,
+  type SkillProposalEventsListResult,
 } from "./types.js";
 
 const WORKSHOP_REL_DIR = "skill-workshop";
@@ -225,8 +234,9 @@ export async function writeSkillProposal(params: {
   workspaceDir: string;
   ownerAgentId?: string;
   maxPending: number;
+  event?: NewSkillProposalEvent;
   store?: SkillWorkshopStoreOptions;
-}): Promise<void> {
+}): Promise<SkillProposalEvent | undefined> {
   assertProposalId(params.record.id);
   assertSkillProposalContentSize(params.content);
   ensureSkillWorkshopSchema(params.store);
@@ -244,7 +254,7 @@ export async function writeSkillProposal(params: {
   }
 
   try {
-    runOpenClawStateWriteTransaction(
+    return runOpenClawStateWriteTransaction(
       ({ db }) => {
         const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
         const existing = executeSqliteQueryTakeFirstSync(
@@ -273,6 +283,7 @@ export async function writeSkillProposal(params: {
           ownerAgentId: params.ownerAgentId ?? params.record.origin?.agentId ?? null,
           workspaceDir: params.workspaceDir,
         });
+        return params.event ? appendSkillProposalEvent(db, params.event) : undefined;
       },
       databaseOptions(params.store),
       { operationLabel: "skill-workshop.proposal.create" },
@@ -292,8 +303,9 @@ export async function replaceSkillProposalDraft(params: {
   previousSupportFiles?: readonly SkillProposalSupportFile[];
   content: string;
   supportFiles?: readonly PreparedSkillProposalSupportFile[];
+  event?: NewSkillProposalEvent;
   store?: SkillWorkshopStoreOptions;
-}): Promise<void> {
+}): Promise<SkillProposalEvent | undefined> {
   assertProposalId(params.record.id);
   assertSkillProposalContentSize(params.content);
   const stateRoot = await root(resolveSkillWorkshopStateDir(params.store));
@@ -315,10 +327,11 @@ export async function replaceSkillProposalDraft(params: {
       await stateRoot.remove(path.join(relativeDir, filePath)).catch(() => undefined);
     }
   }
-  await updateSkillProposalRecord({
+  return await updateSkillProposalRecord({
     record: params.record,
     store: params.store,
     invalidateRollback: true,
+    event: params.event,
   });
 }
 
@@ -326,10 +339,11 @@ export async function updateSkillProposalRecord(params: {
   record: SkillProposalRecord;
   store?: SkillWorkshopStoreOptions;
   invalidateRollback?: boolean;
-}): Promise<void> {
+  event?: NewSkillProposalEvent;
+}): Promise<SkillProposalEvent | undefined> {
   assertProposalId(params.record.id);
   ensureSkillWorkshopSchema(params.store);
-  runOpenClawStateWriteTransaction(
+  return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
       const current = executeSqliteQueryTakeFirstSync(
@@ -351,9 +365,59 @@ export async function updateSkillProposalRecord(params: {
         );
       }
       updateProposal(db, current, params.record);
+      return params.event ? appendSkillProposalEvent(db, params.event) : undefined;
     },
     databaseOptions(params.store),
     { operationLabel: "skill-workshop.proposal.update" },
+  );
+}
+
+export function recordSkillProposalEvaluation(params: {
+  proposalId: string;
+  expectedProposedVersion: string;
+  expectedDraftHash: string;
+  evaluation: SkillProposalEvaluation;
+  event: NewSkillProposalEvent;
+  store?: SkillWorkshopStoreOptions;
+}): { record: SkillProposalRecord; event: SkillProposalEvent } {
+  assertProposalId(params.proposalId);
+  ensureSkillWorkshopSchema(params.store);
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
+      const current = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("skill_workshop_proposals")
+          .selectAll()
+          .where("proposal_id", "=", params.proposalId),
+      );
+      const record = current ? parseSkillProposalRow(current) : null;
+      if (!current || !record) {
+        throw new Error(`Skill proposal not found: ${params.proposalId}`);
+      }
+      if (
+        record.status !== "pending" ||
+        record.proposedVersion !== params.expectedProposedVersion ||
+        record.draftHash !== params.expectedDraftHash
+      ) {
+        throw new Error(
+          "Skill proposal changed while evaluation was running; discard the stale evaluation and retry.",
+        );
+      }
+      const next: SkillProposalRecord = {
+        ...record,
+        updatedAt: params.evaluation.completedAt,
+        evaluation: params.evaluation,
+      };
+      updateProposal(db, current, next);
+      return {
+        record: next,
+        event: appendSkillProposalEvent(db, params.event),
+      };
+    },
+    databaseOptions(params.store),
+    { operationLabel: "skill-workshop.proposal.evaluate" },
   );
 }
 
@@ -514,11 +578,28 @@ async function reconcileInterruptedApply(
         updatedAt: now,
         appliedAt: now,
       });
+      appendSkillProposalEvent(db, {
+        eventId: crypto.randomUUID(),
+        proposalId,
+        proposedVersion: record.proposedVersion,
+        draftHash: record.draftHash,
+        type: "applied",
+        occurredAt: now,
+        actor: { type: "system" },
+        payload: { recovered: true },
+      });
       return true;
     },
     databaseOptions(options),
     { operationLabel: "skill-workshop.apply.reconcile" },
   );
+}
+
+export function readSkillProposalEvents(
+  input: SkillProposalEventsListInput,
+  options: SkillWorkshopStoreOptions = {},
+): SkillProposalEventsListResult {
+  return listStoredSkillProposalEvents(input, options);
 }
 
 export async function readProposalSupportFiles(
