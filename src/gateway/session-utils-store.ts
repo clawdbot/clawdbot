@@ -36,6 +36,7 @@ import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
 import {
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
+  type GatewaySessionStoreDiscoveryCache,
 } from "./session-utils-store-lookup.js";
 import type { GatewayAgentRow } from "./session-utils.types.js";
 
@@ -121,7 +122,14 @@ function readAcpMetaForDeletedAgentCheck(params: {
 
 function loadSessionEntryWithMode(
   sessionKey: string,
-  opts: { agentId?: string; clone?: boolean; includeStoreChildEntries?: boolean } | undefined,
+  opts:
+    | {
+        agentId?: string;
+        clone?: boolean;
+        includeStoreChildEntries?: boolean;
+        targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
+      }
+    | undefined,
   readOnly: boolean,
 ) {
   const cfg = getRuntimeConfig();
@@ -131,6 +139,7 @@ function loadSessionEntryWithMode(
     key,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+    ...(opts?.targetDiscoveryCache ? { targetDiscoveryCache: opts.targetDiscoveryCache } : {}),
     ...(readOnly
       ? {
           exactRead: true,
@@ -160,14 +169,23 @@ function loadSessionEntryWithMode(
 
 export function loadGatewaySessionEntry(
   sessionKey: string,
-  opts?: { agentId?: string; clone?: boolean },
+  opts?: {
+    agentId?: string;
+    clone?: boolean;
+    targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
+  },
 ) {
   return loadSessionEntryWithMode(sessionKey, opts, false);
 }
 
 export function loadGatewaySessionEntryReadOnly(
   sessionKey: string,
-  opts?: { agentId?: string; clone?: boolean; includeStoreChildEntries?: boolean },
+  opts?: {
+    agentId?: string;
+    clone?: boolean;
+    includeStoreChildEntries?: boolean;
+    targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
+  },
 ) {
   return loadSessionEntryWithMode(sessionKey, opts, true);
 }

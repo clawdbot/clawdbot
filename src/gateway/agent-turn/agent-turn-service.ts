@@ -184,6 +184,7 @@ export function createAgentTurnService({
       explicitRecipientSession,
       preAcceptedReservedSessionKey,
       preAttachmentSession,
+      sessionStoreDiscoveryCache,
     } = routing;
     let agentId = routing.agentId;
     let requestedSessionKey = routing.requestedSessionKey;
@@ -322,6 +323,7 @@ export function createAgentTurnService({
           lifecycleGeneration,
           effectiveBootstrapContextRunKind,
           preAttachmentSession,
+          sessionStoreDiscoveryCache,
           respond,
         });
         if (!preparedSession) {

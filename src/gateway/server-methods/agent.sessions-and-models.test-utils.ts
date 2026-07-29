@@ -2133,6 +2133,7 @@ describe("gateway agent handler", () => {
     expect(mocks.loadSessionEntry).toHaveBeenCalledWith("agent:ops:main", {
       agentId: "ops",
       clone: false,
+      targetDiscoveryCache: expect.any(Map),
     });
   });
 
@@ -2183,6 +2184,7 @@ describe("gateway agent handler", () => {
     expect(mocks.loadSessionEntry).toHaveBeenCalledWith("global", {
       agentId: "work",
       clone: false,
+      targetDiscoveryCache: expect.any(Map),
     });
   });
 
@@ -2229,6 +2231,7 @@ describe("gateway agent handler", () => {
     expect(call.sessionKey).toBe("global");
     expect(mocks.loadSessionEntry).toHaveBeenCalledWith("global", {
       clone: false,
+      targetDiscoveryCache: expect.any(Map),
     });
   });
 
@@ -2276,6 +2279,7 @@ describe("gateway agent handler", () => {
     expect(mocks.loadSessionEntry).toHaveBeenCalledWith("agent:work:main", {
       agentId: "work",
       clone: false,
+      targetDiscoveryCache: expect.any(Map),
     });
   });
 
@@ -2412,6 +2416,7 @@ describe("gateway agent handler", () => {
     expect(mocks.loadSessionEntry).toHaveBeenCalledWith("main", {
       agentId: "work",
       clone: false,
+      targetDiscoveryCache: expect.any(Map),
     });
   });
 

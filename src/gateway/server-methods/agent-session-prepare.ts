@@ -24,6 +24,7 @@ import { isRecoverableTerminalSessionStatus } from "../../config/sessions/termin
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import type { GatewaySessionStoreDiscoveryCache } from "../session-utils-store-lookup.js";
 import {
   respondDeletedAgentSession,
   type RestoredCronContinuation,
@@ -71,11 +72,18 @@ export function prepareAgentSession(params: {
   lifecycleGeneration: string;
   effectiveBootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   preAttachmentSession?: { canonicalKey: string; sessionId?: string };
+  sessionStoreDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
   respond: GatewayRequestHandlerOptions["respond"];
 }): PreparedAgentSession | undefined {
   const { cfg, storePath, entry, canonicalKey, legacyKey, storeKeys } = loadSessionEntry(
     params.requestedSessionKey,
-    { ...(params.agentId ? { agentId: params.agentId } : {}), clone: false },
+    {
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      clone: false,
+      ...(params.sessionStoreDiscoveryCache
+        ? { targetDiscoveryCache: params.sessionStoreDiscoveryCache }
+        : {}),
+    },
   );
   if (params.expectedExistingSessionId && entry?.sessionId !== params.expectedExistingSessionId) {
     params.respond(
