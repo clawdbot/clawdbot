@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Resident faster-whisper worker for 16 kHz mono PCM16.
 
-stdin is raw PCM16. The exact newline commands {"cmd":"reset"} and
-{"cmd":"shutdown"} may be interleaved between Node writes. stdout is JSONL.
+stdin is raw PCM16 until EOF. stdout is JSONL.
 """
 from __future__ import annotations
 
@@ -11,13 +10,14 @@ import json
 import os
 import sys
 from dataclasses import dataclass
+from collections import deque
 from typing import Any
 
 SAMPLE_RATE = 16_000
 FRAME_MS = 30
 FRAME_BYTES = SAMPLE_RATE * FRAME_MS // 1000 * 2
-RESET = b'{"cmd":"reset"}\n'
-SHUTDOWN = b'{"cmd":"shutdown"}\n'
+PRE_ROLL_MS = 300
+PRE_ROLL_FRAMES = PRE_ROLL_MS // FRAME_MS
 
 
 def emit(event: str, **fields: Any) -> None:
@@ -30,9 +30,11 @@ class VadState:
     silence_ms: int = 0
     pending: bytes = b""
     speech: bytearray | None = None
+    pre_roll: deque[bytes] | None = None
 
     def __post_init__(self) -> None:
         self.speech = bytearray()
+        self.pre_roll = deque(maxlen=PRE_ROLL_FRAMES)
 
     def reset(self) -> None:
         self.active = False
@@ -40,13 +42,14 @@ class VadState:
         self.pending = b""
         assert self.speech is not None
         self.speech.clear()
+        assert self.pre_roll is not None
+        self.pre_roll.clear()
 
 
 class Worker:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
         self.state = VadState()
-        self.running = True
         self.model: Any = None
         self.vad: Any = None
 
@@ -79,15 +82,25 @@ class Worker:
                 continue
 
             speech = self.state.speech
+            pre_roll = self.state.pre_roll
             assert speech is not None
+            assert pre_roll is not None
             if voiced:
                 if not self.state.active:
                     self.state.active = True
+                    speech.extend(b"".join(pre_roll))
+                    pre_roll.clear()
                     emit("speech_start")
                 self.state.silence_ms = 0
                 speech.extend(frame)
+                if len(speech) >= self.args.max_utterance_ms * SAMPLE_RATE * 2 // 1000:
+                    audio = bytes(speech)
+                    self.state.reset()
+                    emit("speech_end")
+                    self.transcribe(audio)
                 continue
             if not self.state.active:
+                pre_roll.append(frame)
                 continue
 
             speech.extend(frame)
@@ -121,39 +134,21 @@ class Worker:
             emit("error", message=f"transcription failed: {exc}")
 
     def run(self) -> None:
-        # Scan for the two exact control tokens while retaining enough trailing
-        # bytes to recognize a command split across OS pipe reads.
-        buffered = b""
-        longest_command = max(len(RESET), len(SHUTDOWN))
-        while self.running:
+        while True:
             try:
                 chunk = os.read(sys.stdin.fileno(), 4096)
             except Exception as exc:
                 emit("error", message=f"stdin read failed: {exc}")
                 continue
             if not chunk:
-                return
-            buffered += chunk
-            while True:
-                positions = [
-                    (buffered.find(command), command)
-                    for command in (RESET, SHUTDOWN)
-                    if buffered.find(command) >= 0
-                ]
-                if not positions:
-                    keep = min(len(buffered), longest_command - 1)
-                    if len(buffered) > keep:
-                        self.feed(buffered[:-keep] if keep else buffered)
-                        buffered = buffered[-keep:] if keep else b""
-                    break
-                position, command = min(positions, key=lambda item: item[0])
-                self.feed(buffered[:position])
-                buffered = buffered[position + len(command):]
-                if command == RESET:
+                speech = self.state.speech
+                if self.state.active and speech:
+                    audio = bytes(speech)
                     self.state.reset()
-                else:
-                    self.running = False
-                    return
+                    emit("speech_end")
+                    self.transcribe(audio)
+                return
+            self.feed(chunk)
 
 
 def parse_args() -> argparse.Namespace:
@@ -164,6 +159,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--language", default="no")
     parser.add_argument("--vad-aggressiveness", type=int, choices=range(4), default=2)
     parser.add_argument("--silence-ms", type=int, default=700)
+    parser.add_argument(
+        "--max-utterance-ms",
+        type=int,
+        default=int(os.environ.get("MAX_UTTERANCE_MS", "30000")),
+    )
     return parser.parse_args()
 
 

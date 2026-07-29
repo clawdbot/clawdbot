@@ -1,4 +1,5 @@
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, existsSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   RealtimeTranscriptionProviderConfig,
@@ -15,7 +16,8 @@ export type LocalWhisperConfig = {
   computeType: string;
   silenceMs: number;
   vadAggressiveness: number;
-  pythonPath: string;
+  maxUtteranceMs: number;
+  pythonPath: string | undefined;
   workerScript: string;
 };
 
@@ -51,11 +53,15 @@ export function resolveLocalWhisperConfig(
   const raw = nestedConfig(rawConfig);
   const silenceMs = finiteInteger(raw.silenceMs) ?? 700;
   const vadAggressiveness = finiteInteger(raw.vadAggressiveness) ?? 2;
+  const maxUtteranceMs = finiteInteger(raw.maxUtteranceMs) ?? 30_000;
   if (silenceMs <= 0) {
     throw new Error("Local Whisper silenceMs must be a positive integer");
   }
   if (vadAggressiveness < 0 || vadAggressiveness > 3) {
     throw new Error("Local Whisper vadAggressiveness must be between 0 and 3");
+  }
+  if (maxUtteranceMs <= 0) {
+    throw new Error("Local Whisper maxUtteranceMs must be a positive integer");
   }
   return {
     model: optionalString(raw.model) ?? DEFAULT_LOCAL_WHISPER_MODEL,
@@ -64,17 +70,15 @@ export function resolveLocalWhisperConfig(
     computeType: optionalString(raw.computeType) ?? "int8",
     silenceMs,
     vadAggressiveness,
-    pythonPath:
-      optionalString(raw.pythonPath) ??
-      optionalString(process.env.LOCAL_WHISPER_PYTHON) ??
-      "python3",
+    maxUtteranceMs,
+    pythonPath: optionalString(raw.pythonPath) ?? optionalString(process.env.LOCAL_WHISPER_PYTHON),
     workerScript: optionalString(raw.workerScript) ?? defaultWorkerScript(),
   };
 }
 
-function isExecutableOrResolvable(command: string): boolean {
-  if (!command.includes("/")) {
-    return command.length > 0;
+function isExistingAbsolutePath(command: string | undefined): command is string {
+  if (!command || !isAbsolute(command) || !existsSync(command)) {
+    return false;
   }
   try {
     accessSync(command, constants.X_OK);
@@ -96,13 +100,18 @@ export function buildLocalWhisperRealtimeTranscriptionProvider(): RealtimeTransc
       try {
         const config = resolveLocalWhisperConfig(providerConfig);
         accessSync(config.workerScript, constants.R_OK);
-        return isExecutableOrResolvable(config.pythonPath);
+        return isExistingAbsolutePath(config.pythonPath);
       } catch {
         return false;
       }
     },
     createSession: (request) => {
       const config = resolveLocalWhisperConfig(request.providerConfig);
+      if (!isExistingAbsolutePath(config.pythonPath)) {
+        throw new Error(
+          "Local Whisper requires an existing absolute pythonPath or LOCAL_WHISPER_PYTHON",
+        );
+      }
       return createLocalWhisperRealtimeTranscriptionSession({ ...request, ...config });
     },
   };

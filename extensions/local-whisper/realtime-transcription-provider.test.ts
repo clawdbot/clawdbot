@@ -1,4 +1,8 @@
+import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getGlobalDispatcher, MockAgent, setGlobalDispatcher } from "undici";
 import { describe, expect, it, vi } from "vitest";
@@ -13,11 +17,12 @@ import type {
   LocalWhisperWorkerEvent,
   LocalWhisperWorkerFactory,
 } from "./worker.js";
+import { spawnLocalWhisperWorker } from "./worker.js";
 
 class MockWorker implements LocalWhisperWorker {
   readonly pid = 4242;
   readonly audio: Buffer[] = [];
-  readonly commands: string[] = [];
+  ended = false;
   killed = false;
   private readonly events = new EventEmitter();
 
@@ -33,8 +38,8 @@ class MockWorker implements LocalWhisperWorker {
     this.audio.push(Buffer.from(audio));
   }
 
-  command(command: "reset" | "shutdown"): void {
-    this.commands.push(command);
+  endAudio(): void {
+    this.ended = true;
   }
 
   kill(): void {
@@ -66,7 +71,8 @@ function mockSession(
     computeType: "int8",
     silenceMs: 700,
     vadAggressiveness: 2,
-    pythonPath: "python3",
+    maxUtteranceMs: 30_000,
+    pythonPath: process.execPath,
     workerScript: "/tmp/worker.py",
     workerFactory,
     ...callbacks,
@@ -122,7 +128,8 @@ describe("local-whisper provider", () => {
       computeType: "int8",
       silenceMs: 900,
       vadAggressiveness: 3,
-      pythonPath: "python3",
+      maxUtteranceMs: 30_000,
+      pythonPath: undefined,
     });
   });
 
@@ -134,6 +141,26 @@ describe("local-whisper provider", () => {
     });
     expect(config).toBeDefined();
     expect(provider.isConfigured({ providerConfig: config! })).toBe(true);
+  });
+
+  it("is not configured without an explicit Python executable", () => {
+    const provider = buildLocalWhisperRealtimeTranscriptionProvider();
+    const previous = process.env.LOCAL_WHISPER_PYTHON;
+    delete process.env.LOCAL_WHISPER_PYTHON;
+    try {
+      const config = provider.resolveConfig?.({
+        cfg: {} as OpenClawConfig,
+        rawConfig: { model: "small" },
+      });
+      expect(config).toBeDefined();
+      expect(provider.isConfigured({ providerConfig: config! })).toBe(false);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.LOCAL_WHISPER_PYTHON;
+      } else {
+        process.env.LOCAL_WHISPER_PYTHON = previous;
+      }
+    }
   });
 
   it("does not make outbound requests while resolving config or creating a session", () => {
@@ -208,10 +235,100 @@ describe("local-whisper session", () => {
     worker.emit({ event: "ready", pid: worker.pid!, model: "small" });
     await connecting;
     session.close();
-    expect(worker.commands).toEqual(["shutdown"]);
+    expect(worker.ended).toBe(true);
     expect(worker.killed).toBe(false);
-    await vi.advanceTimersByTimeAsync(2_001);
+    await vi.advanceTimersByTimeAsync(5_001);
     expect(worker.killed).toBe(true);
     vi.useRealTimers();
+  });
+});
+
+describe("local-whisper worker hardening", () => {
+  it("keeps pre-roll before speech and forces a transcript at max utterance", () => {
+    const script = `
+import argparse
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("local_whisper_worker", ${JSON.stringify(
+      join(import.meta.dirname, "worker.py"),
+    )})
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+
+class Vad:
+    def is_speech(self, frame, _rate):
+        return frame[0] == 1
+
+def make_worker(max_ms):
+    args = argparse.Namespace(
+        model="small", device="cpu", compute_type="int8", language="no",
+        vad_aggressiveness=2, silence_ms=700, max_utterance_ms=max_ms,
+    )
+    worker = module.Worker(args)
+    worker.vad = Vad()
+    captured = []
+    worker.transcribe = captured.append
+    return worker, captured
+
+frame = lambda value: bytes([value]) * module.FRAME_BYTES
+worker, captured = make_worker(30_000)
+worker.feed(frame(0) * 7 + frame(1) * 10 + frame(0) * 24)
+assert len(captured) == 1
+assert captured[0].startswith(frame(0) * 7)
+assert frame(1) * 10 in captured[0]
+
+worker, captured = make_worker(30_000)
+worker.feed(frame(1) * (35_000 // module.FRAME_MS))
+assert captured
+assert len(captured[0]) == 30_000 * module.SAMPLE_RATE * 2 // 1000
+`;
+    execFileSync("/home/o/.venvs/local-whisper/bin/python", ["-c", script], {
+      stdio: "pipe",
+    });
+  });
+
+  it("treats worker stderr as diagnostics rather than a structured error event", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "local-whisper-stderr-"));
+    const workerScript = join(directory, "worker.py");
+    writeFileSync(
+      workerScript,
+      [
+        "import json, os, sys",
+        'print(json.dumps({"event":"ready","pid":os.getpid(),"model":"test"}), flush=True)',
+        'print("warning: foo", file=sys.stderr, flush=True)',
+        "sys.stdin.buffer.read()",
+      ].join("\n"),
+    );
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    try {
+      const worker = spawnLocalWhisperWorker({
+        pythonPath: "/home/o/.venvs/local-whisper/bin/python",
+        workerScript,
+        model: "test",
+        language: "no",
+        device: "cpu",
+        computeType: "int8",
+        silenceMs: 700,
+        vadAggressiveness: 2,
+        maxUtteranceMs: 30_000,
+      });
+      const events: LocalWhisperWorkerEvent[] = [];
+      await new Promise<void>((resolve) => {
+        worker.onEvent((event) => {
+          events.push(event);
+          if (event.event === "ready") {
+            worker.endAudio();
+          }
+        });
+        worker.onExit(() => resolve());
+      });
+      expect(events.some((event) => event.event === "error")).toBe(false);
+      expect(debug).toHaveBeenCalledWith(expect.stringContaining("warning: foo"));
+    } finally {
+      debug.mockRestore();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

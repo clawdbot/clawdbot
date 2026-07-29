@@ -9,7 +9,7 @@ export type LocalWhisperWorkerEvent =
   | { event: "error"; message: string };
 
 export type LocalWhisperWorkerOptions = {
-  pythonPath: string;
+  pythonPath?: string;
   workerScript: string;
   model: string;
   device: string;
@@ -17,6 +17,7 @@ export type LocalWhisperWorkerOptions = {
   language: string;
   vadAggressiveness: number;
   silenceMs: number;
+  maxUtteranceMs: number;
 };
 
 export interface LocalWhisperWorker {
@@ -24,7 +25,7 @@ export interface LocalWhisperWorker {
   onEvent(listener: (event: LocalWhisperWorkerEvent) => void): void;
   onExit(listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
   writeAudio(audio: Buffer): void;
-  command(command: "reset" | "shutdown"): void;
+  endAudio(): void;
   kill(): void;
 }
 
@@ -38,8 +39,13 @@ class ChildProcessLocalWhisperWorker implements LocalWhisperWorker {
   >();
 
   constructor(options: LocalWhisperWorkerOptions) {
+    const pythonPath = process.env.LOCAL_WHISPER_PYTHON ?? options.pythonPath;
+    if (!pythonPath) {
+      throw new Error("Local Whisper Python path is not configured");
+    }
+    console.debug(`[local-whisper] using Python executable: ${pythonPath}`);
     this.child = spawn(
-      options.pythonPath,
+      pythonPath,
       [
         options.workerScript,
         "--model",
@@ -54,6 +60,8 @@ class ChildProcessLocalWhisperWorker implements LocalWhisperWorker {
         String(options.vadAggressiveness),
         "--silence-ms",
         String(options.silenceMs),
+        "--max-utterance-ms",
+        String(options.maxUtteranceMs),
       ],
       { stdio: ["pipe", "pipe", "pipe"] },
     );
@@ -67,13 +75,13 @@ class ChildProcessLocalWhisperWorker implements LocalWhisperWorker {
           }
         }
       } catch {
-        this.emitError(`worker emitted invalid JSON: ${line.slice(0, 160)}`);
+        console.debug(`[local-whisper worker stdout] invalid JSON: ${line.slice(0, 160)}`);
       }
     });
     this.child.stderr.on("data", (chunk: Buffer) => {
       const message = chunk.toString("utf8").trim();
       if (message) {
-        this.emitError(message);
+        console.debug(`[local-whisper worker stderr] ${message}`);
       }
     });
     this.child.on("error", (error) => this.emitError(error.message));
@@ -102,9 +110,9 @@ class ChildProcessLocalWhisperWorker implements LocalWhisperWorker {
     }
   }
 
-  command(command: "reset" | "shutdown"): void {
+  endAudio(): void {
     if (!this.child.stdin.destroyed) {
-      this.child.stdin.write(`${JSON.stringify({ cmd: command })}\n`);
+      this.child.stdin.end();
     }
   }
 

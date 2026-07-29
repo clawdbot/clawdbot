@@ -333,6 +333,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/llm-task/**"
+"extensions: local-whisper":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/local-whisper/**"
 "extensions: lobster":
   - changed-files:
       - any-glob-to-any-file:

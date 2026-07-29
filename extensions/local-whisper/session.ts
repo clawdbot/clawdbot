@@ -11,7 +11,7 @@ import {
 } from "./worker.js";
 
 const CONNECT_TIMEOUT_MS = 120_000;
-const CLOSE_TIMEOUT_MS = 2_000;
+const CLOSE_TIMEOUT_MS = 5_000;
 
 export type LocalWhisperSessionOptions = LocalWhisperWorkerOptions &
   RealtimeTranscriptionSessionCallbacks & {
@@ -122,7 +122,7 @@ export function createLocalWhisperRealtimeTranscriptionSession(
       if (!currentWorker) {
         return;
       }
-      currentWorker.command("shutdown");
+      currentWorker.endAudio();
       const timeout = setTimeout(
         () => currentWorker.kill(),
         options.closeTimeoutMs ?? CLOSE_TIMEOUT_MS,
