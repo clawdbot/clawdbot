@@ -483,7 +483,10 @@ export function readClaudeCliSessionMessages(params: {
   // Match local transcript persistence before dedupe so imported secrets cannot
   // bypass exact-text matching or reach chat history through the external copy.
   return visibleMessages.map(
-    (message) => redactTranscriptMessage(message as AgentMessage) as TranscriptLikeMessage,
+    (message) =>
+      redactTranscriptMessage(
+        message as unknown as AgentMessage,
+      ) as unknown as TranscriptLikeMessage,
   );
 }
 
