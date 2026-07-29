@@ -702,6 +702,16 @@ describe("chat page split layout host", () => {
       sessionKeys: ["agent:main:replacement"],
     });
 
+    page.requestUpdate();
+    page.remove();
+    await page.updateComplete;
+    expect(request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, { sessionKeys: [] });
+
+    document.body.append(page);
+    await Promise.resolve();
+    expect(request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
+      sessionKeys: ["agent:main:replacement"],
+    });
     page.remove();
     await Promise.resolve();
     expect(request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, { sessionKeys: [] });

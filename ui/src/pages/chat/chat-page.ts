@@ -100,6 +100,8 @@ export class ChatPage extends OpenClawLightDomElement {
     window.addEventListener(UI_COMMAND_EVENT, this.handleUiCommand);
     this.syncRouteAgent();
     this.syncRouteToActivePane();
+    const layout = this.layout ?? this.classicLayout();
+    this.viewerPresence.sync(this.context?.gateway, layout, this.narrow);
   }
 
   override disconnectedCallback() {
@@ -121,10 +123,9 @@ export class ChatPage extends OpenClawLightDomElement {
 
   override updated(changedProperties: Map<PropertyKey, unknown>) {
     const layout = this.layout ?? this.classicLayout();
-    this.viewerPresence.sync(
-      this.context?.gateway,
-      visiblePanesOf(layout, this.narrow).map((pane) => pane.sessionKey),
-    );
+    if (this.isConnected) {
+      this.viewerPresence.sync(this.context?.gateway, layout, this.narrow);
+    }
     const data = this.data;
     const activePane = this.layout ? findPane(this.layout, this.layout.activePaneId)?.pane : null;
     const routeDraftWasRendered =
