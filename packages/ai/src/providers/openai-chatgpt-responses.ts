@@ -1009,6 +1009,7 @@ function getWebSocketReadyState(socket: WebSocketLike): number | undefined {
 
 function isWebSocketReusable(socket: WebSocketLike): boolean {
   const readyState = getWebSocketReadyState(socket);
+  // If readyState is unavailable, assume the runtime keeps it open/reusable.
   return readyState === undefined || readyState === 1;
 }
 
@@ -1022,11 +1023,13 @@ function closeWebSocketSilently(socket: WebSocketLike, code = 1000, reason = "do
   } catch {}
 }
 
+// A delayed release or expiry owns its captured socket, not a newer session lease.
 function deleteOwnedWebSocketSession(sessionId: string, entry: CachedWebSocketConnection): void {
   if (websocketSessionCache.get(sessionId) === entry) {
     websocketSessionCache.delete(sessionId);
   }
 }
+
 function scheduleSessionWebSocketExpiry(sessionId: string, entry: CachedWebSocketConnection): void {
   if (entry.idleTimer) {
     clearTimeout(entry.idleTimer);
