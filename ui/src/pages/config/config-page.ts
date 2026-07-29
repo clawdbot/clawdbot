@@ -2,7 +2,7 @@ import "../../styles/config.css";
 import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
-import { html, type PropertyValues } from "lit";
+import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -1053,11 +1053,15 @@ export class ConfigPage extends OpenClawLightDomElement {
       asConfigRecord(configState.configForm ?? configState.configSnapshot?.config) ?? {};
     const body = this.renderAdvancedConfig(configObject);
     return html`
-      <section class="content-header">
-        <div>
-          <div class="page-title">${configPageTitle(this.pageId)}</div>
-        </div>
-      </section>
+      ${this.pageId === "memory"
+        ? nothing
+        : html`
+            <section class="content-header">
+              <div>
+                <div class="page-title">${configPageTitle(this.pageId)}</div>
+              </div>
+            </section>
+          `}
       ${renderSettingsWorkspace(body)}
     `;
   }

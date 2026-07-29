@@ -688,13 +688,22 @@
 /* Memory */
 .memory-page {
   display: grid;
-  gap: 14px;
-  margin-top: 12px;
+  gap: 0;
 }
 
 .memory-page__panel {
   display: grid;
   gap: 14px;
+}
+
+.shell--settings .content:has(.settings-page) .content-header.hub-page-header {
+  max-width: 1120px;
+}
+
+.memory-page__panel .settings-page,
+.memory-page__panel .config-lead,
+.memory-page__panel .config-content-callout {
+  margin-inline: 0;
 }
 
 .memory-page__link {

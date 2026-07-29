@@ -60,6 +60,12 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
     dreams: html`<div class="test-dreams"></div>`,
     editor: html`<div class="test-editor"></div>`,
     dreamingSettings: html`<div class="test-dreaming-settings"></div>`,
+    agentId: "main",
+    agents: [
+      { value: "main", label: "Main" },
+      { value: "research", label: "Research" },
+    ],
+    onAgentChange: vi.fn(),
     ...overrides,
   };
 }
@@ -71,6 +77,37 @@ function renderInto(props: MemoryViewProps): HTMLElement {
 }
 
 describe("renderMemory", () => {
+  it.each(["overview", "memories", "dreams"] as const)(
+    "renders the shared header and agent scope on %s",
+    (activeTab) => {
+      const onAgentChange = vi.fn();
+      const container = renderInto(createProps({ activeTab, onAgentChange }));
+      const header = container.querySelector(".hub-page-header");
+
+      expect(header?.querySelector(".page-title")?.textContent).toBe("Memory");
+      expect(header?.querySelector(".page-subtitle")?.textContent).toContain(
+        "Choose how OpenClaw stores, searches, and maintains agent memory.",
+      );
+      expect(header?.querySelector(".memory-hub-tabs")).not.toBeNull();
+      expect(container.textContent).not.toContain("Agent view");
+
+      const select = header?.querySelector("openclaw-agent-select") as HTMLElement & {
+        accessibleLabel?: string;
+        onSelect?: (value: string) => void;
+      };
+      expect(select.accessibleLabel).toBe("Agent");
+      select.onSelect?.("research");
+      expect(onAgentChange).toHaveBeenCalledWith("research");
+    },
+  );
+
+  it("keeps the header action slot empty on Settings", () => {
+    const container = renderInto(createProps({ activeTab: "settings" }));
+
+    expect(container.querySelector(".hub-page-header__actions")?.childElementCount).toBe(0);
+    expect(container.querySelector("openclaw-agent-select")).toBeNull();
+  });
+
   it("shows the exclusive engine choice as one radio group over installed engines", () => {
     const container = renderInto(createProps());
 
