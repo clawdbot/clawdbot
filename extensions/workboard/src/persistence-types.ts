@@ -50,9 +50,20 @@ type PersistedWorkboardProofPage = {
   hasMore: boolean;
 };
 
+export type PersistedWorkboardCardProofPage = {
+  card: WorkboardCard;
+  proofPage: PersistedWorkboardProofPage;
+  latestProofNote?: string;
+};
+
 export type WorkboardCardStore = WorkboardKeyedStore & {
   listProofPage?(
     cardId: string,
     request: WorkboardProofPageRequest,
   ): Promise<PersistedWorkboardProofPage | undefined>;
+  listCardProofPages?(request: { limit: number }): Promise<PersistedWorkboardCardProofPage[]>;
+  lookupCardProofPage?(
+    cardId: string,
+    request: WorkboardProofPageRequest,
+  ): Promise<PersistedWorkboardCardProofPage | undefined>;
 };

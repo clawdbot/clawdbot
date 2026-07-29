@@ -6,7 +6,7 @@ import type {
 } from "@openclaw/workboard-contract";
 import { redactClaimToken } from "./card-redaction.js";
 
-const WORKBOARD_PROOF_VIEW_LIMIT = 40;
+export const WORKBOARD_PROOF_VIEW_LIMIT = 40;
 const WORKBOARD_EMBEDDED_PROOF_BYTES = 24 * 1024;
 
 const WORKBOARD_PROOF_CURSOR_PREFIX = "proof-v2.";
@@ -113,26 +113,33 @@ export function paginateWorkboardProof(
   });
 }
 
-export function toBoundedWorkboardCard(card: WorkboardCard): WorkboardCardView {
-  const canonicalProof = card.metadata?.proof ?? [];
-  let proof = canonicalProof.slice(-WORKBOARD_PROOF_VIEW_LIMIT);
+export function toBoundedWorkboardCardFromPage(
+  card: WorkboardCard,
+  page: {
+    proof: WorkboardProof[];
+    total: number;
+    hasMore: boolean;
+  },
+): WorkboardCardView {
+  let proof = page.proof.slice(-WORKBOARD_PROOF_VIEW_LIMIT);
+  let hasMore = page.hasMore || proof.length < page.proof.length;
   while (proof.length > 0 && proofBytes(proof) > WORKBOARD_EMBEDDED_PROOF_BYTES) {
     proof = proof.slice(1);
+    hasMore = true;
   }
-  const hasMore = proof.length < canonicalProof.length;
   const redacted = redactClaimToken(card);
+  const metadata =
+    redacted.metadata || proof.length > 0
+      ? {
+          ...redacted.metadata,
+          ...(proof.length > 0 ? { proof } : { proof: undefined }),
+        }
+      : undefined;
   const projected = {
     ...redacted,
-    ...(redacted.metadata
-      ? {
-          metadata: {
-            ...redacted.metadata,
-            ...(proof.length > 0 ? { proof } : { proof: undefined }),
-          },
-        }
-      : {}),
+    ...(metadata ? { metadata } : {}),
     proofPage: {
-      total: canonicalProof.length,
+      total: page.total,
       hasMore,
       ...(hasMore && proof[0] ? { nextCursor: encodeProofCursor(card.id, proof[0].id) } : {}),
     },
@@ -140,6 +147,15 @@ export function toBoundedWorkboardCard(card: WorkboardCard): WorkboardCardView {
   // Structured cloning strips SQLite's private snapshot symbol and prevents output consumers from
   // mutating canonical nested objects before the view is serialized.
   return structuredClone(projected) as WorkboardCardView;
+}
+
+export function toBoundedWorkboardCard(card: WorkboardCard): WorkboardCardView {
+  const canonicalProof = card.metadata?.proof ?? [];
+  return toBoundedWorkboardCardFromPage(card, {
+    proof: canonicalProof,
+    total: canonicalProof.length,
+    hasMore: false,
+  });
 }
 
 export function assertNotProjectedWorkboardCard(value: unknown): void {

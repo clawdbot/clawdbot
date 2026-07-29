@@ -381,6 +381,83 @@ describe("WorkboardStore", () => {
     }
   });
 
+  it("persists sqlite proof appends and resolutions without rewriting history", async () => {
+    // openclaw-temp-dir: allow extension tests cannot import repo-only test helpers
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-proof-writes-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const stores = createWorkboardSqliteStores({ dbPath });
+    let auditDb: DatabaseSync | undefined;
+    try {
+      const store = new WorkboardStore(stores.cards, {
+        boards: stores.boards,
+        subscriptions: stores.subscriptions,
+        attachments: stores.attachments,
+      });
+      const pending = {
+        id: "proof-pending",
+        status: "unknown" as const,
+        label: "Pending proof",
+        createdAt: 1,
+      };
+      const card = await store.create({
+        title: "Incremental proof persistence",
+        metadata: { proof: [pending] },
+      });
+
+      auditDb = new DatabaseSync(dbPath);
+      auditDb.exec(`
+        CREATE TABLE proof_mutation_audit (operation TEXT NOT NULL) STRICT;
+        CREATE TRIGGER proof_mutation_audit_insert
+          AFTER INSERT ON workboard_card_proof
+          BEGIN
+            INSERT INTO proof_mutation_audit (operation) VALUES ('insert');
+          END;
+        CREATE TRIGGER proof_mutation_audit_update
+          AFTER UPDATE ON workboard_card_proof
+          BEGIN
+            INSERT INTO proof_mutation_audit (operation) VALUES ('update');
+          END;
+        CREATE TRIGGER proof_mutation_audit_delete
+          AFTER DELETE ON workboard_card_proof
+          BEGIN
+            INSERT INTO proof_mutation_audit (operation) VALUES ('delete');
+          END;
+      `);
+      const operations = () =>
+        auditDb
+          ?.prepare("SELECT operation FROM proof_mutation_audit ORDER BY rowid")
+          .all()
+          .map((row) => row.operation) ?? [];
+
+      await store.addComment(card.id, { body: "Unrelated mutation." });
+      expect(operations()).toEqual([]);
+
+      const appended = await store.addProof(card.id, {
+        status: "passed",
+        label: "Appended proof",
+      });
+      expect(operations()).toEqual(["insert"]);
+
+      const nextProof = structuredClone(appended.metadata?.proof ?? []);
+      const resolved = nextProof.find((proof) => proof.id === pending.id);
+      if (!resolved) {
+        throw new Error("expected pending proof");
+      }
+      resolved.status = "passed";
+      await store.update(card.id, { metadata: { proof: nextProof } });
+      expect(operations()).toEqual(["insert", "update"]);
+      expect(
+        auditDb
+          .prepare("SELECT name FROM pragma_index_list('workboard_card_proof') WHERE name = ?")
+          .get("workboard_card_proof_card_ordinal_idx"),
+      ).toMatchObject({ name: "workboard_card_proof_card_ordinal_idx" });
+    } finally {
+      auditDb?.close();
+      stores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("migrates a version 2 workboard table to STRICT without losing rows", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-strict-migration-"));
     const dbPath = path.join(dir, "workboard.sqlite");
@@ -1557,6 +1634,86 @@ describe("WorkboardStore", () => {
       expect(canonical).not.toHaveProperty("proofPage");
     } finally {
       reopenedStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("builds bounded sqlite card views without hydrating canonical proof history", async () => {
+    // openclaw-temp-dir: allow extension tests cannot import repo-only test helpers
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-bounded-views-"));
+    const stores = createWorkboardSqliteStores({ dbPath: path.join(dir, "workboard.sqlite") });
+    try {
+      const store = new WorkboardStore(stores.cards, {
+        boards: stores.boards,
+        subscriptions: stores.subscriptions,
+        attachments: stores.attachments,
+      });
+      await store.upsertBoard({ id: "planning", name: "Planning" });
+      const proof = Array.from({ length: 100 }, (_, index) => ({
+        id: `proof-${index}`,
+        status: "passed" as const,
+        createdAt: index + 1,
+        label: `Proof ${index}`,
+      }));
+      const card = await store.create({
+        title: "Bounded SQLite view",
+        boardId: "planning",
+        metadata: { proof },
+      });
+      const parent = await store.create({
+        title: "Older noted proof",
+        boardId: "planning",
+        status: "done",
+        metadata: {
+          proof: Array.from({ length: 45 }, (_, index) => ({
+            id: `parent-proof-${index}`,
+            status: "passed" as const,
+            createdAt: index + 1,
+            ...(index === 0 ? { note: "Durable result older than the bounded window." } : {}),
+          })),
+        },
+      });
+      const child = await store.create({ title: "Context child", boardId: "planning" });
+      await store.linkCards(parent.id, child.id);
+      await store.create({ title: "Default board summary" });
+
+      stores.cards.entries = async () => {
+        throw new Error("canonical card entries must not back bounded sqlite views");
+      };
+      stores.cards.lookup = async () => {
+        throw new Error("canonical card lookup must not back bounded sqlite views");
+      };
+
+      const result = await store.listBoundedWithBoards({ boardId: "planning" });
+      expect(result.cards).toHaveLength(3);
+      expect(result.cards.find((entry) => entry.id === card.id)).toMatchObject({
+        id: card.id,
+        metadata: {
+          proof: Array.from({ length: 40 }, (_, index) =>
+            expect.objectContaining({ id: `proof-${index + 60}` }),
+          ),
+        },
+        proofPage: { total: 100, hasMore: true },
+      });
+      expect(result.boards).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "default", total: 1 }),
+          expect.objectContaining({ id: "planning", total: 3 }),
+        ]),
+      );
+      await expect(store.getBounded(card.id)).resolves.toMatchObject({
+        id: card.id,
+        proofPage: { total: 100, hasMore: true },
+      });
+      await expect(store.buildWorkerContext(card.id)).resolves.toContain("Proof 99");
+      await expect(store.buildWorkerContext(child.id)).resolves.toContain(
+        "Durable result older than the bounded window.",
+      );
+      await expect(store.list()).rejects.toThrow(
+        "canonical card entries must not back bounded sqlite views",
+      );
+    } finally {
+      stores.close();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

@@ -569,17 +569,19 @@ export function cardBoardId(card: WorkboardCard): string {
   return card.metadata?.automation?.boardId ?? "default";
 }
 
-function cardResultSummary(card: WorkboardCard): string | undefined {
+function cardResultSummary(card: WorkboardCard, latestProofNote?: string): string | undefined {
   return (
     card.metadata?.automation?.summary ??
     card.metadata?.comments?.findLast((comment) => comment.body.trim())?.body ??
-    card.metadata?.proof?.findLast((proof) => proof.note?.trim())?.note
+    card.metadata?.proof?.findLast((proof) => proof.note?.trim())?.note ??
+    latestProofNote
   );
 }
 
 export function buildWorkerContext(
   card: WorkboardCard,
   cards: readonly WorkboardCard[] = [],
+  latestProofNoteByCardId: ReadonlyMap<string, string> = new Map(),
 ): string {
   const lines = [
     `# Workboard card ${card.id}`,
@@ -667,7 +669,9 @@ export function buildWorkerContext(
     lines.push("", "## Parent results");
     for (const parent of parentResults) {
       lines.push(
-        `- ${parent.id} ${parent.title}: ${capText(cardResultSummary(parent), 500) ?? "done"}`,
+        `- ${parent.id} ${parent.title}: ${
+          capText(cardResultSummary(parent, latestProofNoteByCardId.get(parent.id)), 500) ?? "done"
+        }`,
       );
     }
   }
@@ -688,7 +692,9 @@ export function buildWorkerContext(
     lines.push("", `## Recent done work by ${card.agentId}`);
     for (const entry of recentAgentWork) {
       lines.push(
-        `- ${entry.id} ${entry.title}: ${capText(cardResultSummary(entry), 300) ?? "done"}`,
+        `- ${entry.id} ${entry.title}: ${
+          capText(cardResultSummary(entry, latestProofNoteByCardId.get(entry.id)), 300) ?? "done"
+        }`,
       );
     }
   }

@@ -1314,7 +1314,7 @@ private struct IPadWorkboardCardDetailSheet: View {
                 Section {
                     self.detailRow("Title", value: self.card.title)
                     self.detailRow("Status", value: IPadWorkboardDefaults.label(for: self.card.status))
-                    if let proofTotal = self.card.proofPage?.total {
+                    if let proofTotal = self.card.proofTotal {
                         self.detailRow(
                             String(localized: "Proof records"),
                             value: proofTotal.formatted())
@@ -1463,15 +1463,22 @@ struct IPadWorkboardCard: Decodable, Identifiable {
     let metadata: IPadWorkboardMetadata?
     var proofPage: IPadWorkboardProofPage?
 
+    var proofTotal: Int? {
+        self.proofPage?.total ?? self.metadata?.canonicalProofCount
+    }
+
     var proofSummary: String? {
-        guard let total = self.proofPage?.total else { return nil }
+        guard let total = self.proofTotal else { return nil }
         return String(
             format: String(localized: "Proof records: %@"),
             total.formatted())
     }
 
     func retainingProofPage(from previous: Self?) -> Self {
-        guard self.proofPage == nil, let previousProofPage = previous?.proofPage else {
+        guard self.proofPage == nil,
+              self.metadata?.canonicalProofCount == nil,
+              let previousProofPage = previous?.proofPage
+        else {
             return self
         }
         var replacement = self
@@ -1489,7 +1496,14 @@ struct IPadWorkboardProofPage: Decodable {
 struct IPadWorkboardMetadata: Decodable {
     let archivedAt: Double?
     let automation: IPadWorkboardAutomationMetadata?
+    private let proof: [IPadWorkboardProofMarker]?
+
+    var canonicalProofCount: Int? {
+        self.proof?.count
+    }
 }
+
+private struct IPadWorkboardProofMarker: Decodable {}
 
 struct IPadWorkboardAutomationMetadata: Decodable {
     let boardId: String?

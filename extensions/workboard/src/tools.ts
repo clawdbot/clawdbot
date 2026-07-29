@@ -5,7 +5,6 @@ import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { Type } from "typebox";
-import { toBoundedWorkboardCard } from "./card-output.js";
 import { redactClaimToken } from "./card-redaction.js";
 import { WorkboardStore } from "./store.js";
 import { cardIdField, claimTokenField, createWorkboardMoveTool } from "./tools-card-mutations.js";
@@ -347,13 +346,23 @@ export function createWorkboardTools(params: {
       execute: async (_toolCallId, rawParams) => {
         const record = rawParams as Record<string, unknown>;
         const id = readStringParam(record, "id", { required: true });
+        const bounded = record.proofView === "bounded";
+        if (bounded) {
+          const card = await store.getBounded(id);
+          if (!card) {
+            throw new Error(`card not found: ${id}`);
+          }
+          return jsonResult({
+            card,
+            workerContext: await store.buildWorkerContext(id),
+          });
+        }
         const card = await store.get(id);
         if (!card) {
           throw new Error(`card not found: ${id}`);
         }
         return jsonResult({
-          card:
-            record.proofView === "bounded" ? toBoundedWorkboardCard(card) : redactClaimToken(card),
+          card: redactClaimToken(card),
           workerContext: await store.buildWorkerContext(id),
         });
       },

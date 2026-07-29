@@ -1,7 +1,11 @@
 // Workboard plugin module implements store behavior.
 import { randomUUID } from "node:crypto";
-import type { WorkboardAttachment, WorkboardCard } from "@openclaw/workboard-contract";
-import { assertNotProjectedWorkboardCard } from "./card-output.js";
+import type {
+  WorkboardAttachment,
+  WorkboardCard,
+  WorkboardProof,
+} from "@openclaw/workboard-contract";
+import { assertNotProjectedWorkboardCard, WORKBOARD_PROOF_VIEW_LIMIT } from "./card-output.js";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -44,6 +48,20 @@ import {
 import { WorkboardNotificationStore } from "./store-notifications.js";
 
 export type { WorkboardDispatchResult } from "./store-inputs.js";
+
+function withProofHistory(card: WorkboardCard, proof: WorkboardProof[]): WorkboardCard {
+  const metadata =
+    card.metadata || proof.length > 0
+      ? {
+          ...card.metadata,
+          ...(proof.length > 0 ? { proof } : {}),
+        }
+      : undefined;
+  return {
+    ...card,
+    ...(metadata ? { metadata } : {}),
+  };
+}
 
 // Capability layers split review boundaries only; the core still owns persistence and mutation order.
 export class WorkboardStore extends WorkboardNotificationStore {
@@ -260,6 +278,23 @@ export class WorkboardStore extends WorkboardNotificationStore {
   }
 
   async buildWorkerContext(id: string): Promise<string> {
+    if (this.cardProofPageListReader) {
+      const entries = await this.cardProofPageListReader({ limit: WORKBOARD_PROOF_VIEW_LIMIT });
+      const target = entries.find((entry) => entry.card.id === id);
+      if (!target) {
+        throw new Error(`card not found: ${id}`);
+      }
+      const latestProofNoteByCardId = new Map(
+        entries.flatMap((entry) =>
+          entry.latestProofNote ? [[entry.card.id, entry.latestProofNote] as const] : [],
+        ),
+      );
+      return buildWorkerContext(
+        withProofHistory(target.card, target.proofPage.proof),
+        entries.map((entry) => entry.card),
+        latestProofNoteByCardId,
+      );
+    }
     const card = await this.get(id);
     if (!card) {
       throw new Error(`card not found: ${id}`);

@@ -379,6 +379,30 @@ struct RootTabsPresentationTests {
         #expect(replacement.position == 2000)
         #expect(replacement.proofPage?.total == 100)
         #expect(replacement.proofSummary == "Proof records: 100")
+
+        let canonicalMutationPayload = Data(
+            """
+            {
+              "id": "card-1",
+              "title": "Retained proof",
+              "status": "done",
+              "labels": [],
+              "position": 2000,
+              "metadata": {
+                "proof": [
+                  {"id": "proof-1", "status": "passed", "createdAt": 1},
+                  {"id": "proof-2", "status": "passed", "createdAt": 2}
+                ]
+              }
+            }
+            """.utf8)
+        let canonicalMutationCard = try JSONDecoder()
+            .decode(IPadWorkboardCard.self, from: canonicalMutationPayload)
+        let canonicalReplacement = canonicalMutationCard.retainingProofPage(from: card)
+
+        #expect(canonicalReplacement.proofPage == nil)
+        #expect(canonicalReplacement.proofTotal == 2)
+        #expect(canonicalReplacement.proofSummary == "Proof records: 2")
     }
 
     @Test func `skill workshop agent scope normalizes gateway ids`() {

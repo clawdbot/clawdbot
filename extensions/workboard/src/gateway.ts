@@ -1,7 +1,5 @@
 // Workboard plugin module implements gateway behavior.
-import type { WorkboardCard, WorkboardCardView } from "@openclaw/workboard-contract";
 import type { OpenClawPluginApi } from "../api.js";
-import { toBoundedWorkboardCard } from "./card-output.js";
 import { redactClaimToken } from "./card-redaction.js";
 import {
   assertNoCursorAdvance,
@@ -21,15 +19,13 @@ import { WorkboardStore } from "./store.js";
 const READ_SCOPE = "operator.read" as const;
 const WRITE_SCOPE = "operator.write" as const;
 
-function readListCardProjector(
-  params: Record<string, unknown>,
-): (card: WorkboardCard) => WorkboardCard | WorkboardCardView {
+function readBoundedProofView(params: Record<string, unknown>): boolean {
   const proofView = params.proofView;
   if (proofView === undefined) {
-    return redactClaimToken;
+    return false;
   }
   if (proofView === "bounded") {
-    return toBoundedWorkboardCard;
+    return true;
   }
   throw new Error('proofView must be "bounded" when provided.');
 }
@@ -62,11 +58,9 @@ export function registerWorkboardGatewayMethods(params: {
       try {
         respond(
           true,
-          await listWorkboardCards(
-            store,
-            requestParams.boardId,
-            readListCardProjector(requestParams),
-          ),
+          await listWorkboardCards(store, requestParams.boardId, {
+            bounded: readBoundedProofView(requestParams),
+          }),
         );
       } catch (error) {
         respondError(respond, error);

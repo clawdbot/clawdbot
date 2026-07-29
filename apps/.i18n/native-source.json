@@ -21099,7 +21099,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1469,
+      "line": 1473,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
       "source": "Proof records: %@",
       "surface": "apple",
@@ -21107,7 +21107,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1566,
+      "line": 1580,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
       "source": "No cards dispatched.",
       "surface": "apple",
@@ -21115,7 +21115,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1578,
+      "line": 1592,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
       "source": "%@ dispatched.",
       "surface": "apple",
@@ -21123,7 +21123,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1582,
+      "line": 1596,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
       "source": "%@ dispatched: %@.",
       "surface": "apple",
@@ -21131,7 +21131,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1606,
+      "line": 1620,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
       "source": "%@ started",
       "surface": "apple",
@@ -21139,7 +21139,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1607,
+      "line": 1621,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
       "source": "%@ promoted",
       "surface": "apple",
@@ -21147,7 +21147,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1608,
+      "line": 1622,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
       "source": "%@ reclaimed",
       "surface": "apple",
@@ -21155,7 +21155,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1609,
+      "line": 1623,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
       "source": "%@ orchestrated",
       "surface": "apple",
@@ -21163,7 +21163,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1610,
+      "line": 1624,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
       "source": "%@ blocked",
       "surface": "apple",
@@ -21171,7 +21171,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1611,
+      "line": 1625,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
       "source": "%@ failed",
       "surface": "apple",

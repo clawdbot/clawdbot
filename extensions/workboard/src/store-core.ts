@@ -3,11 +3,17 @@ import type {
   WorkboardBoardMetadata,
   WorkboardChange,
   WorkboardCard,
+  WorkboardCardView,
   WorkboardLink,
   WorkboardMetadata,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
-import { assertNotProjectedWorkboardCard } from "./card-output.js";
+import {
+  assertNotProjectedWorkboardCard,
+  toBoundedWorkboardCard,
+  toBoundedWorkboardCardFromPage,
+  WORKBOARD_PROOF_VIEW_LIMIT,
+} from "./card-output.js";
 import {
   type WorkboardCardStore,
   WorkboardStaleSnapshotError,
@@ -83,6 +89,12 @@ export class WorkboardCoreStore {
   private readonly changes: WorkboardChangeTracker;
   protected readonly store: WorkboardKeyedStore;
   protected readonly proofPageReader?: NonNullable<WorkboardCardStore["listProofPage"]>;
+  protected readonly cardProofPageListReader?: NonNullable<
+    WorkboardCardStore["listCardProofPages"]
+  >;
+  private readonly cardProofPageLookupReader?: NonNullable<
+    WorkboardCardStore["lookupCardProofPage"]
+  >;
   protected readonly boardStore: WorkboardKeyedStore<PersistedWorkboardBoard>;
   protected readonly subscriptionStore: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
   protected readonly attachmentStore: WorkboardKeyedStore<PersistedWorkboardAttachment>;
@@ -98,6 +110,8 @@ export class WorkboardCoreStore {
   ) {
     this.changes = new WorkboardChangeTracker(stores.dataVersion);
     this.proofPageReader = store.listProofPage?.bind(store);
+    this.cardProofPageListReader = store.listCardProofPages?.bind(store);
+    this.cardProofPageLookupReader = store.lookupCardProofPage?.bind(store);
     this.store = this.changes.track(store);
     this.boardStore = this.changes.track(
       stores.boards ?? (store as unknown as WorkboardKeyedStore<PersistedWorkboardBoard>),
@@ -204,7 +218,43 @@ export class WorkboardCoreStore {
       .toSorted(compareCards);
   }
 
-  async listBoards(): Promise<{ boards: WorkboardBoardSummary[] }> {
+  async getBounded(id: string): Promise<WorkboardCardView | undefined> {
+    const cardId = id.trim();
+    if (this.cardProofPageLookupReader) {
+      const value = await this.cardProofPageLookupReader(cardId, {
+        limit: WORKBOARD_PROOF_VIEW_LIMIT,
+      });
+      return value ? toBoundedWorkboardCardFromPage(value.card, value.proofPage) : undefined;
+    }
+    const card = await this.get(cardId);
+    return card ? toBoundedWorkboardCard(card) : undefined;
+  }
+
+  async listBoundedWithBoards(
+    options: WorkboardListOptions = {},
+  ): Promise<{ cards: WorkboardCardView[]; boards: WorkboardBoardSummary[] }> {
+    const boardId = normalizeBoardId(options.boardId);
+    const persistedViews = this.cardProofPageListReader
+      ? await this.cardProofPageListReader({ limit: WORKBOARD_PROOF_VIEW_LIMIT })
+      : undefined;
+    const allCards = persistedViews ? persistedViews.map((entry) => entry.card) : await this.list();
+    const cards = persistedViews
+      ? persistedViews
+          .filter((entry) => !boardId || cardBoardId(entry.card) === boardId)
+          .toSorted((a, b) => compareCards(a.card, b.card))
+          .map((entry) => toBoundedWorkboardCardFromPage(entry.card, entry.proofPage))
+      : allCards
+          .filter((card) => !boardId || cardBoardId(card) === boardId)
+          .map(toBoundedWorkboardCard);
+    return {
+      cards,
+      boards: await this.readBoardSummaries(allCards),
+    };
+  }
+
+  private async readBoardSummaries(
+    cards: readonly WorkboardCard[],
+  ): Promise<WorkboardBoardSummary[]> {
     const boards = new Map<string, WorkboardBoardSummary>();
     for (const entry of await this.boardStore.entries()) {
       if (entry.value?.version !== 1 || !entry.value.board?.id) {
@@ -236,7 +286,7 @@ export class WorkboardCoreStore {
         byStatus: {},
       });
     }
-    for (const card of await this.list()) {
+    for (const card of cards) {
       const boardId = cardBoardId(card);
       const summary =
         boards.get(boardId) ??
@@ -257,11 +307,13 @@ export class WorkboardCoreStore {
       summary.updatedAt = Math.max(summary.updatedAt ?? 0, card.updatedAt);
       boards.set(boardId, summary);
     }
-    return {
-      boards: [...boards.values()].toSorted((a, b) =>
-        a.id === "default" ? -1 : b.id === "default" ? 1 : a.id.localeCompare(b.id),
-      ),
-    };
+    return [...boards.values()].toSorted((a, b) =>
+      a.id === "default" ? -1 : b.id === "default" ? 1 : a.id.localeCompare(b.id),
+    );
+  }
+
+  async listBoards(): Promise<{ boards: WorkboardBoardSummary[] }> {
+    return { boards: await this.readBoardSummaries(await this.list()) };
   }
 
   async upsertBoard(input: WorkboardBoardInput): Promise<WorkboardBoardMetadata> {

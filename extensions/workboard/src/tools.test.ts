@@ -1,8 +1,12 @@
 // Workboard tests cover tools plugin behavior.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
+import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { WorkboardStore } from "./store.js";
 import { createWorkboardTools } from "./tools.js";
 import { guardWorkboardToolsForWorkspaceAccess } from "./workspace-access.js";
@@ -310,6 +314,55 @@ describe("workboard tools", () => {
     const canonical = await store.get(card.id);
     expect(canonical?.metadata?.proof).toHaveLength(101);
     expect(canonical).not.toHaveProperty("proofPage");
+  });
+
+  it("keeps bounded sqlite tool reads off canonical proof hydration", async () => {
+    // openclaw-temp-dir: allow extension tests cannot import repo-only test helpers
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-tool-bounded-"));
+    const stores = createWorkboardSqliteStores({ dbPath: path.join(dir, "workboard.sqlite") });
+    try {
+      const store = new WorkboardStore(stores.cards, {
+        boards: stores.boards,
+        subscriptions: stores.subscriptions,
+        attachments: stores.attachments,
+      });
+      const card = await store.create({
+        title: "Bounded SQLite tool",
+        metadata: {
+          proof: Array.from({ length: 100 }, (_, index) => ({
+            id: `proof-${index}`,
+            status: "passed" as const,
+            createdAt: index + 1,
+            label: `Proof ${index}`,
+          })),
+        },
+      });
+      const tools = new Map(
+        createWorkboardTools({
+          api: { runtime: {} } as unknown as OpenClawPluginApi,
+          store,
+          context: { agentId: "main" } as never,
+        }).map((tool) => [tool.name, tool]),
+      );
+
+      stores.cards.lookup = async () => {
+        throw new Error("canonical lookup must not back bounded tool reads");
+      };
+      stores.cards.entries = async () => {
+        throw new Error("canonical entries must not back bounded tool reads");
+      };
+
+      const result = readPayload(
+        await tools
+          .get("workboard_read")
+          ?.execute("sqlite-bounded", { id: card.id, proofView: "bounded" }),
+      );
+      expect(result.card).toMatchObject({ proofPage: { total: 100, hasMore: true } });
+      expect(result.workerContext).toContain("Proof 99");
+    } finally {
+      stores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("can share one store across tool instances for claim coordination", async () => {
