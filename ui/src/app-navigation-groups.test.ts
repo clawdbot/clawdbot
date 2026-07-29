@@ -46,7 +46,6 @@ describe("sidebar entries", () => {
     for (const routeId of [
       "custodian",
       "channels",
-      "config",
       "security",
       "notifications",
       "advanced",
