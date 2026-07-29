@@ -265,6 +265,37 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
     expect(result.compacted).toContain("Alpha ships on Fridays.");
   });
 
+  it("preserves a tab-delimited user heading written under a promotion section", () => {
+    const existing =
+      `${promotionSection("2026-04-10", 400)}\n` +
+      "###\tCorrection\nThe prod DB is db-2.corp.example, NOT db-1.\n\n" +
+      promotionSection("2026-04-20", 400);
+    const newSection = `\n${promotionSection("2026-04-29", 400)}`;
+    const result = compactMemoryForBudget({
+      existingMemory: existing,
+      newSection,
+      budgetChars: 900,
+    });
+    expect(result.droppedDates).toContain("2026-04-10");
+    expect(result.compacted).toContain("###\tCorrection");
+    expect(result.compacted).toContain("The prod DB is db-2.corp.example, NOT db-1.");
+  });
+
+  it("preserves an empty user heading line written under a promotion section", () => {
+    const existing =
+      `${promotionSection("2026-04-10", 400)}\n` +
+      "###\nNotes I keep under a bare heading.\n\n" +
+      promotionSection("2026-04-20", 400);
+    const newSection = `\n${promotionSection("2026-04-29", 400)}`;
+    const result = compactMemoryForBudget({
+      existingMemory: existing,
+      newSection,
+      budgetChars: 900,
+    });
+    expect(result.droppedDates).toContain("2026-04-10");
+    expect(result.compacted).toContain("Notes I keep under a bare heading.");
+  });
+
   it("exposes a sane default budget below the bootstrap injection cap", () => {
     // Bootstrap injection is capped at 12_000 chars per file (see
     // src/agents/embedded-agent-helpers/bootstrap.ts). The MEMORY.md budget
