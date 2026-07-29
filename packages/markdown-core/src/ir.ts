@@ -1449,8 +1449,12 @@ function sliceListMarker(
 
 export function sliceMarkdownIR(ir: MarkdownIR, start: number, end: number): MarkdownIR {
   const textLength = ir.text.length;
-  let normalizedStart = start < 0 ? Math.max(textLength + start, 0) : Math.min(start, textLength);
-  let normalizedEnd = end < 0 ? Math.max(textLength + end, 0) : Math.min(end, textLength);
+  const integerStart = Math.trunc(start) || 0;
+  const integerEnd = Math.trunc(end) || 0;
+  let normalizedStart =
+    integerStart < 0 ? Math.max(textLength + integerStart, 0) : Math.min(integerStart, textLength);
+  let normalizedEnd =
+    integerEnd < 0 ? Math.max(textLength + integerEnd, 0) : Math.min(integerEnd, textLength);
 
   if (normalizedStart < normalizedEnd) {
     // Normalize once so text, formatting, links, and structural metadata share

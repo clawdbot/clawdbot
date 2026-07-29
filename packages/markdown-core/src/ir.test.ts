@@ -76,6 +76,30 @@ describe("sliceMarkdownIR surrogate pair boundaries", () => {
     expect(sliced.text).toBe(`${EMOJI}b`);
   });
 
+  it("preserves native fractional and non-finite slice index semantics", () => {
+    const ir = markdownToIR("[**abcd**](https://example.com)");
+    const ranges = [
+      [-1.5, 4],
+      [0, -1.5],
+      [1.5, 3.9],
+      [Number.NaN, 2],
+      [Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY],
+    ] as const;
+
+    for (const [start, end] of ranges) {
+      const sliced = sliceMarkdownIR(ir, start, end);
+      const expected = ir.text.slice(start, end);
+
+      expect(sliced.text).toBe(expected);
+      expect(sliced.styles).toEqual([
+        expect.objectContaining({ start: 0, end: expected.length, style: "bold" }),
+      ]);
+      expect(sliced.links).toEqual([
+        { start: 0, end: expected.length, href: "https://example.com" },
+      ]);
+    }
+  });
+
   it("propagates adjusted boundaries to link spans", () => {
     const ir = markdownToIR(`a[${EMOJI}b](https://example.com)`);
     // from=2 is LS, should expand to 1
