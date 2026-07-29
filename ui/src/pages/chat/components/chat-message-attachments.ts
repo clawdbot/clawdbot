@@ -463,6 +463,7 @@ export function renderAssistantAttachments(
                   ? html`<a
                       class="chat-assistant-attachment-card__download"
                       href=${downloadHref}
+                      download=${attachment.label}
                       target="_blank"
                       rel="noreferrer"
                       aria-label=${t("chat.mediaPlayer.download", {
@@ -520,6 +521,7 @@ export function renderAssistantAttachments(
                   ? html`<a
                       class="chat-assistant-attachment-card__link"
                       href=${downloadHref}
+                      download=${attachment.label}
                       target="_blank"
                       rel="noreferrer"
                       >${t("chat.mediaPlayer.download", { filename: attachment.label })}</a

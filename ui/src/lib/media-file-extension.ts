@@ -27,3 +27,10 @@ export function getMediaFileExtension(value: string): string | undefined {
   }
   return /\.([a-zA-Z0-9]+)$/.exec(filename)?.[1]?.toLowerCase();
 }
+
+const VIDEO_MEDIA_FILE_EXTENSIONS = new Set(["m4v", "mkv", "mov", "mp4", "webm"]);
+
+export function hasVideoMediaFileExtension(value: string): boolean {
+  const extension = getMediaFileExtension(value);
+  return extension !== undefined && VIDEO_MEDIA_FILE_EXTENSIONS.has(extension);
+}

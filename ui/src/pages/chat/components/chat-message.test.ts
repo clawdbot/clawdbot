@@ -3274,6 +3274,16 @@ describe("grouped chat rendering", () => {
     expect(card.querySelector<HTMLAnchorElement>(".chat-assistant-video-fallback a")?.href).toBe(
       "https://example.com/clip.mp4",
     );
+    expect(
+      card
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+        ?.getAttribute("download"),
+    ).toBe("clip.mp4");
+    expect(
+      card
+        .querySelector<HTMLAnchorElement>(".chat-assistant-video-fallback a")
+        ?.getAttribute("download"),
+    ).toBe("clip.mp4");
   });
 
   it("omits attachment anchors for unsafe transcript URLs", async () => {

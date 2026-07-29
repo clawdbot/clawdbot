@@ -26,4 +26,21 @@ describe("buildUserChatMessageContentBlocks", () => {
       },
     ]);
   });
+
+  it.each([
+    ["clip.mp4", ""],
+    ["clip.mkv", ""],
+    ["clip.mkv", "application/octet-stream"],
+  ])("falls back to the %s extension when MIME is %s", (fileName, mimeType) => {
+    const [block] = buildUserChatMessageContentBlocks("", [
+      {
+        id: `video-${fileName}-${mimeType}`,
+        mimeType,
+        fileName,
+        previewUrl: `blob:${fileName}`,
+      },
+    ]);
+
+    expect(block?.attachment?.kind).toBe("video");
+  });
 });

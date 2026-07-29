@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
@@ -32,6 +32,7 @@ export class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   @state() private duration = 0;
   @state() private buffered = 0;
   @state() private playing = false;
+  @state() private failed = false;
 
   private media: HTMLAudioElement | null = null;
   private readonly sourceController = new ChatMediaSourceController();
@@ -46,7 +47,10 @@ export class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     super.disconnectedCallback();
   }
 
-  override updated(): void {
+  override updated(changedProperties: PropertyValues<this>): void {
+    if (changedProperties.has("src")) {
+      this.failed = false;
+    }
     if (this.media) {
       this.sourceController.updateSource(this.media, this.src, this.sourceIdentity);
     }
@@ -120,10 +124,11 @@ export class ChatAudioPlayer extends OpenClawLightDomContentsElement {
                   >${t("chat.messages.voiceNote")}</span
                 >`
               : null}
-            ${downloadHref
+            ${downloadHref && !this.failed
               ? html`<a
                   class="chat-assistant-attachment-card__download"
                   href=${downloadHref}
+                  download=${this.label}
                   target="_blank"
                   rel="noreferrer"
                   aria-label=${t("chat.mediaPlayer.download", { filename: this.label })}
@@ -133,41 +138,55 @@ export class ChatAudioPlayer extends OpenClawLightDomContentsElement {
               : null}
           </span>
         </div>
-        <div
-          class="chat-audio-player"
-          tabindex="0"
-          @keydown=${(event: KeyboardEvent) => this.handlePlayerKeydown(event)}
-        >
-          <button
-            type="button"
-            class="chat-audio-player__toggle"
-            aria-label=${t(this.playing ? "chat.mediaPlayer.pause" : "chat.mediaPlayer.play")}
-            @click=${() => this.togglePlayback()}
-          >
-            ${this.playing ? icons.pause : icons.play}
-          </button>
-          <div class="chat-audio-player__timeline">
-            <input
-              class="chat-audio-player__seek"
-              type="range"
-              min="0"
-              max=${String(this.duration || 0)}
-              step=${String(SEEK_STEP_SECONDS)}
-              .value=${String(Math.min(this.currentTime, this.duration || this.currentTime))}
-              aria-label=${t("chat.mediaPlayer.seek")}
-              style=${styleMap({
-                "--chat-audio-progress": `${progress * 100}%`,
-                "--chat-audio-buffered": `${Math.max(progress, this.buffered) * 100}%`,
-              })}
-              @input=${(event: Event) =>
-                this.seekTo(Number((event.currentTarget as HTMLInputElement).value))}
-            />
-            <div class="chat-audio-player__time" aria-live="off">
-              <span>${formatChatMediaTime(this.currentTime)}</span>
-              <span>${formatChatMediaTime(this.duration)}</span>
-            </div>
-          </div>
-        </div>
+        ${this.failed
+          ? html`<div class="chat-assistant-attachment-card__reason">
+              ${t("chat.mediaPlayer.videoUnavailable")}
+              ${downloadHref
+                ? html`<a
+                    class="chat-assistant-attachment-card__link"
+                    href=${downloadHref}
+                    download=${this.label}
+                    target="_blank"
+                    rel="noreferrer"
+                    >${t("chat.mediaPlayer.download", { filename: this.label })}</a
+                  >`
+                : null}
+            </div> `
+          : html`<div
+              class="chat-audio-player"
+              tabindex="0"
+              @keydown=${(event: KeyboardEvent) => this.handlePlayerKeydown(event)}
+            >
+              <button
+                type="button"
+                class="chat-audio-player__toggle"
+                aria-label=${t(this.playing ? "chat.mediaPlayer.pause" : "chat.mediaPlayer.play")}
+                @click=${() => this.togglePlayback()}
+              >
+                ${this.playing ? icons.pause : icons.play}
+              </button>
+              <div class="chat-audio-player__timeline">
+                <input
+                  class="chat-audio-player__seek"
+                  type="range"
+                  min="0"
+                  max=${String(this.duration || 0)}
+                  step=${String(SEEK_STEP_SECONDS)}
+                  .value=${String(Math.min(this.currentTime, this.duration || this.currentTime))}
+                  aria-label=${t("chat.mediaPlayer.seek")}
+                  style=${styleMap({
+                    "--chat-audio-progress": `${progress * 100}%`,
+                    "--chat-audio-buffered": `${Math.max(progress, this.buffered) * 100}%`,
+                  })}
+                  @input=${(event: Event) =>
+                    this.seekTo(Number((event.currentTarget as HTMLInputElement).value))}
+                />
+                <div class="chat-audio-player__time" aria-live="off">
+                  <span>${formatChatMediaTime(this.currentTime)}</span>
+                  <span>${formatChatMediaTime(this.duration)}</span>
+                </div>
+              </div>
+            </div>`}
         <audio
           class="chat-audio-player__media"
           preload="metadata"
@@ -179,6 +198,7 @@ export class ChatAudioPlayer extends OpenClawLightDomContentsElement {
             this.sourceController.handleLoadedMetadata(this.media);
             this.duration = Number.isFinite(this.media.duration) ? this.media.duration : 0;
             this.currentTime = this.media.currentTime;
+            this.failed = false;
             this.updateBuffered();
             this.onMediaLoaded?.();
           }}
@@ -211,8 +231,10 @@ export class ChatAudioPlayer extends OpenClawLightDomContentsElement {
             this.playing = false;
           }}
           @error=${() => {
-            if (this.media) {
-              this.sourceController.handleError(this.media);
+            if (this.media && !this.sourceController.handleError(this.media)) {
+              releaseChatAudioPlayback(this.media);
+              this.playing = false;
+              this.failed = true;
             }
           }}
         ></audio>

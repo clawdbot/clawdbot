@@ -60,6 +60,11 @@ describe("ChatAudioPlayer", () => {
     expect(player.querySelector(".chat-audio-player__toggle")?.getAttribute("aria-label")).toBe(
       "Pause",
     );
+    expect(
+      player
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+        ?.getAttribute("download"),
+    ).toBe("briefing.mp3");
 
     const seek = player.querySelector<HTMLInputElement>(".chat-audio-player__seek")!;
     seek.value = "35";
@@ -95,5 +100,40 @@ describe("ChatAudioPlayer", () => {
     player.remove();
 
     expect(pause).toHaveBeenCalledOnce();
+  });
+
+  it("releases playback and shows the fallback after an unrecovered media error", async () => {
+    const first = await createPlayer("broken");
+    const firstMedia = first.querySelector("audio")!;
+    let paused = true;
+    Object.defineProperty(firstMedia, "paused", { configurable: true, get: () => paused });
+    const play = vi.spyOn(firstMedia, "play").mockImplementation(async () => {
+      paused = false;
+      firstMedia.dispatchEvent(new Event("play"));
+    });
+    const pauseFirst = vi.spyOn(firstMedia, "pause").mockImplementation(() => {
+      paused = true;
+    });
+
+    first.querySelector<HTMLButtonElement>(".chat-audio-player__toggle")!.click();
+    await first.updateComplete;
+    expect(play).toHaveBeenCalledOnce();
+    expect((first as unknown as { playing: boolean }).playing).toBe(true);
+
+    firstMedia.dispatchEvent(new Event("error"));
+    await first.updateComplete;
+    expect((first as unknown as { playing: boolean }).playing).toBe(false);
+    expect(first.querySelector(".chat-assistant-attachment-card__reason")?.textContent).toContain(
+      "Can't play this format — download instead.",
+    );
+    expect(
+      first
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__reason a")
+        ?.getAttribute("download"),
+    ).toBe("broken.mp3");
+
+    const second = await createPlayer("working");
+    second.querySelector("audio")!.dispatchEvent(new Event("play"));
+    expect(pauseFirst).not.toHaveBeenCalled();
   });
 });
