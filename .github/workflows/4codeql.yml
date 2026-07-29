@@ -3,7 +3,6 @@
 #
 # You may wish to alter this file to override the set of languages analyzed,
 # or to provide custom queries or build logic.
-# 
 #
 # ******** NOTE ********
 # We have attempted to detect the languages in your repository. Please check
@@ -18,8 +17,7 @@ on:
   pull_request:
     branches: [ "main" ]
   schedule:
-    - cron: '25 12 * * 6'
-    - cron: '44 14 * * 0'
+    - cron: '37 19 * * 5'
 
 jobs:
   analyze:

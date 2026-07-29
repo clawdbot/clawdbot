@@ -1,0 +1,17 @@
+- name: Ensure CI Success
+  # You may pin to the exact commit or the version.
+  # uses: DataDog/ensure-ci-success@b0d931ac77c810490e61964c321103040eef888e
+  uses: DataDog/ensure-ci-success@v2.3.0
+  with:
+    # Number of seconds to sleep before checking CI statuses
+    initial-delay-seconds: # optional, default is 5
+    # Number of retries to wait for checks still in progress
+    max-retries: # optional, default is 5
+    # Seconds to wait between retries when checks are still running
+    polling-interval-seconds: # optional, default is 60
+    # List of job name patterns to exclude from evaluation
+    ignored-name-patterns: # optional
+    # GitHub token to access PR commit statuses and checks
+    github-token: # optional, default is ${{ github.token }}
+    # True to display all checks in job summary, false to display only failed checks
+    full-details-summary: # optional, default is false
