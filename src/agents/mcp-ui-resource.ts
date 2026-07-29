@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-runtime.js";
@@ -31,7 +32,7 @@ export type McpAppViewLease = {
   csp?: McpAppCsp;
   permissions?: McpAppPermissions;
   allowedAppToolNames?: ReadonlySet<string>;
-  authorizeAppToolCall?: () => boolean | Promise<boolean>;
+  authorizeAppInteraction?: () => boolean | Promise<boolean>;
   readOnly?: true;
   toolInput: unknown;
   toolResult: CallToolResult;
@@ -149,12 +150,6 @@ function assertBoundedViewDescriptor(value: {
   }
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function normalizePermissions(value: unknown): McpAppPermissions | undefined {
   const record = asRecord(value);
   if (!record) {
@@ -224,7 +219,7 @@ export async function fetchMcpAppView(params: {
   toolInput: unknown;
   toolResult: CallToolResult;
   allowedAppToolNames?: ReadonlySet<string>;
-  authorizeAppToolCall?: () => boolean | Promise<boolean>;
+  authorizeAppInteraction?: () => boolean | Promise<boolean>;
   readOnly?: true;
   viewId?: string;
 }): Promise<
@@ -286,7 +281,9 @@ export async function fetchMcpAppView(params: {
       ...(params.allowedAppToolNames
         ? { allowedAppToolNames: new Set(params.allowedAppToolNames) }
         : {}),
-      ...(params.authorizeAppToolCall ? { authorizeAppToolCall: params.authorizeAppToolCall } : {}),
+      ...(params.authorizeAppInteraction
+        ? { authorizeAppInteraction: params.authorizeAppInteraction }
+        : {}),
       ...(params.readOnly ? { readOnly: true as const } : {}),
       toolInput: params.toolInput,
       toolResult: params.toolResult,
@@ -328,6 +325,16 @@ export function getMcpAppViewLease(
   pruneViewStore();
   const view = getViewStore().get(viewId);
   return view?.runtime === runtime ? view : undefined;
+}
+
+/** Resolve a live view owned by its originating session, including harness-native runtimes. */
+export function getMcpAppViewLeaseForSession(
+  viewId: string,
+  sessionKey: string,
+): McpAppViewLease | undefined {
+  pruneViewStore();
+  const view = getViewStore().get(viewId);
+  return view?.runtime.sessionKey === sessionKey ? view : undefined;
 }
 
 export function acquireMcpAppViewRequest(

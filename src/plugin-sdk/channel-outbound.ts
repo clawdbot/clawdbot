@@ -21,6 +21,7 @@ export {
 export type { OutboundMessageIdentity } from "../channels/message/outbound-echo.js";
 export {
   bindIngressLifecycleToReplyOptions,
+  createChannelIngressError,
   createChannelIngressDrain,
   createChannelIngressMonitor,
   createReplyPrefixContext,

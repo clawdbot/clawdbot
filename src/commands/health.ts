@@ -4,7 +4,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { styleHealthChannelLine } from "../../packages/terminal-core/src/health-style.js";
 import { isRich } from "../../packages/terminal-core/src/theme.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { inspectChannelAccount } from "../channels/account-inspection.js";
 import { redactChannelStatusSummaryBaseUrl } from "../channels/account-snapshot-fields.js";
 import {
@@ -36,8 +36,6 @@ import {
 } from "../gateway/channel-health-policy.js";
 import type { GatewayHotReloadStatus } from "../gateway/config-reload-status.types.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
-import { getGatewayModelPricingHealth } from "../gateway/model-pricing-cache-state.js";
-import { isGatewayModelPricingEnabled } from "../gateway/model-pricing-config.js";
 import type { ChannelRuntimeSnapshot } from "../gateway/server-channel-runtime.types.js";
 import { info } from "../globals.js";
 import { countFailedDeliveryQueueEntries } from "../infra/delivery-queue-sqlite.js";
@@ -45,6 +43,7 @@ import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationHuman } from "../infra/format-time/format-duration.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   degradedPluginMatchesRoot,
   listActiveDegradedPlugins,
@@ -75,10 +74,15 @@ export { formatHealthChannelLines } from "./health-format.js";
 export type { HealthSummary } from "./health.types.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const healthLog = createSubsystemLogger("health");
 
-const debugHealth = (cfg: OpenClawConfig | undefined, ...args: unknown[]) => {
+const debugHealth = (
+  cfg: OpenClawConfig | undefined,
+  message: string,
+  meta?: Record<string, unknown>,
+) => {
   if (isDiagnosticFlagEnabled("health", cfg)) {
-    console.warn("[health:debug]", ...args);
+    healthLog.info(message, meta);
   }
 };
 
@@ -214,19 +218,6 @@ function formatEventLoopHealthLine(summary: HealthSummary): string | null {
   }`;
 }
 
-/** Formats optional model-pricing cache degradation for text health output. */
-export function formatModelPricingHealthLine(summary: HealthSummary): string | null {
-  const modelPricing = summary.modelPricing;
-  if (!modelPricing || modelPricing.state === "disabled") {
-    return null;
-  }
-  if (modelPricing.state === "ok") {
-    return null;
-  }
-  const detail = modelPricing.detail ? ` (${modelPricing.detail})` : "";
-  return `Model pricing: warning (optional pricing refresh degraded)${detail}`;
-}
-
 function buildContextEngineHealthSummary(): ContextEngineHealthSummary | undefined {
   const quarantined: ContextEngineHealthSummary["quarantined"] = [];
   for (const entry of listContextEngineQuarantines()) {
@@ -271,7 +262,9 @@ export function buildDeliveryQueueHealthSummary(): DeliveryQueueHealthSummary | 
       return entry;
     });
   } catch (error) {
-    debugHealth(undefined, "outbound delivery queue health read failed", error);
+    debugHealth(undefined, "outbound delivery queue health read failed", {
+      error: formatErrorMessage(error),
+    });
   }
   let ingressFailed: NonNullable<DeliveryQueueHealthSummary["ingressFailed"]> = [];
   try {
@@ -287,7 +280,9 @@ export function buildDeliveryQueueHealthSummary(): DeliveryQueueHealthSummary | 
       return entry;
     });
   } catch (error) {
-    debugHealth(undefined, "channel ingress queue health read failed", error);
+    debugHealth(undefined, "channel ingress queue health read failed", {
+      error: formatErrorMessage(error),
+    });
   }
   if (failed.length === 0 && ingressFailed.length === 0) {
     return undefined;
@@ -335,7 +330,7 @@ const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
 
 const resolveAgentOrder = (cfg: OpenClawConfig) => {
   const defaultAgentId = resolveDefaultAgentId(cfg);
-  const entries = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const entries = listAgentEntries(cfg);
   const seen = new Set<string>();
   const ordered: Array<{ id: string; name?: string }> = [];
 
@@ -788,7 +783,6 @@ export async function getHealthSnapshot(params?: {
     ...(params?.configReloadHotReloadStatus
       ? { configReload: { hotReloadStatus: params.configReloadHotReloadStatus } }
       : {}),
-    modelPricing: getGatewayModelPricingHealth({ enabled: isGatewayModelPricingEnabled(cfg) }),
     channels,
     channelOrder,
     channelLabels,
@@ -1015,10 +1009,6 @@ export async function healthCommand(
     if (eventLoopLine) {
       runtime.log(styleHealthChannelLine(eventLoopLine, rich));
     }
-    const modelPricingLine = formatModelPricingHealthLine(summary);
-    if (modelPricingLine) {
-      runtime.log(styleHealthChannelLine(modelPricingLine, rich));
-    }
     const contextEngineLine = formatContextEngineHealthLine(summary);
     if (contextEngineLine) {
       runtime.log(styleHealthChannelLine(contextEngineLine, rich));
@@ -1076,6 +1066,10 @@ export async function healthCommand(
           error: formatErrorMessage(error),
         });
       }
+    }
+
+    if (Number.isFinite(summary.durationMs)) {
+      runtime.log(info(`Gateway probe duration: ${summary.durationMs}ms`));
     }
 
     if (resolvedAgents.length > 0) {

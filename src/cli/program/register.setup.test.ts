@@ -221,6 +221,17 @@ describe("registerSetupCommand", () => {
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
+  it("rejects conflicting custom model input capabilities", async () => {
+    await runCli(["setup", "--custom-image-input", "--custom-text-input"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Use either --custom-image-input or --custom-text-input, not both.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(setupCommandMock).not.toHaveBeenCalled();
+  });
+
   it.each(["not-a-port", "70000"])(
     "rejects invalid --gateway-port %s before onboarding dispatch",
     async (gatewayPort) => {

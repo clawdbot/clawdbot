@@ -131,7 +131,7 @@ function trackedPackageManifests(workspace) {
     .sort();
 }
 
-export function computeDependencyFingerprint({ workspace, frozenLockfile }) {
+function computeDependencyFingerprint({ workspace, frozenLockfile }) {
   const hash = createHash("sha256");
   addRecord(hash, "contract", "frozen-lockfile", String(frozenLockfile));
 

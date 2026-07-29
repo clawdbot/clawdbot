@@ -403,6 +403,30 @@ describe("channel plugin blockers", () => {
     ]);
   });
 
+  it("suppresses ambient-only package env blockers for dev gateway startup", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "discord",
+          origin: "global",
+          channels: ["discord"],
+          packageChannel: createPackageChannelEnv("discord", ["DISCORD_FAKE_TEST_TRIGGER"]),
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    expect(
+      scanConfiguredChannelPluginBlockers(
+        {},
+        { DISCORD_FAKE_TEST_TRIGGER: "configured" } as NodeJS.ProcessEnv,
+        {},
+        { ambientEnvTriggers: "suppress" },
+      ),
+    ).toStrictEqual([]);
+  });
+
   it("requires every package channel allOf environment variable", () => {
     vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
       plugins: [

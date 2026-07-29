@@ -32,6 +32,7 @@ import {
 } from "./query.ts";
 import type { UsageFilterState, UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
 import { renderSessionDetailPanel } from "./view-details.ts";
+import { renderUsageHeatmap } from "./view-heatmap.ts";
 import {
   renderCostBreakdownCompact,
   renderCostWindowComparison,
@@ -808,6 +809,7 @@ export function renderUsage(props: UsageProps) {
                 displaySessionCount,
                 totalSessions,
               )}
+              ${renderUsageHeatmap(filteredDaily, filters.startDate, filters.endDate)}
               ${renderUsageMosaic(
                 aggregateSessions,
                 filters.timeZone,

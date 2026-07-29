@@ -16,7 +16,7 @@ import {
   type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
 import type { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
-import type { v2 } from "./protocol.js";
+import type { CodexAppServerRequestResult, v2 } from "./protocol.js";
 
 /** Terminal reason reported after trying to activate one Codex plugin policy. */
 type CodexPluginActivationReason =
@@ -178,7 +178,7 @@ async function refreshCodexPluginRuntimeState(params: {
   if (params.appCache && params.appCacheKey) {
     params.appCache.invalidate(params.appCacheKey, "Codex plugin activation changed app inventory");
     const request: CodexAppInventoryRequest = async (method, requestParams) =>
-      (await params.request(method, requestParams)) as v2.AppsListResponse;
+      (await params.request(method, requestParams)) as CodexAppServerRequestResult<typeof method>;
     try {
       await params.appCache.refreshNow({
         key: params.appCacheKey,

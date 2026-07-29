@@ -2,7 +2,7 @@ import type { EventEmitter } from "node:events";
 import { Worker, type WorkerOptions } from "node:worker_threads";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 
-const SYSTEM_CA_WARMUP_WARNING_MS = 10_000;
+const SYSTEM_CA_WARMUP_TIMEOUT_MS = 10_000;
 const SYSTEM_CA_WORKER_SOURCE = String.raw`
   const { getCACertificates } = require("node:tls");
   const { parentPort } = require("node:worker_threads");
@@ -21,6 +21,7 @@ const SYSTEM_CA_WORKER_SOURCE = String.raw`
 `;
 
 type SystemCaWarmupWorker = Pick<EventEmitter, "once" | "removeAllListeners"> & {
+  terminate: () => Promise<number>;
   unref: () => void;
 };
 
@@ -28,7 +29,7 @@ type SystemCaWarmupOptions = {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   log?: { warn: (message: string) => void };
-  warningMs?: number;
+  timeoutMs?: number;
   createWorker?: (source: string, options: WorkerOptions) => SystemCaWarmupWorker;
 };
 
@@ -53,6 +54,10 @@ function isWorkerPermissionDenied(error: unknown): boolean {
   );
 }
 
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** Warm Node's effective default CA set without blocking the gateway event loop on macOS. */
 export async function warmMacOSSystemCaOffMainThread(
   options: SystemCaWarmupOptions = {},
@@ -72,55 +77,71 @@ export async function warmMacOSSystemCaOffMainThread(
       options.createWorker ?? ((source, workerOptions) => new Worker(source, workerOptions))
     )(SYSTEM_CA_WORKER_SOURCE, { eval: true });
   } catch (error) {
-    // Node's permission model can deny Worker construction. Fall back to Node's lazy CA
-    // loading instead of turning an optional event-loop warmup into a startup requirement.
-    if (!isWorkerPermissionDenied(error)) {
-      throw error;
-    }
-    options.log?.warn(
-      "macOS CA warmup skipped because Node denied worker-thread permission; trust settings will load lazily",
-    );
+    // CA prewarming is an optimization. Node can still load trust settings lazily.
+    const reason = isWorkerPermissionDenied(error)
+      ? "Node denied worker-thread permission"
+      : `worker creation failed: ${describeError(error)}`;
+    options.log?.warn(`macOS CA warmup skipped because ${reason}; trust settings will load lazily`);
     return;
   }
 
-  await new Promise<void>((resolve, reject) => {
+  await new Promise<void>((resolve) => {
     let settled = false;
-    const warningTimer = setTimeout(() => {
-      options.log?.warn(
-        "macOS CA warmup is still waiting for default trust settings; gateway post-attach startup remains deferred",
-      );
-    }, options.warningMs ?? SYSTEM_CA_WARMUP_WARNING_MS);
-    warningTimer.unref?.();
+    const timeoutMs = options.timeoutMs ?? SYSTEM_CA_WARMUP_TIMEOUT_MS;
 
-    const settle = (finish: () => void) => {
+    const settle = (warning?: string, terminate = false) => {
       if (settled) {
         return;
       }
       settled = true;
-      clearTimeout(warningTimer);
+      clearTimeout(timeout);
       worker.removeAllListeners();
-      finish();
+      // A terminating worker can still report one final error after listener cleanup.
+      worker.once("error", () => {});
+      if (terminate) {
+        void worker.terminate().catch(() => {});
+      }
+      if (warning) {
+        options.log?.warn(warning);
+      }
+      resolve();
     };
 
     worker.once("message", (value: unknown) => {
-      settle(() => {
-        if (!isSystemCaWarmupMessage(value)) {
-          reject(new Error("macOS system CA warmup worker returned an invalid result"));
-          return;
-        }
-        if (!value.ok) {
-          reject(new Error(value.error));
-          return;
-        }
-        resolve();
-      });
+      if (!isSystemCaWarmupMessage(value)) {
+        settle(
+          "macOS CA warmup returned an invalid result; gateway startup will continue and trust settings will load lazily",
+          true,
+        );
+        return;
+      }
+      if (!value.ok) {
+        settle(
+          `macOS CA warmup failed: ${value.error}; gateway startup will continue and trust settings will load lazily`,
+          true,
+        );
+        return;
+      }
+      settle();
     });
-    worker.once("error", (error: Error) => settle(() => reject(error)));
-    worker.once("exit", (code: number) => {
-      settle(() =>
-        reject(new Error(`macOS system CA warmup worker exited before replying (code ${code})`)),
+    worker.once("error", (error: Error) => {
+      settle(
+        `macOS CA warmup worker failed: ${error.message}; gateway startup will continue and trust settings will load lazily`,
       );
     });
+    worker.once("exit", (code: number) => {
+      settle(
+        `macOS CA warmup worker exited before replying (code ${code}); gateway startup will continue and trust settings will load lazily`,
+      );
+    });
+
+    const timeout = setTimeout(() => {
+      settle(
+        `macOS CA warmup timed out after ${timeoutMs}ms; gateway startup will continue and trust settings will load lazily`,
+        true,
+      );
+    }, timeoutMs);
+    timeout.unref?.();
 
     // A wedged trustd lookup must not keep an otherwise stopped gateway process alive.
     worker.unref();

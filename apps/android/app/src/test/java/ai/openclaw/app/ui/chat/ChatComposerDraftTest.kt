@@ -75,6 +75,19 @@ class ChatComposerDraftTest {
   }
 
   @Test
+  fun restoredAttachmentsReplaceTheCurrentComposerSet() {
+    val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:first")
+    val state = ChatComposerStateStore()
+    val existing = PendingAttachment("existing", "existing.jpg", "image/jpeg", "YQ==")
+    val restored = PendingAttachment("restored", "image-1", "image/png", "Yg==")
+    state.addAttachments(owner, listOf(existing))
+
+    state.replaceAttachments(owner, listOf(restored))
+
+    assertEquals(listOf(restored), state.attachments.value[owner])
+  }
+
+  @Test
   fun textDraftSnapshotRestoresEveryOwnerAfterProcessRecreation() {
     var saved = arrayListOf<String>()
     val first = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:first")
@@ -479,6 +492,32 @@ class ChatComposerDraftTest {
     val draft = ChatDraft(text = "repeat this", placement = ChatDraftPlacement.Replace)
 
     assertEquals("repeat this", mergeChatDraft(draft, "existing text"))
+  }
+
+  @Test
+  fun guardedReplacementPreservesComposerEditsMadeWhileActionWasInFlight() {
+    val draft =
+      ChatDraft(
+        text = "rewound text",
+        placement = ChatDraftPlacement.Replace,
+        expectedExistingText = "before",
+      )
+
+    assertEquals(null, mergeChatDraft(draft, "typed while waiting"))
+    assertEquals("rewound text", mergeChatDraft(draft, "before"))
+  }
+
+  @Test
+  fun rewindReplacementCanIntentionallyClearTheComposer() {
+    val draft =
+      ChatDraft(
+        text = "",
+        placement = ChatDraftPlacement.Replace,
+        expectedExistingText = "before",
+        acceptsEmptyText = true,
+      )
+
+    assertEquals("", mergeChatDraft(draft, "before"))
   }
 
   @Test

@@ -216,7 +216,7 @@ enum QuickChatFocusedTextCaptureService {
             return .failed(String(localized: "Focus another app before attaching its text."))
         }
 
-        let hasPermission = await PermissionManager.status([.accessibility])[.accessibility] == true
+        let hasPermission = await PermissionManager.grantedStatus([.accessibility])[.accessibility] == true
         guard !Task.isCancelled else { return .cancelled }
         guard hasPermission else {
             guard self.confirmAccessibilityRequest(appName: appName) else { return .cancelled }

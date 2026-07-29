@@ -137,7 +137,7 @@ export type ControlUiBootstrapConfig = {
   assistantAvatarSource?: string | null;
   assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   assistantAvatarReason?: string | null;
-  assistantAgentId: string;
+  assistantAgentId?: string;
   serverVersion?: string;
   /**
    * Git branch of a source-checkout (non-release) gateway install. Omitted for
@@ -148,7 +148,6 @@ export type ControlUiBootstrapConfig = {
   localMediaPreviewRoots?: string[];
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
-  chatMessageMaxWidth?: string;
   seamColor?: string;
   /** Resolved `agents.defaults.timeFormat`; "auto" keeps the browser locale default. */
   timeFormat?: "auto" | "12" | "24";

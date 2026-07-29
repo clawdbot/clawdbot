@@ -1,0 +1,8 @@
+{"type":"thread.started","thread_id":"thread-terminal-only"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"mcp-terminal","type":"mcp_tool_call","server":"","tool":"lookup","arguments":{"id":"42"},"result":{"content":[],"structured_content":{}},"status":"completed"}}
+{"type":"item.completed","item":{"id":"command-terminal","type":"command_execution","command":"pwd","aggregated_output":"/workspace\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"patch-terminal","type":"file_change","changes":[{"path":"README.md","kind":"update"}],"status":"completed"}}
+{"type":"item.completed","item":{"id":"search-terminal","type":"web_search","query":"OpenClaw"}}
+{"type":"item.completed","item":{"id":"message-terminal","type":"agent_message","text":"terminal only"}}
+{"type":"turn.completed","usage":{"input_tokens":8,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":4,"reasoning_output_tokens":1}}

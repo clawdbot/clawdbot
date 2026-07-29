@@ -3,14 +3,12 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { USAGE_PAYLOAD_TTL_MS, type UsageRefreshReason } from "../usage/refresh-policy.ts";
 import { ProfilePage } from "./profile-page.ts";
 
 const PROFILE_PAGE_TEST_TAG = "test-openclaw-profile-page";
@@ -29,8 +27,9 @@ function createContext(
 ): ApplicationContext<RouteId> {
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected,
-    reconnecting: false,
+    phase: connected ? "connected" : "stopped",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
@@ -45,56 +44,15 @@ function createContext(
   } as unknown as ApplicationContext<RouteId>;
 }
 
-function createCostSummary(cacheStatus?: CostUsageSummary["cacheStatus"]): CostUsageSummary {
-  return {
-    updatedAt: 0,
-    days: 0,
-    daily: [],
-    totals: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      totalCost: 1,
-      inputCost: 0,
-      outputCost: 0,
-      cacheReadCost: 0,
-      cacheWriteCost: 0,
-      missingCostEntries: 0,
-    },
-    ...(cacheStatus ? { cacheStatus } : {}),
-  };
-}
-
-function createSessionsResult(): SessionsUsageResult {
-  const totals = createCostSummary().totals;
-  return {
-    updatedAt: 0,
-    startDate: "2026-07-08",
-    endDate: "2026-07-08",
-    sessions: [],
-    totals,
-    aggregates: {
-      messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
-      tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-      byModel: [],
-      byProvider: [],
-      byAgent: [],
-      byChannel: [],
-      daily: [],
-    },
-  };
-}
-
 function createConnectedContext(
   request: GatewayBrowserClient["request"],
   selfUser: AuthenticatedUser | null = null,
 ) {
   let snapshot: ApplicationGatewaySnapshot = {
     client: { request } as GatewayBrowserClient,
-    connected: true,
-    reconnecting: false,
+    phase: "connected",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
@@ -152,11 +110,12 @@ function createConnectedContext(
       subscribe,
     },
     basePath: "",
+    navigate: vi.fn(),
   } as unknown as ApplicationContext<RouteId>;
   return {
     context,
     emitConnected(connected: boolean) {
-      snapshot = { ...snapshot, connected };
+      snapshot = { ...snapshot, phase: connected ? "connected" : "reconnecting" };
       for (const listener of listeners) {
         listener(snapshot);
       }
@@ -192,108 +151,49 @@ it("refreshes translated copy when the locale changes while mounted", async () =
   expect(note?.textContent?.trim()).not.toBe(englishNote);
 });
 
-it("gates profile usage refreshes by payload age and page visibility", async () => {
-  vi.spyOn(document, "hasFocus").mockReturnValue(true);
-  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-  const request = vi.fn(async (method: string) => {
-    if (method === "usage.cost") {
-      return createCostSummary();
-    }
-    return createSessionsResult();
-  });
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"]);
-  const provider = createApplicationContextProvider(harness.context);
-  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement & {
-    costSummary: CostUsageSummary | null;
-    lastProfileLoadedAtMs: number | null;
-    loading: boolean;
-    requestProfileRefresh: (reason: UsageRefreshReason) => void;
-    scheduleCacheSettleRefresh: () => void;
+it("renders identity before a Usage statistics link without requesting usage data", async () => {
+  const profile: UserProfile = {
+    id: "profile-1",
+    displayName: "Ada",
+    avatarMime: null,
+    mergedInto: null,
+    createdAt: 1,
+    updatedAt: 2,
+    emails: ["ada@example.test"],
+    hasAvatar: false,
   };
+  const request = vi.fn(async (method: string) => {
+    if (method === "users.self") {
+      return { profile };
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: profile.id,
+    email: profile.emails[0],
+    name: profile.displayName ?? undefined,
+  });
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
   provider.append(page);
   document.body.append(provider);
-  await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-  await waitForFast(() => expect(page.loading).toBe(false));
+  await waitForFast(() => expect(page.querySelector("#settings-profile-identity")).not.toBeNull());
 
-  harness.emitConnected(false);
-  harness.emitConnected(true);
-  expect(request).toHaveBeenCalledTimes(2);
+  expect(request.mock.calls.map(([method]) => method)).toEqual(["users.self"]);
+  expect(page.querySelector(".profile-stats")).toBeNull();
+  expect(page.querySelector(".profile-heatmap")).toBeNull();
+  const usageRow = page.querySelector<HTMLButtonElement>(".settings-row--nav");
+  expect(usageRow?.textContent).toContain("Usage statistics");
+  expect(page.querySelector("#settings-profile-identity")?.compareDocumentPosition(usageRow!)).toBe(
+    Node.DOCUMENT_POSITION_FOLLOWING,
+  );
 
-  let reconnectPollDelayMs: number | undefined;
-  const reconnectTimerSpy = vi.spyOn(window, "setTimeout").mockImplementation(((
-    _handler: TimerHandler,
-    timeout?: number,
-  ) => {
-    reconnectPollDelayMs = Number(timeout);
-    return 1;
-  }) as unknown as typeof window.setTimeout);
-  page.costSummary = createCostSummary({
-    status: "refreshing",
-    cachedFiles: 0,
-    pendingFiles: 1,
-    staleFiles: 0,
-  });
-  harness.emitConnected(false);
-  harness.emitConnected(true);
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(reconnectPollDelayMs).toBeGreaterThan(0);
-  expect(reconnectPollDelayMs).toBeLessThanOrEqual(USAGE_PAYLOAD_TTL_MS);
-  reconnectTimerSpy.mockRestore();
-
-  page.lastProfileLoadedAtMs = Date.now() - USAGE_PAYLOAD_TTL_MS;
-  visibility.mockReturnValue("hidden");
-  harness.emitConnected(false);
-  harness.emitConnected(true);
-  expect(request).toHaveBeenCalledTimes(2);
-
-  visibility.mockReturnValue("visible");
-  document.dispatchEvent(new Event("visibilitychange"));
-  window.dispatchEvent(new Event("focus"));
-  await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
-  await waitForFast(() => expect(page.loading).toBe(false));
-
-  page.querySelector<HTMLButtonElement>(".profile-refresh")?.click();
-  await waitForFast(() => expect(request).toHaveBeenCalledTimes(6));
-  await waitForFast(() => expect(page.loading).toBe(false));
-
-  let settlePoll: TimerHandler | null = null;
-  let settleDelayMs: number | undefined;
-  const setTimeoutSpy = vi.spyOn(window, "setTimeout").mockImplementation(((
-    handler: TimerHandler,
-    timeout?: number,
-  ) => {
-    settlePoll = handler;
-    settleDelayMs = Number(timeout);
-    return 1;
-  }) as unknown as typeof window.setTimeout);
-  page.costSummary = createCostSummary({
-    status: "refreshing",
-    cachedFiles: 0,
-    pendingFiles: 1,
-    staleFiles: 0,
-  });
-  const nowMs = Date.now();
-  const nowSpy = vi.spyOn(Date, "now").mockReturnValue(nowMs);
-  page.lastProfileLoadedAtMs = nowMs;
-  page.scheduleCacheSettleRefresh();
-  expect(settleDelayMs).toBe(USAGE_PAYLOAD_TTL_MS);
-  nowSpy.mockRestore();
-
-  page.lastProfileLoadedAtMs = Date.now() - USAGE_PAYLOAD_TTL_MS;
-  visibility.mockReturnValue("hidden");
-  (settlePoll as (() => void) | null)?.();
-  expect(request).toHaveBeenCalledTimes(6);
-
-  setTimeoutSpy.mockRestore();
-  visibility.mockReturnValue("visible");
-  window.dispatchEvent(new Event("focus"));
-  await waitForFast(() => expect(request).toHaveBeenCalledTimes(8));
+  usageRow?.click();
+  expect(harness.context.navigate).toHaveBeenCalledWith("usage");
 });
 
 it("keeps identity UI and profile RPCs absent for unidentified connections", async () => {
-  const request = vi.fn(async (method: string) =>
-    method === "usage.cost" ? createCostSummary() : createSessionsResult(),
-  );
+  const request = vi.fn();
   const harness = createConnectedContext(request as GatewayBrowserClient["request"]);
   const provider = createApplicationContextProvider(harness.context);
   const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
@@ -305,6 +205,113 @@ it("keeps identity UI and profile RPCs absent for unidentified connections", asy
 
   expect(request.mock.calls.some(([method]) => method === "users.self")).toBe(false);
   expect(page.querySelector("#settings-profile-identity")).toBeNull();
+  expect(page.querySelector(".profile-refresh")).toBeNull();
+});
+
+it("rerenders on connection transitions for unidentified connections", async () => {
+  const request = vi.fn();
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"]);
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await page.updateComplete;
+  expect(page.querySelector(".profile-hero")).not.toBeNull();
+
+  // With no @state change (selfUser stays null), the snapshot handler must
+  // still invalidate the render branch that reads connected/client.
+  harness.emitConnected(false);
+  await page.updateComplete;
+  expect(page.querySelector(".profile-hero")).toBeNull();
+
+  harness.emitConnected(true);
+  await page.updateComplete;
+  expect(page.querySelector(".profile-hero")).not.toBeNull();
+});
+
+it("falls back to the text avatar when the hero image fails to load", async () => {
+  const request = vi.fn();
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"]);
+  const agentsState = harness.context.agents.state as unknown as {
+    agentsList: {
+      defaultId: string;
+      agents: Array<{
+        id: string;
+        identity: { name: string; emoji: string; avatarUrl: string };
+      }>;
+    };
+  };
+  agentsState.agentsList = {
+    defaultId: "main",
+    agents: [
+      {
+        id: "main",
+        identity: { name: "Molty", emoji: "🦞", avatarUrl: "/unloadable-avatar.png" },
+      },
+    ],
+  };
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await page.updateComplete;
+  const image = page.querySelector<HTMLImageElement>(".profile-hero__avatar-image");
+  expect(image?.getAttribute("src")).toBe("/unloadable-avatar.png");
+  expect(page.querySelector(".profile-hero__avatar-text")).toBeNull();
+
+  image?.dispatchEvent(new Event("error"));
+  await page.updateComplete;
+
+  expect(page.querySelector(".profile-hero__avatar-image")).toBeNull();
+  expect(page.querySelector(".profile-hero__avatar-text")?.textContent).toBe("🦞");
+});
+
+it("retries the identity bootstrap when users.self returns no profile", async () => {
+  const profile: UserProfile = {
+    id: "profile-1",
+    displayName: "Ada",
+    avatarMime: null,
+    mergedInto: null,
+    createdAt: 1,
+    updatedAt: 2,
+    emails: ["ada@example.test"],
+    hasAvatar: false,
+  };
+  let identityRequests = 0;
+  const request = vi.fn(async (method: string) => {
+    if (method === "users.self") {
+      identityRequests += 1;
+      return identityRequests === 1 ? {} : { profile };
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: "profile-1",
+    email: "ada@example.test",
+    name: "Ada",
+  });
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await waitForFast(() => expect(page.querySelector(".profile-identity-empty")).not.toBeNull());
+  const emptyState = page.querySelector<HTMLElement>(".profile-identity-empty");
+  const setIdentityButton = emptyState?.querySelector<HTMLButtonElement>("button");
+  expect(emptyState?.textContent).toContain(t("profilePage.identity.notSet"));
+  expect(setIdentityButton?.textContent?.trim()).toBe(t("profilePage.identity.setIdentity"));
+  expect(page.textContent).not.toContain("Cannot read properties of undefined");
+
+  setIdentityButton?.click();
+
+  await waitForFast(() =>
+    expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(2),
+  );
+  await waitForFast(() =>
+    expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe("Ada"),
+  );
 });
 
 it("bootstraps and refreshes the connected user's profile through users.self", async () => {
@@ -318,14 +325,13 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     emails: ["ada@example.test", "ada@work.test"],
     hasAvatar: false,
   };
+  let omitNextProfile = false;
   const request = vi.fn(async (method: string, params?: unknown) => {
-    if (method === "usage.cost") {
-      return createCostSummary();
-    }
-    if (method === "sessions.usage") {
-      return createSessionsResult();
-    }
     if (method === "users.self") {
+      if (omitNextProfile) {
+        omitNextProfile = false;
+        return {};
+      }
       return { profile };
     }
     if (method === "users.setDisplayName") {
@@ -426,6 +432,7 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     "Unsaved draft",
   );
 
+  omitNextProfile = true;
   request.mockClear();
   page.querySelector<HTMLButtonElement>(".profile-refresh")?.click();
   await waitForFast(() =>
@@ -439,6 +446,7 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
     "Unsaved draft",
   );
+  expect(page.querySelector(".profile-identity-empty")).toBeNull();
 
   const pageWithState = page as ProfilePageElement & {
     identityBusy: "display-name" | "avatar" | null;

@@ -119,7 +119,7 @@ function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
       configPath:
         params.scopeLabel === "tools.exec"
           ? "tools.exec"
-          : `agents.list.${params.agentId}.tools.exec`,
+          : `agents.entries.${params.agentId}.tools.exec`,
       scopeLabel: params.scopeLabel,
       agentId: params.agentId,
     });
@@ -136,12 +136,24 @@ function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
 
     const configParts: string[] = [];
     const hostParts: string[] = [];
+    const canonicalModeSource =
+      snapshot.security.requestedSource === snapshot.ask.requestedSource &&
+      snapshot.security.requestedSource.endsWith(".mode")
+        ? snapshot.security.requestedSource
+        : undefined;
+    if (canonicalModeSource) {
+      configParts.push(`${canonicalModeSource}="${snapshot.mode.requested}"`);
+    }
     if (securityConflict) {
-      configParts.push(`${snapshot.security.requestedSource}="${snapshot.security.requested}"`);
+      if (!canonicalModeSource) {
+        configParts.push(`${snapshot.security.requestedSource}="${snapshot.security.requested}"`);
+      }
       hostParts.push(`${snapshot.security.hostSource}="${snapshot.security.host}"`);
     }
     if (askConflict) {
-      configParts.push(`${snapshot.ask.requestedSource}="${snapshot.ask.requested}"`);
+      if (!canonicalModeSource) {
+        configParts.push(`${snapshot.ask.requestedSource}="${snapshot.ask.requested}"`);
+      }
       hostParts.push(`${snapshot.ask.hostSource}="${snapshot.ask.host}"`);
     }
 
@@ -162,13 +174,13 @@ function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
     scopeExecConfig: cfg.tools?.exec,
   });
 
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  for (const agent of agents) {
+  const agents = cfg.agents?.entries ?? {};
+  for (const [agentId, agent] of Object.entries(agents)) {
     maybeWarn({
-      scopeLabel: `agents.list.${agent.id}.tools.exec`,
+      scopeLabel: `agents.entries.${agentId}.tools.exec`,
       scopeExecConfig: agent.tools?.exec,
       globalExecConfig: cfg.tools?.exec,
-      agentId: agent.id,
+      agentId,
     });
   }
 

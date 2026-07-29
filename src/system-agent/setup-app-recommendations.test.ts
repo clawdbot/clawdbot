@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OfficialExternalPluginCatalogEntry } from "../plugins/official-external-plugin-catalog.js";
 import { defaultRuntime } from "../runtime.js";
-import { getSetupAppRecommendations } from "./setup-app-recommendations.js";
+import { getSetupAppRecommendations, type SetupAppScanPhase } from "./setup-app-recommendations.js";
 
 /** Force an "ok" result so the returned candidate `groups` can be asserted. */
 function completeMatching(
@@ -33,6 +33,62 @@ function officialEntry(params: {
 }
 
 describe("setup app recommendation candidates", () => {
+  it("reports candidate and matching phases for the normalized app inventory", async () => {
+    const phases: SetupAppScanPhase[] = [];
+
+    await getSetupAppRecommendations({
+      inventorySource: async () => [
+        { label: "Zulu" },
+        { label: "alpha" },
+        { label: "Echo" },
+        { label: "Bravo" },
+      ],
+      runtime: defaultRuntime,
+      onPhase: (phase) => phases.push(phase),
+      deps: {
+        listPlugins: () => [],
+        listChannels: () => [],
+        listProviders: () => [],
+        searchSkills: async ({ query }) => [
+          {
+            score: 1,
+            slug: `${query.toLocaleLowerCase("en-US")}-tools`,
+            ownerHandle: "demo-owner",
+            displayName: `${query} Tools`,
+          },
+        ],
+        complete: completeMatching([{ appLabel: "alpha", candidateId: "@demo-owner/alpha-tools" }]),
+      },
+    });
+
+    expect(phases).toEqual([
+      {
+        kind: "candidates",
+        appCount: 4,
+        sampleLabels: ["alpha", "Bravo", "Echo"],
+      },
+      { kind: "matching", appCount: 4 },
+    ]);
+  });
+
+  it.each([
+    {
+      reason: "unsupported",
+      inventory: { status: "unsupported" as const, platform: "linux" as const, apps: [] as [] },
+    },
+    { reason: "no-apps", inventory: [] },
+  ])("does not report phases when the scan skips for $reason", async ({ inventory }) => {
+    const onPhase = vi.fn();
+
+    await getSetupAppRecommendations({
+      inventorySource: async () => inventory,
+      runtime: defaultRuntime,
+      onPhase,
+    });
+
+    expect(onPhase).not.toHaveBeenCalled();
+  });
+
   it("preserves the ClawHub publisher in candidate ids", async () => {
     const result = await getSetupAppRecommendations({
       inventorySource: async () => [{ label: "Notes" }],

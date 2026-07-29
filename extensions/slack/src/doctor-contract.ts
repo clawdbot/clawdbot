@@ -4,7 +4,13 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { asObjectRecord, defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  asObjectRecord,
+  defineChannelAliasMigration,
+  defineKeyMoveMigration,
+  hasLegacyAccountStreamingAliases,
+  normalizeChannelConfigEntries,
+} from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveSlackNativeStreaming, resolveSlackStreamingMode } from "./streaming-compat.js";
 
 const streamingAliasMigration = defineChannelAliasMigration({
@@ -19,118 +25,88 @@ const streamingAliasMigration = defineChannelAliasMigration({
   dm: { root: true, accounts: true },
 });
 
-function hasLegacySlackChannelAllowAlias(value: unknown): boolean {
-  const channels = asObjectRecord(asObjectRecord(value)?.channels);
-  if (!channels) {
-    return false;
+const dmReplyModeMigration = defineKeyMoveMigration({
+  from: ["dm", "replyToMode"],
+  to: ["replyToModeByChatType", "direct"],
+});
+
+const threadMentionPolicyMigration = defineKeyMoveMigration({
+  from: ["thread", "requireExplicitMention"],
+  to: ["implicitMentions", "threadParticipation"],
+  // The retired boolean controlled only participated threads; the canonical
+  // setting expresses the inverse while reply-to-bot policy stays independent.
+  map: (value) => (typeof value === "boolean" ? { value: !value } : null),
+  pruneEmptySource: true,
+  movedMessage: ({ sourcePath, targetPath, mappedValue }) =>
+    `Moved ${sourcePath} → ${targetPath} (${String(mappedValue)}).`,
+});
+
+const channelAllowMigration = defineKeyMoveMigration({
+  scope: ["channels", "*"],
+  from: ["allow"],
+  to: ["enabled"],
+});
+
+function hasInteractiveRepliesCapability(value: unknown): boolean {
+  const capabilities = asObjectRecord(value)?.capabilities;
+  if (Array.isArray(capabilities)) {
+    return capabilities.some(
+      (entry) => typeof entry === "string" && entry.trim().toLowerCase() === "interactivereplies",
+    );
   }
-  return Object.values(channels).some((channel) =>
-    Object.hasOwn(asObjectRecord(channel) ?? {}, "allow"),
+  const capabilitiesRecord = asObjectRecord(capabilities);
+  return Boolean(
+    capabilitiesRecord &&
+    (Object.keys(capabilitiesRecord).length === 0 ||
+      Object.hasOwn(capabilitiesRecord, "interactiveReplies")),
   );
 }
 
-function hasLegacySlackThreadMentionPolicy(value: unknown): boolean {
-  const thread = asObjectRecord(asObjectRecord(value)?.thread);
-  return Boolean(thread && Object.hasOwn(thread, "requireExplicitMention"));
-}
-
-function hasLegacyDmReplyMode(value: unknown): boolean {
-  return Object.hasOwn(asObjectRecord(asObjectRecord(value)?.dm) ?? {}, "replyToMode");
-}
-
-function migrateDmReplyMode(
-  entry: Record<string, unknown>,
-  path: string,
-  changes: string[],
-): boolean {
-  const dm = asObjectRecord(entry.dm);
-  if (!dm || !Object.hasOwn(dm, "replyToMode")) {
-    return false;
-  }
-  const byType = asObjectRecord(entry.replyToModeByChatType) ?? {};
-  if (byType.direct === undefined) {
-    byType.direct = dm.replyToMode;
-    entry.replyToModeByChatType = byType;
-    changes.push(`Moved ${path}.dm.replyToMode → ${path}.replyToModeByChatType.direct.`);
-  } else {
-    changes.push(`Removed ${path}.dm.replyToMode (replyToModeByChatType.direct already set).`);
-  }
-  delete dm.replyToMode;
-  return true;
-}
-
-function normalizeSlackThreadMentionPolicy(params: {
-  value: Record<string, unknown>;
+function removeInteractiveRepliesCapability(params: {
+  entry: Record<string, unknown>;
   pathPrefix: string;
   changes: string[];
-}): { value: Record<string, unknown>; changed: boolean } {
-  const thread = asObjectRecord(params.value.thread);
-  if (!thread || !Object.hasOwn(thread, "requireExplicitMention")) {
-    return { value: params.value, changed: false };
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const capabilities = params.entry.capabilities;
+  let nextCapabilities: unknown[] | Record<string, unknown>;
+  let removedEmptyObject = false;
+  if (Array.isArray(capabilities)) {
+    nextCapabilities = capabilities.filter(
+      (entry) =>
+        !(typeof entry === "string" && entry.trim().toLowerCase() === "interactivereplies"),
+    );
+    if (nextCapabilities.length === capabilities.length) {
+      return { entry: params.entry, changed: false };
+    }
+  } else {
+    const capabilitiesRecord = asObjectRecord(capabilities);
+    if (
+      !capabilitiesRecord ||
+      (Object.keys(capabilitiesRecord).length > 0 &&
+        !Object.hasOwn(capabilitiesRecord, "interactiveReplies"))
+    ) {
+      return { entry: params.entry, changed: false };
+    }
+    removedEmptyObject = Object.keys(capabilitiesRecord).length === 0;
+    const { interactiveReplies: _retired, ...rest } = capabilitiesRecord;
+    nextCapabilities = rest;
   }
 
-  const next = { ...params.value };
-  const nextThread = { ...thread };
-  const implicitMentions = asObjectRecord(params.value.implicitMentions) ?? {};
-  const nextImplicitMentions = { ...implicitMentions };
-  const legacyValue = thread.requireExplicitMention;
-  const targetPath = `${params.pathPrefix}.implicitMentions.threadParticipation`;
-  if (nextImplicitMentions.threadParticipation !== undefined) {
-    params.changes.push(
-      `Removed ${params.pathPrefix}.thread.requireExplicitMention (${targetPath} already set).`,
-    );
-  } else if (typeof legacyValue === "boolean") {
-    // The retired key maps only the participated-thread fact. Replies to the bot
-    // remain independently governed by the canonical replyToBot policy.
-    nextImplicitMentions.threadParticipation = !legacyValue;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.thread.requireExplicitMention → ${targetPath} (${String(!legacyValue)}).`,
-    );
+  const entry = { ...params.entry };
+  const isEmpty = Array.isArray(nextCapabilities)
+    ? nextCapabilities.length === 0
+    : Object.keys(nextCapabilities).length === 0;
+  if (isEmpty) {
+    delete entry.capabilities;
   } else {
-    params.changes.push(
-      `Removed invalid ${params.pathPrefix}.thread.requireExplicitMention value.`,
-    );
+    entry.capabilities = nextCapabilities;
   }
-  delete nextThread.requireExplicitMention;
-  if (Object.keys(nextThread).length > 0) {
-    next.thread = nextThread;
-  } else {
-    delete next.thread;
-  }
-  if (Object.keys(nextImplicitMentions).length > 0) {
-    next.implicitMentions = nextImplicitMentions;
-  }
-  return { value: next, changed: true };
-}
-
-function normalizeSlackChannelAllowAliases(params: {
-  channels: Record<string, unknown>;
-  pathPrefix: string;
-  changes: string[];
-}): { channels: Record<string, unknown>; changed: boolean } {
-  let changed = false;
-  const nextChannels = { ...params.channels };
-  for (const [channelId, channelValue] of Object.entries(params.channels)) {
-    const channel = asObjectRecord(channelValue);
-    if (!channel || !Object.hasOwn(channel, "allow")) {
-      continue;
-    }
-    const nextChannel = { ...channel };
-    if (nextChannel.enabled === undefined) {
-      nextChannel.enabled = channel.allow;
-      params.changes.push(
-        `Moved ${params.pathPrefix}.${channelId}.allow → ${params.pathPrefix}.${channelId}.enabled.`,
-      );
-    } else {
-      params.changes.push(
-        `Removed ${params.pathPrefix}.${channelId}.allow (${params.pathPrefix}.${channelId}.enabled already set).`,
-      );
-    }
-    delete nextChannel.allow;
-    nextChannels[channelId] = nextChannel;
-    changed = true;
-  }
-  return { channels: nextChannels, changed };
+  params.changes.push(
+    removedEmptyObject
+      ? `Removed retired empty ${params.pathPrefix}.capabilities object; use typed presentation actions instead.`
+      : `Removed retired ${params.pathPrefix}.capabilities.interactiveReplies; use typed presentation actions instead.`,
+  );
+  return { entry, changed: true };
 }
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
@@ -138,53 +114,71 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "slack"],
     message:
+      'channels.slack.capabilities.interactiveReplies is retired; use typed presentation actions instead. Run "openclaw doctor --fix".',
+    match: hasInteractiveRepliesCapability,
+  },
+  {
+    path: ["channels", "slack", "accounts"],
+    message:
+      'channels.slack.accounts.<id>.capabilities.interactiveReplies is retired; use typed presentation actions instead. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyAccountStreamingAliases(value, hasInteractiveRepliesCapability),
+  },
+  {
+    path: ["channels", "slack"],
+    message:
       'channels.slack.dm.replyToMode moved to replyToModeByChatType.direct. Run "openclaw doctor --fix".',
-    match: hasLegacyDmReplyMode,
+    match: dmReplyModeMigration.hasLegacy,
   },
   {
     path: ["channels", "slack", "accounts"],
     message:
       'channels.slack.accounts.<id>.dm.replyToMode moved to replyToModeByChatType.direct. Run "openclaw doctor --fix".',
-    match: (value) =>
-      Object.values(asObjectRecord(value) ?? {}).some((account) => hasLegacyDmReplyMode(account)),
+    match: (value) => hasLegacyAccountStreamingAliases(value, dmReplyModeMigration.hasLegacy),
   },
   {
     path: ["channels", "slack"],
     message:
       'channels.slack.thread.requireExplicitMention is legacy; use channels.slack.implicitMentions.threadParticipation instead. Run "openclaw doctor --fix".',
-    match: hasLegacySlackThreadMentionPolicy,
+    match: threadMentionPolicyMigration.hasLegacy,
   },
   {
     path: ["channels", "slack", "accounts"],
     message:
       'channels.slack.accounts.<id>.thread.requireExplicitMention is legacy; use channels.slack.accounts.<id>.implicitMentions.threadParticipation instead. Run "openclaw doctor --fix".',
-    match: (value) => {
-      const accounts = asObjectRecord(value);
-      return Boolean(
-        accounts &&
-        Object.values(accounts).some((account) => hasLegacySlackThreadMentionPolicy(account)),
-      );
-    },
+    match: (value) =>
+      hasLegacyAccountStreamingAliases(value, threadMentionPolicyMigration.hasLegacy),
   },
   {
     path: ["channels", "slack"],
     message:
       'channels.slack.channels.<id>.allow is legacy; use channels.slack.channels.<id>.enabled instead. Run "openclaw doctor --fix".',
-    match: hasLegacySlackChannelAllowAlias,
+    match: channelAllowMigration.hasLegacy,
   },
   {
     path: ["channels", "slack", "accounts"],
     message:
       'channels.slack.accounts.<id>.channels.<id>.allow is legacy; use channels.slack.accounts.<id>.channels.<id>.enabled instead. Run "openclaw doctor --fix".',
-    match: (value) => {
-      const accounts = asObjectRecord(value);
-      if (!accounts) {
-        return false;
-      }
-      return Object.values(accounts).some((account) => hasLegacySlackChannelAllowAlias(account));
-    },
+    match: (value) => hasLegacyAccountStreamingAliases(value, channelAllowMigration.hasLegacy),
   },
 ];
+
+function normalizeSlackEntry(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const retiredInteractiveReplies = removeInteractiveRepliesCapability(params);
+  const dm = dmReplyModeMigration.normalize({
+    ...params,
+    entry: retiredInteractiveReplies.entry,
+  });
+  const thread = threadMentionPolicyMigration.normalize({ ...params, entry: dm.entry });
+  const channels = channelAllowMigration.normalize({ ...params, entry: thread.entry });
+  return {
+    entry: channels.entry,
+    changed: retiredInteractiveReplies.changed || dm.changed || thread.changed || channels.changed,
+  };
+}
 
 export function normalizeCompatibilityConfig({
   cfg,
@@ -193,92 +187,10 @@ export function normalizeCompatibilityConfig({
 }): ChannelDoctorConfigMutation {
   const changes: string[] = [];
   const aliases = streamingAliasMigration.normalizeChannelConfig({ cfg, changes });
-  const rawEntry = asObjectRecord(
-    (aliases.config.channels as Record<string, unknown> | undefined)?.slack,
-  );
-  if (!rawEntry) {
-    return { config: cfg, changes: [] };
-  }
-  let updated = rawEntry;
-  let changed = aliases.config !== cfg;
-  changed = migrateDmReplyMode(updated, "channels.slack", changes) || changed;
-
-  const normalizedThreadPolicy = normalizeSlackThreadMentionPolicy({
-    value: updated,
-    pathPrefix: "channels.slack",
+  return normalizeChannelConfigEntries({
+    cfg: aliases.config,
+    channelId: "slack",
     changes,
+    normalizeEntry: normalizeSlackEntry,
   });
-  if (normalizedThreadPolicy.changed) {
-    updated = normalizedThreadPolicy.value;
-    changed = true;
-  }
-
-  const channels = asObjectRecord(updated.channels);
-  if (channels) {
-    const normalized = normalizeSlackChannelAllowAliases({
-      channels,
-      pathPrefix: "channels.slack.channels",
-      changes,
-    });
-    if (normalized.changed) {
-      updated = { ...updated, channels: normalized.channels };
-      changed = true;
-    }
-  }
-
-  const accounts = asObjectRecord(updated.accounts);
-  if (accounts) {
-    let accountsChanged = false;
-    const nextAccounts = { ...accounts };
-    for (const [accountId, accountValue] of Object.entries(accounts)) {
-      let account = asObjectRecord(accountValue);
-      if (!account) {
-        continue;
-      }
-      if (migrateDmReplyMode(account, `channels.slack.accounts.${accountId}`, changes)) {
-        nextAccounts[accountId] = account;
-        accountsChanged = true;
-      }
-      const normalizedAccountThreadPolicy = normalizeSlackThreadMentionPolicy({
-        value: account,
-        pathPrefix: `channels.slack.accounts.${accountId}`,
-        changes,
-      });
-      if (normalizedAccountThreadPolicy.changed) {
-        account = normalizedAccountThreadPolicy.value;
-        nextAccounts[accountId] = account;
-        accountsChanged = true;
-      }
-      const channelEntries = asObjectRecord(account.channels);
-      if (channelEntries) {
-        const normalized = normalizeSlackChannelAllowAliases({
-          channels: channelEntries,
-          pathPrefix: `channels.slack.accounts.${accountId}.channels`,
-          changes,
-        });
-        if (normalized.changed) {
-          nextAccounts[accountId] = { ...account, channels: normalized.channels };
-          accountsChanged = true;
-        }
-      }
-    }
-    if (accountsChanged) {
-      updated = { ...updated, accounts: nextAccounts };
-      changed = true;
-    }
-  }
-
-  if (!changed) {
-    return { config: cfg, changes: [] };
-  }
-  return {
-    config: {
-      ...aliases.config,
-      channels: {
-        ...aliases.config.channels,
-        slack: updated as unknown as NonNullable<OpenClawConfig["channels"]>["slack"],
-      } as OpenClawConfig["channels"],
-    },
-    changes,
-  };
 }

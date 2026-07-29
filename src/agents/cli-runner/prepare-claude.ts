@@ -1,5 +1,6 @@
 export const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
-  opus: "claude-opus-4-8",
+  opus: "claude-opus-5",
+  "opus-5": "claude-opus-5",
   "opus-4.8": "claude-opus-4-8",
   "opus-4-8": "claude-opus-4-8",
   "opus-4.7": "claude-opus-4-7",

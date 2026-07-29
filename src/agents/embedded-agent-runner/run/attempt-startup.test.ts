@@ -58,4 +58,18 @@ describe("prepareEmbeddedAttemptSkills", () => {
     ).toThrow("skill prompt mapping failed");
     expect(restore).toHaveBeenCalledOnce();
   });
+
+  it("does not load skills or apply their environment during settled finalization", () => {
+    const prepared = prepareEmbeddedAttemptSkills({
+      attempt: { operation: "settled-tool-finalization" } as EmbeddedRunAttemptParams,
+      effectiveWorkspace: "/tmp/workspace",
+      sandbox: null,
+      sessionAgentId: "main",
+    });
+
+    expect(prepared.skillsPrompt).toBe("");
+    expect(prepared.skillsSnapshotForRun).toBeUndefined();
+    expect(mocks.applySkillEnvOverrides).not.toHaveBeenCalled();
+    expect(mocks.mapSandboxSkillEntriesForPrompt).not.toHaveBeenCalled();
+  });
 });

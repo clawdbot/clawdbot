@@ -783,8 +783,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     });
 
     expect(result).toMatchObject({
-      manualActionReason: "teams-session-conflict",
-      manualActionRequired: true,
+      manualAction: { reason: "teams-session-conflict" },
     });
     expect(window[MEETING_STATE_KEY]).toBe(priorMeeting);
     expect(window["__openclawTeamsCaptions"]).toBe(priorCaptions);
@@ -821,8 +820,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     });
 
     expect(result).toMatchObject({
-      manualActionReason: "teams-session-conflict",
-      manualActionRequired: true,
+      manualAction: { reason: "teams-session-conflict" },
     });
     expect(window[MEETING_STATE_KEY]).toBe(priorMeeting);
     expect(window["__openclawTeamsCaptions"]).toBe(priorCaptions);
@@ -851,7 +849,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       },
     });
 
-    expect(result.manualActionRequired).toBe(false);
+    expect(result.manualAction).toBeUndefined();
     expect(disconnects).toBe(1);
     expect(staleCaptions).toMatchObject({ finalized: true });
     expect(window["__openclawTeamsCaptions"]).toMatchObject({ sessionId: "session-1" });
@@ -894,9 +892,9 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     expect(captions.lines).toMatchObject([{ text: "Final caption" }]);
   });
 
-  it("enables caption capture only for transcribe mode and parses snapshots", () => {
-    expect(TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.captions.enabled("agent")).toBe(false);
-    expect(TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.captions.enabled("bidi")).toBe(false);
+  it("enables caption capture for durable notes in every mode and parses snapshots", () => {
+    expect(TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.captions.enabled("agent")).toBe(true);
+    expect(TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.captions.enabled("bidi")).toBe(true);
     expect(TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.captions.enabled("transcribe")).toBe(true);
     expect(
       TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.captions.parseTranscript({

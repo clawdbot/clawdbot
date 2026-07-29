@@ -109,10 +109,7 @@ public enum ChatTranscriptExporter {
     }
 
     private static func attachments(in message: OpenClawChatMessage) -> [OpenClawChatMessageContent] {
-        message.content.filter { content in
-            let kind = (content.type ?? "text").lowercased()
-            return kind == "file" || kind == "attachment"
-        }
+        message.content.filter(\.isInlineAttachment)
     }
 
     private static func displayRole(_ role: String) -> String {

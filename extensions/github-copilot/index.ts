@@ -9,7 +9,6 @@ import {
   type UnifiedModelCatalogEntry,
   type UnifiedModelCatalogProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   applyAuthProfileConfig,
   coerceSecretRef,
@@ -23,26 +22,20 @@ import {
 import { PUBLIC_GITHUB_COPILOT_DOMAIN, resolveGithubCopilotDomain } from "./domain.js";
 import { createGithubCopilotDynamicModelHooks } from "./dynamic-models.js";
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
-import { resolveCopilotExtendedThinkingLevels } from "./model-metadata.js";
+import { DEFAULT_COPILOT_MODEL, resolveCopilotExtendedThinkingLevels } from "./model-metadata.js";
 import { PROVIDER_ID } from "./models.js";
 import {
   buildGithubCopilotReplayPolicy,
   sanitizeGithubCopilotReplayHistory,
 } from "./replay-policy.js";
+import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 import { wrapCopilotProviderStream } from "./stream.js";
-import {
-  COPILOT_TOKEN_CACHE_MAX_ENTRIES,
-  COPILOT_TOKEN_CACHE_NAMESPACE,
-  type CachedCopilotToken,
-} from "./token-cache.js";
-import { configureCopilotTokenCacheStore } from "./token.js";
 
 const COPILOT_ENV_VARS: [string, string, string] = [
   "COPILOT_GITHUB_TOKEN",
   "GH_TOKEN",
   "GITHUB_TOKEN",
 ];
-const DEFAULT_COPILOT_MODEL = "github-copilot/claude-opus-4.7";
 const DEFAULT_COPILOT_PROFILE_ID = "github-copilot:github";
 
 type GithubCopilotPluginConfig = {
@@ -341,17 +334,6 @@ export default definePluginEntry({
   description: "Bundled GitHub Copilot provider plugin",
   register(api) {
     const startupPluginConfig = (api.pluginConfig ?? {}) as GithubCopilotPluginConfig;
-    let tokenCacheStore: PluginStateSyncKeyedStore<CachedCopilotToken> | undefined;
-    const openTokenCacheStore = () => {
-      tokenCacheStore ??= api.runtime.state.openSyncKeyedStore<CachedCopilotToken>({
-        namespace: COPILOT_TOKEN_CACHE_NAMESPACE,
-        maxEntries: COPILOT_TOKEN_CACHE_MAX_ENTRIES,
-        overflowPolicy: "evict-oldest",
-      });
-      return tokenCacheStore;
-    };
-    configureCopilotTokenCacheStore(openTokenCacheStore);
-
     function resolveCurrentPluginConfig(config?: OpenClawConfig): GithubCopilotPluginConfig {
       const runtimePluginConfig = resolvePluginConfigObject(config, "github-copilot");
       if (runtimePluginConfig) {
@@ -619,6 +601,7 @@ export default definePluginEntry({
       prepareDynamicModel: dynamicModels.prepareDynamicModel,
       resolveDynamicModel: dynamicModels.resolveDynamicModel,
       preferRuntimeResolvedModel: dynamicModels.preferRuntimeResolvedModel,
+      formatApiKey: (credential) => (credential.type === "oauth" ? credential.refresh.trim() : ""),
       wrapStreamFn: wrapCopilotProviderStream,
       buildReplayPolicy: ({ modelId }) => buildGithubCopilotReplayPolicy(modelId),
       sanitizeReplayHistory: sanitizeGithubCopilotReplayHistory,
@@ -636,16 +619,16 @@ export default definePluginEntry({
         };
       },
       prepareRuntimeAuth: async (ctx) => {
-        const { resolveCopilotApiToken } = await loadGithubCopilotRuntime();
-        const token = await resolveCopilotApiToken({
+        const { resolveCopilotRuntimeAuth } = await loadGithubCopilotRuntime();
+        const auth = await resolveCopilotRuntimeAuth({
           githubToken: ctx.apiKey,
           env: ctx.env,
           githubDomain: resolveGithubCopilotDomain({ env: ctx.env, config: ctx.config }),
         });
         return {
-          apiKey: token.token,
-          baseUrl: token.baseUrl,
-          expiresAt: token.expiresAt,
+          apiKey: auth.apiKey,
+          baseUrl: auth.baseUrl,
+          request: { headers: buildCopilotRuntimeHeaders() },
         };
       },
       resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),

@@ -137,7 +137,12 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         }
       }
       try {
-        respond(true, await service.listRepositoryBranches(params.repoRoot), undefined);
+        const result = params.includeRepositoryStatus
+          ? await service.listRepositoryBranches(params.repoRoot, {
+              includeRepositoryStatus: true,
+            })
+          : await service.listRepositoryBranches(params.repoRoot);
+        respond(true, result, undefined);
       } catch (error) {
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
       }

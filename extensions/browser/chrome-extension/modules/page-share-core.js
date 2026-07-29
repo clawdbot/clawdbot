@@ -22,7 +22,14 @@ function truncateShareText(text, maxChars) {
   if (value.length <= maxChars) {
     return value;
   }
-  return `${value.slice(0, maxChars)}\n\n[Truncated: original was ${value.length} characters]`;
+  const marker = `\n\n[Truncated: original was ${value.length} characters]`;
+  let truncated = value.slice(0, maxChars - marker.length);
+  const lastCodeUnit = truncated.charCodeAt(truncated.length - 1);
+  // Keep the complete marker inside the field cap without splitting an emoji.
+  if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff) {
+    truncated = truncated.slice(0, -1);
+  }
+  return `${truncated}${marker}`;
 }
 
 export async function waitForCondition(condition, timeoutMs) {

@@ -127,7 +127,7 @@ describe("processDiscordMessage draft streaming progress", () => {
     ["active", true],
     ["inactive", false],
   ])(
-    "renders Discord tool lines in the draft exactly when durable verbose progress is %s",
+    "keeps Discord tool lines in the draft when durable verbose progress is %s",
     async (_label, durableLaneActive) => {
       const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
       const draftStream = createMockDraftStreamForTest();
@@ -155,15 +155,47 @@ describe("processDiscordMessage draft streaming progress", () => {
       await runProcessDiscordMessage(ctx);
 
       const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
-      if (durableLaneActive) {
-        // The durable verbose lane persists tool summaries: the ephemeral
-        // draft must not render the same tool activity a second time.
-        expect(updates).toBe("");
-      } else {
-        expect(updates).toContain("Exec");
-      }
+      expect(updates).toContain("Exec");
     },
   );
+
+  it("keeps tool rows while yielding commentary to the durable verbose lane", async () => {
+    const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      params?.replyOptions?.onVerboseProgressVisibility?.(() => true);
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Checking the current weather source before summarizing.",
+      });
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onCommandOutput?.({
+        phase: "end",
+        title: "Exec",
+        name: "exec",
+        exitCode: 0,
+      });
+      await elapseProgressDraftStartDelay();
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: { label: "Shelling", commentary: true },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
+    expect(updates).toContain("Exec");
+    expect(updates).not.toContain("Checking the current weather source");
+  });
 
   it("retracts a preamble headline by item identity", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();

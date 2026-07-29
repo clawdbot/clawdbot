@@ -1,7 +1,6 @@
 // Xai provider module implements model/runtime integration.
 import {
   buildLiveModelProviderConfig,
-  getCachedLiveProviderModelRows,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type {
@@ -177,36 +176,30 @@ export async function buildLiveXaiOAuthProvider(params: {
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 }): Promise<ModelProviderConfig> {
-  try {
-    const rows = await getCachedLiveProviderModelRows({
-      providerId: PROVIDER_ID,
-      endpoint: XAI_GROK_OAUTH_MODELS_ENDPOINT,
-      discoveryApiKey: params.discoveryApiKey,
-      fetchGuard: params.fetchGuard,
-      signal: params.signal,
-      ttlMs: XAI_GROK_OAUTH_MODELS_CACHE_TTL_MS,
-      auditContext: "xai-grok-oauth-model-discovery",
-      cacheKeyParts: [
-        PROVIDER_ID,
-        "grok-oauth-model-rows",
-        XAI_GROK_OAUTH_MODELS_ENDPOINT,
-        params.discoveryApiKey,
-      ],
-    });
-    const models = rows
-      .map(buildXaiOauthModelFromLiveRow)
-      .filter((model): model is ModelDefinitionConfig => Boolean(model));
-    if (models.length > 0) {
-      return {
-        baseUrl: XAI_GROK_OAUTH_BASE_URL,
-        api: "openai-responses",
-        auth: "oauth",
-        models,
-      };
-    }
-  } catch {
-    // Grok subscription discovery is advisory. If the proxy is unavailable,
-    // preserve the OAuth proxy transport instead of publishing API-key rows.
-  }
-  return buildXaiOAuthFallbackProvider();
+  const fallback = buildXaiOAuthFallbackProvider();
+  return await buildLiveModelProviderConfig({
+    providerId: PROVIDER_ID,
+    endpoint: XAI_GROK_OAUTH_MODELS_ENDPOINT,
+    providerConfig: {
+      baseUrl: fallback.baseUrl,
+      api: fallback.api,
+      auth: fallback.auth,
+    },
+    models: fallback.models,
+    discoveryApiKey: params.discoveryApiKey,
+    fetchGuard: params.fetchGuard,
+    signal: params.signal,
+    ttlMs: XAI_GROK_OAUTH_MODELS_CACHE_TTL_MS,
+    auditContext: "xai-grok-oauth-model-discovery",
+    cacheKeyParts: [
+      PROVIDER_ID,
+      "grok-oauth-model-rows",
+      XAI_GROK_OAUTH_MODELS_ENDPOINT,
+      params.discoveryApiKey,
+    ],
+    projectRows: (rows) =>
+      rows
+        .map(buildXaiOauthModelFromLiveRow)
+        .filter((model): model is ModelDefinitionConfig => Boolean(model)),
+  });
 }

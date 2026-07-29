@@ -3,10 +3,7 @@
  *
  * Converts channel configured-binding rules into persistent ACP binding records.
  */
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   buildConfiguredAcpSessionKey,
   normalizeBindingConfig,
@@ -37,9 +34,7 @@ function resolveAgentRuntimeAcpDefaults(params: { cfg: OpenClawConfig; ownerAgen
 } {
   // ACP bindings inherit runtime defaults from the owning agent when that agent already runs ACP.
   const ownerAgentId = normalizeLowercaseStringOrEmpty(params.ownerAgentId);
-  const agent = params.cfg.agents?.list?.find(
-    (entry) => normalizeOptionalLowercaseString(entry.id) === ownerAgentId,
-  );
+  const agent = resolveAgentConfig(params.cfg, ownerAgentId);
   if (!agent || agent.runtime?.type !== "acp") {
     return {};
   }

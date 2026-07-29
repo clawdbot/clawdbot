@@ -54,8 +54,10 @@ type ExternalCliSyncProvider = {
 };
 
 // Keep this gate aligned with the canonical identity-copy rule in oauth.ts.
+// Also the passthrough gate in cli-runner/prepare.ts: a live CLI login that
+// this sync would refuse to import must not authenticate a run either.
 /** Return true when imported CLI credentials match an existing profile identity. */
-function isSafeToUseExternalCliCredential(
+export function isSafeToUseExternalCliCredential(
   existing: OAuthCredential | undefined,
   imported: OAuthCredential,
 ): boolean {

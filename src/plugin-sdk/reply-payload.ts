@@ -7,7 +7,10 @@ import { normalizeOutboundReplyPayload as normalizeCoreOutboundReplyPayload } fr
 import { createReplyToFanout } from "../infra/outbound/reply-policy.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 
-export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
+export type { MediaPayloadInput } from "../channels/plugins/media-payload.js";
+/** @deprecated Inbound contexts use `media`; outbound replies use `ReplyPayload.mediaUrl(s)`. */
+export type { MediaPayload } from "../channels/plugins/media-payload.js";
+/** @deprecated Inbound contexts use `media`; outbound replies use `ReplyPayload.mediaUrl(s)`. */
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
 /** Plugin-facing reply payload without core-only trusted local media internals. */
 export type ReplyPayload = Omit<InternalReplyPayload, "trustedLocalMedia">;
@@ -26,6 +29,12 @@ export {
 export type OutboundReplyPayload = {
   /** Plain text reply body. */
   text?: string;
+  /** Visible body a channel adapter may use when native structured content requires text. */
+  fallbackText?: {
+    text: string;
+    /** Batch payload replaced when the adapter adopts this fallback body. */
+    replacesPayloadIndex?: number;
+  };
   /** Ordered media attachments for channels that can send multiple media items. */
   mediaUrls?: string[];
   /** Legacy single media attachment. */

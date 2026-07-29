@@ -30,6 +30,7 @@ vi.mock("./session-transcript-readers.js", () => ({
 }));
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: mocks.loadSessionEntry,
+  loadSessionEntryReadOnly: mocks.loadSessionEntry,
 }));
 
 import { mintMcpAppViewFromTranscript, restoreMcpAppView } from "./mcp-app-reconstruction.js";
@@ -152,7 +153,7 @@ describe("MCP App transcript reconstruction", () => {
       },
     );
 
-    const authorizeAppToolCall = vi.fn(async () => true);
+    const authorizeAppInteraction = vi.fn(async () => true);
     await expect(
       mintMcpAppViewFromTranscript({
         cfg: {},
@@ -161,18 +162,17 @@ describe("MCP App transcript reconstruction", () => {
           serverName: "demo",
           toolName: "show",
           uiResourceUri: "ui://demo/app",
-          originSessionKey: "agent:main:main",
           toolCallId: "call-1",
         },
         allowedAppToolNames: new Set(["refresh"]),
-        authorizeAppToolCall,
+        authorizeAppInteraction,
         readOnly: false,
       }),
     ).resolves.toEqual({ runtime, view });
     expect(mocks.fetchMcpAppView).toHaveBeenCalledWith(
       expect.objectContaining({
         allowedAppToolNames: new Set(["refresh"]),
-        authorizeAppToolCall,
+        authorizeAppInteraction,
         toolCallId: "call-1",
       }),
     );

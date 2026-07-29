@@ -11,7 +11,7 @@ import {
   executeMcpAppOperation,
   McpAppViewExpiredError,
   type McpAppOperation,
-  requireMcpAppViewAuthorization,
+  requireMcpAppInteraction,
   resolveMcpAppActiveView,
   withMcpAppActiveView,
 } from "../mcp-app-operations.js";
@@ -71,12 +71,19 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
         viewId: requireString(params, "viewId"),
         cfg: context.getRuntimeConfig(),
       });
-      return await withMcpAppActiveView(active, "read", () => {
+      return await withMcpAppActiveView(active, "read", async () => {
         const { view } = active;
-        const interactive = view.allowedAppToolNames !== undefined && view.readOnly !== true;
+        let interactive = false;
+        try {
+          await requireMcpAppInteraction(view);
+          interactive = true;
+        } catch {
+          // Stale board leases remain renderable but lose every interactive capability.
+        }
         const updateModelContextSupported =
           interactive && active.runtime.mcpAppModelContextRevoked !== true;
-        const sandboxPort = context.getMcpAppSandboxPort?.();
+        const sandboxPort =
+          context.getMcpAppSandboxPort?.() ?? (await context.ensureSandboxHostPort?.());
         if (sandboxPort === undefined) {
           throw new Error("MCP App sandbox listener is unavailable; restart the Gateway");
         }
@@ -120,10 +127,7 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
         viewId: requireString(params, "viewId"),
       });
       return await withMcpAppActiveView(active, "read", async () => {
-        if (active.view.readOnly === true || active.view.allowedAppToolNames === undefined) {
-          throw new Error("MCP App view is not authorized to update model context");
-        }
-        await requireMcpAppViewAuthorization(active.view);
+        await requireMcpAppInteraction(active.view);
         updateMcpAppModelContext(active.runtime, active.view, params);
         return {};
       });

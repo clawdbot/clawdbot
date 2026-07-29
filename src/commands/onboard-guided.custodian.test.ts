@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
 import { resetLogger } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
@@ -40,6 +41,16 @@ const readConfigFileSnapshot = vi.hoisted(() =>
 const logPathTracker = createSuiteLogPathTracker("openclaw-guided-onboard-log-");
 
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot }));
+vi.mock("./onboard-agent.js", () => ({
+  ensureOnboardingAgent: async ({ config }: { config: OpenClawConfig }) => ({
+    config: {
+      ...config,
+      agents: { ...config.agents, list: [{ id: "main", default: true }] },
+    },
+    agentId: "main",
+    bootstrapPending: true,
+  }),
+}));
 
 vi.mock("./onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "/tmp/openclaw-workspace",
@@ -69,7 +80,7 @@ function existingModelCandidate() {
   return {
     kind: "existing-model",
     label: "Current model",
-    detail: "already configured",
+    detail: "acme/workspace-model — already configured",
     modelRef: "acme/workspace-model",
     recommended: false,
     credentials: true,
@@ -105,6 +116,9 @@ function setupDeps(params: {
   const runSystemAgentChat = vi.fn<NonNullable<GuidedOnboardingDeps["runSystemAgentChat"]>>(
     params.runSystemAgentChat ?? (async () => {}),
   );
+  const runSetupMemoryImportStep = vi.fn<
+    NonNullable<GuidedOnboardingDeps["runSetupMemoryImportStep"]>
+  >(params.runSetupMemoryImportStep ?? (async () => ({ status: "skipped", providers: [] })));
   return {
     createPrompter: () => params.prompter,
     persistAccessMode: vi.fn(async () => undefined),
@@ -134,7 +148,7 @@ function setupDeps(params: {
         lines: ["Workspace: /tmp/work", "Gateway: running"],
       })),
     persistRiskAcknowledgement: params.persistRiskAcknowledgement ?? vi.fn(async () => undefined),
-    runSetupMemoryImportStep: params.runSetupMemoryImportStep ?? vi.fn(async () => undefined),
+    runSetupMemoryImportStep,
     runAppRecommendations:
       params.runAppRecommendations ??
       vi.fn(async ({ config }) => ({ config, commitResult: vi.fn() })),
@@ -282,15 +296,62 @@ describe("runGuidedOnboarding custodian flow", () => {
   it("keeps the working route when other options are explored and skipped", async () => {
     promptAuthChoiceGrouped.mockResolvedValueOnce("skip");
     const prompter = createWizardPrompter(undefined, { selectValues: ["full", "other"] });
-    const deps = setupDeps({ prompter });
+    const deps = setupDeps({
+      prompter,
+      detect: vi.fn(async () =>
+        detection({
+          candidates: [candidate("claude-cli", "Claude Code"), candidate("codex-cli", "Codex")],
+        }),
+      ),
+    });
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
     expect(promptAuthChoiceGrouped).toHaveBeenCalledOnce();
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
+      expect.objectContaining({
+        additionalGroups: [
+          expect.objectContaining({
+            label: "Detected on this machine",
+            hint: "Claude Code, Codex",
+            methodMessage: "Use which detected AI?",
+          }),
+        ],
+      }),
+    );
     const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(notes).toContain("Keeping the working AI you already have.");
     expect(notes).not.toContain("Add AI later");
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
+  });
+
+  it("names the configured model in the recommended route confirmation", async () => {
+    const prompter = createWizardPrompter(undefined, { selectValues: ["full", "use"] });
+    const deps = setupDeps({
+      prompter,
+      detect: vi.fn(async () => detection({ candidates: [existingModelCandidate()] })),
+      activate: vi.fn(async () => ({
+        ok: true as const,
+        modelRef: "acme/workspace-model",
+        latencyMs: 125,
+        lines: ["Default model: acme/workspace-model"],
+      })),
+    });
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+
+    expect(prompter.select).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        message: "Use Current model (acme/workspace-model)?",
+        options: expect.arrayContaining([
+          expect.objectContaining({
+            value: "use",
+            label: "Continue with Current model (acme/workspace-model) — recommended",
+          }),
+        ]),
+      }),
+    );
   });
 
   it("quips about detected coding agents", async () => {
@@ -309,6 +370,25 @@ describe("runGuidedOnboarding custodian flow", () => {
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("good taste"),
       expect.anything(),
+    );
+  });
+
+  it("renders detected candidates without leaking interpolation placeholders", async () => {
+    const prompter = createWizardPrompter();
+    const deps = setupDeps({
+      prompter,
+      detect: vi.fn(async () =>
+        detection({
+          candidates: [candidate("claude-cli", "Claude Code"), candidate("codex-cli", "Codex")],
+        }),
+      ),
+    });
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+
+    expect(prompter.note).toHaveBeenCalledWith(
+      "Claude Code — logged in\nCodex — logged in",
+      "AI found",
     );
   });
 
