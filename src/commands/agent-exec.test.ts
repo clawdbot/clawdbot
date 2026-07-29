@@ -168,6 +168,27 @@ describe("agent exec strict result classification", () => {
     });
     expect(envelope.payloads).toEqual([{ text: "done", mediaUrl: null }]);
   });
+
+  it("projects the embedded outer tool summary", () => {
+    const envelope = classifyAgentExecResult({
+      payloads: [{ text: "done" }],
+      meta: {
+        durationMs: 10,
+        toolSummary: {
+          calls: 2,
+          tools: ["read", "write"],
+          failures: 1,
+          totalToolTimeMs: 25,
+        },
+      },
+    });
+    expect(envelope.toolSummary).toEqual({
+      calls: 2,
+      tools: ["read", "write"],
+      failures: 1,
+      totalToolTimeMs: 25,
+    });
+  });
 });
 
 describe("agent exec command composition", () => {

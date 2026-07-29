@@ -68,6 +68,7 @@ Plain output writes only the final assistant text to stdout. Diagnostics use std
   "codeModeEngaged": false,
   "assistantTurns": 2,
   "bridgeCalls": { "search": 1, "describe": 0, "call": 3 },
+  "toolSummary": { "calls": 2, "tools": ["read", "write"], "totalToolTimeMs": 48 },
   "model": "gpt-5.6-sol",
   "provider": "openai",
   "sessionId": "019..."
@@ -82,8 +83,23 @@ Run-stat fields are additive and may be absent:
 - `codeModeEngaged`: `true` only when [code mode](/tools/code-mode) actually owned the model tool surface for the run. `tools.codeMode.enabled=true` alone does not guarantee engagement; models routed through a native harness surface can leave it `false`.
 - `assistantTurns`: completed assistant/provider round trips in the run; omitted when none completed.
 - `bridgeCalls`: inner tool-search/code-mode bridge call counts (`search`/`describe`/`call`). These are invisible to the provider; outer tool calls stay in `meta.toolSummary.calls` of the full run metadata.
+- `toolSummary`: outer model-visible tool-call count, tool names, failures, and total tool time from the embedded run.
 
-The same fields appear on `meta.agentMeta` in the `openclaw agent --json` response.
+The agent run-stat fields appear on `meta.agentMeta` in the `openclaw agent --json` response; the outer tool summary remains at `meta.toolSummary`.
+
+### Code Mode model matrix
+
+From a source checkout, run the bounded evaluation matrix against any explicit model reference:
+
+```bash
+pnpm qa:code-mode-models -- --model ollama/qwen3.5:9b
+```
+
+Repeat `--model` to compare models, or use `--mode`, `--task`, and `--repetitions` to narrow the default direct/automatic/forced Code Mode matrix. Each cell runs an isolated `agent exec` task and records model/provider identity, timing, result status, failure class, outer tool calls, Code Mode bridge calls, and verified output/effects.
+
+The output directory contains canonical QA Lab `qa-evidence.json`. `summary.json` and `results.jsonl` are supporting aggregate and per-cell artifacts; `manifest.json` records the requested matrix and source identity.
+
+This is evaluation-only evidence, not a CI or release gate. Results do not change model capabilities, runtime routing, fallback, or repair policy.
 
 ### `agent exec` options
 

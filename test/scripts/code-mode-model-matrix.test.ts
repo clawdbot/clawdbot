@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { validateQaEvidenceSummaryJson } from "../../extensions/qa-lab/api.ts";
 import {
   assertFreshCodeModeMatrixOutputDir,
   buildCodeModeMatrixAgentEnv,
@@ -13,6 +14,7 @@ import {
   runCodeModeModelMatrix,
   type CodeModeMatrixCellResult,
 } from "../../scripts/code-mode-model-matrix.ts";
+import type { AgentExecEnvelope } from "../../src/commands/agent-exec.ts";
 
 describe("Code Mode model matrix options", () => {
   it("defaults to the complete bounded matrix", () => {
@@ -106,10 +108,11 @@ describe("Code Mode model matrix classification", () => {
     payloads: [{ text: "CM-EXPECTED" }],
     codeModeEngaged: true,
     bridgeCalls: { search: 0, describe: 0, call: 1 },
+    toolSummary: { calls: 1, tools: ["exec"] },
     model: "qwen3.5:9b",
     provider: "ollama",
     sessionId: "session",
-  } as const;
+  } satisfies AgentExecEnvelope;
 
   it("requires engagement, tool execution, effect, and exact final text", () => {
     expect(
@@ -206,6 +209,67 @@ describe("Code Mode model matrix classification", () => {
     });
   });
 
+  it("requires outer tool-call evidence for direct and automatic cells", () => {
+    for (const mode of ["direct", "auto"] as const) {
+      expect(
+        classifyCodeModeMatrixCell({
+          diagnostics: "",
+          effectPassed: true,
+          envelope: {
+            ...successEnvelope,
+            codeModeEngaged: mode === "auto",
+            toolSummary: { calls: 0, tools: [] },
+          },
+          expected: "CM-EXPECTED",
+          mode,
+          model: "ollama/qwen3.5:9b",
+          task: "read",
+        }).failureCategory,
+      ).toBe("tool_execution");
+    }
+  });
+
+  it("uses outer tool-call evidence for automatic cells that engage Code Mode", () => {
+    expect(
+      classifyCodeModeMatrixCell({
+        diagnostics: "",
+        effectPassed: true,
+        envelope: {
+          ...successEnvelope,
+          bridgeCalls: { search: 1, describe: 1, call: 0 },
+          codeModeEngaged: true,
+          toolSummary: { calls: 1, tools: ["exec"] },
+        },
+        expected: "CM-EXPECTED",
+        mode: "auto",
+        model: "ollama/qwen3.5:9b",
+        task: "read",
+      }),
+    ).toMatchObject({
+      failureCategory: null,
+      oracle: { toolExecution: true },
+      passed: true,
+    });
+  });
+
+  it("keeps nested bridge-call evidence mandatory for forced Code Mode", () => {
+    expect(
+      classifyCodeModeMatrixCell({
+        diagnostics: "",
+        effectPassed: true,
+        envelope: {
+          ...successEnvelope,
+          bridgeCalls: { search: 1, describe: 1, call: 0 },
+          toolSummary: { calls: 1, tools: ["exec"] },
+        },
+        expected: "CM-EXPECTED",
+        mode: "code",
+        model: "ollama/qwen3.5:9b",
+        task: "read",
+      }).failureCategory,
+    ).toBe("tool_execution");
+  });
+
   it("rejects forced Code Mode runs that never engaged", () => {
     expect(
       classifyCodeModeMatrixCell({
@@ -287,6 +351,7 @@ describe("Code Mode model matrix artifacts", () => {
             }
             return {
               buildSha256: "build123",
+              bridgeCalls: { search: 0, describe: 0, call: 1 },
               codeModeEngaged: true,
               elapsedMs: 10,
               expected: "CM-EXPECTED",
@@ -312,6 +377,7 @@ describe("Code Mode model matrix artifacts", () => {
               status: "ok",
               task: cell.task,
               timestamp: "2026-07-28T12:00:00.000Z",
+              toolSummary: { calls: 1, tools: ["exec"] },
             } satisfies CodeModeMatrixCellResult;
           },
         },
@@ -340,6 +406,34 @@ describe("Code Mode model matrix artifacts", () => {
       expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
         failureCategory: "harness_error",
         error: { kind: "harness_error", message: "fixture exploded" },
+      });
+      const evidence = validateQaEvidenceSummaryJson(
+        JSON.parse(await fs.readFile(path.join(repoRoot, "artifacts", "qa-evidence.json"), "utf8")),
+      );
+      expect(evidence.entries).toHaveLength(2);
+      expect(evidence.entries[0]).toMatchObject({
+        test: {
+          kind: "script-test",
+          source: { path: "scripts/code-mode-model-matrix.ts" },
+        },
+        execution: {
+          provider: {
+            id: "ollama",
+            model: { name: "qwen3.5:9b", ref: "ollama/qwen3.5:9b" },
+          },
+          artifacts: [
+            { kind: "manifest", path: "manifest.json" },
+            { kind: "summary", path: "summary.json" },
+            { kind: "results", path: "results.jsonl" },
+          ],
+        },
+        result: {
+          status: "fail",
+          failure: { class: "harness_error", reason: "harness_error" },
+        },
+      });
+      expect(evidence.entries[1]).toMatchObject({
+        result: { status: "pass", timing: { wallMs: 10 } },
       });
     } finally {
       await fs.rm(repoRoot, { force: true, recursive: true });

@@ -8,6 +8,13 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import {
+  buildScriptEvidenceSummary,
+  QA_EVIDENCE_FILENAME,
+  validateQaEvidenceSummaryJson,
+  type QaEvidenceStatus,
+  type QaEvidenceSummaryJson,
+} from "../extensions/qa-lab/api.ts";
 import type { AgentExecEnvelope } from "../src/commands/agent-exec.ts";
 import { previewForDevToolLog, redactJsonValueForDevToolLog } from "./lib/dev-tooling-safety.ts";
 
@@ -101,6 +108,7 @@ export type CodeModeMatrixCellResult = {
   status: AgentExecEnvelope["status"];
   task: CodeModeMatrixTask;
   timestamp: string;
+  toolSummary?: AgentExecEnvelope["toolSummary"];
   usage?: AgentExecEnvelope["usage"];
 };
 
@@ -568,7 +576,7 @@ function classifyProviderFailure(text: string): CellFailureCategory | null {
 export function classifyCodeModeMatrixCell(params: {
   diagnostics: string;
   effectPassed: boolean;
-  envelope: AgentExecEnvelope;
+  envelope: Readonly<AgentExecEnvelope>;
   expected: string;
   mode: CodeModeMatrixMode;
   model: string;
@@ -587,12 +595,11 @@ export function classifyCodeModeMatrixCell(params: {
   const requestedModel = params.model.slice(separator + 1);
   const identity =
     params.envelope.provider === requestedProvider && params.envelope.model === requestedModel;
+  const outerToolExecution = (params.envelope.toolSummary?.calls ?? 0) > 0;
+  // Direct and auto evaluate the model-visible outer tool surface. Forced Code
+  // Mode additionally proves that the exec cell reached a nested catalog tool.
   const toolExecution =
-    params.envelope.codeModeEngaged === true
-      ? (params.envelope.bridgeCalls?.call ?? 0) > 0
-      : params.task === "read"
-        ? params.envelope.final.includes(params.expected)
-        : effect;
+    outerToolExecution && (params.mode !== "code" || (params.envelope.bridgeCalls?.call ?? 0) > 0);
   const oracle = { answer, effect, engagement, identity, toolExecution };
   if (params.stdoutContractValid === false) {
     return { failureCategory: "harness_error", oracle, passed: false };
@@ -924,6 +931,7 @@ async function runMatrixCell(params: RunCellParams): Promise<CodeModeMatrixCellR
       status: command.envelope.status,
       task: params.cell.task,
       timestamp: new Date().toISOString(),
+      ...(command.envelope.toolSummary ? { toolSummary: command.envelope.toolSummary } : {}),
       ...(command.envelope.usage ? { usage: command.envelope.usage } : {}),
     };
   } finally {
@@ -1045,6 +1053,86 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
   );
 }
 
+function evidenceStatus(result: CodeModeMatrixCellResult): QaEvidenceStatus {
+  if (result.passed) {
+    return "pass";
+  }
+  if (result.failureCategory === "provider_auth" || result.failureCategory === "provider_billing") {
+    return "blocked";
+  }
+  return "fail";
+}
+
+function observedModelRef(result: CodeModeMatrixCellResult): string {
+  if (result.observedProvider && result.observedModel) {
+    return `${result.observedProvider}/${result.observedModel}`;
+  }
+  return result.model;
+}
+
+function buildCodeModeMatrixEvidence(params: {
+  generatedAt: string;
+  repoRoot: string;
+  results: readonly CodeModeMatrixCellResult[];
+}): QaEvidenceSummaryJson {
+  const artifactPaths = [
+    { kind: "manifest", path: "manifest.json" },
+    { kind: "summary", path: "summary.json" },
+    { kind: "results", path: "results.jsonl" },
+  ];
+  const entries = params.results.flatMap((result) => {
+    const summary = buildScriptEvidenceSummary({
+      artifactPaths,
+      evidenceMode: "full",
+      generatedAt: result.timestamp,
+      packageSource: { kind: "source-checkout", sha: result.gitSha },
+      primaryModel: observedModelRef(result),
+      providerMode: "live-frontier",
+      repoRoot: params.repoRoot,
+      runner: "code-mode-model-matrix",
+      targets: [
+        {
+          id: result.id,
+          title: `${result.model} ${result.mode} ${result.task} repetition ${result.repetition}`,
+          sourcePath: SOURCE_PATH,
+        },
+      ],
+      results: [
+        {
+          id: result.id,
+          status: evidenceStatus(result),
+          durationMs: Math.max(1, result.elapsedMs),
+          failureMessage: result.failureCategory ?? undefined,
+        },
+      ],
+    });
+    const entry = summary.entries[0];
+    if (!entry) {
+      return [];
+    }
+    if (entry.result.failure && result.failureCategory) {
+      entry.result.failure.class = result.failureCategory;
+    }
+    return [entry];
+  });
+  const base = buildScriptEvidenceSummary({
+    artifactPaths,
+    evidenceMode: "full",
+    generatedAt: params.generatedAt,
+    packageSource: { kind: "source-checkout" },
+    primaryModel: "unknown/unknown",
+    providerMode: "live-frontier",
+    repoRoot: params.repoRoot,
+    runner: "code-mode-model-matrix",
+    targets: [],
+    results: [],
+  });
+  return validateQaEvidenceSummaryJson({
+    ...base,
+    entries,
+  });
+}
+
 export async function runCodeModeModelMatrix(
   options: CodeModeMatrixOptions,
   deps: MatrixRunDependencies = {},
@@ -1088,6 +1176,14 @@ export async function runCodeModeModelMatrix(
   if (options.dryRun) {
     const summary = { status: "dry-run", total: cells.length };
     await writeJson(path.join(outputDir, "summary.json"), summary);
+    await writeJson(
+      path.join(outputDir, QA_EVIDENCE_FILENAME),
+      buildCodeModeMatrixEvidence({
+        generatedAt: now.toISOString(),
+        repoRoot: options.repoRoot,
+        results: [],
+      }),
+    );
     return { exitCode: 0, outputDir, summary };
   }
 
@@ -1163,6 +1259,14 @@ export async function runCodeModeModelMatrix(
       groups,
     };
     await writeJson(path.join(outputDir, "summary.json"), summary);
+    await writeJson(
+      path.join(outputDir, QA_EVIDENCE_FILENAME),
+      buildCodeModeMatrixEvidence({
+        generatedAt: summary.finishedAt,
+        repoRoot: options.repoRoot,
+        results,
+      }),
+    );
     return {
       exitCode: failed > 0 && !options.allowFailures ? 1 : 0,
       outputDir,
