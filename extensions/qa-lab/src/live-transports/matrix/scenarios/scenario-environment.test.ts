@@ -9,6 +9,7 @@ vi.mock("../substrate/config.js", () => ({ buildMatrixQaConfig }));
 vi.mock("./scenario-runtime-room.js", () => ({ runMatrixQaCanary: vi.fn() }));
 
 import { createMatrixQaScenarioEnvironment } from "./scenario-environment.js";
+import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -80,8 +81,9 @@ describe("matrix scenario environment", () => {
       waitForConfigRestartSettle: vi.fn(),
     };
     const first = await environment.prepareFlow(input);
-    first.scenarioContext.syncState.driver = "s1";
-    first.scenarioContext.syncState.observer = "s2";
+    const syncState: MatrixQaScenarioContext["syncState"] = first.scenarioContext.syncState;
+    syncState.driver = "s1";
+    syncState.observer = "s2";
     first.scenarioContext.syncStreams!.driver = { prime: vi.fn() } as never;
     first.scenarioContext.syncStreams!.observer = { prime: vi.fn() } as never;
 

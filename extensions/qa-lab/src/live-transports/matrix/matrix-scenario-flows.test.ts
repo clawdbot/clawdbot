@@ -4,6 +4,7 @@ import {
   readQaScenarioById,
   readQaScenarioExecutionConfig,
 } from "../../scenario-catalog.js";
+import { requireFlowScenario } from "../../scenario-catalog.test-utils.js";
 
 const MATRIX_MENTION_GATE_PRIMARY_SCENARIOS = [
   "matrix-allowbots-default-block",
@@ -162,14 +163,16 @@ describe("Matrix QA Lab scenario flows", () => {
 
   it("isolates only model-driven allowBots admission scenarios", () => {
     const isolatedScenarioIds = MATRIX_MENTION_GATE_PRIMARY_SCENARIOS.filter(
-      (scenarioId) => readQaScenarioById(scenarioId).execution.suiteIsolation === "isolated",
+      (scenarioId) =>
+        requireFlowScenario(readQaScenarioById(scenarioId)).execution.suiteIsolation === "isolated",
     );
 
     expect(isolatedScenarioIds).toEqual(MATRIX_ISOLATED_ALLOWBOTS_ADMISSION_SCENARIOS);
     for (const scenarioId of MATRIX_ISOLATED_ALLOWBOTS_ADMISSION_SCENARIOS) {
-      expect(readQaScenarioById(scenarioId).execution.isolationReason, scenarioId).toContain(
-        "fresh model-driven configured-bot admission",
-      );
+      expect(
+        requireFlowScenario(readQaScenarioById(scenarioId)).execution.isolationReason,
+        scenarioId,
+      ).toContain("fresh model-driven configured-bot admission");
     }
   });
 

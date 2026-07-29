@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { defaultQaSuiteConcurrencyForTransport } from "./qa-transport-registry.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
+import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import {
   collectQaSuiteGatewayConfigPatch,
   collectQaSuiteGatewayRuntimeOptions,
@@ -557,7 +558,7 @@ describe("qa suite planning helpers", () => {
     ];
 
     for (const scenarioId of scenarioIds) {
-      const scenario = readQaScenarioById(scenarioId);
+      const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
       expect(scenario.execution.suiteIsolation, scenarioId).toBe("isolated");
       expect(scenario.execution.isolationReason, scenarioId).toContain("fresh canary reply");
       expect(scenarioRequiresIsolatedQaSuiteWorker(scenario), scenarioId).toBe(true);
