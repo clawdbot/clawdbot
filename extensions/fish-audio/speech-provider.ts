@@ -18,7 +18,6 @@ import {
   trimToUndefined,
 } from "openclaw/plugin-sdk/speech-core";
 import {
-  FISH_AUDIO_BASE_URL,
   FISH_AUDIO_STREAM_MAX_BYTES,
   type FishAudioFormat,
   type FishAudioLatency,
@@ -363,9 +362,3 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
     },
   };
 }
-
-export const FISH_AUDIO_DEFAULTS = {
-  baseUrl: FISH_AUDIO_BASE_URL,
-  model: DEFAULT_MODEL,
-  latency: DEFAULT_LATENCY,
-} as const;
