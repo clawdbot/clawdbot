@@ -275,13 +275,18 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     if (!processInstanceId || !this.isConnected || this.connection !== connection) {
       return;
     }
-    const notices = new Map(
-      [...this.addonNotices].filter(
-        ([, notice]) =>
-          notice.processInstanceId === null || notice.processInstanceId === processInstanceId,
-      ),
-    );
-    if (notices.size !== this.addonNotices.size) {
+    const notices = new Map<string, MemoryAddonNotice>();
+    for (const [pluginId, notice] of this.addonNotices) {
+      if (notice.processInstanceId === null) {
+        notices.set(pluginId, { ...notice, processInstanceId });
+      } else if (notice.processInstanceId === processInstanceId) {
+        notices.set(pluginId, notice);
+      }
+    }
+    if (
+      notices.size !== this.addonNotices.size ||
+      [...notices].some(([pluginId, notice]) => this.addonNotices.get(pluginId) !== notice)
+    ) {
       this.addonNotices = notices;
     }
   }
@@ -454,9 +459,6 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     const errors = new Map(this.addonErrors);
     errors.delete(pluginId);
     this.addonErrors = errors;
-    const notices = new Map(this.addonNotices);
-    notices.delete(pluginId);
-    this.addonNotices = notices;
     try {
       try {
         const processInstanceIdPromise = this.readProcessInstanceId(client);
@@ -473,6 +475,10 @@ class MemorySettingsPage extends OpenClawLightDomElement {
           if (currentConnection?.connected && currentConnection.client) {
             void this.reconcileAddonNotices(currentConnection.client, currentConnection);
           }
+        } else {
+          const notices = new Map(this.addonNotices);
+          notices.delete(pluginId);
+          this.addonNotices = notices;
         }
       } catch (error) {
         this.addonErrors = new Map(this.addonErrors).set(pluginId, errorMessage(error));

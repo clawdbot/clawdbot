@@ -73,7 +73,7 @@ function createPage(params: {
   basePath?: string;
   agents?: Array<{ id: string; name?: string }>;
   memoryStatus?: (agentId: string, probe: boolean) => Promise<unknown>;
-  processInstanceIds?: string[];
+  processInstanceIds?: Array<string | undefined>;
   scopes?: string[];
   lookupSchemaPath?: (call: number) => Promise<unknown>;
 }) {
@@ -546,16 +546,19 @@ describe("MemorySettingsPage catalog state", () => {
   it("surfaces restart-required outcomes from add-on mutations", async () => {
     const initial = [addon("active-memory", true), addon("memory-wiki", false)];
     const updated = [addon("active-memory", true), addon("memory-wiki", true)];
+    let mutations = 0;
     const { element, request, setPhase } = createPage({
       configObject: {},
       listCatalog: (call) => Promise.resolve({ plugins: call === 0 ? initial : updated }),
       setEnabled: (_pluginId, enabled) =>
-        Promise.resolve({
-          ok: true,
-          plugin: addon("memory-wiki", enabled),
-          restartRequired: true,
-        }),
-      processInstanceIds: ["process-a", "process-a", "process-a", "process-b"],
+        mutations++ === 0
+          ? Promise.resolve({
+              ok: true,
+              plugin: addon("memory-wiki", enabled),
+              restartRequired: true,
+            })
+          : Promise.reject(new Error("follow-up rejected")),
+      processInstanceIds: [undefined, "process-a", "process-a", "process-a", "process-b"],
     });
     document.body.append(element);
     try {
@@ -568,10 +571,16 @@ describe("MemorySettingsPage catalog state", () => {
       );
       expect(addonSwitch(element, "Memory wiki")?.checked).toBe(true);
 
+      toggleAddon(element, "Memory wiki", false);
+      await waitForFast(() => expect(element.textContent).toContain("follow-up rejected"));
+      expect(element.textContent).toContain(
+        "Enabled memory-wiki. A Gateway restart is required to apply the change.",
+      );
+
       setPhase("disconnected");
       setPhase("connected");
       await waitForFast(() =>
-        expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(3),
+        expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(4),
       );
       expect(element.textContent).toContain(
         "Enabled memory-wiki. A Gateway restart is required to apply the change.",
