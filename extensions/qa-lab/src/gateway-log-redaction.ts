@@ -60,17 +60,18 @@ function redactSecretEnvKeyPattern(text: string, pattern: RegExp) {
 
 function redactSecretValueKey(text: string, key: string) {
   const escapedKey = escapeRegExp(key);
+  const valuePattern = `[^\\s"';,]+|"(?:\\\\.|[^"\\\\])*"|'[^']*'`;
   return text
     .replace(new RegExp(`([?#&]${escapedKey}=)[^&\\s]+`, "gi"), "$1<redacted>")
     .replace(
-      new RegExp(`(^|\\s)(--${escapedKey})(\\s*[=:]\\s*)([^\\s"';,]+|"[^"]*"|'[^']*')`, "gi"),
+      new RegExp(`(^|\\s)(--${escapedKey})(\\s*[=:]\\s*)(${valuePattern})`, "gi"),
       `$1$2$3<redacted>`,
     )
     .replace(
-      new RegExp(`(^|[^\\w?#&-])(${escapedKey})(\\s*[=:]\\s*)([^\\s"';,]+|"[^"]*"|'[^']*')`, "gi"),
+      new RegExp(`(^|[^\\w?#&-])(${escapedKey})(\\s*[=:]\\s*)(${valuePattern})`, "gi"),
       `$1$2$3<redacted>`,
     )
-    .replace(new RegExp(`("${escapedKey}"\\s*:\\s*)"[^"]*"`, "gi"), `$1"<redacted>"`);
+    .replace(new RegExp(`("${escapedKey}"\\s*:\\s*)"(?:\\\\.|[^"\\\\])*"`, "gi"), `$1"<redacted>"`);
 }
 
 function redactStructuredSecretLine(text: string, key: string) {

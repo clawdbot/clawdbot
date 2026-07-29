@@ -66,8 +66,10 @@ export async function readBuzzQaCredentialFile(params: {
   let payload: unknown;
   try {
     payload = JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`Buzz QA credential file ${resolvedPath} is not valid JSON.`, { cause: error });
+  } catch {
+    // JSON.parse errors may include source snippets, so never retain the
+    // secret-bearing parser error as a cause.
+    throw new Error(`Buzz QA credential file ${resolvedPath} is not valid JSON.`);
   }
   return parseBuzzQaCredentialPayload(payload);
 }

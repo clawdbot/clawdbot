@@ -97,5 +97,10 @@ describe("Buzz QA credentials", () => {
     await expect(readBuzzQaCredentialFile({ filePath, repoRoot })).rejects.toThrow(
       "is not valid JSON",
     );
+    try {
+      await readBuzzQaCredentialFile({ filePath, repoRoot });
+    } catch (error) {
+      expect((error as Error & { cause?: unknown }).cause).toBeUndefined();
+    }
   });
 });

@@ -29,18 +29,17 @@ describe("gateway log redaction", () => {
   it("redacts Buzz QA private keys and authorization tags", () => {
     const privateKey = "01".repeat(32);
     const authTag = '["auth","pubkey","conditions","signature"]';
-    const jsonAuthTag = "authorization-tag-value";
     const raw = [
       `privateKey: ${privateKey}`,
       `authTag: ${authTag}`,
       `{"privateKey":"${privateKey}"}`,
-      `{"authTag":"${jsonAuthTag}"}`,
+      JSON.stringify({ authTag }),
     ].join("\n");
 
     const redacted = redactQaGatewayDebugText(raw);
     expect(redacted).not.toContain(privateKey);
     expect(redacted).not.toContain(authTag);
-    expect(redacted).not.toContain(jsonAuthTag);
+    expect(redacted).not.toContain("signature");
     expect(redacted.match(/<redacted>/gu)).toHaveLength(4);
   });
 
