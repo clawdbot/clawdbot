@@ -97,6 +97,10 @@ export function isQaTestFileScenario(
   );
 }
 
+function resolveNativeVitestReportPath(scenario: QaTestFileScenario, outputDir: string): string {
+  return path.join(outputDir, `${scenario.id}.vitest-report.json`);
+}
+
 function vitestReporterArgs(
   scenario: QaTestFileScenario,
   context: { outputDir: string },
@@ -104,7 +108,7 @@ function vitestReporterArgs(
   return [
     "--reporter=verbose",
     "--reporter=json",
-    `--outputFile.json=${path.join(context.outputDir, `${scenario.id}.vitest-report.json`)}`,
+    `--outputFile.json=${resolveNativeVitestReportPath(scenario, context.outputDir)}`,
   ];
 }
 
@@ -233,7 +237,7 @@ async function readNativeVitestExecutionFailure(params: {
   outputDir: string;
   scenario: QaTestFileScenario;
 }): Promise<string | undefined> {
-  const reportPath = path.join(params.outputDir, `${params.scenario.id}.vitest-report.json`);
+  const reportPath = resolveNativeVitestReportPath(params.scenario, params.outputDir);
   const report = await readJsonFileIfExists(reportPath);
   if (!report || typeof report !== "object") {
     return `Vitest exited successfully without writing a valid JSON test report at ${reportPath}.`;
@@ -271,6 +275,16 @@ async function runScenarioCommandSteps(params: {
   for (const step of params.steps) {
     logChunks.push(`$ ${formatCommand(step)}\n`);
     try {
+      const isNativeVitestStep =
+        params.scenario.execution.kind !== "script" &&
+        step.args[0] === "scripts/run-vitest.mjs";
+      if (isNativeVitestStep) {
+        // A reused scenario output directory must not let a previous run's
+        // passing report authenticate a child that emitted no report.
+        await fs.rm(resolveNativeVitestReportPath(params.scenario, params.outputDir), {
+          force: true,
+        });
+      }
       const timeoutMs =
         params.scenario.execution.kind === "script"
           ? (params.scenario.execution.timeoutMs ?? params.commandTimeoutMs)
@@ -298,10 +312,7 @@ async function runScenarioCommandSteps(params: {
       }
       // Chromium installation and script producers do not execute Vitest tests.
       // Only the final native test command can prove an assertion actually ran.
-      if (
-        params.scenario.execution.kind !== "script" &&
-        step.args[0] === "scripts/run-vitest.mjs"
-      ) {
+      if (isNativeVitestStep) {
         failureMessage = await readNativeVitestExecutionFailure(params);
         if (failureMessage) {
           logChunks.push(`${failureMessage}\n`);

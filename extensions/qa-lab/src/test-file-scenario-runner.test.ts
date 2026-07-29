@@ -447,6 +447,46 @@ describe("qa test file scenario runner", () => {
     },
   );
 
+  it.each([{ executionKind: "vitest" as const }, { executionKind: "playwright" as const }])(
+    "does not reuse a prior passing $executionKind report when the next child writes none",
+    async ({ executionKind }) => {
+      const repoRoot = await makeTempRepo(`qa-${executionKind}-stale-vitest-report-`);
+      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", `scenario-${executionKind}`);
+      const scenarioPath =
+        executionKind === "playwright"
+          ? "ui/src/e2e/chat-flow.e2e.test.ts"
+          : "extensions/qa-lab/src/coverage-report.test.ts";
+      const reportPath = path.join(outputDir, `scenario-${executionKind}.vitest-report.json`);
+      let writeReport = true;
+      const runParams = {
+        repoRoot,
+        outputDir,
+        providerMode: "mock-openai" as const,
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        scenarios: [makeTestFileScenario(executionKind, scenarioPath)],
+        runCommand: async (command: QaScenarioCommandExecution) => {
+          if (writeReport) {
+            await writeNativeVitestReport(command, { passed: 1 });
+          }
+          return { exitCode: 0, stdout: "child exited successfully\n", stderr: "" };
+        },
+      };
+
+      const firstRun = await runQaTestFileScenarios(runParams);
+      expect(firstRun.results[0]).toMatchObject({ status: "pass" });
+      await expect(fs.access(reportPath)).resolves.toBeUndefined();
+
+      writeReport = false;
+      const secondRun = await runQaTestFileScenarios(runParams);
+      expect(secondRun.results[0]).toMatchObject({
+        failureMessage: `Vitest exited successfully without writing a valid JSON test report at ${reportPath}.`,
+        status: "fail",
+      });
+      expect(secondRun.evidence.entries[0]?.result.status).toBe("fail");
+      await expect(fs.access(reportPath)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
   it.each([
     { failFast: true, expectedScenarioIds: ["first-native-scenario"] },
     {
