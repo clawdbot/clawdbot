@@ -1126,6 +1126,57 @@ describe("qa mock openai server", () => {
     expect(outputText(payload)).toBe("CURRENT_PROGRESS_OK");
   });
 
+  it("selects tool progress after quiet streaming in one user envelope", async () => {
+    const server = await startMockServer();
+    const currentPrompt =
+      "@openclaw:matrix-qa.test Tool progress QA check: call the read tool exactly once on `QA_KICKOFF_TASK.md` before answering. The only valid final marker is inside that file.";
+    const envelope = [
+      "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_ENVELOPE_OK`.",
+      currentPrompt,
+    ].join("\n");
+    const plan = await expectResponsesJson(server, {
+      stream: false,
+      input: [makeUserInput(envelope)],
+    });
+
+    const toolCall = outputToolCall(plan, "read");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({ path: "QA_KICKOFF_TASK.md" });
+    expect(JSON.stringify(plan)).not.toContain("STALE_ENVELOPE_OK");
+
+    const final = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(envelope),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_current_envelope",
+          output: "Reply with only this exact marker and no other text:\nCURRENT_ENVELOPE_OK",
+        },
+      ],
+    });
+
+    expect(outputText(final)).toBe("CURRENT_ENVELOPE_OK");
+  });
+
+  it("rejects successful error-progress results without a prompt directive", async () => {
+    const server = await startMockServer();
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "Tool progress error QA check: read `missing-progress-target.txt` before answering. The final marker is supplied only after the tool runs.",
+        ),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_unexpected_success",
+          output: "Reply with only this exact marker and no other text:\nFALSE_POSITIVE_OK",
+        },
+      ],
+    });
+
+    expect(outputText(payload)).toBe("BUG-TOOL-DID-NOT-FAIL");
+  });
+
   it("prefers path-like refs over generic quoted keys in prompts", async () => {
     const server = await startMockServer();
 
