@@ -175,6 +175,9 @@ export function registerMemoryWikiGatewayMethods(params: {
     { scope: READ_SCOPE },
   );
 
+  // Renamed from wiki.palace without an alias by maintainer decision: the method was
+  // undocumented, its only known consumer is the version-locked Control UI, and stale
+  // callers get an explicit unknown-method error rather than a silent failure.
   api.registerGatewayMethod(
     "wiki.overview",
     async ({ params: requestParams, respond }) => {
