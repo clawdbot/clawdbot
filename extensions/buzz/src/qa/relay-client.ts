@@ -17,7 +17,7 @@ import type { BuzzQaCredentials } from "./credentials.js";
 const BUZZ_MESSAGE_KIND = 9;
 const MEMBERSHIP_TIMEOUT_MS = 10_000;
 
-export type BuzzQaRelayDriver = {
+type BuzzQaRelayDriver = {
   assertHealthy(): void;
   close(): Promise<void>;
   sendMessage(input: {
