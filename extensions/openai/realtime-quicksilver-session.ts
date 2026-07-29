@@ -450,8 +450,8 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       prunePendingOffers();
       const voice = resolveOpenAIQuicksilverVoice(request.voice);
       const token = randomBytes(32).toString("base64url");
-      reserveOpenAIQuicksilverSession(token);
       const expiresAt = Date.now() + OPENAI_QUICKSILVER_PENDING_TTL_MS;
+      reserveOpenAIQuicksilverSession(token, { expiresAtMs: expiresAt });
       pendingOffers.set(token, {
         auth,
         expiresAt,
@@ -615,6 +615,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
         partialTranscriptRole: undefined,
       };
       activeSessions.set(token, session);
+      reserveOpenAIQuicksilverSession(token);
       reservationTransferred = true;
       attachSidebandHandlers(session, runAgentConsult);
       const terminalEvent = connected.detachBuffer();
