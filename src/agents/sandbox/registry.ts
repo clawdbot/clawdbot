@@ -234,32 +234,36 @@ function rowToUpdate(row: SandboxRegistryInsert): SandboxRegistryUpdate {
 function readRegistryRows(
   kind: SandboxRegistryKind,
   filter?: { backendId: string; scopeKey: string },
+  env: NodeJS.ProcessEnv = process.env,
 ): SandboxRegistryRow[] {
-  if (!fsSync.existsSync(resolveOpenClawStateSqlitePath(process.env))) {
+  if (!fsSync.existsSync(resolveOpenClawStateSqlitePath(env))) {
     return [];
   }
   // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
-  return withOpenClawStateDatabaseReadOnly(({ db }) => {
-    if (!tableExists(db, "sandbox_registry_entries")) {
-      return [];
-    }
-    const stateDb = getSandboxRegistryKysely(db);
-    let query = stateDb
-      .selectFrom("sandbox_registry_entries")
-      .selectAll()
-      .where("registry_kind", "=", kind);
-    if (filter) {
-      query = query
-        .where("session_key", "=", filter.scopeKey)
-        .where("backend_id", "=", filter.backendId);
-    }
-    return executeSqliteQuerySync(
-      db,
-      filter
-        ? query.orderBy("last_used_at_ms", "desc").orderBy("container_name", "asc")
-        : query.orderBy("container_name", "asc"),
-    ).rows;
-  });
+  return withOpenClawStateDatabaseReadOnly(
+    ({ db }) => {
+      if (!tableExists(db, "sandbox_registry_entries")) {
+        return [];
+      }
+      const stateDb = getSandboxRegistryKysely(db);
+      let query = stateDb
+        .selectFrom("sandbox_registry_entries")
+        .selectAll()
+        .where("registry_kind", "=", kind);
+      if (filter) {
+        query = query
+          .where("session_key", "=", filter.scopeKey)
+          .where("backend_id", "=", filter.backendId);
+      }
+      return executeSqliteQuerySync(
+        db,
+        filter
+          ? query.orderBy("last_used_at_ms", "desc").orderBy("container_name", "asc")
+          : query.orderBy("container_name", "asc"),
+      ).rows;
+    },
+    { env },
+  );
 }
 
 function readRegistryRow(
@@ -726,10 +730,10 @@ export async function readRegisteredSandboxRuntimeIds(params: {
 }
 
 /** Reads exact runtime-owned sandbox scope keys without creating a state database. */
-export function readRegisteredSandboxScopeKeys(): string[] {
+export function readRegisteredSandboxScopeKeys(env: NodeJS.ProcessEnv = process.env): string[] {
   return [
     ...new Set(
-      readRegistryRows("container")
+      readRegistryRows("container", undefined, env)
         .map((row) => rowToContainerEntry(row))
         .flatMap((entry) => {
           const scopeKey = entry?.sessionKey.trim();

@@ -36,7 +36,7 @@ export function listSandboxWorkspaceDirs(params: {
 
     // Directory slugs erase agent/session boundaries; only the SQLite runtime
     // registry can prove that a session copy belongs to an active sandbox.
-    registeredScopeKeys ??= readRegisteredSandboxScopeKeys();
+    registeredScopeKeys ??= readRegisteredSandboxScopeKeys(params.env);
     for (const sessionKey of registeredScopeKeys) {
       const runtime = resolveSandboxRuntimeStatus({ cfg: params.cfg, sessionKey });
       if (!runtime.sandboxed || runtime.agentId !== agentId) {

@@ -4,7 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { updateRegistry } from "../agents/sandbox/registry.js";
+import { readRegisteredSandboxScopeKeys, updateRegistry } from "../agents/sandbox/registry.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
 import {
   readWorkspaceStateSnapshot,
@@ -391,6 +391,77 @@ describe("sandbox workspace Doctor migration", () => {
     expect(result.warnings).toEqual([]);
     expect(fs.existsSync(inactivePath)).toBe(true);
     expect(fs.existsSync(activePath)).toBe(false);
+  });
+
+  it("reads registered session ownership from the requested state profile", async () => {
+    const context = setup();
+    const requestedStateDir = path.join(context.homeDir, "requested-profile");
+    const requestedEnv = { ...context.env, OPENCLAW_STATE_DIR: requestedStateDir };
+    const sandboxRoot = path.join(context.homeDir, "sandboxes");
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: context.workspaceDir,
+          sandbox: {
+            mode: "all",
+            scope: "session",
+            workspaceAccess: "ro",
+            workspaceRoot: "~/sandboxes",
+          },
+        },
+        entries: { main: { default: true } },
+      },
+    } satisfies OpenClawConfig;
+    const requestedSession = "agent:main:telegram:direct:requested-profile";
+    const ambientSession = "agent:main:slack:direct:ambient-profile";
+    const workspaceFor = (sessionKey: string) =>
+      resolveSandboxWorkspaceLayoutPaths({
+        cfg: { scope: "session", workspaceAccess: "ro", workspaceRoot: sandboxRoot },
+        rawSessionKey: sessionKey,
+        workspaceDir: context.workspaceDir,
+      }).sandboxWorkspaceDir;
+    const requestedPath = path.join(
+      workspaceFor(requestedSession),
+      "openclaw-workspace-state.json",
+    );
+    const ambientPath = path.join(workspaceFor(ambientSession), "openclaw-workspace-state.json");
+    for (const setupPath of [requestedPath, ambientPath]) {
+      await fsp.mkdir(path.dirname(setupPath), { recursive: true });
+      await fsp.writeFile(setupPath, JSON.stringify({ version: 1 }), "utf8");
+    }
+
+    setTestEnvValue("OPENCLAW_STATE_DIR", requestedStateDir);
+    await registerSandboxSession(requestedSession);
+    setTestEnvValue("OPENCLAW_STATE_DIR", context.stateDir);
+    await registerSandboxSession(ambientSession);
+
+    expect(readRegisteredSandboxScopeKeys(requestedEnv)).toEqual([requestedSession]);
+    expect(readRegisteredSandboxScopeKeys(context.env)).toEqual([ambientSession]);
+
+    const detected = detectLegacyWorkspaceState({
+      cfg,
+      stateDir: requestedStateDir,
+      env: requestedEnv,
+      homedir: () => context.homeDir,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(detected.sources).toContainEqual(
+      expect.objectContaining({ kind: "setup", sourcePath: requestedPath }),
+    );
+    expect(detected.sources).not.toContainEqual(
+      expect.objectContaining({ kind: "setup", sourcePath: ambientPath }),
+    );
+
+    const result = await migrateLegacyWorkspaceState({
+      detected,
+      env: requestedEnv,
+      stateDir: requestedStateDir,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(fs.existsSync(requestedPath)).toBe(false);
+    expect(fs.existsSync(ambientPath)).toBe(true);
   });
 
   it("does not claim an unregistered session copy from a removed agent", async () => {
