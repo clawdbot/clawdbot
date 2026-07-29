@@ -13,18 +13,31 @@ const RECENT_QUEUE_MESSAGE_IDS = resolveGlobalDedupeCache(RECENT_QUEUE_MESSAGE_I
   maxSize: 10_000,
 });
 
-/** Chunk-shared run→identity association so abandonment can free the entry by object identity. */
+/** Chunk-shared identity→key association so abandonment can free the entry. */
 const RUN_MESSAGE_ID_KEYS = resolveGlobalSingleton(
   Symbol.for("openclaw.recentQueueMessageIdKeys"),
   () => new WeakMap<object, string>(),
 );
 
+type DedupeOwnedRun = { turnAdoptionLifecycle?: object };
+
+/**
+ * The adoption lifecycle is the ownership identity that survives run cloning
+ * (overflow-summary retry sources copy the lifecycle reference onto a new run
+ * object), so it must key the association; completion release fires once per
+ * lifecycle. Lifecycle-less runs never release, so keying them by the run
+ * object keeps their entries for the full TTL.
+ */
+function resolveDedupeIdentity(run: DedupeOwnedRun): object {
+  return run.turnAdoptionLifecycle ?? run;
+}
+
 export function peekRecentQueueMessageId(key: string): boolean {
   return RECENT_QUEUE_MESSAGE_IDS.peek(key);
 }
 
-export function recordRecentQueueMessageId(run: object, key: string): void {
-  RUN_MESSAGE_ID_KEYS.set(run, key);
+export function recordRecentQueueMessageId(run: DedupeOwnedRun, key: string): void {
+  RUN_MESSAGE_ID_KEYS.set(resolveDedupeIdentity(run), key);
   RECENT_QUEUE_MESSAGE_IDS.check(key);
 }
 
@@ -33,12 +46,13 @@ export function recordRecentQueueMessageId(run: object, key: string): void {
  * durable ingress release its claim for retry; that retry must be re-admittable
  * instead of being rejected as a recent duplicate.
  */
-export function releaseRecentQueueMessageId(run: object): void {
-  const key = RUN_MESSAGE_ID_KEYS.get(run);
+export function releaseRecentQueueMessageId(run: DedupeOwnedRun): void {
+  const identity = resolveDedupeIdentity(run);
+  const key = RUN_MESSAGE_ID_KEYS.get(identity);
   if (key === undefined) {
     return;
   }
-  RUN_MESSAGE_ID_KEYS.delete(run);
+  RUN_MESSAGE_ID_KEYS.delete(identity);
   RECENT_QUEUE_MESSAGE_IDS.delete(key);
 }
 

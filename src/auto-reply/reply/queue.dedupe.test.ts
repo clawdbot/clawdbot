@@ -417,6 +417,57 @@ describe("followup queue deduplication", () => {
     clearSessionQueues([key]);
   });
 
+  it("allows re-enqueueing a message compacted into a summary elision before teardown", () => {
+    const key = `test-dedup-elision-retry-${Date.now()}`;
+    const summarizeSettings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+    const onAbandoned = vi.fn();
+    const first = createRun({
+      prompt: "first",
+      messageId: "m1",
+      originatingChannel: "line",
+      originatingTo: "group:G1",
+    });
+    first.turnAdoptionLifecycle = { onAdopted: () => {}, onAbandoned };
+    expect(enqueueFollowupRun(key, first, summarizeSettings)).toBe(true);
+
+    // Overflow the cap twice: the first enqueue drops `first` into the summary
+    // sources, the second compacts it into a summary elision. Compaction clones
+    // the run (createOverflowSummaryRetrySource), so from here on completion
+    // sees the clone, not the originally recorded run object.
+    for (const [prompt, messageId] of [
+      ["second", "m2"],
+      ["third", "m3"],
+    ] as const) {
+      expect(
+        enqueueFollowupRun(
+          key,
+          createRun({ prompt, messageId, originatingChannel: "line", originatingTo: "group:G1" }),
+          summarizeSettings,
+        ),
+      ).toBe(true);
+    }
+
+    // Teardown abandons the elided run via its clone; the ingress retry for the
+    // original message id must still be re-admittable.
+    clearSessionQueues([key]);
+    expect(onAbandoned).toHaveBeenCalledTimes(1);
+
+    const retry = createRun({
+      prompt: "first",
+      messageId: "m1",
+      originatingChannel: "line",
+      originatingTo: "group:G1",
+    });
+    retry.turnAdoptionLifecycle = { onAdopted: () => {} };
+    expect(enqueueFollowupRun(key, retry, summarizeSettings)).toBe(true);
+    clearSessionQueues([key]);
+  });
+
   it("still deduplicates redelivery of a message whose queued run was admitted", async () => {
     const key = `test-dedup-admitted-redelivery-${Date.now()}`;
     const onAbandoned = vi.fn();
