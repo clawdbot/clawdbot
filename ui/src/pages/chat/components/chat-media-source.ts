@@ -127,6 +127,7 @@ export class ChatMediaSourceController {
     this.pendingIdentity = "";
     this.restore = null;
     media.removeAttribute("src");
+    media.load();
   }
 
   handleLoadedMetadata(media: HTMLMediaElement, canResume = () => true): void {

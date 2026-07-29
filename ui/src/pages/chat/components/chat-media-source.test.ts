@@ -123,12 +123,14 @@ describe("ChatMediaSourceController", () => {
     const media = document.createElement("audio");
     const state = { currentTime: 18, duration: 80, paused: true };
     mockMediaState(media, state);
+    const load = vi.spyOn(media, "load").mockImplementation(() => undefined);
     const controller = new ChatMediaSourceController();
     controller.updateSource(media, "blob:protected-audio", "/tmp/audio.mp3");
 
     controller.reset(media);
 
     expect(media.hasAttribute("src")).toBe(false);
+    expect(load).toHaveBeenCalledOnce();
     expect(controller.currentSource).toBe("");
     expect(controller.currentIdentity).toBe("");
   });
