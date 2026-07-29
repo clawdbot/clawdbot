@@ -527,7 +527,11 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
   const activeEntriesBySessionId = new Map<string, SessionTranscriptCorpusEntry>();
   const activeEntryOwnersByPath = new Map<string, string>();
   const artifactDirsByPath = new Map<string, string>();
-  rememberArtifactDir(artifactDirsByPath, sessionsDir);
+  // Filename-templated stores share their parent across agents. Only discover
+  // archives from an explicitly agent-scoped or canonical-owned store root.
+  if (configuredStoreRootIsAgentScoped || isAgentOwnedFixedStore) {
+    rememberArtifactDir(artifactDirsByPath, sessionsDir);
+  }
   rememberArtifactDir(artifactDirsByPath, resolveSessionTranscriptsDirForAgent(normalizedAgentId));
   const sessionEntries = listSessionEntries({
     agentId: normalizedAgentId,

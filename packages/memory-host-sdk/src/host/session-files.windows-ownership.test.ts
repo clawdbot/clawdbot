@@ -205,10 +205,24 @@ describe("memory session directory ownership", () => {
       const customRoot = path.join(tmpDir, "shared-custom-store");
       const storePath = path.join(customRoot, "main.json");
       const otherSessionFile = path.join(customRoot, "ops-private.jsonl");
+      const otherArchiveFile = path.join(
+        customRoot,
+        "ops-private.jsonl.deleted.2026-02-16T22-27-33.000Z",
+      );
+      const canonicalArchiveFile = path.join(
+        tmpDir,
+        "agents",
+        "main",
+        "sessions",
+        "main-retained.jsonl.deleted.2026-02-16T22-27-33.000Z",
+      );
       const sessionKey = "agent:main:chat:shared-custom-transcript";
       const configPath = path.join(tmpDir, "openclaw.json");
       fsSync.mkdirSync(customRoot, { recursive: true });
+      fsSync.mkdirSync(path.dirname(canonicalArchiveFile), { recursive: true });
       fsSync.writeFileSync(otherSessionFile, "");
+      fsSync.writeFileSync(otherArchiveFile, "sibling private transcript");
+      fsSync.writeFileSync(canonicalArchiveFile, "main retained transcript");
       fsSync.writeFileSync(
         configPath,
         JSON.stringify({
@@ -234,6 +248,16 @@ describe("memory session directory ownership", () => {
       );
       expect(entries).not.toContainEqual(
         expect.objectContaining({ sessionFile: otherSessionFile }),
+      );
+      expect(entries).not.toContainEqual(
+        expect.objectContaining({ sessionFile: otherArchiveFile }),
+      );
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          agentId: "main",
+          artifactKind: "archive-artifact",
+          sessionFile: canonicalArchiveFile,
+        }),
       );
     } finally {
       platform.mockRestore();
