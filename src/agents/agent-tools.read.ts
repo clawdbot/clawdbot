@@ -1107,8 +1107,12 @@ function withMemoryWriteProvenance<
         });
       // Persist the predicted post-write hash first. A provenance failure must
       // prevent an otherwise untracked memory mutation from becoming trusted.
-      await observer.recordBeforeWrite({ absolutePath, contentBefore, contentAfter: content });
-      await operations.writeFile(absolutePath, content);
+      await observer.write({
+        absolutePath,
+        contentBefore,
+        contentAfter: content,
+        commit: () => operations.writeFile(absolutePath, content),
+      });
     },
   } as T;
 }

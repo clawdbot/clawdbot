@@ -118,7 +118,7 @@ export type MemoryFlushPlan = {
     contentAfter: string;
     originClass: "agent" | "untrusted";
     observedAt: number;
-  }) => Promise<void>;
+  }) => Promise<(() => Promise<void>) | void>;
   clearWriteProvenance?: (params: { workspaceDir: string; relativePath: string }) => Promise<void>;
 };
 

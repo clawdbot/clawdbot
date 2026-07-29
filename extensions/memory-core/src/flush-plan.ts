@@ -185,6 +185,22 @@ export function buildMemoryFlushPlan(
         key: writtenPath,
         value: { fileHash: hash(write.contentAfter), originClass, observedAt: write.observedAt },
       });
+      return async () => {
+        if (existing) {
+          await writeMemoryCoreWorkspaceEntry({
+            namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+            workspaceDir: write.workspaceDir,
+            key: writtenPath,
+            value: existing,
+          });
+          return;
+        }
+        await deleteMemoryCoreWorkspaceEntry({
+          namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+          workspaceDir: write.workspaceDir,
+          key: writtenPath,
+        });
+      };
     },
     clearWriteProvenance: async ({ workspaceDir, relativePath: writtenPath }) => {
       const normalized = normalizeAgentMemoryPath(writtenPath);

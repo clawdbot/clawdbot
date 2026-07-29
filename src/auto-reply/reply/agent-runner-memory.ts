@@ -458,7 +458,10 @@ function readLatestNonzeroUsageFromTranscriptEvents(
   return undefined;
 }
 
-function readActiveTurnTaintFromTranscriptEvents(events: readonly unknown[]): boolean {
+function readActiveTurnTaintFromTranscriptEvents(events: readonly unknown[]): {
+  boundaryFound: boolean;
+  tainted: boolean;
+} {
   const activeEvents = selectSessionTranscriptLeafControlledPath(events) ?? events;
   for (const event of activeEvents.toReversed()) {
     if (!event || typeof event !== "object" || Array.isArray(event)) {
@@ -470,7 +473,7 @@ function readActiveTurnTaintFromTranscriptEvents(events: readonly unknown[]): bo
     }
     const record = message as Record<string, unknown>;
     if (record.role === "user") {
-      return false;
+      return { boundaryFound: true, tainted: false };
     }
     const metadata = record["__openclaw"];
     if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
@@ -478,10 +481,10 @@ function readActiveTurnTaintFromTranscriptEvents(events: readonly unknown[]): bo
     }
     const openClaw = metadata as { resultContentSource?: unknown; turnTainted?: unknown };
     if (openClaw.turnTainted === true || openClaw.resultContentSource === "network") {
-      return true;
+      return { boundaryFound: false, tainted: true };
     }
   }
-  return false;
+  return { boundaryFound: false, tainted: false };
 }
 
 function readSqliteSessionLogSnapshot(
@@ -501,7 +504,9 @@ function readSqliteSessionLogSnapshot(
         });
       }
       if (options.includeTurnTaint) {
-        snapshot.turnTainted = readActiveTurnTaintFromTranscriptEvents(events);
+        const scan = readActiveTurnTaintFromTranscriptEvents(events);
+        snapshot.turnTainted =
+          scan.tainted || (!scan.boundaryFound && events.length >= SQLITE_USAGE_TAIL_MAX_EVENTS);
       }
     }
   } catch {
@@ -630,7 +635,8 @@ async function readFileSessionTurnTaint(logPath: string): Promise<boolean> {
         return [];
       }
     });
-    return readActiveTurnTaintFromTranscriptEvents(events);
+    const scan = readActiveTurnTaintFromTranscriptEvents(events);
+    return scan.tainted || (!scan.boundaryFound && stat.size > size);
   } catch {
     return true;
   } finally {

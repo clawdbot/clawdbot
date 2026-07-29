@@ -531,6 +531,12 @@ describe("runMemoryFlushIfNeeded", () => {
           __openclaw: { turnTainted: true },
         },
       },
+      // Force the bounded SQLite tail to lose the turn boundary and taint marker.
+      // A truncated active turn must remain conservatively tainted.
+      ...Array.from({ length: 512 }, (_, index) => ({
+        type: "custom",
+        data: { index },
+      })),
     ]);
     const targetPath = path.join(rootDir, "memory", "2023-11-14.md");
     await fs.mkdir(path.dirname(targetPath), { recursive: true });

@@ -377,12 +377,12 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
         }
         throw error;
       });
-      await observer.recordBeforeWrite({
+      await observer.write({
         absolutePath: filePath,
         contentBefore,
         contentAfter: content,
+        commit: () => operations.writeFile(filePath, content),
       });
-      await operations.writeFile(filePath, content);
     },
     remove: async (filePath) => {
       await operations.remove(filePath);
