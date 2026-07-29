@@ -45,7 +45,7 @@ export function createSandboxFsBridgeFromResolver(
       const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
       await fs.writeFile(target.hostPath, buffer);
     },
-    createFile: async ({ filePath, cwd, data, mkdir = true }) => {
+    createFileExclusive: async ({ filePath, cwd, data, mkdir = true }) => {
       const target = resolvePath(filePath, cwd);
       if (!target.hostPath) {
         throw new Error(`Expected hostPath for ${target.containerPath}`);

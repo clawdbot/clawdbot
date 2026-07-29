@@ -186,7 +186,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     });
   }
 
-  async createFile(params: {
+  async createFileExclusive(params: {
     filePath: string;
     cwd?: string;
     data: Buffer | string;

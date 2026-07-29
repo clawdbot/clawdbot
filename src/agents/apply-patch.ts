@@ -291,7 +291,7 @@ type PatchCreateOutcome = "created" | "exists";
 type PatchFileOps = {
   readFile: (filePath: string) => Promise<string>;
   writeFile: (filePath: string, content: string) => Promise<void>;
-  createFile: (filePath: string, content: string) => Promise<PatchCreateOutcome>;
+  createFileExclusive: (filePath: string, content: string) => Promise<PatchCreateOutcome>;
   remove: (filePath: string) => Promise<void>;
   mkdirp: (dir: string) => Promise<void>;
 };
@@ -302,7 +302,7 @@ async function createPatchTarget(params: {
   ops: PatchFileOps;
   hint: string;
 }) {
-  const outcome = await params.ops.createFile(params.target.resolved, params.contents);
+  const outcome = await params.ops.createFileExclusive(params.target.resolved, params.contents);
   if (outcome === "exists") {
     throw new Error(
       `Cannot create ${params.target.display}: the file already exists. ${params.hint}`,
@@ -319,7 +319,14 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
         return decodeUtf8File(buf, filePath);
       },
       writeFile: (filePath, content) => bridge.writeFile({ filePath, cwd: root, data: content }),
-      createFile: (filePath, content) => bridge.createFile({ filePath, cwd: root, data: content }),
+      createFileExclusive: (filePath, content) => {
+        if (!bridge.createFileExclusive) {
+          throw new Error(
+            "Sandbox filesystem bridge does not support atomic file creation; refusing to overwrite an existing path.",
+          );
+        }
+        return bridge.createFileExclusive({ filePath, cwd: root, data: content });
+      },
       remove: (filePath) => bridge.remove({ filePath, cwd: root, force: false }),
       mkdirp: (dir) => bridge.mkdirp({ filePath: dir, cwd: root }),
     };
@@ -327,11 +334,11 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
 
   if (options.workspaceOnly === false) {
     return {
-      readFile: (filePath) => fs.readFile(filePath, "utf8"),
+      readFile: async (filePath) => decodeUtf8File(await fs.readFile(filePath), filePath),
       writeFile: async (filePath, content) => {
         await fs.writeFile(filePath, content, "utf8");
       },
-      createFile: async (filePath, content) => {
+      createFileExclusive: async (filePath, content) => {
         try {
           await fs.writeFile(filePath, content, { encoding: "utf8", flag: "wx" });
           return "created";
@@ -368,7 +375,7 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
       const relative = toRelativeSandboxPath(options.cwd, filePath);
       await (await rootPromise).write(relative, content, { encoding: "utf8" });
     },
-    createFile: async (filePath, content) => {
+    createFileExclusive: async (filePath, content) => {
       const relative = toRelativeSandboxPath(options.cwd, filePath);
       try {
         await (await rootPromise).create(relative, content, { encoding: "utf8" });
