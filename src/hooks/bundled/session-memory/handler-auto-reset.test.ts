@@ -53,8 +53,9 @@ describe("session-memory automatic reset", () => {
         reason,
       });
 
-      await handler(event);
-      await flushSessionMemoryWritesForTest();
+      const completed = handler(event);
+      expect(completed).toBeInstanceOf(Promise);
+      await completed;
 
       const memoryDir = path.join(tempDir, "memory");
       const files = await fs.readdir(memoryDir);

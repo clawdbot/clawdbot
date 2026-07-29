@@ -439,6 +439,11 @@ const saveSessionToMemory: HookHandler = (event) => {
   void writePromise.finally(() => {
     pendingSessionMemoryWrites.delete(writePromise);
   });
+  // Automatic rollover dispatch is already detached from the successor turn.
+  // Keep its gateway admission alive until nested slug/model work finishes.
+  if (isAutoReset) {
+    return writePromise;
+  }
 };
 
 export default saveSessionToMemory;
