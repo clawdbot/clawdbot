@@ -567,6 +567,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Install
   - H2: Setup
+  - H2: Inbound durability
   - H2: Configure
   - H2: Access control
   - H2: Message behavior
@@ -1282,6 +1283,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H1: openclaw agent
   - H2: agent exec
+  - H3: Code Mode model matrix
   - H3: agent exec options
   - H2: Options
   - H2: Examples

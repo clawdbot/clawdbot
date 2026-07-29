@@ -61,6 +61,47 @@ Security notes:
 - LINE signature verification is body-dependent (HMAC over the raw body), so OpenClaw applies a strict pre-auth body limit (64 KB) and read timeout before verification.
 - OpenClaw processes webhook events from the verified raw request bytes. Upstream middleware-transformed `req.body` values are ignored for signature-integrity safety.
 
+## Inbound durability
+
+The [Setup](#setup) webhook contract acknowledges an event only after it is durably
+queued. From there, delivery runs through the shared channel-ingress drain with
+LINE-specific settings:
+
+- **Per-conversation ordering.** Events are serialized by source lane —
+  `group:<groupId>`, `room:<roomId>`, or `user:<userId>`; events without a
+  conversation source use their own event-scoped lane. Within a lane, events
+  dispatch in received order, so a retrying event delays later events in the same
+  chat but never other chats. Up to 8 deliveries run concurrently across lanes.
+- **Retries.** A failed delivery retries with exponential backoff starting at
+  1 second and doubling per attempt, roughly two minutes of cumulative backoff
+  across the window. After the 8th failed attempt the event dead-letters
+  (`retry-limit-exceeded`) immediately: LINE opts out of the generic 24-hour
+  dead-letter age floor so a poison event cannot block its conversation lane for
+  a day.
+- **Non-retryable failures** dead-letter on the first attempt: stored payloads
+  that no longer parse (`invalid-event`), deliveries that already committed side
+  effects (`delivery-side-effects-committed`), and LINE API authentication
+  failures (`authentication-failed`, HTTP 401/403).
+- **Stall watchdog.** A claimed delivery that never reaches agent-turn adoption
+  dead-letters as `handler-timeout` after 5 minutes.
+- **Crash recovery.** A delivery claimed by a Gateway process that died is
+  reclaimed when its 30-minute claim lease expires, so an in-flight event can
+  wait up to that long after a hard crash before it is retried. Events accepted
+  while the Gateway is stopping are still persisted and drain after the next
+  start.
+- **Duplicate suppression window.** Completed and failed queue records are
+  retained for 30 days (up to 4096 entries each per account); while the record
+  exists, a redelivered webhook for the same event is acknowledged without a
+  second dispatch.
+
+The `500`-on-persistence-failure contract recovers events only when **Webhook
+redelivery** is enabled for the channel in the LINE Developers console (Messaging
+API settings). Without it, LINE does not re-send failed webhook deliveries, and an
+event refused with `500` is lost.
+
+Dead-lettered events stay inspectable and recoverable; see
+[Inbound dead letters](/cli/channels#inbound-dead-letters).
+
 ## Configure
 
 Minimal config:
@@ -245,6 +286,17 @@ Generic media sends without LINE-specific options use the image route.
   and that the gateway is reachable from LINE.
 - **Media download errors:** raise `channels.line.mediaMaxMb` if media exceeds the
   default limit.
+- **Bot silently skips messages (events dead-lettered):** `openclaw logs` shows
+  `line: spooled update <id> ... dead-lettered` lines with the failure reason.
+  Inspect with `openclaw channels dead-letters list --channel line --account default`;
+  after fixing the cause, re-enqueue one event with
+  `openclaw channels dead-letters resubmit <event-id> --channel line --account default`.
+  `openclaw health` reports dead-letter counts and `openclaw doctor` names
+  affected accounts.
+- **`handler-timeout` dead letters:** the delivery was claimed but no agent turn
+  adopted it within 5 minutes, usually a hung agent run or a stalled provider.
+  Check `openclaw logs --follow` around the failure age shown in the
+  dead-letters list output.
 
 ## Related
 
