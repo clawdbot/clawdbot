@@ -44,6 +44,7 @@ extension OnboardingView {
         self.updateDiscoveryMonitoring(for: pageIndex)
         self.maybeInstallCLI(for: pageIndex)
         self.maybeStartAISetup(for: pageIndex)
+        self.updateMemoryImportMonitoring(for: pageIndex)
     }
 
     func maybeInstallCLI(for pageIndex: Int) {
@@ -163,6 +164,11 @@ extension OnboardingView {
         guard installed else { return }
         cliExecutableReady = true
         cliInstallLocation = CLIInstaller.managedExecutableLocation()
+        if !Self.shouldActivateLocalGateway(afterCLIInstallFor: self.state.connectionMode) {
+            cliStatus = "OpenClaw CLI is ready for the Mac node."
+            cliInstalled = true
+            return
+        }
         cliStatus = "Starting OpenClaw Gateway…"
         // The step checklist shows one spinner at a time: install first,
         // then the service start.

@@ -35,6 +35,8 @@ export type ProviderAuth = {
   /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
   subscriptionType?: string;
   rateLimitTier?: string;
+  /** Account email captured on the resolved credential, when known. */
+  email?: string;
 };
 
 type AuthStore = ReturnType<typeof ensureAuthProfileStore>;
@@ -337,6 +339,9 @@ async function resolveOAuthToken(params: {
         ...(cred.type === "oauth" && cred.rateLimitTier
           ? { rateLimitTier: cred.rateLimitTier }
           : {}),
+        // Token credentials carry an email too; oauth-only gating would drop
+        // identity for static bearer profiles whose tokens expose no claims.
+        ...(cred.email ? { email: cred.email } : {}),
       };
     } catch {
       // ignore
@@ -384,6 +389,7 @@ async function resolveProviderUsageAuthViaPlugin(params: {
               ...(auth.accountId ? { accountId: auth.accountId } : {}),
               ...(auth.subscriptionType ? { subscriptionType: auth.subscriptionType } : {}),
               ...(auth.rateLimitTier ? { rateLimitTier: auth.rateLimitTier } : {}),
+              ...(auth.email ? { email: auth.email } : {}),
             }
           : null;
       },
@@ -403,6 +409,7 @@ async function resolveProviderUsageAuthViaPlugin(params: {
       ...(resolved.accountId ? { accountId: resolved.accountId } : {}),
       ...(resolved.subscriptionType ? { subscriptionType: resolved.subscriptionType } : {}),
       ...(resolved.rateLimitTier ? { rateLimitTier: resolved.rateLimitTier } : {}),
+      ...(resolved.email ? { email: resolved.email } : {}),
     },
   };
 }

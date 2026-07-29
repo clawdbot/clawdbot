@@ -1,8 +1,8 @@
 // Covers host binary detection command selection.
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
-import { resetWindowsInstallRootsForTests } from "./windows-install-roots.js";
 
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 
@@ -16,13 +16,18 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   runCommandWithTimeoutMock.mockReset();
-  resetWindowsInstallRootsForTests();
 });
 
 describe("detectBinary", () => {
   it("uses the trusted Windows where.exe when probing PATH", async () => {
+    const accessSync = fs.accessSync.bind(fs);
+    vi.spyOn(fs, "accessSync").mockImplementation((filePath, mode) => {
+      if (String(filePath).toLowerCase() === "c:\\windows\\system32\\reg.exe") {
+        throw new Error("registry lookup disabled for test");
+      }
+      return accessSync(filePath, mode);
+    });
     vi.stubEnv("SystemRoot", "D:\\Windows");
-    resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
     runCommandWithTimeoutMock.mockResolvedValue({
       code: 0,
       stdout: "D:\\Tools\\openclaw.exe\n",

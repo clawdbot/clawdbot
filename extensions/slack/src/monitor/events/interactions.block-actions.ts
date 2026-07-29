@@ -19,9 +19,11 @@ import { decodeSlackApprovalAction, type SlackApprovalAction } from "../../appro
 import { isSlackApprovalAuthorizedSender } from "../../approval-auth.js";
 import { isSlackExecApprovalAuthorizedSender } from "../../exec-approvals.js";
 import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
+import { decodeSlackQuestionAction, resolveSlackQuestionAction } from "../../question-actions.js";
 import {
   isSlackApprovalActionId,
   isSlackCallbackActionId,
+  isSlackQuestionActionId,
   SLACK_REPLY_BUTTON_ACTION_ID,
   SLACK_REPLY_LINK_ACTION_ID,
   SLACK_REPLY_SELECT_ACTION_ID,
@@ -1071,6 +1073,25 @@ async function handleSlackBlockAction(params: {
     });
     return;
   }
+  if (isSlackQuestionActionId(parsed.actionId)) {
+    const question = decodeSlackQuestionAction(parsed.actionSummary.value);
+    if (!question) {
+      await respondEphemeral(respond, "This question action is invalid or expired.");
+      return;
+    }
+    const auth = await authorizeSlackBlockAction({ ctx: params.ctx, parsed, respond });
+    if (!auth.allowed) {
+      return;
+    }
+    await resolveSlackQuestionAction({
+      action: question,
+      cfg: params.ctx.cfg,
+      accountId: params.ctx.accountId,
+      userId: parsed.userId,
+      respond: async (text) => await respondEphemeral(respond, text),
+    });
+    return;
+  }
   const pluginInteractionData = buildSlackPluginInteractionData({
     actionId: parsed.actionId,
     summary: parsed.actionSummary,
@@ -1153,3 +1174,4 @@ export function registerSlackBlockActionHandler(params: {
     });
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

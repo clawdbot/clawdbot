@@ -1,7 +1,7 @@
 // Gateway WebSocket log formatting.
 // Redacts and compacts request/response/event metadata for console diagnostics.
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import chalk from "chalk";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { isVerbose } from "../globals.js";
@@ -101,15 +101,15 @@ export function shouldLogWs(): boolean {
 }
 
 /** Compacts long ids while keeping enough entropy for log correlation. */
-export function shortId(value: string): string {
+function shortId(value: string): string {
   const s = value.trim();
   if (UUID_RE.test(s)) {
-    return `${s.slice(0, 8)}…${s.slice(-4)}`;
+    return `${sliceUtf16Safe(s, 0, 8)}…${sliceUtf16Safe(s, -4)}`;
   }
   if (s.length <= 24) {
     return s;
   }
-  return `${s.slice(0, 12)}…${s.slice(-4)}`;
+  return `${sliceUtf16Safe(s, 0, 12)}…${sliceUtf16Safe(s, -4)}`;
 }
 
 /** Formats and redacts arbitrary values before they are written to gateway logs. */

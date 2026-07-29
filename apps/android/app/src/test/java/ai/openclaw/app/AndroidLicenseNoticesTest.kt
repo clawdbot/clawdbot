@@ -36,7 +36,9 @@ class AndroidLicenseNoticesTest {
 
     assertEquals(
       listOf(
+        "AndroidX Media3",
         "AndroidX Room",
+        "AndroidX Wear",
         "Bouncy Castle Provider",
         "Coil",
         "CommonMark Java",

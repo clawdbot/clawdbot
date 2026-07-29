@@ -308,8 +308,7 @@ export function createDiscordMessagingActionContext(params: {
   const directOperator = params.options?.conversationReadOrigin === "direct-operator";
   const currentReadContext = params.options?.readContext;
   const directDmEnabled =
-    accountConfig.dm?.enabled !== false &&
-    (accountConfig.dmPolicy ?? accountConfig.dm?.policy ?? "pairing") !== "disabled";
+    accountConfig.dm?.enabled !== false && (accountConfig.dmPolicy ?? "pairing") !== "disabled";
   const withOpts = (extra?: Record<string, unknown>) =>
     createDiscordActionOptions({ cfg: params.cfg, accountId, extra });
   const resolvedReactionAccountId = accountId ?? resolveDefaultDiscordAccountId(params.cfg);

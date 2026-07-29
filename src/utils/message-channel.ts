@@ -23,10 +23,6 @@ export {
 export {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalNonDeliveryChannel,
-  NATIVE_APPROVAL_CHANNELS,
-  isNativeApprovalChannel,
-  type InternalMessageChannel,
-  type NativeApprovalChannel,
 } from "./message-channel-constants.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "./message-channel-constants.js";
 import { normalizeMessageChannel } from "./message-channel-normalize.js";
@@ -67,13 +63,25 @@ export function isEphemeralGatewayClient(client?: GatewayClientInfoLike | null):
 /** Return whether a client is one of the operator UI clients. */
 export function isOperatorUiClient(client?: GatewayClientInfoLike | null): boolean {
   const clientId = normalizeGatewayClientName(client?.id);
-  return clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI || clientId === GATEWAY_CLIENT_NAMES.TUI;
+  return (
+    clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI ||
+    clientId === GATEWAY_CLIENT_NAMES.BROWSER_COPILOT ||
+    clientId === GATEWAY_CLIENT_NAMES.TUI
+  );
 }
 
 /** Return whether a client is the browser Control UI. */
 export function isBrowserOperatorUiClient(client?: GatewayClientInfoLike | null): boolean {
   const clientId = normalizeGatewayClientName(client?.id);
-  return clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI;
+  return (
+    clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI ||
+    clientId === GATEWAY_CLIENT_NAMES.BROWSER_COPILOT
+  );
+}
+
+/** Return whether a client is the first-party browser side-panel copilot. */
+export function isBrowserCopilotClient(client?: GatewayClientInfoLike | null): boolean {
+  return normalizeGatewayClientName(client?.id) === GATEWAY_CLIENT_NAMES.BROWSER_COPILOT;
 }
 
 /** Return whether a raw channel id resolves to OpenClaw's internal channel. */
@@ -81,6 +89,19 @@ export function isInternalMessageChannel(
   raw?: string | null,
 ): raw is typeof INTERNAL_MESSAGE_CHANNEL {
   return normalizeMessageChannel(raw) === INTERNAL_MESSAGE_CHANNEL;
+}
+
+/** Return whether a channel can resolve exec approvals in the originating chat. */
+export function isNativeApprovalChannel(value?: string | null): boolean {
+  if (!value) {
+    return false;
+  }
+  if (value === INTERNAL_MESSAGE_CHANNEL) {
+    return true;
+  }
+  return listBundledChannelCatalogEntries().some(
+    (entry) => entry.id === value && entry.channel.approvalFlags?.includes("native"),
+  );
 }
 
 /** Return whether a Gateway client is the public webchat surface. */

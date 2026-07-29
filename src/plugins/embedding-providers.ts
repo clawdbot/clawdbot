@@ -67,12 +67,6 @@ export function getRegisteredEmbeddingProvider(
 ): RegisteredEmbeddingProvider | undefined {
   return getCoreEmbeddingProvider(id) ?? getEmbeddingProviders().get(id);
 }
-
-/** Returns only the embedding provider adapter for callers that do not need ownership metadata. */
-export function getEmbeddingProvider(id: string): EmbeddingProviderAdapter | undefined {
-  return getRegisteredEmbeddingProvider(id)?.adapter;
-}
-
 /** Lists registered embedding providers with core defaults merged first. */
 export function listRegisteredEmbeddingProviders(): RegisteredEmbeddingProvider[] {
   const merged = new Map<string, RegisteredEmbeddingProvider>(
@@ -84,22 +78,7 @@ export function listRegisteredEmbeddingProviders(): RegisteredEmbeddingProvider[
     }
   }
   return Array.from(merged.values());
-}
-
-/** Lists embedding provider adapters without registration metadata. */
-export function listEmbeddingProviders(): EmbeddingProviderAdapter[] {
-  return listRegisteredEmbeddingProviders().map((entry) => entry.adapter);
-}
-
-/** Replaces non-core embedding providers with adapter-only test/runtime state. */
-export function restoreEmbeddingProviders(adapters: EmbeddingProviderAdapter[]): void {
-  getEmbeddingProviders().clear();
-  for (const adapter of adapters) {
-    registerEmbeddingProvider(adapter);
-  }
-}
-
-/** Replaces non-core embedding providers while preserving registration metadata. */
+} /** Replaces non-core embedding providers while preserving registration metadata. */
 export function restoreRegisteredEmbeddingProviders(entries: RegisteredEmbeddingProvider[]): void {
   getEmbeddingProviders().clear();
   for (const entry of entries) {

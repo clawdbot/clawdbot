@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Foreground service that keeps the Android node connection and voice capture visible to the OS. */
 class NodeForegroundService : Service() {
@@ -169,14 +170,21 @@ class NodeForegroundService : Service() {
     latestStartId = maxOf(latestStartId, startId)
     when (intent?.action) {
       ACTION_STOP -> {
+        startSuppressed.set(true)
         disconnectRequested = true
         runtimeRestoreJob?.cancel()
         runtimeRestoreJob = null
+        notificationJob?.cancel()
+        notificationJob = null
         activeRuntime?.disconnect()
         activeRuntime = null
         (application as NodeApp).disconnectRuntimeAsync()
         stopSelfResult(startId)
         return START_NOT_STICKY
+      }
+      ACTION_RESUME -> {
+        startSuppressed.set(false)
+        disconnectRequested = false
       }
       ACTION_SET_VOICE_CAPTURE_MODE -> {
         voiceCaptureMode = intent.getStringExtra(EXTRA_VOICE_CAPTURE_MODE).toVoiceCaptureMode()
@@ -194,7 +202,7 @@ class NodeForegroundService : Service() {
         )
       }
     }
-    if (disconnectRequested) {
+    if (disconnectRequested || startSuppressed.get()) {
       // A STOP can lose stopSelfResult to a newer queued start. Let the newest
       // start id close the service instead of leaving a disconnected FGS alive.
       stopSelfResult(startId)
@@ -286,23 +294,38 @@ class NodeForegroundService : Service() {
     private const val NOTIFICATION_ID = 1
 
     private const val ACTION_STOP = "ai.openclaw.app.action.STOP"
+    private const val ACTION_RESUME = "ai.openclaw.app.action.RESUME"
     private const val ACTION_SET_VOICE_CAPTURE_MODE = "ai.openclaw.app.action.SET_VOICE_CAPTURE_MODE"
     private const val EXTRA_VOICE_CAPTURE_MODE = "ai.openclaw.app.extra.VOICE_CAPTURE_MODE"
+    private val startSuppressed = AtomicBoolean(false)
 
     fun start(context: Context) {
+      if (startSuppressed.get()) return
       val intent = Intent(context, NodeForegroundService::class.java)
       context.startForegroundService(intent)
     }
 
     fun stop(context: Context) {
+      startSuppressed.set(true)
       val intent = Intent(context, NodeForegroundService::class.java).setAction(ACTION_STOP)
       context.startService(intent)
+    }
+
+    internal fun resume(
+      context: Context,
+      startNow: Boolean,
+    ) {
+      startSuppressed.set(false)
+      if (!startNow) return
+      val intent = Intent(context, NodeForegroundService::class.java).setAction(ACTION_RESUME)
+      context.startForegroundService(intent)
     }
 
     fun setVoiceCaptureMode(
       context: Context,
       mode: VoiceCaptureMode,
     ) {
+      if (startSuppressed.get()) return
       val intent =
         Intent(context, NodeForegroundService::class.java)
           .setAction(ACTION_SET_VOICE_CAPTURE_MODE)

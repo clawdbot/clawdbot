@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -30,6 +31,11 @@ import java.util.UUID
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class NodeForegroundServiceTest {
+  @After
+  fun resetNodeServiceStartSuppression() {
+    NodeForegroundService.resume(RuntimeEnvironment.getApplication(), startNow = false)
+  }
+
   @Test
   fun stableNotificationStateReemitsWhenLocaleChanges() =
     runBlocking {
@@ -170,6 +176,39 @@ class NodeForegroundServiceTest {
       assertNull(app.peekRuntime())
     } finally {
       controller.destroy()
+    }
+  }
+
+  @Test
+  fun explicitResumeAfterStopRestoresStickyServiceOwnership() {
+    val app = RuntimeEnvironment.getApplication() as NodeApp
+    val controller = Robolectric.buildService(NodeForegroundService::class.java).create()
+
+    try {
+      val stopped =
+        controller
+          .get()
+          .onStartCommand(
+            Intent(app, NodeForegroundService::class.java)
+              .setAction("ai.openclaw.app.action.STOP"),
+            0,
+            1,
+          )
+      val resumed =
+        controller
+          .get()
+          .onStartCommand(
+            Intent(app, NodeForegroundService::class.java)
+              .setAction("ai.openclaw.app.action.RESUME"),
+            0,
+            2,
+          )
+
+      assertEquals(Service.START_NOT_STICKY, stopped)
+      assertEquals(Service.START_STICKY, resumed)
+    } finally {
+      controller.destroy()
+      app.peekRuntime()?.disconnect()
     }
   }
 

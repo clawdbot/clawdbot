@@ -86,6 +86,38 @@ describe("IMessageRpcClient child stream error handling", () => {
     },
   );
 
+  it("clears the stop fallback timer when the child closes first", async () => {
+    const realClearTimeout = globalThis.clearTimeout;
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    let scheduledTimer: NodeJS.Timeout | undefined;
+
+    try {
+      const { IMessageRpcClient } = await import("./client.js");
+      const client = new IMessageRpcClient({ cliPath: "imsg" });
+      await client.start();
+      const endMock = vi.fn(() => {
+        child.emit("close", 0, null);
+        return child.stdin;
+      });
+      child.stdin.end = endMock;
+
+      await client.stop();
+
+      expect(endMock).toHaveReturnedWith(child.stdin);
+      expect(setTimeoutSpy).toHaveBeenCalledOnce();
+      scheduledTimer = setTimeoutSpy.mock.results[0]?.value as NodeJS.Timeout | undefined;
+      expect(scheduledTimer).toBeDefined();
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(scheduledTimer);
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      if (scheduledTimer) {
+        realClearTimeout(scheduledTimer);
+      }
+      vi.restoreAllMocks();
+    }
+  });
+
   it("settles the client after a real child stdout stream failure", async () => {
     const childProcess =
       await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -111,5 +143,90 @@ describe("IMessageRpcClient child stream error handling", () => {
       }
       await client.stop();
     }
+  });
+
+  it("promotes a complete Full Disk Access diagnostic", async () => {
+    const { IMessageRpcClient } = await import("./client.js");
+    const runtimeError = vi.fn();
+    const client = new IMessageRpcClient({
+      cliPath: "imsg",
+      runtime: { error: runtimeError, exit: vi.fn(), log: vi.fn() },
+    });
+    await client.start();
+
+    const pending = client.request("ping", {}, { timeoutMs: 0 });
+    pending.catch(() => {});
+    child.stderr.emit("data", Buffer.from("notice Full Disk Access denied for chat.db\n"));
+    child.emit("close", 1, null);
+
+    await expect(pending).rejects.toThrow(
+      "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+    );
+    expect(runtimeError).toHaveBeenCalledOnce();
+    expect(runtimeError.mock.calls[0]?.[0]).not.toContain("�");
+  });
+
+  it("preserves a split UTF-8 Full Disk Access diagnostic from a real child", async () => {
+    const childProcess =
+      await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    const script = `
+      const prefix = Buffer.from("notice 猫 Full Disk Acc", "utf8");
+      setTimeout(() => {
+        process.stderr.write(prefix.subarray(0, 8));
+        setTimeout(() => {
+          process.stderr.write(prefix.subarray(8));
+          setTimeout(() => {
+            process.stderr.write("ess denied for chat.db");
+            setTimeout(() => process.exit(1), 10);
+          }, 10);
+        }, 10);
+      }, 50);
+    `;
+    const realChild = childProcess.spawn(process.execPath, ["-e", script], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    spawnMock.mockReturnValueOnce(realChild);
+    const { IMessageRpcClient } = await import("./client.js");
+    const runtimeError = vi.fn();
+    const client = new IMessageRpcClient({
+      cliPath: "imsg",
+      runtime: { error: runtimeError, exit: vi.fn(), log: vi.fn() },
+    });
+    await client.start();
+
+    try {
+      const pending = client.request("ping", {}, { timeoutMs: 0 });
+      pending.catch(() => {});
+
+      await expect(pending).rejects.toThrow(
+        "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+      );
+      expect(runtimeError).toHaveBeenCalledWith(
+        "imsg rpc: notice 猫 Full Disk Access denied for chat.db",
+      );
+    } finally {
+      if (!realChild.killed) {
+        realChild.kill("SIGTERM");
+      }
+      await client.stop();
+    }
+  });
+
+  it("keeps unrelated unterminated stderr on the generic close error path", async () => {
+    const { IMessageRpcClient } = await import("./client.js");
+    const runtimeError = vi.fn();
+    const client = new IMessageRpcClient({
+      cliPath: "imsg",
+      runtime: { error: runtimeError, exit: vi.fn(), log: vi.fn() },
+    });
+    await client.start();
+
+    const pending = client.request("ping", {}, { timeoutMs: 0 });
+    pending.catch(() => {});
+    child.stderr.emit("data", Buffer.from("unrelated warning"));
+    child.emit("close", 1, null);
+
+    await expect(pending).rejects.toThrow("imsg rpc exited (code 1)");
+    expect(runtimeError).toHaveBeenCalledWith("imsg rpc: unrelated warning");
   });
 });

@@ -7,27 +7,46 @@ import ai.openclaw.app.GatewayClawHubSkillSummary
 import ai.openclaw.app.GatewaySkillSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.isClawHubSkillInstalled
+import ai.openclaw.app.isClawHubSkillOperationActive
 import ai.openclaw.app.ui.design.ClawDetailRow
+import ai.openclaw.app.ui.design.ClawIconButton
 import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
+import ai.openclaw.app.ui.design.ClawPill
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawSecondaryButton
+import ai.openclaw.app.ui.design.ClawSegmentedControl
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTextBadge
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.uppercaseFirstGraphemeOrNull
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -41,7 +60,21 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+
+private enum class SkillsTab {
+  Installed,
+  Browse,
+}
+
+private enum class InstalledSkillFilter {
+  All,
+  Ready,
+  Setup,
+  Off,
+}
 
 /** Settings screen for gateway skills and their readiness state. */
 @Composable
@@ -63,20 +96,17 @@ internal fun SkillsSettingsScreen(
   val needsSetupCount = skills.count { skillNeedsSetup(it) }
   val disabledCount = skills.count { it.disabled }
   var selectedSkillKey by remember { mutableStateOf<String?>(null) }
+  var selectedTabName by rememberSaveable { mutableStateOf(SkillsTab.Installed.name) }
   var installedSearch by rememberSaveable { mutableStateOf("") }
+  var installedFilterName by rememberSaveable { mutableStateOf(InstalledSkillFilter.All.name) }
   var clawHubQuery by rememberSaveable { mutableStateOf("") }
+  val selectedTab = SkillsTab.entries.firstOrNull { it.name == selectedTabName } ?: SkillsTab.Installed
+  val installedFilter =
+    InstalledSkillFilter.entries.firstOrNull { it.name == installedFilterName }
+      ?: InstalledSkillFilter.All
   val visibleSkills =
-    remember(skills, installedSearch) {
-      val query = installedSearch.trim()
-      if (query.isEmpty()) {
-        skills
-      } else {
-        skills.filter { skill ->
-          skill.name.contains(query, ignoreCase = true) ||
-            skill.skillKey.contains(query, ignoreCase = true) ||
-            skill.description?.contains(query, ignoreCase = true) == true
-        }
-      }
+    remember(skills, installedSearch, installedFilter) {
+      filterInstalledSkills(skills, installedSearch, installedFilter)
     }
 
   LaunchedEffect(isConnected) {
@@ -105,23 +135,26 @@ internal fun SkillsSettingsScreen(
     icon = Icons.Default.Settings,
     onBack = onBack,
   ) {
-    SettingsMetricPanel(
-      rows =
-        listOf(
-          SettingsMetric(nativeString("Installed"), skills.size.toString()),
-          SettingsMetric(nativeString("Ready"), readyCount.toString()),
-          SettingsMetric(nativeString("Needs Setup"), needsSetupCount.toString()),
-          SettingsMetric(nativeString("Off"), disabledCount.toString()),
-        ),
+    SkillsOverviewPanel(
+      installedCount = skills.size,
+      readyCount = readyCount,
+      needsSetupCount = needsSetupCount,
+      disabledCount = disabledCount,
+      refreshing = skillsRefreshing,
+      canRefresh = isConnected,
+      onRefresh = viewModel::refreshSkills,
     )
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-      ClawSecondaryButton(
-        text = if (skillsRefreshing) nativeString("Refreshing") else nativeString("Refresh"),
-        onClick = viewModel::refreshSkills,
-        enabled = isConnected && !skillsRefreshing,
-        modifier = Modifier.weight(1f),
-      )
-    }
+    val installedTabLabel = nativeString("Installed")
+    val browseTabLabel = nativeString("Browse")
+    ClawSegmentedControl(
+      options = listOf(installedTabLabel, browseTabLabel),
+      selected = if (selectedTab == SkillsTab.Installed) installedTabLabel else browseTabLabel,
+      onSelect = { selected ->
+        selectedTabName =
+          if (selected == installedTabLabel) SkillsTab.Installed.name else SkillsTab.Browse.name
+      },
+      modifier = Modifier.fillMaxWidth(),
+    )
     skillsErrorText?.let { errorText ->
       ClawPanel {
         Text(text = errorText, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
@@ -136,51 +169,38 @@ internal fun SkillsSettingsScreen(
         )
       }
     }
-    InstalledSkillSearchPanel(
-      query = installedSearch,
-      onQueryChange = { installedSearch = it },
-      visibleCount = visibleSkills.size,
-      totalCount = skills.size,
-    )
-    when {
-      !isConnected ->
-        ClawPanel {
-          Text(text = nativeString("Connect the gateway to load skills."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
-      skills.isEmpty() ->
-        ClawPanel {
-          Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(text = nativeString("No skills installed."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-            Text(text = nativeString("Skills installed on the gateway will appear here."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-          }
-        }
-      visibleSkills.isEmpty() ->
-        ClawPanel {
-          Text(text = nativeString("No installed skills match this search."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
-      else ->
-        SkillsPanel(
-          skills = visibleSkills,
+    when (selectedTab) {
+      SkillsTab.Installed ->
+        InstalledSkillsPane(
+          skills = skills,
+          visibleSkills = visibleSkills,
+          query = installedSearch,
+          filter = installedFilter,
+          isConnected = isConnected,
           canManageSkills = canManageSkills,
           mutatingSkillKeys = skillMutationKeys,
+          onQueryChange = { installedSearch = it },
+          onFilterChange = { installedFilterName = it.name },
           onSkillClick = { selectedSkillKey = it.skillKey },
           onSkillEnabledChange = viewModel::setSkillEnabled,
         )
+      SkillsTab.Browse ->
+        ClawHubSkillSearchPanel(
+          state = clawHubState,
+          installedSkills = skills,
+          query = clawHubQuery,
+          isConnected = isConnected,
+          methodsAvailable = clawHubMethodsAvailable,
+          canManageSkills = canManageSkills,
+          onQueryChange = { clawHubQuery = it },
+          onSearch = { viewModel.searchClawHubSkills(clawHubQuery) },
+          onReviewInstall = viewModel::reviewClawHubSkillInstall,
+          onAcknowledgeInstall = { slug, version ->
+            viewModel.installClawHubSkill(slug, acknowledgeClawHubRisk = true, version = version)
+          },
+          onClearMessage = viewModel::clearClawHubSkillMessage,
+        )
     }
-    ClawHubSkillSearchPanel(
-      state = clawHubState,
-      query = clawHubQuery,
-      isConnected = isConnected,
-      methodsAvailable = clawHubMethodsAvailable,
-      canManageSkills = canManageSkills,
-      onQueryChange = { clawHubQuery = it },
-      onSearch = { viewModel.searchClawHubSkills(clawHubQuery) },
-      onReviewInstall = viewModel::reviewClawHubSkillInstall,
-      onAcknowledgeInstall = { slug, version ->
-        viewModel.installClawHubSkill(slug, acknowledgeClawHubRisk = true, version = version)
-      },
-      onClearMessage = viewModel::clearClawHubSkillMessage,
-    )
   }
   clawHubState.installReview?.let { review ->
     ClawHubInstallReviewDialog(
@@ -235,27 +255,162 @@ private fun SkillDetailSettingsScreen(
 }
 
 @Composable
-private fun InstalledSkillSearchPanel(
-  query: String,
-  onQueryChange: (String) -> Unit,
-  visibleCount: Int,
-  totalCount: Int,
+private fun SkillsOverviewPanel(
+  installedCount: Int,
+  readyCount: Int,
+  needsSetupCount: Int,
+  disabledCount: Int,
+  refreshing: Boolean,
+  canRefresh: Boolean,
+  onRefresh: () -> Unit,
 ) {
-  ClawPanel {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+  ClawPanel(contentPadding = PaddingValues(14.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
       Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
       ) {
-        Text(text = nativeString("Installed skills"), style = ClawTheme.type.section, color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
-        ClawStatusPill(
-          text = nativeString("\${visibleCount}/\${totalCount}", visibleCount, totalCount),
-          status = ClawStatus.Neutral,
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+          Text(text = installedCount.toString(), style = ClawTheme.type.display, color = ClawTheme.colors.text)
+          Text(text = nativeString("Installed"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+        }
+        ClawIconButton(
+          icon = Icons.Default.Refresh,
+          contentDescription = if (refreshing) nativeString("Refreshing") else nativeString("Refresh"),
+          onClick = onRefresh,
+          enabled = canRefresh && !refreshing,
         )
       }
-      ClawTextField(value = query, onValueChange = onQueryChange, placeholder = nativeString("Search installed skills"))
+      SkillDistributionBar(
+        readyCount = readyCount,
+        needsSetupCount = needsSetupCount,
+        disabledCount = disabledCount,
+      )
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        SkillCountLegend(
+          label = nativeString("Ready"),
+          count = readyCount,
+          color = ClawTheme.colors.success,
+          modifier = Modifier.weight(1f),
+        )
+        SkillCountLegend(
+          label = nativeString("Needs Setup"),
+          count = needsSetupCount,
+          color = ClawTheme.colors.warning,
+          modifier = Modifier.weight(1f),
+        )
+        SkillCountLegend(
+          label = nativeString("Off"),
+          count = disabledCount,
+          color = ClawTheme.colors.textSubtle,
+          modifier = Modifier.weight(1f),
+        )
+      }
     }
+  }
+}
+
+@Composable
+private fun SkillDistributionBar(
+  readyCount: Int,
+  needsSetupCount: Int,
+  disabledCount: Int,
+) {
+  val total = readyCount + needsSetupCount + disabledCount
+  Row(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .height(6.dp)
+        .clip(RoundedCornerShape(ClawTheme.radii.pill))
+        .background(ClawTheme.colors.surfacePressed),
+  ) {
+    if (total > 0) {
+      if (readyCount > 0) {
+        Box(modifier = Modifier.weight(readyCount.toFloat()).fillMaxHeight().background(ClawTheme.colors.success))
+      }
+      if (needsSetupCount > 0) {
+        Box(modifier = Modifier.weight(needsSetupCount.toFloat()).fillMaxHeight().background(ClawTheme.colors.warning))
+      }
+      if (disabledCount > 0) {
+        Box(modifier = Modifier.weight(disabledCount.toFloat()).fillMaxHeight().background(ClawTheme.colors.textSubtle))
+      }
+    }
+  }
+}
+
+@Composable
+private fun SkillCountLegend(
+  label: String,
+  count: Int,
+  color: Color,
+  modifier: Modifier = Modifier,
+) {
+  Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+      Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(color))
+      Text(text = label, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
+    }
+    Text(text = count.toString(), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+  }
+}
+
+@Composable
+private fun InstalledSkillsPane(
+  skills: List<GatewaySkillSummary>,
+  visibleSkills: List<GatewaySkillSummary>,
+  query: String,
+  filter: InstalledSkillFilter,
+  isConnected: Boolean,
+  canManageSkills: Boolean,
+  mutatingSkillKeys: Set<String>,
+  onQueryChange: (String) -> Unit,
+  onFilterChange: (InstalledSkillFilter) -> Unit,
+  onSkillClick: (GatewaySkillSummary) -> Unit,
+  onSkillEnabledChange: (String, Boolean) -> Unit,
+) {
+  ClawPanel {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+      ClawTextField(value = query, onValueChange = onQueryChange, placeholder = nativeString("Search installed skills"))
+      Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        InstalledSkillFilter.entries.forEach { option ->
+          ClawPill(
+            text = installedSkillFilterLabel(option),
+            selected = option == filter,
+            onClick = { onFilterChange(option) },
+          )
+        }
+      }
+    }
+  }
+  when {
+    !isConnected ->
+      ClawPanel {
+        Text(text = nativeString("Connect the gateway to load skills."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      }
+    skills.isEmpty() ->
+      ClawPanel {
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+          Text(text = nativeString("No skills installed."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+          Text(text = nativeString("Skills installed on the gateway will appear here."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        }
+      }
+    visibleSkills.isEmpty() ->
+      ClawPanel {
+        Text(text = nativeString("No installed skills match this search."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      }
+    else ->
+      SkillsPanel(
+        skills = visibleSkills,
+        canManageSkills = canManageSkills,
+        mutatingSkillKeys = mutatingSkillKeys,
+        onSkillClick = onSkillClick,
+        onSkillEnabledChange = onSkillEnabledChange,
+      )
   }
 }
 
@@ -375,11 +530,6 @@ private fun SkillListRow(
           onCheckedChange = { onSkillEnabledChange(skill.skillKey, it) },
           enabled = canManageSkills && !isMutating,
         )
-        Icon(
-          imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-          contentDescription = null,
-          tint = ClawTheme.colors.textSubtle,
-        )
       }
     },
   )
@@ -388,6 +538,7 @@ private fun SkillListRow(
 @Composable
 private fun ClawHubSkillSearchPanel(
   state: GatewayClawHubSkillSearchState,
+  installedSkills: List<GatewaySkillSummary>,
   query: String,
   isConnected: Boolean,
   methodsAvailable: Boolean,
@@ -399,7 +550,7 @@ private fun ClawHubSkillSearchPanel(
   onClearMessage: () -> Unit,
 ) {
   ClawPanel {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
       Text(text = nativeString("Find on ClawHub"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       Text(
         text = nativeString("Search registry metadata. The Gateway verifies trust again before any download."),
@@ -413,53 +564,172 @@ private fun ClawHubSkillSearchPanel(
           color = ClawTheme.colors.warning,
         )
       }
-      ClawTextField(value = query, onValueChange = onQueryChange, placeholder = nativeString("Search ClawHub"))
-      ClawPrimaryButton(
-        text = if (state.searching) nativeString("Searching") else nativeString("Search"),
-        onClick = onSearch,
-        enabled = isConnected && methodsAvailable && !state.searching,
+      Row(
         modifier = Modifier.fillMaxWidth(),
-      )
-      state.errorText?.let { error ->
-        Text(text = nativeString(error), style = ClawTheme.type.body, color = ClawTheme.colors.warning)
-      }
-      state.messageText?.let { message ->
-        Text(text = nativeString(message), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-      }
-      if (state.errorText != null || state.messageText != null) {
-        ClawSecondaryButton(text = nativeString("Dismiss"), onClick = onClearMessage, modifier = Modifier.fillMaxWidth())
-      }
-      state.acknowledgeSlug?.let { slug ->
-        ClawPrimaryButton(
-          text = nativeString("Acknowledge Gateway warning and install"),
-          onClick = { onAcknowledgeInstall(slug, state.acknowledgeVersion) },
-          enabled = methodsAvailable && canManageSkills && slug !in state.installingSlugs,
-          modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        ClawTextField(
+          value = query,
+          onValueChange = onQueryChange,
+          placeholder = nativeString("Search ClawHub"),
+          modifier = Modifier.weight(1f),
+        )
+        ClawIconButton(
+          icon = Icons.Default.Search,
+          contentDescription = if (state.searching) nativeString("Searching") else nativeString("Search"),
+          onClick = onSearch,
+          enabled = isConnected && methodsAvailable && !state.searching,
         )
       }
     }
   }
+  if (state.errorText != null || state.messageText != null) {
+    ClawHubNoticeCard(
+      errorText = state.errorText,
+      messageText = state.messageText,
+      acknowledgeSlug = state.acknowledgeSlug,
+      acknowledgeVersion = state.acknowledgeVersion,
+      canAcknowledge = methodsAvailable && canManageSkills,
+      installingSlugs = state.installingSlugs,
+      onAcknowledgeInstall = onAcknowledgeInstall,
+      onDismiss = onClearMessage,
+    )
+  }
   if (state.results.isNotEmpty()) {
     ClawListPanel(items = state.results) { skill ->
+      val installed =
+        skill.version?.let { version -> isClawHubSkillInstalled(installedSkills, skill.slug, version) }
+          ?: isClawHubSkillInstalled(installedSkills, skill.slug)
       ClawDetailRow(
         title = skill.displayName,
         subtitle = listOfNotNull(skill.summary, skill.version?.let { nativeString("Version \$it", it) }).joinToString(" · "),
         leading = { ClawTextBadge(text = skillBadge(skill.displayName)) },
         trailing = {
           val reviewing = state.reviewingSlug == skill.slug
-          val installing = skill.slug in state.installingSlugs
+          val installing = isClawHubSkillOperationActive(state.installingSlugs, skill.slug)
           ClawSecondaryButton(
             text =
               when {
+                installed -> nativeString("Installed")
                 installing -> nativeString("Installing")
                 reviewing -> nativeString("Loading")
                 else -> nativeString("Review")
               },
             onClick = { onReviewInstall(skill) },
-            enabled = isConnected && methodsAvailable && !reviewing && !installing,
+            enabled = isConnected && methodsAvailable && !installed && !reviewing && !installing,
           )
         },
       )
+    }
+  }
+}
+
+@Composable
+private fun ClawHubNoticeCard(
+  errorText: String?,
+  messageText: String?,
+  acknowledgeSlug: String?,
+  acknowledgeVersion: String?,
+  canAcknowledge: Boolean,
+  installingSlugs: Set<String>,
+  onAcknowledgeInstall: (String, String?) -> Unit,
+  onDismiss: () -> Unit,
+) {
+  val requiresAcknowledgement = acknowledgeSlug != null
+  val status =
+    when {
+      requiresAcknowledgement -> ClawStatus.Warning
+      errorText != null -> ClawStatus.Danger
+      else -> ClawStatus.Success
+    }
+  val rawText = errorText ?: messageText.orEmpty()
+  val summary =
+    if (requiresAcknowledgement) {
+      nativeString("The Gateway will verify this exact release with ClawHub before download. If the release needs explicit risk acknowledgement, Android will show the Gateway warning before retrying.")
+    } else {
+      rawText.substringBefore("\n\n").trim()
+    }
+  val details =
+    when {
+      requiresAcknowledgement -> rawText.takeIf(String::isNotBlank)
+      "\n\n" in rawText -> rawText.substringAfter("\n\n").trim().takeIf(String::isNotBlank)
+      else -> null
+    }
+  var detailsExpanded by rememberSaveable(rawText) { mutableStateOf(false) }
+  val accent =
+    when (status) {
+      ClawStatus.Success -> ClawTheme.colors.success
+      ClawStatus.Warning -> ClawTheme.colors.warning
+      ClawStatus.Danger -> ClawTheme.colors.danger
+      ClawStatus.Neutral -> ClawTheme.colors.textSubtle
+    }
+  val background =
+    when (status) {
+      ClawStatus.Success -> ClawTheme.colors.successSoft
+      ClawStatus.Warning -> ClawTheme.colors.warningSoft
+      ClawStatus.Danger -> ClawTheme.colors.dangerSoft
+      ClawStatus.Neutral -> ClawTheme.colors.surfaceRaised
+    }
+  val title =
+    when {
+      requiresAcknowledgement -> nativeString("Needs attention")
+      errorText != null -> nativeString("Blocked")
+      else -> nativeString("Installed")
+    }
+
+  Surface(
+    modifier = Modifier.fillMaxWidth(),
+    shape = RoundedCornerShape(ClawTheme.radii.panel),
+    color = background,
+    border = BorderStroke(1.dp, accent.copy(alpha = 0.45f)),
+  ) {
+    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(accent))
+        Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
+      }
+      Text(text = summary, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      if (detailsExpanded && details != null) {
+        Surface(
+          modifier = Modifier.fillMaxWidth(),
+          shape = RoundedCornerShape(ClawTheme.radii.control),
+          color = ClawTheme.colors.surface.copy(alpha = 0.72f),
+        ) {
+          Text(
+            text = details,
+            modifier = Modifier.padding(10.dp),
+            style = ClawTheme.type.mono,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
+      }
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (details != null && !detailsExpanded) {
+          ClawSecondaryButton(
+            text = nativeString("Review"),
+            onClick = { detailsExpanded = true },
+            modifier = Modifier.weight(1f),
+          )
+        }
+        ClawSecondaryButton(
+          text = nativeString("Dismiss"),
+          onClick = onDismiss,
+          modifier = Modifier.weight(1f),
+        )
+      }
+      acknowledgeSlug?.let { slug ->
+        ClawPrimaryButton(
+          text = nativeString("Acknowledge Gateway warning and install"),
+          onClick = { onAcknowledgeInstall(slug, acknowledgeVersion) },
+          enabled = canAcknowledge && slug !in installingSlugs && (details == null || detailsExpanded),
+          modifier = Modifier.fillMaxWidth(),
+        )
+      }
     }
   }
 }
@@ -512,6 +782,37 @@ private fun ReviewLine(
     Text(text = value, style = ClawTheme.type.body, color = ClawTheme.colors.text)
   }
 }
+
+private fun filterInstalledSkills(
+  skills: List<GatewaySkillSummary>,
+  query: String,
+  filter: InstalledSkillFilter,
+): List<GatewaySkillSummary> {
+  val normalizedQuery = query.trim()
+  return skills.filter { skill ->
+    val matchesQuery =
+      normalizedQuery.isEmpty() ||
+        skill.name.contains(normalizedQuery, ignoreCase = true) ||
+        skill.skillKey.contains(normalizedQuery, ignoreCase = true) ||
+        skill.description?.contains(normalizedQuery, ignoreCase = true) == true
+    val matchesFilter =
+      when (filter) {
+        InstalledSkillFilter.All -> true
+        InstalledSkillFilter.Ready -> skillReady(skill)
+        InstalledSkillFilter.Setup -> skillNeedsSetup(skill)
+        InstalledSkillFilter.Off -> skill.disabled
+      }
+    matchesQuery && matchesFilter
+  }
+}
+
+private fun installedSkillFilterLabel(filter: InstalledSkillFilter): String =
+  when (filter) {
+    InstalledSkillFilter.All -> nativeString("All")
+    InstalledSkillFilter.Ready -> nativeString("Ready")
+    InstalledSkillFilter.Setup -> nativeString("Needs Setup")
+    InstalledSkillFilter.Off -> nativeString("Off")
+  }
 
 private fun skillReady(skill: GatewaySkillSummary): Boolean =
   !skill.disabled &&
@@ -593,6 +894,6 @@ private fun skillBadge(name: String): String =
     .split(' ', '-', '_')
     .filter { it.isNotBlank() }
     .take(2)
-    .mapNotNull { it.firstOrNull()?.uppercaseChar()?.toString() }
+    .mapNotNull { it.uppercaseFirstGraphemeOrNull() }
     .joinToString("")
     .ifBlank { "S" }

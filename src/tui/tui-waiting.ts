@@ -20,7 +20,7 @@ export const defaultWaitingPhrases = [
 ];
 
 /** Picks a stable phrase for a timer tick. */
-export function pickWaitingPhrase(tick: number, phrases = defaultWaitingPhrases) {
+function pickWaitingPhrase(tick: number, phrases = defaultWaitingPhrases) {
   const idx = Math.floor(tick / 10) % phrases.length;
   return phrases[idx] ?? phrases[0] ?? "waiting";
 }

@@ -4,15 +4,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { OpenClawFilePreviewModal } from "./file-preview-modal.ts";
 
+type FilePreviewModalElement = HTMLElement & {
+  files: typeof files;
+  activePath: string;
+  query: string;
+  contextLabel: string;
+  updateComplete: Promise<boolean>;
+};
+
 let container: HTMLDivElement;
 
 const FILE_PREVIEW_MODAL_ELEMENT_NAME = `test-openclaw-file-preview-modal-${crypto.randomUUID()}`;
 
-// The non-isolated UI runner resets modules but not customElements. Register
-// the current class graph so locale updates reach the mounted test element.
-class TestFilePreviewModal extends OpenClawFilePreviewModal {}
-
-customElements.define(FILE_PREVIEW_MODAL_ELEMENT_NAME, TestFilePreviewModal);
+customElements.define(FILE_PREVIEW_MODAL_ELEMENT_NAME, class extends OpenClawFilePreviewModal {});
 
 const files = [
   {
@@ -37,7 +41,7 @@ async function renderPreview(options: RenderPreviewOptions = {}) {
   const query = options.query ?? "";
   const activePath = options.activePath ?? "templates/digest.md";
   const previewFiles = options.previewFiles ?? files;
-  const modal = document.createElement(FILE_PREVIEW_MODAL_ELEMENT_NAME) as OpenClawFilePreviewModal;
+  const modal = document.createElement(FILE_PREVIEW_MODAL_ELEMENT_NAME) as FilePreviewModalElement;
   modal.files = previewFiles;
   modal.activePath = activePath;
   modal.query = query;
@@ -49,7 +53,7 @@ async function renderPreview(options: RenderPreviewOptions = {}) {
   return modal;
 }
 
-function shadowText(modal: OpenClawFilePreviewModal): string {
+function shadowText(modal: FilePreviewModalElement): string {
   return modal.shadowRoot?.textContent ?? "";
 }
 
@@ -134,6 +138,24 @@ describe("openclaw-file-preview-modal", () => {
 
     expect(arrowDown.defaultPrevented).toBe(true);
     expect(onDocumentKeydown).not.toHaveBeenCalled();
+    expect(onSelect.mock.lastCall?.[0].detail).toBe("filters/auto-senders.txt");
+  });
+
+  it("handles file navigation from the modal dialog event path", async () => {
+    const modal = await renderPreview();
+    const onSelect = vi.fn();
+    modal.addEventListener("file-preview-select", onSelect);
+
+    const dialog = modal.shadowRoot?.querySelector<HTMLElement>("openclaw-modal-dialog");
+    const arrowDown = new KeyboardEvent("keydown", {
+      key: "ArrowDown",
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    });
+    dialog?.dispatchEvent(arrowDown);
+
+    expect(arrowDown.defaultPrevented).toBe(true);
     expect(onSelect.mock.lastCall?.[0].detail).toBe("filters/auto-senders.txt");
   });
 
@@ -235,16 +257,41 @@ describe("openclaw-file-preview-modal", () => {
         filteredFileCount: "{count}/{total} arquivos",
         noMatches: "Nenhum arquivo corresponde.",
         navigate: "navegar",
+        kind: {
+          text: "Texto",
+          shell: "Shell",
+          file: "Arquivo",
+        },
       },
     });
 
     await i18n.setLocale("pt-BR");
     await modal.updateComplete;
 
-    expect(modal.shadowRoot?.querySelector(".modal")?.getAttribute("aria-label")).toBe(
-      "Arquivos de suporte",
-    );
+    expect(
+      modal.shadowRoot?.querySelector<HTMLElement & { label: string }>("openclaw-modal-dialog")
+        ?.label,
+    ).toBe("Arquivos de suporte");
     expect(shadowText(modal)).toContain("2 arquivos");
     expect(shadowText(modal)).toContain("Fechar");
+  });
+
+  it("localizes generic file-kind chips", async () => {
+    i18n.registerTranslation("pt-BR", {
+      filePreview: {
+        kind: {
+          text: "Texto",
+          shell: "Shell",
+          file: "Arquivo",
+        },
+      },
+    });
+    await i18n.setLocale("pt-BR");
+
+    const modal = await renderPreview({
+      activePath: "filters/auto-senders.txt",
+    });
+
+    expect(modal.shadowRoot?.querySelector(".chip.accent")?.textContent).toBe("Texto");
   });
 });

@@ -1,8 +1,11 @@
 // Memory Host SDK tests cover response snippet behavior.
 import { describe, expect, it } from "vitest";
-import { readResponseJsonWithLimit, readResponseTextSnippet } from "./response-snippet.js";
+import {
+  readMemoryHostResponseTextSnippet,
+  readResponseJsonWithLimit,
+} from "./response-snippet.js";
 
-describe("readResponseTextSnippet", () => {
+describe("readMemoryHostResponseTextSnippet", () => {
   function stallingResponse(onCancel: () => void): Response {
     const reader = {
       read: () => new Promise<ReadableStreamReadResult<Uint8Array>>(() => {}),
@@ -30,15 +33,15 @@ describe("readResponseTextSnippet", () => {
     });
 
     await expect(
-      readResponseTextSnippet(new Response(stream), { maxBytes: 4, maxChars: 100 }),
+      readMemoryHostResponseTextSnippet(new Response(stream), { maxBytes: 4, maxChars: 100 }),
     ).resolves.toBe("abcd... [truncated]");
     expect(canceled).toBe(true);
   });
 
   it("does not split surrogate pairs when truncating text snippets", async () => {
-    await expect(readResponseTextSnippet(new Response("abc🤖tail"), { maxChars: 4 })).resolves.toBe(
-      "abc... [truncated]",
-    );
+    await expect(
+      readMemoryHostResponseTextSnippet(new Response("abc🤖tail"), { maxChars: 4 }),
+    ).resolves.toBe("abc... [truncated]");
   });
 
   it("drops partial UTF-8 characters when byte-capped snippets truncate a stream", async () => {
@@ -50,7 +53,7 @@ describe("readResponseTextSnippet", () => {
     });
 
     await expect(
-      readResponseTextSnippet(new Response(stream), { maxBytes: 3, maxChars: 100 }),
+      readMemoryHostResponseTextSnippet(new Response(stream), { maxBytes: 3, maxChars: 100 }),
     ).resolves.toBe("ab... [truncated]");
   });
 
@@ -60,7 +63,7 @@ describe("readResponseTextSnippet", () => {
       canceled = true;
     });
     const controller = new AbortController();
-    const read = readResponseTextSnippet(response, {
+    const read = readMemoryHostResponseTextSnippet(response, {
       maxBytes: 1024,
       signal: controller.signal,
     });

@@ -17,7 +17,6 @@ import {
   resolveGroupDmAllow,
   shouldEmitDiscordReactionNotification,
 } from "./monitor/allow-list.js";
-import { buildDiscordMediaPayload } from "./monitor/message-utils.js";
 import { resolveDiscordReplyTarget, sanitizeDiscordThreadName } from "./monitor/threading.js";
 type DiscordReactionEvent = Parameters<
   import("./monitor/listeners.js").DiscordReactionListener["handle"]
@@ -124,7 +123,7 @@ describe("DiscordMessageListener", () => {
     await Promise.resolve();
   }
 
-  it("returns immediately while handler continues in background", async () => {
+  it("waits for the durable handler handoff", async () => {
     let handlerResolved = false;
     const deferred = createDeferred();
     const handler = vi.fn(async () => {
@@ -134,19 +133,18 @@ describe("DiscordMessageListener", () => {
     const listener = new DiscordMessageListener(handler);
 
     const handlePromise = listener.handle(
-      {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
+      {} as unknown as Parameters<
+        import("./monitor/listeners.js").DiscordMessageListener["handle"]
+      >[0],
       {} as unknown as import("./internal/discord.js").Client,
     );
 
-    // handle() returns immediately while the background queue starts on the next tick.
-    await expect(handlePromise).resolves.toBeUndefined();
     await flushAsyncWork();
     expect(handler).toHaveBeenCalledOnce();
     expect(handlerResolved).toBe(false);
 
-    // Release and let background handler finish.
     deferred.resolve();
-    await Promise.resolve();
+    await expect(handlePromise).resolves.toBeUndefined();
     expect(handlerResolved).toBe(true);
   });
 
@@ -164,26 +162,25 @@ describe("DiscordMessageListener", () => {
     });
     const listener = new DiscordMessageListener(handler);
 
-    await expect(
-      listener.handle(
-        {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
-        {} as unknown as import("./internal/discord.js").Client,
-      ),
-    ).resolves.toBeUndefined();
-    await expect(
-      listener.handle(
-        {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
-        {} as unknown as import("./internal/discord.js").Client,
-      ),
-    ).resolves.toBeUndefined();
+    const firstHandle = listener.handle(
+      {} as unknown as Parameters<
+        import("./monitor/listeners.js").DiscordMessageListener["handle"]
+      >[0],
+      {} as unknown as import("./internal/discord.js").Client,
+    );
+    const secondHandle = listener.handle(
+      {} as unknown as Parameters<
+        import("./monitor/listeners.js").DiscordMessageListener["handle"]
+      >[0],
+      {} as unknown as import("./internal/discord.js").Client,
+    );
 
-    // Both handlers are dispatched concurrently (fire-and-forget).
     await flushAsyncWork();
     expect(handler).toHaveBeenCalledTimes(2);
 
     first.resolve();
     second.resolve();
-    await Promise.resolve();
+    await Promise.all([firstHandle, secondHandle]);
   });
 
   it("logs handler failures", async () => {
@@ -199,7 +196,9 @@ describe("DiscordMessageListener", () => {
     const listener = new DiscordMessageListener(handler, logger);
 
     await listener.handle(
-      {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
+      {} as unknown as Parameters<
+        import("./monitor/listeners.js").DiscordMessageListener["handle"]
+      >[0],
       {} as unknown as import("./internal/discord.js").Client,
     );
     await flushAsyncWork();
@@ -218,13 +217,13 @@ describe("DiscordMessageListener", () => {
     const listener = new DiscordMessageListener(handler, logger);
 
     const handlePromise = listener.handle(
-      {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
+      {} as unknown as Parameters<
+        import("./monitor/listeners.js").DiscordMessageListener["handle"]
+      >[0],
       {} as unknown as import("./internal/discord.js").Client,
     );
-    await expect(handlePromise).resolves.toBeUndefined();
-
     deferred.resolve();
-    await flushAsyncWork();
+    await expect(handlePromise).resolves.toBeUndefined();
     expect(handler).toHaveBeenCalledOnce();
     // The listener no longer wraps message handlers with slow-listener logging.
     expect(logger.warn).not.toHaveBeenCalled();
@@ -243,20 +242,22 @@ describe("discord allowlist helpers", () => {
       ["123", "steipete", "Friends of OpenClaw"],
       ["discord:", "user:", "guild:", "channel:"],
     );
-    expect(allowListMatches(allow, { id: "123" })).toBe(true);
-    expect(allowListMatches(allow, { name: "steipete" })).toBe(false);
-    expect(allowListMatches(allow, { name: "friends-of-openclaw" })).toBe(false);
+    expect(allowListMatches(allow, { id: "123" }, { allowNameMatching: false })).toBe(true);
+    expect(allowListMatches(allow, { name: "steipete" }, { allowNameMatching: false })).toBe(false);
+    expect(
+      allowListMatches(allow, { name: "friends-of-openclaw" }, { allowNameMatching: false }),
+    ).toBe(false);
     expect(allowListMatches(allow, { name: "steipete" }, { allowNameMatching: true })).toBe(true);
     expect(
       allowListMatches(allow, { name: "friends-of-openclaw" }, { allowNameMatching: true }),
     ).toBe(true);
-    expect(allowListMatches(allow, { name: "other" })).toBe(false);
+    expect(allowListMatches(allow, { name: "other" }, { allowNameMatching: false })).toBe(false);
   });
 
   it("matches pk-prefixed allowlist entries", () => {
     const allow = expectNormalizedAllowList(["pk:member-123"], ["discord:", "user:", "pk:"]);
-    expect(allowListMatches(allow, { id: "member-123" })).toBe(true);
-    expect(allowListMatches(allow, { id: "member-999" })).toBe(false);
+    expect(allowListMatches(allow, { id: "member-123" }, { allowNameMatching: false })).toBe(true);
+    expect(allowListMatches(allow, { id: "member-999" }, { allowNameMatching: false })).toBe(false);
   });
 
   it("does not treat DM wildcard access as owner access", () => {
@@ -903,21 +904,6 @@ describe("discord reaction notification gating", () => {
   });
 });
 
-describe("discord media payload", () => {
-  it("preserves attachment order for MediaPaths/MediaUrls", () => {
-    const payload = buildDiscordMediaPayload([
-      { path: "/tmp/a.png", contentType: "image/png" },
-      { path: "/tmp/b.png", contentType: "image/png" },
-      { path: "/tmp/c.png", contentType: "image/png" },
-    ]);
-    expect(payload.MediaPath).toBe("/tmp/a.png");
-    expect(payload.MediaUrl).toBe("/tmp/a.png");
-    expect(payload.MediaType).toBe("image/png");
-    expect(payload.MediaPaths).toEqual(["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]);
-    expect(payload.MediaUrls).toEqual(["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]);
-  });
-});
-
 // --- DM reaction integration tests ---
 // These test that handleDiscordReactionEvent (via DiscordReactionListener)
 // properly handles DM reactions instead of silently dropping them.
@@ -1421,3 +1407,4 @@ describe("discord reaction notification modes", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

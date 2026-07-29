@@ -43,7 +43,7 @@ type DecryptMetricName = "decrypt.success" | "decrypt.failure";
 
 type MemoryMetricName = "memory.seen_tracker_size" | "memory.rate_limiter_entries";
 
-export type MetricName =
+type MetricName =
   | EventMetricName
   | RelayMetricName
   | RateLimitMetricName

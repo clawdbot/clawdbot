@@ -20,12 +20,9 @@ import {
   type CommandGroupEntry,
 } from "./register-command-groups.js";
 import {
-  getSubCliCommandsWithSubcommands,
   getSubCliEntries as getSubCliEntryDescriptors,
   type SubCliDescriptor,
 } from "./subcli-descriptors.js";
-
-export { getSubCliCommandsWithSubcommands };
 
 export type SubCliRegistrationContext = {
   purpose?: "runtime" | "completion";
@@ -158,9 +155,19 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerDevicesCli",
     },
     {
+      commandNames: ["users"],
+      loadModule: () => import("../users-cli.js"),
+      exportName: "registerUsersCli",
+    },
+    {
       commandNames: ["node"],
       loadModule: () => import("../node-cli.js"),
       exportName: "registerNodeCli",
+    },
+    {
+      commandNames: ["worker"],
+      loadModule: () => import("../worker-cli.js"),
+      exportName: "registerWorkerCli",
     },
     {
       commandNames: ["sandbox"],

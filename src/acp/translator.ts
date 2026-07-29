@@ -85,8 +85,6 @@ import {
   buildSessionMetadata,
   buildSessionPresentation,
   buildSessionUsageSnapshot,
-  normalizeClientCapabilities,
-  type ClientCapabilityState,
   type GatewaySessionPresentationRow,
   type SessionSnapshot,
 } from "./translator.presentation.js";
@@ -134,11 +132,6 @@ const loadAcpSdkModule = createLazyRuntimeModule(() => import("@agentclientproto
 async function getAvailableCommandsForAcp() {
   const { getAvailableCommands } = await loadAcpCommandsModule();
   return getAvailableCommands();
-}
-
-async function getAcpProtocolVersion() {
-  const { PROTOCOL_VERSION } = await loadAcpSdkModule();
-  return PROTOCOL_VERSION;
 }
 
 type DisconnectContext = {
@@ -257,8 +250,6 @@ export class AcpGatewayAgent implements Agent {
   private pendingPrompts = new Map<string, PendingPrompt>();
   private settlingPromptKeys = new Set<string>();
   private approvalRelays = new Map<string, PendingApprovalRelay>();
-  private clientCapabilities: ClientCapabilityState = normalizeClientCapabilities(undefined);
-  private clientInfo: InitializeRequest["clientInfo"] = null;
   private disconnectTimer: NodeJS.Timeout | null = null;
   private activeDisconnectContext: DisconnectContext | null = null;
   private disconnectGeneration = 0;
@@ -315,22 +306,6 @@ export class AcpGatewayAgent implements Agent {
     this.clearDisconnectTimer();
   }
 
-  supportsClientReadTextFile(): boolean {
-    return this.clientCapabilities.readTextFile;
-  }
-
-  supportsClientWriteTextFile(): boolean {
-    return this.clientCapabilities.writeTextFile;
-  }
-
-  supportsClientTerminal(): boolean {
-    return this.clientCapabilities.terminal;
-  }
-
-  getClientInfo(): InitializeRequest["clientInfo"] {
-    return this.clientInfo;
-  }
-
   handleGatewayReconnect(): void {
     this.log("gateway reconnected");
     const disconnectContext = this.activeDisconnectContext;
@@ -372,11 +347,9 @@ export class AcpGatewayAgent implements Agent {
     }
   }
 
-  async initialize(params: InitializeRequest): Promise<InitializeResponse> {
-    this.clientCapabilities = normalizeClientCapabilities(params.clientCapabilities);
-    this.clientInfo = params.clientInfo ?? null;
+  async initialize(_params: InitializeRequest): Promise<InitializeResponse> {
     return {
-      protocolVersion: await getAcpProtocolVersion(),
+      protocolVersion: (await loadAcpSdkModule()).PROTOCOL_VERSION,
       agentCapabilities: {
         loadSession: true,
         promptCapabilities: {
@@ -498,7 +471,7 @@ export class AcpGatewayAgent implements Agent {
       assertAbsoluteCwd(requestedCwd, "session/list");
     }
     const fallbackCwd = requestedCwd ?? process.cwd();
-    const rawCursor = normalizeOptionalString(params.cursor);
+    const rawCursor = params.cursor;
     const cursor = decodeListSessionsCursor(rawCursor);
     if (rawCursor && cursor.cwd !== requestedCwd) {
       throw new Error("ACP session list cursor does not match the cwd filter.");
@@ -748,7 +721,7 @@ export class AcpGatewayAgent implements Agent {
           if (status === "error") {
             const current = pending();
             if (current) {
-              this.rejectPendingPrompt(
+              await this.rejectPendingPrompt(
                 current,
                 new Error("Chat failed before the run started; try again."),
               );
@@ -802,21 +775,21 @@ export class AcpGatewayAgent implements Agent {
         }
       };
 
-      void sendWithProvenanceFallback().catch((err: unknown) => {
+      void sendWithProvenanceFallback().catch(async (err: unknown) => {
         const promptKey = this.pendingPromptKey(params.sessionId, runId);
-        if (
-          isGatewayCloseError(err) &&
-          (this.getPendingPrompt(params.sessionId, runId) || this.settlingPromptKeys.has(promptKey))
-        ) {
+        if (this.settlingPromptKeys.has(promptKey)) {
           return;
         }
-        this.clearApprovalRelaysForPrompt(params.sessionId, runId, { denyActive: true });
-        this.pendingPrompts.delete(params.sessionId);
-        this.sessionStore.clearActiveRun(params.sessionId);
-        if (this.pendingPrompts.size === 0) {
-          this.clearDisconnectTimer();
+        if (isGatewayCloseError(err) && this.getPendingPrompt(params.sessionId, runId)) {
+          return;
         }
-        reject(err instanceof Error ? err : new Error(String(err)));
+        const error = err instanceof Error ? err : new Error(String(err));
+        const current = this.getPendingPrompt(params.sessionId, runId);
+        if (current) {
+          await this.rejectPendingPrompt(current, error);
+          return;
+        }
+        reject(error);
       });
     });
   }
@@ -1003,12 +976,17 @@ export class AcpGatewayAgent implements Agent {
       return;
     }
 
-    const pending = params.runId
-      ? this.findPendingBySessionKey(params.sessionKey, params.runId)
-      : this.findUniquePendingBySessionKey(params.sessionKey);
+    const pending = this.findPendingForApproval(params);
     if (!pending) {
       return;
     }
+    const pendingToolCall = approvalEvent.toolCallId
+      ? pending.toolCalls?.get(approvalEvent.toolCallId)
+      : undefined;
+    const correlatedApprovalEvent =
+      !approvalEvent.title && pendingToolCall?.kind === "execute"
+        ? { ...approvalEvent, title: pendingToolCall.title }
+        : approvalEvent;
 
     const relay: PendingApprovalRelay = {
       approvalId: approvalEvent.approvalId,
@@ -1018,7 +996,36 @@ export class AcpGatewayAgent implements Agent {
       state: "active",
     };
     this.approvalRelays.set(relay.approvalId, relay);
-    void this.runApprovalRelay(relay, approvalEvent);
+    void this.runApprovalRelay(relay, correlatedApprovalEvent);
+  }
+
+  private findPendingForApproval(params: {
+    sessionKey: string;
+    runId?: string;
+    approvalEvent: GatewayExecApprovalEvent;
+  }): PendingPrompt | undefined {
+    if (params.runId) {
+      return this.findPendingBySessionKey(params.sessionKey, params.runId);
+    }
+    const toolCallId = params.approvalEvent.toolCallId;
+    if (!toolCallId) {
+      return this.findUniquePendingBySessionKey(params.sessionKey);
+    }
+
+    let match: PendingPrompt | undefined;
+    for (const pending of this.pendingPrompts.values()) {
+      if (
+        pending.sessionKey !== params.sessionKey ||
+        pending.toolCalls?.get(toolCallId)?.kind !== "execute"
+      ) {
+        continue;
+      }
+      if (match) {
+        return undefined;
+      }
+      match = pending;
+    }
+    return match;
   }
 
   private async runApprovalRelay(
@@ -1326,11 +1333,19 @@ export class AcpGatewayAgent implements Agent {
     this.disconnectTimer.unref?.();
   }
 
-  private rejectPendingPrompt(pending: PendingPrompt, error: Error): void {
+  private async rejectPendingPrompt(
+    pending: PendingPrompt,
+    error: Error,
+    options: { recordDisconnectNotice?: boolean } = {},
+  ): Promise<void> {
     const currentPending = this.getPendingPrompt(pending.sessionId, pending.idempotencyKey);
     if (currentPending !== pending) {
       return;
     }
+
+    const promptKey = this.pendingPromptKey(pending.sessionId, pending.idempotencyKey);
+    // Claim before emitting so late Gateway events cannot settle this prompt twice.
+    this.settlingPromptKeys.add(promptKey);
     this.clearApprovalRelaysForPrompt(pending.sessionId, pending.idempotencyKey, {
       denyActive: true,
     });
@@ -1339,7 +1354,33 @@ export class AcpGatewayAgent implements Agent {
     if (this.pendingPrompts.size === 0) {
       this.clearDisconnectTimer();
     }
-    pending.reject(error);
+
+    try {
+      if (options.recordDisconnectNotice) {
+        const text = pending.sendAccepted
+          ? "[OpenClaw interruption] The Gateway disconnected after accepting this message, so its final outcome is unknown. Check the session before retrying."
+          : "[OpenClaw interruption] The Gateway disconnected before OpenClaw could confirm whether this message was accepted, so its final outcome is unknown. Check the session before retrying.";
+        // Make replay durable before rejecting, but do not let ACP client backpressure
+        // extend the disconnect deadline indefinitely.
+        await this.sessionUpdates.emit({
+          sessionId: pending.sessionId,
+          sessionKey: pending.sessionKey,
+          ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+          runId: pending.idempotencyKey,
+          record: true,
+          waitForDelivery: false,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text },
+          },
+        });
+      }
+    } catch (noticeError) {
+      this.log(`disconnect notice failed for ${pending.idempotencyKey}: ${String(noticeError)}`);
+    } finally {
+      pending.reject(error);
+      this.settlingPromptKeys.delete(promptKey);
+    }
   }
 
   private clearPendingDisconnectState(
@@ -1421,9 +1462,10 @@ export class AcpGatewayAgent implements Agent {
       this.log(`agent.wait reconcile failed for ${pending.idempotencyKey}: ${String(err)}`);
       if (deadlineExpired) {
         if (this.shouldRejectPendingAtDisconnectDeadline(pending, disconnectContext)) {
-          this.rejectPendingPrompt(
+          await this.rejectPendingPrompt(
             pending,
             new Error(`Gateway disconnected: ${disconnectContext.reason}`),
+            { recordDisconnectNotice: true },
           );
           return false;
         }
@@ -1451,9 +1493,10 @@ export class AcpGatewayAgent implements Agent {
         if (!currentDisconnectContext) {
           return false;
         }
-        this.rejectPendingPrompt(
+        await this.rejectPendingPrompt(
           currentPending,
           new Error(`Gateway disconnected: ${currentDisconnectContext.reason}`),
+          { recordDisconnectNotice: true },
         );
         return false;
       }
@@ -1781,3 +1824,4 @@ export class AcpGatewayAgent implements Agent {
     );
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

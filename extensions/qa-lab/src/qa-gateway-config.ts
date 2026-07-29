@@ -1,4 +1,5 @@
 // Qa Lab helper module supports qa gateway config behavior.
+import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -113,18 +114,37 @@ export function buildQaGatewayConfig(params: {
       .map((pluginId) => pluginId.trim())
       .filter((pluginId) => pluginId.length > 0),
   );
-  const selectedPluginIds = usesCodexMockAppServer
+  const providerSelectedPluginIds = usesCodexMockAppServer
     ? uniqueStrings([...configuredPluginIds, ...selectedProviderIds])
     : provider.usesModelProviderPlugins
       ? uniqueStrings(
           (params.enabledPluginIds?.length ?? 0) > 0 ? configuredPluginIds : selectedProviderIds,
         )
       : configuredPluginIds;
+  // A forced Codex cell must stage its harness even when the provider owner is
+  // selected independently; otherwise its QA-only sandbox never takes effect.
+  const selectedPluginIds =
+    params.forcedRuntime === "codex"
+      ? uniqueStrings([...providerSelectedPluginIds, "codex"])
+      : providerSelectedPluginIds;
   const transportPluginIds = uniqueStrings(params.transportPluginIds ?? [])
     .map((pluginId) => pluginId.trim())
     .filter((pluginId) => pluginId.length > 0);
   const pluginEntries = Object.fromEntries(
-    selectedPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
+    selectedPluginIds.map((pluginId) => [
+      pluginId,
+      params.forcedRuntime === "codex" && pluginId === "codex"
+        ? {
+            enabled: true,
+            config: {
+              appServer: {
+                sandbox: "workspace-write",
+                ...(params.fastMode === true ? { serviceTier: "priority" } : {}),
+              },
+            },
+          }
+        : { enabled: true },
+    ]),
   );
   const transportPluginEntries = Object.fromEntries(
     transportPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
@@ -174,8 +194,30 @@ export function buildQaGatewayConfig(params: {
           },
         }
       : providerGatewayModels;
+  const mockMemorySearch =
+    provider.kind === "mock"
+      ? {
+          provider: "openai",
+          model: "text-embedding-3-small",
+          remote: {
+            // Memory embeddings bypass the model runtime, so bind them to the
+            // mock explicitly or a forced runtime can fall through to a live API.
+            baseUrl: providerBaseUrl,
+            apiKey: "test",
+          },
+        }
+      : {};
 
   return {
+    meta: {
+      lastTouchedVersion: OPENCLAW_VERSION,
+    },
+    memory: {
+      backend: "builtin",
+      search: {
+        ...mockMemorySearch,
+      },
+    },
     plugins: {
       allow: allowedPlugins,
       slots: {
@@ -205,20 +247,12 @@ export function buildQaGatewayConfig(params: {
         model: buildQaModelSelection(primaryModel, alternateModel),
         ...(imageGenerationModelRef
           ? {
-              imageGenerationModel: {
-                primary: imageGenerationModelRef,
+              mediaModels: {
+                image: { primary: imageGenerationModelRef },
               },
             }
           : {}),
         ...(params.thinkingDefault ? { thinkingDefault: params.thinkingDefault } : {}),
-        memorySearch: {
-          sync: {
-            watch: true,
-            watchDebounceMs: 25,
-            onSessionStart: true,
-            onSearch: true,
-          },
-        },
         models: {
           [primaryModel]: resolveModelEntry(primaryModel),
           [alternateModel]: resolveModelEntry(alternateModel),
@@ -228,9 +262,8 @@ export function buildQaGatewayConfig(params: {
           maxConcurrent: 2,
         },
       },
-      list: [
-        {
-          id: "qa",
+      entries: {
+        qa: {
           default: true,
           model: buildQaModelSelection(primaryModel, alternateModel),
           ...(params.forcedRuntime === "codex" && params.fastMode !== undefined
@@ -249,10 +282,7 @@ export function buildQaGatewayConfig(params: {
             profile: "coding",
           },
         },
-      ],
-    },
-    memory: {
-      backend: "builtin",
+      },
     },
     tools: {
       // The parity scenarios are code-agent contracts: they must always expose
@@ -276,11 +306,6 @@ export function buildQaGatewayConfig(params: {
         mode: "token",
         token: params.gatewayToken,
       },
-      reload: {
-        // QA restart scenarios need deterministic reload timing instead of the
-        // much longer production deferral window.
-        deferralTimeoutMs: 1_000,
-      },
       controlUi: {
         enabled: params.controlUiEnabled ?? true,
         ...((params.controlUiEnabled ?? true) && params.controlUiRoot
@@ -288,7 +313,6 @@ export function buildQaGatewayConfig(params: {
           : {}),
         ...((params.controlUiEnabled ?? true)
           ? {
-              allowInsecureAuth: true,
               allowedOrigins,
             }
           : {}),

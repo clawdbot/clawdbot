@@ -2,15 +2,16 @@
 import {
   applyChannelMatchMeta,
   buildChannelKeyCandidates,
-  resolveChannelEntryMatchWithFallback,
   type ChannelMatchSource,
 } from "openclaw/plugin-sdk/channel-targets";
 import type {
   ChannelBotLoopProtectionConfig,
   ReplyToMode,
+  SlackChannelConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildSlackChannelPolicyScope } from "../group-policy.js";
 import { normalizeSlackSlug } from "./allow-list.js";
 
 export type SlackChannelConfigResolved = {
@@ -23,6 +24,7 @@ export type SlackChannelConfigResolved = {
   users?: Array<string | number>;
   skills?: string[];
   systemPrompt?: string;
+  presenceEvents?: SlackChannelConfig["presenceEvents"];
   matchKey?: string;
   matchSource?: ChannelMatchSource;
 };
@@ -37,6 +39,7 @@ type SlackChannelConfigEntry = {
   users?: Array<string | number>;
   skills?: string[];
   systemPrompt?: string;
+  presenceEvents?: SlackChannelConfig["presenceEvents"];
 };
 
 export type SlackChannelConfigEntries = Record<string, SlackChannelConfigEntry>;
@@ -100,13 +103,10 @@ export function resolveSlackChannelConfig(params: {
     allowNameMatching ? directName : undefined,
     allowNameMatching ? normalizedName : undefined,
   );
-  const match = resolveChannelEntryMatchWithFallback({
-    entries,
-    keys: candidates,
-    wildcardKey: "*",
-  });
+  const match = buildSlackChannelPolicyScope({ channels: entries, candidates });
   const { entry: matched, wildcardEntry: fallback } = match;
 
+  // The monitor honors root channels.slack.requireMention; the adapter deliberately ignores it.
   const requireMentionDefault = defaultRequireMention ?? true;
   if (keys.length === 0) {
     return { allowed: true, requireMention: requireMentionDefault };
@@ -133,6 +133,7 @@ export function resolveSlackChannelConfig(params: {
   const users = firstDefined(resolved.users, fallback?.users);
   const skills = firstDefined(resolved.skills, fallback?.skills);
   const systemPrompt = firstDefined(resolved.systemPrompt, fallback?.systemPrompt);
+  const presenceEvents = firstDefined(resolved.presenceEvents, fallback?.presenceEvents);
   const result: SlackChannelConfigResolved = {
     allowed,
     requireMention,
@@ -143,6 +144,7 @@ export function resolveSlackChannelConfig(params: {
     users,
     skills,
     systemPrompt,
+    presenceEvents,
   };
   return applyChannelMatchMeta(result, match);
 }

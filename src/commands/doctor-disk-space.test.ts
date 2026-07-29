@@ -1,16 +1,18 @@
 // Doctor disk-space tests cover byte formatting, warning generation, and note rendering.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import {
-  buildDiskSpaceWarnings,
-  collectDiskSpaceHealthFindings,
-  formatBytes,
-  noteDiskSpace,
-} from "./doctor-disk-space.js";
+import { collectDiskSpaceHealthFindings, formatBytes, noteDiskSpace } from "./doctor-disk-space.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: vi.fn(),
 }));
+
+function collectFindingsAt(availableBytes: number) {
+  return collectDiskSpaceHealthFindings({ gateway: { mode: "local" } } as never, {
+    env: { HOME: "/home/test" },
+    readDiskSpace: () => ({ availableBytes }),
+  });
+}
 
 describe("formatBytes", () => {
   it("formats zero bytes", () => {
@@ -50,69 +52,51 @@ describe("formatBytes", () => {
   });
 });
 
-describe("buildDiskSpaceWarnings", () => {
+describe("collectDiskSpaceHealthFindings thresholds", () => {
   it("returns empty array when space is sufficient", () => {
-    const warnings = buildDiskSpaceWarnings({
-      availableBytes: 10 * 1024 * 1024 * 1024,
-      displayStateDir: "~/.openclaw",
-    });
-    expect(warnings).toEqual([]);
+    expect(collectFindingsAt(10 * 1024 * 1024 * 1024)).toEqual([]);
   });
 
-  it("returns warning lines when space is low (below 500 MB)", () => {
-    const warnings = buildDiskSpaceWarnings({
-      availableBytes: 300 * 1024 * 1024,
-      displayStateDir: "~/.openclaw",
-    });
-    expect(warnings).toHaveLength(2);
-    expect(warnings[0]).toContain("Low disk space");
-    expect(warnings[0]).toContain("300 MB");
-    expect(warnings[0]).toContain("~/.openclaw");
+  it("returns a warning finding when space is low (below 500 MB)", () => {
+    expect(collectFindingsAt(300 * 1024 * 1024)).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining("Low disk space"),
+        target: "300 MB",
+        requirement: "low-free-space",
+      }),
+    ]);
   });
 
-  it("returns critical lines when space is very low (below 100 MB)", () => {
-    const warnings = buildDiskSpaceWarnings({
-      availableBytes: 50 * 1024 * 1024,
-      displayStateDir: "~/.openclaw",
-    });
-    expect(warnings).toHaveLength(3);
-    expect(warnings[0]).toContain("CRITICAL");
-    expect(warnings[0]).toContain("50 MB");
+  it("returns a critical finding when space is very low (below 100 MB)", () => {
+    expect(collectFindingsAt(50 * 1024 * 1024)).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining("CRITICAL"),
+        target: "50 MB",
+        requirement: "critical-free-space",
+      }),
+    ]);
   });
 
   it("returns critical at exactly 0 bytes", () => {
-    const warnings = buildDiskSpaceWarnings({
-      availableBytes: 0,
-      displayStateDir: "~/.openclaw",
-    });
-    expect(warnings).toHaveLength(3);
-    expect(warnings[0]).toContain("CRITICAL");
+    expect(collectFindingsAt(0)).toEqual([
+      expect.objectContaining({ requirement: "critical-free-space" }),
+    ]);
   });
 
   it("returns empty at exactly 500 MB (boundary)", () => {
-    const warnings = buildDiskSpaceWarnings({
-      availableBytes: 500 * 1024 * 1024,
-      displayStateDir: "~/.openclaw",
-    });
-    expect(warnings).toEqual([]);
+    expect(collectFindingsAt(500 * 1024 * 1024)).toEqual([]);
   });
 
   it("returns warning at 499 MB (just below boundary)", () => {
-    const warnings = buildDiskSpaceWarnings({
-      availableBytes: 499 * 1024 * 1024,
-      displayStateDir: "~/.openclaw",
-    });
-    expect(warnings).toHaveLength(2);
-    expect(warnings[0]).toContain("Low disk space");
+    expect(collectFindingsAt(499 * 1024 * 1024)).toEqual([
+      expect.objectContaining({ requirement: "low-free-space" }),
+    ]);
   });
 
   it("returns critical at exactly 99 MB (just below critical)", () => {
-    const warnings = buildDiskSpaceWarnings({
-      availableBytes: 99 * 1024 * 1024,
-      displayStateDir: "~/.openclaw",
-    });
-    expect(warnings).toHaveLength(3);
-    expect(warnings[0]).toContain("CRITICAL");
+    expect(collectFindingsAt(99 * 1024 * 1024)).toEqual([
+      expect.objectContaining({ requirement: "critical-free-space" }),
+    ]);
   });
 });
 

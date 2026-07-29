@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 
-export const GATEWAY_STARTUP_SUBSYSTEMS = [
+const GATEWAY_STARTUP_SUBSYSTEMS = [
   "internal-hooks",
   "internal-startup-hook",
   "gateway-start-hooks",
@@ -13,9 +13,9 @@ export const GATEWAY_STARTUP_SUBSYSTEMS = [
   "gmail-model",
 ] as const;
 
-export type GatewayStartupSubsystem = (typeof GATEWAY_STARTUP_SUBSYSTEMS)[number];
+type GatewayStartupSubsystem = (typeof GATEWAY_STARTUP_SUBSYSTEMS)[number];
 
-export type GatewayStartupSkippedReason =
+type GatewayStartupSkippedReason =
   | "not-configured"
   | "no-handlers-loaded"
   | "disabled-by-environment"
@@ -23,7 +23,7 @@ export type GatewayStartupSkippedReason =
   | "no-gmail-account"
   | "startup-disabled";
 
-export type GatewayStartupOutcome =
+type GatewayStartupOutcome =
   | { subsystem: GatewayStartupSubsystem; status: "loaded" | "scheduled" }
   | { subsystem: GatewayStartupSubsystem; status: "failed"; reason: "see earlier log" }
   | {
@@ -45,7 +45,7 @@ export type GatewayStartupOutcomeRecorder = {
   snapshot: () => GatewayStartupOutcome[];
 };
 
-export type GatewayStartupOutcomeRecorderParams = {
+type GatewayStartupOutcomeRecorderParams = {
   cfg: OpenClawConfig;
   gatewayStartHooks: boolean;
   memoryStartupMode: "off" | "immediate" | "idle";

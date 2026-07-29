@@ -52,7 +52,7 @@ type RemovedSessionArtifactCleanup = {
   }) => Promise<void>;
 };
 
-export type FileBackedSessionStoreMaintenanceParams = {
+type FileBackedSessionStoreMaintenanceParams = {
   storePath: string;
   store: Record<string, SessionEntry>;
   activeSessionKey?: string;
@@ -62,9 +62,10 @@ export type FileBackedSessionStoreMaintenanceParams = {
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   log: SessionMaintenanceLogger;
   artifacts: RemovedSessionArtifactCleanup;
+  commitReducedStore?: () => Promise<void>;
 };
 
-export type FileBackedSessionStoreMaintenanceResult = {
+type FileBackedSessionStoreMaintenanceResult = {
   changedStore: boolean;
 };
 
@@ -91,8 +92,8 @@ function rememberRemovedSessionFile(
   removedSessionFiles: RemovedSessionFiles,
   entry: SessionEntry,
 ): void {
-  if (!removedSessionFiles.has(entry.sessionId) || entry.sessionFile) {
-    removedSessionFiles.set(entry.sessionId, entry.sessionFile);
+  if (!removedSessionFiles.has(entry.sessionId)) {
+    removedSessionFiles.set(entry.sessionId, undefined);
   }
 }
 
@@ -251,6 +252,7 @@ async function applyEnforcedMaintenance(params: {
     maintenance: params.maintenance,
     warnOnly: false,
     log: params.operation.log,
+    commitEvictedIndex: params.operation.commitReducedStore,
   });
   await params.operation.onMaintenanceApplied?.({
     mode: params.maintenance.mode,

@@ -1,22 +1,26 @@
+import path from "node:path";
+import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 // Agent session SDK tests cover default tool wiring, prompt preservation, and
 // session write-lock behavior.
 import { Type } from "typebox";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Context, Model, SimpleStreamOptions } from "../../llm/types.js";
-import {
-  createUserTurnTranscriptRecorder,
-  takeRuntimeUserTurnTranscriptContext,
-} from "../../sessions/user-turn-transcript.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { loadSessionEntry, loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
+import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
+import type { ImageContent, Model, SimpleStreamOptions } from "../../llm/types.js";
+import { readRuntimePromptImageOrder } from "../../media/media-facts.js";
+import { finalizeRuntimePromptImages } from "../../media/runtime-prompt-image-provenance.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
 
 const thinkingMocks = vi.hoisted(() => ({
   resolveThinkingDefaultForModel: vi.fn(() => "medium"),
 }));
 const streamMocks = vi.hoisted(() => ({
-  streamSimple: vi.fn(
-    (_model: Model, _context: Context, _options?: SimpleStreamOptions) => "stream",
-  ),
+  streamSimple: vi.fn(),
 }));
+const sdkSessionTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../../auto-reply/thinking.js", () => ({
   resolveThinkingDefaultForModel: thinkingMocks.resolveThinkingDefaultForModel,
@@ -24,13 +28,16 @@ vi.mock("../../auto-reply/thinking.js", () => ({
 vi.mock("../../llm/stream.js", () => ({
   streamSimple: streamMocks.streamSimple,
 }));
+import { takeRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { AuthStorage } from "./auth-storage.js";
 import { createExtensionRuntime } from "./extensions/loader.js";
 import type { LoadExtensionsResult, ToolDefinition } from "./extensions/types.js";
+import * as publicSessionSdk from "./index.js";
+import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import { createAgentSession } from "./sdk.js";
-import { SessionManager } from "./session-manager.js";
+import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { createSyntheticSourceInfo } from "./source-info.js";
 
@@ -47,13 +54,111 @@ const testModel: Model = {
   maxTokens: 1000,
 };
 
+describe("createAgentSession runtime ownership", () => {
+  it("keeps embedded recovery construction out of the public sessions barrel", () => {
+    expect(publicSessionSdk).not.toHaveProperty("createAgentSessionForEmbeddedRunner");
+  });
+
+  it("binds the installed stream wrapper to the model-registry lifecycle", async () => {
+    const modelRegistry = createTestModelRegistry();
+    const { session } = await createAgentSession({
+      model: testModel,
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry,
+    });
+
+    expect(getStreamLlmRuntime(session.agent.streamFn)).toBe(
+      getModelRegistryRuntime(modelRegistry).llmRuntime,
+    );
+  });
+
+  it("keeps the default SQLite session inside an explicit agent directory", async () => {
+    const root = sdkSessionTempDirs.make("openclaw-sdk-session-");
+    const agentDir = path.join(root, "isolated-agent");
+    const cwd = path.join(root, "explicit-sdk-cwd");
+    const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
+    try {
+      const { session } = await createAgentSession({
+        agentDir,
+        cwd,
+        model: testModel,
+        resourceLoader: createEmptyResourceLoader(),
+        settingsManager: SettingsManager.inMemory(),
+        modelRegistry: createTestModelRegistry(),
+      });
+
+      const target = session.sessionManager.getSessionTarget();
+      if (!target) {
+        throw new Error("Expected the default SDK session to have a transcript target");
+      }
+      expect(target.storePath).toBe(databasePath);
+      expect(loadSessionEntry(target)).toMatchObject({ sessionId: target.sessionId });
+      await expect(loadTranscriptEvents(target)).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "session", id: target.sessionId, cwd }),
+        ]),
+      );
+      session.dispose();
+    } finally {
+      disposeOpenClawAgentDatabaseByPath(databasePath);
+    }
+  });
+});
+
 function createModelWithoutBaseUrl(overrides: Partial<Model>): Model {
   const { baseUrl: _baseUrl, ...model } = { ...testModel, ...overrides };
   return model as unknown as Model;
 }
 
+function createAssistantError(errorMessage: string): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [],
+    api: testModel.api,
+    provider: testModel.provider,
+    model: testModel.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "error",
+    errorMessage,
+    timestamp: 1,
+  };
+}
+
+function createAssistantResultStream(message: AssistantMessage) {
+  const stream = createAssistantMessageEventStream();
+  queueMicrotask(() => {
+    if (message.stopReason === "error" || message.stopReason === "aborted") {
+      stream.push({ type: "error", reason: message.stopReason, error: message });
+    } else {
+      stream.push({ type: "done", reason: message.stopReason, message });
+    }
+    stream.end();
+  });
+  return stream;
+}
+
 function createEmptyResourceLoader(): ResourceLoader {
   return createResourceLoaderWithHandlers(new Map());
+}
+
+function createTestModelRegistry(authStorage = AuthStorage.inMemory()): ModelRegistry {
+  const modelRegistry = ModelRegistry.inMemory(authStorage);
+  for (const api of ["openai-responses", "bedrock-converse-stream"] as const) {
+    modelRegistry.registerProvider(`test-${api}`, {
+      api,
+      streamSimple: streamMocks.streamSimple,
+    });
+  }
+  return modelRegistry;
 }
 
 function createResourceLoaderWithHandlers(
@@ -99,7 +204,7 @@ async function createSessionAndStreamModel(model: Model): Promise<SimpleStreamOp
     resourceLoader: createEmptyResourceLoader(),
     sessionManager: SessionManager.inMemory(),
     settingsManager: SettingsManager.inMemory(),
-    modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    modelRegistry: createTestModelRegistry(),
   });
 
   await session.agent.streamFn?.(
@@ -115,32 +220,50 @@ async function createSessionAndStreamModel(model: Model): Promise<SimpleStreamOp
   return streamMocks.streamSimple.mock.lastCall?.[2] ?? {};
 }
 
-function appendPersistedAssistantMessage(params: {
-  sessionManager: SessionManager;
-  content: unknown;
-  stopReason?: "stop" | "aborted";
-}) {
-  params.sessionManager.appendMessage({
-    role: "assistant",
-    content: params.content,
-    api: "messages",
-    provider: "anthropic",
-    model: "sonnet-4.6",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+function createSessionManagerWithPersistedAssistantMessages(
+  messages: Array<{
+    content: unknown;
+    stopReason?: "stop" | "aborted";
+  }>,
+): SessionManager {
+  const timestamp = new Date().toISOString();
+  return SessionManager.fromEntries([
+    {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: "sdk-persisted-content",
+      timestamp,
+      cwd: process.cwd(),
     },
-    stopReason: params.stopReason ?? "stop",
-    timestamp: Date.now(),
-  } as Parameters<SessionManager["appendMessage"]>[0]);
+    ...messages.map((message, index) => ({
+      type: "message",
+      id: `assistant-${String(index + 1)}`,
+      parentId: index === 0 ? null : `assistant-${String(index)}`,
+      timestamp,
+      message: {
+        role: "assistant",
+        content: message.content,
+        api: "messages",
+        provider: "anthropic",
+        model: "sonnet-4.6",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: message.stopReason ?? "stop",
+        timestamp: Date.now(),
+      },
+    })),
+  ]);
 }
 
 async function createSessionFromManager(sessionManager: SessionManager) {
   const { session } = await createAgentSession({
+    authStorage: AuthStorage.inMemory(),
     model: testModel,
     resourceLoader: createEmptyResourceLoader(),
     sessionManager,
@@ -151,9 +274,9 @@ async function createSessionFromManager(sessionManager: SessionManager) {
 }
 
 async function createSessionWithPersistedAssistantContent(content: unknown) {
-  const sessionManager = SessionManager.inMemory();
-  appendPersistedAssistantMessage({ sessionManager, content });
-  return await createSessionFromManager(sessionManager);
+  return await createSessionFromManager(
+    createSessionManagerWithPersistedAssistantMessages([{ content }]),
+  );
 }
 
 describe("AgentSession getLastAssistantText", () => {
@@ -180,13 +303,10 @@ describe("AgentSession getLastAssistantText", () => {
   });
 
   it("skips aborted malformed content and returns the preceding assistant text", async () => {
-    const sessionManager = SessionManager.inMemory();
-    appendPersistedAssistantMessage({ sessionManager, content: "previous answer" });
-    appendPersistedAssistantMessage({
-      sessionManager,
-      content: null,
-      stopReason: "aborted",
-    });
+    const sessionManager = createSessionManagerWithPersistedAssistantMessages([
+      { content: "previous answer" },
+      { content: null, stopReason: "aborted" },
+    ]);
     const session = await createSessionFromManager(sessionManager);
 
     expect(session.getLastAssistantText()).toBe("previous answer");
@@ -223,6 +343,37 @@ describe("AgentSession queued user turns", () => {
       },
       recorder,
     });
+  });
+
+  it("carries prompt facts non-enumerably on the exact steered message", async () => {
+    const session = await createSessionFromManager(SessionManager.inMemory());
+    const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+    const media = [{ path: "/tmp/a.png", contentType: "image/png" }];
+    const imageOrder = ["inline"] as const;
+    const image: ImageContent = { type: "image", data: "aW1hZ2U=", mimeType: "image/png" };
+    const { images } = finalizeRuntimePromptImages([{ image, factIndex: 0 }]);
+
+    await session.steer("[media attached: /tmp/a.png (image/png)]", images, undefined, media, [
+      ...imageOrder,
+    ]);
+
+    const runtimeMessage = steer.mock.calls[0]?.[0];
+    expect(runtimeMessage).toBeDefined();
+    const mediaSymbol = Object.getOwnPropertySymbols(runtimeMessage ?? {}).find(
+      (symbol) => Symbol.keyFor(symbol) === "openclaw.runtimePromptMediaFacts",
+    );
+    expect(mediaSymbol).toBeDefined();
+    if (!runtimeMessage || !mediaSymbol) {
+      throw new Error("expected runtime prompt media message and symbol");
+    }
+    expect((runtimeMessage as unknown as Record<PropertyKey, unknown>)[mediaSymbol]).toEqual([
+      expect.objectContaining({ path: "/tmp/a.png", contentType: "image/png", kind: "image" }),
+    ]);
+    expect(readRuntimePromptImageOrder(runtimeMessage)).toEqual(imageOrder);
+    expect((runtimeMessage as unknown as Record<string, unknown>)["__openclaw"]).toEqual({
+      mediaImageBlockFactIndexes: [0],
+    });
+    expect(JSON.stringify(runtimeMessage)).not.toContain("runtimePromptMediaFacts");
   });
 });
 
@@ -690,5 +841,98 @@ describe("createAgentSession thinking level defaults", () => {
     });
 
     expect(session.thinkingLevel).toBe("off");
+  });
+});
+
+describe("AgentSession retry behavior", () => {
+  async function createRetrySession(retry?: { baseDelayMs: number; maxRetries: number }) {
+    const authStorage = AuthStorage.inMemory();
+    authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
+    return await createAgentSession({
+      model: testModel,
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory({
+        retry: retry ?? { baseDelayMs: 0, maxRetries: 1 },
+      }),
+      modelRegistry: createTestModelRegistry(authStorage),
+    });
+  }
+
+  it("stops permanent errors and retries transient HTTP errors in a session", async () => {
+    streamMocks.streamSimple.mockReset();
+    const permanentEvents: string[] = [];
+    streamMocks.streamSimple.mockImplementation(() =>
+      createAssistantResultStream(createAssistantError("model model-x-500-preview not found")),
+    );
+    const { session: permanentSession } = await createRetrySession();
+    permanentSession.subscribe((event) => permanentEvents.push(event.type));
+
+    await permanentSession.prompt("test permanent error");
+
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    expect(permanentEvents).not.toContain("auto_retry_start");
+
+    const transientEvents: string[] = [];
+    streamMocks.streamSimple.mockReset();
+    streamMocks.streamSimple
+      .mockImplementationOnce(() =>
+        createAssistantResultStream(createAssistantError("HTTP 503 temporary provider response")),
+      )
+      .mockImplementationOnce(() =>
+        createAssistantResultStream({
+          ...createAssistantError(""),
+          content: [{ type: "text", text: "recovered" }],
+          stopReason: "stop",
+          errorMessage: undefined,
+        }),
+      );
+    const { session: transientSession } = await createRetrySession();
+    transientSession.subscribe((event) => transientEvents.push(event.type));
+
+    await transientSession.prompt("test transient error");
+
+    expect(streamMocks.streamSimple.mock.calls.length).toBeGreaterThan(1);
+    expect(transientEvents).toContain("auto_retry_start");
+    expect(transientEvents).toContain("auto_retry_end");
+  });
+
+  it("uses a short server Retry-After as the auto-retry delay floor", async () => {
+    vi.useFakeTimers();
+    try {
+      streamMocks.streamSimple.mockReset();
+      streamMocks.streamSimple
+        .mockImplementationOnce(() =>
+          createAssistantResultStream(
+            createAssistantError("HTTP 429: rate limited; Retry-After: 30 seconds"),
+          ),
+        )
+        .mockImplementationOnce(() =>
+          createAssistantResultStream({
+            ...createAssistantError(""),
+            content: [{ type: "text", text: "recovered" }],
+            stopReason: "stop",
+            errorMessage: undefined,
+          }),
+        );
+      const { session } = await createRetrySession({ baseDelayMs: 2_000, maxRetries: 1 });
+      const retryDelays: number[] = [];
+      session.subscribe((event) => {
+        if (event.type === "auto_retry_start") {
+          retryDelays.push(event.delayMs);
+        }
+      });
+
+      const promptPromise = session.prompt("test Retry-After");
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(retryDelays).toEqual([30_000]);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await promptPromise;
+      expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

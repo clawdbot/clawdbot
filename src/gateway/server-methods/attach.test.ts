@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetAttachGrantsForTest, resolveAttachGrant } from "../mcp-grant-store.js";
+import { resolveAttachGrant } from "../mcp-grant-store.js";
 import { closeMcpLoopbackServer } from "../mcp-http.js";
 import { attachHandlers } from "./attach.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -27,12 +27,10 @@ const grantOpts = (sessionKey: string, respond: ReturnType<typeof vi.fn>) =>
 
 describe("attach gateway methods", () => {
   beforeEach(() => {
-    resetAttachGrantsForTest();
     loadSessionEntryMock.mockReset();
     loadSessionEntryMock.mockReturnValue({ entry: undefined });
   });
   afterEach(async () => {
-    resetAttachGrantsForTest();
     // attach.grant lazily starts the loopback singleton; close it so it doesn't leak across files.
     await closeMcpLoopbackServer();
   });

@@ -3,7 +3,6 @@ import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CliCommandCatalogEntry, CliCommandPathPolicy } from "./command-catalog.js";
 import {
-  resolveCliCatalogCommandPath,
   resolveCliCommandPathPolicy,
   resolveCliNetworkProxyPolicy,
 } from "./command-path-policy.js";
@@ -170,6 +169,15 @@ describe("command-path-policy", () => {
       }),
     ).toBe("default");
 
+    expectResolvedPolicy(["agent", "exec"], {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+      pluginRegistry: { scope: "all" },
+      ownsProtocolStdout: true,
+      hideBanner: true,
+      networkProxy: "default",
+    });
+
     for (const commandPath of [
       ["agents"],
       ["agents", "list"],
@@ -187,6 +195,18 @@ describe("command-path-policy", () => {
   });
 
   it("resolves mixed startup-only rules", () => {
+    expectResolvedPolicy(["qa", "suite"], {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    });
+    expectResolvedPolicy(["worker"], {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+      hideBanner: true,
+      ownsProtocolStdout: true,
+      networkProxy: "bypass",
+    });
     expectResolvedPolicy(["configure"], {
       bypassConfigGuard: true,
       loadPlugins: "never",
@@ -196,20 +216,51 @@ describe("command-path-policy", () => {
       loadPlugins: "never",
       networkProxy: "bypass",
     });
+    expectResolvedPolicy(["config", "file"], {
+      bypassConfigGuard: true,
+      ensureCliPath: false,
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    });
     expectResolvedPolicy(["config", "set"], {
       loadPlugins: "never",
       networkProxy: "bypass",
     });
-    expectResolvedPolicy(["doctor"], {
+    const doctorPolicy = resolveCliCommandPathPolicy(["doctor"]);
+    expectNetworkProxyResolver(doctorPolicy);
+    expect(doctorPolicy).toMatchObject({
       bypassConfigGuard: true,
       loadPlugins: "never",
     });
+    expect(
+      doctorPolicy.networkProxy({
+        argv: ["node", "openclaw", "doctor"],
+        commandPath: ["doctor"],
+      }),
+    ).toBe("default");
+    expect(
+      doctorPolicy.networkProxy({
+        argv: ["node", "openclaw", "doctor", "--state-sqlite=compact"],
+        commandPath: ["doctor"],
+      }),
+    ).toBe("bypass");
     expectResolvedPolicy(["config", "validate"], {
       bypassConfigGuard: true,
       loadPlugins: "never",
       networkProxy: "bypass",
     });
+    expectResolvedPolicy(["config", "schema"], {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+      ownsProtocolStdout: true,
+      networkProxy: "bypass",
+    });
     expectResolvedPolicy(["gateway", "status"], {
+      routeConfigGuard: "always",
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    });
+    expectResolvedPolicy(["gateway", "health"], {
       routeConfigGuard: "always",
       loadPlugins: "never",
       networkProxy: "bypass",
@@ -242,6 +293,16 @@ describe("command-path-policy", () => {
     }
     expectResolvedPolicy(["cron", "list"], {
       bypassConfigGuard: true,
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    });
+  });
+
+  it("keeps routed and Commander config reads ahead of observing startup guards", () => {
+    expectResolvedPolicy(["config", "get"], {
+      bypassConfigGuard: true,
+      routeConfigGuard: "always",
+      ensureCliPath: false,
       loadPlugins: "never",
       networkProxy: "bypass",
     });
@@ -291,6 +352,12 @@ describe("command-path-policy", () => {
     );
   });
 
+  it("routes ClawHub skill verification through the network proxy", () => {
+    expect(
+      resolveCliNetworkProxyPolicy(["node", "openclaw", "skills", "verify", "@demo-owner/weather"]),
+    ).toBe("default");
+  });
+
   it("uses the longest catalog command path for deep network proxy overrides", async () => {
     const catalog: readonly CliCommandCatalogEntry[] = [
       { commandPath: ["nodes"], policy: { networkProxy: "bypass" } },
@@ -305,17 +372,12 @@ describe("command-path-policy", () => {
       const actual = await importOriginal<typeof import("./command-catalog.js")>();
       return { ...actual, cliCommandCatalog: catalog };
     });
-    const {
-      resolveCliCatalogCommandPath: resolveCliCatalogCommandPathLocal,
-      resolveCliNetworkProxyPolicy: resolveCliNetworkProxyPolicyLocal,
-    } = await importFreshModule<typeof import("./command-path-policy.js")>(
-      import.meta.url,
-      "./command-path-policy.js?catalog-overrides",
-    );
+    const { resolveCliNetworkProxyPolicy: resolveCliNetworkProxyPolicyLocal } =
+      await importFreshModule<typeof import("./command-path-policy.js")>(
+        import.meta.url,
+        "./command-path-policy.js?catalog-overrides",
+      );
 
-    expect(
-      resolveCliCatalogCommandPathLocal(["node", "openclaw", "nodes", "camera", "snap"]),
-    ).toEqual(["nodes", "camera", "snap"]);
     expect(resolveCliNetworkProxyPolicyLocal(["node", "openclaw", "nodes", "camera", "snap"])).toBe(
       "default",
     );
@@ -324,26 +386,24 @@ describe("command-path-policy", () => {
     );
   });
 
-  it("stops catalog command path resolution before positional arguments", () => {
+  it("stops catalog policy resolution before positional arguments", () => {
     expect(
-      resolveCliCatalogCommandPath(["node", "openclaw", "config", "get", "proxy.enabled"]),
-    ).toEqual(["config", "get"]);
+      resolveCliNetworkProxyPolicy(["node", "openclaw", "config", "get", "proxy.enabled"]),
+    ).toBe("bypass");
     expect(
-      resolveCliCatalogCommandPath(["node", "openclaw", "message", "send", "--to", "demo"]),
-    ).toEqual(["message"]);
+      resolveCliNetworkProxyPolicy(["node", "openclaw", "message", "send", "--to", "demo"]),
+    ).toBe("default");
   });
 
   it("treats bare gateway invocations with options as the gateway runtime", () => {
     const argv = ["node", "openclaw", "gateway", "--port", "1234"];
 
-    expect(resolveCliCatalogCommandPath(argv)).toEqual(["gateway"]);
     expect(resolveCliNetworkProxyPolicy(argv)).toBe("default");
   });
 
   it("resolves gateway runs after root options with values", () => {
     const argv = ["node", "openclaw", "--log-level", "debug", "gateway", "run"];
 
-    expect(resolveCliCatalogCommandPath(argv)).toEqual(["gateway"]);
     expect(resolveCliNetworkProxyPolicy(argv)).toBe("default");
   });
 
@@ -355,19 +415,14 @@ describe("command-path-policy", () => {
       ["node", "openclaw", "gateway", "--password-file", "status"],
       ["node", "openclaw", "gateway", "--ws-log", "compact"],
     ]) {
-      expect(resolveCliCatalogCommandPath(argv), argv.join(" ")).toEqual(["gateway"]);
       expect(resolveCliNetworkProxyPolicy(argv), argv.join(" ")).toBe("default");
     }
   });
 
   it("still resolves real gateway bypass subcommands after their command token", () => {
-    expect(resolveCliCatalogCommandPath(["node", "openclaw", "gateway", "status"])).toEqual([
-      "gateway",
-      "status",
-    ]);
-    expect(
-      resolveCliCatalogCommandPath(["node", "openclaw", "gateway", "status", "--token", "secret"]),
-    ).toEqual(["gateway", "status"]);
     expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "gateway", "status"])).toBe("bypass");
+    expect(
+      resolveCliNetworkProxyPolicy(["node", "openclaw", "gateway", "status", "--token", "secret"]),
+    ).toBe("bypass");
   });
 });

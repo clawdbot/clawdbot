@@ -126,6 +126,7 @@ export function shouldUseEnvHttpProxyForUrl(
  * (`undici/lib/dispatcher/env-http-proxy-agent.js`):
  * - Entries separated by commas OR whitespace (undici splits on `/[,\s]/`)
  * - Case-insensitive
+ * - Lower-case `no_proxy` shadows upper-case `NO_PROXY`, including blank values
  * - Empty or missing → no bypass
  * - Bare `*` value → bypass everything
  * - Exact hostname match
@@ -147,7 +148,7 @@ export function shouldUseEnvHttpProxyForUrl(
  * SSRF bypass.
  */
 export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  const raw = normalizeProxyEnvValue(env.no_proxy) ?? normalizeProxyEnvValue(env.NO_PROXY);
+  const raw = env.no_proxy ?? env.NO_PROXY ?? "";
   if (!raw) {
     return false;
   }

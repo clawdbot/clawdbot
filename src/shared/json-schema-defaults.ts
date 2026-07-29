@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // JSON schema default helpers fill object values from TypeBox schema defaults.
 import { Compile } from "typebox/compile";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { JsonSchemaObject } from "./json-schema.types.js";
 
 type JsonSchemaValue = JsonSchemaObject | boolean;
@@ -926,6 +927,9 @@ function applyObjectPropertyDefaults(
 ): Record<string, unknown> {
   const properties = isRecord(schema.properties) ? schema.properties : {};
   for (const [key, propertySchema] of Object.entries(properties)) {
+    if (isBlockedObjectKey(key)) {
+      continue;
+    }
     const currentValue = value[key];
     const defaultedValue = applySchemaDefaults(
       propertySchema as JsonSchemaValue,
@@ -951,7 +955,7 @@ function applyObjectPropertyDefaults(
         continue;
       }
       for (const key of Object.keys(value)) {
-        if (!regex.test(key)) {
+        if (isBlockedObjectKey(key) || !regex.test(key)) {
           continue;
         }
         patternMatchedKeys.add(key);
@@ -969,7 +973,11 @@ function applyObjectPropertyDefaults(
   if (isRecord(schema.additionalProperties)) {
     const additionalSchema = schema.additionalProperties as JsonSchemaValue;
     for (const key of Object.keys(value)) {
-      if (Object.hasOwn(properties, key) || patternMatchedKeys.has(key)) {
+      if (
+        isBlockedObjectKey(key) ||
+        Object.hasOwn(properties, key) ||
+        patternMatchedKeys.has(key)
+      ) {
         continue;
       }
       value[key] = applySchemaDefaults(
@@ -1317,3 +1325,4 @@ function applySchemaDefaults(
 export function applyJsonSchemaDefaults<T>(schema: JsonSchemaValue, value: T): T {
   return applySchemaDefaults(schema, value) as T;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

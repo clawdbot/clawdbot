@@ -44,16 +44,21 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -68,7 +73,7 @@ internal fun CommandPalette(
   onOpenSessions: () -> Unit,
   onOpenProviders: () -> Unit,
   onOpenSettings: () -> Unit,
-  onOpenSession: (String) -> Unit,
+  onOpenSession: (String, String?) -> Unit,
 ) {
   val isConnected by viewModel.isConnected.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
@@ -76,12 +81,18 @@ internal fun CommandPalette(
   val providers by viewModel.modelAuthProviders.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   var query by rememberSaveable { mutableStateOf("") }
+  val searchFocusRequester = remember { FocusRequester() }
+  val keyboardController = LocalSoftwareKeyboardController.current
+  LaunchedEffect(searchFocusRequester) {
+    searchFocusRequester.requestFocus()
+    keyboardController?.show()
+  }
   val normalizedQuery = query.trim()
   val quickActions =
     listOf(
       CommandItem(CommandAction.Chat, nativeText("Open Chat"), nativeText("Start or continue a conversation"), Icons.Outlined.ChatBubbleOutline, onOpenChat),
       CommandItem(CommandAction.Voice, nativeText("Start Voice"), nativeText("Talk or dictate with OpenClaw"), Icons.Outlined.MicNone, onOpenVoice),
-      CommandItem(CommandAction.Sessions, nativeText("Browse Sessions"), nativeText("Find previous conversations"), Icons.Outlined.AccessTime, onOpenSessions),
+      CommandItem(CommandAction.Sessions, nativeText("Browse Threads"), nativeText("Find previous conversations"), Icons.Outlined.AccessTime, onOpenSessions),
       CommandItem(CommandAction.Providers, nativeText("Providers & Models"), verbatimText(providerCommandSubtitle(isConnected, providers, models)), Icons.Outlined.Inventory2, onOpenProviders),
       CommandItem(CommandAction.Settings, nativeText("Settings"), nativeText("Gateway, voice, notifications, privacy"), Icons.Outlined.Settings, onOpenSettings),
     )
@@ -108,12 +119,22 @@ internal fun CommandPalette(
               onClick = onDismiss,
             )
             Text(text = nativeString("Search"), style = ClawTheme.type.title, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
-            CommandAvatar(text = "OC")
+            Box(
+              modifier = Modifier.size(ClawTheme.spacing.touchTarget),
+              contentAlignment = Alignment.Center,
+            ) {
+              CommandAvatar(text = "OC")
+            }
           }
         }
 
         item {
-          ClawTextField(value = query, onValueChange = { query = it }, placeholder = nativeString("Search OpenClaw"))
+          ClawTextField(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = nativeString("Search OpenClaw"),
+            modifier = Modifier.focusRequester(searchFocusRequester),
+          )
         }
 
         item {
@@ -122,7 +143,7 @@ internal fun CommandPalette(
 
         if (actionRows.isEmpty()) {
           item {
-            ClawEmptyState(title = nativeString("No actions found"), body = nativeString("Try Chat, Voice, Sessions, Providers, or Settings."))
+            ClawEmptyState(title = nativeString("No actions found"), body = nativeString("Try Chat, Voice, Threads, Providers, or Settings."))
           }
         } else {
           item {
@@ -131,14 +152,14 @@ internal fun CommandPalette(
         }
 
         item {
-          CommandSectionLabel(title = nativeString("Sessions"))
+          CommandSectionLabel(title = nativeString("Threads"))
         }
 
         if (sessionRows.isEmpty()) {
           item {
             ClawPanel {
               Text(
-                text = if (isConnected) nativeString("No matching sessions yet.") else nativeString("Connect the Gateway to search sessions."),
+                text = if (isConnected) nativeString("No matching threads yet.") else nativeString("Connect the Gateway to search threads."),
                 style = ClawTheme.type.body,
                 color = ClawTheme.colors.textMuted,
               )
@@ -151,8 +172,9 @@ internal fun CommandPalette(
                 sessionRows.map { session ->
                   CommandSessionRow(
                     key = session.key,
+                    ownerAgentId = session.ownerAgentId,
                     title = commandSessionTitle(session.displayName),
-                    subtitle = if (pendingRunCount > 0) nativeString("Assistant working") else nativeString("OpenClaw session"),
+                    subtitle = if (pendingRunCount > 0) nativeString("Assistant working") else nativeString("OpenClaw thread"),
                     metadata = session.updatedAtMs?.let(::commandRelativeTime) ?: nativeString("now"),
                   )
                 },
@@ -209,6 +231,7 @@ internal fun commandActionAccessibilityDescription(
 
 private data class CommandSessionRow(
   val key: String,
+  val ownerAgentId: String?,
   val title: String,
   val subtitle: String,
   val metadata: String,
@@ -252,11 +275,11 @@ private fun CommandActionRow(row: CommandItem) {
 @Composable
 private fun CommandSessionList(
   rows: List<CommandSessionRow>,
-  onOpen: (String) -> Unit,
+  onOpen: (String, String?) -> Unit,
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
     ClawSeparatedColumn(items = rows) { row ->
-      CommandSessionListRow(row = row, onClick = { onOpen(row.key) })
+      CommandSessionListRow(row = row, onClick = { onOpen(row.key, row.ownerAgentId) })
     }
   }
 }
@@ -284,7 +307,7 @@ private fun CommandSessionListRow(
         Text(text = row.subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
       Text(text = row.metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      CommandRowChevron(contentDescription = nativeString("Open session"))
+      CommandRowChevron(contentDescription = nativeString("Open thread"))
     }
   }
 }
@@ -351,7 +374,7 @@ internal fun providerCommandSubtitle(
 }
 
 /** Falls back to the canonical main-session label when gateway display names are blank. */
-private fun commandSessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: nativeString("Main session")
+private fun commandSessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: nativeString("Main thread")
 
 /** Formats command-palette session timestamps for compact rows. */
 internal fun commandRelativeTime(

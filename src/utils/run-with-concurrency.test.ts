@@ -4,10 +4,6 @@ import { runTasksWithConcurrency } from "./run-with-concurrency.js";
 
 describe("runTasksWithConcurrency", () => {
   it("preserves task order with bounded worker count", async () => {
-    const flushMicrotasks = async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    };
     let running = 0;
     let peak = 0;
     const resolvers: Array<(() => void) | undefined> = [];
@@ -22,7 +18,10 @@ describe("runTasksWithConcurrency", () => {
     });
 
     const resultPromise = runTasksWithConcurrency({ tasks, limit: 2 });
-    const takeResolver = (index: number): (() => void) => {
+    const takeResolver = async (index: number): Promise<() => void> => {
+      await vi.waitFor(() => {
+        expect(resolvers[index]).toBeTypeOf("function");
+      });
       const resolver = resolvers[index];
       if (!resolver) {
         throw new Error(`expected task ${index} to be running`);
@@ -30,17 +29,14 @@ describe("runTasksWithConcurrency", () => {
       return resolver;
     };
 
-    await flushMicrotasks();
-    const resolveFirst = takeResolver(0);
-    const resolveSecond = takeResolver(1);
+    const resolveFirst = await takeResolver(0);
+    const resolveSecond = await takeResolver(1);
 
     resolveSecond();
-    await flushMicrotasks();
-    const resolveThird = takeResolver(2);
+    const resolveThird = await takeResolver(2);
 
     resolveFirst();
-    await flushMicrotasks();
-    const resolveFourth = takeResolver(3);
+    const resolveFourth = await takeResolver(3);
 
     resolveThird();
     resolveFourth();

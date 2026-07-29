@@ -245,10 +245,9 @@ export async function runManagerTurn(params: {
           params.activeTurnBySession.set(actorKey, activeTurn);
           activeTurnStarted = true;
 
-          const combinedSignal =
-            input.signal && typeof AbortSignal.any === "function"
-              ? AbortSignal.any([input.signal, internalAbortController.signal])
-              : internalAbortController.signal;
+          const combinedSignal = input.signal
+            ? AbortSignal.any([input.signal, internalAbortController.signal])
+            : internalAbortController.signal;
           const eventGate = { open: true };
           await input.onLifecycle?.({
             type: "prompt_submitted",

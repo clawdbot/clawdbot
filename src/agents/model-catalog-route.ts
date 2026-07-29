@@ -9,12 +9,12 @@ import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-t
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 
-export type ModelCatalogRouteMatcher = (
+type ModelCatalogRouteMatcher = (
   entry: ModelCatalogEntry,
   route: ProviderModelRouteCandidate,
 ) => boolean;
 
-export type ModelCatalogLogicalIdentity = { id: string; key: string };
+type ModelCatalogLogicalIdentity = { id: string; key: string };
 
 /** Provider-owned catalog equivalence and exact physical-route matching. */
 export type ModelCatalogRoutePolicy = {
@@ -33,7 +33,7 @@ export type ModelCatalogRouteProjection =
       policy: ModelCatalogRoutePolicy;
     };
 
-export type ModelCatalogLogicalOverrides = Partial<
+type ModelCatalogLogicalOverrides = Partial<
   Pick<ModelCatalogEntry, "name" | "contextWindow" | "contextTokens" | "reasoning" | "input">
 >;
 
@@ -86,12 +86,24 @@ function sameLogicalModel(
   return policy.resolveIdentity(a)?.key === identity.key;
 }
 
-function logicalIdentity(entry: ModelCatalogEntry, id: string, name?: string): ModelCatalogEntry {
+function logicalIdentity(
+  entry: ModelCatalogEntry,
+  id: string,
+  name?: string,
+  lifecycleEntry: ModelCatalogEntry = entry,
+): ModelCatalogEntry {
   return {
     id,
     name: name ?? id,
     provider: entry.provider,
     ...(entry.alias ? { alias: entry.alias } : {}),
+    ...(lifecycleEntry.providerOrder !== undefined
+      ? { providerOrder: lifecycleEntry.providerOrder }
+      : {}),
+    ...(lifecycleEntry.status ? { status: lifecycleEntry.status } : {}),
+    ...(lifecycleEntry.statusReason ? { statusReason: lifecycleEntry.statusReason } : {}),
+    ...(lifecycleEntry.replaces ? { replaces: lifecycleEntry.replaces } : {}),
+    ...(lifecycleEntry.replacedBy ? { replacedBy: lifecycleEntry.replacedBy } : {}),
   };
 }
 
@@ -158,7 +170,12 @@ export function projectModelCatalogEntryForRoute(params: {
     policy,
     catalog: params.catalog,
   });
-  const projected = logicalIdentity(params.entry, identity.id, donor?.name ?? params.entry.name);
+  const projected = logicalIdentity(
+    params.entry,
+    identity.id,
+    donor?.name ?? params.entry.name,
+    donor ?? params.entry,
+  );
   return applyLogicalOverrides(
     {
       ...projected,

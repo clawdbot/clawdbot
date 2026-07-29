@@ -46,8 +46,6 @@ import {
 } from "./system-profiles.js";
 import { movePathToTrash } from "./trash.js";
 
-export type { ImportSystemProfileParams, ImportSystemProfileResult, SystemProfileInfo };
-
 /** Input accepted when creating a browser profile. */
 type CreateProfileParams = {
   name: string;

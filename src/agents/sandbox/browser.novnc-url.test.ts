@@ -6,14 +6,12 @@ import {
   consumeNoVncObserverToken,
   generateNoVncPassword,
   issueNoVncObserverToken,
-  resetNoVncObserverTokensForTests,
 } from "./novnc-auth.js";
 
 describe("noVNC auth helpers", () => {
   it("issues one-time short-lived observer tokens", () => {
     // Observer tokens are bearer access to a browser session, so consumption is
     // one-shot and bounded by a short TTL.
-    resetNoVncObserverTokensForTests();
     const token = issueNoVncObserverToken({
       noVncPort: 50123,
       password: "abcd1234", // pragma: allowlist secret
@@ -31,7 +29,6 @@ describe("noVNC auth helpers", () => {
   });
 
   it("expires observer tokens", () => {
-    resetNoVncObserverTokensForTests();
     const token = issueNoVncObserverToken({
       noVncPort: 50123,
       password: "abcd1234", // pragma: allowlist secret
@@ -42,7 +39,6 @@ describe("noVNC auth helpers", () => {
   });
 
   it("uses the default ttl when observer token ttlMs is non-finite", () => {
-    resetNoVncObserverTokensForTests();
     const liveToken = issueNoVncObserverToken({
       noVncPort: 50123,
       password: "abcd1234", // pragma: allowlist secret
@@ -64,7 +60,6 @@ describe("noVNC auth helpers", () => {
   });
 
   it("uses the default ttl when observer token ttlMs is unsafe or too large", () => {
-    resetNoVncObserverTokensForTests();
     const unsafeToken = issueNoVncObserverToken({
       noVncPort: 50123,
       password: "abcd1234", // pragma: allowlist secret
@@ -83,7 +78,6 @@ describe("noVNC auth helpers", () => {
   });
 
   it("does not issue usable observer tokens when the issue time is invalid", () => {
-    resetNoVncObserverTokensForTests();
     const token = issueNoVncObserverToken({
       noVncPort: 50123,
       password: "abcd1234", // pragma: allowlist secret

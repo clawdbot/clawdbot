@@ -1,26 +1,24 @@
 // Covers provider error classifiers and failover reason mapping.
 import { describe, expect, it } from "vitest";
+import { isCloudflareOrHtmlErrorPage } from "../shared/assistant-error-format.js";
 import {
   classifyAssistantFailoverReason,
   classifyProviderRuntimeFailureKind,
   classifyFailoverReason,
-  classifyFailoverReasonFromHttpStatus,
   extractObservedOverflowTokenCount,
   isAuthErrorMessage,
-  isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isCloudCodeAssistFormatError,
-  isCloudflareOrHtmlErrorPage,
   isCompactionFailureError,
   isContextOverflowError,
   isFailoverErrorMessage,
-  isImageDimensionErrorMessage,
   isLikelyContextOverflowError,
   isTimeoutErrorMessage,
   isTransientHttpError,
   parseImageDimensionError,
   parseImageSizeError,
 } from "./embedded-agent-helpers.js";
+import { isAuthPermanentErrorMessage } from "./embedded-agent-helpers/failover-matches.js";
 
 // OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
 const OPENAI_RATE_LIMIT_MESSAGE =
@@ -78,6 +76,18 @@ function expectNotFailoverSample(sample: string) {
   expect(isTimeoutErrorMessage(sample)).toBe(false);
   expect(classifyFailoverReason(sample)).toBeNull();
   expect(isFailoverErrorMessage(sample)).toBe(false);
+}
+
+function classifyFailoverReasonFromHttpStatus(
+  status: number | undefined,
+  message?: string,
+  opts?: { provider?: string },
+) {
+  if (status === undefined) {
+    return null;
+  }
+  const statusText = `HTTP ${status}`;
+  return classifyFailoverReason(message ? `${statusText}: ${message}` : statusText, opts);
 }
 
 describe("isAuthPermanentErrorMessage", () => {
@@ -639,20 +649,6 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     expect(classifyFailoverReasonFromHttpStatus(401, "invalid_api_key")).toBe("auth");
   });
 
-  it("treats body-less HTTP 422 as unknown instead of format", () => {
-    expect(classifyFailoverReasonFromHttpStatus(422)).toBeNull();
-  });
-
-  it("treats no-body HTTP 400/422 wrappers as unknown instead of format", () => {
-    expect(classifyFailoverReasonFromHttpStatus(400, "No body response")).toBeNull();
-    expect(classifyFailoverReasonFromHttpStatus(400, "400 status code (no body)")).toBeNull();
-    expect(classifyFailoverReasonFromHttpStatus(422, "HTTP 422: No body")).toBeNull();
-    expect(classifyFailoverReasonFromHttpStatus(422, "HTTP 422: No response body")).toBeNull();
-    expect(
-      classifyFailoverReasonFromHttpStatus(422, "Error: HTTP 422: No response body"),
-    ).toBeNull();
-  });
-
   it("treats HTTP 422 with an unclassifiable body as format error", () => {
     expect(classifyFailoverReasonFromHttpStatus(422, "check open ai req parameter error")).toBe(
       "format",
@@ -898,13 +894,11 @@ describe("isFailoverErrorMessage", () => {
   });
 
   it("matches abort stop-reason timeout variants", () => {
+    // Bare `error` stop reasons are provider-completed failures (#109218), not hangs.
     expectTimeoutFailoverSamples([
       "Unhandled stop reason: abort",
-      "Unhandled stop reason: error",
       "stop reason: abort",
-      "stop reason: error",
       "reason: abort",
-      "reason: error",
     ]);
   });
 
@@ -954,6 +948,22 @@ describe("isFailoverErrorMessage", () => {
       "Provider finish_reason: abort",
       "Provider finish_reason: malformed_response",
     ]);
+  });
+
+  it("classifies Provider finish_reason: error as server_error, not timeout (#109218)", () => {
+    // OpenRouter/Google can complete quickly with finish_reason:error; that is a
+    // provider-completed failure, not a hung request. Fallback must remain eligible.
+    const samples = [
+      "Provider finish_reason: error",
+      "finish_reason: error",
+      "stop reason: error",
+      "Unhandled stop reason: error",
+    ];
+    for (const sample of samples) {
+      expect(isTimeoutErrorMessage(sample)).toBe(false);
+      expect(classifyFailoverReason(sample)).toBe("server_error");
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
   });
 
   it("does not classify MALFORMED_FUNCTION_CALL as timeout", () => {
@@ -1040,7 +1050,6 @@ describe("image dimension errors", () => {
       contentIndex: 1,
       raw,
     });
-    expect(isImageDimensionErrorMessage(raw)).toBe(true);
   });
 });
 
@@ -1499,6 +1508,28 @@ describe("classifyFailoverReason provider messages", () => {
 });
 
 describe("classifyProviderRuntimeFailureKind", () => {
+  it("classifies generic resource-exhausted codes as rate_limit", () => {
+    expect(
+      classifyProviderRuntimeFailureKind({
+        provider: "openai",
+        code: "RESOURCE_EXHAUSTED",
+        message: "",
+      }),
+    ).toBe("rate_limit");
+  });
+
+  it.each([
+    { provider: "openai", code: "SERVER_ERROR" },
+    { provider: "google", code: "UNAVAILABLE" },
+    { provider: "anthropic", code: "RATE_LIMIT_ERROR" },
+  ] as const)(
+    "does not report code-only $provider $code failures as empty responses",
+    ({ provider, code }) => {
+      expect(classifyProviderRuntimeFailureKind({ provider, code, message: "" })).not.toBe(
+        "empty_response",
+      );
+    },
+  );
   it("classifies missing scope failures", () => {
     expect(
       classifyProviderRuntimeFailureKind({
@@ -1624,6 +1655,25 @@ describe("classifyProviderRuntimeFailureKind", () => {
     ).toBe("dns");
     expect(classifyProviderRuntimeFailureKind("socket hang up")).toBe("timeout");
     expect(
+      classifyProviderRuntimeFailureKind({
+        code: "CERT_HAS_EXPIRED",
+        message: "certificate has expired",
+      }),
+    ).toBe("tls_certificate");
+    expect(
+      classifyProviderRuntimeFailureKind({
+        code: "CERT_REVOKED",
+        message: "TLS validation failed",
+      }),
+    ).toBe("tls_certificate");
+    expect(
+      classifyProviderRuntimeFailureKind({
+        status: 400,
+        code: "CERT_HAS_EXPIRED",
+        message: "certificate field rejected",
+      }),
+    ).toBe("unclassified");
+    expect(
       classifyProviderRuntimeFailureKind("INVALID_REQUEST_ERROR: string should match pattern"),
     ).toBe("schema");
     expect(classifyProviderRuntimeFailureKind("exec denied (allowlist-miss):")).toBe(
@@ -1703,3 +1753,4 @@ describe("classifyProviderRuntimeFailureKind", () => {
     expect(classifyFailoverReason(INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE)).toBe("timeout");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

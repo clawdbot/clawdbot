@@ -13,6 +13,7 @@ import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { tryReadJson } from "../infra/json-files.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { readRegularFile } from "../infra/regular-file.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import { resolveUserPath } from "../utils.js";
@@ -23,6 +24,7 @@ import { installPluginFromPath, type InstallPluginResult } from "./install.js";
 const DEFAULT_GIT_TIMEOUT_MS = 120_000;
 const DEFAULT_MARKETPLACE_DOWNLOAD_TIMEOUT_MS = 120_000;
 const MAX_MARKETPLACE_ARCHIVE_BYTES = 256 * 1024 * 1024;
+const MAX_MARKETPLACE_MANIFEST_BYTES = 16 * 1024 * 1024;
 const MARKETPLACE_MANIFEST_CANDIDATES = [
   path.join(".claude-plugin", "marketplace.json"),
   "marketplace.json",
@@ -46,14 +48,14 @@ type MarketplaceEntrySource =
   | { kind: "git-subdir"; url: string; path: string; ref?: string }
   | { kind: "url"; url: string };
 
-export type MarketplacePluginEntry = {
+type MarketplacePluginEntry = {
   name: string;
   version?: string;
   description?: string;
   source: MarketplaceEntrySource;
 };
 
-export type MarketplaceManifest = {
+type MarketplaceManifest = {
   name?: string;
   version?: string;
   plugins: MarketplacePluginEntry[];
@@ -80,7 +82,7 @@ type KnownMarketplaceRecord = {
   source?: unknown;
 };
 
-export type MarketplacePluginListResult =
+type MarketplacePluginListResult =
   | {
       ok: true;
       manifest: MarketplaceManifest;
@@ -91,7 +93,7 @@ export type MarketplacePluginListResult =
       error: string;
     };
 
-export type MarketplaceInstallResult =
+type MarketplaceInstallResult =
   | ({
       ok: true;
       marketplaceName?: string;
@@ -102,7 +104,7 @@ export type MarketplaceInstallResult =
     } & Extract<InstallPluginResult, { ok: true }>)
   | Extract<InstallPluginResult, { ok: false }>;
 
-export type MarketplaceShortcutResolution =
+type MarketplaceShortcutResolution =
   | {
       ok: true;
       plugin: string;
@@ -597,7 +599,28 @@ async function loadMarketplace(params: {
     remoteRef?: string;
     cleanup?: () => Promise<void>;
   }): Promise<{ ok: true; marketplace: LoadedMarketplace } | { ok: false; error: string }> => {
-    const raw = await fs.readFile(paramsLocal.manifestPath, "utf-8");
+    let raw: string;
+    try {
+      // Resolve symlinks so a marketplace.json that points to a regular file
+      // keeps working, while the bounded regular-file read still rejects
+      // directories, FIFOs, and oversized targets.
+      const resolvedManifestPath = await fs.realpath(paramsLocal.manifestPath);
+      const { buffer } = await readRegularFile({
+        filePath: resolvedManifestPath,
+        maxBytes: MAX_MARKETPLACE_MANIFEST_BYTES,
+      });
+      raw = buffer.toString("utf-8");
+    } catch (err) {
+      await paramsLocal.cleanup?.();
+      const message = err instanceof Error ? err.message : String(err);
+      // readRegularFile rejects symlinks/non-files and caps file size. Only the
+      // size cap should be reported as an oversize manifest; other read failures
+      // need their own diagnostic so users don't chase the wrong problem.
+      if (message.startsWith("File exceeds")) {
+        return { ok: false, error: "Marketplace manifest too large" };
+      }
+      return { ok: false, error: `Marketplace manifest unreadable: ${message}` };
+    }
     const parsed = parseMarketplaceManifest(raw, paramsLocal.manifestPath);
     if (!parsed.ok) {
       await paramsLocal.cleanup?.();
@@ -1332,3 +1355,4 @@ export async function installPluginFromMarketplace(
     await loaded.marketplace.cleanup?.();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

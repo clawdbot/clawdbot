@@ -32,11 +32,11 @@ export type BundleMcpDiagnostic = {
   message: string;
 };
 
-export type EnabledBundleMcpConfigResult = {
+type EnabledBundleMcpConfigResult = {
   config: BundleMcpConfig;
   diagnostics: BundleMcpDiagnostic[];
 };
-export type BundleMcpRuntimeSupport = {
+type BundleMcpRuntimeSupport = {
   hasSupportedStdioServer: boolean;
   supportedServerNames: string[];
   unsupportedServerNames: string[];
@@ -225,6 +225,24 @@ function loadBundleInlineMcpConfig(params: {
   };
 }
 
+function loadNativePluginMcpConfig(params: {
+  rootDir: string;
+  mcpServers: Record<string, BundleMcpServerConfig>;
+}): { config: BundleMcpConfig; diagnostics: string[] } {
+  const rootDir = normalizeBundlePath(params.rootDir);
+  return {
+    config: {
+      mcpServers: Object.fromEntries(
+        Object.entries(params.mcpServers).map(([serverName, server]) => [
+          serverName,
+          absolutizeBundleMcpServer({ rootDir, baseDir: rootDir, server }),
+        ]),
+      ),
+    },
+    diagnostics: [],
+  };
+}
+
 function loadBundleMcpConfig(params: {
   pluginId: string;
   rootDir: string;
@@ -289,6 +307,22 @@ export function inspectBundleMcpRuntimeSupport(params: {
   };
 }
 
+export function inspectNativePluginMcpRuntimeSupport(params: {
+  rootDir: string;
+  mcpServers: Record<string, BundleMcpServerConfig>;
+}): BundleMcpRuntimeSupport {
+  const support = inspectBundleServerRuntimeSupport({
+    loaded: loadNativePluginMcpConfig(params),
+    resolveServers: (config) => config.mcpServers,
+  });
+  return {
+    hasSupportedStdioServer: support.hasSupportedServer,
+    supportedServerNames: support.supportedServerNames,
+    unsupportedServerNames: support.unsupportedServerNames,
+    diagnostics: support.diagnostics,
+  };
+}
+
 export function loadEnabledBundleMcpConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
@@ -300,6 +334,13 @@ export function loadEnabledBundleMcpConfig(params: {
     manifestRegistry: params.manifestRegistry,
     createEmptyConfig: () => ({ mcpServers: {} }),
     loadBundleConfig: loadBundleMcpConfig,
+    loadNativePluginConfig: ({ record }) =>
+      record.mcpServers
+        ? loadNativePluginMcpConfig({
+            rootDir: record.rootDir,
+            mcpServers: record.mcpServers,
+          })
+        : undefined,
     createDiagnostic: (pluginId, message) => ({ pluginId, message }),
   });
 }

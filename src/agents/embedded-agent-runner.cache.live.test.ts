@@ -20,7 +20,7 @@ import {
   resolveLiveDirectModel,
   withLiveCacheHeartbeat,
 } from "./live-cache-test-support.js";
-import { buildZeroUsage } from "./stream-message-shared.js";
+import { buildUsageWithNoCost } from "./stream-message-shared.js";
 
 const describeCacheLive = LIVE_CACHE_TEST_ENABLED ? describe : describe.skip;
 
@@ -213,7 +213,7 @@ function normalizeLiveUsage(
     | undefined,
 ): AssistantMessage["usage"] {
   if (!usage) {
-    return buildZeroUsage();
+    return buildUsageWithNoCost({});
   }
   const input = usage.input ?? 0;
   const output = usage.output ?? 0;
@@ -1434,3 +1434,4 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

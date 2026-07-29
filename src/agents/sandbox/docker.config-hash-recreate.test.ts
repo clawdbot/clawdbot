@@ -1,10 +1,8 @@
 // Docker sandbox recreation tests cover config-hash labels, bind ordering, and
 // mount labels used to decide when shared containers must be rebuilt.
-import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   computeSandboxConfigHash,
@@ -20,15 +18,9 @@ type SpawnCall = {
   args: string[];
 };
 
-type MockDockerChild = EventEmitter & {
-  stdout: Readable;
-  stderr: Readable;
-  stdin: EventEmitter & { end: (input?: string | Buffer) => void };
-  kill: (signal?: NodeJS.Signals) => void;
-};
-
 const spawnState = vi.hoisted(() => ({
   calls: [] as SpawnCall[],
+  containerExists: true,
   inspectRunning: true,
   labelHash: "",
 }));
@@ -59,20 +51,11 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtimeMocks,
 }));
 
-function createMockDockerChild(): MockDockerChild {
-  const child = new EventEmitter() as MockDockerChild;
-  child.stdout = new Readable({ read() {} });
-  child.stderr = new Readable({ read() {} });
-  child.stdin = Object.assign(new EventEmitter(), { end: () => undefined });
-  child.kill = () => undefined;
-  return child;
-}
-
-function spawnDockerProcess(command: string, args: string[]) {
+async function spawnDockerProcess(commandAndArgs: string[]) {
+  const [command = "", ...args] = commandAndArgs;
   // The tests assert docker CLI arguments without requiring Docker; this mock
   // implements only the inspect/create/start/rm calls used by ensureSandboxContainer.
   spawnState.calls.push({ command, args });
-  const child = createMockDockerChild();
 
   let code = 0;
   let stdout = "";
@@ -81,46 +64,61 @@ function spawnDockerProcess(command: string, args: string[]) {
     code = 1;
     stderr = `unexpected command: ${command}`;
   } else if (args[0] === "inspect" && args[1] === "-f" && args[2] === "{{.State.Running}}") {
-    stdout = spawnState.inspectRunning ? "true\n" : "false\n";
+    if (!spawnState.containerExists) {
+      code = 1;
+      stderr = "No such object";
+    } else {
+      stdout = spawnState.inspectRunning ? "true\n" : "false\n";
+    }
   } else if (
     args[0] === "inspect" &&
     args[1] === "-f" &&
     args[2]?.includes('index .Config.Labels "openclaw.configHash"')
   ) {
-    stdout = `${spawnState.labelHash}\n`;
-  } else if (
-    (args[0] === "rm" && args[1] === "-f") ||
-    (args[0] === "image" && args[1] === "inspect") ||
-    args[0] === "create" ||
-    args[0] === "start"
-  ) {
+    if (!spawnState.containerExists) {
+      code = 1;
+      stderr = "No such object";
+    } else {
+      stdout = `${spawnState.labelHash}\n`;
+    }
+  } else if (args[0] === "rm" && args[1] === "-f") {
+    spawnState.containerExists = false;
+    spawnState.inspectRunning = false;
+  } else if (args[0] === "image" && args[1] === "inspect") {
+    code = 0;
+  } else if (args[0] === "create") {
+    if (spawnState.containerExists) {
+      code = 1;
+      stderr = "container name is already in use";
+    } else {
+      spawnState.containerExists = true;
+      spawnState.inspectRunning = false;
+      spawnState.labelHash =
+        args
+          .find((arg) => arg.startsWith("openclaw.configHash="))
+          ?.slice("openclaw.configHash=".length) ?? "";
+    }
+  } else if (args[0] === "start") {
+    spawnState.inspectRunning = true;
+  } else if (args[0] === "exec") {
     code = 0;
   } else {
     code = 1;
     stderr = `unexpected docker args: ${args.join(" ")}`;
   }
-
-  queueMicrotask(() => {
-    if (stdout) {
-      child.stdout.emit("data", Buffer.from(stdout));
-    }
-    if (stderr) {
-      child.stderr.emit("data", Buffer.from(stderr));
-    }
-    child.emit("close", code);
-  });
-  return child;
-}
-
-async function createChildProcessMock() {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
-    ...actual,
-    spawn: spawnDockerProcess,
+    failed: code !== 0,
+    isCanceled: false,
+    exitCode: code,
+    stdout: Buffer.from(stdout),
+    stderr: Buffer.from(stderr),
   };
 }
 
-vi.mock("node:child_process", async () => createChildProcessMock());
+vi.mock("../../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../process/exec.js")>()),
+  spawnCommand: spawnDockerProcess,
+}));
 
 let ensureSandboxContainer: typeof import("./docker.js").ensureSandboxContainer;
 let resolveDockerEnvPolicyEpoch: typeof import("./docker.js").resolveDockerEnvPolicyEpoch;
@@ -131,7 +129,10 @@ async function loadFreshDockerModuleForTest() {
     readRegistryEntry: registryMocks.readRegistryEntry,
     updateRegistry: registryMocks.updateRegistry,
   }));
-  vi.doMock("node:child_process", async () => createChildProcessMock());
+  vi.doMock("../../process/exec.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../process/exec.js")>()),
+    spawnCommand: spawnDockerProcess,
+  }));
   ({ ensureSandboxContainer, resolveDockerEnvPolicyEpoch } = await import("./docker.js"));
 }
 
@@ -176,7 +177,7 @@ function createSandboxConfig(
       vncPort: 5900,
       noVncPort: 6080,
       headless: true,
-      enableNoVnc: false,
+      noVncEnabled: false,
       allowHostControl: false,
       autoStart: false,
       autoStartTimeoutMs: 5000,
@@ -189,11 +190,11 @@ function createSandboxConfig(
 async function ensureSandboxCreateCallForTest(params: {
   cfg: SandboxConfig;
   workspaceDir?: string;
-  sessionKey?: string;
+  scopeKey?: string;
 }): Promise<SpawnCall> {
   const workspaceDir = params.workspaceDir ?? "/tmp/workspace";
   await ensureSandboxContainer({
-    sessionKey: params.sessionKey ?? "agent:main:session-1",
+    scopeKey: params.scopeKey ?? "shared",
     workspaceDir,
     agentWorkspaceDir: workspaceDir,
     cfg: params.cfg,
@@ -217,6 +218,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
 
   beforeEach(async () => {
     spawnState.calls.length = 0;
+    spawnState.containerExists = true;
     spawnState.inspectRunning = true;
     spawnState.labelHash = "";
     registryMocks.readRegistryEntry.mockClear();
@@ -224,6 +226,55 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     registryMocks.updateRegistry.mockResolvedValue(undefined);
     runtimeMocks.log.mockClear();
     await loadFreshDockerModuleForTest();
+  });
+
+  it("serializes concurrent provisioning for one container", async () => {
+    const workspaceDir = makeTempDir();
+    const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`]);
+    spawnState.containerExists = false;
+    spawnState.inspectRunning = false;
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+
+    const params = {
+      scopeKey: "shared",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      cfg,
+    };
+    const [first, second] = await Promise.all([
+      ensureSandboxContainer(params),
+      ensureSandboxContainer(params),
+    ]);
+
+    expect(first).toBe("oc-test-shared");
+    expect(second).toBe(first);
+    expect(spawnState.calls.filter((call) => call.args[0] === "create")).toHaveLength(1);
+    expect(spawnState.calls.filter((call) => call.args[0] === "start")).toHaveLength(1);
+    expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the canonical non-shared scope for Docker names, labels, and registry identity", async () => {
+    const workspaceDir = makeTempDir();
+    const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`]);
+    cfg.scope = "agent";
+    spawnState.containerExists = false;
+    spawnState.inspectRunning = false;
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+    const scopeKey = `agent:poly:workspace:${"a".repeat(32)}`;
+
+    const createCall = await ensureSandboxCreateCallForTest({
+      cfg,
+      workspaceDir,
+      scopeKey,
+    });
+
+    const containerName = createCall.args[createCall.args.indexOf("--name") + 1];
+    expect(containerName).toMatch(/^oc-test-workspace-[a-f0-9]{32}$/);
+    expect(createCall.args).toContain(`openclaw.sessionKey=${scopeKey}`);
+    expect(registryMocks.updateRegistry.mock.calls.at(-1)?.[0]).toMatchObject({
+      containerName,
+      sessionKey: scopeKey,
+    });
   });
 
   it("recreates shared container when array-order change alters hash", async () => {
@@ -264,7 +315,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     });
 
     const containerName = await ensureSandboxContainer({
-      sessionKey: "agent:main:session-1",
+      scopeKey: "shared",
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
       cfg: newCfg,
@@ -353,7 +404,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     });
 
     await ensureSandboxContainer({
-      sessionKey: "agent:main:session-1",
+      scopeKey: "shared",
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
       cfg,
@@ -365,6 +416,33 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       expect.stringContaining("Recreate to apply: openclaw sandbox recreate --all"),
     );
     expect(registryMocks.updateRegistry.mock.calls.at(-1)?.[0]?.configHash).toBe(oldHash);
+  });
+
+  it("rejects a hot stale container when current config is required", async () => {
+    const workspaceDir = makeTempDir();
+    const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`], "rw", {});
+    spawnState.labelHash = "stale-hash";
+    registryMocks.readRegistryEntry.mockResolvedValue({
+      containerName: "oc-test-shared",
+      sessionKey: "shared",
+      createdAtMs: 1,
+      lastUsedAtMs: Date.now(),
+      image: cfg.docker.image,
+      configHash: "stale-hash",
+    });
+
+    await expect(
+      ensureSandboxContainer({
+        scopeKey: "shared",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        cfg,
+        requireCurrentConfig: true,
+      }),
+    ).rejects.toThrow("restricted dispatch requires the current container config");
+    expect(spawnState.calls.some((call) => call.args[0] === "rm")).toBe(false);
+    expect(spawnState.calls.some((call) => call.args[0] === "create")).toBe(false);
+    expect(registryMocks.updateRegistry).not.toHaveBeenCalled();
   });
 
   it("recreates shared container when previously filtered explicit env becomes allowed", async () => {

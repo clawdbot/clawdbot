@@ -27,6 +27,7 @@ import {
   collectInlineManagedServiceEnvKeys,
   hasInlineEnvironmentSource,
   isEnvironmentFileOnlySource,
+  readEnvironmentValueSource,
 } from "./service-managed-env.js";
 import { isNonMinimalServicePathEntry, normalizeServicePathEntry } from "./service-path-policy.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
@@ -47,11 +48,9 @@ export type ServiceConfigIssue = {
   level?: "recommended" | "aggressive";
 };
 
-export type ServiceConfigAudit = {
-  ok: boolean;
-  issues: ServiceConfigIssue[];
-};
-
+export type ServiceConfigAudit =
+  | { ok: true; issues: ServiceConfigIssue[] }
+  | { ok: false; issues: ServiceConfigIssue[] };
 export const SERVICE_AUDIT_CODES = {
   gatewayCommandMissing: "gateway-command-missing",
   gatewayEntrypointMismatch: "gateway-entrypoint-mismatch",
@@ -299,15 +298,19 @@ function readGatewayServiceCommandPortState(
   if (!programArguments || programArguments.length === 0) {
     return { kind: "missing" };
   }
-  for (const [index, arg] of programArguments.entries()) {
+  let latest: GatewayServiceCommandPort = { kind: "missing" };
+  for (let index = 0; index < programArguments.length; index += 1) {
+    const arg = programArguments[index];
     if (arg === "--port") {
-      return parseGatewayPortArg(programArguments[index + 1]);
+      latest = parseGatewayPortArg(programArguments[index + 1]);
+      index += 1;
+      continue;
     }
-    if (arg.startsWith("--port=")) {
-      return parseGatewayPortArg(arg.slice("--port=".length));
+    if (arg?.startsWith("--port=")) {
+      latest = parseGatewayPortArg(arg.slice("--port=".length));
     }
   }
-  return { kind: "missing" };
+  return latest;
 }
 
 function auditGatewayServicePort(params: {
@@ -391,18 +394,6 @@ function normalizeServiceEnvKey(key: string): string | null {
   return normalizeEnvVarKey(key, { portable: true })?.toUpperCase() ?? null;
 }
 
-function readEnvironmentValueSource(
-  command: GatewayServiceCommand,
-  normalizedKey: string,
-): GatewayServiceEnvironmentValueSource | undefined {
-  for (const [rawKey, source] of Object.entries(command?.environmentValueSources ?? {})) {
-    if (normalizeServiceEnvKey(rawKey) === normalizedKey) {
-      return source;
-    }
-  }
-  return undefined;
-}
-
 const SERVICE_PROXY_ENV_KEY_SET = new Set(
   SERVICE_PROXY_ENV_KEYS.flatMap((key) => {
     const normalized = normalizeServiceEnvKey(key);
@@ -423,7 +414,11 @@ function collectInlineProxyEnvKeys(command: GatewayServiceCommand): string[] {
     if (!normalized || !SERVICE_PROXY_ENV_KEY_SET.has(normalized)) {
       continue;
     }
-    if (!hasInlineEnvironmentSource(readEnvironmentValueSource(command, normalized))) {
+    if (
+      !hasInlineEnvironmentSource(
+        readEnvironmentValueSource(command.environmentValueSources, normalized),
+      )
+    ) {
       continue;
     }
     inlineKeys.push(normalized);
@@ -562,7 +557,7 @@ async function auditGatewayRuntime(
   if (isBunRuntime(execPath)) {
     issues.push({
       code: SERVICE_AUDIT_CODES.gatewayRuntimeBun,
-      message: "Gateway service uses Bun; Bun is incompatible with WhatsApp + Telegram channels.",
+      message: "Gateway service uses Bun; OpenClaw runtime state requires node:sqlite.",
       detail: execPath,
       level: "recommended",
     });
@@ -586,7 +581,7 @@ async function auditGatewayRuntime(
         issues.push({
           code: SERVICE_AUDIT_CODES.gatewayRuntimeNodeSystemMissing,
           message:
-            "System Node 22 LTS (22.19+) or Node 24 not found; install it before migrating away from version managers.",
+            "System Node 22 LTS (22.22.3+) or Node 24.15+ not found; install it before migrating away from version managers.",
           level: "recommended",
         });
       }
@@ -668,5 +663,5 @@ export async function auditGatewayServiceConfig(params: {
     await auditLaunchdPlist(params.env, issues);
   }
 
-  return { ok: issues.length === 0, issues };
+  return issues.length === 0 ? { ok: true, issues } : { ok: false, issues };
 }

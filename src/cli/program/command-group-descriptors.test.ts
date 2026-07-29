@@ -6,7 +6,6 @@ import {
   buildCommandGroupEntries,
   defineImportedCommandGroupSpec,
   defineImportedProgramCommandGroupSpecs,
-  resolveCommandGroupEntries,
 } from "./command-group-descriptors.js";
 
 const descriptors = [
@@ -23,18 +22,6 @@ const descriptors = [
 ] as const;
 
 describe("command-group-descriptors", () => {
-  it("resolves placeholders by descriptor name", () => {
-    const register = vi.fn();
-    expect(
-      resolveCommandGroupEntries(descriptors, [{ commandNames: ["alpha"], register }]),
-    ).toEqual([
-      {
-        placeholders: [descriptors[0]],
-        register,
-      },
-    ]);
-  });
-
   it("builds command-group entries with a register mapper", () => {
     const register = vi.fn();
     const mappedRegister = vi.fn();

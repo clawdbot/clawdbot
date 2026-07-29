@@ -10,12 +10,11 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema } from "../config.js";
 import type { VoiceCallProvider } from "../providers/base.js";
-import { clearVoiceCallStateRuntime, setVoiceCallStateRuntime } from "../runtime-state.js";
+import { setVoiceCallStateRuntime } from "../runtime-state.js";
 import type { AnswerCallInput, HangupCallInput, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { processEvent } from "./events.js";
 import { speakInitialMessage } from "./outbound.js";
-import { flushPendingCallRecordWritesForTest } from "./store.js";
 
 const logSpy = vi.hoisted(() => {
   const logEntries: string[] = [];
@@ -59,6 +58,9 @@ function installStateRuntime(): void {
       openChannelIngressQueue: (() => {
         throw new Error("openChannelIngressQueue is not used by voice-call event tests");
       }) as never,
+      openChannelIngressDrain: (() => {
+        throw new Error("openChannelIngressDrain is not used by voice-call event tests");
+      }) as never,
     },
   });
 }
@@ -78,10 +80,8 @@ afterEach(async () => {
       clearTimeout(waiter.timeout);
     }
     ctx.transcriptWaiters.clear();
-    await flushPendingCallRecordWritesForTest();
     fs.rmSync(ctx.storePath, { recursive: true, force: true });
   }
-  clearVoiceCallStateRuntime();
   resetPluginStateStoreForTests();
   vi.useRealTimers();
   vi.restoreAllMocks();

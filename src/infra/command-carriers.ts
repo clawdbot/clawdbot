@@ -213,7 +213,7 @@ function resolveEnvSplitPayload(
   return resolveEnvCarriedArgv(["env", ...carriedArgv], depth + 1) ?? carriedArgv;
 }
 
-export type ParsedEnvInvocationPrelude = {
+type ParsedEnvInvocationPrelude = {
   assignmentKeys: string[];
   commandIndex: number;
   splitArgv?: string[];

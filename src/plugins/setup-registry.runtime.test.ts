@@ -1,10 +1,7 @@
 // Verifies metadata-backed setup registry descriptor lookup.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  clearCurrentPluginMetadataSnapshot,
-  resolvePluginMetadataControlPlaneFingerprint,
-  setCurrentPluginMetadataSnapshot,
-} from "./current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -85,15 +82,7 @@ function createCurrentSnapshot(params: {
   };
   return {
     policyHash,
-    configFingerprint: resolvePluginMetadataControlPlaneFingerprint(
-      {},
-      {
-        env: process.env,
-        index,
-        policyHash,
-        workspaceDir: params.workspaceDir,
-      },
-    ),
+    configFingerprint: params.manifestHash,
     workspaceDir: params.workspaceDir,
     index,
     plugins: [
@@ -148,9 +137,7 @@ describe("setup-registry descriptor lookup", () => {
       ],
     });
 
-    const { testing, resolvePluginSetupCliBackendDescriptor } =
-      await import("./setup-registry.runtime.js");
-    testing.resetDescriptorCache();
+    const { resolvePluginSetupCliBackendDescriptor } = await import("./setup-registry.runtime.js");
 
     expect(resolvePluginSetupCliBackendDescriptor({ backend: "codex-cli" })).toEqual({
       pluginId: "openai",
@@ -169,9 +156,7 @@ describe("setup-registry descriptor lookup", () => {
   });
 
   it("refreshes cliBackends when the current metadata snapshot changes", async () => {
-    const { testing, resolvePluginSetupCliBackendDescriptor } =
-      await import("./setup-registry.runtime.js");
-    testing.resetDescriptorCache();
+    const { resolvePluginSetupCliBackendDescriptor } = await import("./setup-registry.runtime.js");
 
     setCurrentPluginMetadataSnapshot(
       createCurrentSnapshot({
@@ -204,9 +189,7 @@ describe("setup-registry descriptor lookup", () => {
   });
 
   it("uses workspace-scoped current metadata through the active plugin runtime", async () => {
-    const { testing, resolvePluginSetupCliBackendDescriptor } =
-      await import("./setup-registry.runtime.js");
-    testing.resetDescriptorCache();
+    const { resolvePluginSetupCliBackendDescriptor } = await import("./setup-registry.runtime.js");
 
     setActivePluginRegistry(
       createEmptyPluginRegistry(),
@@ -259,9 +242,7 @@ describe("setup-registry descriptor lookup", () => {
       plugins: [],
     });
 
-    const { testing, resolvePluginSetupCliBackendDescriptor } =
-      await import("./setup-registry.runtime.js");
-    testing.resetDescriptorCache();
+    const { resolvePluginSetupCliBackendDescriptor } = await import("./setup-registry.runtime.js");
 
     setCurrentPluginMetadataSnapshot(
       createCurrentSnapshot({

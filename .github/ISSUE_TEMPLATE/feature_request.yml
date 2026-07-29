@@ -62,6 +62,17 @@ body:
       label: Evidence/examples
       description: Prior art, links, screenshots, logs, or metrics.
       placeholder: Comparable behavior in X, sample config, and screenshot of current limitation.
+  - type: dropdown
+    id: implementation_intent
+    attributes:
+      label: Do you plan to open a PR for this?
+      description: Helps maintainers route the idea — self-implemented features move faster.
+      options:
+        - Yes, I plan to implement this myself
+        - Maybe, with maintainer guidance
+        - No, proposing the idea only
+    validations:
+      required: true
   - type: textarea
     id: additional_information
     attributes:

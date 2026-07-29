@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
  * debounce drains, and force individual collection when cross-channel ordering matters.
  */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isFastTestRuntimeEnv } from "../infra/env.js";
 
 /** Mutable summary state for a capped queue. */
 type QueueSummaryState = {
@@ -23,12 +24,6 @@ type QueueState<T> = QueueSummaryState & {
   cap: number;
 };
 
-/** Clear accumulated overflow summary state after it has been emitted. */
-export function clearQueueSummaryState(state: QueueSummaryState): void {
-  state.droppedCount = 0;
-  state.summaryLines = [];
-}
-
 /** Build a summary prompt preview without mutating the source queue state. */
 export function previewQueueSummaryPrompt(params: {
   state: QueueSummaryState;
@@ -36,11 +31,7 @@ export function previewQueueSummaryPrompt(params: {
   title?: string;
 }): string | undefined {
   return buildQueueSummaryPrompt({
-    state: {
-      dropPolicy: params.state.dropPolicy,
-      droppedCount: params.state.droppedCount,
-      summaryLines: [...params.state.summaryLines],
-    },
+    state: params.state,
     noun: params.noun,
     title: params.title,
   });
@@ -177,7 +168,7 @@ export function waitForQueueDebounce(
   },
   abortSignal?: AbortSignal,
 ): Promise<void> {
-  if (process.env.OPENCLAW_TEST_FAST === "1") {
+  if (isFastTestRuntimeEnv()) {
     // Tests use this escape hatch so debounce logic does not slow deterministic queue specs.
     return Promise.resolve();
   }
@@ -310,7 +301,7 @@ export async function drainCollectQueueStep<T>(params: {
   });
 }
 
-/** Build and consume the queue overflow summary prompt. */
+/** Build the queue overflow summary prompt. */
 function buildQueueSummaryPrompt(params: {
   state: QueueSummaryState;
   noun: string;
@@ -330,7 +321,6 @@ function buildQueueSummaryPrompt(params: {
       lines.push(`- ${line}`);
     }
   }
-  clearQueueSummaryState(params.state);
   return lines.join("\n");
 }
 

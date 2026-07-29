@@ -7,7 +7,7 @@ import type {
 import { WorkerProviderError } from "openclaw/plugin-sdk/plugin-entry";
 import { isSecretRef, isValidSecretRef } from "openclaw/plugin-sdk/secret-input";
 
-export const STATIC_SSH_WORKER_PROVIDER_ID = "static-ssh";
+const STATIC_SSH_WORKER_PROVIDER_ID = "static-ssh";
 
 const STATIC_SSH_LEASE_PREFIX = `${STATIC_SSH_WORKER_PROVIDER_ID}:`;
 const DEFAULT_SSH_PORT = 22;

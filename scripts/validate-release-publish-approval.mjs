@@ -7,6 +7,7 @@ const run = JSON.parse(fs.readFileSync(0, "utf8"));
 const releasePublishRunId = process.env.RELEASE_PUBLISH_RUN_ID ?? "";
 const expectedBranch = process.env.EXPECTED_WORKFLOW_BRANCH ?? "";
 const directRecovery = process.env.DIRECT_RELEASE_RECOVERY === "true";
+const allowCompletedSuccessfulParent = process.env.ALLOW_COMPLETED_SUCCESSFUL_PARENT === "true";
 const approvalPath = process.env.APPROVAL_PATH ?? "";
 const approvalKind = process.env.RELEASE_APPROVAL_KIND ?? "android";
 const expectedRunAttempt = process.env.EXPECTED_RUN_ATTEMPT ?? "";
@@ -107,6 +108,20 @@ if (expectedRunAttempt && run.runAttempt !== positiveRunAttempt(expectedRunAttem
 }
 
 if (!directRecovery) {
+  if (run.status === "in_progress" && !run.conclusion) {
+    console.log(`Using release publish approval run ${releasePublishRunId}: ${run.url}`);
+    process.exit(0);
+  }
+  if (
+    allowCompletedSuccessfulParent &&
+    run.status === "completed" &&
+    run.conclusion === "success"
+  ) {
+    console.log(
+      `Using successful completed release publish run ${releasePublishRunId}: ${run.url}`,
+    );
+    process.exit(0);
+  }
   if (run.status !== "in_progress") {
     fail(
       `Referenced release publish run ${releasePublishRunId} must still be in_progress, got ${run.status ?? "<missing>"}.`,
@@ -117,8 +132,6 @@ if (!directRecovery) {
       `Referenced release publish run ${releasePublishRunId} already concluded ${run.conclusion}.`,
     );
   }
-  console.log(`Using release publish approval run ${releasePublishRunId}: ${run.url}`);
-  process.exit(0);
 }
 
 if (run.status === "in_progress" && !run.conclusion) {

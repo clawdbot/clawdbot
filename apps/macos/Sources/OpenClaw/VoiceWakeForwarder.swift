@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawChatUI
 import OSLog
 
 enum VoiceWakeForwarder {
@@ -140,14 +141,13 @@ enum VoiceWakeForwarder {
 
     private static func loadSessionRouteEntry(sessionKey: String) async -> SessionRouteEntry? {
         do {
-            let data = try await GatewayConnection.shared.request(
-                method: "sessions.list",
-                params: [
-                    "includeGlobal": AnyCodable(false),
-                    "includeUnknown": AnyCodable(false),
-                    "limit": AnyCodable(500),
-                ],
+            let request = OpenClawChatGatewayRequests.sessionsList(
+                limit: 500,
+                search: nil,
+                archived: false,
+                includeGlobal: false,
                 timeoutMs: 10000)
+            let data = try await GatewayConnection.shared.request(request)
             let response = try JSONDecoder().decode(SessionListResponse.self, from: data)
             return response.sessions.first {
                 $0.key.trimmingCharacters(in: .whitespacesAndNewlines)

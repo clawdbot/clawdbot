@@ -10,9 +10,9 @@ import {
   saveRemoteMedia,
 } from "openclaw/plugin-sdk/media-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { TLON_MEDIA_FETCH_TIMEOUTS } from "../media-fetch-timeouts.js";
 
 const MAX_IMAGES_PER_MESSAGE = 8;
-const TLON_MEDIA_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 
 interface ExtractedImage {
   url: string;
@@ -25,11 +25,31 @@ interface DownloadedMedia {
   originalUrl: string;
 }
 
+type TlonInboundMedia = { path: string; contentType: string };
+
+/** Keeps Tlon's shipped path-duplicating prompt bytes paired with ordered facts. */
+export function buildTlonInboundMediaPrompt(
+  messageText: string,
+  attachments: readonly TlonInboundMedia[],
+): { body: string; media: TlonInboundMedia[] } {
+  const media = attachments.map((attachment) => ({ ...attachment }));
+  if (media.length === 0) {
+    return { body: messageText, media };
+  }
+  const mediaLines = media
+    .map(
+      (attachment) =>
+        `[media attached: ${attachment.path} (${attachment.contentType}) | ${attachment.path}]`,
+    )
+    .join("\n");
+  return { body: `${mediaLines}\n${messageText}`, media };
+}
+
 /**
  * Extract image blocks from Tlon message content.
  * Returns array of image URLs found in the message.
  */
-export function extractImageBlocks(content: unknown): ExtractedImage[] {
+function extractImageBlocks(content: unknown): ExtractedImage[] {
   if (!content || !Array.isArray(content)) {
     return [];
   }
@@ -55,10 +75,7 @@ export function extractImageBlocks(content: unknown): ExtractedImage[] {
  * Download a media file from URL to local storage.
  * Returns the local path where the file was saved.
  */
-export async function downloadMedia(
-  url: string,
-  mediaDir?: string,
-): Promise<DownloadedMedia | null> {
+async function downloadMedia(url: string, mediaDir?: string): Promise<DownloadedMedia | null> {
   try {
     // Validate URL is http/https before fetching
     const parsedUrl = new URL(url);
@@ -70,7 +87,7 @@ export async function downloadMedia(
     const fetchOptions = {
       url,
       maxBytes: MAX_IMAGE_BYTES,
-      readIdleTimeoutMs: TLON_MEDIA_DOWNLOAD_IDLE_TIMEOUT_MS,
+      ...TLON_MEDIA_FETCH_TIMEOUTS,
       ssrfPolicy: undefined,
       requestInit: { method: "GET" },
     };

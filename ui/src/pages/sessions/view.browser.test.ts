@@ -20,7 +20,6 @@ const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
   : describe.skip;
 
 type BrowserFixture = {
-  context: BrowserContext;
   page: Page;
 };
 
@@ -30,6 +29,7 @@ function readUiCss(): string {
     "ui/src/styles/layout.css",
     "ui/src/styles/layout.mobile.css",
     "ui/src/styles/components.css",
+    "ui/src/styles/settings.css",
     "ui/src/styles/sessions.css",
   ];
   return files.map((file) => readStyleSheet(file)).join("\n");
@@ -38,7 +38,7 @@ function readUiCss(): string {
 function sessionsTableHtml() {
   const headers = ["", "Key", "Kind", "Status", "Updated", "Tokens", "Actions"];
   const overviewTiles = [
-    ["3", "Sessions"],
+    ["3", "Threads"],
     ["1", "Live"],
     ["1", "Unread"],
     ["123k", "Tokens"],
@@ -58,9 +58,11 @@ function sessionsTableHtml() {
     )
     .join("");
   return `
-    <section class="card">
-      <div class="sessions-overview">${overviewTiles}</div>
-      <div class="data-table-wrapper">
+    <div class="settings-page settings-page--wide">
+      <div class="settings-group">
+        <div class="sessions-overview">${overviewTiles}</div>
+      </div>
+      <div class="settings-group">
         <div class="data-table-container">
           <table class="data-table sessions-table">
             <thead>
@@ -104,11 +106,11 @@ function sessionsTableHtml() {
                     </div>
                   </div>
                 </td>
-                <td><span class="data-table-badge data-table-badge--direct">direct</span></td>
+                <td><span class="session-kind session-kind--direct">direct</span></td>
                 <td class="session-status-col">
-                  <span class="session-status-badge session-status-badge--live" aria-label="Status: Live">
-                    <span class="session-status-badge__dot" aria-hidden="true"></span>
-                    <span class="session-status-badge__label">Live</span>
+                  <span class="settings-status settings-status--ok">
+                    <span class="settings-status__dot"></span>
+                    Live
                   </span>
                 </td>
                 <td>now</td>
@@ -123,10 +125,10 @@ function sessionsTableHtml() {
                 <td class="session-actions-cell">
                   <div class="session-actions">
                     <button class="session-details-toggle" type="button" aria-expanded="true">
-                      <span class="session-compaction-count">1</span>
+                      <span class="settings-count session-compaction-count">1</span>
                       <svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
                     </button>
-                    <button class="icon-btn" aria-label="Open session menu" aria-haspopup="menu">
+                    <button class="icon-btn" aria-label="Open thread menu" aria-haspopup="menu">
                       <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1" /></svg>
                     </button>
                   </div>
@@ -137,15 +139,15 @@ function sessionsTableHtml() {
                   <div class="session-details-panel">
                     <div class="session-details-panel__hero">
                       <div>
-                        <div class="session-details-panel__eyebrow">Session details</div>
+                        <div class="session-details-panel__eyebrow">Thread details</div>
                         <div class="session-details-panel__title">agent:main:main</div>
                       </div>
                       <div class="session-details-panel__badges">
-                        <span class="session-status-badge session-status-badge--live" aria-label="Status: Live">
-                          <span class="session-status-badge__dot" aria-hidden="true"></span>
-                          <span class="session-status-badge__label">Live</span>
+                        <span class="settings-status settings-status--ok">
+                          <span class="settings-status__dot"></span>
+                          Live
                         </span>
-                        <span class="data-table-badge data-table-badge--direct">direct</span>
+                        <span class="session-kind session-kind--direct">direct</span>
                       </div>
                     </div>
                     <div class="session-details-section">
@@ -153,15 +155,15 @@ function sessionsTableHtml() {
                       <div class="session-overrides-grid">
                         <label class="session-override-field">
                           <span class="session-override-field__label">Label</span>
-                          <input class="session-override-field__control" value="triage" />
+                          <input class="settings-input" value="triage" />
                         </label>
                         <label class="session-override-field">
                           <span class="session-override-field__label">Thinking</span>
-                          <select class="session-override-field__control"><option>Default</option></select>
+                          <select class="settings-select"><option>Default</option></select>
                         </label>
                         <label class="session-override-field">
                           <span class="session-override-field__label">Fast</span>
-                          <select class="session-override-field__control"><option>on</option></select>
+                          <select class="settings-select"><option>on</option></select>
                         </label>
                       </div>
                     </div>
@@ -196,56 +198,62 @@ function sessionsTableHtml() {
           </table>
         </div>
       </div>
-    </section>
+    </div>
   `;
 }
 
 async function openFixture(
-  browser: Browser,
+  context: BrowserContext,
   width: number,
   height: number,
 ): Promise<BrowserFixture> {
-  const context = await browser.newContext({ viewport: { width, height } });
   let page: Page | undefined;
   try {
     page = await context.newPage();
+    await page.setViewportSize({ width, height });
     await page.setContent(
       `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${sessionsTableHtml()}</body></html>`,
     );
-    return { context, page };
+    return { page };
   } catch (error) {
-    await context.close().catch(() => {});
+    await page?.close().catch(() => {});
     throw error;
   }
 }
 
 async function closeFixture(fixture: BrowserFixture): Promise<void> {
-  await fixture.context.close().catch(() => {});
+  await fixture.page.close().catch(() => {});
 }
 
 describeBrowserLayout("sessions responsive browser layout", () => {
   let browser: Browser;
+  let context: BrowserContext;
 
   beforeAll(async () => {
-    // Browser startup dominates this suite; fresh contexts keep viewport state isolated.
     browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+    try {
+      context = await browser.newContext();
+    } catch (error) {
+      await browser.close().catch(() => {});
+      throw error;
+    }
   });
 
   afterAll(async () => {
+    await context?.close().catch(() => {});
     await browser?.close().catch(() => {});
   });
 
   it.each(VIEWPORTS)("keeps the session roster visible at %dx%d", async (width, height) => {
-    const fixture = await openFixture(browser, width, height);
+    const fixture = await openFixture(context, width, height);
     const { page } = fixture;
     try {
       const metrics = await page.evaluate(() => {
         const container = document.querySelector(".data-table-container");
         const actions = document.querySelector(".session-actions");
         const trigger = document.querySelector(".session-details-toggle");
-        const status = document.querySelector(".session-status-badge");
-        const statusLabel = document.querySelector(".session-status-badge__label");
-        const kind = document.querySelector(".data-table-badge");
+        const status = document.querySelector(".settings-status");
+        const kind = document.querySelector(".session-kind");
         const key = document.querySelector(".session-key-cell .session-link");
         const details = document.querySelector(".session-details-panel");
         if (
@@ -253,7 +261,6 @@ describeBrowserLayout("sessions responsive browser layout", () => {
           !(actions instanceof HTMLElement) ||
           !(trigger instanceof HTMLElement) ||
           !(status instanceof HTMLElement) ||
-          !(statusLabel instanceof HTMLElement) ||
           !(kind instanceof HTMLElement) ||
           !(key instanceof HTMLElement)
         ) {

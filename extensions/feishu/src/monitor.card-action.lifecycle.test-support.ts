@@ -2,7 +2,7 @@
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./lifecycle.test-support.js";
-import { resetProcessedFeishuCardActionTokensForTests } from "./card-action.js";
+import { processedCardActions, resolvedCardActionChatTypes } from "./card-action-state.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import {
   getFeishuLifecycleTestMocks,
@@ -26,7 +26,6 @@ const {
   createEventDispatcherMock,
   createFeishuReplyDispatcherMock,
   dispatchReplyFromConfigMock,
-  finalizeInboundContextMock,
   resolveAgentRouteMock,
   resolveBoundConversationMock,
   sendCardFeishuMock,
@@ -129,11 +128,11 @@ function latestReplyDispatcherParams() {
 }
 
 function latestFinalizedContext() {
-  const call = finalizeInboundContextMock.mock.calls.at(-1);
+  const call = dispatchReplyFromConfigMock.mock.calls.at(-1);
   if (!call) {
     throw new Error("expected finalized inbound context call");
   }
-  return call[0] as {
+  return call[0].ctx as {
     AccountId?: string;
     SessionKey?: string;
     MessageSid?: string;
@@ -145,7 +144,8 @@ describe("Feishu card-action lifecycle", () => {
     vi.useRealTimers();
     resetFeishuLifecycleTestMocks();
     lastRuntime = createRuntimeEnv();
-    resetProcessedFeishuCardActionTokensForTests();
+    processedCardActions.clear();
+    resolvedCardActionChatTypes.clear();
     setFeishuLifecycleStateDir("openclaw-feishu-card-action");
 
     createFeishuReplyDispatcherMock.mockReturnValue(createFeishuLifecycleReplyDispatcher());
@@ -169,11 +169,8 @@ describe("Feishu card-action lifecycle", () => {
       replyText: "card action reply once",
     });
 
-    withReplyDispatcherMock.mockImplementation(async ({ run }) => await run());
-
     installFeishuLifecycleReplyRuntime({
       resolveAgentRouteMock,
-      finalizeInboundContextMock,
       dispatchReplyFromConfigMock,
       withReplyDispatcherMock,
       storePath: "/tmp/feishu-card-action-sessions.json",
@@ -182,7 +179,8 @@ describe("Feishu card-action lifecycle", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    resetProcessedFeishuCardActionTokensForTests();
+    processedCardActions.clear();
+    resolvedCardActionChatTypes.clear();
     restoreFeishuLifecycleStateDir(originalStateDir);
   });
 
@@ -316,13 +314,14 @@ describe("Feishu card-action lifecycle", () => {
         replyToMessageId: "om_card_v2_nested",
       }),
     );
-    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
+    expect(dispatchReplyFromConfigMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        AccountId: "acct-card",
-        SessionKey: "agent:bound-agent:feishu:direct:ou_user1",
-        MessageSid: "card-action-tok-card-v2-nested-operator",
+        ctx: expect.objectContaining({
+          AccountId: "acct-card",
+          SessionKey: "agent:bound-agent:feishu:direct:ou_user1",
+          MessageSid: "card-action-tok-card-v2-nested-operator",
+        }),
       }),
-      undefined,
     );
   });
 

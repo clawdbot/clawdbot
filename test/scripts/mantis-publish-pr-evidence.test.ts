@@ -108,15 +108,22 @@ describe("scripts/mantis/publish-pr-evidence", () => {
 
   it("uploads manifest artifacts to R2-compatible object storage", async () => {
     const manifest = loadEvidenceManifest(writeFixtureManifest());
-    const requests: Array<{ body: Buffer; headers: HeadersInit; method: string; url: string }> = [];
+    const requests: Array<{
+      body: Buffer;
+      headers: HeadersInit;
+      method: string;
+      signal: AbortSignal;
+      url: string;
+    }> = [];
     const fetchImpl = async (
       url: URL,
-      init: { body: Buffer; headers: HeadersInit; method: string },
+      init: { body: Buffer; headers: HeadersInit; method: string; signal: AbortSignal },
     ) => {
       requests.push({
         body: init.body,
         headers: init.headers,
         method: init.method,
+        signal: init.signal,
         url: url.toString(),
       });
       return new Response("", { status: 200 });
@@ -142,6 +149,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
       treeUrl: "https://qa.openclaw.ai/mantis/discord/pr-1/run-1/index.json",
     });
     expect(requests.map((request) => request.method)).toEqual(["PUT", "PUT", "PUT", "PUT", "PUT"]);
+    expect(requests.every((request) => request.signal instanceof AbortSignal)).toBe(true);
     expect(requests.map((request) => request.url)).toEqual([
       "https://example.r2.cloudflarestorage.com/qa-artifacts/mantis/discord/pr-1/run-1/baseline.png",
       "https://example.r2.cloudflarestorage.com/qa-artifacts/mantis/discord/pr-1/run-1/candidate.png",
@@ -159,6 +167,146 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     expect(String(requests[4]?.body)).toContain(
       '"url": "https://qa.openclaw.ai/mantis/discord/pr-1/run-1/baseline.png"',
     );
+  });
+
+  it("aborts a stalled artifact upload after the per-object timeout", async () => {
+    const manifest = loadEvidenceManifest(writeFixtureManifest());
+    let observedSignal: AbortSignal | undefined;
+
+    const upload = publishArtifactFiles({
+      artifactRoot: "mantis/discord/pr-1/run-1",
+      fetchImpl: (_url, init) => {
+        observedSignal = init.signal;
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+        });
+      },
+      manifest,
+      storageConfig: {
+        accessKeyId: "access",
+        bucket: "qa-artifacts",
+        endpoint: "https://example.r2.cloudflarestorage.com",
+        publicBaseUrl: "https://qa.openclaw.ai",
+        region: "auto",
+        secretAccessKey: "secret",
+      },
+      timeoutMs: 5,
+    });
+
+    await expect(upload).rejects.toMatchObject({
+      cause: { name: "TimeoutError" },
+      message: "Timed out uploading Mantis artifact baseline.png after 5ms.",
+    });
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
+  it("bounds oversized non-ok upload error response bodies", async () => {
+    const manifest = loadEvidenceManifest(writeFixtureManifest());
+    const chunk = new Uint8Array(8 * 1024).fill("x".charCodeAt(0));
+    let enqueuedBytes = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        enqueuedBytes += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+    });
+
+    const upload = publishArtifactFiles({
+      artifactRoot: "mantis/discord/pr-1/run-1",
+      fetchImpl: async () =>
+        new Response(body, {
+          status: 503,
+          statusText: "Service Unavailable",
+        }),
+      manifest,
+      storageConfig: {
+        accessKeyId: "access",
+        bucket: "qa-artifacts",
+        endpoint: "https://example.r2.cloudflarestorage.com",
+        publicBaseUrl: "https://qa.openclaw.ai",
+        region: "auto",
+        secretAccessKey: "secret",
+      },
+    });
+
+    await expect(upload).rejects.toMatchObject({
+      message: expect.stringMatching(
+        /^Failed to upload Mantis artifact baseline\.png: 503 Service Unavailable\nMantis upload error response body exceeded 65536 bytes$/u,
+      ),
+    });
+    // Unbounded response.text() would keep pulling forever; the bound cancels after ~64 KiB.
+    expect(enqueuedBytes).toBeGreaterThan(64 * 1024);
+    expect(enqueuedBytes).toBeLessThanOrEqual(256 * 1024);
+  });
+
+  it("propagates signal abort during non-ok upload error body reading", async () => {
+    const manifest = loadEvidenceManifest(writeFixtureManifest());
+    let cancelled = false;
+    // A slow-streaming error body that will stall until the signal fires.
+    const body = new ReadableStream<Uint8Array>({
+      pull() {
+        // Never resolves; the signal will abort the read.
+        return new Promise(() => {});
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    const upload = publishArtifactFiles({
+      artifactRoot: "mantis/discord/pr-1/run-1",
+      fetchImpl: async () =>
+        new Response(body, {
+          status: 503,
+          statusText: "Service Unavailable",
+        }),
+      manifest,
+      storageConfig: {
+        accessKeyId: "access",
+        bucket: "qa-artifacts",
+        endpoint: "https://example.r2.cloudflarestorage.com",
+        publicBaseUrl: "https://qa.openclaw.ai",
+        region: "auto",
+        secretAccessKey: "secret",
+      },
+      timeoutMs: 50,
+    });
+
+    await expect(upload).rejects.toMatchObject({
+      cause: { name: "TimeoutError" },
+      message: "Timed out uploading Mantis artifact baseline.png after 50ms.",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(cancelled).toBe(true);
+  });
+
+  it("reads small non-ok upload error response bodies within the bound", async () => {
+    const manifest = loadEvidenceManifest(writeFixtureManifest());
+    const smallBody = "access denied: invalid credentials";
+
+    const upload = publishArtifactFiles({
+      artifactRoot: "mantis/discord/pr-1/run-1",
+      fetchImpl: async () =>
+        new Response(smallBody, {
+          status: 403,
+          statusText: "Forbidden",
+        }),
+      manifest,
+      storageConfig: {
+        accessKeyId: "access",
+        bucket: "qa-artifacts",
+        endpoint: "https://example.r2.cloudflarestorage.com",
+        publicBaseUrl: "https://qa.openclaw.ai",
+        region: "auto",
+        secretAccessKey: "secret",
+      },
+    });
+
+    await expect(upload).rejects.toMatchObject({
+      message: expect.stringMatching(
+        /^Failed to upload Mantis artifact baseline\.png: 403 Forbidden\naccess denied: invalid credentials$/u,
+      ),
+    });
   });
 
   it("allows failure manifests to omit optional visual artifacts", () => {

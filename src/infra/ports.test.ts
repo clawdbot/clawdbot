@@ -17,6 +17,7 @@ vi.mock("../process/exec.js", () => ({
 
 let inspectPortConnections: typeof import("./ports-inspect.js").inspectPortConnections;
 let inspectPortUsage: typeof import("./ports-inspect.js").inspectPortUsage;
+let inspectPortUsages: typeof import("./ports-inspect.js").inspectPortUsages;
 let ensurePortAvailable: typeof import("./ports.js").ensurePortAvailable;
 let handlePortError: typeof import("./ports.js").handlePortError;
 let PortInUseError: typeof import("./ports.js").PortInUseError;
@@ -57,7 +58,8 @@ async function listenServer(
 }
 
 beforeAll(async () => {
-  ({ inspectPortConnections, inspectPortUsage } = await import("./ports-inspect.js"));
+  ({ inspectPortConnections, inspectPortUsage, inspectPortUsages } =
+    await import("./ports-inspect.js"));
   ({ ensurePortAvailable, handlePortError, PortInUseError } = await import("./ports.js"));
 });
 
@@ -219,6 +221,47 @@ describeUnix("inspectPortUsage", () => {
     }
   });
 
+  it("limits concurrent Unix process metadata lookups", async () => {
+    const listenerCount = 25;
+    let activeProcessLookups = 0;
+    let maxConcurrentProcessLookups = 0;
+    let processLookupCount = 0;
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (typeof command !== "string") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (command.includes("lsof")) {
+        return {
+          stdout: Array.from(
+            { length: listenerCount },
+            (_, index) => `p${1_000 + index}\ncnode\nnTCP 127.0.0.1:18789 (LISTEN)`,
+          ).join("\n"),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "ps") {
+        processLookupCount += 1;
+        activeProcessLookups += 1;
+        maxConcurrentProcessLookups = Math.max(maxConcurrentProcessLookups, activeProcessLookups);
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 1);
+        });
+        activeProcessLookups -= 1;
+        return { stdout: "value\n", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const result = await inspectPortUsage(18789);
+
+    expect(result.listeners).toHaveLength(listenerCount);
+    expect(processLookupCount).toBe(listenerCount * 3);
+    expect(maxConcurrentProcessLookups).toBeLessThan(processLookupCount);
+    expect(maxConcurrentProcessLookups).toBeLessThanOrEqual(60);
+  });
+
   it("does not match ss listener ports by substring", async () => {
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const command = argv[0];
@@ -374,6 +417,124 @@ describeUnix("inspectPortUsage", () => {
       pid: 111,
       address: "TCP *:18789 (LISTEN)",
     });
+  });
+
+  it("keeps single-port lsof listener inspection scoped to the requested port", async () => {
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (typeof command !== "string") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (command.includes("lsof")) {
+        return {
+          stdout: "p111\ncnode\nnTCP *:18789 (LISTEN)\n",
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "ps") {
+        if (argv.includes("command=")) {
+          return {
+            stdout: "node /tmp/openclaw/dist/index.js gateway run\n",
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (argv.includes("user=")) {
+          return { stdout: "tester\n", stderr: "", code: 0 };
+        }
+        if (argv.includes("ppid=")) {
+          return { stdout: "1\n", stderr: "", code: 0 };
+        }
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    await inspectPortUsage(18789);
+
+    const lsofCalls = runCommandWithTimeoutMock.mock.calls.filter(([argv]) => {
+      const command = Array.isArray(argv) ? argv[0] : undefined;
+      return typeof command === "string" && command.includes("lsof");
+    });
+    expect(lsofCalls).toHaveLength(1);
+    const lsofArgv = lsofCalls[0]?.[0] as string[] | undefined;
+    expect(lsofArgv?.[0]).toMatch(/lsof$/);
+    expect(lsofArgv?.slice(1)).toEqual(["-nP", "-iTCP:18789", "-sTCP:LISTEN", "-FpFcn"]);
+  });
+
+  it("batches Unix listener lsof inspection across same-cycle port checks", async () => {
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (typeof command !== "string") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (command.includes("lsof")) {
+        return {
+          stdout:
+            "p111\ncnode\nnTCP *:18789 (LISTEN)\n" +
+            "p222\ncdeno\nnTCP 127.0.0.1:19001 (LISTEN)\n" +
+            "p333\ncnginx\nnTCP *:3000 (LISTEN)\n",
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "ps") {
+        if (argv.includes("command=")) {
+          return {
+            stdout:
+              argv[2] === "111"
+                ? "node /tmp/openclaw/dist/index.js gateway run\n"
+                : "deno run /tmp/openclaw/cli.ts\n",
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (argv.includes("user=")) {
+          return { stdout: "tester\n", stderr: "", code: 0 };
+        }
+        if (argv.includes("ppid=")) {
+          return { stdout: "1\n", stderr: "", code: 0 };
+        }
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const results = await inspectPortUsages([18789, 19001]);
+
+    const lsofCalls = runCommandWithTimeoutMock.mock.calls.filter(([argv]) => {
+      const command = Array.isArray(argv) ? argv[0] : undefined;
+      return typeof command === "string" && command.includes("lsof");
+    });
+    expect(lsofCalls).toHaveLength(1);
+    const lsofArgv = lsofCalls[0]?.[0] as string[] | undefined;
+    expect(lsofArgv?.[0]).toMatch(/lsof$/);
+    expect(lsofArgv?.slice(1)).toEqual(["-nP", "-iTCP", "-sTCP:LISTEN", "-FpFcn"]);
+    expect(results.get(18789)).toMatchObject({
+      port: 18789,
+      status: "busy",
+      listeners: [
+        expect.objectContaining({
+          pid: 111,
+          command: "node",
+          address: "TCP *:18789 (LISTEN)",
+          commandLine: "node /tmp/openclaw/dist/index.js gateway run",
+        }),
+      ],
+    });
+    expect(results.get(19001)).toMatchObject({
+      port: 19001,
+      status: "busy",
+      listeners: [
+        expect.objectContaining({
+          pid: 222,
+          command: "deno",
+          address: "TCP 127.0.0.1:19001 (LISTEN)",
+          commandLine: "deno run /tmp/openclaw/cli.ts",
+        }),
+      ],
+    });
+    expect(results.get(18789)?.detail).toBe("p111\ncnode\nnTCP *:18789 (LISTEN)");
+    expect(results.get(19001)?.detail).toBe("p222\ncdeno\nnTCP 127.0.0.1:19001 (LISTEN)");
   });
 
   it("preserves malformed lsof pid records as unknown-pid listener diagnostics", async () => {

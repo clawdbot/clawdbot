@@ -2,15 +2,41 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readLocalSkillCardContentSync } from "../lifecycle/clawhub.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";
 import { buildWorkspaceSkillStatus } from "./status.js";
 
 type SkillStatus = ReturnType<typeof buildWorkspaceSkillStatus>["skills"][number];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("buildWorkspaceSkillStatus", () => {
+  it("reports blank env requirements as missing", () => {
+    const envName = "OPENCLAW_TEST_BLANK_SKILL_STATUS";
+    const original = process.env[envName];
+    process.env[envName] = "   ";
+    try {
+      const report = buildWorkspaceSkillStatus("/tmp/ws", {
+        entries: [
+          createEntry("blank-env", {
+            metadata: { primaryEnv: envName, requires: { env: [envName] } },
+          }),
+        ],
+      });
+
+      expect(report.skills[0]?.eligible).toBe(false);
+      expect(report.skills[0]?.missing.env).toEqual([envName]);
+    } finally {
+      if (original === undefined) {
+        delete process.env[envName];
+      } else {
+        process.env[envName] = original;
+      }
+    }
+  });
+
   it("surfaces valid ClawHub linkage and local Skill Card metadata", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-status-"));
     try {
@@ -237,6 +263,107 @@ describe("buildWorkspaceSkillStatus", () => {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
+
+  it("links a discovered global ClawHub skill only through the managed lockfile", async () => {
+    const managedParentDir = tempDirs.make("openclaw-managed-");
+    const workspaceDir = tempDirs.make("openclaw-skill-status-");
+    const managedSkillsDir = path.join(managedParentDir, "skills");
+    const skillDir = path.join(managedSkillsDir, "agentreceipt");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: agentreceipt\ndescription: Global skill\n---\n",
+      "utf8",
+    );
+    await writeClawHubStatusFixture({
+      workspaceDir: managedParentDir,
+      skillDir,
+      slug: "agentreceipt",
+    });
+    // Same slug in the workspace must not cross-link the managed install.
+    await writeClawHubStatusFixture({
+      workspaceDir,
+      skillDir: path.join(workspaceDir, "unused"),
+      slug: "agentreceipt",
+      installedVersion: "9.9.9",
+    });
+
+    const report = buildWorkspaceSkillStatus(workspaceDir, { managedSkillsDir });
+    const skill = report.skills.find((entry) => entry.skillKey === "agentreceipt");
+
+    expect(skill).toMatchObject({ source: "openclaw-managed" });
+    expect(skill?.clawhub).toMatchObject({
+      status: "linked",
+      valid: true,
+      slug: "agentreceipt",
+      installedVersion: "1.2.3",
+      lockPath: path.join(managedParentDir, ".clawhub", "lock.json"),
+    });
+  });
+
+  it("reports a globally installed skill as invalid when it is absent from the managed lockfile", async () => {
+    const managedParentDir = tempDirs.make("openclaw-managed-");
+    const workspaceDir = tempDirs.make("openclaw-skill-status-");
+    const managedSkillsDir = path.join(managedParentDir, "skills");
+    const skillDir = path.join(managedSkillsDir, "agentreceipt");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: agentreceipt\ndescription: Global skill\n---\n",
+      "utf8",
+    );
+    await writeClawHubStatusFixture({
+      workspaceDir: managedParentDir,
+      skillDir,
+      slug: "agentreceipt",
+      writeLock: false,
+    });
+
+    const report = buildWorkspaceSkillStatus(workspaceDir, { managedSkillsDir });
+    const skill = report.skills.find((entry) => entry.skillKey === "agentreceipt");
+
+    expect(skill?.clawhub).toMatchObject({
+      status: "invalid",
+      valid: false,
+      reason: expect.stringContaining("not tracked by the managed ClawHub lockfile"),
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "links a discovered managed skill whose install directory is a symlink",
+    async () => {
+      const managedParentDir = tempDirs.make("openclaw-managed-");
+      const externalSkillDir = tempDirs.make("openclaw-skill-target-");
+      const workspaceDir = tempDirs.make("openclaw-skill-status-");
+      const managedSkillsDir = path.join(managedParentDir, "skills");
+      await fs.mkdir(managedSkillsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(externalSkillDir, "SKILL.md"),
+        "---\nname: linked-skill\ndescription: Symlinked global skill\n---\n",
+        "utf8",
+      );
+      await fs.symlink(externalSkillDir, path.join(managedSkillsDir, "linked-skill"));
+      await writeClawHubStatusFixture({
+        workspaceDir: managedParentDir,
+        skillDir: externalSkillDir,
+        slug: "linked-skill",
+      });
+
+      const report = buildWorkspaceSkillStatus(workspaceDir, { managedSkillsDir });
+      const skill = report.skills.find((entry) => entry.skillKey === "linked-skill");
+      const externalSkillRealDir = await fs.realpath(externalSkillDir);
+
+      expect(skill).toMatchObject({
+        source: "openclaw-managed",
+        baseDir: externalSkillRealDir,
+      });
+      expect(skill?.clawhub).toMatchObject({
+        status: "linked",
+        valid: true,
+        lockPath: path.join(managedParentDir, ".clawhub", "lock.json"),
+      });
+    },
+  );
 
   it("does not surface install options for OS-scoped skills on unsupported platforms", () => {
     if (process.platform === "win32") {

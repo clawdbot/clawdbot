@@ -12,6 +12,7 @@ import {
   type HealthCheckContext,
   type HealthFinding,
 } from "openclaw/plugin-sdk/health";
+import { defaultRuntime as cliRuntime } from "openclaw/plugin-sdk/runtime";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./doctor/fix-metadata.js";
 import { POLICY_CHECK_IDS, evaluatePolicy } from "./doctor/register.js";
 import {
@@ -60,7 +61,7 @@ const defaultRuntime: PolicyCommandRuntime = {
     process.stdout.write(value);
   },
   error(value) {
-    process.stderr.write(`${value}\n`);
+    cliRuntime.error(value);
   },
   sleep(ms) {
     return sleep(ms);
@@ -101,7 +102,7 @@ export function registerPolicyCli(program: Command): void {
     });
 }
 
-export async function policyCompareCommand(
+async function policyCompareCommand(
   options: PolicyCompareOptions,
   runtime: PolicyCommandRuntime = defaultRuntime,
 ): Promise<number> {
@@ -123,7 +124,7 @@ export async function policyCompareCommand(
   }
 }
 
-export async function policyCheckCommand(
+async function policyCheckCommand(
   options: PolicyCheckOptions,
   runtime: PolicyCommandRuntime = defaultRuntime,
 ): Promise<number> {
@@ -137,7 +138,7 @@ export async function policyCheckCommand(
   }
 }
 
-export async function policyWatchCommand(
+async function policyWatchCommand(
   options: PolicyWatchOptions,
   runtime: PolicyCommandRuntime = defaultRuntime,
 ): Promise<number> {

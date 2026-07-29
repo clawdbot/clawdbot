@@ -2,9 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   formatDurationCompact,
-  formatTokenShort,
   formatTokenUsageDisplay,
-  resolveIoTokens,
   resolveTotalTokens,
   truncateLine,
 } from "./subagents-format.js";
@@ -21,18 +19,18 @@ describe("shared/subagents-format", () => {
   });
 
   it("formats token counts with integer, kilo, and million branches", () => {
-    expect(formatTokenShort()).toBeUndefined();
-    expect(formatTokenShort(999.9)).toBe("999");
-    expect(formatTokenShort(1_500)).toBe("1.5k");
-    expect(formatTokenShort(10_000)).toBe("10k");
-    expect(formatTokenShort(15_400)).toBe("15k");
+    expect(formatTokenUsageDisplay()).toBe("");
+    expect(formatTokenUsageDisplay({ totalTokens: 999.9 })).toBe("tokens 999 prompt/cache");
+    expect(formatTokenUsageDisplay({ totalTokens: 1_500 })).toBe("tokens 1.5k prompt/cache");
+    expect(formatTokenUsageDisplay({ totalTokens: 10_000 })).toBe("tokens 10k prompt/cache");
+    expect(formatTokenUsageDisplay({ totalTokens: 15_400 })).toBe("tokens 15k prompt/cache");
     // Rollover boundary: rounding to thousands must not emit an out-of-scheme
     // "1000k" — it has to advance to the million branch.
-    expect(formatTokenShort(999_499)).toBe("999k");
-    expect(formatTokenShort(999_500)).toBe("1m");
-    expect(formatTokenShort(999_999)).toBe("1m");
-    expect(formatTokenShort(1_000_000)).toBe("1m");
-    expect(formatTokenShort(1_250_000)).toBe("1.3m");
+    expect(formatTokenUsageDisplay({ totalTokens: 999_499 })).toBe("tokens 999k prompt/cache");
+    expect(formatTokenUsageDisplay({ totalTokens: 999_500 })).toBe("tokens 1m prompt/cache");
+    expect(formatTokenUsageDisplay({ totalTokens: 999_999 })).toBe("tokens 1m prompt/cache");
+    expect(formatTokenUsageDisplay({ totalTokens: 1_000_000 })).toBe("tokens 1m prompt/cache");
+    expect(formatTokenUsageDisplay({ totalTokens: 1_250_000 })).toBe("tokens 1.3m prompt/cache");
   });
 
   it("truncates lines only when needed", () => {
@@ -78,17 +76,11 @@ describe("shared/subagents-format", () => {
     expect(resolveTotalTokens({ inputTokens: 10, outputTokens: 5 })).toBe(15);
     expect(resolveTotalTokens({ inputTokens: Number.NaN, outputTokens: 5 })).toBeUndefined();
 
-    expect(resolveIoTokens({ inputTokens: 10, outputTokens: 5 })).toEqual({
-      input: 10,
-      output: 5,
-      total: 15,
-    });
-    expect(resolveIoTokens({ outputTokens: 5 })).toEqual({
-      input: 0,
-      output: 5,
-      total: 5,
-    });
-    expect(resolveIoTokens({ inputTokens: Number.NaN, outputTokens: 0 })).toBeUndefined();
+    expect(formatTokenUsageDisplay({ inputTokens: 10, outputTokens: 5 })).toBe(
+      "tokens 15 (in 10 / out 5)",
+    );
+    expect(formatTokenUsageDisplay({ outputTokens: 5 })).toBe("tokens 5 (in 0 / out 5)");
+    expect(formatTokenUsageDisplay({ inputTokens: Number.NaN, outputTokens: 0 })).toBe("");
   });
 
   it("formats io and prompt-cache usage displays with fallback branches", () => {

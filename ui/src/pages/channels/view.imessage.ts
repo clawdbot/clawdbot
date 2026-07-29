@@ -5,7 +5,9 @@ import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelConfigSection } from "./view.config.ts";
 import {
+  boolStatusKind,
   formatNullableBoolean,
+  renderChannelProbeRow,
   renderSingleAccountChannelCard,
   resolveChannelConfigured,
 } from "./view.shared.ts";
@@ -14,18 +16,26 @@ import type { ChannelsProps } from "./view.types.ts";
 export function renderIMessageCard(params: {
   props: ChannelsProps;
   imessage?: IMessageStatus | null;
-  accountCountLabel: unknown;
+  accountCount?: number;
 }) {
-  const { props, imessage, accountCountLabel } = params;
+  const { props, imessage, accountCount } = params;
   const configured = resolveChannelConfigured("imessage", props);
 
   return renderSingleAccountChannelCard({
     title: t("channels.imessage.title"),
     subtitle: t("channels.imessage.subtitle"),
-    accountCountLabel,
+    accountCount,
     statusRows: [
-      { label: t("common.configured"), value: formatNullableBoolean(configured) },
-      { label: t("common.running"), value: imessage?.running ? t("common.yes") : t("common.no") },
+      {
+        label: t("common.configured"),
+        value: formatNullableBoolean(configured),
+        kind: boolStatusKind(configured),
+      },
+      {
+        label: t("common.running"),
+        value: imessage?.running ? t("common.yes") : t("common.no"),
+        kind: boolStatusKind(imessage?.running),
+      },
       {
         label: t("common.lastStart"),
         value: imessage?.lastStartAt
@@ -40,15 +50,10 @@ export function renderIMessageCard(params: {
       },
     ],
     lastError: imessage?.lastError,
-    secondaryCallout: imessage?.probe
-      ? html`<div class="callout" style="margin-top: 12px;">
-          ${imessage.probe.ok ? t("common.probeOk") : t("common.probeFailed")} ·
-          ${imessage.probe.error ?? ""}
-        </div>`
-      : nothing,
+    secondaryCallout: imessage?.probe ? renderChannelProbeRow(imessage.probe) : nothing,
     configSection: renderChannelConfigSection({ channelId: "imessage", props }),
-    footer: html`<div class="row" style="margin-top: 12px;">
-      <button class="btn" @click=${() => props.onRefresh(true)}>${t("common.probe")}</button>
-    </div>`,
+    footer: html`<button class="btn" @click=${() => props.onRefresh(true)}>
+      ${t("common.probe")}
+    </button>`,
   });
 }

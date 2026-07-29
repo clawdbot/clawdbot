@@ -4,7 +4,7 @@
  * Converts lightweight HTML into bounded markdown/text without pulling in a full renderer.
  */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { decodeHtmlEntityAt } from "../utils/html.js";
+import { decodeHtmlEntities } from "../../shared/html-entities.js";
 import { sanitizeHtml, stripInvisibleUnicode } from "./web-fetch-visibility.js";
 
 /** Output mode requested by web_fetch extraction. */
@@ -51,33 +51,10 @@ type TagEndResult = {
   rawTextStart?: number;
 };
 
-// Decode entities through the canonical shared decoder (agents/utils/html.ts) so web_fetch and the
-// renderer share one entity contract — the divergent hand-rolled copy here was what truncated astral
-// entities. A single left-to-right pass also avoids double-decoding "&amp;#39;" into "'", because the
-// "&amp;" is consumed before its following "#39;" is ever seen as an entity.
 function decodeEntities(value: string): string {
-  if (!value.includes("&")) {
-    return value;
-  }
-  let out = "";
-  for (let i = 0; i < value.length; i += 1) {
-    if (value[i] === "&") {
-      // &nbsp; is not an escapable entity in the shared decoder; render it as a space.
-      if (value.slice(i, i + 6).toLowerCase() === "&nbsp;") {
-        out += " ";
-        i += 5;
-        continue;
-      }
-      const decoded = decodeHtmlEntityAt(value, i);
-      if (decoded) {
-        out += decoded.text;
-        i += decoded.length - 1;
-        continue;
-      }
-    }
-    out += value[i];
-  }
-  return out;
+  // Display extraction historically accepted mixed-case &nbsp; and treats non-breaking spaces as
+  // ordinary collapsible whitespace. Normalize it before the shared decoder to stay single-pass.
+  return decodeHtmlEntities(value.replace(/&nbsp;/gi, "\u00a0")).replaceAll("\u00a0", " ");
 }
 
 function isAsciiWhitespace(value: string): boolean {

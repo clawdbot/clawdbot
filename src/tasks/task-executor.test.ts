@@ -1,16 +1,11 @@
 // Covers task executor runtime selection, lifecycle updates, and error paths.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetAgentEventsForTest, resetAgentRunContextForTest } from "../infra/agent-events.js";
-import { resetHeartbeatWakeStateForTests } from "../infra/heartbeat-wake.js";
+import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { captureEnv } from "../test-utils/env.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
-import {
-  getDetachedTaskLifecycleRuntime,
-  resetDetachedTaskLifecycleRuntimeForTests,
-  setDetachedTaskLifecycleRuntime,
-} from "./detached-task-runtime.js";
+import { getDetachedTaskLifecycleRuntime } from "./detached-task-runtime.js";
 import {
   cancelFlowById,
   cancelFlowByIdForOwner,
@@ -20,7 +15,6 @@ import {
   createRunningTaskRun as createRunningTaskRunOrNull,
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
-  runTaskInFlow,
   runTaskInFlowForOwner,
   setDetachedTaskDeliveryStatusByRunId,
   startTaskRunByRunId,
@@ -29,22 +23,26 @@ import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   getTaskFlowById,
   listTaskFlowRecords,
-  resetTaskFlowRegistryForTests,
 } from "./task-flow-registry.js";
-import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
-  setTaskRegistryDeliveryRuntimeForTests,
   getTaskById,
-  findLatestTaskForFlowId,
   findTaskByRunId,
+  listTasksForFlowId,
   markTaskTerminalById,
+} from "./task-registry.js";
+import type { TaskRecord } from "./task-registry.types.js";
+import {
+  configureTaskFlowRegistryRuntime,
+  resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
+  resetTaskFlowRegistryForTests,
+  setDetachedTaskLifecycleRuntime,
   setTaskRegistryControlRuntimeForTests,
-} from "./task-registry.js";
-import type { TaskRecord } from "./task-registry.types.js";
+  setTaskRegistryDeliveryRuntimeForTests,
+} from "./task-runtime.test-helpers.js";
 
 const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 
@@ -75,6 +73,15 @@ function createManagedTaskFlow(
   }
   return flow;
 }
+
+function runTaskInFlow(
+  params: Omit<Parameters<typeof runTaskInFlowForOwner>[0], "callerOwnerKey">,
+) {
+  return runTaskInFlowForOwner({
+    ...params,
+    callerOwnerKey: "agent:main:main",
+  });
+}
 const hoisted = vi.hoisted(() => {
   const sendMessageMock = vi.fn();
   const cancelSessionMock = vi.fn();
@@ -104,17 +111,16 @@ async function withTaskExecutorStateDir(run: (stateDir: string) => Promise<void>
   await withStateDirEnv("openclaw-task-executor-", async ({ stateDir }) => {
     resetDetachedTaskLifecycleRuntimeForTests();
     resetSystemEventsForTest();
-    resetHeartbeatWakeStateForTests();
     resetAgentEventsForTest();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryControlRuntimeForTests();
-    resetAgentRunContextForTest();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     setTaskRegistryDeliveryRuntimeForTests({
       sendMessage: hoisted.sendMessageMock,
     });
     setTaskRegistryControlRuntimeForTests({
+      cancelActiveCronTaskRun: () => false,
       getAcpSessionManager: () => ({
         cancelSession: hoisted.cancelSessionMock,
       }),
@@ -124,11 +130,9 @@ async function withTaskExecutorStateDir(run: (stateDir: string) => Promise<void>
       await run(stateDir);
     } finally {
       resetSystemEventsForTest();
-      resetHeartbeatWakeStateForTests();
       resetAgentEventsForTest();
       resetTaskRegistryDeliveryRuntimeForTests();
       resetTaskRegistryControlRuntimeForTests();
-      resetAgentRunContextForTest();
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
     }
@@ -215,11 +219,9 @@ describe("task-executor", () => {
   afterEach(() => {
     ORIGINAL_ENV.restore();
     resetSystemEventsForTest();
-    resetHeartbeatWakeStateForTests();
     resetAgentEventsForTest();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryControlRuntimeForTests();
-    resetAgentRunContextForTest();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     hoisted.sendMessageMock.mockReset();
@@ -733,7 +735,7 @@ describe("task-executor", () => {
       expect(created.found).toBe(false);
       expect(created.created).toBe(false);
       expect(created.reason).toBe("Flow not found.");
-      expect(findLatestTaskForFlowId(flow.flowId)).toBeUndefined();
+      expect(listTasksForFlowId(flow.flowId)[0]).toBeUndefined();
     });
   });
 
@@ -1129,3 +1131,4 @@ describe("task-executor", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

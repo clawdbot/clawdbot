@@ -484,6 +484,46 @@ describe("cron service store seam coverage", () => {
     );
   });
 
+  it("clears a paced slot and its provenance after force reload changes pacing", async () => {
+    const { storePath } = await makeStorePath();
+    const staleNextRunAtMs = STORE_TEST_NOW + 3_600_000;
+
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [
+        createReloadCronJob({
+          pacing: { max: "4h" },
+          state: {
+            nextRunAtMs: staleNextRunAtMs,
+            pacedNextRunAtMs: staleNextRunAtMs,
+          },
+        }),
+      ],
+    });
+
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [
+        createReloadCronJob({
+          pacing: { max: "2h" },
+          updatedAtMs: STORE_TEST_NOW,
+          state: {
+            nextRunAtMs: staleNextRunAtMs,
+            pacedNextRunAtMs: staleNextRunAtMs,
+          },
+        }),
+      ],
+    });
+
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+
+    const reloadedJob = findJobOrThrow(state, "reload-cron-expr-job");
+    expect(reloadedJob.state.nextRunAtMs).toBeUndefined();
+    expect(reloadedJob.state.pacedNextRunAtMs).toBeUndefined();
+  });
+
   it("preserves nextRunAtMs after force reload when cron schedule key order changes only", async () => {
     const { storePath } = await makeStorePath();
     const dueNextRunAtMs = STORE_TEST_NOW - 1_000;

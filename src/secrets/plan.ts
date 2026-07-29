@@ -9,7 +9,7 @@ import { parseDotPath, toDotPath } from "./shared.js";
 import { resolvePlanTargetAgainstRegistry, type ResolvedPlanTarget } from "./target-registry.js";
 
 /** Registry target id accepted by a secrets apply plan. */
-export type SecretsPlanTargetType = string;
+type SecretsPlanTargetType = string;
 
 /** One planned SecretRef mutation against config or auth-profile storage. */
 export type SecretsPlanTarget = {
@@ -186,6 +186,8 @@ export function normalizeSecretsPlanOptions(
   return {
     scrubEnv: options?.scrubEnv ?? true,
     scrubAuthProfilesForProviderTargets: options?.scrubAuthProfilesForProviderTargets ?? true,
-    scrubLegacyAuthJson: options?.scrubLegacyAuthJson ?? true,
+    // Deprecated plan input retained for protocol compatibility. Doctor owns
+    // legacy auth.json migration; secrets apply never reads or rewrites it.
+    scrubLegacyAuthJson: false,
   };
 }

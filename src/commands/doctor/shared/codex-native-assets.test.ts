@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { collectCodexNativeAssetInfoNotes, scanCodexNativeAssets } from "./codex-native-assets.js";
+import { collectCodexNativeAssetInfoNotes } from "./codex-native-assets.js";
+import { scanCodexNativeAssets } from "./codex-native-assets.test-support.js";
 
 const tempRoots = new Set<string>();
 
@@ -121,10 +122,8 @@ describe("collectCodexNativeAssetInfoNotes", () => {
 
     expect(notes).toStrictEqual([
       [
-        "- Personal Codex CLI assets were found, but native Codex-mode OpenClaw agents use isolated per-agent Codex homes.",
-        `- Sources: ${codexHome} and ${path.join(root, ".agents", "skills")} (1 skill, 0 plugins, 0 config files, 0 hook files).`,
-        "- These assets will not be loaded by the Codex app-server child unless you intentionally promote them.",
-        "- If the Codex plugin is not installed, run `openclaw plugins install npm:@openclaw/codex` first. Then run `openclaw migrate plan codex` to inventory them. Applying that migration copies skills into the current OpenClaw agent workspace; Codex plugins, hooks, and config stay manual-review only.",
+        `- Personal Codex CLI assets found (1 skill, 0 plugins, 0 config files, 0 hook files) in ${codexHome} and ${path.join(root, ".agents", "skills")}; native Codex-mode agents use isolated per-agent homes and will not load them.`,
+        "- To review or promote them: install the Codex plugin (openclaw plugins install npm:@openclaw/codex), then run openclaw migrate plan codex.",
       ].join("\n"),
     ]);
   });

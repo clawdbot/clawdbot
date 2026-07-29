@@ -2,16 +2,11 @@
 import { describe, expect, it } from "vitest";
 import {
   normalizeVoiceWakeRoutingConfig,
-  normalizeVoiceWakeTriggerWord,
   resolveVoiceWakeRouteByTrigger,
   validateVoiceWakeRoutingConfigInput,
 } from "./voicewake-routing.js";
 
 describe("voicewake routing normalization", () => {
-  it("normalizes punctuation-heavy triggers to token-equivalent spacing", () => {
-    expect(normalizeVoiceWakeTriggerWord("  Hey,   Bot!!  ")).toBe("hey bot");
-  });
-
   it("normalizes agentId targets before persisting routes", () => {
     const normalized = normalizeVoiceWakeRoutingConfig({
       defaultTarget: { mode: "current" },

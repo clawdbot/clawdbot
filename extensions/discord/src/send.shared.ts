@@ -45,16 +45,13 @@ const DISCORD_UPLOAD_TOO_LARGE_NOTICE =
 type DiscordRequest = DiscordRetryRunner;
 
 export {
-  buildDiscordMessagePayload,
   buildDiscordMessageRequest,
   createDiscordMessageNonce,
   resolveDiscordMessageFlags,
   resolveDiscordSendComponents,
   resolveDiscordSendEmbeds,
   stripUndefinedFields,
-  SUPPRESS_EMBEDS_FLAG,
   SUPPRESS_NOTIFICATIONS_FLAG,
-  type DiscordSendComponentFactory,
   type DiscordAllowedMentions,
   type DiscordSendComponents,
   type DiscordSendEmbeds,

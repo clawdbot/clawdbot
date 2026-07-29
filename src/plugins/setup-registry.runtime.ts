@@ -28,14 +28,6 @@ type SetupCliBackendDescriptorCache = {
 };
 
 let cachedSetupCliBackendDescriptors: SetupCliBackendDescriptorCache | undefined;
-
-/** Test hook for resetting the descriptor cache. */
-export const testing = {
-  resetDescriptorCache(): void {
-    cachedSetupCliBackendDescriptors = undefined;
-  },
-};
-
 function resolveMetadataSnapshotForSetupCliBackends(
   params: Omit<SetupCliBackendDescriptorLookupParams, "backend"> = {},
 ): {

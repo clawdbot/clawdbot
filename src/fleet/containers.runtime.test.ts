@@ -19,13 +19,12 @@ const profileMocks = vi.hoisted(() => ({
 
 vi.mock("./cell-profile.js", () => profileMocks);
 
-import {
-  __test as containersTestApi,
-  createFleetContainerRuntime,
-  type CellContainerProfile,
-  type FleetContainerCommandExecutor,
-  type FleetContainerStreamExecutor,
-} from "./containers.runtime.js";
+import type { CellContainerProfile } from "./cell-profile.js";
+import { createRedactingStreamWriter } from "./containers.redaction.js";
+import { createFleetContainerRuntime } from "./containers.runtime.js";
+
+type FleetContainerCommandExecutor = NonNullable<Parameters<typeof createFleetContainerRuntime>[0]>;
+type FleetContainerStreamExecutor = NonNullable<Parameters<typeof createFleetContainerRuntime>[1]>;
 
 function successfulExecutor() {
   return vi.fn<FleetContainerCommandExecutor>(async () => ({
@@ -154,10 +153,11 @@ describe("fleet container runtime", () => {
     const executor = vi.fn<FleetContainerCommandExecutor>(async () => ({
       stdout: JSON.stringify([
         {
+          Id: "container-id",
           Image: "sha256:old-image-id",
           State: { Status: "running", Running: true },
           Config: {
-            Env: ["OPENCLAW_GATEWAY_TOKEN=secret", "FEATURE=a=b"],
+            Env: ["OPENCLAW_GATEWAY_TOKEN=test-auth-token", "FEATURE=a=b"],
             Image: "ghcr.io/openclaw/openclaw:latest",
             Labels: { "openclaw.fleet.tenant": "acme" },
             User: "1000:1000",
@@ -178,10 +178,11 @@ describe("fleet container runtime", () => {
       createFleetContainerRuntime(executor).inspect("podman", "cell-acme"),
     ).resolves.toEqual({
       kind: "ok",
+      containerId: "container-id",
       state: "running",
       running: true,
       labels: { "openclaw.fleet.tenant": "acme" },
-      environment: { OPENCLAW_GATEWAY_TOKEN: "secret", FEATURE: "a=b" },
+      environment: { OPENCLAW_GATEWAY_TOKEN: "test-auth-token", FEATURE: "a=b" },
       imageId: "sha256:old-image-id",
       memory: "2147483648",
       cpus: "2",
@@ -510,7 +511,7 @@ describe("fleet container runtime", () => {
   it("redacts secrets from streamed log output, including across chunk boundaries", () => {
     const written: string[] = [];
     const target = { write: (text: string) => written.push(text) } as unknown as NodeJS.WriteStream;
-    const writer = containersTestApi.createRedactingStreamWriter(target, ["gw-secret-token"]);
+    const writer = createRedactingStreamWriter(target, ["gw-secret-token"]);
     writer.write(Buffer.from("boot ok\ntoken=gw-sec"));
     writer.write(Buffer.from("ret-token done\ntail without newline"));
     writer.flush();
@@ -523,7 +524,7 @@ describe("fleet container runtime", () => {
   it("never splits a secret across a forced long-line flush", () => {
     const written: string[] = [];
     const target = { write: (text: string) => written.push(text) } as unknown as NodeJS.WriteStream;
-    const writer = containersTestApi.createRedactingStreamWriter(target, ["gw-secret-token"]);
+    const writer = createRedactingStreamWriter(target, ["gw-secret-token"]);
     // An unterminated line ending exactly in a secret prefix at the flush point.
     writer.write(Buffer.from(`${"x".repeat(64 * 1024)}gw-sec`));
     writer.write(Buffer.from("ret-token trailing"));
@@ -544,6 +545,7 @@ describe("fleet container runtime", () => {
         : {
             stdout: JSON.stringify([
               {
+                Id: "container-id",
                 Image: "sha256:image",
                 State: { Status: "running", Running: true },
                 Config: { Env: [], Labels: {} },

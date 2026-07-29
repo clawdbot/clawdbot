@@ -11,7 +11,7 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
-export type ModelRuntimeDirectiveResolution =
+type ModelRuntimeDirectiveResolution =
   | { kind: "unchanged" }
   | { kind: "clear" }
   | { kind: "set"; runtime: string }

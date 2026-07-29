@@ -30,10 +30,10 @@ describe("stripHtmlFromTeamsMessage", () => {
     expect(stripHtmlFromTeamsMessage("<p>Hello <b>world</b></p>")).toBe("Hello world");
   });
 
-  it("decodes common HTML entities", () => {
-    expect(stripHtmlFromTeamsMessage("&amp; &lt;b&gt; &quot;x&quot; &#39;y&#39; &nbsp;z")).toBe(
-      "& <b> \"x\" 'y' z",
-    );
+  it("decodes HTML5 entities", () => {
+    expect(
+      stripHtmlFromTeamsMessage("&amp; &lt;b&gt; &quot;x&quot; &#39;y&#39; &nbsp;z &copy;"),
+    ).toBe("& <b> \"x\" 'y' z ©");
   });
 
   it("does not double-decode escaped entities (decodes &amp; last)", () => {

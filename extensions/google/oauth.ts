@@ -1,6 +1,5 @@
 // Google plugin module implements oauth behavior.
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
-import { clearCredentialsCache, extractGeminiCliCredentials } from "./oauth.credentials.js";
 import {
   buildAuthUrl,
   generateOAuthState,
@@ -11,9 +10,6 @@ import {
 } from "./oauth.flow.js";
 import type { GeminiCliOAuthContext, GeminiCliOAuthCredentials } from "./oauth.shared.js";
 import { exchangeCodeForTokens, refreshTokensForGeminiCli } from "./oauth.token.js";
-
-export { clearCredentialsCache, extractGeminiCliCredentials };
-export type { GeminiCliOAuthContext, GeminiCliOAuthCredentials };
 
 export async function loginGeminiCliOAuth(
   ctx: GeminiCliOAuthContext,

@@ -1,4 +1,5 @@
 /** Builds plugin lookup tables keyed by manifest ids, channels, providers, and commands. */
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createGatewayStartupMetadataPluginIdScope,
@@ -14,7 +15,7 @@ import {
 import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
 import { normalizeWorkerProviderIds } from "./worker-provider-registry.js";
 
-export type PluginLookUpTableMetrics = PluginMetadataSnapshot["metrics"] & {
+type PluginLookUpTableMetrics = PluginMetadataSnapshot["metrics"] & {
   startupPlanMs: number;
   startupPluginCount: number;
   deferredChannelPluginCount: number;
@@ -26,7 +27,7 @@ export type PluginLookUpTable = PluginMetadataSnapshot & {
   metrics: PluginLookUpTableMetrics;
 };
 
-export type LoadPluginLookUpTableParams = {
+type LoadPluginLookUpTableParams = {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   workspaceDir?: string;
@@ -34,17 +35,13 @@ export type LoadPluginLookUpTableParams = {
   index?: PluginRegistrySnapshot;
   metadataSnapshot?: PluginMetadataSnapshot;
   workerProviderIds?: readonly string[];
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 };
 
-let lookupTableMemoBySnapshot = new WeakMap<
+const lookupTableMemoBySnapshot = new WeakMap<
   PluginMetadataSnapshot,
   Map<string, PluginLookUpTable>
 >();
-
-export function clearPluginLookUpTableMemoForTest(): void {
-  lookupTableMemoBySnapshot = new WeakMap<PluginMetadataSnapshot, Map<string, PluginLookUpTable>>();
-}
-
 export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): PluginLookUpTable {
   const requestedSnapshotConfig = params.activationSourceConfig ?? params.config;
   const workerProviderIds = normalizeWorkerProviderIds(params.workerProviderIds ?? []);
@@ -55,6 +52,7 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
       : {}),
     env: params.env,
     workerProviderIds,
+    ambientEnvTriggers: params.ambientEnvTriggers,
   });
   const metadataSnapshot =
     params.metadataSnapshot &&
@@ -95,6 +93,7 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
     index,
     manifestRegistry,
     workerProviderIds,
+    ambientEnvTriggers: params.ambientEnvTriggers,
   });
   const startupPlanMs = performance.now() - startupPlanStartedAt;
 

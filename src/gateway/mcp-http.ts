@@ -50,11 +50,6 @@ import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 // Loopback MCP server exposes gateway-scoped tools to local MCP clients over a
 // bearer-token HTTP endpoint bound to 127.0.0.1. Only one active server/runtime
 // is registered per process.
-export {
-  createMcpAttachGrantServerConfig,
-  createMcpLoopbackServerConfig,
-  getActiveMcpLoopbackRuntime,
-} from "./mcp-http.loopback-runtime.js";
 
 type McpLoopbackServer = {
   port: number;
@@ -72,16 +67,12 @@ function createMcpJsonParseError(error: unknown): Error & { code: "mcp_json_pars
 }
 
 function isMcpJsonParseError(error: unknown): error is Error & { code: "mcp_json_parse_error" } {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as { code?: unknown }).code === "mcp_json_parse_error"
-  );
+  return isRecord(error) && error.code === "mcp_json_parse_error";
 }
 
-function parseMcpJsonBody(body: string): JsonRpcRequest | JsonRpcRequest[] {
+function parseMcpJsonBody(body: string): unknown {
   try {
-    return JSON.parse(body) as JsonRpcRequest | JsonRpcRequest[];
+    return JSON.parse(body) as unknown;
   } catch (error) {
     throw createMcpJsonParseError(error);
   }
@@ -99,13 +90,27 @@ function isJsonRpcRequest(message: unknown): message is JsonRpcRequest {
   return isRecord(message) && message.jsonrpc === "2.0" && typeof message.method === "string";
 }
 
-function jsonRpcInternalError(parsed: JsonRpcRequest | JsonRpcRequest[] | undefined) {
-  if (Array.isArray(parsed)) {
-    return parsed.map((message) =>
-      jsonRpcError(readJsonRpcRequestId(message), -32603, "Internal error"),
-    );
+function shouldSendJsonRpcResponse(message: unknown): boolean {
+  return !isJsonRpcRequest(message) || Object.hasOwn(message, "id");
+}
+
+function collectJsonRpcResponses<T>(
+  messages: unknown[],
+  createResponse: (message: unknown) => T,
+): T[] {
+  return messages.filter(shouldSendJsonRpcResponse).map(createResponse);
+}
+
+function jsonRpcInternalError(parsed: unknown) {
+  const isBatch = Array.isArray(parsed);
+  const messages = isBatch ? parsed : [parsed];
+  const responses = collectJsonRpcResponses(messages, (message) =>
+    jsonRpcError(readJsonRpcRequestId(message), -32603, "Internal error"),
+  );
+  if (responses.length === 0) {
+    return null;
   }
-  return jsonRpcError(readJsonRpcRequestId(parsed), -32603, "Internal error");
+  return isBatch ? responses : responses[0];
 }
 
 function shouldLogMcpLoopbackTraffic(): boolean {
@@ -156,7 +161,7 @@ function createRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
 }
 
 /** Starts a new MCP loopback HTTP server and registers its bearer tokens. */
-export async function startMcpLoopbackServer(port = 0): Promise<{
+async function startMcpLoopbackServer(port = 0): Promise<{
   port: number;
   close: () => Promise<void>;
 }> {
@@ -206,11 +211,17 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
     const cliRequestCaptureHandle = markMcpLoopbackRequestStarted(cliCaptureKey);
     const requestAbort = createRequestAbortSignal(req, res);
     void (async () => {
-      let parsed: JsonRpcRequest | JsonRpcRequest[] | undefined;
+      let parsed: unknown;
       let cliCaptureHandles: Array<ReturnType<typeof markMcpLoopbackToolCallStarted>> = [];
       try {
         const body = await readMcpHttpBody(req, { timeoutMs: resolveMcpHttpBodyTimeoutMs() });
         parsed = parseMcpJsonBody(body);
+        if (Array.isArray(parsed) && parsed.length === 0) {
+          markMcpLoopbackRequestClassified(cliRequestCaptureHandle);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(jsonRpcError(null, -32600, "Invalid Request")));
+          return;
+        }
         const messages = Array.isArray(parsed) ? parsed : [parsed];
         cliCaptureHandles = messages.map((message) => {
           if (
@@ -257,13 +268,18 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           (!harnessEntry ||
             isAgentHarnessSessionStoreEntryProtected(requestContext.sessionKey, harnessEntry))
         ) {
-          const errors = messages.map((message) =>
+          const errors = collectJsonRpcResponses(messages, (message) =>
             jsonRpcError(
               readJsonRpcRequestId(message),
               -32600,
               AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
             ),
           );
+          if (errors.length === 0) {
+            res.writeHead(202);
+            res.end();
+            return;
+          }
           const payload = Array.isArray(parsed)
             ? JSON.stringify(errors)
             : JSON.stringify(errors[0]);
@@ -278,6 +294,9 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           runtimePolicySessionKey: requestContext.runtimePolicySessionKey,
           agentId: requestContext.agentId,
           sessionId: requestContext.sessionId,
+          runId: requestContext.runId,
+          workspaceDir: requestContext.workspaceDir,
+          cwd: requestContext.cwd,
           modelProvider: requestContext.modelProvider,
           modelId: requestContext.modelId,
           yieldContextCacheKey: yieldContext?.cacheKey,
@@ -293,6 +312,8 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           sourceReplyDeliveryMode: requestContext.sourceReplyDeliveryMode,
           taskSuggestionDeliveryMode: requestContext.taskSuggestionDeliveryMode,
           requireExplicitMessageTarget: requestContext.requireExplicitMessageTarget,
+          toolsAllow: requestContext.toolsAllow,
+          scheduledToolPolicy: requestContext.scheduledToolPolicy,
           senderIsOwner: requestContext.senderIsOwner,
           nodeExecAllowed: requestContext.nodeExecAllowed,
           execSession: requestContext.execSession,
@@ -373,7 +394,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           } finally {
             markMcpLoopbackToolCallFinished(cliCaptureHandle);
           }
-          if (response !== null) {
+          if (response !== null && shouldSendJsonRpcResponse(message)) {
             const responseToolName =
               message.method === "tools/call" && isRecord(message.params)
                 ? message.params.name
@@ -401,7 +422,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(payload);
       } catch (error) {
-        logWarn(`mcp loopback: request handling failed: ${formatErrorMessage(error)}`);
+        logWarn(`mcp-loopback: request handling failed: ${formatErrorMessage(error)}`);
         logMcpLoopbackTraffic("request-failed", {
           message: formatErrorMessage(error),
         });
@@ -420,8 +441,14 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
             res.writeHead(400, { "Content-Type": "application/json" });
             res.end(JSON.stringify(jsonRpcError(null, -32700, "Parse error")));
           } else {
-            res.writeHead(500, { "Content-Type": "application/json" });
-            res.end(JSON.stringify(jsonRpcInternalError(parsed)));
+            const internalError = jsonRpcInternalError(parsed);
+            if (internalError === null) {
+              res.writeHead(202);
+              res.end();
+            } else {
+              res.writeHead(500, { "Content-Type": "application/json" });
+              res.end(JSON.stringify(internalError));
+            }
           }
         }
       } finally {

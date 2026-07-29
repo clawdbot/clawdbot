@@ -1,11 +1,14 @@
 // Embedded system prompt tests cover prompt assembly for provider guidance,
 // delegation mode, workspace-only safety, memory sections, and active processes.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearMemoryPluginState, registerMemoryPromptSection } from "../../plugins/memory-state.js";
+import {
+  clearMemoryPluginState,
+  registerTestMemoryPromptBuilder,
+} from "../../plugins/memory-state.test-fixtures.js";
 import type { AgentSession } from "../sessions/index.js";
 import { applySystemPromptToSession, buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
-vi.mock("../../tts/tts.js", () => ({
+vi.mock("../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
 }));
 
@@ -49,6 +52,39 @@ describe("buildEmbeddedSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Embedded Stable\n\nStable provider guidance.");
+  });
+
+  it("keeps post-compaction curated context scoped to the prepared project", () => {
+    const prompt = buildEmbeddedSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reasoningTagHint: false,
+      runtimeInfo: {
+        host: "local",
+        os: "darwin",
+        arch: "arm64",
+        node: process.version,
+        model: "gpt-5.4",
+        provider: "openai",
+      },
+      tools: [],
+      modelAliasLines: [],
+      userTimezone: "UTC",
+      activeProjectKeys: ["github.com/acme/Alpha"],
+      contextFiles: [
+        {
+          path: "/tmp/openclaw/MEMORY.md",
+          content: [
+            "- Alpha compaction fact. <!-- project: github.com/acme/Alpha -->",
+            "- Beta compaction fact. <!-- project: github.com/acme/Beta -->",
+            "- Global compaction fact.",
+          ].join("\n"),
+        },
+      ],
+    });
+
+    expect(prompt).toContain("Alpha compaction fact");
+    expect(prompt).toContain("Global compaction fact");
+    expect(prompt).not.toContain("Beta compaction fact");
   });
 
   it("uses config-backed sub-agent delegation mode", () => {
@@ -223,6 +259,7 @@ describe("buildEmbeddedSystemPrompt", () => {
       nativeCommandGuidanceLines: ["Subagent-only command guidance."],
       modelAliasLines: [],
       userTimezone: "UTC",
+      promptMode: "minimal",
     });
 
     expect(prompt).toContain("- sessions_spawn");
@@ -231,10 +268,13 @@ describe("buildEmbeddedSystemPrompt", () => {
     expect(prompt).not.toContain("Larger work: use `sessions_spawn`");
     expect(prompt).not.toContain("Do not poll `subagents list` / `sessions_list` in a loop");
     expect(prompt).toContain("Subagent-only command guidance.");
+    expect(prompt).toContain("## Promised Work");
+    expect(prompt).toContain("Progress such as `running` is not completion.");
+    expect(prompt.match(/## Promised Work/g)).toHaveLength(1);
   });
 
   it("can omit base memory guidance for non-legacy context engines", () => {
-    registerMemoryPromptSection(() => ["## Memory Recall", "Use memory carefully.", ""]);
+    registerTestMemoryPromptBuilder(() => ["## Memory Recall", "Use memory carefully.", ""]);
 
     const prompt = buildEmbeddedSystemPrompt({
       workspaceDir: "/tmp/openclaw",

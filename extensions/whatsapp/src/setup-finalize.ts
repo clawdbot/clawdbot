@@ -405,6 +405,18 @@ export async function finalizeWhatsAppSetup(params: {
     accountId,
   });
 
+  if (params.options?.deferDeviceLinkToClient) {
+    // The gateway client renders the pairing QR itself (web.login.start/wait);
+    // running the terminal QR login here would print to a headless process.
+    next = await promptWhatsAppDmAccess({
+      cfg: next,
+      accountId,
+      forceAllowFrom: params.forceAllowFrom,
+      prompter: params.prompter,
+    });
+    return { cfg: next };
+  }
+
   if (!linked) {
     await params.prompter.note(
       [

@@ -1,0 +1,57 @@
+import type { AgentInternalEvent } from "../../agents/internal-events.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
+
+export type AgentRunRequest = {
+  message: string;
+  agentId?: string;
+  provider?: string;
+  model?: string;
+  to?: string;
+  replyTo?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  expectedExistingSessionId?: string;
+  thinking?: string;
+  deliver?: boolean;
+  attachments?: Array<{
+    type?: string;
+    mimeType?: string;
+    fileName?: string;
+    content?: unknown;
+  }>;
+  channel?: string;
+  replyChannel?: string;
+  accountId?: string;
+  replyAccountId?: string;
+  threadId?: string;
+  groupId?: string;
+  groupChannel?: string;
+  groupSpace?: string;
+  lane?: string;
+  cwd?: string;
+  extraSystemPrompt?: string;
+  modelRun?: boolean;
+  promptMode?: "full" | "minimal" | "none";
+  bootstrapContextMode?: "full" | "lightweight";
+  // Commitment fan-out scope is scheduler-internal and cannot be selected over Gateway RPC.
+  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  acpTurnSource?: "manual_spawn";
+  internalRuntimeHandoffId?: string;
+  execApprovalFollowupExpectedSessionId?: string;
+  internalEvents?: AgentInternalEvent[];
+  suppressPromptPersistence?: boolean;
+  sessionEffects?: "visible" | "internal";
+  idempotencyKey: string;
+  sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+  disableMessageTool?: boolean;
+  swarmCollector?: boolean;
+  swarmOutputSchema?: Record<string, unknown>;
+  forceRestartSafeTools?: boolean;
+  timeout?: number;
+  bestEffortDeliver?: boolean;
+  cleanupBundleMcpOnRunEnd?: boolean;
+  label?: string;
+  inputProvenance?: InputProvenance;
+  workspaceDir?: string;
+  voiceWakeTrigger?: string;
+};

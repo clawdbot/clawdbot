@@ -3,14 +3,10 @@
 export const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
 /** Prefix for bundled plugin source paths. */
 export const BUNDLED_PLUGIN_PATH_PREFIX = `${BUNDLED_PLUGIN_ROOT_DIR}/`;
-/** Glob for bundled plugin unit tests. */
-export const BUNDLED_PLUGIN_TEST_GLOB = `${BUNDLED_PLUGIN_ROOT_DIR}/**/*.test.ts`;
-/** Glob for bundled plugin E2E tests. */
-export const BUNDLED_PLUGIN_E2E_TEST_GLOB = `${BUNDLED_PLUGIN_ROOT_DIR}/**/*.e2e.test.ts`;
-/** Glob for bundled plugin live tests. */
-export const BUNDLED_PLUGIN_LIVE_TEST_GLOB = `${BUNDLED_PLUGIN_ROOT_DIR}/**/*.live.test.ts`;
-
-/** Return a bundled plugin source root path. */
+/**
+ * Return a bundled plugin source root path.
+ * @internal Shared test-routing script contract.
+ */
 export function bundledPluginRoot(pluginId) {
   return `${BUNDLED_PLUGIN_PATH_PREFIX}${pluginId}`;
 }
@@ -21,7 +17,7 @@ export function bundledPluginFile(pluginId, relativePath) {
 }
 
 /** Return a bundled plugin dist root path. */
-export function bundledDistPluginRoot(pluginId) {
+function bundledDistPluginRoot(pluginId) {
   return `dist/${bundledPluginRoot(pluginId)}`;
 }
 
@@ -30,7 +26,10 @@ export function bundledDistPluginFile(pluginId, relativePath) {
   return `${bundledDistPluginRoot(pluginId)}/${relativePath}`;
 }
 
-/** Return a bundled plugin source callsite string with a line number. */
+/**
+ * Return a bundled plugin source callsite string with a line number.
+ * @internal Shared repository-script contract.
+ */
 export function bundledPluginCallsite(pluginId, relativePath, line) {
   return `${bundledPluginFile(pluginId, relativePath)}:${line}`;
 }

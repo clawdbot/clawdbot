@@ -1,12 +1,11 @@
 // Slack tests cover targets plugin behavior.
 import { describe, expect, it } from "vitest";
-import { canonicalizeSlackApiTargetId } from "./target-parsing.js";
+import { canonicalizeSlackApiTargetId, slackTargetsMatch } from "./target-parsing.js";
 import {
   normalizeSlackMessagingTarget,
   parseSlackTarget,
   resolveSlackChannelId,
   slackContextTargetsMatch,
-  slackTargetsMatch,
 } from "./targets.js";
 
 describe("parseSlackTarget", () => {

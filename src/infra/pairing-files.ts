@@ -2,7 +2,7 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 
-export { createAsyncLock, readJsonIfExists, writeJson } from "./json-files.js";
+export { createAsyncLock, readJsonIfExists } from "./json-files.js";
 
 /** Resolve pending/paired JSON file locations for one pairing namespace. */
 export function resolvePairingPaths(baseDir: string | undefined, subdir: string) {

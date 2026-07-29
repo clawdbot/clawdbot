@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { assertGatewayServiceMutationAllowed } from "../infra/gateway-supervision.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { VERSION } from "../version.js";
 import { assertFutureConfigActionAllowed } from "./future-config-guard.js";
@@ -12,6 +13,7 @@ import {
   readLaunchAgentProgramArguments,
   readLaunchAgentRuntime,
   restartLaunchAgent,
+  startLaunchAgent,
   stageLaunchAgent,
   stopLaunchAgent,
   uninstallLaunchAgent,
@@ -22,10 +24,12 @@ import {
   readScheduledTaskCommand,
   readScheduledTaskRuntime,
   restartScheduledTask,
+  startScheduledTask,
   stageScheduledTask,
   stopScheduledTask,
   uninstallScheduledTask,
 } from "./schtasks.js";
+import { mergeGatewayServiceEnv } from "./service-env-merge.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -47,22 +51,15 @@ import {
   readSystemdServiceExecStart,
   readSystemdServiceRuntime,
   restartSystemdService,
+  startSystemdService,
   stageSystemdService,
   stopSystemdService,
   uninstallSystemdService,
 } from "./systemd.js";
 export type {
   GatewayServiceCommandConfig,
-  GatewayServiceControlArgs,
-  GatewayServiceEnv,
-  GatewayServiceEnvArgs,
   GatewayServiceInstallArgs,
-  GatewayServiceManageArgs,
-  GatewayServiceReadOptions,
-  GatewayServiceRestartResult,
   GatewayServiceStartRepairIssue,
-  GatewayServiceStartResult,
-  GatewayServiceStageArgs,
   GatewayServiceState,
 } from "./service-types.js";
 
@@ -82,6 +79,7 @@ export type GatewayService = {
   stage: (args: GatewayServiceStageArgs) => Promise<void>;
   install: (args: GatewayServiceInstallArgs) => Promise<void>;
   uninstall: (args: GatewayServiceManageArgs) => Promise<void>;
+  start: (args: GatewayServiceControlArgs) => Promise<void>;
   stop: (args: GatewayServiceControlArgs) => Promise<void>;
   restart: (args: GatewayServiceControlArgs) => Promise<GatewayServiceRestartResult>;
   isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
@@ -91,32 +89,6 @@ export type GatewayService = {
     opts?: GatewayServiceReadOptions,
   ) => Promise<GatewayServiceRuntime>;
 };
-
-function mergeGatewayServiceEnv(
-  baseEnv: GatewayServiceEnv,
-  command: GatewayServiceCommandConfig | null,
-): GatewayServiceEnv {
-  if (!command?.environment) {
-    return baseEnv;
-  }
-  const merged = {
-    ...baseEnv,
-    ...command.environment,
-  };
-  for (const key of [
-    "OPENCLAW_LAUNCHD_LABEL",
-    "OPENCLAW_SYSTEMD_UNIT",
-    "OPENCLAW_WINDOWS_TASK_NAME",
-  ]) {
-    // Explicit caller env selects the target service identity; installed command
-    // env may come from a different profile or stale service file.
-    const value = baseEnv[key]?.trim();
-    if (value) {
-      merged[key] = value;
-    }
-  }
-  return merged;
-}
 
 const TEMP_PROGRAM_ROOTS = [os.tmpdir(), "/tmp", "/private/tmp", "/var/tmp"].map((entry) =>
   path.resolve(entry),
@@ -246,6 +218,14 @@ export async function startGatewayService(
     };
   }
 
+  if (state.loaded && state.running) {
+    return {
+      outcome: "already-running",
+      state,
+      issues: repairIssues,
+    };
+  }
+
   if (repairIssues.length > 0) {
     return {
       outcome: "repair-required",
@@ -255,10 +235,10 @@ export async function startGatewayService(
   }
 
   try {
-    const restartResult = await service.restart({ ...args, env: state.env });
+    await service.start({ ...args, env: state.env });
     const nextState = await readGatewayServiceState(service, { env: state.env });
     return {
-      outcome: restartResult.outcome === "scheduled" ? "scheduled" : "started",
+      outcome: "started",
       state: nextState,
     };
   } catch (err) {
@@ -316,6 +296,7 @@ function createUnsupportedGatewayService(): GatewayService {
     stage: rejectUnsupportedGatewayService,
     install: rejectUnsupportedGatewayService,
     uninstall: rejectUnsupportedGatewayService,
+    start: rejectUnsupportedGatewayService,
     stop: rejectUnsupportedGatewayService,
     restart: rejectUnsupportedGatewayService,
     isLoaded: rejectUnsupportedGatewayService,
@@ -335,6 +316,7 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     stage: ignoreServiceWriteResult(stageLaunchAgent),
     install: ignoreServiceWriteResult(installLaunchAgent),
     uninstall: uninstallLaunchAgent,
+    start: startLaunchAgent,
     stop: stopLaunchAgent,
     restart: restartLaunchAgent,
     isLoaded: isLaunchAgentLoaded,
@@ -348,6 +330,7 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     stage: ignoreServiceWriteResult(stageSystemdService),
     install: ignoreServiceWriteResult(installSystemdService),
     uninstall: uninstallSystemdService,
+    start: startSystemdService,
     stop: stopSystemdService,
     restart: restartSystemdService,
     isLoaded: isSystemdServiceEnabled,
@@ -361,6 +344,7 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     stage: ignoreServiceWriteResult(stageScheduledTask),
     install: ignoreServiceWriteResult(installScheduledTask),
     uninstall: uninstallScheduledTask,
+    start: startScheduledTask,
     stop: stopScheduledTask,
     restart: restartScheduledTask,
     isLoaded: isScheduledTaskInstalled,
@@ -369,28 +353,51 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
   },
 };
 
-function withFutureConfigGuard(service: GatewayService): GatewayService {
+function assertGatewayServiceMutationOwnedByOpenClaw(
+  action: string,
+  env?: GatewayServiceEnv,
+): void {
+  assertGatewayServiceMutationAllowed(action, process.env);
+  if (env && env !== process.env) {
+    assertGatewayServiceMutationAllowed(action, env);
+  }
+}
+
+function withGatewayServiceMutationGuards(service: GatewayService): GatewayService {
   return {
     ...service,
     stage: async (args) => {
       // Service mutations rewrite durable launchd/systemd/schtasks files, so
       // block them when config was produced by a newer OpenClaw.
+      assertGatewayServiceMutationOwnedByOpenClaw("rewrite the gateway service", args.env);
       await assertFutureConfigActionAllowed("rewrite the gateway service");
       return await service.stage(args);
     },
     install: async (args) => {
+      assertGatewayServiceMutationOwnedByOpenClaw(
+        "install or rewrite the gateway service",
+        args.env,
+      );
       await assertFutureConfigActionAllowed("install or rewrite the gateway service");
       return await service.install(args);
     },
     uninstall: async (args) => {
+      assertGatewayServiceMutationOwnedByOpenClaw("uninstall the gateway service", args.env);
       await assertFutureConfigActionAllowed("uninstall the gateway service");
       return await service.uninstall(args);
     },
+    start: async (args) => {
+      assertGatewayServiceMutationOwnedByOpenClaw("start the gateway service", args.env);
+      await assertFutureConfigActionAllowed("start the gateway service");
+      return await service.start(args);
+    },
     stop: async (args) => {
+      assertGatewayServiceMutationOwnedByOpenClaw("stop the gateway service", args.env);
       await assertFutureConfigActionAllowed("stop the gateway service");
       return await service.stop(args);
     },
     restart: async (args) => {
+      assertGatewayServiceMutationOwnedByOpenClaw("restart the gateway service", args.env);
       await assertFutureConfigActionAllowed("restart the gateway service");
       return await service.restart(args);
     },
@@ -405,7 +412,7 @@ function isSupportedGatewayServicePlatform(
 
 export function resolveGatewayService(): GatewayService {
   if (isSupportedGatewayServicePlatform(process.platform)) {
-    return withFutureConfigGuard(GATEWAY_SERVICE_REGISTRY[process.platform]);
+    return withGatewayServiceMutationGuards(GATEWAY_SERVICE_REGISTRY[process.platform]);
   }
   return createUnsupportedGatewayService();
 }

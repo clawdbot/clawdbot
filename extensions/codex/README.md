@@ -8,7 +8,7 @@ Install from OpenClaw:
 openclaw plugins install @openclaw/codex
 ```
 
-Use this plugin when you want OpenClaw to run Codex-backed model turns, media understanding, and prompt overlays through the Codex app-server harness, or to browse non-archived Codex Desktop and CLI sessions and paginated transcripts across paired computers.
+Use this plugin when you want OpenClaw to run Codex-backed model turns, media understanding, and prompt overlays through the Codex app-server harness, or to browse non-archived Codex CLI, VS Code, Atlas, and ChatGPT sessions and paginated transcripts across paired computers.
 
 Guided onboarding attempts to install and enable supervision after it detects a native Codex installation and the selected inference backend passes its live check; Codex does not need to be the primary backend. Supervision activates when that opportunistic plugin setup succeeds. App Server availability is checked when supervision connects. An explicit Codex plugin disable, plugin-policy block, or `supervision.enabled: false` prevents opportunistic enablement. Manual setups enable `plugins.entries.codex.config.supervision.enabled`. Without explicit App Server connection settings, supervision uses a managed user-home stdio connection; explicit `appServer` settings are honored.
 

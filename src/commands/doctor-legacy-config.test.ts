@@ -1,6 +1,10 @@
 // Doctor legacy-config tests cover compatibility normalizers for old channel, browser, and config shapes.
 import { describe, expect, it } from "vitest";
-import { normalizeLegacyStreamingAliases } from "../config/channel-compat-normalization.js";
+import {
+  normalizeLegacyChannelAliases,
+  normalizeLegacyStreamingAliases,
+  resolveLegacyAliasStreamingMode,
+} from "../config/channel-compat-normalization.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeLegacyBrowserConfig } from "./doctor/shared/legacy-config-core-normalizers.js";
 
@@ -21,7 +25,6 @@ function normalizeStreaming(params: {
   resolvedMode: string;
   aliasOnlyMode?: string;
   resolvedNativeTransport?: unknown;
-  offModeLegacyNotice?: (pathPrefix: string) => string;
 }) {
   const changes: string[] = [];
   const result = normalizeLegacyStreamingAliases({
@@ -80,15 +83,12 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
       entry: { streamMode: "off" },
       pathPrefix: "channels.discord",
       resolvedMode: "off",
-      offModeLegacyNotice: (pathPrefix) =>
-        `${pathPrefix}.streaming remains off by default to avoid Discord preview-edit rate limits; set ${pathPrefix}.streaming.mode="partial" to opt in explicitly.`,
     });
 
     expect(res.entry.streaming).toEqual({ mode: "off" });
     expect(getLegacyProperty(res.entry, "streamMode")).toBeUndefined();
     expect(res.changes).toEqual([
       "Moved channels.discord.streamMode → channels.discord.streaming.mode (off).",
-      'channels.discord.streaming remains off by default to avoid Discord preview-edit rate limits; set channels.discord.streaming.mode="partial" to opt in explicitly.',
     ]);
   });
 
@@ -169,6 +169,164 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
     expect(res.changes).toEqual([
       "Moved channels.slack.streaming (boolean) → channels.slack.streaming.mode (off).",
       "Moved channels.slack.streaming (boolean) → channels.slack.streaming.nativeTransport.",
+    ]);
+  });
+});
+
+describe("normalizeLegacyChannelAliases account inheritance seeding", () => {
+  // Discord-shaped options: object-without-mode default "off", absent default
+  // "progress", account merge replaces the root streaming object wholesale.
+  function normalizeChannel(
+    entry: Record<string, unknown>,
+    options?: { seedAccountStreamingFromRoot?: boolean },
+  ) {
+    const changes: string[] = [];
+    const result = normalizeLegacyChannelAliases({
+      entry,
+      pathPrefix: "channels.discord",
+      changes,
+      seedAccountStreamingFromRoot: options?.seedAccountStreamingFromRoot ?? true,
+      resolveStreamingOptions: (value) => ({
+        resolvedMode: resolveLegacyAliasStreamingMode(value, "off"),
+        aliasOnlyMode: "progress",
+        includePreviewChunk: true,
+      }),
+    });
+    return { entry: result.entry, changes };
+  }
+
+  function workStreaming(entry: Record<string, unknown>): unknown {
+    return (entry.accounts as { work: Record<string, unknown> }).work.streaming;
+  }
+
+  it("pins the absent-object default when no root streaming object exists", () => {
+    // Truth table row 1: root absent → account previously resolved the
+    // channel's streaming-absent default, so migration pins it explicitly.
+    const res = normalizeChannel({
+      accounts: { work: { blockStreaming: true } },
+    });
+
+    expect(workStreaming(res.entry)).toEqual({
+      mode: "progress",
+      block: { enabled: true },
+    });
+    expect(res.changes).toEqual([
+      "Moved channels.discord.accounts.work.blockStreaming → channels.discord.accounts.work.streaming.block.enabled.",
+      "Set channels.discord.accounts.work.streaming.mode (progress) to keep the previous default while migrating flat streaming keys.",
+    ]);
+  });
+
+  it("seeds the root object's mode and subfields when the root has a mode", () => {
+    // Truth table row 2: account previously inherited the root object wholesale,
+    // so the created account object copies mode plus subfields; no pin needed.
+    const res = normalizeChannel({
+      streaming: { mode: "block", block: { coalesce: { idleMs: 5 } } },
+      accounts: { work: { chunkMode: "newline" } },
+    });
+
+    expect(workStreaming(res.entry)).toEqual({
+      mode: "block",
+      chunkMode: "newline",
+      block: { coalesce: { idleMs: 5 } },
+    });
+    expect(res.entry.streaming).toEqual({ mode: "block", block: { coalesce: { idleMs: 5 } } });
+    expect(res.changes).toEqual([
+      "Moved channels.discord.accounts.work.chunkMode → channels.discord.accounts.work.streaming.chunkMode.",
+      "Copied channels.discord.streaming into channels.discord.accounts.work.streaming to keep inherited settings while migrating flat streaming keys.",
+    ]);
+  });
+
+  it("seeds subfields without pinning a mode when the root object has no mode", () => {
+    // Truth table row 3: the account previously resolved the root object's
+    // object-without-mode default; pinning absentObjectDefault would change it.
+    const res = normalizeChannel({
+      streaming: { chunkMode: "word" },
+      accounts: { work: { blockStreaming: true } },
+    });
+
+    const streaming = workStreaming(res.entry) as Record<string, unknown>;
+    expect(streaming).toEqual({
+      chunkMode: "word",
+      block: { enabled: true },
+    });
+    expect(streaming.mode).toBeUndefined();
+    expect(res.changes).toEqual([
+      "Moved channels.discord.accounts.work.blockStreaming → channels.discord.accounts.work.streaming.block.enabled.",
+      "Copied channels.discord.streaming into channels.discord.accounts.work.streaming to keep inherited settings while migrating flat streaming keys.",
+    ]);
+  });
+
+  it("resolves conflicting root/account slots with per-resolver precedence", () => {
+    // Pre-migration precedence differs per slot: mode and block.enabled
+    // resolve on the MERGED entry (root nested outranks account flat aliases),
+    // while chunkMode resolves the raw account entry first, so the account
+    // alias wins there. Seeding preserves each slot's actual resolver order.
+    const res = normalizeChannel({
+      streaming: { mode: "block", chunkMode: "word" },
+      accounts: { work: { streamMode: "partial", chunkMode: "newline" } },
+    });
+
+    expect(workStreaming(res.entry)).toEqual({
+      mode: "block",
+      chunkMode: "newline",
+    });
+  });
+
+  it("merges coalesce per field and keeps root preview.chunk atomic when seeding", () => {
+    // block.coalesce: resolveProviderBlockStreamingCoalesce merges the account
+    // pick over the root pick per field. preview.chunk: the merged-entry
+    // resolver picks the whole object atomically, so the root nested chunk
+    // must not blend with the account draftChunk-derived one.
+    const res = normalizeChannel({
+      streaming: {
+        mode: "block",
+        block: { coalesce: { idleMs: 5, minChars: 100 } },
+        preview: { chunk: { minChars: 200 } },
+      },
+      accounts: {
+        work: {
+          blockStreaming: true,
+          blockStreamingCoalesce: { minChars: 900 },
+          draftChunk: { maxChars: 800 },
+        },
+      },
+    });
+
+    expect(workStreaming(res.entry)).toEqual({
+      mode: "block",
+      block: { enabled: true, coalesce: { idleMs: 5, minChars: 900 } },
+      preview: { chunk: { minChars: 200 } },
+    });
+  });
+
+  it("does not seed accounts whose streaming key already existed", () => {
+    const res = normalizeChannel({
+      streaming: { mode: "block", chunkMode: "word" },
+      accounts: { work: { streaming: false } },
+    });
+
+    expect(workStreaming(res.entry)).toEqual({
+      mode: "off",
+    });
+    expect(res.changes).toEqual([
+      "Moved channels.discord.accounts.work.streaming (boolean) → channels.discord.accounts.work.streaming.mode (off).",
+    ]);
+  });
+
+  it("does not seed for deep-merge channels so runtime inheritance keeps composing", () => {
+    // Slack/iMessage deep-merge root+account streaming at runtime; copying root
+    // values into the account config would freeze inheritance at fix time.
+    const res = normalizeChannel(
+      {
+        streaming: { mode: "block", block: { coalesce: { idleMs: 5 } } },
+        accounts: { work: { chunkMode: "newline" } },
+      },
+      { seedAccountStreamingFromRoot: false },
+    );
+
+    expect(workStreaming(res.entry)).toEqual({ chunkMode: "newline" });
+    expect(res.changes).toEqual([
+      "Moved channels.discord.accounts.work.chunkMode → channels.discord.accounts.work.streaming.chunkMode.",
     ]);
   });
 });

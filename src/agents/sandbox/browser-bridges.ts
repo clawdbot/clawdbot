@@ -5,7 +5,7 @@
  */
 import { type BrowserBridge, stopBrowserBridgeServer } from "../../plugin-sdk/browser-bridge.js";
 
-export type CachedBrowserBridge = {
+type CachedBrowserBridge = {
   bridge: BrowserBridge;
   containerName: string;
   authToken?: string;

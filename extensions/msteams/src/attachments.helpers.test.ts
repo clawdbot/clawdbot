@@ -1,48 +1,16 @@
 // Msteams tests cover attachments.helpers plugin behavior.
-import { beforeEach, describe, expect, it } from "vitest";
-import type { PluginRuntime } from "../runtime-api.js";
-import {
-  buildMSTeamsAttachmentPlaceholder,
-  buildMSTeamsGraphMessageUrl,
-  buildMSTeamsMediaPayload,
-  resolveMSTeamsInboundAttachmentPresentation,
-} from "./attachments.js";
-import { setMSTeamsRuntime } from "./runtime.js";
+import { describe, expect, it } from "vitest";
+import { buildMSTeamsGraphMessageUrl, resolveMSTeamsAdvertisedMedia } from "./attachments.js";
 
 const SHAREPOINT_HOST = "contoso.sharepoint.com";
 const TEST_HOST = "x";
 const createUrlForHost = (host: string, pathSegment: string) => `https://${host}/${pathSegment}`;
 const createTestUrl = (pathSegment: string) => createUrlForHost(TEST_HOST, pathSegment);
 const TEST_URL_IMAGE = createTestUrl("img");
-const TEST_URL_IMAGE_PNG = createTestUrl("img.png");
-const TEST_URL_IMAGE_1_PNG = createTestUrl("1.png");
-const TEST_URL_IMAGE_2_JPG = createTestUrl("2.jpg");
 const TEST_URL_PDF = createTestUrl("x.pdf");
-const TEST_URL_PDF_1 = createTestUrl("1.pdf");
-const TEST_URL_PDF_2 = createTestUrl("2.pdf");
-const TEST_URL_HTML_A = createTestUrl("a.png");
-const TEST_URL_HTML_B = createTestUrl("b.png");
-const CONTENT_TYPE_IMAGE_PNG = "image/png";
 const CONTENT_TYPE_APPLICATION_PDF = "application/pdf";
 const CONTENT_TYPE_TEXT_HTML = "text/html";
-const CONTENT_TYPE_TEAMS_FILE_DOWNLOAD_INFO = "application/vnd.microsoft.teams.file.download.info";
-type AttachmentPlaceholderInput = Parameters<typeof buildMSTeamsAttachmentPlaceholder>[0];
 type GraphMessageUrlParams = Parameters<typeof buildMSTeamsGraphMessageUrl>[0];
-type MSTeamsMediaPayload = ReturnType<typeof buildMSTeamsMediaPayload>;
-
-const runtimeStub = {
-  channel: {
-    text: {
-      chunkText: (text: string) => (text ? [text] : []),
-    },
-  },
-} as unknown as PluginRuntime;
-const MEDIA_PLACEHOLDER_IMAGE = "<media:image>";
-const MEDIA_PLACEHOLDER_DOCUMENT = "<media:document>";
-const formatImagePlaceholder = (count: number) =>
-  count > 1 ? `${MEDIA_PLACEHOLDER_IMAGE} (${count} images)` : MEDIA_PLACEHOLDER_IMAGE;
-const formatDocumentPlaceholder = (count: number) =>
-  count > 1 ? `${MEDIA_PLACEHOLDER_DOCUMENT} (${count} files)` : MEDIA_PLACEHOLDER_DOCUMENT;
 const withLabel = <T extends object>(label: string, fields: T): T & { label: string } => ({
   label,
   ...fields,
@@ -53,28 +21,6 @@ const buildAttachment = <T extends Record<string, unknown>>(contentType: string,
 });
 const createHtmlAttachment = (content: string) =>
   buildAttachment(CONTENT_TYPE_TEXT_HTML, { content });
-const buildHtmlImageTag = (src: string) => `<img src="${src}" />`;
-const createHtmlImageAttachments = (sources: string[], prefix = "") => [
-  createHtmlAttachment(`${prefix}${sources.map(buildHtmlImageTag).join("")}`),
-];
-const createContentUrlAttachments = (contentType: string, ...contentUrls: string[]) =>
-  contentUrls.map((contentUrl) => buildAttachment(contentType, { contentUrl }));
-const createImageAttachments = (...contentUrls: string[]) =>
-  createContentUrlAttachments(CONTENT_TYPE_IMAGE_PNG, ...contentUrls);
-const createPdfAttachments = (...contentUrls: string[]) =>
-  createContentUrlAttachments(CONTENT_TYPE_APPLICATION_PDF, ...contentUrls);
-const createTeamsFileDownloadInfoAttachments = (
-  downloadUrl = createTestUrl("dl"),
-  fileType = "png",
-) => [
-  buildAttachment(CONTENT_TYPE_TEAMS_FILE_DOWNLOAD_INFO, {
-    content: { downloadUrl, fileType },
-  }),
-];
-const createMediaEntriesWithType = (contentType: string, ...paths: string[]) =>
-  paths.map((path) => ({ path, contentType }));
-const createImageMediaEntries = (...paths: string[]) =>
-  createMediaEntriesWithType(CONTENT_TYPE_IMAGE_PNG, ...paths);
 const DEFAULT_CHANNEL_TEAM_ID = "team-id";
 const DEFAULT_CHANNEL_ID = "chan-id";
 const createChannelGraphMessageUrlParams = (
@@ -88,56 +34,60 @@ const createChannelGraphMessageUrlParams = (
 const GRAPH_CHANNEL_MESSAGES_ROOT =
   "https://graph.microsoft.com/v1.0/teams/team-id/channels/chan-id/messages";
 
-const expectMSTeamsMediaPayload = (
-  payload: MSTeamsMediaPayload,
-  expected: { firstPath: string; paths: string[]; types: string[] },
-) => {
-  expect(payload.MediaPath).toBe(expected.firstPath);
-  expect(payload.MediaUrl).toBe(expected.firstPath);
-  expect(payload.MediaPaths).toEqual(expected.paths);
-  expect(payload.MediaUrls).toEqual(expected.paths);
-  expect(payload.MediaTypes).toEqual(expected.types);
-};
-
-const ATTACHMENT_PLACEHOLDER_CASES = [
-  withLabel("returns empty string when no attachments", {
-    attachments: undefined as AttachmentPlaceholderInput,
-    expected: "",
+const ADVERTISED_MEDIA_CASES = [
+  withLabel("returns no facts without attachments", {
+    attachments: undefined,
+    expected: [],
   }),
-  withLabel("returns empty string when attachments are empty", {
+  withLabel("returns no facts for an empty attachment list", {
     attachments: [],
-    expected: "",
+    expected: [],
   }),
-  withLabel("returns image placeholder for one image attachment", {
-    attachments: createImageAttachments(TEST_URL_IMAGE_PNG),
-    expected: formatImagePlaceholder(1),
+  withLabel("returns an image fact for one image", {
+    attachments: [{ contentType: "image/png", contentUrl: "https://x.test/image.png" }],
+    expected: [{ kind: "image" }],
   }),
-  withLabel("returns image placeholder with count for many image attachments", {
+  withLabel("counts multiple images", {
     attachments: [
-      ...createImageAttachments(TEST_URL_IMAGE_1_PNG),
-      { contentType: "image/jpeg", contentUrl: TEST_URL_IMAGE_2_JPG },
+      { contentType: "image/png", contentUrl: "https://x.test/one.png" },
+      { contentType: "image/jpeg", contentUrl: "https://x.test/two.jpg" },
     ],
-    expected: formatImagePlaceholder(2),
+    expected: [{ kind: "image" }, { kind: "image" }],
   }),
-  withLabel("treats Teams file.download.info image attachments as images", {
-    attachments: createTeamsFileDownloadInfoAttachments(),
-    expected: formatImagePlaceholder(1),
+  withLabel("recognizes Teams download-info images", {
+    attachments: [
+      {
+        contentType: "application/vnd.microsoft.teams.file.download.info",
+        content: { downloadUrl: "https://x.test/download", fileType: "png" },
+      },
+    ],
+    expected: [{ kind: "image" }],
   }),
-  withLabel("returns document placeholder for non-image attachments", {
-    attachments: createPdfAttachments(TEST_URL_PDF),
-    expected: formatDocumentPlaceholder(1),
+  withLabel("returns a document presentation for one document", {
+    attachments: [{ contentType: "application/pdf", contentUrl: "https://x.test/file.pdf" }],
+    expected: [{ kind: "document" }],
   }),
-  withLabel("returns document placeholder with count for many non-image attachments", {
-    attachments: createPdfAttachments(TEST_URL_PDF_1, TEST_URL_PDF_2),
-    expected: formatDocumentPlaceholder(2),
+  withLabel("counts multiple documents", {
+    attachments: [
+      { contentType: "application/pdf", contentUrl: "https://x.test/one.pdf" },
+      { contentType: "application/pdf", contentUrl: "https://x.test/two.pdf" },
+    ],
+    expected: [{ kind: "document" }, { kind: "document" }],
   }),
-  withLabel("counts one inline image in html attachments", {
-    attachments: createHtmlImageAttachments([TEST_URL_HTML_A], "<p>hi</p>"),
-    expected: formatImagePlaceholder(1),
+  withLabel("counts one inline image", {
+    attachments: [createHtmlAttachment('<p>hi</p><img src="https://x.test/one.png" />')],
+    expected: [{ kind: "image", sourceId: "https://x.test/one.png" }],
   }),
-  withLabel("counts many inline images in html attachments", {
-    attachments: createHtmlImageAttachments([TEST_URL_HTML_A, TEST_URL_HTML_B]),
-    expected: formatImagePlaceholder(2),
+  withLabel("counts multiple inline images", {
+    attachments: [
+      createHtmlAttachment(
+        '<img src="https://x.test/one.png" /><img src="https://x.test/two.png" />',
+      ),
+    ],
+    expected: [
+      { kind: "image", sourceId: "https://x.test/one.png" },
+      { kind: "image", sourceId: "https://x.test/two.png" },
+    ],
   }),
 ];
 
@@ -166,47 +116,46 @@ const GRAPH_MESSAGE_URL_CASES = [
 ];
 
 describe("msteams attachment helpers", () => {
-  beforeEach(() => {
-    setMSTeamsRuntime(runtimeStub);
-  });
-
-  describe("buildMSTeamsAttachmentPlaceholder", () => {
-    it.each(ATTACHMENT_PLACEHOLDER_CASES)("$label", ({ attachments, expected }) => {
-      expect(buildMSTeamsAttachmentPlaceholder(attachments)).toBe(expected);
+  describe("resolveMSTeamsAdvertisedMedia", () => {
+    it.each(ADVERTISED_MEDIA_CASES)("$label", ({ attachments, expected }) => {
+      expect(resolveMSTeamsAdvertisedMedia(attachments)).toEqual(expected);
     });
 
-    it("respects inline image limits when counting placeholder images", () => {
+    it("preserves an inline image fact when materialization limits reject it", () => {
       const attachments = [
-        {
-          contentType: "text/html",
-          content: `<img src="data:image/png;base64,${"A".repeat(16)}" />`,
-        },
+        createHtmlAttachment(`<img src="data:image/png;base64,${"A".repeat(16)}" />`),
       ];
 
       expect(
-        buildMSTeamsAttachmentPlaceholder(attachments, {
+        resolveMSTeamsAdvertisedMedia(attachments, {
           maxInlineBytes: 4,
           maxInlineTotalBytes: 4,
         }),
-      ).toBe("<media:document>");
+      ).toEqual([{ kind: "image" }]);
+    });
+
+    it("aligns Graph hosted-content image URLs with their fallback resource id", () => {
+      const hostedUrl =
+        "https://graph.microsoft.com/v1.0/chats/chat/messages/message/hostedContents/hosted%2D1/$value";
+      expect(
+        resolveMSTeamsAdvertisedMedia([createHtmlAttachment(`<img src="${hostedUrl}" />`)]),
+      ).toEqual([{ kind: "image", sourceId: "hosted-1" }]);
     });
 
     it("counts advertised files without URLs and ignores mention-only HTML", () => {
       expect(
-        resolveMSTeamsInboundAttachmentPresentation([
-          { contentType: "application/pdf", name: "report.pdf" },
-        ]),
-      ).toEqual({ placeholder: "<media:document>", expectedMediaCount: 1 });
+        resolveMSTeamsAdvertisedMedia([{ contentType: "application/pdf", name: "report.pdf" }]),
+      ).toEqual([{ kind: "document" }]);
       expect(
-        resolveMSTeamsInboundAttachmentPresentation([
+        resolveMSTeamsAdvertisedMedia([
           { contentType: "text/html", content: "<div><at>Bot</at> hello</div>" },
         ]),
-      ).toEqual({ placeholder: "", expectedMediaCount: 0 });
+      ).toEqual([]);
     });
 
     it("does not count HTML references separately from files or cards", () => {
       expect(
-        resolveMSTeamsInboundAttachmentPresentation([
+        resolveMSTeamsAdvertisedMedia([
           createHtmlAttachment('<attachment id="file-1"></attachment>'),
           {
             id: "file-1",
@@ -214,10 +163,10 @@ describe("msteams attachment helpers", () => {
             contentUrl: TEST_URL_PDF,
           },
         ]),
-      ).toEqual({ placeholder: "<media:document>", expectedMediaCount: 1 });
+      ).toEqual([{ kind: "document", sourceId: "file-1" }]);
 
       expect(
-        resolveMSTeamsInboundAttachmentPresentation([
+        resolveMSTeamsAdvertisedMedia([
           createHtmlAttachment('<attachment id="card-1"></attachment>'),
           {
             id: "card-1",
@@ -225,29 +174,42 @@ describe("msteams attachment helpers", () => {
             content: { type: "AdaptiveCard" },
           },
         ]),
-      ).toEqual({ placeholder: "", expectedMediaCount: 0 });
+      ).toEqual([]);
+    });
+
+    it("does not count CID image references separately from their attachment", () => {
+      expect(
+        resolveMSTeamsAdvertisedMedia([
+          createHtmlAttachment('<img src="cid:image-1" />'),
+          {
+            id: "image-1",
+            contentType: "image/png",
+            contentUrl: "https://x.test/image.png",
+          },
+        ]),
+      ).toEqual([{ kind: "image", sourceId: "image-1" }]);
     });
 
     it("counts repeated inline URLs once while keeping data images per occurrence", () => {
       const repeatedUrl = "https://example.com/repeated.png";
       expect(
-        resolveMSTeamsInboundAttachmentPresentation([
+        resolveMSTeamsAdvertisedMedia([
           {
             contentType: "text/html",
             content: `<img src="${repeatedUrl}"><img src="${repeatedUrl}">`,
           },
         ]),
-      ).toEqual({ placeholder: "<media:image>", expectedMediaCount: 1 });
+      ).toEqual([{ kind: "image", sourceId: repeatedUrl }]);
 
       const dataUrl = "data:image/png;base64,AQ==";
       expect(
-        resolveMSTeamsInboundAttachmentPresentation([
+        resolveMSTeamsAdvertisedMedia([
           {
             contentType: "text/html",
             content: `<img src="${dataUrl}"><img src="${dataUrl}">`,
           },
         ]),
-      ).toEqual({ placeholder: "<media:image> (2 images)", expectedMediaCount: 2 });
+      ).toEqual([{ kind: "image" }, { kind: "image" }]);
     });
   });
 
@@ -308,17 +270,6 @@ describe("msteams attachment helpers", () => {
       ).toBe(
         "https://graph.microsoft.com/v1.0/teams/team%2Fid/channels/channel%20id/messages/root%20id/replies/reply%2Fid",
       );
-    });
-  });
-
-  describe("buildMSTeamsMediaPayload", () => {
-    it("returns single and multi-file fields", () => {
-      const payload = buildMSTeamsMediaPayload(createImageMediaEntries("/tmp/a.png", "/tmp/b.png"));
-      expectMSTeamsMediaPayload(payload, {
-        firstPath: "/tmp/a.png",
-        paths: ["/tmp/a.png", "/tmp/b.png"],
-        types: [CONTENT_TYPE_IMAGE_PNG, CONTENT_TYPE_IMAGE_PNG],
-      });
     });
   });
 

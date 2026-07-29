@@ -1,5 +1,5 @@
 // Canonicalizes the portable policy snapshot carried with delayed exec approvals.
-export type ExecApprovalPolicyRule = {
+type ExecApprovalPolicyRule = {
   pattern: string;
   argPattern?: string;
   source?: "allow-always";
@@ -39,7 +39,7 @@ function compareOptionalUtf8(left: string | undefined, right: string | undefined
 }
 
 /** Cross-runtime order: tuple fields, absent before present, UTF-8 byte lexicographic. */
-export function compareExecApprovalPolicyRules(
+function compareExecApprovalPolicyRules(
   left: ExecApprovalPolicyRule,
   right: ExecApprovalPolicyRule,
 ): number {

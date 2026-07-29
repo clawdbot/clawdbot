@@ -21,6 +21,7 @@
     "packages/model-catalog-core/src/**/*.ts",
     "packages/memory-host-sdk/src/**/*.ts",
     "packages/normalization-core/src/**/*.ts",
+    "packages/retry/src/**/*.ts",
     "packages/acp-core/src/**/*.ts",
     "packages/terminal-core/src/**/*.ts",
     "src/video-generation/dashscope-compatible.ts",

@@ -31,6 +31,15 @@ type JsonSchemaObject = JsonSchemaNode & {
 
 type ConfigDocBaselineKind = "core" | "channel" | "plugin";
 
+type ConfigDocBaselineCounts = Record<ConfigDocBaselineKind, number>;
+
+type ConfigDocBaselineCountViolation = {
+  kind: ConfigDocBaselineKind;
+  current: number;
+  budget: number;
+  message: string;
+};
+
 export type ConfigDocBaselineEntry = {
   path: string;
   kind: ConfigDocBaselineKind;
@@ -80,9 +89,13 @@ type ConfigDocBaselineArtifactPaths = {
 
 type ConfigDocBaselineArtifactsWriteResult = {
   changed: boolean;
+  hashChanged: boolean;
   wrote: boolean;
   jsonPaths: ConfigDocBaselineArtifactPaths;
   hashPath: string;
+  countsPath: string;
+  countViolations: ConfigDocBaselineCountViolation[];
+  countBudgetError?: string;
 };
 
 const GENERATED_BY = "scripts/generate-config-doc-baseline.ts" as const;
@@ -91,6 +104,7 @@ const DEFAULT_CORE_OUTPUT = "docs/.generated/config-baseline.core.json";
 const DEFAULT_CHANNEL_OUTPUT = "docs/.generated/config-baseline.channel.json";
 const DEFAULT_PLUGIN_OUTPUT = "docs/.generated/config-baseline.plugin.json";
 const DEFAULT_HASH_OUTPUT = "docs/.generated/config-baseline.sha256";
+const DEFAULT_COUNTS_OUTPUT = "docs/.generated/config-baseline.counts.json";
 let cachedConfigDocBaselinePromise: Promise<ConfigDocBaseline> | null = null;
 const uiHintIndexCache = new WeakMap<
   ConfigSchemaResponse["uiHints"],
@@ -103,12 +117,6 @@ const schemaHasChildrenCache = new WeakMap<JsonSchemaObject, boolean>();
 
 function compareBaselineStrings(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function logConfigDocBaselineDebug(message: string): void {
-  if (process.env.OPENCLAW_CONFIG_DOC_BASELINE_DEBUG === "1") {
-    console.error(`[config-doc-baseline] ${message}`);
-  }
 }
 
 function resolveRepoRoot(): string {
@@ -369,15 +377,11 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
     config: {},
     bundledChannelConfigCollector: runtime.collectBundledChannelConfigs,
   });
-  logConfigDocBaselineDebug(`loaded ${manifestRegistry.plugins.length} bundled plugin manifests`);
   const bundledRegistry = {
     ...manifestRegistry,
     plugins: manifestRegistry.plugins.filter((plugin) => plugin.origin === "bundled"),
   };
   const channelPlugins = runtime.collectChannelSchemaMetadata(bundledRegistry);
-  logConfigDocBaselineDebug(
-    `loaded ${channelPlugins.length} bundled channel entries from metadata`,
-  );
 
   return runtime.buildConfigSchema({
     plugins: runtime.collectPluginSchemaMetadata(bundledRegistry),
@@ -385,7 +389,7 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
   });
 }
 
-export function collectConfigDocBaselineEntries(
+function collectConfigDocBaselineEntries(
   schema: JsonSchemaObject,
   uiHints: ConfigSchemaResponse["uiHints"],
   pathPrefix = "",
@@ -478,7 +482,7 @@ export function collectConfigDocBaselineEntries(
   return entries;
 }
 
-export function dedupeConfigDocBaselineEntries(
+function dedupeConfigDocBaselineEntries(
   entries: ConfigDocBaselineEntry[],
 ): ConfigDocBaselineEntry[] {
   const byPath = new Map<string, ConfigDocBaselineEntry>();
@@ -520,23 +524,15 @@ async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
     return await cachedConfigDocBaselinePromise;
   }
   cachedConfigDocBaselinePromise = (async () => {
-    const start = Date.now();
-    logConfigDocBaselineDebug("build baseline start");
     const response = await loadBundledConfigSchemaResponse();
     const schemaRoot = asSchemaObject(response.schema);
     if (!schemaRoot) {
       throw new Error("config schema root is not an object");
     }
-    const collectStart = Date.now();
-    logConfigDocBaselineDebug("collect baseline entries start");
     const entries = dedupeConfigDocBaselineEntries(
       collectConfigDocBaselineEntries(schemaRoot, response.uiHints),
     );
     const { coreEntries, channelEntries, pluginEntries } = splitConfigDocBaselineEntries(entries);
-    logConfigDocBaselineDebug(
-      `collect baseline entries done count=${entries.length} elapsedMs=${Date.now() - collectStart}`,
-    );
-    logConfigDocBaselineDebug(`build baseline done elapsedMs=${Date.now() - start}`);
     return {
       generatedBy: GENERATED_BY,
       coreEntries,
@@ -567,8 +563,6 @@ function renderKindBaseline(
 export async function renderConfigDocBaselineArtifacts(
   baseline?: ConfigDocBaseline | Promise<ConfigDocBaseline>,
 ): Promise<ConfigDocBaselineArtifactsRender> {
-  const start = Date.now();
-  logConfigDocBaselineDebug("render artifacts start");
   const resolvedBaseline = baseline ? await baseline : await buildConfigDocBaseline();
   const json: ConfigDocBaselineArtifacts = {
     combined: `${JSON.stringify(resolvedBaseline, null, 2)}\n`,
@@ -576,7 +570,6 @@ export async function renderConfigDocBaselineArtifacts(
     channel: renderKindBaseline("channel", resolvedBaseline.channelEntries),
     plugin: renderKindBaseline("plugin", resolvedBaseline.pluginEntries),
   };
-  logConfigDocBaselineDebug(`render artifacts done elapsedMs=${Date.now() - start}`);
   return {
     json,
     baseline: resolvedBaseline,
@@ -616,6 +609,62 @@ function computeConfigBaselineHashFileContent(json: ConfigDocBaselineArtifacts):
   return `${lines.join("\n")}\n`;
 }
 
+function computeConfigBaselineCounts(baseline: ConfigDocBaseline): ConfigDocBaselineCounts {
+  return {
+    core: baseline.coreEntries.length,
+    channel: baseline.channelEntries.length,
+    plugin: baseline.pluginEntries.length,
+  };
+}
+
+function renderConfigBaselineCounts(counts: ConfigDocBaselineCounts): string {
+  return `${JSON.stringify(counts, null, 2)}\n`;
+}
+
+function parseConfigBaselineCounts(content: string | null): ConfigDocBaselineCounts {
+  if (content === null) {
+    throw new Error("count budget file is missing");
+  }
+  const parsed = JSON.parse(content) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("count budget must be a JSON object");
+  }
+  const record = parsed as Record<string, unknown>;
+  for (const kind of ["core", "channel", "plugin"] as const) {
+    if (!Number.isInteger(record[kind]) || (record[kind] as number) < 0) {
+      throw new Error(`${kind} budget must be a non-negative integer`);
+    }
+  }
+  return {
+    core: record.core as number,
+    channel: record.channel as number,
+    plugin: record.plugin as number,
+  };
+}
+
+function collectConfigBaselineCountViolations(
+  current: ConfigDocBaselineCounts,
+  budget: ConfigDocBaselineCounts,
+): ConfigDocBaselineCountViolation[] {
+  const violations: ConfigDocBaselineCountViolation[] = [];
+  for (const kind of ["core", "channel", "plugin"] as const) {
+    if (current[kind] === budget[kind]) {
+      continue;
+    }
+    const message =
+      current[kind] > budget[kind]
+        ? `${kind}: current ${current[kind]} > budget ${budget[kind]}; config surface grew; either remove config elsewhere or consciously raise the budget in docs/.generated/config-baseline.counts.json in this PR and justify it in the PR body. See the AGENTS.md config-surface bar.`
+        : `${kind}: current ${current[kind]} < budget ${budget[kind]}; budget is stale; run pnpm config:docs:gen to ratchet it down.`;
+    violations.push({
+      kind,
+      current: current[kind],
+      budget: budget[kind],
+      message,
+    });
+  }
+  return violations;
+}
+
 function resolveBaselineArtifactPaths(
   repoRoot: string,
   params?: {
@@ -641,36 +690,50 @@ export async function writeConfigDocBaselineArtifacts(params?: {
   channelPath?: string;
   pluginPath?: string;
   hashPath?: string;
+  countsPath?: string;
   rendered?: ConfigDocBaselineArtifactsRender | Promise<ConfigDocBaselineArtifactsRender>;
 }): Promise<ConfigDocBaselineArtifactsWriteResult> {
-  const start = Date.now();
-  logConfigDocBaselineDebug("write artifacts start");
   const repoRoot = params?.repoRoot ?? resolveRepoRoot();
   const jsonPaths = resolveBaselineArtifactPaths(repoRoot, params);
   const hashPath = path.resolve(repoRoot, params?.hashPath ?? DEFAULT_HASH_OUTPUT);
+  const countsPath = path.resolve(repoRoot, params?.countsPath ?? DEFAULT_COUNTS_OUTPUT);
   const rendered = params?.rendered
     ? await params.rendered
     : await renderConfigDocBaselineArtifacts();
-  logConfigDocBaselineDebug(`render artifacts done elapsedMs=${Date.now() - start}`);
 
   const nextHashContent = computeConfigBaselineHashFileContent(rendered.json);
+  const counts = computeConfigBaselineCounts(rendered.baseline);
+  const nextCountsContent = renderConfigBaselineCounts(counts);
   const currentHashContent = readFileIfExists(hashPath);
-  const changed = currentHashContent !== nextHashContent;
-  logConfigDocBaselineDebug(
-    `compare hashes done changed=${changed} elapsedMs=${Date.now() - start}`,
-  );
+  const hashChanged = currentHashContent !== nextHashContent;
+  let countBudgetError: string | undefined;
+  let countViolations: ConfigDocBaselineCountViolation[] = [];
+  try {
+    countViolations = collectConfigBaselineCountViolations(
+      counts,
+      parseConfigBaselineCounts(readFileIfExists(countsPath)),
+    );
+  } catch (error) {
+    countBudgetError = error instanceof Error ? error.message : String(error);
+  }
+  const changed = hashChanged || countBudgetError !== undefined || countViolations.length > 0;
 
   if (params?.check) {
     return {
       changed,
+      hashChanged,
       wrote: false,
       jsonPaths,
       hashPath,
+      countsPath,
+      countViolations,
+      ...(countBudgetError ? { countBudgetError } : {}),
     };
   }
 
-  // Write the hash file (tracked in git)
+  // Write tracked drift-detection artifacts.
   writeFileAtomic(hashPath, nextHashContent);
+  writeFileAtomic(countsPath, nextCountsContent);
 
   // Write full JSON artifacts locally (gitignored, useful for inspection)
   for (const key of Object.keys(jsonPaths) as Array<keyof ConfigDocBaselineArtifacts>) {
@@ -679,8 +742,11 @@ export async function writeConfigDocBaselineArtifacts(params?: {
 
   return {
     changed,
+    hashChanged,
     wrote: true,
     jsonPaths,
     hashPath,
+    countsPath,
+    countViolations: [],
   };
 }

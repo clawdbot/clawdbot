@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import {
   POSIX_INLINE_COMMAND_FLAGS,
-  POWERSHELL_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
   resolvePowerShellInlineCommandMatch,
 } from "./shell-inline-command.js";
@@ -12,117 +11,59 @@ describe("resolveInlineCommandMatch", () => {
     {
       name: "extracts the next token for bash -lc",
       argv: ["bash", "-lc", "echo hi"],
-      flags: POSIX_INLINE_COMMAND_FLAGS,
+      opts: {},
       expected: { command: "echo hi", valueTokenIndex: 2 },
-    },
-    {
-      name: "extracts the next token for PowerShell -Command",
-      argv: ["pwsh", "-Command", "Get-ChildItem"],
-      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
-      expected: { command: "Get-ChildItem", valueTokenIndex: 2 },
-    },
-    {
-      name: "extracts the next token for PowerShell -CommandWithArgs",
-      argv: ["pwsh", "-CommandWithArgs", "Get-ChildItem"],
-      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
-      expected: { command: "Get-ChildItem", valueTokenIndex: 2 },
-    },
-    {
-      name: "extracts the next token for PowerShell -File",
-      argv: ["pwsh", "-File", "script.ps1"],
-      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
-      expected: { command: "script.ps1", valueTokenIndex: 2 },
-    },
-    {
-      name: "extracts the next token for PowerShell -ec",
-      argv: ["pwsh", "-ec", "ZQBjAGgAbwA="],
-      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
-      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 2 },
-    },
-    {
-      name: "extracts the next token for PowerShell /ec",
-      argv: ["pwsh", "/NoProfile", "/ec", "ZQBjAGgAbwA="],
-      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
-      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 3 },
-    },
-    {
-      name: "extracts the next token for PowerShell -en",
-      argv: ["pwsh", "-en", "ZQBjAGgAbwA="],
-      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
-      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 2 },
-    },
-    {
-      name: "extracts the next token for PowerShell -f",
-      argv: ["powershell", "-f", "script.ps1"],
-      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
-      expected: { command: "script.ps1", valueTokenIndex: 2 },
-    },
-    {
-      name: "extracts the next token for PowerShell -ec",
-      argv: ["pwsh", "-ec", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
-      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
-      expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 2 },
-    },
-    {
-      name: "extracts the next token for PowerShell -EC",
-      argv: ["pwsh", "-EC", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
-      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
-      expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 2 },
-    },
-    {
-      name: "extracts the next token for PowerShell encoded-command prefixes",
-      argv: ["pwsh", "-en", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
-      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
-      expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 2 },
-    },
-    {
-      name: "extracts the next token for PowerShell slash switch forms",
-      argv: ["pwsh", "/ec", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
-      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
-      expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 2 },
     },
     {
       name: "supports combined -c forms when enabled",
       argv: ["sh", "-cecho hi"],
-      flags: POSIX_INLINE_COMMAND_FLAGS,
       opts: { allowCombinedC: true },
       expected: { command: "echo hi", valueTokenIndex: 1 },
     },
     {
       name: "keeps post-c no-argument shell flags separate from the command",
       argv: ["bash", "-cx", "echo hi"],
-      flags: POSIX_INLINE_COMMAND_FLAGS,
       opts: { allowCombinedC: true },
       expected: { command: "echo hi", valueTokenIndex: 2 },
     },
     {
       name: "keeps post-c stdin shell flags separate from the command",
       argv: ["bash", "-cs", "echo hi"],
-      flags: POSIX_INLINE_COMMAND_FLAGS,
+      opts: { allowCombinedC: true },
+      expected: { command: "echo hi", valueTokenIndex: 2 },
+    },
+    {
+      name: "extracts yash long cmdline option",
+      argv: ["yash", "--cmdline", "echo hi"],
+      opts: {},
+      expected: { command: "echo hi", valueTokenIndex: 2 },
+    },
+    {
+      name: "keeps pre-c clustered shell flags separate from the command",
+      argv: ["yash", "-xc", "echo hi"],
       opts: { allowCombinedC: true },
       expected: { command: "echo hi", valueTokenIndex: 2 },
     },
     {
       name: "rejects combined -c forms when disabled",
       argv: ["sh", "-cecho hi"],
-      flags: POSIX_INLINE_COMMAND_FLAGS,
       opts: { allowCombinedC: false },
       expected: { command: null, valueTokenIndex: null },
     },
     {
       name: "returns a value index for blank command tokens",
       argv: ["bash", "-lc", "   "],
-      flags: POSIX_INLINE_COMMAND_FLAGS,
+      opts: {},
       expected: { command: null, valueTokenIndex: 2 },
     },
     {
       name: "returns null value index when the flag has no following token",
       argv: ["bash", "-lc"],
-      flags: POSIX_INLINE_COMMAND_FLAGS,
+      opts: {},
       expected: { command: null, valueTokenIndex: null },
     },
-  ])("$name", ({ argv, flags, opts, expected }) => {
-    expect(resolveInlineCommandMatch(argv, flags, opts)).toEqual(expected);
+  ])("$name", ({ argv, opts, expected }) => {
+    expect(resolveInlineCommandMatch(argv, POSIX_INLINE_COMMAND_FLAGS, opts)).toEqual(expected);
   });
 
   it("stops parsing after --", () => {

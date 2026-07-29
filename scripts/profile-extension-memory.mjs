@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import pMap from "p-map";
 import { ensureExtensionMemoryBuild } from "./ensure-extension-memory-build.mjs";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 import { formatErrorMessage } from "./lib/error-format.mjs";
@@ -495,15 +496,9 @@ async function main() {
           timeoutMs: options.combinedTimeoutMs,
         });
 
-    const pending = [...selectedEntries];
-    const results = [];
-
-    async function worker() {
-      while (pending.length > 0) {
-        const next = pending.shift();
-        if (next === undefined) {
-          return;
-        }
+    const results = await pMap(
+      selectedEntries,
+      async (next) => {
         const result = await runCase({
           repoRoot,
           env,
@@ -512,7 +507,7 @@ async function main() {
           body: buildImportBody([next.file], "IMPORTED"),
           timeoutMs: options.timeoutMs,
         });
-        results.push({
+        const entry = {
           dir: next.dir,
           file: next.file,
           status: result.timedOut ? "timeout" : result.code === 0 ? "ok" : "fail",
@@ -522,16 +517,14 @@ async function main() {
               ? result.maxRssMb - baseline.maxRssMb
               : null,
           stderrPreview: summarizeStderr(result.stderr),
-        });
+        };
 
         const status = result.timedOut ? "timeout" : result.code === 0 ? "ok" : "fail";
         const rss = result.maxRssMb === null ? "n/a" : `${result.maxRssMb.toFixed(1)} MB`;
         console.log(`[extension-memory] ${next.dir}: ${status} ${rss}`);
-      }
-    }
-
-    await Promise.all(
-      Array.from({ length: Math.min(options.concurrency, selectedEntries.length) }, () => worker()),
+        return entry;
+      },
+      { concurrency: options.concurrency, stopOnError: true },
     );
 
     results.sort((a, b) => a.dir.localeCompare(b.dir));

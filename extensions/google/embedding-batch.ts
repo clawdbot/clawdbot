@@ -15,8 +15,11 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   assertOkOrThrowProviderError,
+  createProviderOperationDeadline,
   createProviderHttpError,
   readProviderJsonObjectResponse,
+  resolveProviderOperationTimeoutMs,
+  waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
 import type { GeminiEmbeddingClient, GeminiTextEmbeddingRequest } from "./embedding-provider.js";
 import { parseGeminiAuth } from "./gemini-auth.js";
@@ -257,6 +260,7 @@ async function submitGeminiBatch(params: {
 async function fetchGeminiBatchStatus(params: {
   gemini: GeminiEmbeddingClient;
   batchName: string;
+  signal?: AbortSignal;
 }): Promise<GeminiBatchOperation> {
   const baseUrl = normalizeBatchBaseUrl(params.gemini);
   const name = params.batchName.startsWith("batches/")
@@ -267,6 +271,7 @@ async function fetchGeminiBatchStatus(params: {
   return await withRemoteHttpResponse({
     url: statusUrl,
     ssrfPolicy: params.gemini.ssrfPolicy,
+    signal: params.signal,
     init: {
       headers: buildBatchHeaders(params.gemini, { json: true }),
     },
@@ -350,15 +355,24 @@ async function waitForGeminiBatch(params: {
   debug?: (message: string, data?: Record<string, unknown>) => void;
   initial?: GeminiBatchOperation;
 }): Promise<{ outputFileId: string }> {
-  const start = Date.now();
+  const deadline = createProviderOperationDeadline({
+    label: `gemini batch ${params.batchName}`,
+    timeoutMs: params.timeoutMs,
+  });
   let current: GeminiBatchOperation | undefined = params.initial;
   while (true) {
-    const operation =
-      current ??
-      (await fetchGeminiBatchStatus({
-        gemini: params.gemini,
-        batchName: params.batchName,
-      }));
+    const operation = current
+      ? current
+      : await fetchGeminiBatchStatus({
+          gemini: params.gemini,
+          batchName: params.batchName,
+          signal: AbortSignal.timeout(
+            resolveProviderOperationTimeoutMs({
+              deadline,
+              defaultTimeoutMs: params.timeoutMs,
+            }),
+          ),
+        });
     const state = getGeminiBatchState(operation);
     if (state === "succeeded") {
       const outputFileId = getGeminiBatchOutputFileId(operation);
@@ -380,12 +394,12 @@ async function waitForGeminiBatch(params: {
         `gemini batch ${params.batchName} submitted; enable remote.batch.wait to await completion`,
       );
     }
-    if (Date.now() - start > params.timeoutMs) {
-      throw new Error(`gemini batch ${params.batchName} timed out after ${params.timeoutMs}ms`);
-    }
-    params.debug?.(`gemini batch ${params.batchName} ${state}; waiting ${params.pollIntervalMs}ms`);
-    await new Promise((resolve) => {
-      setTimeout(resolve, params.pollIntervalMs);
+    params.debug?.(
+      `gemini batch ${params.batchName} ${state}; waiting up to ${params.pollIntervalMs}ms`,
+    );
+    await waitProviderOperationPollInterval({
+      deadline,
+      pollIntervalMs: params.pollIntervalMs,
     });
     current = undefined;
   }

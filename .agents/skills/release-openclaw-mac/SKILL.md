@@ -7,6 +7,10 @@ description: "Run or recover OpenClaw macOS release signing, notarization, appca
 
 Use with `$release-openclaw-maintainer`, `$release-openclaw-ci`, `$one-password`, and `$release-private` if it exists when stable macOS assets, release-ops mac preflight, notarization, appcast promotion, or mac release recovery is involved.
 
+This is a regular stable-release skill. Do not invoke it for extended-stable;
+that track does not inherit macOS assets, appcast promotion, or a GitHub Release
+unless the current extended-stable release policy explicitly adds them.
+
 ## Credentials
 
 - Resolve Peter-owned ASC item refs, key ids, issuer ids, and service-token provenance from `$release-private`.
@@ -63,6 +67,11 @@ Do not update these from mixed sources. All three ASC fields must come from the 
 - If notarization stays in progress for several minutes after key-file write, that is normal Apple wait time; do not edit blindly.
 
 ## Dispatch
+
+The public handoff workflow validates the tag, source, build, and package
+metadata before publication. It does not require a GitHub release page because
+it does not upload assets. Keep this validation before the real publish
+workflow; the publisher owns draft creation and final undraft.
 
 Public handoff validation:
 

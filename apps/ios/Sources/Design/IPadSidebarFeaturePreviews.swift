@@ -303,8 +303,8 @@ private struct IPadActivityStatesPreview: View {
                     action: {})
                 ProStatusRow(
                     icon: gatewayValue == "online" ? "network" : "wifi.slash",
-                    title: gatewayTitle,
-                    detail: gatewayDetail,
+                    title: .localized(gatewayTitle),
+                    detail: .localized(gatewayDetail),
                     value: gatewayValue,
                     color: gatewayColor,
                     actionTitle: gatewayValue == "online" ? nil : "Settings",
@@ -322,8 +322,8 @@ private struct IPadActivityStatesPreview: View {
                     Divider().padding(.leading, 58)
                     ProStatusRow(
                         icon: row.icon,
-                        title: row.title,
-                        detail: row.detail,
+                        title: .localized(row.title),
+                        detail: .localized(row.detail),
                         value: row.state,
                         color: row.color,
                         actionTitle: "Open",
@@ -333,8 +333,8 @@ private struct IPadActivityStatesPreview: View {
                     Divider().padding(.leading, 58)
                     ProStatusRow(
                         icon: row.icon,
-                        title: row.title,
-                        detail: row.detail,
+                        title: .localized(row.title),
+                        detail: .localized(row.detail),
                         value: row.value,
                         color: row.color,
                         actionTitle: nil,

@@ -23,14 +23,14 @@ import { installDownloadSpec } from "./install-download.js";
 import { formatInstallFailureMessage } from "./install-output.js";
 import type { SkillInstallResult, SkillInstallSkipReason } from "./install-types.js";
 
-export type SkillInstallRequest = {
+type SkillInstallRequest = {
   workspaceDir: string;
   skillName: string;
   installId: string;
   timeoutMs?: number;
   config?: OpenClawConfig;
 };
-export type { SkillInstallResult, SkillInstallSkipReason } from "./install-types.js";
+export type { SkillInstallSkipReason } from "./install-types.js";
 
 type SkillsInstallDeps = {
   hasBinary: (bin: string) => boolean;
@@ -819,7 +819,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   return withWarnings(normalizedResult, warnings);
 }
 
-export const testing = {
+const testing = {
   resolveDefaultNodeInstallStateDir,
   setDepsForTest(overrides?: Partial<SkillsInstallDeps>): void {
     skillsInstallDeps = {
@@ -828,3 +828,9 @@ export const testing = {
     };
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.skillsInstallTestApi")] =
+    testing;
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

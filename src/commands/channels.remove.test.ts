@@ -35,7 +35,6 @@ vi.mock("../channels/plugins/catalog.js", async () => {
   );
   return {
     ...actual,
-    listChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
     listRawChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
   };
 });

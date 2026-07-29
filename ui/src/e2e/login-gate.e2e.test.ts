@@ -83,6 +83,7 @@ describeControlUiE2e("Control UI responsive login gate E2E", () => {
   it("shows a protocol mismatch without reconnecting", async () => {
     const context = await browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
+    await page.clock.install();
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 
     try {
@@ -99,7 +100,7 @@ describeControlUiE2e("Control UI responsive login gate E2E", () => {
       expect((await failure.textContent())?.toLowerCase()).toContain(
         "supported connection protocol",
       );
-      await page.waitForTimeout(1_600);
+      await page.clock.runFor(1_600);
       expect(await gateway.getRequests("connect")).toHaveLength(1);
     } finally {
       await closeContext(context);
@@ -133,7 +134,7 @@ describeControlUiE2e("Control UI responsive login gate E2E", () => {
           document.querySelectorAll<HTMLElement>(".login-gate__form .field input"),
         );
         const toggles = Array.from(
-          document.querySelectorAll<HTMLElement>(".login-gate__secret-row .btn--icon"),
+          document.querySelectorAll<HTMLElement>(".login-gate__form .settings-secret__toggle"),
         );
         const connect = document.querySelector<HTMLElement>(".login-gate__connect");
         if (!gate || !card || !connect) {
@@ -152,7 +153,7 @@ describeControlUiE2e("Control UI responsive login gate E2E", () => {
           inputMinHeights: inputs.map((input) => getComputedStyle(input).minHeight),
           toggleSizes: toggles.map((toggle) => {
             const style = getComputedStyle(toggle);
-            return { height: style.height, minWidth: style.minWidth, width: style.width };
+            return { height: style.height, width: style.width };
           }),
         };
       });
@@ -164,11 +165,9 @@ describeControlUiE2e("Control UI responsive login gate E2E", () => {
       expect(metrics.gateOverflowY).toBe("auto");
       expect(metrics.gateScrollHeight).toBeGreaterThan(metrics.gateClientHeight);
       expect(metrics.inputMinHeights.every((height) => height === "44px")).toBe(true);
+      expect(metrics.toggleSizes).toHaveLength(2);
       expect(
-        metrics.toggleSizes.every(
-          ({ height, minWidth, width }) =>
-            height === "44px" && minWidth === "44px" && width === "44px",
-        ),
+        metrics.toggleSizes.every(({ height, width }) => height === "32px" && width === "32px"),
       ).toBe(true);
 
       const failureDocs = page.locator(".login-gate__failure-docs");

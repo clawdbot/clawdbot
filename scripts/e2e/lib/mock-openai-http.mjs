@@ -1,5 +1,7 @@
 // Mock OpenAI-compatible HTTP server helpers for E2E scenarios.
 import fs from "node:fs";
+// Raw launchers meet the repo's Node 22.22.3 minimum, where native TS stripping is enabled.
+import { truncateUtf16Safe } from "../../../packages/normalization-core/src/utf16-slice.ts";
 import { readPositiveIntEnv } from "./env-limits.mjs";
 
 const DEFAULT_REQUEST_MAX_BYTES = 4 * 1024 * 1024;
@@ -76,7 +78,7 @@ export function boundedRequestLogBody(value, bodyText, limits = readMockOpenAiHt
   return {
     truncated: true,
     byteLength,
-    preview: bodyText.slice(0, REQUEST_LOG_PREVIEW_CHARS),
+    preview: truncateUtf16Safe(bodyText, REQUEST_LOG_PREVIEW_CHARS),
   };
 }
 

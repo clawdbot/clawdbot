@@ -19,7 +19,7 @@ interface CleanupTarget {
   readonly rawPath?: string;
 }
 
-export interface LegacyPluginDependencyStateIssue {
+interface LegacyPluginDependencyStateIssue {
   readonly kind: "legacy-plugin-dependency-state";
   readonly path: string;
 }
@@ -475,8 +475,8 @@ export async function cleanupLegacyPluginDependencyState(params: {
   return { changes, warnings };
 }
 
-export const testing = {
-  collectLegacyPluginDependencyTargets,
-  detectLegacyPluginDependencyStateIssues,
-  legacyPluginDependencyStateIssueToHealthFinding,
-};
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.pluginDependencyCleanupTestApi")
+  ] = { collectLegacyPluginDependencyTargets };
+}

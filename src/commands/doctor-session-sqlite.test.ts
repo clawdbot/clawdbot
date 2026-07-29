@@ -5,6 +5,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   loadExactSqliteSessionEntry,
   loadSqliteTranscriptEventsSync,
@@ -18,15 +19,27 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   OPENCLAW_AGENT_SCHEMA_VERSION,
+  resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import {
+  readOpenClawDatabaseQuarantine,
+  recordOpenClawDatabaseQuarantine,
+} from "../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { sessionDeliveryRoute } from "../utils/delivery-context.shared.js";
 import {
   assertSafeSessionSqliteMigrationMove,
+  createSessionSqliteMigrationFailureIssue,
   restoreSessionSqliteMigrationRun,
-  type SessionSqliteMigrationManifest,
+  type ActiveSessionSqliteMigrationRun,
 } from "./doctor-session-sqlite-migration-run.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
+import {
+  readOnlySqliteSessionEntries,
+  resolveTargetSqlitePath,
+} from "./doctor-session-sqlite-readers.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
+
+type SessionSqliteMigrationManifest = ActiveSessionSqliteMigrationRun["manifest"];
 
 type TestStore = {
   configPath: string;
@@ -44,6 +57,7 @@ const previousEnv = {
   OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
   OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
 };
+const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const lexicalTempDir = path.resolve(os.tmpdir());
 const realTempDir = fs.realpathSync.native(os.tmpdir());
 const hasPlatformTempAlias = lexicalTempDir !== realTempDir;
@@ -64,6 +78,99 @@ afterEach(() => {
 });
 
 describe("runDoctorSessionSqlite", () => {
+  it("uses the requested agent as the owner for explicit-store maintenance", async () => {
+    const stateDir = autoCleanupTempDirs.make("openclaw-doctor-explicit-ops-");
+    const storePath = path.join(stateDir, "shared", "sessions.json");
+    const report = await runDoctorSessionSqlite({
+      agent: "ops",
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      mode: "inspect",
+      store: storePath,
+    });
+
+    expect(report.targets).toHaveLength(1);
+    expect(report.targets[0]).toMatchObject({ agentId: "ops", storePath });
+  });
+
+  it("reads populated v13 session_entries before migration", () => {
+    const stateDir = autoCleanupTempDirs.make("openclaw-doctor-v13-reader-");
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const target = { agentId: "main", storePath };
+    const sqlitePath = resolveTargetSqlitePath(target);
+    fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
+    const sqlite = nodeSqlite.requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(sqlitePath);
+    try {
+      database.exec(`
+        CREATE TABLE session_entries (
+          session_key TEXT NOT NULL PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          entry_json TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        INSERT INTO session_entries (session_key, session_id, entry_json, updated_at)
+        VALUES (
+          'agent:main:v13-reader',
+          'v13-reader-session',
+          '{"sessionId":"v13-reader-session","updatedAt":13}',
+          13
+        );
+        PRAGMA user_version = 13;
+      `);
+    } finally {
+      database.close();
+    }
+
+    expect(readOnlySqliteSessionEntries(target)).toEqual({
+      exists: true,
+      ok: true,
+      summaries: [
+        {
+          sessionKey: "agent:main:v13-reader",
+          entry: { sessionId: "v13-reader-session", updatedAt: 13 },
+        },
+      ],
+    });
+  });
+
+  it("excludes v14 transcript-only nodes from doctor entry reads", () => {
+    const stateDir = autoCleanupTempDirs.make("openclaw-doctor-v14-reader-");
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const target = { agentId: "main", storePath };
+    const sqlitePath = resolveTargetSqlitePath(target);
+    fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
+    const sqlite = nodeSqlite.requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(sqlitePath);
+    try {
+      database.exec(`
+        CREATE TABLE session_nodes (
+          session_key TEXT NOT NULL PRIMARY KEY,
+          current_session_id TEXT NOT NULL,
+          entry_json TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        INSERT INTO session_nodes VALUES
+          ('agent:main:transcript-only', 'transcript-only-session', '{}', 14),
+          ('agent:main:v14-reader', 'v14-reader-session',
+           '{"sessionId":"v14-reader-session","updatedAt":14}', 14);
+        PRAGMA user_version = 14;
+      `);
+    } finally {
+      database.close();
+    }
+
+    expect(readOnlySqliteSessionEntries(target)).toEqual({
+      exists: true,
+      ok: true,
+      summaries: [
+        {
+          sessionKey: "agent:main:v14-reader",
+          entry: { sessionId: "v14-reader-session", updatedAt: 14 },
+        },
+      ],
+    });
+  });
+
   it("dry-runs a legacy store without writing SQLite rows", async () => {
     const store = createLegacyStore();
 
@@ -107,6 +214,41 @@ describe("runDoctorSessionSqlite", () => {
     expect(fs.existsSync(report.targets[0]?.sqlitePath ?? "")).toBe(false);
   });
 
+  it("reports store_unreadable instead of crashing when the store stat fails", async () => {
+    const store = createLegacyStore();
+    // Replace the sessions directory with a regular file so statSync on the
+    // store path throws ENOTDIR (non-ENOENT errors bypass throwIfNoEntry).
+    fs.rmSync(store.sessionDir, { force: true, recursive: true });
+    fs.writeFileSync(store.sessionDir, "not a directory\n", { mode: 0o600 });
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "inspect",
+      store: store.storePath,
+    });
+
+    expect(report.targets[0]?.issues).toEqual([
+      expect.objectContaining({ code: "store_unreadable" }),
+    ]);
+  });
+
+  it("reports store_unreadable for a non-regular store path", async () => {
+    const store = createLegacyStore();
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "inspect",
+      store: store.sessionDir,
+    });
+
+    expect(report.targets[0]?.issues).toEqual([
+      expect.objectContaining({
+        code: "store_unreadable",
+        message: expect.stringContaining("not a regular file"),
+      }),
+    ]);
+  });
+
   it("inspects SQLite-only all-agent targets without requiring a legacy store", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-session-sqlite-"));
     try {
@@ -137,6 +279,142 @@ describe("runDoctorSessionSqlite", () => {
     }
   });
 
+  it("migrates a dormant historical agent database before all-agent import compaction", async () => {
+    const tempDir = autoCleanupTempDirs.make("openclaw-doctor-session-sqlite-");
+    const stateDir = path.join(tempDir, "state");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const agentIds = ["dormant", "current"] as const;
+    for (const agentId of agentIds) {
+      const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      fs.writeFileSync(path.join(sessionsDir, "sessions.json"), "{}\n", { mode: 0o600 });
+    }
+    const dormantPath = createHistoricalV1AgentDatabase({ agentId: "dormant", env });
+    const currentPath = openOpenClawAgentDatabase({ agentId: "current", env }).path;
+    closeOpenClawAgentDatabasesForTest();
+
+    const sqlite = nodeSqlite.requireNodeSqlite();
+    const currentBefore = new sqlite.DatabaseSync(currentPath);
+    const currentUpdatedAt = expectDefined(
+      currentBefore
+        .prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'")
+        .get() as { updated_at?: number } | undefined,
+      "current schema metadata",
+    ).updated_at;
+    currentBefore.close();
+
+    const report = await runDoctorSessionSqlite({
+      allAgents: true,
+      cfg: { agents: { list: agentIds.map((id) => ({ id })) } },
+      env,
+      mode: "import",
+    });
+
+    expect(report.totals).toMatchObject({
+      importedEntries: 0,
+      issues: 0,
+      targets: 2,
+    });
+    expect(report.targets.find((target) => target.agentId === "dormant")?.compact).toMatchObject({
+      skipped: false,
+    });
+    const dormantAfter = new sqlite.DatabaseSync(dormantPath);
+    const currentAfter = new sqlite.DatabaseSync(currentPath);
+    try {
+      expect(dormantAfter.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
+      expect(
+        dormantAfter
+          .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+          .get(),
+      ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
+      expect(
+        dormantAfter
+          .prepare("PRAGMA table_info(session_windows)")
+          .all()
+          .map((column) => (column as { name?: unknown }).name),
+      ).toContain("session_scope");
+      expect(
+        dormantAfter
+          .prepare("PRAGMA table_info(memory_index_sources)")
+          .all()
+          .map((column) => (column as { name?: unknown }).name),
+      ).toEqual(["id", "path", "source", "hash", "mtime", "size"]);
+      expect(dormantAfter.prepare("PRAGMA integrity_check").get()).toEqual({
+        integrity_check: "ok",
+      });
+      expect(dormantAfter.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(
+        currentAfter
+          .prepare("SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary'")
+          .get(),
+      ).toEqual({
+        schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+        updated_at: currentUpdatedAt,
+      });
+    } finally {
+      dormantAfter.close();
+      currentAfter.close();
+    }
+  });
+
+  it("keeps mismatched older agent schema versions blocking during all-agent import", async () => {
+    const tempDir = autoCleanupTempDirs.make("openclaw-doctor-session-sqlite-");
+    const stateDir = path.join(tempDir, "token=supersecret", "state");
+    const sessionsDir = path.join(stateDir, "agents", "drifted", "sessions");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionsDir, "sessions.json"), "{}\n", { mode: 0o600 });
+    const sqlitePath = openOpenClawAgentDatabase({ agentId: "drifted", env }).path;
+    closeOpenClawAgentDatabasesForTest();
+
+    const sqlite = nodeSqlite.requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(sqlitePath);
+    try {
+      database.exec("PRAGMA user_version = 1;");
+      database
+        .prepare("UPDATE schema_meta SET schema_version = 2 WHERE meta_key = 'primary'")
+        .run();
+    } finally {
+      database.close();
+    }
+
+    const report = await runDoctorSessionSqlite({
+      allAgents: true,
+      cfg: { agents: { list: [{ id: "drifted" }] } },
+      env,
+      mode: "import",
+    });
+
+    expect(report.targets[0]?.issues).toEqual([
+      expect.objectContaining({
+        code: "sqlite_compact_failed",
+        message: expect.stringMatching(/uses schema version 1/iu),
+      }),
+    ]);
+    const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
+    expect(manifest.failedAt).toBeTruthy();
+    expect(manifest.failureReports).toBeDefined();
+    const failureReportPath = expectDefined(
+      report.migrationRun?.failureReportMarkdownPath,
+      "blocking migration failure report path",
+    );
+    const failureReport = fs.readFileSync(failureReportPath, "utf-8");
+    expect(failureReport).toContain("sqlite_compact_failed");
+    expect(failureReport).toContain("openclaw doctor --session-sqlite recover --github-issue");
+    expect(failureReport).not.toContain("supersecret");
+    const after = new sqlite.DatabaseSync(sqlitePath);
+    try {
+      expect(after.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+      expect(
+        after.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
+      ).toEqual({ schema_version: 2 });
+    } finally {
+      after.close();
+    }
+  });
+
   it("repairs legacy message and route shapes at the import boundary", async () => {
     const store = createLegacyStore({
       entryOverrides: {
@@ -162,7 +440,7 @@ describe("runDoctorSessionSqlite", () => {
       storePath: store.storePath,
     });
     // The SQLite runtime does no read repair, so import must store canonical shapes.
-    expect(typeof imported?.entry.route).not.toBe("string");
+    expect(typeof sessionDeliveryRoute(imported?.entry)).not.toBe("string");
     const events = loadSqliteTranscriptEventsSync({
       agentId: "main",
       sessionId: "session-1",
@@ -173,6 +451,26 @@ describe("runDoctorSessionSqlite", () => {
       message?: { content?: unknown };
     };
     expect(message?.message?.content).toEqual([{ type: "text", text: "legacy string" }]);
+    closeOpenClawAgentDatabasesForTest();
+    const sqlite = nodeSqlite.requireNodeSqlite();
+    const migrated = new sqlite.DatabaseSync(
+      resolveOpenClawAgentSqlitePath({ agentId: "main", env: store.env }),
+      { readOnly: true },
+    );
+    try {
+      expect(migrated.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
+      expect(
+        migrated
+          .prepare(
+            "SELECT session_id, length(generation) AS generation_length FROM transcript_rewrite_watermarks",
+          )
+          .all(),
+      ).toEqual([{ generation_length: 32, session_id: "session-1" }]);
+    } finally {
+      migrated.close();
+    }
   });
 
   it("preserves the legacy transcript mtime as the SQLite mutation watermark", async () => {
@@ -234,7 +532,6 @@ describe("runDoctorSessionSqlite", () => {
       agentHarnessId: "codex",
       lifecycleRevision: "rev-1",
       sessionId: "session-1",
-      sessionFile: expect.stringMatching(/^sqlite:/),
     });
   });
 
@@ -316,8 +613,8 @@ describe("runDoctorSessionSqlite", () => {
         agentId: "main",
         sessionKey: "agent:main:main",
         storePath: store.storePath,
-      })?.entry.sessionFile,
-    ).toContain("sqlite:main:session-1:");
+      })?.entry,
+    ).not.toHaveProperty("sessionFile");
     expect(
       loadSqliteTranscriptEventsSync({
         agentId: "main",
@@ -326,6 +623,57 @@ describe("runDoctorSessionSqlite", () => {
         storePath: store.storePath,
       }),
     ).toHaveLength(2);
+  });
+
+  it("archives legacy stores with valid sessions and invalid cron stubs without failing", async () => {
+    const store = createLegacyStore();
+    const legacyStore = JSON.parse(fs.readFileSync(store.storePath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+    const cronStubKey = "agent:main:cron:legacy-stub";
+    legacyStore[cronStubKey] = { updatedAt: 1500 };
+    fs.writeFileSync(store.storePath, `${JSON.stringify(legacyStore, null, 2)}\n`, { mode: 0o600 });
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+
+    expect(report.totals).toMatchObject({
+      archivedLegacyStoreFiles: 1,
+      importedEntries: 1,
+      importedTranscriptEvents: 2,
+      issues: 1,
+      sqliteEntries: 1,
+    });
+    expect(report.targets[0]?.issues).toEqual([
+      {
+        code: "entry_invalid",
+        message: "Session entry is missing a valid sessionId.",
+        sessionKey: cronStubKey,
+      },
+    ]);
+    const archivedStorePath = expectDefined(
+      report.targets[0]?.archivedLegacyStoreFiles?.[0],
+      "archived legacy store path",
+    );
+    expect(fs.existsSync(store.storePath)).toBe(false);
+    expect(fs.existsSync(archivedStorePath)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(archivedStorePath, "utf-8"))).toMatchObject({
+      [cronStubKey]: { updatedAt: 1500 },
+    });
+
+    const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
+    expect(manifest.failedAt).toBeUndefined();
+    expect(manifest.failureReports).toBeUndefined();
+    expect(manifest.targets[0]).toMatchObject({
+      issues: [expect.objectContaining({ code: "entry_invalid", sessionKey: cronStubKey })],
+      validationBeforeArchive: "passed",
+    });
+    expect(report.migrationRun?.failureReportJsonPath).toBeUndefined();
+    expect(report.migrationRun?.failureReportMarkdownPath).toBeUndefined();
   });
 
   it("compacts migrated agent SQLite databases and reports reclaimed pages", async () => {
@@ -373,6 +721,26 @@ describe("runDoctorSessionSqlite", () => {
       compact.targets[0]?.compact?.dbSizeBeforeBytes ?? 0,
     );
   });
+
+  it.skipIf(process.platform === "win32")(
+    "allows hard-linked legacy stores during SQLite compaction",
+    async () => {
+      const { store } = await createImportedStoreForCompaction();
+      const externalStorePath = path.join(store.tempDir, "external-sessions.json");
+      fs.writeFileSync(store.storePath, "{}\n", { mode: 0o600 });
+      fs.linkSync(store.storePath, externalStorePath);
+
+      const report = await runDoctorSessionSqlite({
+        env: store.env,
+        mode: "compact",
+        store: store.storePath,
+      });
+
+      expect(report.totals.issues).toBe(0);
+      expect(fs.statSync(externalStorePath).nlink).toBe(2);
+      expect(fs.readFileSync(externalStorePath, "utf8")).toBe("{}\n");
+    },
+  );
 
   it("refuses compaction while this process owns an open agent database handle", async () => {
     const { sqlitePath, store } = await createImportedStoreForCompaction();
@@ -463,22 +831,77 @@ describe("runDoctorSessionSqlite", () => {
       fs.renameSync(sqlitePath, realPath);
       fs.symlinkSync(realPath, sqlitePath);
 
-      const report = await runDoctorSessionSqlite({
-        env: store.env,
-        mode: "compact",
-        store: store.storePath,
-      });
-
-      expect(report.targets[0]?.issues).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            code: "sqlite_compact_failed",
-            message: expect.stringMatching(/not a regular file/iu),
-          }),
-        ]),
-      );
+      await expect(
+        runDoctorSessionSqlite({
+          env: store.env,
+          mode: "compact",
+          store: store.storePath,
+        }),
+      ).rejects.toThrow(/Cannot run session SQLite compact.*symbolic-link path/iu);
     },
   );
+
+  it("clears agent quarantine after compaction", async () => {
+    const { sqlitePath, store } = await createImportedStoreForCompaction();
+    expect(
+      recordOpenClawDatabaseQuarantine({
+        env: store.env,
+        kind: "agent",
+        path: sqlitePath,
+        reason: "corrupt index",
+      }),
+    ).toBe(true);
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "compact",
+      store: store.storePath,
+    });
+
+    expect(report.totals.issues).toBe(0);
+    expect(readOpenClawDatabaseQuarantine(sqlitePath, { env: store.env })).toBeUndefined();
+    expect(openOpenClawAgentDatabase({ agentId: "main", env: store.env }).db.isOpen).toBe(true);
+  });
+
+  it("repairs canonical index corruption in place during recovery", async () => {
+    const { sqlitePath, store } = await createImportedStoreForCompaction();
+    createCanonicalCacheIndexDrift(sqlitePath);
+    expect(
+      recordOpenClawDatabaseQuarantine({
+        env: store.env,
+        kind: "agent",
+        path: sqlitePath,
+        reason: "canonical cache index drift",
+      }),
+    ).toBe(true);
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "recover",
+      store: store.storePath,
+    });
+
+    expect(report.totals.issues).toBe(0);
+    expect(report.targets[0]?.corruptRecovery).toBeUndefined();
+    expect(fs.existsSync(sqlitePath)).toBe(true);
+    expect(readOpenClawDatabaseQuarantine(sqlitePath, { env: store.env })).toBeUndefined();
+
+    const sqlite = nodeSqlite.requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+    try {
+      expect(database.prepare("PRAGMA integrity_check").get()).toEqual({
+        integrity_check: "ok",
+      });
+      expect(
+        database
+          .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
+          .get("doctor", "canonical-index"),
+      ).toEqual({ value_json: '{"ok":true}' });
+    } finally {
+      database.close();
+    }
+    expect(openOpenClawAgentDatabase({ agentId: "main", env: store.env }).db.isOpen).toBe(true);
+  });
 
   it.skipIf(process.platform === "win32")(
     "reapplies owner-only permissions after compaction",
@@ -500,6 +923,14 @@ describe("runDoctorSessionSqlite", () => {
   it("rejects stale secondary indexes before compacting and quarantines them in recovery", async () => {
     const { sqlitePath, store } = await createImportedStoreForCompaction();
     createUnsafeIndexDrift(sqlitePath);
+    expect(
+      recordOpenClawDatabaseQuarantine({
+        env: store.env,
+        kind: "agent",
+        path: sqlitePath,
+        reason: "stale secondary index",
+      }),
+    ).toBe(true);
 
     const report = await runDoctorSessionSqlite({
       env: store.env,
@@ -516,6 +947,9 @@ describe("runDoctorSessionSqlite", () => {
           ),
         }),
       ]),
+    );
+    expect(readOpenClawDatabaseQuarantine(sqlitePath, { env: store.env })?.reason).toBe(
+      "stale secondary index",
     );
 
     const recovery = await runDoctorSessionSqlite({
@@ -580,8 +1014,8 @@ describe("runDoctorSessionSqlite", () => {
         agentId: "main",
         sessionKey: "agent:main:main",
         storePath: store.storePath,
-      })?.entry.sessionFile,
-    ).toContain("sqlite:main:session-1:");
+      })?.entry,
+    ).not.toHaveProperty("sessionFile");
   });
 
   it("validates missing SQLite rows without creating the agent database", async () => {
@@ -1414,7 +1848,9 @@ describe("runDoctorSessionSqlite", () => {
     });
 
     expect(recover.mode).toBe("recover");
-    expect(recover.totals.issues).toBe(0);
+    expect(recover.targets[0]?.issues).toMatchObject([
+      { code: "active_sqlite_transcript_jsonl", sessionKey: "agent:main:main" },
+    ]);
     expect(recover.migrationRun?.manifestPath).toBe(manifestPath);
     expect(recover.targets[0]?.restore?.manifestPaths).toEqual([manifestPath]);
     expect(recover.targets[0]?.restore?.restoredFiles).toEqual(
@@ -1430,6 +1866,75 @@ describe("runDoctorSessionSqlite", () => {
       expect(recover.supportIssue?.body).not.toContain(process.env.HOME);
     }
     expect(recover.supportIssue?.url).toContain("github.com/openclaw/openclaw/issues/new");
+  });
+
+  it("keeps truncated GitHub issue bodies on a valid UTF-16 boundary", () => {
+    const store = createLegacyStore();
+    const manifestPath = path.join(store.tempDir, "failed-migration.json");
+    const unpairedSurrogate =
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+    const writeManifest = (messages: string[], targetCount = 1) => {
+      const manifest: SessionSqliteMigrationManifest = {
+        failedAt: "2030-01-01T00:00:00.000Z",
+        manifestVersion: 2,
+        openClawVersion: "test",
+        runId: "utf16-boundary",
+        startedAt: "2030-01-01T00:00:00.000Z",
+        targets: Array.from({ length: targetCount }, (_, index) => {
+          const targetMessages = index === targetCount - 1 ? messages : ["x".repeat(500)];
+          return {
+            agentId:
+              targetCount === 1
+                ? "agent-with-long-name-".repeat(10)
+                : `agent-${index}-${"long-name-".repeat(10)}`,
+            completedMoves: [],
+            issues: targetMessages.map((message) => ({ code: "startup_failure", message })),
+            plannedMoves: [],
+            sqlitePath: path.join(store.tempDir, "openclaw-agent.sqlite"),
+            storePath: store.storePath,
+            validationBeforeArchive: "failed",
+          };
+        }),
+      };
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+    };
+
+    writeManifest([`${"x".repeat(499)}🎉tail`]);
+    const fieldIssue = createSessionSqliteMigrationFailureIssue(manifestPath);
+    expect(fieldIssue?.body).not.toMatch(unpairedSurrogate);
+    expect(new URL(fieldIssue?.url ?? "").searchParams.get("body")).not.toContain("�");
+
+    const baseMessages = Array.from({ length: 9 }, () => "x".repeat(500));
+    writeManifest([...baseMessages, "MESSAGE_START"]);
+    const probe = createSessionSqliteMigrationFailureIssue(manifestPath);
+    const messageOffset = probe?.body.indexOf("MESSAGE_START") ?? -1;
+    expect(5_999 - messageOffset).toBeLessThan(500);
+
+    writeManifest([...baseMessages, `${"x".repeat(5_999 - messageOffset)}🎉tail`]);
+    const issue = createSessionSqliteMigrationFailureIssue(manifestPath);
+    expect(issue?.body).toContain("🎉tail");
+    const urlBody = new URL(issue?.url ?? "").searchParams.get("body");
+    expect(urlBody).not.toContain("�");
+    expect(urlBody).toContain("truncated for URL");
+
+    let bodyTargetCount = 0;
+    let bodyMessageOffset = -1;
+    for (let count = 1; count < 50; count += 1) {
+      writeManifest(["BODY_START"], count);
+      const candidateIssue = createSessionSqliteMigrationFailureIssue(manifestPath);
+      const candidateOffset = candidateIssue?.body.indexOf("BODY_START") ?? -1;
+      if (candidateOffset < 0) {
+        break;
+      }
+      bodyTargetCount = count;
+      bodyMessageOffset = candidateOffset;
+    }
+    expect(bodyMessageOffset).toBeGreaterThanOrEqual(0);
+    expect(19_999 - bodyMessageOffset).toBeLessThan(600);
+
+    writeManifest([`${"x".repeat(19_999 - bodyMessageOffset)}🎉tail`], bodyTargetCount);
+    const bodyIssue = createSessionSqliteMigrationFailureIssue(manifestPath);
+    expect(bodyIssue?.body).not.toMatch(unpairedSurrogate);
   });
 
   it("recovers only manifests matching an explicit store selector", async () => {
@@ -1687,8 +2192,11 @@ describe("runDoctorSessionSqlite", () => {
         archivedLegacyStoreFiles: 0,
         archivedTranscriptFiles: 0,
         importedEntries: 1,
-        issues: 0,
+        issues: 1,
       });
+      expect(report.targets[0]?.issues).toMatchObject([
+        { code: "active_sqlite_transcript_jsonl", sessionKey: "agent:main:main" },
+      ]);
       expect(fs.existsSync(storePath)).toBe(true);
       expect(fs.existsSync(mainTranscriptPath)).toBe(true);
       expect(fs.existsSync(workTranscriptPath)).toBe(true);
@@ -2040,7 +2548,7 @@ describe("runDoctorSessionSqlite", () => {
     );
     fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
     fs.writeFileSync(sqlitePath, "not a sqlite database\n", { mode: 0o600 });
-    const requireSqlite = vi.spyOn(nodeSqlite, "requireNodeSqlite").mockImplementationOnce(() => {
+    const openSqlite = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementationOnce(() => {
       throw new Error("node:sqlite unavailable");
     });
 
@@ -2052,7 +2560,7 @@ describe("runDoctorSessionSqlite", () => {
         store: store.storePath,
       });
     } finally {
-      requireSqlite.mockRestore();
+      openSqlite.mockRestore();
     }
 
     expect(report?.totals.issues).toBe(1);
@@ -2215,14 +2723,9 @@ describe("runDoctorSessionSqlite", () => {
     expect(
       manifest.targets[0]?.completedMoves.some((move) => move.kind === "unreferenced-jsonl"),
     ).toBe(true);
-    expect(report.migrationRun?.failureReportMarkdownPath).toBeTruthy();
-    const failureReport = fs.readFileSync(
-      report.migrationRun?.failureReportMarkdownPath ?? "",
-      "utf-8",
-    );
-    expect(failureReport).toContain("transcript_malformed");
-    expect(failureReport).toContain("openclaw doctor --session-sqlite recover --github-issue");
-    expect(failureReport).not.toContain("supersecret");
+    expect(manifest.failedAt).toBeUndefined();
+    expect(manifest.failureReports).toBeUndefined();
+    expect(report.migrationRun?.failureReportMarkdownPath).toBeUndefined();
   });
 
   it("reports malformed selected legacy transcripts during validation", async () => {
@@ -2274,6 +2777,92 @@ async function createImportedStoreForCompaction(): Promise<{
   return { sqlitePath, store };
 }
 
+// Build the physical v1 layout directly so the doctor path, not the runtime
+// opener, owns the upgrade. Empty session tables preserve the dormant-agent
+// reproduction: import has no rows to open before its compact step.
+function createHistoricalV1AgentDatabase(params: {
+  agentId: string;
+  env: NodeJS.ProcessEnv;
+}): string {
+  const sqlitePath = resolveOpenClawAgentSqlitePath(params);
+  fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
+  const sqlite = nodeSqlite.requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(sqlitePath);
+  try {
+    database.exec(`
+      CREATE TABLE schema_meta (
+        meta_key TEXT NOT NULL PRIMARY KEY,
+        role TEXT NOT NULL,
+        schema_version INTEGER NOT NULL,
+        agent_id TEXT,
+        app_version TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE sessions (
+        session_id TEXT NOT NULL PRIMARY KEY,
+        session_key TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE session_entries (
+        session_key TEXT NOT NULL PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        entry_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+      );
+      CREATE TABLE memory_index_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        revision INTEGER NOT NULL
+      );
+      INSERT INTO memory_index_state (id, revision) VALUES (1, 1);
+      CREATE TABLE memory_index_sources (
+        source_kind TEXT NOT NULL DEFAULT 'memory',
+        source_key TEXT NOT NULL,
+        path TEXT,
+        session_id TEXT,
+        hash TEXT NOT NULL,
+        mtime INTEGER NOT NULL,
+        size INTEGER NOT NULL,
+        PRIMARY KEY (source_kind, source_key),
+        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+      );
+      CREATE TABLE memory_index_chunks (
+        id TEXT PRIMARY KEY,
+        source_kind TEXT NOT NULL DEFAULT 'memory',
+        source_key TEXT NOT NULL,
+        path TEXT NOT NULL,
+        session_id TEXT,
+        start_line INTEGER NOT NULL,
+        end_line INTEGER NOT NULL,
+        hash TEXT NOT NULL,
+        model TEXT NOT NULL,
+        text TEXT NOT NULL,
+        embedding BLOB NOT NULL,
+        embedding_dims INTEGER,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (source_kind, source_key)
+          REFERENCES memory_index_sources(source_kind, source_key) ON DELETE CASCADE,
+        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+      );
+      PRAGMA user_version = 1;
+    `);
+    database
+      .prepare(
+        `
+          INSERT INTO schema_meta
+            (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+          VALUES ('primary', 'agent', 1, ?, NULL, 1, 1)
+        `,
+      )
+      .run(params.agentId);
+  } finally {
+    database.close();
+  }
+  return sqlitePath;
+}
+
 function createUnsafeIndexDrift(sqlitePath: string): void {
   const sqlite = nodeSqlite.requireNodeSqlite();
   const database = new sqlite.DatabaseSync(sqlitePath);
@@ -2310,6 +2899,39 @@ function createUnsafeIndexDrift(sqlitePath: string): void {
   }
 }
 
+function createCanonicalCacheIndexDrift(sqlitePath: string): void {
+  const sqlite = nodeSqlite.requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(sqlitePath);
+  try {
+    database.exec(`
+      INSERT INTO cache_entries (scope, key, value_json, expires_at, updated_at)
+      VALUES ('doctor', 'canonical-index', '{"ok":true}', 100, 1);
+      DROP INDEX idx_agent_cache_expiry;
+      CREATE INDEX idx_agent_cache_expiry ON cache_entries(key);
+    `);
+    database.enableDefensive?.(false);
+    database.exec("PRAGMA writable_schema = ON;");
+    database
+      .prepare(
+        `UPDATE sqlite_schema
+            SET sql = 'CREATE INDEX idx_agent_cache_expiry ON cache_entries(scope, expires_at, key) WHERE expires_at IS NOT NULL'
+          WHERE name = 'idx_agent_cache_expiry'`,
+      )
+      .run();
+    database.exec("PRAGMA writable_schema = OFF;");
+    const schemaVersionRow = database.prepare("PRAGMA schema_version;").get() as
+      | Record<string, unknown>
+      | undefined;
+    const schemaVersion = Number(
+      schemaVersionRow?.schema_version ??
+        (schemaVersionRow ? Object.values(schemaVersionRow)[0] : undefined),
+    );
+    database.exec(`PRAGMA schema_version = ${schemaVersion + 1};`);
+  } finally {
+    database.close();
+  }
+}
+
 function createLegacyStore(
   params: {
     agentDirName?: string;
@@ -2319,9 +2941,7 @@ function createLegacyStore(
     transcriptLines?: string[];
   } = {},
 ): TestStore {
-  const tempDir = fs.mkdtempSync(
-    path.join(params.tempRoot ?? os.tmpdir(), "openclaw-doctor-session-sqlite-"),
-  );
+  const tempDir = autoCleanupTempDirs.make("openclaw-doctor-session-sqlite-", params.tempRoot);
   const stateDir = path.join(tempDir, "state");
   const configPath = path.join(tempDir, "openclaw.json");
   const sessionDir = params.customStore
@@ -2460,3 +3080,4 @@ function restoreEnvValue(key: keyof NodeJS.ProcessEnv, value: string | undefined
   }
   process.env[key] = value;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

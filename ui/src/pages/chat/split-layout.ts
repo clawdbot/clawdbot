@@ -1,4 +1,5 @@
-import { expectDefined } from "@openclaw/normalization-core";
+import type { UiCommand } from "@openclaw/gateway-protocol";
+import { expectDefined, isRecord } from "@openclaw/normalization-core";
 
 export type ChatSplitPane = { id: string; sessionKey: string };
 type ChatSplitColumn = { id: string; panes: ChatSplitPane[]; paneWeights: number[] };
@@ -9,7 +10,29 @@ export type ChatSplitLayout = {
   activePaneId: string;
 };
 
+export function singlePaneLayout(
+  columnId: string,
+  paneId: string,
+  sessionKey: string,
+): ChatSplitLayout {
+  return {
+    columns: [{ id: columnId, panes: [{ id: paneId, sessionKey }], paneWeights: [1] }],
+    columnWeights: [1],
+    activePaneId: paneId,
+  };
+}
+
 const MIN_PAIR_SHARE = 0.15;
+
+export function splitWeight(weights: number[], index: number, context: string): number {
+  return expectDefined(weights[index], context);
+}
+
+export function splitRatio(weights: number[], index: number, context: string): number {
+  const before = splitWeight(weights, index, `${context} before divider`);
+  const after = splitWeight(weights, index + 1, `${context} after divider`);
+  return before / (before + after);
+}
 
 function cloneLayout(layout: ChatSplitLayout): ChatSplitLayout {
   return {
@@ -45,24 +68,12 @@ function nextColumnId(layout: ChatSplitLayout): string {
   return `c${max + 1}`;
 }
 
-export function nextPaneId(layout: ChatSplitLayout): string {
+function nextPaneId(layout: ChatSplitLayout): string {
   const max = panesOf(layout).reduce(
     (current, pane) => Math.max(current, numericSuffix(pane.id, "p")),
     0,
   );
   return `p${max + 1}`;
-}
-
-export function createSinglePaneLayout(sessionKey: string): ChatSplitLayout {
-  return {
-    columns: [{ id: "c1", panes: [{ id: "p1", sessionKey }], paneWeights: [1] }],
-    columnWeights: [1],
-    activePaneId: "p1",
-  };
-}
-
-export function createSplitLayout(sessionKey: string): ChatSplitLayout {
-  return insertPane(createSinglePaneLayout(sessionKey), "p1", sessionKey, "right");
 }
 
 export function findPane(
@@ -93,6 +104,15 @@ export function findPane(
 
 export function panesOf(layout: ChatSplitLayout): ChatSplitPane[] {
   return layout.columns.flatMap((column) => column.panes.map((pane) => ({ ...pane })));
+}
+
+/** Panes actually rendered at the current viewport width. */
+export function visiblePanesOf(layout: ChatSplitLayout, narrow: boolean): ChatSplitPane[] {
+  if (!narrow) {
+    return panesOf(layout);
+  }
+  const activePane = findPane(layout, layout.activePaneId)?.pane;
+  return activePane ? [activePane] : [];
 }
 
 export function insertPane(
@@ -192,6 +212,36 @@ export function setActivePane(layout: ChatSplitLayout, paneId: string): ChatSpli
   return next;
 }
 
+type UiSplitLayoutCommand = Extract<UiCommand, { kind: "split" | "close-pane" | "focus" }>;
+
+export function applyUiCommandToSplitLayout(
+  layout: ChatSplitLayout,
+  command: UiSplitLayoutCommand,
+  sourceSessionKey?: string,
+): ChatSplitLayout | undefined {
+  if (command.kind === "split") {
+    const sourcePane = sourceSessionKey
+      ? panesOf(layout).find((entry) => entry.sessionKey === sourceSessionKey)
+      : undefined;
+    if (sourceSessionKey && !sourcePane) {
+      return layout;
+    }
+    return insertPane(
+      layout,
+      sourcePane?.id ?? layout.activePaneId,
+      command.sessionKey,
+      command.direction,
+    );
+  }
+  const pane = panesOf(layout).find((entry) => entry.sessionKey === command.sessionKey);
+  if (!pane) {
+    return layout;
+  }
+  return command.kind === "close-pane"
+    ? closePane(layout, pane.id)
+    : setActivePane(layout, pane.id);
+}
+
 function resizePair(weights: number[], boundaryIndex: number, pairRatio: number): number[] {
   const next = [...weights];
   if (boundaryIndex < 0 || boundaryIndex + 1 >= weights.length) {
@@ -231,10 +281,6 @@ export function resizePanes(
     column.paneWeights = resizePair(column.paneWeights, boundaryIndex, pairRatio);
   }
   return next;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readWeights(value: unknown, length: number): number[] {

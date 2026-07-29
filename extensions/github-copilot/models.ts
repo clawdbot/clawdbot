@@ -3,7 +3,7 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/core";
-import { buildCopilotIdeHeaders, COPILOT_INTEGRATION_ID } from "openclaw/plugin-sdk/provider-auth";
+import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -19,12 +19,9 @@ import {
   resolveCopilotTransportApi,
   resolveStaticCopilotModelOverride,
 } from "./model-metadata.js";
+import { COPILOT_RUNTIME_INTEGRATION_ID } from "./runtime-identity.js";
 
 export const PROVIDER_ID = "github-copilot";
-const CODEX_FORWARD_COMPAT_TARGET_IDS = new Set(["gpt-5.4", "gpt-5.3-codex"]);
-// gpt-5.3-codex is only a useful template when gpt-5.4 is the target; it is
-// always a registry miss (and therefore skipped) when it is the target itself.
-const CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex"] as const;
 
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8192;
@@ -46,26 +43,6 @@ export function resolveCopilotForwardCompatModel(
   const existing = ctx.modelRegistry.find(PROVIDER_ID, lowerModelId);
   if (existing) {
     return undefined;
-  }
-
-  // For gpt-5.4 and gpt-5.3-codex, clone from a registered codex template
-  // to inherit the correct reasoning and capability flags.
-  if (CODEX_FORWARD_COMPAT_TARGET_IDS.has(lowerModelId)) {
-    for (const templateId of CODEX_TEMPLATE_MODEL_IDS) {
-      const template = ctx.modelRegistry.find(
-        PROVIDER_ID,
-        templateId,
-      ) as ProviderRuntimeModel | null;
-      if (!template) {
-        continue;
-      }
-      return normalizeModelCompat({
-        ...template,
-        id: trimmedModelId,
-        name: trimmedModelId,
-      } as ProviderRuntimeModel);
-    }
-    // Template not found — fall through to synthetic catch-all below.
   }
 
   const staticOverride = resolveStaticCopilotModelOverride(lowerModelId);
@@ -144,6 +121,10 @@ type CopilotApiModelEntry = {
 
 const COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS = 10_000;
 const COPILOT_ROUTER_ID_PREFIX = "accounts/";
+type CopilotCatalogModel = Omit<ModelDefinitionConfig, "input"> & {
+  api: NonNullable<ModelDefinitionConfig["api"]>;
+  input: ProviderRuntimeModel["input"];
+};
 
 function resolveCopilotApiForVendor(
   vendor: string | undefined,
@@ -195,7 +176,7 @@ function resolveCopilotThinkingLevelMap(
 
 function mapCopilotApiModelToDefinition(
   entry: CopilotApiModelEntry,
-): ModelDefinitionConfig | undefined {
+): CopilotCatalogModel | undefined {
   const id = entry.id?.trim();
   if (!id) {
     return undefined;
@@ -217,7 +198,7 @@ function mapCopilotApiModelToDefinition(
     ? supports.reasoning_effort.length > 0
     : false;
   const supportsVision = supports?.vision === true;
-  const input: ModelDefinitionConfig["input"] = supportsVision ? ["text", "image"] : ["text"];
+  const input: CopilotCatalogModel["input"] = supportsVision ? ["text", "image"] : ["text"];
 
   const contextWindow =
     asPositiveSafeInteger(limits?.max_context_window_tokens) ?? DEFAULT_CONTEXT_WINDOW;
@@ -227,7 +208,7 @@ function mapCopilotApiModelToDefinition(
   const api = resolveCopilotApiForVendor(entry.vendor, id);
   const thinkingLevelMap = resolveCopilotThinkingLevelMap(api, id, compat);
 
-  const definition: ModelDefinitionConfig = {
+  const definition: CopilotCatalogModel = {
     id,
     name: entry.name?.trim() || id,
     api,
@@ -251,7 +232,7 @@ function asCopilotApiModelEntry(value: unknown): CopilotApiModelEntry {
 }
 
 type FetchCopilotModelCatalogParams = {
-  /** Short-lived Copilot API token (from `resolveCopilotApiToken`). */
+  /** GitHub source token accepted by the account's Copilot API endpoint. */
   copilotApiToken: string;
   /** Resolved baseUrl from the same token-exchange response. */
   baseUrl: string;
@@ -273,7 +254,7 @@ type FetchCopilotModelCatalogParams = {
  */
 export async function fetchCopilotModelCatalog(
   params: FetchCopilotModelCatalogParams,
-): Promise<ModelDefinitionConfig[]> {
+): Promise<CopilotCatalogModel[]> {
   const fetchImpl = params.fetchImpl ?? fetch;
   const trimmedBase = params.baseUrl.replace(/\/+$/, "");
   if (!trimmedBase) {
@@ -294,16 +275,18 @@ export async function fetchCopilotModelCatalog(
         Accept: "application/json",
         Authorization: `Bearer ${params.copilotApiToken}`,
         ...buildCopilotIdeHeaders(),
-        "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+        "Copilot-Integration-Id": COPILOT_RUNTIME_INTEGRATION_ID,
       },
       signal: params.signal ?? controller?.signal,
     });
     if (!res.ok) {
+      // Static catalog fallback never consumes this body, so release the transport before cleanup.
+      await res.body?.cancel().catch(() => undefined);
       throw new Error(`Copilot /models fetch failed: HTTP ${res.status}`);
     }
     const data = await readProviderJsonArrayFieldResponse(res, "Copilot /models", "data");
     const seen = new Set<string>();
-    const out: ModelDefinitionConfig[] = [];
+    const out: CopilotCatalogModel[] = [];
     for (const rawEntry of data) {
       const entry = asCopilotApiModelEntry(rawEntry);
       const def = mapCopilotApiModelToDefinition(entry);

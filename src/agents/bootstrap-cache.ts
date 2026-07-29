@@ -85,7 +85,13 @@ export function clearBootstrapSnapshotOnSessionRollover(params: {
   clearBootstrapSnapshot(params.sessionKey);
 }
 
-/** Clear all cached bootstrap snapshots. */
-export function clearAllBootstrapSnapshots(): void {
-  cache.clear();
+/** Clear bootstrap state after an in-log lifecycle boundary is durably appended. */
+export function clearBootstrapSnapshotOnSessionBoundary(params: {
+  boundaryAppended: boolean;
+  sessionKey?: string;
+}): void {
+  if (!params.boundaryAppended || !params.sessionKey) {
+    return;
+  }
+  clearBootstrapSnapshot(params.sessionKey);
 }

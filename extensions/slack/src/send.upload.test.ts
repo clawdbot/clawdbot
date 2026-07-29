@@ -109,7 +109,7 @@ vi.mock("./runtime-api.js", async () => {
   };
 });
 
-const { sendMessageSlack, clearSlackDmChannelCache } = await import("./send.js");
+const { sendMessageSlack } = await import("./send.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 
 type UploadTestClient = WebClient & {
@@ -224,7 +224,6 @@ describe("sendMessageSlack file upload with user IDs", () => {
     cleanupUploadTimeout.mockClear();
     uploadTimeoutControllers.length = 0;
     loadOutboundMediaFromUrlMock.mockClear();
-    clearSlackDmChannelCache();
     clearSlackThreadParticipationCache();
   });
 
@@ -468,6 +467,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
     expectOnlyCallFirstArg(fetchWithSsrFGuard, {
       url: "https://files.slack.com/upload",
       mode: "trusted_env_proxy",
+      timeoutMs: 120_000,
       signal: expect.any(AbortSignal),
       requireHttps: true,
       policy: {
@@ -831,7 +831,10 @@ describe("sendMessageSlack file upload with user IDs", () => {
           operation: "slack-upload-file",
           url: baseUrl,
         });
-        expectOnlyCallFirstArg(fetchWithSsrFGuard, { signal: expect.any(AbortSignal) });
+        expectOnlyCallFirstArg(fetchWithSsrFGuard, {
+          timeoutMs: 120_000,
+          signal: expect.any(AbortSignal),
+        });
         expect(cleanupUploadTimeout).toHaveBeenCalledOnce();
         expect(uploadTimeoutControllers).toHaveLength(0);
         expect(onPlatformSendDispatch).not.toHaveBeenCalled();

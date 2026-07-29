@@ -30,7 +30,7 @@ const programMocks = vi.hoisted(() => {
     runChannelLogin: vi.fn(),
     runChannelLogout: vi.fn(),
     runTui: vi.fn(),
-    runCrestodianWithInference: vi.fn(),
+    runSystemAgentWithInference: vi.fn(),
     loadAndMaybeMigrateDoctorConfig: vi.fn(),
     ensureConfigReady: vi.fn(),
     ensurePluginRegistryLoaded: vi.fn(),
@@ -43,7 +43,7 @@ export const setupCommand = programMocks.setupCommand as AnyMock;
 export const setupWizardCommand = programMocks.setupWizardCommand as AnyMock;
 export const callGateway = programMocks.callGateway as AnyMock;
 export const runTui = programMocks.runTui as AnyMock;
-export const runCrestodianWithInference = programMocks.runCrestodianWithInference as AnyMock;
+export const runSystemAgentWithInference = programMocks.runSystemAgentWithInference as AnyMock;
 export const ensureConfigReady = programMocks.ensureConfigReady as AnyMock;
 
 export const runtime = programMocks.runtime as {
@@ -89,8 +89,8 @@ vi.mock("./channel-auth.js", () => ({
   runChannelLogout: programMocks.runChannelLogout,
 }));
 vi.mock("../tui/tui.js", () => ({ runTui: programMocks.runTui }));
-vi.mock("../commands/crestodian-with-inference.js", () => ({
-  runCrestodianWithInference: programMocks.runCrestodianWithInference,
+vi.mock("../commands/system-agent-with-inference.js", () => ({
+  runSystemAgentWithInference: programMocks.runSystemAgentWithInference,
 }));
 vi.mock("../gateway/call.js", () => ({
   callGateway: programMocks.callGateway,

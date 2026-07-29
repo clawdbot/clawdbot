@@ -102,7 +102,7 @@ import {
   loadSessionUsageTimeSeries,
 } from "../../infra/session-cost-usage.js";
 import { loadCombinedSessionStoreForGateway } from "../session-utils.js";
-import { usageHandlers } from "./usage.js";
+import { testApi, usageHandlers } from "./usage.js";
 
 const TEST_RUNTIME_CONFIG = {
   agents: {
@@ -205,6 +205,7 @@ async function withUsageState(
 
 describe("sessions.usage", () => {
   beforeEach(() => {
+    testApi.sessionsUsageCache.clear();
     vi.useRealTimers();
     vi.clearAllMocks();
   });
@@ -284,7 +285,7 @@ describe("sessions.usage", () => {
     expect(expectDefined(sessions[0], "sessions[0] test invariant").agentId).toBe("opus");
   });
 
-  it("loads selected session summaries in one batched cache read and reports refresh status", async () => {
+  it("returns pending cache rows with null usage while refresh runs", async () => {
     vi.mocked(discoverAllSessions).mockResolvedValueOnce([
       {
         sessionId: "s-a",
@@ -304,7 +305,10 @@ describe("sessions.usage", () => {
     ]);
     vi.mocked(loadSessionCostSummariesFromCache).mockImplementation(async ({ sessions }) => ({
       summaries: sessions.map((session) => {
-        const tokens = session.sessionId === "s-a" ? 10 : session.sessionId === "s-b" ? 20 : 30;
+        if (session.sessionId === "s-c") {
+          return null;
+        }
+        const tokens = session.sessionId === "s-a" ? 10 : 20;
         return {
           input: tokens,
           output: 0,
@@ -339,7 +343,12 @@ describe("sessions.usage", () => {
     };
     expect(result.cacheStatus?.status).toBe("refreshing");
     expect(result.sessions.map((session) => session.sessionId)).toEqual(["s-a", "s-b", "s-c"]);
-    expect(result.totals.totalTokens).toBe(60);
+    expect(result.sessions.map((session) => session.usage?.totalTokens ?? null)).toEqual([
+      10,
+      20,
+      null,
+    ]);
+    expect(result.totals.totalTokens).toBe(30);
   });
 
   it("passes the requested timezone offset to session daily summaries", async () => {
@@ -353,6 +362,25 @@ describe("sessions.usage", () => {
       expect.objectContaining({
         dayBucket: { mode: "utc-offset", utcOffsetMinutes: -300 },
       }),
+    );
+  });
+
+  it("includes untimestamped entries only for the all-time range", async () => {
+    await runSessionsUsage({ range: "all", limit: 10 });
+    await runSessionsUsage({ ...BASE_USAGE_RANGE, limit: 10 });
+    await runSessionsUsage({ startDate: "1970-01-01", endDate: "2026-02-02", limit: 10 });
+
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ includeUntimestamped: true }),
+    );
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ includeUntimestamped: undefined }),
+    );
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ includeUntimestamped: undefined, startMs: 0 }),
     );
   });
 

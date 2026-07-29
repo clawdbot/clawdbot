@@ -1,4 +1,8 @@
 // Provider auth tests cover credential resolution, setup state, and auth method contracts.
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 
@@ -7,6 +11,7 @@ const TEST_CACHED_COPILOT_TOKEN = [
   "cached",
   ["proxy-ep", "proxy.individual.githubcopilot.com"].join("="),
 ].join(";");
+const TEST_GITHUB_TOKEN_FINGERPRINT = createHash("sha256").update(TEST_GITHUB_TOKEN).digest("hex");
 
 async function withPartialCopilotResponse(run: (port: number) => Promise<void>): Promise<void> {
   const { once } = await import("node:events");
@@ -316,6 +321,7 @@ describe("provider auth profile helpers", () => {
     expect(saved).toEqual([
       expect.objectContaining({
         expiresAt: 2_000_000_000_000,
+        sourceCredentialFingerprint: createHash("sha256").update("github-token").digest("hex"),
         token: "token;proxy-ep=proxy.individual.githubcopilot.com",
       }),
     ]);
@@ -339,6 +345,9 @@ describe("provider auth profile helpers", () => {
       deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=javascript:alert(1);"),
     ).toBeNull();
     expect(deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=://bad;")).toBeNull();
+    expect(
+      deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=proxy.attacker.example;"),
+    ).toBeNull();
   });
 
   it("rejects Copilot token expiry values outside the supported date range", async () => {
@@ -544,8 +553,8 @@ describe("provider auth profile helpers", () => {
         fetchImpl: fetchImpl as typeof fetch,
         cachePath: "/tmp/copilot-token-http-happy.json",
         loadJsonFileImpl: () => undefined,
-        saveJsonFileImpl: (path, value) => {
-          saved.push({ path, value });
+        saveJsonFileImpl: (cachePath, value) => {
+          saved.push({ path: cachePath, value });
         },
       });
 
@@ -584,6 +593,7 @@ describe("provider auth profile helpers", () => {
         expiresAt: Number.MAX_SAFE_INTEGER,
         updatedAt: Date.now(),
         integrationId: COPILOT_INTEGRATION_ID,
+        sourceCredentialFingerprint: TEST_GITHUB_TOKEN_FINGERPRINT,
       }),
       saveJsonFileImpl: (_path, value) => saved.push(value),
     });
@@ -774,6 +784,7 @@ describe("provider auth profile helpers", () => {
         expiresAt: Date.now() + 60 * 60 * 1000,
         updatedAt: Date.now(),
         integrationId: COPILOT_INTEGRATION_ID,
+        sourceCredentialFingerprint: TEST_GITHUB_TOKEN_FINGERPRINT,
       }),
       saveJsonFileImpl: () => {},
     });
@@ -781,6 +792,100 @@ describe("provider auth profile helpers", () => {
     expect(result.source).toBe("cache:/tmp/copilot-token-cache-hit.json");
     expect(timeout).not.toHaveBeenCalled();
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse a cached Copilot token from another GitHub credential", async () => {
+    vi.resetModules();
+
+    const saved: unknown[] = [];
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            token: "fresh;proxy-ep=proxy.individual.githubcopilot.com",
+            expires_at: "+2000000000",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+    const { COPILOT_INTEGRATION_ID, resolveCopilotApiToken } = await import("./provider-auth.js");
+
+    const result = await resolveCopilotApiToken({
+      githubToken: TEST_GITHUB_TOKEN,
+      fetchImpl: fetchImpl as typeof fetch,
+      cachePath: "/tmp/copilot-token-cache-profile-mismatch.json",
+      loadJsonFileImpl: () => ({
+        token: TEST_CACHED_COPILOT_TOKEN,
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        updatedAt: Date.now(),
+        integrationId: COPILOT_INTEGRATION_ID,
+        sourceCredentialFingerprint: createHash("sha256").update("different-token").digest("hex"),
+      }),
+      saveJsonFileImpl: (_path, value) => saved.push(value),
+    });
+
+    expect(result.source).toContain("fetched:");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(saved).toEqual([
+      expect.objectContaining({
+        sourceCredentialFingerprint: TEST_GITHUB_TOKEN_FINGERPRINT,
+        token: "fresh;proxy-ep=proxy.individual.githubcopilot.com",
+      }),
+    ]);
+  });
+
+  it("retains valid Copilot exchanges across A to B to A profile rotation", async () => {
+    vi.resetModules();
+
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-copilot-cache-"));
+    try {
+      const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get("authorization");
+        const sourceFixture = authorization?.replace(/^Bearer\s+/u, "") ?? "";
+        let exchangeFixture = "test-token-placeholder";
+        if (sourceFixture === "test-auth-token") {
+          exchangeFixture = "test-auth-token";
+        }
+        return new Response(
+          JSON.stringify(
+            Object.fromEntries([
+              ["token", exchangeFixture],
+              ["expires_at", Date.now() + 60 * 60 * 1000],
+            ]),
+          ),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      });
+      const { resolveCopilotApiToken } = await import("./provider-auth.js");
+      const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
+
+      const firstA = await resolveCopilotApiToken({
+        githubToken: "test-auth-token",
+        env,
+        fetchImpl: fetchImpl as typeof fetch,
+      });
+      const firstB = await resolveCopilotApiToken({
+        githubToken: "test-token-placeholder",
+        env,
+        fetchImpl: fetchImpl as typeof fetch,
+      });
+      const secondA = await resolveCopilotApiToken({
+        githubToken: "test-auth-token",
+        env,
+        fetchImpl: fetchImpl as typeof fetch,
+      });
+
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(firstA.token).toBe("test-auth-token");
+      expect(firstB.token).toBe("test-token-placeholder");
+      expect(secondA.token).toBe(firstA.token);
+      expect(secondA.source).toBe("cache:plugin-state");
+    } finally {
+      const { resetPluginStateStoreForTests } =
+        await import("../plugin-state/plugin-state-store.js");
+      resetPluginStateStoreForTests();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("times out while reading a stalled HTTP response body", async () => {
@@ -1002,15 +1107,22 @@ describe("Copilot data-residency domain resolution", () => {
     expect(saved).toEqual([expect.objectContaining({ domain: "acme.ghe.com" })]);
   });
 
-  it("keeps legacy pre-domain cache entries usable for github.com across upgrade", async () => {
+  it("re-exchanges legacy cache entries without a source credential fingerprint", async () => {
     vi.resetModules();
 
-    const fetchImpl = vi.fn();
+    const saved: unknown[] = [];
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            token: "fresh-public;proxy-ep=proxy.individual.githubcopilot.com",
+            expires_at: "+2000000000",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
     const { COPILOT_INTEGRATION_ID, resolveCopilotApiToken } = await import("./provider-auth.js");
 
-    // Shipped caches predate the domain stamp and were only ever minted for
-    // public github.com. A valid legacy entry must stay a cache hit for the
-    // default domain instead of forcing a re-exchange on upgrade.
     const result = await resolveCopilotApiToken({
       githubToken: "github-token",
       env: {},
@@ -1021,13 +1133,19 @@ describe("Copilot data-residency domain resolution", () => {
         expiresAt: Date.now() + 60 * 60 * 1000,
         updatedAt: Date.now(),
         integrationId: COPILOT_INTEGRATION_ID,
-        // no domain field
+        // no domain or source credential fingerprint
       }),
-      saveJsonFileImpl: () => {},
+      saveJsonFileImpl: (_path, value) => saved.push(value),
     });
 
-    expect(fetchImpl).not.toHaveBeenCalled();
-    expect(result.source).toBe("cache:/tmp/copilot-token-legacy.json");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result.source).toBe("fetched:https://api.github.com/copilot_internal/v2/token");
+    expect(saved).toEqual([
+      expect.objectContaining({
+        domain: "github.com",
+        sourceCredentialFingerprint: TEST_GITHUB_TOKEN_FINGERPRINT,
+      }),
+    ]);
   });
 
   it("does not reuse a legacy pre-domain cache entry for a tenant domain", async () => {
@@ -1082,6 +1200,7 @@ describe("Copilot data-residency domain resolution", () => {
         expiresAt: Date.now() + 60 * 60 * 1000,
         updatedAt: Date.now(),
         integrationId: COPILOT_INTEGRATION_ID,
+        sourceCredentialFingerprint: TEST_GITHUB_TOKEN_FINGERPRINT,
         domain: "acme.ghe.com",
       }),
       saveJsonFileImpl: () => {},
@@ -1092,3 +1211,4 @@ describe("Copilot data-residency domain resolution", () => {
     expect(result.baseUrl).toBe("https://copilot-api.acme.ghe.com");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

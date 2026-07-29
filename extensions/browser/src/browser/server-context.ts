@@ -43,14 +43,12 @@ import type {
 export type {
   BrowserRouteContext,
   BrowserServerState,
-  BrowserTab,
   ProfileContext,
-  ProfileRuntimeState,
   ProfileStatus,
 } from "./server-context.types.js";
 
 /** Lists configured and runtime-known Browser profile names without duplicates. */
-export function listKnownProfileNames(state: BrowserServerState): string[] {
+function listKnownProfileNames(state: BrowserServerState): string[] {
   const names = new Set(Object.keys(state.resolved.profiles));
   for (const name of state.profiles.keys()) {
     names.add(name);
@@ -171,14 +169,14 @@ function createProfileContext(
           await rawSelection.ensureTabAvailable(targetId, { ...options, signal }, true),
       );
     },
-    isHttpReachable: async (timeoutMs) =>
+    isHttpReachable: async (timeoutMs, callerSignal) =>
       await withLease(
-        undefined,
+        callerSignal,
         async (signal) => await rawAvailability.isHttpReachable(timeoutMs, signal),
       ),
-    isTransportAvailable: async (timeoutMs) =>
+    isTransportAvailable: async (timeoutMs, callerSignal) =>
       await withLease(
-        undefined,
+        callerSignal,
         async (signal) => await rawAvailability.isTransportAvailable(timeoutMs, signal),
       ),
     isReachable: async (timeoutMs, options) =>

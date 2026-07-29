@@ -1,6 +1,10 @@
 // Whatsapp helper module supports normalize target behavior.
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
+import {
+  normalizeLowercaseStringOrEmpty,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const WHATSAPP_USER_JID_RE = /^(\d+)(?::\d+)?@s\.whatsapp\.net$/i;
 const WHATSAPP_LEGACY_USER_JID_RE = /^(\d+)@c\.us$/i;
@@ -111,19 +115,12 @@ export function normalizeWhatsAppMessagingTarget(raw: string): string | undefine
 }
 
 export function normalizeWhatsAppAllowFromEntries(allowFrom: Array<string | number>): string[] {
-  const seen = new Set<string>();
-  const normalized = allowFrom
-    .map((entry) => String(entry).trim())
-    .filter((entry): entry is string => Boolean(entry))
-    .map(normalizeWhatsAppAllowFromEntry)
-    .filter((entry): entry is string => Boolean(entry));
-  return normalized.filter((entry) => {
-    if (seen.has(entry)) {
-      return false;
-    }
-    seen.add(entry);
-    return true;
-  });
+  return uniqueStrings(
+    formatNormalizedAllowFromEntries({
+      allowFrom,
+      normalizeEntry: normalizeWhatsAppAllowFromEntry,
+    }),
+  );
 }
 
 export function normalizeWhatsAppAllowFromEntry(entry: string): string | null {

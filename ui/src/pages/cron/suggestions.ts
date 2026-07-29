@@ -8,7 +8,7 @@
 import { t } from "../../i18n/index.ts";
 import type { CronFormState } from "../../lib/cron/index.ts";
 
-export type CronSuggestion = {
+type CronSuggestion = {
   id: string;
   emoji: string;
   nameKey: string;

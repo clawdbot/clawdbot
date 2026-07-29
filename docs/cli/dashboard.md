@@ -13,11 +13,23 @@ Open the Control UI using your current auth.
 ```bash
 openclaw dashboard
 openclaw dashboard --no-open
+openclaw dashboard --json
 openclaw dashboard --yes
 ```
 
 - `--no-open`: print the URL but do not launch a browser.
+- `--json`: print one machine-readable connection object without opening a browser, using the clipboard, prompting, or starting the Gateway.
 - `--yes`: start/install the Gateway without prompting when needed.
+
+## Machine-readable output
+
+Use `--json` for desktop integrations and scripts that need the resolved Control UI URL:
+
+```bash
+openclaw dashboard --json
+```
+
+The response includes `url`, `httpUrl`, `wsUrl`, `port`, and `tokenIncluded`. If the Gateway is not ready, the command returns `{"ok":false,"reason":"..."}` and exits non-zero. SecretRef-managed tokens are never included in `url`.
 
 Notes:
 

@@ -1,6 +1,7 @@
 // Feishu tests cover bot group name plugin behavior.
 import { afterAll, describe, it, expect, vi, beforeEach } from "vitest";
-import { resolveGroupName, clearGroupNameCache } from "./bot.js";
+import { feishuGroupNameCache } from "./bot-group-name-state.js";
+import { resolveGroupName } from "./bot-group-name.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 const mockGetChatInfo = vi.hoisted(() => vi.fn());
@@ -52,7 +53,7 @@ describe("resolveGroupName", () => {
     mockGetChatInfo.mockReset();
     mockCreateFeishuClient.mockReset();
     mockCreateFeishuClient.mockReturnValue({});
-    clearGroupNameCache();
+    feishuGroupNameCache.clear();
   });
 
   it("returns the trimmed group name on successful API call", async () => {

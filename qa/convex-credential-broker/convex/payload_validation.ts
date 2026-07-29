@@ -1,5 +1,5 @@
 // Payload Validation module supports OpenClaw QA credential workflows.
-export class CredentialPayloadValidationError extends Error {
+class CredentialPayloadValidationError extends Error {
   code: string;
   httpStatus: number;
 

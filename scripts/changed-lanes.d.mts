@@ -10,6 +10,7 @@ export type ChangedLane =
   | "docs"
   | "tooling"
   | "liveDockerTooling"
+  | "bundledChannelConfigMetadata"
   | "releaseMetadata"
   | "all";
 
@@ -27,7 +28,6 @@ export type DetectChangedLanesOptions = {
   packageJsonChangeKind?: "liveDockerTooling" | "tooling" | null;
 };
 
-export function normalizeChangedPath(inputPath: unknown): string;
 export function createEmptyChangedLanes(): ChangedLanes;
 export function isChangedLaneTestPath(changedPath: string): boolean;
 export function detectChangedLanes(
@@ -49,6 +49,7 @@ export function listChangedPathsFromGit(params: {
   mergeHeadFirstParent?: boolean;
 }): string[];
 export function listStagedChangedPaths(cwd?: string): string[];
+export function hasDeadcodeScannedSource(changedPaths: string[]): boolean;
 export function isLiveDockerPackageScriptOnlyChange(before: string, after: string): boolean;
 export function isPackageScriptOnlyChange(before: string, after: string): boolean;
 

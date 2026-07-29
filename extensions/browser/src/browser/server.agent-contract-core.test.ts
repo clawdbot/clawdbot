@@ -3,7 +3,6 @@ import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./constants.js";
-import { BROWSER_NAVIGATION_BLOCKED_MESSAGE } from "./errors.js";
 import { ACT_ERROR_CODES } from "./routes/agent.act.errors.js";
 import { isActKind } from "./routes/agent.act.shared.js";
 import {
@@ -28,6 +27,8 @@ import {
   startBrowserControlServerFromConfig,
 } from "./server.control-server.test-harness.js";
 import { getBrowserTestFetch } from "./test-support/fetch.js";
+
+const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy";
 
 type ActErrorResponse = {
   error?: string;

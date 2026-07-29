@@ -24,6 +24,9 @@ final class DevicePairingApprovalPrompter {
     /// state is unknown until fresh gateway truth applies (stale snapshots
     /// must not produce a positive "previously paired" claim).
     private var trustUnknownRequestIds: Set<String> = []
+    /// Requests whose approve/reject RPC is still in flight; their cards are
+    /// hidden optimistically and restored by the failure path.
+    private var pendingLocalDecisionRequestIds: Set<String> = []
 
     private struct PairingList: Codable {
         let pending: [PendingRequest]
@@ -81,6 +84,7 @@ final class DevicePairingApprovalPrompter {
             task: &self.task,
             queue: &self.queue)
         PairingApprovalCenter.shared.unregister(kind: .device)
+        self.pendingLocalDecisionRequestIds.removeAll(keepingCapacity: false)
         self.updatePendingCounts()
     }
 
@@ -117,7 +121,11 @@ final class DevicePairingApprovalPrompter {
 
     private func syncCards() {
         guard !self.isStopping else { return }
-        let cards = self.queue.map { self.card(for: $0) }
+        // A pending local decision hides the card immediately (the decision is
+        // optimistic); the failure path re-syncs so the card can come back.
+        let cards = self.queue
+            .filter { !self.pendingLocalDecisionRequestIds.contains($0.requestId) }
+            .map { self.card(for: $0) }
         PairingApprovalCenter.shared.sync(kind: .device, cards: cards)
     }
 
@@ -148,21 +156,34 @@ final class DevicePairingApprovalPrompter {
         guard !self.isStopping else { return }
         guard let request = self.queue.first(where: { $0.requestId == card.requestId }) else { return }
 
-        switch decision {
+        self.pendingLocalDecisionRequestIds.insert(request.requestId)
+        // Optimistic dismiss: the card leaves the panel before the RPC
+        // round-trip.
+        self.syncCards()
+        let rpcOk: Bool = switch decision {
         case .approve:
-            if await !(self.approve(requestId: request.requestId)) {
-                // Stale request (expired or superseded on the gateway): re-sync the
-                // queue with gateway truth so accumulated stale cards collapse at once.
-                await self.loadPendingRequestsFromGateway()
-                return
-            }
+            await self.approve(requestId: request.requestId)
         case .reject:
-            if await !(self.reject(requestId: request.requestId)) {
-                // Failed reject leaves the request pending on the gateway;
-                // re-sync instead of hiding a still-live card.
-                await self.loadPendingRequestsFromGateway()
-                return
+            await self.reject(requestId: request.requestId)
+        }
+        self.pendingLocalDecisionRequestIds.remove(request.requestId)
+
+        if !rpcOk {
+            // Stale request (expired/superseded/resolved elsewhere) or gateway
+            // failure: re-sync with gateway truth so stale cards collapse. A
+            // request that is genuinely still pending comes back, and the
+            // notification explains why the optimistic dismiss did not stick.
+            await self.loadPendingRequestsFromGateway()
+            self.syncCards()
+            if self.queue.contains(where: { $0.requestId == request.requestId }) {
+                await PairingPromptSupport.notifyDecisionFailed(
+                    kind: .device,
+                    decision: decision,
+                    subject: PairingPromptSupport.subjectLabel(
+                        displayName: request.displayName,
+                        fallback: request.deviceId))
             }
+            return
         }
 
         // Discard any in-flight list snapshot: it predates this resolution

@@ -12,8 +12,8 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { applyFeatherlessConfig, FEATHERLESS_DEFAULT_MODEL_REF } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
-  buildFeatherlessProvider,
   FEATHERLESS_BASE_URL,
   FEATHERLESS_DEFAULT_MODEL_ID,
   FEATHERLESS_DYNAMIC_COMPAT,
@@ -75,32 +75,29 @@ export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Featherless AI Provider",
   description: "Featherless AI provider plugin",
+  manifest,
   provider: {
     label: "Featherless AI",
     docsPath: "/providers/featherless",
-    envVars: ["FEATHERLESS_API_KEY"],
-    auth: [
-      {
-        methodId: "api-key",
-        label: "Featherless AI API key",
-        hint: "OpenAI-compatible access to open models",
-        optionKey: "featherlessApiKey",
-        flagName: "--featherless-api-key",
-        envVar: "FEATHERLESS_API_KEY",
-        promptMessage: "Enter Featherless AI API key",
-        defaultModel: FEATHERLESS_DEFAULT_MODEL_REF,
-        applyConfig: (cfg) => applyFeatherlessConfig(cfg),
-        noteTitle: "Featherless AI",
-        noteMessage: [
-          "Featherless AI serves open models through an OpenAI-compatible API.",
-          "Create an API key at: https://featherless.ai/account/api-keys",
-        ].join("\n"),
-      },
-    ],
+    manifestAuth: {
+      defaultModel: FEATHERLESS_DEFAULT_MODEL_REF,
+      applyConfig: applyFeatherlessConfig,
+      noteTitle: "Featherless AI",
+      noteMessage: [
+        "Featherless AI serves open models through an OpenAI-compatible API.",
+        "Create an API key at: https://featherless.ai/account/api-keys",
+      ].join("\n"),
+    },
     catalog: {
-      buildProvider: buildFeatherlessProvider,
-      buildStaticProvider: buildFeatherlessProvider,
       allowExplicitBaseUrl: true,
+      liveModelDiscovery: {
+        endpointPath: "models?capabilities=chat",
+        buildRequestHeaders: ({ apiKey }) => ({
+          Accept: "application/json",
+          "User-Agent": "openclaw",
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        }),
+      },
     },
     augmentModelCatalog: ({ config }) =>
       readConfiguredProviderCatalogEntries({

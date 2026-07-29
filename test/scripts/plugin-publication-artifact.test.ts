@@ -749,6 +749,23 @@ describe("plugin publication artifact", () => {
     ).toThrow("producer job did not complete successfully");
   });
 
+  it("accepts an environment-waiting current producer attempt", () => {
+    const fixture = createFixture();
+    const workflowRun = JSON.parse(readFileSync(fixture.workflowRunPath, "utf8"));
+    workflowRun.status = "waiting";
+    workflowRun.conclusion = null;
+    writeFileSync(fixture.workflowRunPath, `${JSON.stringify(workflowRun)}\n`);
+
+    expect(
+      verifyFixture(fixture, {
+        consumerRunAttempt: RUN_ATTEMPT,
+        producerJobName: PRODUCER_JOB_NAME,
+        runStatePolicy: "same-run-producer-success",
+        workflowJobsMetadataPath: fixture.workflowJobsPath,
+      }),
+    ).toMatchObject({ producerRunAttempt: RUN_ATTEMPT, producerRunId: RUN_ID });
+  });
+
   it("retries bounded metadata, attempt, and archive failures against the exact run attempt", async () => {
     const zip = createZip([{ bytes: Buffer.from("proof"), name: "proof.txt" }]);
     const artifactMetadata = {
@@ -1090,7 +1107,7 @@ describe("plugin publication artifact", () => {
   it("caps publication JSON and tarball members before ZIP expansion", () => {
     const fixture = createFixture();
     const manifest = readFileSync(fixture.created.manifestPath);
-    const oversizedManifest = Buffer.alloc(2 * 1024 * 1024 + 1, 0x20);
+    const oversizedManifest = Buffer.alloc(4 * 1024 * 1024 + 1, 0x20);
 
     replaceArtifactZip(fixture, [
       { bytes: fixture.tarball, name: TARBALL_NAME },

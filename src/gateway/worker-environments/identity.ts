@@ -1,7 +1,7 @@
 import type { SecretRef } from "../../config/types.secrets.js";
 import type { WorkerProfile, WorkerProvider, WorkerSshIdentity } from "../../plugins/types.js";
 
-export type GenericWorkerSshIdentityResolver = (keyRef: SecretRef) => Promise<WorkerSshIdentity>;
+type GenericWorkerSshIdentityResolver = (keyRef: SecretRef) => Promise<WorkerSshIdentity>;
 
 function requireIdentity(value: unknown): WorkerSshIdentity {
   if (

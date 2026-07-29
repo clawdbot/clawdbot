@@ -11,11 +11,6 @@ const mocks = vi.hoisted(() => ({
   detectBinary: vi.fn(),
   isContainerEnvironment: vi.fn(),
   resolveBrewExecutable: vi.fn(),
-  resolveNodeManagerOptions: vi.fn(() => [
-    { value: "npm", label: "npm" },
-    { value: "pnpm", label: "pnpm" },
-    { value: "bun", label: "bun" },
-  ]),
 }));
 
 // Module under test imports these at module scope.
@@ -35,10 +30,10 @@ vi.mock("../infra/brew.js", () => ({
 }));
 vi.mock("./onboard-helpers.js", () => ({
   detectBinary: mocks.detectBinary,
-  resolveNodeManagerOptions: mocks.resolveNodeManagerOptions,
 }));
 
-import { setupSkills, testing } from "./onboard-skills.js";
+import { setupSkills } from "./onboard-skills.js";
+import { testing } from "./onboard-skills.test-support.js";
 
 describe("skill onboarding text bounds", () => {
   it("keeps install failures and hints UTF-16 well-formed", () => {
@@ -288,6 +283,29 @@ describe("setupSkills", () => {
     const installNote = notes.find((n) => n.message.includes("node-helper"));
     expect(installNote?.message).toContain("node-helper");
     expect(installNote?.message).not.toContain("repo-helper");
+  });
+
+  it("rechecks persistent-effect authority immediately before each dependency install", async () => {
+    mockMissingBrewStatus([
+      createBundledSkill({
+        name: "node-helper",
+        description: "Node helper",
+        bins: ["node-helper"],
+        installLabel: "Install node-helper",
+        installKind: "node",
+      }),
+    ]);
+    const beforePersistentEffect = vi.fn(async () => {});
+
+    const { prompter } = createPrompter({});
+    await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter, {
+      beforePersistentEffect,
+    });
+
+    expect(beforePersistentEffect).toHaveBeenCalledOnce();
+    expect(beforePersistentEffect.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.installSkill.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
   });
 
   it("uses the requested node manager for node-backed auto installs", async () => {

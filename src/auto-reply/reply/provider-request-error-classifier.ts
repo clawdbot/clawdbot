@@ -8,7 +8,7 @@ import { isFailoverError } from "../../agents/failover-error.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 
 /** Provider request error classes that get a specialized user-facing reply. */
-export type ProviderRequestErrorCode =
+type ProviderRequestErrorCode =
   | "provider_authentication_error"
   | "provider_conversation_state_error"
   | "provider_internal_error"
@@ -16,30 +16,31 @@ export type ProviderRequestErrorCode =
   | "provider_rate_limit_or_quota_error";
 
 /** Structured provider error classification for reply failure handling. */
-export type ProviderRequestErrorClassification = {
+type ProviderRequestErrorClassification = {
   code: ProviderRequestErrorCode;
   userMessage: string;
   technicalMessage: string;
+  allowTransientHttpRetry?: true;
 };
 
 /** User-facing copy for provider-side broken conversation state. */
 export const PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE =
   "⚠️ The model provider rejected the conversation state. Please try again, or use /new to start a fresh session.";
 
-export const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
+const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned HTTP 429 before replying. This can mean rate limiting, exhausted quota, or an account balance/billing issue. Check the selected provider/model, API key, and provider billing/quota dashboard, then try again.";
 
-export const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
+const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening.";
 
-export const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
+const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
 
 /**
  * User-facing copy for a configured model the provider no longer serves.
  * Distinct from generic failures because retrying or starting a new session
  * cannot help: the model id itself must be changed in config.
  */
-export const PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE =
+const PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE =
   "⚠️ The configured model is unavailable from the provider — it may have been renamed, retired, or is not offered on this account. This needs a config update (agents.defaults.model); retrying or starting a new session won't fix it.";
 
 /** Classifies provider request failures that are actionable for users. */
@@ -84,6 +85,14 @@ export function classifyProviderRequestError(
       code: "provider_conversation_state_error",
       userMessage: PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
       technicalMessage,
+    };
+  }
+  if (hasHttp503Evidence(err, technicalMessage)) {
+    return {
+      code: "provider_internal_error",
+      userMessage: PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
+      technicalMessage,
+      allowTransientHttpRetry: true,
     };
   }
   if (isProviderInternalErrorMessage(technicalMessage)) {
@@ -136,12 +145,27 @@ function isProviderInternalErrorMessage(message: string): boolean {
 
 function hasHttp429Evidence(err: unknown, message: string): boolean {
   return (
-    readHttp429Status(err) ||
+    readHttpStatus(err, 429) ||
     /\b(?:http\s*)?429\b|["'](?:status|code)["']\s*:\s*429\b/iu.test(message)
   );
 }
 
-function readHttp429Status(err: unknown, seen = new Set<unknown>()): boolean {
+function hasHttp503Evidence(err: unknown, message: string): boolean {
+  const rawError = isFailoverError(err) ? err.rawError : undefined;
+  return (
+    readHttpStatus(err, 503) ||
+    hasHttp503TextEvidence(message) ||
+    (rawError ? hasHttp503TextEvidence(rawError) : false)
+  );
+}
+
+function hasHttp503TextEvidence(message: string): boolean {
+  return /\b(?:(?:unexpected\s+status|http)\s*503|503\s+service unavailable)\b|["'](?:status|code)["']\s*:\s*503\b/iu.test(
+    message,
+  );
+}
+
+function readHttpStatus(err: unknown, expectedStatus: number, seen = new Set<unknown>()): boolean {
   if (!err || typeof err !== "object" || seen.has(err)) {
     return false;
   }
@@ -150,16 +174,16 @@ function readHttp429Status(err: unknown, seen = new Set<unknown>()): boolean {
     (err as { status?: unknown; statusCode?: unknown }).status ??
     (err as { statusCode?: unknown }).statusCode;
   if (typeof candidate === "number" && Number.isFinite(candidate)) {
-    if (candidate === 429) {
+    if (candidate === expectedStatus) {
       return true;
     }
-  } else if (typeof candidate === "string" && Number(candidate.trim()) === 429) {
+  } else if (typeof candidate === "string" && Number(candidate.trim()) === expectedStatus) {
     return true;
   }
   const nested = err as { cause?: unknown; error?: unknown; response?: unknown };
   return (
-    readHttp429Status(nested.response, seen) ||
-    readHttp429Status(nested.error, seen) ||
-    readHttp429Status(nested.cause, seen)
+    readHttpStatus(nested.response, expectedStatus, seen) ||
+    readHttpStatus(nested.error, expectedStatus, seen) ||
+    readHttpStatus(nested.cause, expectedStatus, seen)
   );
 }

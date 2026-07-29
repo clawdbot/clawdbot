@@ -191,18 +191,6 @@ describe("pw-tools-core browser SSRF guards", () => {
         }),
     },
     {
-      name: "clickCoords",
-      run: async () =>
-        await interactions.clickCoordsViaPlaywright({
-          cdpUrl: "http://127.0.0.1:18792",
-          targetId: "tab-1",
-          x: 10,
-          y: 20,
-          ssrfPolicy: { allowPrivateNetwork: false },
-          browserProxyMode: "explicit-browser-proxy",
-        }),
-    },
-    {
       name: "type",
       run: async () =>
         await interactions.typeViaPlaywright({
@@ -1328,3 +1316,4 @@ describe("pw-tools-core browser SSRF guards", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

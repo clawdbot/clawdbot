@@ -1,9 +1,11 @@
-// Systemd tests cover Linux service install, start, stop, and status behavior.
 import type { ExecFileOptionsWithStringEncoding } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Systemd tests cover Linux service install, start, stop, and status behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildGatewayInstallPlan } from "../commands/daemon-install-helpers.js";
 
 type ExecFileError = Error & {
   stderr?: string;
@@ -83,11 +85,11 @@ import {
   isSystemdServiceEnabled,
   isSystemdUnitActive,
   isSystemdUserServiceAvailable,
-  parseSystemdShow,
   readSystemdServiceRuntime,
   readSystemdServiceExecStart,
   restartSystemdService,
   resolveSystemdUserUnitPath,
+  startSystemdService,
   stageSystemdService,
   stopSystemdService,
   uninstallSystemdService,
@@ -791,86 +793,106 @@ describe("isNonFatalSystemdInstallProbeError", () => {
   });
 });
 
-describe("systemd runtime parsing", () => {
-  it("parses active state details", () => {
-    const output = [
-      "ActiveState=inactive",
-      "SubState=dead",
-      "MainPID=0",
-      "ExecMainStatus=2",
-      "ExecMainCode=exited",
-    ].join("\n");
-    expect(parseSystemdShow(output)).toEqual({
-      activeState: "inactive",
+describe("readSystemdServiceRuntime", () => {
+  async function readRuntimeFromShowOutput(output: string) {
+    execFileMock.mockReset();
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args[0]).toBe("--user");
+        expect(args[1]).toBe("show");
+        cb(null, output, "");
+      });
+    return await readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME });
+  }
+
+  it("parses active state details", async () => {
+    const runtime = await readRuntimeFromShowOutput(
+      [
+        "ActiveState=inactive",
+        "SubState=dead",
+        "MainPID=0",
+        "ExecMainStatus=2",
+        "ExecMainCode=exited",
+      ].join("\n"),
+    );
+    expect(runtime).toMatchObject({
+      status: "stopped",
+      state: "inactive",
       subState: "dead",
-      execMainStatus: 2,
-      execMainCode: "exited",
+      lastExitStatus: 2,
+      lastExitReason: "exited",
     });
   });
 
-  it("parses Result and the restart counter for crash-loop give-up detection", () => {
+  it("parses Result and the restart counter for crash-loop give-up detection", async () => {
     // Real systemd 249 give-up shape: a crash-looped unit keeps Result=exit-code
     // (start-limit-hit never overwrites an exec failure), so the counter reaching
     // StartLimitBurst is what flags the give-up.
-    const output = [
-      "ActiveState=failed",
-      "SubState=failed",
-      "Result=exit-code",
-      "NRestarts=5",
-      "StartLimitBurst=5",
-      "MainPID=0",
-      "ExecMainStatus=1",
-      "ExecMainCode=exited",
-    ].join("\n");
-    expect(parseSystemdShow(output)).toEqual({
-      activeState: "failed",
+    const runtime = await readRuntimeFromShowOutput(
+      [
+        "ActiveState=failed",
+        "SubState=failed",
+        "Result=exit-code",
+        "NRestarts=5",
+        "StartLimitBurst=5",
+        "MainPID=0",
+        "ExecMainStatus=1",
+        "ExecMainCode=exited",
+      ].join("\n"),
+    );
+    expect(runtime).toMatchObject({
+      status: "stopped",
+      state: "failed",
       subState: "failed",
-      result: "exit-code",
-      nRestarts: 5,
-      startLimitBurst: 5,
-      execMainStatus: 1,
-      execMainCode: "exited",
+      lastExitStatus: 1,
+      lastExitReason: "exited",
+      systemd: { result: "exit-code", nRestarts: 5, startLimitBurst: 5 },
     });
   });
 
-  it("rejects pid and exit status values with junk suffixes", () => {
-    const output = [
-      "ActiveState=inactive",
-      "SubState=dead",
-      "MainPID=42abc",
-      "ExecMainStatus=2ms",
-      "ExecMainCode=exited",
-    ].join("\n");
-    expect(parseSystemdShow(output)).toEqual({
-      activeState: "inactive",
-      subState: "dead",
-      execMainCode: "exited",
-    });
+  it("rejects pid and exit status values with junk suffixes", async () => {
+    const runtime = await readRuntimeFromShowOutput(
+      [
+        "ActiveState=inactive",
+        "SubState=dead",
+        "MainPID=42abc",
+        "ExecMainStatus=2ms",
+        "ExecMainCode=exited",
+      ].join("\n"),
+    );
+    expect(runtime.pid).toBeUndefined();
+    expect(runtime.lastExitStatus).toBeUndefined();
+    expect(runtime.lastExitReason).toBe("exited");
   });
 
-  it("rejects invalid cgroup counters as junk", () => {
-    const output = [
-      "ActiveState=active",
-      "SubState=running",
-      "MainPID=1",
-      "ExecMainStatus=0",
-      "ExecMainCode=running",
-      "KillMode=process",
-      "TasksCurrent=42abc",
-      "MemoryCurrent=11GB",
-    ].join("\n");
-    expect(parseSystemdShow(output)).toEqual({
-      activeState: "active",
-      subState: "running",
-      mainPid: 1,
-      execMainStatus: 0,
-      execMainCode: "running",
-      killMode: "process",
+  it("rejects invalid cgroup counters as junk", async () => {
+    const runtime = await readRuntimeFromShowOutput(
+      [
+        "ActiveState=active",
+        "SubState=running",
+        "MainPID=1",
+        "ExecMainStatus=0",
+        "ExecMainCode=running",
+        "KillMode=process",
+        "TasksCurrent=42abc",
+        "MemoryCurrent=11GB",
+      ].join("\n"),
+    );
+    expect(runtime).toMatchObject({
+      status: "running",
+      pid: 1,
+      lastExitStatus: 0,
+      lastExitReason: "running",
+      systemd: { killMode: "process" },
     });
+    expect(runtime.systemd?.tasksCurrent).toBeUndefined();
+    expect(runtime.systemd?.memoryCurrent).toBeUndefined();
   });
-});
 
-describe("readSystemdServiceRuntime", () => {
   it("surfaces systemd cgroup metrics and KillMode", async () => {
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -1301,7 +1323,81 @@ describe("stageSystemdService", () => {
     });
   });
 
-  it("writes node file-backed managed values to the node env file instead of the unit", async () => {
+  it("round-trips file-managed secrets through parse, repair planning, and emit", async () => {
+    await withStageFixture(async ({ env, unitPath, envFilePath, stateDir }) => {
+      const wrapperPath = path.join(stateDir, "openclaw-wrapper");
+      const fileBackedOpenAiKey = "file-backed-openai-test-key";
+      await fs.writeFile(wrapperPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      await fs.chmod(wrapperPath, 0o755);
+      await fs.writeFile(envFilePath, `OPENAI_API_KEY=${fileBackedOpenAiKey}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      await fs.mkdir(path.dirname(unitPath), { recursive: true });
+      await fs.writeFile(
+        unitPath,
+        [
+          "[Service]",
+          `ExecStart=${wrapperPath} gateway --port 18789`,
+          `EnvironmentFile=-${envFilePath}`,
+          "Environment=HOME=" + env.HOME,
+          "Environment=OPENCLAW_GATEWAY_PORT=18789",
+          "Environment=OPENCLAW_SERVICE_MANAGED_ENV_KEYS=OPENAI_API_KEY",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const command = await readSystemdServiceExecStart(env);
+      expect(command?.environment?.OPENAI_API_KEY).toBe(fileBackedOpenAiKey);
+      expect(command?.environmentValueSources?.OPENAI_API_KEY).toBe("file");
+      expect(command?.environmentValueSources?.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("inline");
+
+      const plan = await buildGatewayInstallPlan({
+        env: { ...env, PATH: "/usr/bin:/bin" },
+        port: 18_789,
+        runtime: "node",
+        platform: "linux",
+        nodePath: process.execPath,
+        wrapperPath,
+        existingEnvironment: command?.environment,
+        existingEnvironmentValueSources: command?.environmentValueSources,
+        authStore: { version: 1, profiles: {} },
+        config: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+                models: [],
+              },
+            },
+          },
+        },
+      });
+      expect(plan.environmentValueSources?.OPENAI_API_KEY).toBe("file");
+      expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("OPENAI_API_KEY");
+
+      mockSystemctlStatusOk();
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        ...plan,
+      });
+
+      const [rewrittenUnit, rewrittenEnvFile] = await Promise.all([
+        fs.readFile(unitPath, "utf8"),
+        fs.readFile(envFilePath, "utf8"),
+      ]);
+      expect(rewrittenUnit).toContain(`EnvironmentFile=-${envFilePath}`);
+      expect(rewrittenUnit).toContain(
+        "Environment=OPENCLAW_SERVICE_MANAGED_ENV_KEYS=OPENAI_API_KEY",
+      );
+      expect(rewrittenUnit).not.toContain(fileBackedOpenAiKey);
+      expect(rewrittenEnvFile).toBe(`OPENAI_API_KEY=${fileBackedOpenAiKey}\n`);
+    });
+  });
+
+  it("matches differently-cased source metadata when writing node file-backed values", async () => {
     await withStageFixture(async ({ env, stateDir, unitPath, envFilePath, nodeEnvFilePath }) => {
       await fs.rm(stateDir, { recursive: true, force: true });
       const gatewayPassword = 'symbol " \\ $ `'; // pragma: allowlist secret
@@ -1321,9 +1417,9 @@ describe("stageSystemdService", () => {
           OPENCLAW_SERVICE_KIND: "node",
         },
         environmentValueSources: {
-          OPENCLAW_GATEWAY_TOKEN: "file",
-          OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
-          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "inline",
+          openclaw_gateway_token: "file",
+          openclaw_gateway_password: "file", // pragma: allowlist secret
+          openclaw_service_managed_env_keys: "inline",
         },
       });
 
@@ -2152,6 +2248,33 @@ describe("systemd service control", () => {
     execFileMock.mockReset();
   });
 
+  it("starts the resolved user unit and ignores audit observer failures", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "start", GATEWAY_SERVICE);
+        cb(null, "", "");
+      });
+    const write = vi.fn();
+    const onMutation = vi.fn(() => {
+      throw new Error("audit failed");
+    });
+
+    await expect(
+      startSystemdService({
+        stdout: { write } as unknown as NodeJS.WritableStream,
+        env: {},
+        onMutation,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(onMutation).toHaveBeenCalledWith({ mode: "systemctl-start" });
+    expect(
+      expectDefined(onMutation.mock.invocationCallOrder[0], "start audit call order"),
+    ).toBeLessThan(expectDefined(write.mock.invocationCallOrder[0], "start output call order"));
+    expect(requireFirstWrite(write)).toContain("Started systemd service");
+  });
+
   it("stops the resolved user unit", async () => {
     execFileMock
       .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
@@ -2160,12 +2283,41 @@ describe("systemd service control", () => {
         cb(null, "", "");
       });
     const write = vi.fn();
+    const onMutation = vi.fn();
     const stdout = { write } as unknown as NodeJS.WritableStream;
 
-    await stopSystemdService({ stdout, env: {} });
+    await stopSystemdService({ stdout, env: {}, onMutation });
 
     expect(write).toHaveBeenCalledTimes(1);
     expect(requireFirstWrite(write)).toContain("Stopped systemd service");
+    expect(onMutation).toHaveBeenCalledWith({ mode: "systemctl-stop" });
+    expect(onMutation.mock.invocationCallOrder[0]).toBeLessThan(
+      expectDefined(
+        write.mock.invocationCallOrder[0],
+        "write.mock.invocationCallOrder[0] test invariant",
+      ),
+    );
+  });
+
+  it("audits a successful stop before a later output failure", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "stop", GATEWAY_SERVICE);
+        cb(null, "", "");
+      });
+    const onMutation = vi.fn();
+    const stdout = {
+      write: vi.fn(() => {
+        throw new Error("output failed");
+      }),
+    } as unknown as NodeJS.WritableStream;
+
+    await expect(stopSystemdService({ stdout, env: {}, onMutation })).rejects.toThrow(
+      "output failed",
+    );
+
+    expect(onMutation).toHaveBeenCalledWith({ mode: "systemctl-stop" });
   });
 
   it("allows stop when systemd status is degraded but available", async () => {
@@ -2345,3 +2497,4 @@ describe("systemd service control", () => {
     await assertRestartSuccess({ USER: "debian" });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

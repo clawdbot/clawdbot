@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
+import { withSecureTestNodeExecPath } from "./test-node-command.test-support.js";
 
 const manifestMocks = vi.hoisted(() => ({
   listPluginOriginsFromMetadataSnapshot: vi.fn(
@@ -101,7 +102,7 @@ describe("prepareSecretsRuntimeSnapshot loadable plugin origins", () => {
     expect(manifestMocks.listPluginOriginsFromMetadataSnapshot).toHaveBeenCalledWith(snapshot);
   });
 
-  it("carries the shared manifest registry into plugin-managed SecretRef resolution", async () => {
+  it("keeps full plugin policy while projecting provider-auth assignments", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-runtime-secret-provider-"));
     fs.chmodSync(rootDir, 0o700);
     fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
@@ -151,32 +152,53 @@ describe("prepareSecretsRuntimeSnapshot loadable plugin origins", () => {
     };
 
     try {
-      const snapshot = await prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          gateway: {
-            auth: {
-              mode: "token",
-              token: { source: "exec", provider: "vault", id: "gateway/token" },
+      const config = asConfig({
+        plugins: {
+          entries: {
+            "vault-secrets": { enabled: true },
+          },
+        },
+        gateway: {
+          auth: {
+            mode: "token",
+            token: { source: "exec", provider: "vault", id: "gateway/token" },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              apiKey: { source: "exec", provider: "vault", id: "models/openai" },
+              models: [],
             },
           },
-          secrets: {
-            providers: {
-              vault: {
-                source: "exec",
-                pluginIntegration: {
-                  pluginId: "vault-secrets",
-                  integrationId: "vault",
-                },
+        },
+        secrets: {
+          providers: {
+            vault: {
+              source: "exec",
+              pluginIntegration: {
+                pluginId: "vault-secrets",
+                integrationId: "vault",
               },
             },
           },
-        }),
-        env: { HOME: rootDir },
-        includeAuthStoreRefs: false,
-        pluginMetadataSnapshot,
+        },
       });
+      const snapshot = await withSecureTestNodeExecPath(async () =>
+        prepareSecretsRuntimeSnapshot({
+          config,
+          assignmentConfig: asConfig({
+            models: config.models,
+            secrets: config.secrets,
+          }),
+          env: { HOME: rootDir },
+          includeAuthStoreRefs: false,
+          pluginMetadataSnapshot,
+        }),
+      );
 
-      expect(snapshot.config.gateway?.auth?.token).toBe("value:gateway/token");
+      expect(snapshot.config.gateway).toBeUndefined();
+      expect(snapshot.config.models?.providers?.openai?.apiKey).toBe("value:models/openai");
       expect(manifestMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
       expect(manifestMocks.listPluginOriginsFromMetadataSnapshot).toHaveBeenCalledWith(
         pluginMetadataSnapshot,

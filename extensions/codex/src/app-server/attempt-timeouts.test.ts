@@ -2,11 +2,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS,
-  CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
-  CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
-  CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
-  CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
+  isCodexAppServerStartupError,
   resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs,
   resolveCodexGatewayTimeoutWithGraceMs,
   resolveCodexStartupTimeoutMs,
@@ -15,6 +11,12 @@ import {
   resolveCodexTurnTerminalIdleTimeoutMs,
   withCodexStartupTimeout,
 } from "./attempt-timeouts.js";
+
+const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
+const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
+const CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 10_000;
+const CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 5 * 60_000;
+const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 
 describe("Codex app-server attempt timeouts", () => {
   afterEach(() => {
@@ -169,12 +171,14 @@ describe("Codex app-server attempt timeouts", () => {
       },
       operation: async () => new Promise<never>(() => {}),
     });
-    const rejected = expect(run).rejects.toThrow("codex app-server startup timed out");
+    const errorResult = run.catch((error: unknown) => error);
 
     await vi.advanceTimersByTimeAsync(10);
     expect(events).toEqual(["cleanup-start"]);
     await vi.advanceTimersByTimeAsync(5);
-    await rejected;
+    const error = await errorResult;
+    expect(isCodexAppServerStartupError(error, "timed_out")).toBe(true);
+    expect((error as Error).message).toBe("codex app-server startup timed out");
     expect(events).toEqual(["cleanup-start", "cleanup-done"]);
   });
 
@@ -186,10 +190,12 @@ describe("Codex app-server attempt timeouts", () => {
       signal: controller.signal,
       operation: async () => new Promise<never>(() => {}),
     });
-    const rejected = expect(run).rejects.toThrow("codex app-server startup aborted");
+    const errorResult = run.catch((error: unknown) => error);
 
     controller.abort();
 
-    await rejected;
+    const error = await errorResult;
+    expect(isCodexAppServerStartupError(error, "aborted")).toBe(true);
+    expect((error as Error).message).toBe("codex app-server startup aborted");
   });
 });

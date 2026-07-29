@@ -1,0 +1,17 @@
+title: Discord voice auto-join connects
+scenario:
+  id: discord-voice-autojoin
+  surface: channels
+  coverage:
+    primary: [discord.auto-join-and-follow-users]
+  execution:
+    kind: flow
+    channel: discord
+    timeoutMs: 60000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { discordScenarioId: discord-voice-autojoin }
+flow:
+  module: ./live-transports/discord/scenario-runtime.js
+  call: runDiscordVoiceAutojoinScenario
+  args: [{ expr: discordScenarioContext }]

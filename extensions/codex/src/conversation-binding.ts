@@ -14,6 +14,10 @@ import type {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server/app-server-policy.js";
+import {
+  CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+  unsubscribeCodexThreadBestEffort,
+} from "./app-server/attempt-client-cleanup.js";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import {
@@ -71,6 +75,7 @@ import {
 import { trackCodexConversationActiveTurn } from "./conversation-control.js";
 import { createCodexConversationTurnCollector } from "./conversation-turn-collector.js";
 import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
+import { isIncognitoSessionKey } from "./incognito-session.js";
 import { resumeCodexCliSessionOnNode } from "./node-cli-sessions.js";
 
 const DEFAULT_BOUND_TURN_TIMEOUT_MS = 20 * 60_000;
@@ -81,12 +86,6 @@ const LEADING_DASH_PATTERN = /^-+/;
 const TRAILING_DASH_PATTERN = /-+$/;
 const NATIVE_CONVERSATION_INTERACTIVE_APPROVALS_UNAVAILABLE =
   "OpenClaw native Codex conversation binding cannot route interactive approvals yet; use the Codex harness or explicit /acp spawn codex for that workflow.";
-
-export {
-  createCodexCliNodeConversationBindingData,
-  readCodexConversationBindingData,
-  resolveCodexDefaultWorkspaceDir,
-} from "./conversation-binding-data.js";
 
 type CodexConversationRunOptions = {
   bindingStore: CodexAppServerBindingStore;
@@ -181,7 +180,7 @@ function getGlobalState(): CodexConversationGlobalState {
   return globalState[CODEX_CONVERSATION_GLOBAL_STATE];
 }
 
-export async function startCodexConversationThread(
+async function startCodexConversationThread(
   params: CodexConversationStartParams,
 ): Promise<CodexAppServerConversationBindingData> {
   const workspaceDir =
@@ -253,7 +252,7 @@ export async function startCodexConversationThread(
   });
 }
 
-export async function handleCodexConversationInboundClaim(
+async function handleCodexConversationInboundClaim(
   event: PluginHookInboundClaimEvent,
   ctx: PluginHookInboundClaimContext,
   options: CodexConversationRunOptions,
@@ -343,7 +342,7 @@ export async function handleCodexConversationInboundClaim(
   }
 }
 
-export async function handleCodexConversationBindingResolved(
+async function handleCodexConversationBindingResolved(
   event: PluginConversationBindingResolvedEvent,
   options: { bindingStore: CodexAppServerBindingStore },
 ): Promise<void> {
@@ -519,6 +518,7 @@ async function requestNewConversationBindingThread(
           ...buildThreadRequestRuntimeOptions(params, resolved),
           developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
           experimentalRawEvents: true,
+          ...(isIncognitoSessionKey(params.sessionKey) ? { ephemeral: true } : {}),
         },
         requestOptions,
       ),
@@ -735,6 +735,7 @@ async function runBoundTurn(params: {
                 ...(serviceTier ? { serviceTier } : {}),
                 developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
                 experimentalRawEvents: true,
+                ...(isIncognitoSessionKey(params.sessionKey) ? { ephemeral: true } : {}),
               },
               requestOptions,
             ),
@@ -897,6 +898,22 @@ async function runBoundTurn(params: {
         text: replyText || "Codex completed without a text reply.",
       },
     };
+  } catch (error) {
+    if (isIncognitoSessionKey(params.sessionKey)) {
+      const bindingReleased = await params.bindingStore.mutate(identity, {
+        kind: "clear",
+        threadId,
+      });
+      const timedOut =
+        error instanceof Error && error.message === "codex app-server bound turn timed out";
+      if (bindingReleased && !timedOut) {
+        await unsubscribeCodexThreadBestEffort(client, {
+          threadId,
+          timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+        });
+      }
+    }
+    throw error;
   } finally {
     notificationCleanup();
     requestCleanup();
@@ -1241,3 +1258,10 @@ function conversationBindingIdentity(
 ): CodexAppServerBindingIdentity {
   return { kind: "conversation", bindingId: data.bindingId };
 }
+
+export const codexConversationBindingRuntime = {
+  startThread: startCodexConversationThread,
+  handleInboundClaim: handleCodexConversationInboundClaim,
+  handleBindingResolved: handleCodexConversationBindingResolved,
+};
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

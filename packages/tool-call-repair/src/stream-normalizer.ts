@@ -1629,3 +1629,4 @@ export async function* normalizePlainTextToolCallStreamEvents(
     yield event;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

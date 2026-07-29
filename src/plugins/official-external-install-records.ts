@@ -77,6 +77,24 @@ function isOfficialClawHubInstallRecord(record: PluginInstallRecord): boolean {
   return (record.clawhubUrl ?? "").trim().replace(/\/+$/, "") === "https://clawhub.ai";
 }
 
+/** Resolves one package identity from a current trusted official ClawHub install record. */
+export function resolveTrustedOfficialClawHubPackageName(
+  record: PluginInstallRecord,
+): string | undefined {
+  if (
+    record.source !== "clawhub" ||
+    record.clawhubChannel !== "official" ||
+    (record.clawhubUrl ?? "").trim().replace(/\/+$/, "") !== "https://clawhub.ai"
+  ) {
+    return undefined;
+  }
+  const packageNames = resolveRecordedClawHubPackageNames(record);
+  if (!packageNames || packageNames.length === 0 || new Set(packageNames).size !== 1) {
+    return undefined;
+  }
+  return packageNames[0];
+}
+
 function hasTrustedClawHubSourceAuthority(
   record: PluginInstallRecord,
   officialClawHubSpec: string | undefined,

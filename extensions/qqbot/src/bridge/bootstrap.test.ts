@@ -6,7 +6,12 @@ import { ensurePlatformAdapter } from "./bootstrap.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(),
+  readRemoteMediaBuffer: vi.fn(),
   resolveApprovalOverGateway: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+  readRemoteMediaBuffer: (...args: unknown[]) => mocks.readRemoteMediaBuffer(...args),
 }));
 
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
@@ -44,6 +49,36 @@ describe("QQBot built-in platform adapter", () => {
     mocks.getRuntimeConfig.mockReturnValue({ channels: { qqbot: {} } });
     mocks.resolveApprovalOverGateway.mockResolvedValue(canonicalLoserResult);
     ensurePlatformAdapter();
+  });
+
+  it("forwards response header deadlines to the media runtime", async () => {
+    mocks.readRemoteMediaBuffer.mockResolvedValueOnce({
+      buffer: Buffer.from("image"),
+      fileName: "remote.png",
+    });
+
+    const result = await getPlatformAdapter().fetchMedia({
+      url: "https://media.qq.com/assets/photo.png",
+      filePathHint: "photo.png",
+      maxBytes: 1024,
+      maxRedirects: 2,
+      timeoutMs: 5_000,
+      responseHeaderTimeoutMs: 120_000,
+      ssrfPolicy: { hostnameAllowlist: ["*.qq.com"] },
+      requestInit: { headers: { accept: "image/png" } },
+    });
+
+    expect(result).toEqual({ buffer: Buffer.from("image"), fileName: "remote.png" });
+    expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledWith({
+      url: "https://media.qq.com/assets/photo.png",
+      filePathHint: "photo.png",
+      maxBytes: 1024,
+      maxRedirects: 2,
+      timeoutMs: 5_000,
+      responseHeaderTimeoutMs: 120_000,
+      ssrfPolicy: { hostnameAllowlist: ["*.qq.com"] },
+      requestInit: { headers: { accept: "image/png" } },
+    });
   });
 
   it("preserves plugin ownership and the canonical first-answer result", async () => {

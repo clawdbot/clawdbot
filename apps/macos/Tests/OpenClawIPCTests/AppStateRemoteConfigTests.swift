@@ -52,6 +52,30 @@ private actor GatewayConfigReadGate {
 @MainActor
 struct AppStateRemoteConfigTests {
     @Test
+    func `config fingerprint ignores writer bookkeeping metadata`() {
+        let base: [String: Any] = [
+            "gateway": ["mode": "local"],
+        ]
+        let touched: [String: Any] = [
+            "gateway": ["mode": "local"],
+            "meta": [
+                "lastTouchedAt": "2026-07-13T09:12:53Z",
+                "lastTouchedVersion": "2026.7.2",
+            ],
+        ]
+        let changed: [String: Any] = [
+            "gateway": ["mode": "remote"],
+            "meta": [
+                "lastTouchedAt": "2026-07-13T09:13:25Z",
+                "lastTouchedVersion": "2026.7.2",
+            ],
+        ]
+
+        #expect(AppState._testConfigFingerprint(base) == AppState._testConfigFingerprint(touched))
+        #expect(AppState._testConfigFingerprint(base) != AppState._testConfigFingerprint(changed))
+    }
+
+    @Test
     func `route edit during config read fails the source snapshot closed`() async {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withIsolatedState(
@@ -205,13 +229,13 @@ struct AppStateRemoteConfigTests {
     @Test
     func `config watcher endpoint replacement clears and ignores stale discovery identity`() {
         let previousGatewayPreference = captureGatewayPreference()
-        let previousPending = UserDefaults.standard.object(forKey: onboardingCrestodianPendingKey)
+        let previousPending = UserDefaults.standard.object(forKey: onboardingSystemAgentPendingKey)
         defer {
             restoreGatewayPreference(previousGatewayPreference)
             if let previousPending {
-                UserDefaults.standard.set(previousPending, forKey: onboardingCrestodianPendingKey)
+                UserDefaults.standard.set(previousPending, forKey: onboardingSystemAgentPendingKey)
             } else {
-                OnboardingCrestodianResumeStore.clear()
+                OnboardingSystemAgentResumeStore.clear()
             }
         }
         let state = AppState(preview: true)
@@ -219,7 +243,7 @@ struct AppStateRemoteConfigTests {
         state.remoteTransport = .direct
         state.remoteUrl = "wss://gateway-a.example.test"
         GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
-        OnboardingCrestodianResumeStore.markPending(routeIdentity: "remote:id:gateway-a")
+        OnboardingSystemAgentResumeStore.markPending(routeIdentity: "remote:id:gateway-a")
         let view = OnboardingView(state: state)
         view.preferredGatewayID = "gateway-a"
 
@@ -236,13 +260,13 @@ struct AppStateRemoteConfigTests {
         #expect(state.remoteUrl == "wss://gateway-b.example.test")
         #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
         #expect(view.effectivePreferredGatewayID == nil)
-        let routeIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity(
+        let routeIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity(
             state: state,
             preferredGatewayID: view.effectivePreferredGatewayID)
         #expect(routeIdentity?.hasPrefix("remote:direct:") == true)
         #expect(routeIdentity != "remote:id:gateway-a")
-        #expect(!OnboardingCrestodianResumeStore.isPending(for: routeIdentity))
-        #expect(OnboardingCrestodianResumeStore.isPending(for: "remote:id:gateway-a"))
+        #expect(!OnboardingSystemAgentResumeStore.isPending(for: routeIdentity))
+        #expect(OnboardingSystemAgentResumeStore.isPending(for: "remote:id:gateway-a"))
     }
 
     @Test

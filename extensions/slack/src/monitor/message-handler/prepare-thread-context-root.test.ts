@@ -6,9 +6,15 @@ import {
   formatSlackBotStarterThreadLabel,
   isSlackThreadAuthorCurrentBot,
   resolveSlackThreadHistoryFilterPolicy,
-  type SlackThreadRootCandidate,
   shouldIncludeBotThreadStarterContext,
 } from "./prepare-thread-context-root.js";
+
+type SlackThreadRootCandidate = {
+  userId?: string;
+  botId?: string;
+  text?: string;
+  ts?: string;
+};
 
 describe("isSlackThreadAuthorCurrentBot", () => {
   const identity = { botUserId: "U_BOT", botId: "B1" };

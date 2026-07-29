@@ -14,9 +14,7 @@ generic policy: DM/group allowlists, pairing-store DM entries, route gates,
 command gates, event auth, mention activation, redacted diagnostics, and
 admission.
 
-Use `openclaw/plugin-sdk/channel-ingress-runtime` for new receive paths. The
-older `openclaw/plugin-sdk/channel-ingress` subpath stays exported as a
-deprecated compatibility facade for third-party plugins.
+Use `openclaw/plugin-sdk/channel-ingress-runtime` for receive paths.
 
 ## Runtime resolver
 
@@ -120,8 +118,10 @@ Most channels should leave activation after sender and command gates. Public
 chat surfaces that must quiet non-mentioned traffic before sender allowlist
 noise can opt into `activation.order: "before-sender"` when text-command
 bypass is disabled. Channels with implicit activation, such as replies in bot
-threads, can pass `activation.allowedImplicitMentionKinds`; the projected
-`activationAccess.shouldBypassMention` then reports when command or implicit
+threads, resolve `channels.defaults.implicitMentions` plus channel and account
+overrides with `resolveChannelImplicitMentions(...)`, then pass the result as
+`activation.implicitMentions`. The projected
+`activationAccess.shouldBypassMention` reports when command or implicit
 activation bypassed an explicit mention.
 
 ## Redaction
