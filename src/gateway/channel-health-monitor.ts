@@ -51,6 +51,7 @@ export type ChannelHealthMonitor = {
 type RestartRecord = {
   lastRestartAt: number;
   restartsThisHour: { at: number }[];
+  pendingRestartContinuationConsumed: boolean;
 };
 
 function resolveTimingPolicy(
@@ -160,6 +161,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           const record = restartRecords.get(key) ?? {
             lastRestartAt: 0,
             restartsThisHour: [],
+            pendingRestartContinuationConsumed: false,
           };
 
           const continuingPendingRestart =
@@ -175,7 +177,17 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           }
 
           pruneOldRestarts(record, now);
-          if (!continuingPendingRestart && record.restartsThisHour.length >= maxRestartsPerHour) {
+          // A timed-out stop already consumed a restart slot. Allow exactly one
+          // pending continuation to finish that handoff; further stuck-pending
+          // passes must use the ordinary hourly budget.
+          const usePendingRestartContinuation =
+            continuingPendingRestart &&
+            record.restartsThisHour.length > 0 &&
+            !record.pendingRestartContinuationConsumed;
+          if (
+            !usePendingRestartContinuation &&
+            record.restartsThisHour.length >= maxRestartsPerHour
+          ) {
             log.warn?.(
               `[${channelId}:${accountId}] health-monitor: hit ${maxRestartsPerHour} restarts/hour limit, skipping`,
             );
@@ -186,9 +198,13 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
 
-          if (!continuingPendingRestart) {
+          if (usePendingRestartContinuation) {
+            record.pendingRestartContinuationConsumed = true;
+            restartRecords.set(key, record);
+          } else {
             record.lastRestartAt = now;
             record.restartsThisHour.push({ at: now });
+            record.pendingRestartContinuationConsumed = continuingPendingRestart;
             restartRecords.set(key, record);
           }
 

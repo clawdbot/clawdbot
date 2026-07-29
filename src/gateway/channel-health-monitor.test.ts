@@ -614,6 +614,76 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+  it("caps repeated pending recovery after the handoff continuation", async () => {
+    const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: account,
+        },
+      },
+      {
+        startChannel: vi.fn(async () => {
+          account.running = false;
+          account.connected = false;
+          account.restartPending = true;
+          account.reconnectAttempts = 0;
+        }),
+      },
+    );
+    const monitor = startDefaultMonitor(manager, {
+      checkIntervalMs: 1_000,
+      cooldownCycles: 1,
+      maxRestartsPerHour: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+
+    await advanceHealthCheck();
+    expect(manager.startChannel).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(manager.startChannel).toHaveBeenCalledTimes(2);
+    monitor.stop();
+  });
+
+  it("counts cold pending recovery when no handoff slot exists", async () => {
+    const account: Partial<ChannelAccountSnapshot> = {
+      ...disconnectedAccount(Date.now() - 300_000),
+      running: false,
+      restartPending: true,
+      reconnectAttempts: 0,
+    };
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: account,
+        },
+      },
+      {
+        startChannel: vi.fn(async () => {
+          account.running = false;
+          account.connected = false;
+          account.restartPending = true;
+          account.reconnectAttempts = 0;
+        }),
+      },
+    );
+    const monitor = startDefaultMonitor(manager, {
+      checkIntervalMs: 1_000,
+      cooldownCycles: 1,
+      maxRestartsPerHour: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+
+    await advanceHealthCheck();
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+    monitor.stop();
+  });
+
   it("defers to the channel supervisor while its own auto-restart is scheduled", async () => {
     let autoRestartScheduled = true;
     const manager = createSnapshotManager(
