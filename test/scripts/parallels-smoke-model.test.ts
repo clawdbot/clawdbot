@@ -48,6 +48,7 @@ import {
 import {
   LinuxGuest,
   MacosGuest,
+  runPosixBackgroundShell,
   runWindowsBackgroundPowerShell,
 } from "../../scripts/e2e/parallels/guest-transports.ts";
 import { resolveHostCommandInvocation } from "../../scripts/e2e/parallels/host-command.ts";
@@ -115,13 +116,13 @@ function countNonEmptyLines(value: string): number {
   return count;
 }
 
-function expectFatalError(run: () => unknown, message: string): void {
+function expectFatalError(runTest: () => unknown, message: string): void {
   const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   const exit = vi.spyOn(process, "exit").mockImplementation((code) => {
     throw new Error(`process.exit(${code})`);
   });
   try {
-    expect(run).toThrow("process.exit(1)");
+    expect(runTest).toThrow("process.exit(1)");
     expect(stderr).toHaveBeenLastCalledWith(`error: ${message}\n`);
   } finally {
     exit.mockRestore();
@@ -312,10 +313,13 @@ describe("Parallels smoke model selection", () => {
     expect(linux).toContain("rm -rf /root/.openclaw /root/.npm/_cacache");
   });
 
-  it("forces the explicit test-owned Windows gateway stop", () => {
+  it("uses a forced Windows gateway stop only when the installed CLI supports it", () => {
     const windows = readFileSync(TS_PATHS.windows, "utf8");
-    expect(windows).toContain('const forceFlag = action === "stop" ? " --force" : "";');
-    expect(windows).toContain("Invoke-OpenClaw gateway ${action}${forceFlag}");
+    expect(windows).toContain("Invoke-OpenClaw gateway stop --help");
+    expect(windows).toContain("$stopHelp -match");
+    expect(windows).toContain("$gatewayArgs += '--force'");
+    expect(windows).toContain("Invoke-OpenClaw @gatewayArgs");
+    expect(windows).not.toContain('const forceFlag = action === "stop"');
   });
 
   it("preserves caller arguments when loaded as the Windows controller library", () => {
@@ -1640,6 +1644,130 @@ exit 0
     expect(script).toContain("guestPowerShellBackground(\n      `install-main-${");
     expect(script).not.toMatch(/private installMain\(tempName: string\): void/u);
     expect(script).not.toMatch(/private installLatestRelease\(\): void/u);
+  });
+
+  it("runs the macOS dev update through a detached done-file runner", () => {
+    const script = readFileSync(TS_PATHS.macos, "utf8");
+    const transports = readFileSync(TS_PATHS.guestTransports, "utf8");
+
+    expect(script).toContain('this.guest.shBackground(\n      "macos-update-dev"');
+    expect(transports).toContain("/usr/bin/nohup /bin/bash");
+    expect(transports).toContain("__OPENCLAW_BACKGROUND_DONE__");
+    expect(transports).toContain("POSIX_BACKGROUND_LOG_MAX_BYTES");
+    expect(transports).toContain('command=$(/bin/ps -p "$background_pid" -o command=');
+    expect(transports).toContain("*${posixSingleQuote(runnerPath)}*)");
+  });
+
+  it("accepts an ambiguous POSIX background launch after its run materializes", async () => {
+    const output: string[] = [];
+    let calls = 0;
+    const runCommand = vi.fn((_command: string, args: string[]) => {
+      calls++;
+      if (calls === 4) {
+        return { status: 124, stderr: "", stdout: "" };
+      }
+      if (calls === 5) {
+        return { status: 0, stderr: "", stdout: "materialized\n" };
+      }
+      if (calls === 6) {
+        return { status: 0, stderr: "", stdout: "done\n" };
+      }
+      if (calls === 7) {
+        const drainScript = args.at(-1) ?? "";
+        const exitPrefix = drainScript.match(
+          /(__OPENCLAW_BACKGROUND_EXIT__:[A-Za-z0-9_-]+:)/u,
+        )?.[1];
+        const doneMarker = drainScript.match(/(__OPENCLAW_BACKGROUND_DONE__:[A-Za-z0-9_-]+)/u)?.[1];
+        return {
+          status: 0,
+          stderr: "",
+          stdout: `update complete\n${exitPrefix}0\n${doneMarker}\n`,
+        };
+      }
+      return { status: 0, stderr: "", stdout: "" };
+    });
+
+    await runPosixBackgroundShell({
+      append: (chunk) => output.push(String(chunk)),
+      label: "macos update",
+      pollIntervalMs: 1,
+      runCommand: runCommand as unknown as typeof run,
+      script: "echo update",
+      timeoutMs: 5_000,
+      transportArgs: (args) => args,
+    });
+
+    expect(output.join("")).toContain("update complete");
+    expect(calls).toBe(8);
+  });
+
+  it("propagates a detached POSIX background exit failure", async () => {
+    let calls = 0;
+    const runCommand = vi.fn((_command: string, args: string[]) => {
+      calls++;
+      if (calls === 4) {
+        return { status: 0, stderr: "", stdout: "started\n" };
+      }
+      if (calls === 5) {
+        return { status: 0, stderr: "", stdout: "done\n" };
+      }
+      if (calls === 6) {
+        const drainScript = args.at(-1) ?? "";
+        const exitPrefix = drainScript.match(
+          /(__OPENCLAW_BACKGROUND_EXIT__:[A-Za-z0-9_-]+:)/u,
+        )?.[1];
+        const doneMarker = drainScript.match(/(__OPENCLAW_BACKGROUND_DONE__:[A-Za-z0-9_-]+)/u)?.[1];
+        return {
+          status: 0,
+          stderr: "",
+          stdout: `update failed\n${exitPrefix}7\n${doneMarker}\n`,
+        };
+      }
+      return { status: 0, stderr: "", stdout: "" };
+    });
+
+    await expect(
+      runPosixBackgroundShell({
+        label: "macos update",
+        pollIntervalMs: 1,
+        runCommand: runCommand as unknown as typeof run,
+        script: "exit 7",
+        timeoutMs: 5_000,
+        transportArgs: (args) => args,
+      }),
+    ).rejects.toThrow("macos update failed");
+
+    expect(calls).toBe(7);
+  });
+
+  it("force-stops the verified POSIX background process tree on timeout", async () => {
+    const scripts: string[] = [];
+    let calls = 0;
+    const runCommand = vi.fn((_command: string, args: string[]) => {
+      calls++;
+      scripts.push(args.at(-1) ?? "");
+      if (calls === 4) {
+        return { status: 0, stderr: "", stdout: "started\n" };
+      }
+      return { status: 0, stderr: "", stdout: calls >= 5 ? "wait\n" : "" };
+    });
+
+    await expect(
+      runPosixBackgroundShell({
+        label: "macos update",
+        pollIntervalMs: 1,
+        runCommand: runCommand as unknown as typeof run,
+        script: "sleep 60",
+        timeoutMs: 25,
+        transportArgs: (args) => args,
+      }),
+    ).rejects.toThrow("macos update timed out");
+
+    const cleanup = scripts.at(-1) ?? "";
+    expect(cleanup).toContain('command=$(/bin/ps -p "$background_pid" -o command=');
+    expect(cleanup).toContain('for child in $(/usr/bin/pgrep -P "$1"');
+    expect(cleanup).toContain('/bin/kill -TERM "$1"');
+    expect(cleanup).toContain('/bin/kill -KILL "$1"');
   });
 
   it("paces ambiguous Windows background launch materialization probes", async () => {

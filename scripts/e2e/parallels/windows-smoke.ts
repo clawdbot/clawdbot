@@ -696,12 +696,20 @@ Invoke-OpenClaw update status --json`,
   }
 
   private gatewayAction(action: "restart" | "stop"): Promise<void> {
-    const forceFlag = action === "stop" ? " --force" : "";
+    const gatewayArgs =
+      action === "stop"
+        ? `$gatewayArgs = @('gateway', 'stop')
+$stopHelp = (Invoke-OpenClaw gateway stop --help 2>&1 | Out-String)
+if ($stopHelp -match '(?m)^\\s+--force(?:\\s|$)') {
+  $gatewayArgs += '--force'
+}`
+        : `$gatewayArgs = @('gateway', 'restart')`;
     return this.guestPowerShellBackground(
       `gateway-${action}`,
       `$ErrorActionPreference = 'Continue'
 $PSNativeCommandUseErrorActionPreference = $false
-Invoke-OpenClaw gateway ${action}${forceFlag}
+${gatewayArgs}
+Invoke-OpenClaw @gatewayArgs
 if ($LASTEXITCODE -ne 0) { throw "gateway ${action} failed with exit code $LASTEXITCODE" }`,
       420_000,
     );
