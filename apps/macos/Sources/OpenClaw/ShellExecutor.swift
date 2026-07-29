@@ -134,6 +134,7 @@ enum ShellExecutor {
     {
         let result = try await Subprocess.run(
             configuration,
+            input: .standardInput,
             output: output.subprocessStandardOutput,
             error: output.subprocessStandardError)
         return result.terminationStatus
@@ -146,7 +147,7 @@ enum ShellExecutor {
     {
         let result = try await Subprocess.run(
             configuration,
-            input: .none,
+            input: .standardInput,
             output: output.subprocessStandardOutput,
             error: output.subprocessStandardError)
         { execution in
