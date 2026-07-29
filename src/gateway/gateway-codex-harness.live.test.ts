@@ -1741,7 +1741,7 @@ async function assertCodexNativeSubagentProgress(params: {
     requesterSessionKey: params.requesterSessionKey,
   });
   expect(ended[0]?.ctx).toEqual(started[0]?.ctx);
-  logCodexLiveStep("native-subagent-progress", params.events);
+  logCodexLiveStep("native-subagent-progress", { events: params.events });
 }
 
 describeLive("gateway live (Codex harness)", () => {
