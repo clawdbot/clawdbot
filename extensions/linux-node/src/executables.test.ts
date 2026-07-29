@@ -1,22 +1,30 @@
-import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { createCachedExecutableResolver } from "./executables.js";
+import { chmodSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { resolveExecutable } from "./executables.js";
 
 describe("linux-node executable discovery", () => {
-  it("caches PATH probes per process environment", () => {
-    const expected = path.join("/usr/bin", "ffmpeg");
-    const isExecutable = vi.fn((candidate: string) => candidate === expected);
-    const resolve = createCachedExecutableResolver(isExecutable);
-    const env = { PATH: "/usr/local/bin:/usr/bin" };
+  it("caches resolved executables per process environment", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-linux-node-exec-"));
+    const command = `ffmpeg-${process.pid}-${Date.now()}`;
+    const expected = join(dir, command);
+    writeFileSync(expected, "#!/bin/sh\nexit 0\n");
+    chmodSync(expected, 0o755);
 
-    expect(resolve("ffmpeg", env)).toBe(expected);
-    expect(resolve("ffmpeg", env)).toBe(expected);
-    expect(isExecutable).toHaveBeenCalledTimes(2);
+    expect(resolveExecutable(command, { PATH: dir })).toBe(expected);
+    unlinkSync(expected);
+    expect(resolveExecutable(command, { PATH: dir })).toBe(expected);
+    rmSync(dir, { recursive: true, force: true });
   });
 
   it("checks known GeoClue demo paths after PATH", () => {
-    const demo = "/usr/libexec/geoclue-2.0/demos/where-am-i";
-    const resolve = createCachedExecutableResolver((candidate) => candidate === demo);
-    expect(resolve("where-am-i", { PATH: "/usr/bin" }, [demo])).toBe(demo);
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-linux-node-demo-"));
+    const demo = join(dir, "where-am-i");
+    writeFileSync(demo, "#!/bin/sh\nexit 0\n");
+    chmodSync(demo, 0o755);
+
+    expect(resolveExecutable(`where-am-i-${process.pid}`, { PATH: "" }, [demo])).toBe(demo);
+    rmSync(dir, { recursive: true, force: true });
   });
 });

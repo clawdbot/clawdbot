@@ -227,7 +227,7 @@ public final class OpenClawChatSpeechController {
 /// Whole-clip playback for gateway-rendered container audio. File metadata
 /// helps AVAudioPlayer parse clips whose type is not obvious from the bytes.
 @MainActor
-final class ChatSpeechClipPlayer: NSObject, ChatSpeechClipPlaying, @preconcurrency AVAudioPlayerDelegate {
+final class ChatSpeechClipPlayer: NSObject, ChatSpeechClipPlaying {
     private var player: AVAudioPlayer?
     private var continuation: CheckedContinuation<Bool, Never>?
 
@@ -275,6 +275,14 @@ final class ChatSpeechClipPlayer: NSObject, ChatSpeechClipPlaying, @preconcurren
         continuation?.resume(returning: finished)
     }
 }
+
+// SDK 27 imports AVAudioPlayerDelegate with compatible isolation. Older SDKs
+// still need the preconcurrency bridge for this main-actor implementation.
+#if compiler(>=6.4)
+extension ChatSpeechClipPlayer: AVAudioPlayerDelegate {}
+#else
+extension ChatSpeechClipPlayer: @preconcurrency AVAudioPlayerDelegate {}
+#endif
 
 /// On-device fallback voice via AVSpeechSynthesizer.
 @MainActor

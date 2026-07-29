@@ -11,9 +11,11 @@ import {
   parseTelegramTargetForTest,
   telegramMessagingForTest,
 } from "../../infra/outbound/targets.test-helpers.js";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { buildChannelOutboundSessionRoute } from "../../plugin-sdk/core.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 
 const { extractDeliveryInfoMock } = vi.hoisted(() => ({
   extractDeliveryInfoMock: vi.fn(),
@@ -32,9 +34,13 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
 }));
 
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadSessionEntry: vi.fn(),
-}));
+vi.mock("../../config/sessions/session-accessor.js", () => {
+  const loadSessionEntry = vi.fn();
+  return {
+    loadSessionEntry,
+    loadSessionEntryReadOnly: loadSessionEntry,
+  };
+});
 
 vi.mock("../../infra/outbound/channel-selection.runtime.js", () => ({
   resolveMessageChannelSelection: vi
@@ -223,11 +229,27 @@ const DEFAULT_TARGET = {
   channel: "forum" as const,
   to: "room:default",
 };
+const malformedAccountIdCases = [
+  { description: "numeric", accountId: 123 },
+  { description: "boolean", accountId: false },
+  { description: "object", accountId: {} },
+] as const;
 
-type SessionStore = Record<string, SessionEntry>;
+type SessionStore = Record<
+  string,
+  SessionEntry & {
+    lastChannel?: string;
+    lastTo?: string;
+    lastAccountId?: string;
+    lastThreadId?: string | number;
+  }
+>;
 
 function setSessionStore(store: SessionStore) {
-  vi.mocked(loadSessionEntry).mockImplementation(({ sessionKey }) => store[sessionKey]);
+  const canonical = Object.fromEntries(
+    Object.entries(store).map(([key, entry]) => [key, normalizeLegacySessionEntryDelivery(entry)]),
+  );
+  vi.mocked(loadSessionEntry).mockImplementation(({ sessionKey }) => canonical[sessionKey]);
 }
 
 function setMainSessionEntry(entry?: SessionStore[string]) {
@@ -245,10 +267,14 @@ function setLastSessionEntry(params: {
   setMainSessionEntry({
     sessionId: params.sessionId,
     updatedAt: 1000,
-    lastChannel: params.lastChannel,
-    lastTo: params.lastTo,
-    ...(params.lastThreadId ? { lastThreadId: params.lastThreadId } : {}),
-    ...(params.lastAccountId ? { lastAccountId: params.lastAccountId } : {}),
+    delivery: normalizeSessionDeliveryState({
+      context: {
+        channel: params.lastChannel,
+        to: params.lastTo,
+        threadId: params.lastThreadId,
+        accountId: params.lastAccountId,
+      },
+    }),
   });
 }
 
@@ -363,6 +389,96 @@ describe("resolveDeliveryTarget", () => {
     expect(result.accountId).toBe("account-b");
   });
 
+  it.each([
+    {
+      description: "trims an explicit account",
+      explicitAccountId: "  explicit-account  ",
+      expectedAccountId: "explicit-account",
+    },
+    {
+      description: "falls back to the session for a whitespace-only account",
+      explicitAccountId: "   ",
+      expectedAccountId: "session-account",
+    },
+    {
+      description: "falls back to the session for an empty account",
+      explicitAccountId: "",
+      expectedAccountId: "session-account",
+    },
+  ])("$description", async ({ explicitAccountId, expectedAccountId }) => {
+    setLastSessionEntry({
+      sessionId: "sess-account-normalization",
+      lastChannel: "forum",
+      lastTo: "room:ops",
+      lastAccountId: "session-account",
+    });
+
+    const result = await resolveDeliveryTarget(makeForumBoundCfg(), AGENT_ID, {
+      channel: "forum",
+      to: "room:ops",
+      accountId: explicitAccountId,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.accountId).toBe(expectedAccountId);
+  });
+
+  it.each([
+    { description: "whitespace-only", explicitAccountId: "   " },
+    { description: "empty", explicitAccountId: "" },
+  ])(
+    "falls back to the bound account for a $description account",
+    async ({ explicitAccountId }) => {
+      setMainSessionEntry(undefined);
+
+      const result = await resolveDeliveryTarget(makeForumBoundCfg(), AGENT_ID, {
+        channel: "forum",
+        to: "room:ops",
+        accountId: explicitAccountId,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.accountId).toBe("account-b");
+    },
+  );
+
+  it.each(malformedAccountIdCases)(
+    "falls back to the session for a malformed $description account",
+    async ({ accountId }) => {
+      setLastSessionEntry({
+        sessionId: "sess-malformed-account",
+        lastChannel: "forum",
+        lastTo: "room:ops",
+        lastAccountId: "session-account",
+      });
+
+      const result = await resolveDeliveryTarget(makeForumBoundCfg(), AGENT_ID, {
+        channel: "forum",
+        to: "room:ops",
+        accountId: accountId as unknown as string,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.accountId).toBe("session-account");
+    },
+  );
+
+  it.each(malformedAccountIdCases)(
+    "falls back to the bound account for a malformed $description account",
+    async ({ accountId }) => {
+      setMainSessionEntry(undefined);
+
+      const result = await resolveDeliveryTarget(makeForumBoundCfg(), AGENT_ID, {
+        channel: "forum",
+        to: "room:ops",
+        accountId: accountId as unknown as string,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.accountId).toBe("account-b");
+    },
+  );
+
   it("preserves binding order when peerless delivery falls back to a bound accountId", async () => {
     setMainSessionEntry(undefined);
     const cfg = makeCfg({
@@ -411,9 +527,9 @@ describe("resolveDeliveryTarget", () => {
     setMainSessionEntry({
       sessionId: "sess-1",
       updatedAt: 1000,
-      lastChannel: "forum",
-      lastTo: "room:default",
-      lastAccountId: "session-account",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "forum", to: "room:default", accountId: "session-account" },
+      }),
     });
 
     const cfg = makeForumBoundCfg();

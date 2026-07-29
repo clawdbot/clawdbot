@@ -9,7 +9,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import {
   listCommitments,
   markCommitmentsStatus,
-  resolveCommitmentStorePath,
+  resolveCommitmentDatabasePath,
 } from "../commitments/store.js";
 import type { CommitmentRecord, CommitmentStatus } from "../commitments/types.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -113,14 +113,14 @@ export async function commitmentsListCommand(
       count: commitments.length,
       status: status ?? (opts.all ? null : "pending"),
       agentId: normalizeOptionalString(opts.agent) ?? null,
-      store: resolveCommitmentStorePath(),
+      store: resolveCommitmentDatabasePath(),
       commitments,
     });
     return;
   }
 
   runtime.log(info(`Commitments: ${commitments.length}`));
-  runtime.log(info(`Store: ${resolveCommitmentStorePath()}`));
+  runtime.log(info(`Store: ${resolveCommitmentDatabasePath()}`));
   if (status) {
     runtime.log(info(`Status filter: ${status}`));
   }

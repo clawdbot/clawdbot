@@ -6,7 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActiveNodeContext } from "../infra/active-node-context.js";
-import { buildSystemPromptParams } from "./system-prompt-params.js";
+import { buildSystemPromptParams, resolveSystemPromptRepoRoot } from "./system-prompt-params.js";
 
 async function makeTempDir(label: string): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${label}-`));
@@ -17,10 +17,12 @@ async function makeRepoRoot(root: string): Promise<void> {
 }
 
 function buildParams(params: { config?: OpenClawConfig; workspaceDir?: string; cwd?: string }) {
+  const preparedRepoRoot = resolveSystemPromptRepoRoot(params);
   return buildSystemPromptParams({
     config: params.config,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
+    preparedRepoRoot,
     runtime: {
       host: "host",
       os: "os",
@@ -40,6 +42,17 @@ describe("buildSystemPromptParams", () => {
     const { runtimeInfo } = buildParams({});
 
     expect(runtimeInfo.activeNode).toBe("mac-123");
+  });
+
+  it("omits an active node that fails current-generation validation", () => {
+    setActiveNodeContext(
+      { nodeId: "mac-123", pairingGeneration: "generation-a" },
+      { isCurrent: () => false },
+    );
+
+    const { runtimeInfo } = buildParams({});
+
+    expect(runtimeInfo.activeNode).toBeUndefined();
   });
 
   it("detects repo root from workspaceDir", async () => {
@@ -113,6 +126,28 @@ describe("buildSystemPromptParams", () => {
     const workspaceDir = await makeTempDir("norepo");
 
     const { runtimeInfo } = buildParams({ workspaceDir });
+
+    expect(runtimeInfo.repoRoot).toBeUndefined();
+  });
+
+  it("does not rediscover the repository after preparation", async () => {
+    const workspaceDir = await makeTempDir("prepared-norepo");
+    const repoRoot = await makeTempDir("late-repo");
+    const preparedRepoRoot = resolveSystemPromptRepoRoot({ workspaceDir });
+    await makeRepoRoot(repoRoot);
+
+    const { runtimeInfo } = buildSystemPromptParams({
+      preparedRepoRoot,
+      workspaceDir,
+      cwd: repoRoot,
+      runtime: {
+        host: "host",
+        os: "os",
+        arch: "arch",
+        node: "node",
+        model: "model",
+      },
+    });
 
     expect(runtimeInfo.repoRoot).toBeUndefined();
   });

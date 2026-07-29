@@ -11,7 +11,27 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
-import { createReplyOperation } from "./reply-run-registry.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { runReplyAgent } from "./agent-runner.runtime.js";
+import { applySessionHints } from "./body.js";
+import {
+  loadAgentRunnerRuntime,
+  loadEmbeddedAgentRuntime,
+  loadSessionUpdatesRuntime,
+} from "./get-reply-run-helpers.js";
+import { runPreparedReply } from "./get-reply-run.js";
+import { buildDirectChatContext, buildGroupChatContext, buildGroupIntro } from "./groups.js";
+import { finalizeInboundContextForSdk } from "./inbound-context.js";
+import {
+  buildInboundUserContextPrefix,
+  resolveInboundUserContextPromptJoiner,
+} from "./inbound-meta.js";
+import { createReplyOperation, getActiveReplyRunCount } from "./reply-run-registry.js";
+import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
+import { routeReply } from "./route-reply.runtime.js";
+import { drainFormattedSystemEvents } from "./session-system-events.js";
+import { buildChannelSourceTurnId } from "./source-turn-id.js";
+import { resolveTypingMode } from "./typing-mode.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
@@ -154,20 +174,6 @@ vi.mock("./typing-mode.js", () => ({
   resolveTypingMode: vi.fn().mockReturnValue("off"),
 }));
 
-let runPreparedReply: typeof import("./get-reply-run.js").runPreparedReply;
-let runReplyAgent: typeof import("./agent-runner.runtime.js").runReplyAgent;
-let routeReply: typeof import("./route-reply.runtime.js").routeReply;
-let drainFormattedSystemEvents: typeof import("./session-system-events.js").drainFormattedSystemEvents;
-let applySessionHints: typeof import("./body.js").applySessionHints;
-let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
-let buildDirectChatContext: typeof import("./groups.js").buildDirectChatContext;
-let buildGroupIntro: typeof import("./groups.js").buildGroupIntro;
-let buildGroupChatContext: typeof import("./groups.js").buildGroupChatContext;
-let buildInboundUserContextPrefix: typeof import("./inbound-meta.js").buildInboundUserContextPrefix;
-let resolveInboundUserContextPromptJoiner: typeof import("./inbound-meta.js").resolveInboundUserContextPromptJoiner;
-let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
-let replyRunTesting: typeof import("./reply-run-registry.js").testing;
-
 function createGatewayDrainingError(): Error {
   const error = new Error("Gateway is draining for restart; new tasks are not accepted");
   error.name = "GatewayDrainingError";
@@ -176,24 +182,50 @@ function createGatewayDrainingError(): Error {
 
 const ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE =
   "Treat this as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way.";
+
+function createInboundBody<T extends string>(body: T) {
+  return { Body: body, RawBody: body, CommandBody: body };
+}
+
+function createSessionBody<T extends string>(body: T) {
+  return { Body: body, BodyStripped: body };
+}
+
+function createProviderSurface<T extends string>(provider: T) {
+  return { Provider: provider, Surface: provider };
+}
+
+function createInboundTurn<
+  TBody extends string,
+  TProvider extends string,
+  TChatType extends string,
+>(body: TBody, provider: TProvider, chatType: TChatType) {
+  return { ...createInboundBody(body), ...createProviderSurface(provider), ChatType: chatType };
+}
+
+function createSessionTurn<
+  TBody extends string,
+  TProvider extends string,
+  TChatType extends string,
+>(body: TBody, provider: TProvider, chatType: TChatType) {
+  return { ...createSessionBody(body), ...createProviderSurface(provider), ChatType: chatType };
+}
+
 function baseParams(
   overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {},
 ): Parameters<typeof runPreparedReply>[0] {
-  return {
+  const defaults = {
     ctx: {
-      Body: "",
-      RawBody: "",
-      CommandBody: "",
+      ...createInboundBody(""),
       ThreadHistoryBody: "Earlier message in this thread",
       OriginatingChannel: "slack",
       OriginatingTo: "C123",
       ChatType: "group",
     },
     sessionCtx: {
-      Body: "",
-      BodyStripped: "",
+      ...createSessionBody(""),
       ThreadHistoryBody: "Earlier message in this thread",
-      MediaPath: "/tmp/input.png",
+      media: [{ path: "/tmp/input.png" }],
       Provider: "slack",
       ChatType: "group",
       OriginatingChannel: "slack",
@@ -248,8 +280,27 @@ function baseParams(
     sessionKey: "session-key",
     workspaceDir: "/tmp/workspace",
     abortedLastRun: false,
-    ...overrides,
   };
+  const ctx = overrides.ctx ?? defaults.ctx;
+  const sessionCtx = overrides.sessionCtx ?? defaults.sessionCtx;
+  const resolveTestCanonicalText = (value: Record<string, unknown>) => {
+    const { commandText, agentText, rawText } = finalizeInboundContextForSdk({ ...value });
+    return { commandText, agentText, rawText };
+  };
+  const sessionText = resolveTestCanonicalText(sessionCtx);
+  return {
+    ...defaults,
+    ...overrides,
+    ctx: { ...ctx, ...resolveTestCanonicalText(ctx) },
+    sessionCtx: {
+      ...sessionCtx,
+      ...sessionText,
+      agentText:
+        typeof sessionCtx.BodyStripped === "string"
+          ? sessionCtx.BodyStripped
+          : sessionText.agentText,
+    },
+  } as Parameters<typeof runPreparedReply>[0];
 }
 
 function ownerParams(): Parameters<typeof runPreparedReply>[0] {
@@ -296,21 +347,13 @@ describe("runPreparedReply media-only handling", () => {
   const cleanupPaths: string[] = [];
 
   beforeAll(async () => {
-    ({ runPreparedReply } = await import("./get-reply-run.js"));
-    ({ runReplyAgent } = await import("./agent-runner.runtime.js"));
-    ({ routeReply } = await import("./route-reply.runtime.js"));
-    ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
-    ({ applySessionHints } = await import("./body.js"));
-    ({ resolveTypingMode } = await import("./typing-mode.js"));
-    ({ buildDirectChatContext, buildGroupIntro, buildGroupChatContext } =
-      await import("./groups.js"));
-    ({ buildInboundUserContextPrefix, resolveInboundUserContextPromptJoiner } =
-      await import("./inbound-meta.js"));
-    ({ testing: replyRunTesting, getActiveReplyRunCount } =
-      await import("./reply-run-registry.js"));
-
-    // Load deferred reply dependencies before per-case timing starts.
-    await runPreparedReply(baseParams());
+    // Preload the runtime seams directly so test setup does not need a synthetic
+    // reply turn with registry and session side effects.
+    await Promise.all([
+      loadEmbeddedAgentRuntime(),
+      loadAgentRunnerRuntime(),
+      loadSessionUpdatesRuntime(),
+    ]);
   });
 
   beforeEach(async () => {
@@ -518,19 +561,16 @@ describe("runPreparedReply media-only handling", () => {
     await runPreparedReply(
       baseParams({
         ctx: {
-          Body: "",
-          RawBody: "",
-          CommandBody: "",
+          ...createInboundBody(""),
           ThreadHistoryBody: "Earlier direct message",
           OriginatingChannel: "slack",
           OriginatingTo: "D123",
           ChatType: "direct",
         },
         sessionCtx: {
-          Body: "",
-          BodyStripped: "",
+          ...createSessionBody(""),
           ThreadHistoryBody: "Earlier direct message",
-          MediaPath: "/tmp/input.png",
+          media: [{ path: "/tmp/input.png" }],
           Provider: "slack",
           ChatType: "direct",
           OriginatingChannel: "slack",
@@ -548,19 +588,16 @@ describe("runPreparedReply media-only handling", () => {
       baseParams({
         opts: { sourceReplyDeliveryMode: "message_tool_only" },
         ctx: {
-          Body: "yo",
-          RawBody: "yo",
-          CommandBody: "yo",
+          ...createInboundBody("yo"),
           ThreadHistoryBody: "Earlier direct message",
           OriginatingChannel: "telegram",
           OriginatingTo: "telegram-direct-test-id",
           ChatType: "direct",
         },
         sessionCtx: {
-          Body: "yo",
-          BodyStripped: "yo",
+          ...createSessionBody("yo"),
           ThreadHistoryBody: "Earlier direct message",
-          MediaPath: "/tmp/input.png",
+          media: [{ path: "/tmp/input.png" }],
           Provider: "telegram",
           ChatType: "direct",
           OriginatingChannel: "telegram",
@@ -582,16 +619,18 @@ describe("runPreparedReply media-only handling", () => {
     expect(directContextParams?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(buildInboundUserContextPrefix).toHaveBeenCalledWith(
       {
-        Body: "yo",
-        BodyStripped: "yo",
+        ...createSessionBody("yo"),
         ThreadHistoryBody: "Earlier direct message",
-        MediaPath: "/tmp/input.png",
+        media: [{ path: "/tmp/input.png" }],
         Provider: "telegram",
         ChatType: "direct",
         OriginatingChannel: "telegram",
         OriginatingTo: "telegram-direct-test-id",
         InboundHistory: undefined,
         ThreadStarterBody: undefined,
+        commandText: "yo",
+        agentText: "yo",
+        rawText: "yo",
       },
       expect.anything(),
       undefined,
@@ -654,19 +693,16 @@ describe("runPreparedReply media-only handling", () => {
       await runPreparedReply(
         baseParams({
           ctx: {
-            Body: "",
-            RawBody: "",
-            CommandBody: "",
+            ...createInboundBody(""),
             ThreadHistoryBody: "Earlier direct message",
             OriginatingChannel: "slack",
             OriginatingTo: "D123",
             ChatType: chatType,
           },
           sessionCtx: {
-            Body: "",
-            BodyStripped: "",
+            ...createSessionBody(""),
             ThreadHistoryBody: "Earlier direct message",
-            MediaPath: "/tmp/input.png",
+            media: [{ path: "/tmp/input.png" }],
             Provider: "slack",
             ChatType: chatType,
             OriginatingChannel: "slack",
@@ -690,9 +726,7 @@ describe("runPreparedReply media-only handling", () => {
       baseParams({
         sessionKey: "agent:main:telegram:group:target",
         ctx: {
-          Body: "",
-          RawBody: "",
-          CommandBody: "",
+          ...createInboundBody(""),
           ThreadHistoryBody: "Earlier direct message",
           OriginatingChannel: "telegram",
           OriginatingTo: "D123",
@@ -702,10 +736,9 @@ describe("runPreparedReply media-only handling", () => {
           CommandTargetSessionKey: "agent:main:telegram:group:target",
         },
         sessionCtx: {
-          Body: "",
-          BodyStripped: "",
+          ...createSessionBody(""),
           ThreadHistoryBody: "Earlier direct message",
-          MediaPath: "/tmp/input.png",
+          media: [{ path: "/tmp/input.png" }],
           Provider: "telegram",
           ChatType: "direct",
           OriginatingChannel: "telegram",
@@ -729,6 +762,23 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.prompt).toContain("[Thread history - for context]");
     expect(call.followupRun.prompt).toContain("Earlier message in this thread");
     expect(call.followupRun.prompt).toContain("[User sent media without caption]");
+  });
+
+  it("persists pure media turns without the model-facing placeholder", async () => {
+    const params = baseParams();
+    params.ctx.ThreadHistoryBody = undefined;
+    params.ctx.media = [{ path: "/tmp/input.png" }];
+    params.sessionCtx.ThreadHistoryBody = undefined;
+
+    await runPreparedReply(params);
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.prompt).toContain("[User sent media without caption]");
+    expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      role: "user",
+      content: "",
+      __openclaw: { media: [expect.objectContaining({ path: "/tmp/input.png" })] },
+    });
   });
 
   it.each([
@@ -796,6 +846,38 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.originatingChannel).toBe(channel);
   });
 
+  it("prefers a one-turn queue override over the stored session mode", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockImplementationOnce((params) => ({
+      mode: params.inlineMode ?? params.sessionEntry?.queueMode ?? "steer",
+    }));
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReturnValueOnce("active-session")
+      .mockReturnValueOnce("active-session");
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValueOnce(true);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunStreaming).mockReturnValueOnce(true);
+
+    await runPreparedReply(
+      baseParams({
+        sessionEntry: {
+          sessionId: "active-session",
+          updatedAt: Date.now(),
+          queueMode: "followup",
+        },
+        opts: { queueModeOverride: "steer" },
+      }),
+    );
+
+    expect(queueSettings.resolveQueueSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ inlineMode: "steer" }),
+    );
+    expect(requireLastRunReplyAgentCall()).toMatchObject({
+      shouldSteer: true,
+      resolvedQueue: { mode: "steer" },
+    });
+  });
+
   it("keeps thread history context on follow-up turns", async () => {
     const result = await runPreparedReply(
       baseParams({
@@ -814,9 +896,7 @@ describe("runPreparedReply media-only handling", () => {
       baseParams({
         isNewSession: false,
         ctx: {
-          Body: "",
-          RawBody: "",
-          CommandBody: "",
+          ...createInboundBody(""),
           ThreadStarterBody: "starter message",
           ThreadHistoryBody: undefined,
           OriginatingChannel: "slack",
@@ -824,11 +904,10 @@ describe("runPreparedReply media-only handling", () => {
           ChatType: "group",
         },
         sessionCtx: {
-          Body: "",
-          BodyStripped: "",
+          ...createSessionBody(""),
           ThreadStarterBody: "starter message",
           ThreadHistoryBody: undefined,
-          MediaPath: "/tmp/input.png",
+          media: [{ path: "/tmp/input.png" }],
           Provider: "slack",
           ChatType: "group",
           OriginatingChannel: "slack",
@@ -848,9 +927,7 @@ describe("runPreparedReply media-only handling", () => {
       baseParams({
         isNewSession: false,
         ctx: {
-          Body: "",
-          RawBody: "",
-          CommandBody: "",
+          ...createInboundBody(""),
           ThreadStarterBody: "starter message",
           ThreadHistoryBody: "Earlier message in this thread",
           OriginatingChannel: "slack",
@@ -858,11 +935,10 @@ describe("runPreparedReply media-only handling", () => {
           ChatType: "group",
         },
         sessionCtx: {
-          Body: "",
-          BodyStripped: "",
+          ...createSessionBody(""),
           ThreadStarterBody: "starter message",
           ThreadHistoryBody: "Earlier message in this thread",
-          MediaPath: "/tmp/input.png",
+          media: [{ path: "/tmp/input.png" }],
           Provider: "slack",
           ChatType: "group",
           OriginatingChannel: "slack",
@@ -879,30 +955,22 @@ describe("runPreparedReply media-only handling", () => {
 
   it("does not duplicate thread starter text with a plain-text prelude", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
-      [
-        "Thread starter (untrusted, for context):",
-        "```json",
-        '{"body":"starter message"}',
-        "```",
-      ].join("\n"),
+      ["Thread starter:", "```json", '{"body":"starter message"}', "```"].join("\n"),
     );
 
     const result = await runPreparedReply(
       baseParams({
         ctx: {
-          Body: "",
-          RawBody: "",
-          CommandBody: "",
+          ...createInboundBody(""),
           ThreadStarterBody: "starter message",
           OriginatingChannel: "slack",
           OriginatingTo: "C123",
           ChatType: "group",
         },
         sessionCtx: {
-          Body: "",
-          BodyStripped: "",
+          ...createSessionBody(""),
           ThreadStarterBody: "starter message",
-          MediaPath: "/tmp/input.png",
+          media: [{ path: "/tmp/input.png" }],
           Provider: "slack",
           ChatType: "group",
           OriginatingChannel: "slack",
@@ -913,9 +981,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(result).toEqual({ text: "ok" });
 
     const call = requireRunReplyAgentCall();
-    expect(call.followupRun.currentInboundContext?.text).toContain(
-      "Thread starter (untrusted, for context):",
-    );
+    expect(call.followupRun.currentInboundContext?.text).toContain("Thread starter:");
     expect(call.followupRun.prompt).not.toContain("[Thread starter - for context]");
   });
 
@@ -923,13 +989,10 @@ describe("runPreparedReply media-only handling", () => {
     const result = await runPreparedReply(
       baseParams({
         ctx: {
-          Body: "",
-          RawBody: "",
-          CommandBody: "",
+          ...createInboundBody(""),
         },
         sessionCtx: {
-          Body: "",
-          BodyStripped: "",
+          ...createSessionBody(""),
           Provider: "slack",
         },
       }),
@@ -944,7 +1007,7 @@ describe("runPreparedReply media-only handling", () => {
   it("still skips metadata-only turns when inbound context adds chat_id", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
       [
-        "Conversation info (untrusted metadata):",
+        "Conversation info:",
         "```json",
         JSON.stringify({ chat_id: "paperclip:issue:abc" }, null, 2),
         "```",
@@ -954,13 +1017,10 @@ describe("runPreparedReply media-only handling", () => {
     const result = await runPreparedReply(
       baseParams({
         ctx: {
-          Body: "",
-          RawBody: "",
-          CommandBody: "",
+          ...createInboundBody(""),
         },
         sessionCtx: {
-          Body: "",
-          BodyStripped: "",
+          ...createSessionBody(""),
           Provider: "paperclip",
           OriginatingChannel: "paperclip",
           OriginatingTo: "paperclip:issue:abc",
@@ -978,7 +1038,7 @@ describe("runPreparedReply media-only handling", () => {
   it("allows pending inbound history to trigger a bare mention turn", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
       [
-        "Chat history since last reply (untrusted, for context):",
+        "Chat history since last reply:",
         "```json",
         JSON.stringify(
           [{ sender: "Alice", timestamp_ms: 1_700_000_000_000, body: "what changed?" }],
@@ -992,15 +1052,12 @@ describe("runPreparedReply media-only handling", () => {
     const result = await runPreparedReply(
       baseParams({
         ctx: {
-          Body: "",
-          RawBody: "",
-          CommandBody: "",
+          ...createInboundBody(""),
           ChatType: "group",
           WasMentioned: true,
         },
         sessionCtx: {
-          Body: "",
-          BodyStripped: "",
+          ...createSessionBody(""),
           Provider: "feishu",
           OriginatingChannel: "feishu",
           OriginatingTo: "chat-1",
@@ -1027,7 +1084,7 @@ describe("runPreparedReply media-only handling", () => {
   it("does not treat blank pending inbound history as user input", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
       [
-        "Chat history since last reply (untrusted, for context):",
+        "Chat history since last reply:",
         "```json",
         JSON.stringify([{ sender: "Alice", timestamp_ms: 1_700_000_000_000, body: "" }], null, 2),
         "```",
@@ -1037,15 +1094,12 @@ describe("runPreparedReply media-only handling", () => {
     const result = await runPreparedReply(
       baseParams({
         ctx: {
-          Body: "",
-          RawBody: "",
-          CommandBody: "",
+          ...createInboundBody(""),
           ChatType: "group",
           WasMentioned: true,
         },
         sessionCtx: {
-          Body: "",
-          BodyStripped: "",
+          ...createSessionBody(""),
           Provider: "feishu",
           OriginatingChannel: "feishu",
           OriginatingTo: "chat-1",
@@ -1065,7 +1119,7 @@ describe("runPreparedReply media-only handling", () => {
   it("allows webchat pure-image turns when image content is carried outside MediaPath", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
       [
-        "Conversation info (untrusted metadata):",
+        "Conversation info:",
         "```json",
         JSON.stringify({ provider: "webchat", chat_id: "webchat:local" }, null, 2),
         "```",
@@ -1075,13 +1129,10 @@ describe("runPreparedReply media-only handling", () => {
     const result = await runPreparedReply(
       baseParams({
         ctx: {
-          Body: "",
-          RawBody: "",
-          CommandBody: "",
+          ...createInboundBody(""),
         },
         sessionCtx: {
-          Body: "",
-          BodyStripped: "",
+          ...createSessionBody(""),
           Provider: "webchat",
           OriginatingChannel: "webchat",
           OriginatingTo: "webchat:local",
@@ -1105,7 +1156,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
   });
 
-  it("hydrates current image MediaPaths by extension when MediaTypes are missing", async () => {
+  it("hydrates current image facts by extension when content types are missing", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
     cleanupPaths.push(tmpDir);
     const imagePath = path.join(tmpDir, "inbound.png");
@@ -1120,24 +1171,19 @@ describe("runPreparedReply media-only handling", () => {
     const result = await runPreparedReply(
       baseParams({
         ctx: {
-          Body: "describe this",
-          RawBody: "describe this",
-          CommandBody: "describe this",
-          MediaPaths: [imagePath],
-          MediaWorkspaceDir: tmpDir,
+          ...createInboundBody("describe this"),
+          media: [{ path: imagePath, workspaceDir: tmpDir }],
           OriginatingChannel: "discord",
           OriginatingTo: "C123",
           ChatType: "group",
         },
         sessionCtx: {
-          Body: "describe this",
-          BodyStripped: "describe this",
+          ...createSessionBody("describe this"),
           Provider: "discord",
           OriginatingChannel: "discord",
           OriginatingTo: "C123",
           ChatType: "group",
-          MediaPaths: [imagePath],
-          MediaWorkspaceDir: tmpDir,
+          media: [{ path: imagePath, workspaceDir: tmpDir }],
         },
       }),
     );
@@ -1155,10 +1201,9 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
       role: "user",
       content: "describe this",
-      MediaPath: imagePath,
-      MediaPaths: [imagePath],
-      MediaType: "image/png",
-      MediaTypes: ["image/png"],
+      __openclaw: {
+        media: [expect.objectContaining({ path: imagePath, contentType: "image/png" })],
+      },
     });
     expect(call.followupRun.images?.[0]?.data).toHaveLength(92);
     expect(call.followupRun.imageOrder).toEqual(["inline"]);
@@ -1168,23 +1213,18 @@ describe("runPreparedReply media-only handling", () => {
     await runPreparedReply(
       baseParams({
         ctx: {
-          Body: "follow up without media",
-          RawBody: "follow up without media",
-          CommandBody: "follow up without media",
+          ...createInboundBody("follow up without media"),
           OriginatingChannel: "telegram",
           OriginatingTo: "42",
           ChatType: "direct",
         },
         sessionCtx: {
-          Body: "follow up without media",
-          BodyStripped: "follow up without media",
+          ...createSessionBody("follow up without media"),
           Provider: "telegram",
           OriginatingChannel: "telegram",
           OriginatingTo: "42",
           ChatType: "direct",
-          MediaPath: "/tmp/previous-image.png",
-          MediaPaths: ["/tmp/previous-image.png"],
-          MediaTypes: ["image/png"],
+          media: [{ path: "/tmp/previous-image.png", contentType: "image/png" }],
         },
       }),
     );
@@ -1206,16 +1246,13 @@ describe("runPreparedReply media-only handling", () => {
     await runPreparedReply(
       baseParams({
         ctx: {
-          Body: "hello",
-          RawBody: "hello",
-          CommandBody: "hello",
+          ...createInboundBody("hello"),
           OriginatingChannel: "telegram",
           OriginatingTo: "chat-1",
           ChatType: chatType,
         },
         sessionCtx: {
-          Body: "hello",
-          BodyStripped: "hello",
+          ...createSessionBody("hello"),
           Provider: "telegram",
           OriginatingChannel: "telegram",
           OriginatingTo: "chat-1",
@@ -1253,17 +1290,14 @@ describe("runPreparedReply media-only handling", () => {
     await runPreparedReply(
       baseParams({
         ctx: {
-          Body: "timestamped followup",
-          RawBody: "timestamped followup",
-          CommandBody: "timestamped followup",
+          ...createInboundBody("timestamped followup"),
           OriginatingChannel: "whatsapp",
           OriginatingTo: "+15550001",
           ChatType: "direct",
           Timestamp: 1_710_000_000,
         },
         sessionCtx: {
-          Body: "timestamped followup",
-          BodyStripped: "timestamped followup",
+          ...createSessionBody("timestamped followup"),
           Provider: "whatsapp",
           OriginatingChannel: "whatsapp",
           OriginatingTo: "+15550001",
@@ -1303,12 +1337,11 @@ describe("runPreparedReply media-only handling", () => {
     const result = await runPreparedReply(
       baseParams({
         ctx: {
-          Body: "describe this\n\n[Image]\nDescription:\na tiny dot image",
-          RawBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
-          CommandBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
-          MediaPaths: [imagePath, secondImagePath],
-          MediaTypes: ["image/png", "image/png"],
-          MediaWorkspaceDir: tmpDir,
+          ...createInboundBody("describe this\n\n[Image]\nDescription:\na tiny dot image"),
+          media: [
+            { path: imagePath, contentType: "image/png", workspaceDir: tmpDir },
+            { path: secondImagePath, contentType: "image/png", workspaceDir: tmpDir },
+          ],
           MediaUnderstanding: [
             {
               kind: "image.description",
@@ -1330,15 +1363,15 @@ describe("runPreparedReply media-only handling", () => {
           ChatType: "direct",
         },
         sessionCtx: {
-          Body: "describe this\n\n[Image]\nDescription:\na tiny dot image",
-          BodyStripped: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          ...createSessionBody("describe this\n\n[Image]\nDescription:\na tiny dot image"),
           Provider: "webchat",
           OriginatingChannel: "webchat",
           OriginatingTo: "webchat:local",
           ChatType: "direct",
-          MediaPaths: [imagePath, secondImagePath],
-          MediaTypes: ["image/png", "image/png"],
-          MediaWorkspaceDir: tmpDir,
+          media: [
+            { path: imagePath, contentType: "image/png", workspaceDir: tmpDir },
+            { path: secondImagePath, contentType: "image/png", workspaceDir: tmpDir },
+          ],
         },
       }),
     );
@@ -1349,9 +1382,16 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.images).toBeUndefined();
     expect(call.followupRun.imageOrder).toBeUndefined();
     expect(call.followupRun.prompt).toContain("a tiny dot image");
+    expect(
+      (
+        call.followupRun.userTurnTranscriptRecorder?.message as unknown as Record<string, unknown>
+      )?.["__openclaw"],
+    ).toMatchObject({
+      mediaImageLayout: { slots: [], suppressedFactIndexes: [0, 1] },
+    });
   });
 
-  it("rehydrates only current MediaPaths missing image understanding", async () => {
+  it("rehydrates only current facts missing image understanding", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
     cleanupPaths.push(tmpDir);
     const imagePath = path.join(tmpDir, "inbound.png");
@@ -1369,12 +1409,11 @@ describe("runPreparedReply media-only handling", () => {
     const result = await runPreparedReply(
       baseParams({
         ctx: {
-          Body: "describe this\n\n[Image]\nDescription:\na tiny dot image",
-          RawBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
-          CommandBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
-          MediaPaths: [imagePath, secondImagePath],
-          MediaTypes: ["image/png", "image/png"],
-          MediaWorkspaceDir: tmpDir,
+          ...createInboundBody("describe this\n\n[Image]\nDescription:\na tiny dot image"),
+          media: [
+            { path: imagePath, contentType: "image/png", workspaceDir: tmpDir },
+            { path: secondImagePath, contentType: "image/png", workspaceDir: tmpDir },
+          ],
           MediaUnderstanding: [
             {
               kind: "image.description",
@@ -1389,15 +1428,15 @@ describe("runPreparedReply media-only handling", () => {
           ChatType: "direct",
         },
         sessionCtx: {
-          Body: "describe this\n\n[Image]\nDescription:\na tiny dot image",
-          BodyStripped: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          ...createSessionBody("describe this\n\n[Image]\nDescription:\na tiny dot image"),
           Provider: "webchat",
           OriginatingChannel: "webchat",
           OriginatingTo: "webchat:local",
           ChatType: "direct",
-          MediaPaths: [imagePath, secondImagePath],
-          MediaTypes: ["image/png", "image/png"],
-          MediaWorkspaceDir: tmpDir,
+          media: [
+            { path: imagePath, contentType: "image/png", workspaceDir: tmpDir },
+            { path: secondImagePath, contentType: "image/png", workspaceDir: tmpDir },
+          ],
         },
       }),
     );
@@ -1412,6 +1451,16 @@ describe("runPreparedReply media-only handling", () => {
         mimeType: "image/png",
       },
     ]);
+    expect(
+      (
+        call.followupRun.userTurnTranscriptRecorder?.message as unknown as Record<string, unknown>
+      )?.["__openclaw"],
+    ).toMatchObject({
+      mediaImageLayout: {
+        slots: [{ kind: "inline", factIndex: 1 }],
+        suppressedFactIndexes: [0],
+      },
+    });
     expect(call.followupRun.imageOrder).toEqual(["inline"]);
     expect(call.followupRun.prompt).toContain("a tiny dot image");
   });
@@ -1420,9 +1469,7 @@ describe("runPreparedReply media-only handling", () => {
     await runPreparedReply(
       baseParams({
         ctx: {
-          Body: "/new",
-          RawBody: "/new",
-          CommandBody: "/new",
+          ...createInboundBody("/new"),
         },
         command: {
           ...(baseParams().command as Record<string, unknown>),
@@ -1443,13 +1490,10 @@ describe("runPreparedReply media-only handling", () => {
     const result = await runPreparedReply(
       baseParams({
         ctx: {
-          Body: "/reset soft re-read persona files",
-          RawBody: "/reset soft re-read persona files",
-          CommandBody: "/reset soft re-read persona files",
+          ...createInboundBody("/reset soft re-read persona files"),
         },
         sessionCtx: {
-          Body: "",
-          BodyStripped: "",
+          ...createSessionBody(""),
           Provider: "slack",
         },
         command: {
@@ -1777,22 +1821,13 @@ describe("runPreparedReply media-only handling", () => {
           baseParams({
             isNewSession: false,
             ctx: {
-              Body: "second top-level DM",
-              RawBody: "second top-level DM",
-              CommandBody: "second top-level DM",
-              Provider: "slack",
-              Surface: "slack",
-              ChatType: "direct",
+              ...createInboundTurn("second top-level DM", "slack", "direct"),
               OriginatingChannel: "slack",
               OriginatingTo: "user:U1",
               ...threadContext,
             },
             sessionCtx: {
-              Body: "second top-level DM",
-              BodyStripped: "second top-level DM",
-              Provider: "slack",
-              Surface: "slack",
-              ChatType: "direct",
+              ...createSessionTurn("second top-level DM", "slack", "direct"),
               OriginatingChannel: "slack",
               OriginatingTo: "user:U1",
               ...threadContext,
@@ -1839,22 +1874,13 @@ describe("runPreparedReply media-only handling", () => {
         baseParams({
           isNewSession: false,
           ctx: {
-            Body: "follow-up in another transport thread",
-            RawBody: "follow-up in another transport thread",
-            CommandBody: "follow-up in another transport thread",
-            Provider: "telegram",
-            Surface: "telegram",
-            ChatType: "direct",
+            ...createInboundTurn("follow-up in another transport thread", "telegram", "direct"),
             OriginatingChannel: "telegram",
             OriginatingTo: "user:1",
             MessageThreadId: 43,
           },
           sessionCtx: {
-            Body: "follow-up in another transport thread",
-            BodyStripped: "follow-up in another transport thread",
-            Provider: "telegram",
-            Surface: "telegram",
-            ChatType: "direct",
+            ...createSessionTurn("follow-up in another transport thread", "telegram", "direct"),
             OriginatingChannel: "telegram",
             OriginatingTo: "user:1",
             MessageThreadId: 43,
@@ -2216,19 +2242,10 @@ describe("runPreparedReply media-only handling", () => {
     await runPreparedReply(
       baseParams({
         ctx: {
-          Body: "what does this mean?",
-          RawBody: "what does this mean?",
-          CommandBody: "what does this mean?",
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "group",
+          ...createInboundTurn("what does this mean?", "telegram", "group"),
         },
         sessionCtx: {
-          Body: "what does this mean?",
-          BodyStripped: "what does this mean?",
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "group",
+          ...createSessionTurn("what does this mean?", "telegram", "group"),
           ReplyToSender: "Jake",
           ReplyToBody: "quoted status body",
           ReplyToIsQuote: true,
@@ -2255,7 +2272,7 @@ describe("runPreparedReply media-only handling", () => {
   it("runs bare mention replies when the reply target is the current-turn context", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
       [
-        "Reply target of current user message (untrusted, for context):",
+        "Reply target of current user message:",
         "```json",
         JSON.stringify({ sender_label: "Bot", body: "quoted status body" }, null, 2),
         "```",
@@ -2268,19 +2285,16 @@ describe("runPreparedReply media-only handling", () => {
           Body: "",
           RawBody: "@bot",
           CommandBody: "@bot",
-          Provider: "telegram",
-          Surface: "telegram",
+          ...createProviderSurface("telegram"),
           ChatType: "group",
           ReplyToBody: "quoted status body",
           ReplyToSender: "Bot",
         },
         sessionCtx: {
-          Body: "",
-          BodyStripped: "",
+          ...createSessionBody(""),
           RawBody: "@bot",
           CommandBody: "@bot",
-          Provider: "telegram",
-          Surface: "telegram",
+          ...createProviderSurface("telegram"),
           ChatType: "group",
           ReplyToBody: "quoted status body",
           ReplyToSender: "Bot",
@@ -2307,12 +2321,12 @@ describe("runPreparedReply media-only handling", () => {
   it("runs room events as contextual events instead of direct user prompts", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
       [
-        "Conversation info (untrusted metadata):",
+        "Conversation info:",
         "```json",
         JSON.stringify({ message_id: "35676", inbound_event_kind: "room_event" }, null, 2),
         "```",
         "",
-        "Conversation context (untrusted, chronological, selected for current message):",
+        "Conversation context (chronological, selected for current message):",
         "#35673 obviyus: @HamVerBot make a note",
         "#35674 Keśava: I wish I could enjoy 5.5",
         "#35675 obviyus ->#35674: Are you fr fr",
@@ -2323,22 +2337,22 @@ describe("runPreparedReply media-only handling", () => {
       baseParams({
         opts: { sourceReplyDeliveryMode: "message_tool_only" },
         ctx: {
-          Body: "No wtf",
-          RawBody: "No wtf",
-          CommandBody: "No wtf",
-          Provider: "telegram",
-          Surface: "telegram",
+          ...createInboundBody("No wtf"),
+          ...createProviderSurface("telegram"),
+          OriginatingChannel: "telegram",
+          OriginatingTo: "-100123",
           ChatType: "group",
         },
         sessionCtx: {
-          Body: "No wtf",
-          BodyStripped: "No wtf",
-          Provider: "telegram",
-          Surface: "telegram",
+          ...createSessionBody("No wtf"),
+          ...createProviderSurface("telegram"),
+          OriginatingChannel: "telegram",
+          OriginatingTo: "-100123",
           ChatType: "group",
           InboundEventKind: "room_event",
-          MediaType: "audio/ogg",
+          media: [{ contentType: "audio/ogg" }],
           MessageSid: "35676",
+          MessageSidFull: "  ",
           SenderName: "Keśava",
           AmbientTranscriptWatermarkKey: '["telegram","","-100123",""]',
           AmbientTranscriptMessageId: "35676",
@@ -2361,8 +2375,21 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.userTurnTranscriptRecorder?.message).toEqual({
       role: "user",
       content: "#35676 Keśava: No wtf",
+      idempotencyKey: buildChannelSourceTurnId({
+        provider: "telegram",
+        conversationId: "-100123",
+        messageId: "35676",
+      }),
       timestamp: expect.any(Number),
-      __openclaw: { senderIsOwner: false, senderName: "Keśava" },
+      __openclaw: {
+        senderIsOwner: false,
+        senderName: "Keśava",
+        transport: {
+          channel: "telegram",
+          conversationRef: expect.stringMatching(/^conv_[a-f0-9]{32}$/),
+          messageId: "35676",
+        },
+      },
     });
     call?.followupRun.userTurnTranscriptRecorder?.markRuntimePersisted({
       role: "user",
@@ -2413,19 +2440,10 @@ describe("runPreparedReply media-only handling", () => {
       baseParams({
         opts: { abortSignal: abortController.signal },
         ctx: {
-          Body: "ambient",
-          RawBody: "ambient",
-          CommandBody: "ambient",
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "group",
+          ...createInboundTurn("ambient", "telegram", "group"),
         },
         sessionCtx: {
-          Body: "ambient",
-          BodyStripped: "ambient",
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "group",
+          ...createSessionTurn("ambient", "telegram", "group"),
           InboundEventKind: "room_event",
           MessageSid: "992",
           SenderName: "Alice",
@@ -2471,19 +2489,10 @@ describe("runPreparedReply media-only handling", () => {
           queuedFollowupAbortSignal?: AbortSignal;
         },
         ctx: {
-          Body: "ambient",
-          RawBody: "ambient",
-          CommandBody: "ambient",
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "group",
+          ...createInboundTurn("ambient", "telegram", "group"),
         },
         sessionCtx: {
-          Body: "ambient",
-          BodyStripped: "ambient",
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "group",
+          ...createSessionTurn("ambient", "telegram", "group"),
           InboundEventKind: "room_event",
           MessageSid: "993",
           SenderName: "Alice",
@@ -2519,19 +2528,10 @@ describe("runPreparedReply media-only handling", () => {
       baseParams({
         opts: { abortSignal: abortController.signal },
         ctx: {
-          Body: "@bot keep this",
-          RawBody: "@bot keep this",
-          CommandBody: "@bot keep this",
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "group",
+          ...createInboundTurn("@bot keep this", "telegram", "group"),
         },
         sessionCtx: {
-          Body: "@bot keep this",
-          BodyStripped: "@bot keep this",
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "group",
+          ...createSessionTurn("@bot keep this", "telegram", "group"),
           InboundEventKind: "user_request",
           MessageSid: "994",
           SenderName: "Alice",
@@ -2565,19 +2565,10 @@ describe("runPreparedReply media-only handling", () => {
     await runPreparedReply(
       baseParams({
         ctx: {
-          Body: "ambient",
-          RawBody: "ambient",
-          CommandBody: "ambient",
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "group",
+          ...createInboundTurn("ambient", "telegram", "group"),
         },
         sessionCtx: {
-          Body: "ambient",
-          BodyStripped: "ambient",
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "group",
+          ...createSessionTurn("ambient", "telegram", "group"),
           InboundEventKind: "room_event",
           MessageSid: "993",
           SenderName: "Alice",
@@ -2601,19 +2592,10 @@ describe("runPreparedReply media-only handling", () => {
       baseParams({
         opts: { sourceReplyDeliveryMode: "automatic" },
         ctx: {
-          Body: "ambient",
-          RawBody: "ambient",
-          CommandBody: "ambient",
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "group",
+          ...createInboundTurn("ambient", "telegram", "group"),
         },
         sessionCtx: {
-          Body: "ambient",
-          BodyStripped: "ambient",
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "group",
+          ...createSessionTurn("ambient", "telegram", "group"),
           InboundEventKind: "room_event",
           MessageSid: "991",
           SenderName: "Alice",
@@ -2634,19 +2616,10 @@ describe("runPreparedReply media-only handling", () => {
       baseParams({
         opts: { sourceReplyDeliveryMode: "automatic" },
         ctx: {
-          Body: "webchat prompt",
-          RawBody: "webchat prompt",
-          CommandBody: "webchat prompt",
-          Provider: "webchat",
-          Surface: "webchat",
-          ChatType: "direct",
+          ...createInboundTurn("webchat prompt", "webchat", "direct"),
         },
         sessionCtx: {
-          Body: "webchat prompt",
-          BodyStripped: "webchat prompt",
-          Provider: "webchat",
-          Surface: "webchat",
-          ChatType: "direct",
+          ...createSessionTurn("webchat prompt", "webchat", "direct"),
           InboundEventKind: "room_event",
           MessageSid: "webchat-room-event",
           SenderName: "Operator",
@@ -2668,16 +2641,13 @@ describe("runPreparedReply media-only handling", () => {
       baseParams({
         opts: { sourceReplyDeliveryMode: "automatic" },
         ctx: {
-          Body: "ambient",
-          RawBody: "ambient",
-          CommandBody: "ambient",
+          ...createInboundBody("ambient"),
           Provider: "webchat",
           Surface: "telegram",
           ChatType: "group",
         },
         sessionCtx: {
-          Body: "ambient",
-          BodyStripped: "ambient",
+          ...createSessionBody("ambient"),
           Provider: "webchat",
           Surface: "telegram",
           ChatType: "group",
@@ -2701,19 +2671,10 @@ describe("runPreparedReply media-only handling", () => {
       baseParams({
         opts: { sourceReplyDeliveryMode: "message_tool_only" },
         ctx: {
-          Body: "webchat prompt",
-          RawBody: "webchat prompt",
-          CommandBody: "webchat prompt",
-          Provider: "webchat",
-          Surface: "webchat",
-          ChatType: "direct",
+          ...createInboundTurn("webchat prompt", "webchat", "direct"),
         },
         sessionCtx: {
-          Body: "webchat prompt",
-          BodyStripped: "webchat prompt",
-          Provider: "webchat",
-          Surface: "webchat",
-          ChatType: "direct",
+          ...createSessionTurn("webchat prompt", "webchat", "direct"),
           MessageSid: "webchat-direct",
           SenderName: "Operator",
         },
@@ -2739,15 +2700,13 @@ describe("runPreparedReply media-only handling", () => {
           Body: heartbeatPrompt,
           RawBody: heartbeatPrompt,
           CommandBody: heartbeatPrompt,
-          Provider: "heartbeat",
-          Surface: "heartbeat",
+          ...createProviderSurface("heartbeat"),
           ChatType: "direct",
         },
         sessionCtx: {
           Body: heartbeatPrompt,
           BodyStripped: heartbeatPrompt,
-          Provider: "heartbeat",
-          Surface: "heartbeat",
+          ...createProviderSurface("heartbeat"),
           ChatType: "direct",
         },
       }),
@@ -2758,6 +2717,9 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain(heartbeatPrompt);
     expect(call?.transcriptCommandBody).toBe("[OpenClaw heartbeat poll]");
     expect(call?.followupRun.transcriptPrompt).toBe("[OpenClaw heartbeat poll]");
+    expect(call?.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      provenance: { kind: "internal_system", sourceTool: "heartbeat" },
+    });
   });
 
   it("keeps active goal context out of background heartbeat turns", async () => {
@@ -2809,15 +2771,12 @@ describe("runPreparedReply media-only handling", () => {
         isNewSession: false,
         systemSent: true,
         ctx: {
-          Body: "scheduled wake",
-          RawBody: "scheduled wake",
-          CommandBody: "scheduled wake",
+          ...createInboundBody("scheduled wake"),
           Provider: "cron-event",
           SessionKey: "agent:main:discord:guild-1:channel-1",
         },
         sessionCtx: {
-          Body: "scheduled wake",
-          BodyStripped: "scheduled wake",
+          ...createSessionBody("scheduled wake"),
           Provider: "cron-event",
         },
         sessionEntry: {
@@ -2825,18 +2784,18 @@ describe("runPreparedReply media-only handling", () => {
           updatedAt: 1,
           systemSent: true,
           chatType: "channel",
-          channel: "discord",
           groupId: "guild-1",
           groupChannel: "#ops",
-          lastChannel: "discord",
-          lastTo: "channel-1",
-          origin: {
-            provider: "discord",
-            surface: "discord",
-            chatType: "channel",
-            to: "channel-1",
-          },
-        } as SessionEntry,
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "discord", to: "channel-1" },
+            origin: {
+              provider: "discord",
+              surface: "discord",
+              chatType: "channel",
+              to: "channel-1",
+            },
+          }),
+        },
       }),
     );
 
@@ -2889,15 +2848,15 @@ describe("runPreparedReply media-only handling", () => {
         updatedAt: 1,
         systemSent: true,
         chatType: "group",
-        channel: "telegram",
-        lastChannel: "telegram",
-        lastTo: "-100123",
-        origin: {
-          provider: "telegram",
-          surface: "telegram",
-          chatType: "group",
-          to: "-100123",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram", to: "-100123" },
+          origin: {
+            provider: "telegram",
+            surface: "telegram",
+            chatType: "group",
+            to: "-100123",
+          },
+        }),
       };
 
       await runPreparedReply(
@@ -2910,20 +2869,11 @@ describe("runPreparedReply media-only handling", () => {
           systemSent: true,
           sessionEntry,
           ctx: {
-            Body: "@bot check this",
-            RawBody: "@bot check this",
-            CommandBody: "@bot check this",
-            Provider: "telegram",
-            Surface: "telegram",
-            ChatType: "group",
+            ...createInboundTurn("@bot check this", "telegram", "group"),
             MessageSid: "msg-1",
           },
           sessionCtx: {
-            Body: "@bot check this",
-            BodyStripped: "@bot check this",
-            Provider: "telegram",
-            Surface: "telegram",
-            ChatType: "group",
+            ...createSessionTurn("@bot check this", "telegram", "group"),
             InboundEventKind: "room_event",
             MessageSid: "msg-1",
           },
@@ -2939,20 +2889,11 @@ describe("runPreparedReply media-only handling", () => {
           systemSent: true,
           sessionEntry,
           ctx: {
-            Body: "@bot check this",
-            RawBody: "@bot check this",
-            CommandBody: "@bot check this",
-            Provider: "telegram",
-            Surface: "telegram",
-            ChatType: "group",
+            ...createInboundTurn("@bot check this", "telegram", "group"),
             MessageSid: "msg-2",
           },
           sessionCtx: {
-            Body: "@bot check this",
-            BodyStripped: "@bot check this",
-            Provider: "telegram",
-            Surface: "telegram",
-            ChatType: "group",
+            ...createSessionTurn("@bot check this", "telegram", "group"),
             MessageSid: "msg-2",
           },
         }),
@@ -2968,15 +2909,12 @@ describe("runPreparedReply media-only handling", () => {
           systemSent: true,
           sessionEntry,
           ctx: {
-            Body: "scheduled wake",
-            RawBody: "scheduled wake",
-            CommandBody: "scheduled wake",
+            ...createInboundBody("scheduled wake"),
             Provider: "cron-event",
             SessionKey: "agent:main:telegram:-100123",
           },
           sessionCtx: {
-            Body: "scheduled wake",
-            BodyStripped: "scheduled wake",
+            ...createSessionBody("scheduled wake"),
             Provider: "cron-event",
           },
         }),
@@ -3021,19 +2959,10 @@ describe("runPreparedReply media-only handling", () => {
       isNewSession: false,
       systemSent: true,
       ctx: {
-        Body: "@bot check this",
-        RawBody: "@bot check this",
-        CommandBody: "@bot check this",
-        Provider: "telegram",
-        Surface: "telegram",
-        ChatType: "group",
+        ...createInboundTurn("@bot check this", "telegram", "group"),
       },
       sessionCtx: {
-        Body: "@bot check this",
-        BodyStripped: "@bot check this",
-        Provider: "telegram",
-        Surface: "telegram",
-        ChatType: "group",
+        ...createSessionTurn("@bot check this", "telegram", "group"),
         InboundEventKind: "room_event" as const,
       },
     };
@@ -3074,21 +3003,12 @@ describe("runPreparedReply media-only handling", () => {
         isNewSession: false,
         systemSent: true,
         ctx: {
-          Body: "@SirPinchALotBot check this",
-          RawBody: "@SirPinchALotBot check this",
-          CommandBody: "@SirPinchALotBot check this",
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "group",
+          ...createInboundTurn("@SirPinchALotBot check this", "telegram", "group"),
           BotUsername: "SirPinchALotBot",
           ExplicitlyMentionedBot: true,
         },
         sessionCtx: {
-          Body: "@SirPinchALotBot check this",
-          BodyStripped: "@SirPinchALotBot check this",
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "group",
+          ...createSessionTurn("@SirPinchALotBot check this", "telegram", "group"),
           BotUsername: "SirPinchALotBot",
           ExplicitlyMentionedBot: true,
         },
@@ -3117,15 +3037,15 @@ describe("runPreparedReply media-only handling", () => {
       updatedAt: 1,
       systemSent: true,
       chatType: "group",
-      channel: "telegram",
-      lastChannel: "telegram",
-      lastTo: "-100123",
-      origin: {
-        provider: "telegram",
-        surface: "telegram",
-        chatType: "group",
-        to: "-100123",
-      },
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "-100123" },
+        origin: {
+          provider: "telegram",
+          surface: "telegram",
+          chatType: "group",
+          to: "-100123",
+        },
+      }),
     };
 
     await runPreparedReply(
@@ -3138,19 +3058,10 @@ describe("runPreparedReply media-only handling", () => {
         systemSent: false,
         sessionEntry,
         ctx: {
-          Body: "@bot first",
-          RawBody: "@bot first",
-          CommandBody: "@bot first",
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "group",
+          ...createInboundTurn("@bot first", "telegram", "group"),
         },
         sessionCtx: {
-          Body: "@bot first",
-          BodyStripped: "@bot first",
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "group",
+          ...createSessionTurn("@bot first", "telegram", "group"),
         },
       }),
     );
@@ -3164,19 +3075,10 @@ describe("runPreparedReply media-only handling", () => {
         systemSent: true,
         sessionEntry,
         ctx: {
-          Body: "second",
-          RawBody: "second",
-          CommandBody: "second",
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "group",
+          ...createInboundTurn("second", "telegram", "group"),
         },
         sessionCtx: {
-          Body: "second",
-          BodyStripped: "second",
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "group",
+          ...createSessionTurn("second", "telegram", "group"),
         },
       }),
     );
@@ -3197,12 +3099,7 @@ describe("runPreparedReply media-only handling", () => {
     "keeps inbound sender context in reply-targeted bare %s model prompt while hiding startup instructions from transcript prompt",
     async (commandText, startupAction) => {
       vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
-        [
-          "Conversation info (untrusted metadata):",
-          "Sender (untrusted metadata):",
-          "sender_id",
-          "telegram-user-1",
-        ].join("\n"),
+        ["Conversation info:", "Sender:", "sender_id", "telegram-user-1"].join("\n"),
       );
 
       await runPreparedReply(
@@ -3211,18 +3108,13 @@ describe("runPreparedReply media-only handling", () => {
             Body: commandText,
             RawBody: commandText,
             CommandBody: commandText,
-            Provider: "webchat",
-            Surface: "webchat",
+            ...createProviderSurface("webchat"),
             ChatType: "direct",
             ReplyToBody: "quoted reset target",
             ReplyToSender: "Ada Lovelace",
           },
           sessionCtx: {
-            Body: "",
-            BodyStripped: "",
-            Provider: "webchat",
-            Surface: "webchat",
-            ChatType: "direct",
+            ...createSessionTurn("", "webchat", "direct"),
             SenderId: "telegram-user-1",
             SenderName: "Ada Lovelace",
             ReplyToBody: "quoted reset target",
@@ -3243,14 +3135,14 @@ describe("runPreparedReply media-only handling", () => {
 
       const call = requireLastRunReplyAgentCall();
       expect(call?.commandBody).toContain("A new session was started via /new or /reset.");
-      expect(call?.commandBody).toContain("Conversation info (untrusted metadata):");
-      expect(call?.commandBody).toContain("Sender (untrusted metadata):");
+      expect(call?.commandBody).toContain("Conversation info:");
+      expect(call?.commandBody).toContain("Sender:");
       expect(call?.commandBody).toContain("telegram-user-1");
       expect(call?.followupRun.prompt).toContain("A new session was started via /new or /reset.");
-      expect(call?.followupRun.prompt).toContain("Sender (untrusted metadata):");
+      expect(call?.followupRun.prompt).toContain("Sender:");
       expect(call?.transcriptCommandBody).toBe(`[OpenClaw session ${startupAction}]`);
       expect(call?.followupRun.transcriptPrompt).toBe(`[OpenClaw session ${startupAction}]`);
-      expect(call?.followupRun.transcriptPrompt).not.toContain("Sender (untrusted metadata):");
+      expect(call?.followupRun.transcriptPrompt).not.toContain("Sender:");
     },
   );
 
@@ -3258,19 +3150,10 @@ describe("runPreparedReply media-only handling", () => {
     await runPreparedReply(
       baseParams({
         ctx: {
-          Body: "/reset summarize my workspace",
-          RawBody: "/reset summarize my workspace",
-          CommandBody: "/reset summarize my workspace",
-          Provider: "webchat",
-          Surface: "webchat",
-          ChatType: "direct",
+          ...createInboundTurn("/reset summarize my workspace", "webchat", "direct"),
         },
         sessionCtx: {
-          Body: "",
-          BodyStripped: "",
-          Provider: "webchat",
-          Surface: "webchat",
-          ChatType: "direct",
+          ...createSessionTurn("", "webchat", "direct"),
         },
         command: {
           surface: "webchat",
@@ -3298,19 +3181,16 @@ describe("runPreparedReply media-only handling", () => {
     await runPreparedReply(
       baseParams({
         ctx: {
-          Body: "",
-          RawBody: "",
-          CommandBody: "",
+          ...createInboundBody(""),
           ThreadHistoryBody: "Earlier message in this thread",
           OriginatingChannel: "webchat",
           OriginatingTo: "session:abc",
           ChatType: "group",
         },
         sessionCtx: {
-          Body: "",
-          BodyStripped: "",
+          ...createSessionBody(""),
           ThreadHistoryBody: "Earlier message in this thread",
-          MediaPath: "/tmp/input.png",
+          media: [{ path: "/tmp/input.png" }],
           Provider: "telegram",
           ChatType: "group",
           OriginatingChannel: "telegram",
@@ -3321,15 +3201,21 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = requireRunReplyAgentCall();
     expect(call?.followupRun.run.messageProvider).toBe("webchat");
+    expect(call?.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      __openclaw: {
+        transport: {
+          channel: "telegram",
+          conversationRef: expect.stringMatching(/^conv_[a-f0-9]{32}$/u),
+        },
+      },
+    });
   });
 
   it("prefers Provider over Surface when origin channel is missing", async () => {
     await runPreparedReply(
       baseParams({
         ctx: {
-          Body: "",
-          RawBody: "",
-          CommandBody: "",
+          ...createInboundBody(""),
           ThreadHistoryBody: "Earlier message in this thread",
           OriginatingChannel: undefined,
           OriginatingTo: undefined,
@@ -3338,10 +3224,9 @@ describe("runPreparedReply media-only handling", () => {
           ChatType: "group",
         },
         sessionCtx: {
-          Body: "",
-          BodyStripped: "",
+          ...createSessionBody(""),
           ThreadHistoryBody: "Earlier message in this thread",
-          MediaPath: "/tmp/input.png",
+          media: [{ path: "/tmp/input.png" }],
           Provider: "webchat",
           ChatType: "group",
           OriginatingChannel: undefined,
@@ -3358,9 +3243,7 @@ describe("runPreparedReply media-only handling", () => {
     await runPreparedReply(
       baseParams({
         ctx: {
-          Body: "",
-          RawBody: "",
-          CommandBody: "",
+          ...createInboundBody(""),
           ThreadHistoryBody: "Earlier message in this thread",
           OriginatingChannel: "discord",
           OriginatingTo: "channel:24680",
@@ -3368,10 +3251,9 @@ describe("runPreparedReply media-only handling", () => {
           AccountId: undefined,
         },
         sessionCtx: {
-          Body: "",
-          BodyStripped: "",
+          ...createSessionBody(""),
           ThreadHistoryBody: "Earlier message in this thread",
-          MediaPath: "/tmp/input.png",
+          media: [{ path: "/tmp/input.png" }],
           Provider: "discord",
           ChatType: "group",
           OriginatingChannel: "discord",
@@ -3396,9 +3278,7 @@ describe("runPreparedReply media-only handling", () => {
           agents: { defaults: {} },
         },
         ctx: {
-          Body: "",
-          RawBody: "",
-          CommandBody: "",
+          ...createInboundBody(""),
           ThreadHistoryBody: "Earlier message in this thread",
           Provider: "slack",
           OriginatingChannel: undefined,
@@ -3407,10 +3287,9 @@ describe("runPreparedReply media-only handling", () => {
           ReplyToMode: "off",
         },
         sessionCtx: {
-          Body: "",
-          BodyStripped: "",
+          ...createSessionBody(""),
           ThreadHistoryBody: "Earlier message in this thread",
-          MediaPath: "/tmp/input.png",
+          media: [{ path: "/tmp/input.png" }],
           Provider: "slack",
           ChatType: "group",
           OriginatingChannel: "slack",
@@ -3441,17 +3320,14 @@ describe("runPreparedReply media-only handling", () => {
         },
         opts: { isHeartbeat: true },
         ctx: {
-          Body: "scheduled wake",
-          RawBody: "scheduled wake",
-          CommandBody: "scheduled wake",
+          ...createInboundBody("scheduled wake"),
           Provider: "cron-event",
           SessionKey: "agent:main:slack:direct:U1",
           OriginatingChannel: "slack",
           OriginatingTo: "user:U1",
         },
         sessionCtx: {
-          Body: "scheduled wake",
-          BodyStripped: "scheduled wake",
+          ...createSessionBody("scheduled wake"),
           Provider: "cron-event",
           OriginatingChannel: "slack",
           OriginatingTo: "user:U1",
@@ -3460,23 +3336,21 @@ describe("runPreparedReply media-only handling", () => {
           sessionId: "session-1",
           updatedAt: 1,
           chatType: "direct",
-          channel: "matrix",
-          lastChannel: "slack",
-          lastTo: "user:U1",
-          lastAccountId: "work",
-          deliveryContext: {
-            channel: "slack",
-            to: "user:U1",
-            accountId: "work",
-          },
-          origin: {
-            provider: "matrix",
-            surface: "matrix",
-            chatType: "direct",
-            to: "room:origin",
-            accountId: "origin",
-          },
-        } as SessionEntry,
+          delivery: normalizeSessionDeliveryState({
+            context: {
+              channel: "slack",
+              to: "user:U1",
+              accountId: "work",
+            },
+            origin: {
+              provider: "matrix",
+              surface: "matrix",
+              chatType: "direct",
+              to: "room:origin",
+              accountId: "origin",
+            },
+          }),
+        },
       }),
     );
 
@@ -3495,9 +3369,7 @@ describe("runPreparedReply media-only handling", () => {
     await runPreparedReply(
       baseParams({
         ctx: {
-          Body: "",
-          RawBody: "",
-          CommandBody: "",
+          ...createInboundBody(""),
           ThreadHistoryBody: "Earlier message in this thread",
           OriginatingChannel: "slack",
           OriginatingTo: "user:U1",
@@ -3506,10 +3378,9 @@ describe("runPreparedReply media-only handling", () => {
           TransportThreadId: "650.000",
         },
         sessionCtx: {
-          Body: "",
-          BodyStripped: "",
+          ...createSessionBody(""),
           ThreadHistoryBody: "Earlier message in this thread",
-          MediaPath: "/tmp/input.png",
+          media: [{ path: "/tmp/input.png" }],
           Provider: "slack",
           ChatType: "direct",
           OriginatingChannel: "slack",
@@ -3588,9 +3459,9 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.senderIsOwner).toBe(true);
   });
 
-  it("does not downgrade sender ownership when event text contains the untrusted marker", async () => {
+  it("does not downgrade sender ownership when event text contains a system marker", async () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
-      "System: [t] Relay text mentions System (untrusted): but event is trusted.",
+      "System: [t] Relay text mentions System: but event is trusted.",
     );
     const params = ownerParams();
 
@@ -3655,8 +3526,7 @@ describe("runPreparedReply media-only handling", () => {
       baseParams({
         ctx: { Body: "low steer this conversation", RawBody: "low steer this conversation" },
         sessionCtx: {
-          Body: "low steer this conversation",
-          BodyStripped: "low steer this conversation",
+          ...createSessionBody("low steer this conversation"),
         },
         resolvedThinkLevel: undefined,
       }),

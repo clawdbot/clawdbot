@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import type { Command } from "commander";
 import { ensureExtensionRelayToken } from "../browser/extension-relay/relay-auth.js";
 import { isLoopbackHost } from "../gateway/net.js";
+import { resolveGatewayPort } from "../sdk-config.js";
+import { resolveLocalPairingGatewayUrl } from "./browser-cli-extension-pairing.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
 import {
   danger,
@@ -63,17 +65,17 @@ function buildRemoteGatewayRelayUrl(raw: string): string {
   return url.toString();
 }
 
-function buildPairingString(gatewayUrl?: string): {
+async function buildPairingString(gatewayUrl?: string): Promise<{
   pairing: string;
   relayPort: number;
   remote: boolean;
-} {
+}> {
   const cfg = getRuntimeConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   // Create the host-local relay secret if this host has not used the extension
   // driver yet, so pairing works on a fresh gateway or node host before the
   // relay has started. Pairing must run on the machine that hosts the browser.
-  const token = ensureExtensionRelayToken();
+  const token = await ensureExtensionRelayToken();
   const profile = firstExtensionProfile();
   const relayPort = profile?.relayPort ?? resolved.extensionRelayDefaultPort;
 
@@ -82,14 +84,24 @@ function buildPairingString(gatewayUrl?: string): {
     // Remote: the extension connects straight to this gateway over wss:// — no
     // node host on the browser machine. The gateway route self-validates the
     // same host-local secret.
+    const relayUrl = new URL(buildRemoteGatewayRelayUrl(gateway));
+    relayUrl.searchParams.set("gateway", gateway);
     return {
-      pairing: `${buildRemoteGatewayRelayUrl(gateway)}#${token}`,
+      pairing: `${relayUrl.toString()}#${token}`,
       relayPort,
       remote: true,
     };
   }
+  const configuredRemote = cfg.gateway?.mode === "remote" ? cfg.gateway.remote?.url?.trim() : "";
+  const directGatewayUrl = resolveLocalPairingGatewayUrl({
+    configuredRemote,
+    gatewayPort: resolveGatewayPort(cfg),
+    tlsEnabled: cfg.gateway?.tls?.enabled === true,
+  });
+  const relayUrl = new URL(`ws://127.0.0.1:${relayPort}/extension`);
+  relayUrl.searchParams.set("gateway", directGatewayUrl);
   return {
-    pairing: `ws://127.0.0.1:${relayPort}/extension#${token}`,
+    pairing: `${relayUrl.toString()}#${token}`,
     relayPort,
     remote: false,
   };
@@ -124,15 +136,13 @@ export function registerBrowserExtensionCommands(
       await runCommandWithRuntime(
         defaultRuntime,
         async () => {
-          const result = buildPairingString(opts.gatewayUrl);
+          const result = await buildPairingString(opts.gatewayUrl);
           if (opts.json === true) {
-            defaultRuntime.log(
-              JSON.stringify({
-                pairingString: result.pairing,
-                relayPort: result.relayPort,
-                remote: result.remote,
-              }),
-            );
+            defaultRuntime.writeJson({
+              pairingString: result.pairing,
+              relayPort: result.relayPort,
+              remote: result.remote,
+            });
             return;
           }
           const setupLine = result.remote

@@ -13,6 +13,30 @@ type SkillStatus = ReturnType<typeof buildWorkspaceSkillStatus>["skills"][number
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("buildWorkspaceSkillStatus", () => {
+  it("reports blank env requirements as missing", () => {
+    const envName = "OPENCLAW_TEST_BLANK_SKILL_STATUS";
+    const original = process.env[envName];
+    process.env[envName] = "   ";
+    try {
+      const report = buildWorkspaceSkillStatus("/tmp/ws", {
+        entries: [
+          createEntry("blank-env", {
+            metadata: { primaryEnv: envName, requires: { env: [envName] } },
+          }),
+        ],
+      });
+
+      expect(report.skills[0]?.eligible).toBe(false);
+      expect(report.skills[0]?.missing.env).toEqual([envName]);
+    } finally {
+      if (original === undefined) {
+        delete process.env[envName];
+      } else {
+        process.env[envName] = original;
+      }
+    }
+  });
+
   it("surfaces valid ClawHub linkage and local Skill Card metadata", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-status-"));
     try {

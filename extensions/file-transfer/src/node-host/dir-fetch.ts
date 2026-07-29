@@ -95,11 +95,22 @@ async function listTarEntries(tarBuffer: Buffer): Promise<string[] | null> {
   if (!result || result.termination !== "exit" || result.code !== 0) {
     return null;
   }
-  return result.stdout
-    .toString("utf8")
-    .split("\n")
-    .map((line) => line.replace(/\\/gu, "/").replace(/^\.\//u, "").replace(/\/$/u, ""))
-    .filter((line) => line.length > 0);
+  const entries: string[] = [];
+  const output = result.stdout.toString("utf8");
+  let start = 0;
+  while (start <= output.length) {
+    const end = output.indexOf("\n", start);
+    const rawLine = output.slice(start, end === -1 ? output.length : end);
+    const line = rawLine.replace(/\\/gu, "/").replace(/^\.\//u, "").replace(/\/$/u, "");
+    if (line.length > 0) {
+      entries.push(line);
+    }
+    if (end === -1) {
+      break;
+    }
+    start = end + 1;
+  }
+  return entries.toSorted((left, right) => left.localeCompare(right));
 }
 
 type TarArchiveResult = Buffer | "TOO_LARGE" | "TIMEOUT" | "ERROR";
@@ -134,8 +145,7 @@ async function listTreeEntries(root: string, maxEntries: number): Promise<string
   const rootHandle = await fsRoot(root);
   async function visit(relativeDir: string): Promise<boolean> {
     const entries = await rootHandle.list(relativeDir, { withFileTypes: true });
-    entries.sort((left, right) => left.name.localeCompare(right.name));
-    for (const entry of entries) {
+    for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
       const rel = path.posix.join(relativeDir === "." ? "" : relativeDir, entry.name);
       results.push(rel);
       if (results.length > maxEntries) {
@@ -180,26 +190,9 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   }
 
   if (preflightOnly) {
+    let entries: string[] | "TOO_MANY";
     try {
-      const entries = await listTreeEntries(canonical, 5000);
-      if (entries === "TOO_MANY") {
-        return {
-          ok: false,
-          code: "TREE_TOO_LARGE",
-          message: "directory tree exceeds 5000 entries during preflight",
-          canonicalPath: canonical,
-        };
-      }
-      return {
-        ok: true,
-        path: canonical,
-        tarBase64: "",
-        tarBytes: 0,
-        sha256: "",
-        fileCount: entries.length,
-        entries,
-        preflightOnly: true,
-      };
+      entries = await listTreeEntries(canonical, 5000);
     } catch (err) {
       const code = classifyFsError(err);
       return {
@@ -209,6 +202,54 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
         canonicalPath: canonical,
       };
     }
+    if (entries === "TOO_MANY") {
+      return {
+        ok: false,
+        code: "TREE_TOO_LARGE",
+        message: "directory tree exceeds 5000 entries during preflight",
+        canonicalPath: canonical,
+      };
+    }
+
+    const tarBuffer = await createTarArchive(canonical, maxBytes);
+    if (tarBuffer === "TOO_LARGE") {
+      return {
+        ok: false,
+        code: "TREE_TOO_LARGE",
+        message: `tarball exceeded ${maxBytes} byte limit during preflight`,
+        canonicalPath: canonical,
+      };
+    }
+    if (tarBuffer === "TIMEOUT") {
+      return {
+        ok: false,
+        code: "READ_ERROR",
+        message: "tar command exceeded 60s wall-clock timeout (slow filesystem or symlink loop?)",
+        canonicalPath: canonical,
+      };
+    }
+    if (tarBuffer === "ERROR") {
+      const currentDirectory = await statRequiredDirectory(canonical, classifyFsError);
+      if (!currentDirectory.ok) {
+        return currentDirectory;
+      }
+      return {
+        ok: false,
+        code: "READ_ERROR",
+        message: "tar command failed",
+        canonicalPath: canonical,
+      };
+    }
+    return {
+      ok: true,
+      path: canonical,
+      tarBase64: "",
+      tarBytes: 0,
+      sha256: "",
+      fileCount: entries.length,
+      entries,
+      preflightOnly: true,
+    };
   }
 
   // Preflight size check using du
@@ -285,9 +326,3 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
     entries,
   };
 }
-
-export const testing = {
-  createTarArchive,
-  listTarEntries,
-  preflightDu,
-};

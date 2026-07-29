@@ -6,21 +6,26 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "../../agents/internal-runtime-context.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
   getTaskById,
+  listTaskRecordPage,
   markTaskTerminalById,
   recordTaskProgressByRunId,
 } from "../../tasks/runtime-internal.js";
+import { reloadTaskRegistryFromStore } from "../../tasks/task-registry.js";
+import { saveTaskRegistryStateToSqlite } from "../../tasks/task-registry.store.sqlite.js";
+import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import {
-  reloadTaskRegistryFromStore,
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryForTests,
   setTaskRegistryControlRuntimeForTests,
-} from "../../tasks/task-registry.js";
-import { saveTaskRegistryStateToSqlite } from "../../tasks/task-registry.store.sqlite.js";
-import type { TaskRecord } from "../../tasks/task-registry.types.js";
+} from "../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { tasksHandlers } from "./tasks.js";
 import type { RespondFn } from "./types.js";
@@ -159,7 +164,7 @@ describe("tasks gateway handlers", () => {
     const { calls, payload } = await runTaskHandler("tasks.list", {
       status: "running",
       agentId: "main",
-      sessionKey: "agent:main:main",
+      sessionKey: "main",
     });
 
     expect(calls[0]?.[0]).toBe(true);
@@ -175,6 +180,13 @@ describe("tasks gateway handlers", () => {
     expect(listedTask?.sessionKey).toBe("agent:main:main");
     expect(listedTask?.childSessionKey).toBe("agent:worker:subagent:child");
     expect(listedTask?.runId).toBe("run-running");
+
+    const canonical = await runTaskHandler("tasks.list", {
+      status: "running",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    });
+    expect(canonical.payload?.tasks?.map((task) => task.taskId)).toEqual([running.taskId]);
   });
 
   it("orders the ledger by last activity, not creation time", async () => {
@@ -248,6 +260,83 @@ describe("tasks gateway handlers", () => {
     expect(page3.payload?.nextCursor).toBeUndefined();
   });
 
+  it("uses task id as the stable activity-order tie break", async () => {
+    const sharedActivityAt = 5_000;
+    const laterId = createSnapshotTask({
+      taskId: "task-z",
+      runId: "run-z",
+      lastEventAt: sharedActivityAt,
+    });
+    const earlierId = createSnapshotTask({
+      taskId: "task-a",
+      runId: "run-a",
+      lastEventAt: sharedActivityAt,
+    });
+    saveTaskRegistryStateToSqlite({
+      tasks: new Map([
+        [laterId.taskId, laterId],
+        [earlierId.taskId, earlierId],
+      ]),
+      deliveryStates: new Map(),
+    });
+    reloadTaskRegistryFromStore();
+
+    const { payload } = await runTaskHandler("tasks.list", {});
+
+    expect(payload?.tasks?.map((task) => task.taskId)).toEqual(["task-a", "task-z"]);
+  });
+
+  it("clones only the requested task page", async () => {
+    for (let index = 0; index < 6; index++) {
+      createTaskRecord({
+        runtime: "cli",
+        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        task: `Task ${index}`,
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        detail: { index },
+      });
+    }
+    const cloneSpy = vi.spyOn(globalThis, "structuredClone");
+    try {
+      const { payload } = await runTaskHandler("tasks.list", { limit: 2 });
+
+      expect(payload?.tasks).toHaveLength(2);
+      expect(payload?.nextCursor).toBe("2");
+      expect(cloneSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      cloneSpy.mockRestore();
+    }
+  });
+
+  it("returns page records isolated from the registry", () => {
+    const created = createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      task: "Isolated task",
+      status: "running",
+      deliveryStatus: "pending",
+      detail: { nested: { value: "original" } },
+    });
+
+    const page = listTaskRecordPage({ offset: 0, limit: 1 });
+    const detail = page.tasks[0]?.detail as { nested: { value: string } } | undefined;
+    expect(detail).toBeDefined();
+    if (detail) {
+      detail.nested.value = "mutated";
+    }
+
+    const current = expectDefined(
+      getTaskById(created.taskId),
+      "page mutation must not change the registry record",
+    );
+    expect((current.detail as { nested: { value: string } }).nested.value).toBe("original");
+  });
+
   it("treats explicit task agentId as authoritative over the session-key fallback", async () => {
     // Cross-agent subagent task: the registry derives agentId=worker from the
     // child session key, while owner/requester keys belong to main. tasks.list
@@ -289,6 +378,51 @@ describe("tasks gateway handlers", () => {
 
     expect(payload?.task?.status).toBe("completed");
     expect(payload?.task?.title).toBe("Done task");
+    expect(payload?.task?.prompt).toBe("Done task");
+  });
+
+  it("keeps bounded prompts lookup-only", async () => {
+    const task = createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      task: `Inspect the task prompt ${"x".repeat(5_000)}`,
+      status: "running",
+      deliveryStatus: "pending",
+    });
+
+    const listed = await runTaskHandler("tasks.list", {});
+    expect(listed.payload?.tasks?.[0]?.prompt).toBeUndefined();
+
+    const { payload } = await getTaskPayload(task.taskId);
+    expect(payload?.task?.prompt).toHaveLength(4_000);
+    expect(payload?.task?.prompt).toMatch(/^Inspect the task prompt/);
+    expect(payload?.task?.prompt).toMatch(/…$/);
+  });
+
+  it("preserves prompt layout while removing internal runtime context", async () => {
+    const visiblePrompt = [
+      "Review this workflow:",
+      "",
+      "  ```yaml",
+      "  steps:",
+      "    - test",
+      "  ```",
+    ].join("\n");
+    const task = createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      task: `${visiblePrompt}\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nhidden\n${INTERNAL_RUNTIME_CONTEXT_END}`,
+      status: "running",
+      deliveryStatus: "pending",
+    });
+
+    const { payload } = await getTaskPayload(task.taskId);
+
+    expect(payload?.task?.prompt).toBe(visiblePrompt);
   });
 
   it("sanitizes task text before exposing SDK summaries", async () => {
@@ -323,6 +457,7 @@ describe("tasks gateway handlers", () => {
     expect(payload?.task?.title).toBe("Compile artifact");
     expect(payload?.task?.terminalSummary).toBe("Failed after build");
     expect(payload?.task?.error).toBe("Tool failed");
+    expect(payload?.task?.prompt).toBe("Compile artifact");
     expect(JSON.stringify(calls[0]?.[1])).not.toContain("OpenClaw runtime context");
   });
 

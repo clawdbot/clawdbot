@@ -99,6 +99,10 @@ export type SessionMcpRuntime = {
    */
   isRequesterScopedServer?: (serverName: string) => boolean;
   mcpAppsEnabled?: boolean;
+  /** Latest non-persisted App context, owned by the exact live view that supplied it. */
+  pendingMcpAppModelContext?: { owner: object; text: string; leased?: boolean };
+  /** Blocks a deferred-retirement view from restoring context across reset. */
+  mcpAppModelContextRevoked?: boolean;
   createdAt: number;
   lastUsedAt: number;
   activeLeases?: number;
@@ -164,8 +168,9 @@ export type SessionMcpRuntimeManager = {
     sessionKey?: string;
   }) => SessionMcpRuntime | undefined;
   disposeSession: (sessionId: string) => Promise<void>;
-  deferRetirement: (sessionId: string) => boolean;
-  completeDeferredRetirement: (sessionId: string, runtime: SessionMcpRuntime) => Promise<boolean>;
+  /** Required retirement stays armed when a stopping run creates or reuses a runtime. */
+  deferRetirement: (sessionId: string, opts?: { retainAcrossReuse?: boolean }) => boolean;
+  completeDeferredRetirement: (sessionId: string, runtime?: SessionMcpRuntime) => Promise<boolean>;
   disposeAll: () => Promise<void>;
   sweepIdleRuntimes: () => Promise<number>;
   listSessionIds: () => string[];

@@ -12,7 +12,7 @@ import {
   makePersistedCall,
   writeLegacyCallsJsonl,
 } from "../manager.test-harness.js";
-import { clearVoiceCallStateRuntime, setVoiceCallStateRuntime } from "../runtime-state.js";
+import { setVoiceCallStateRuntime } from "../runtime-state.js";
 import { CallRecordSchema } from "../types.js";
 import {
   findCallMatchesInStore,
@@ -33,6 +33,9 @@ function installStateRuntime(): void {
       openChannelIngressQueue: (() => {
         throw new Error("openChannelIngressQueue is not used by voice-call store tests");
       }) as never,
+      openChannelIngressDrain: (() => {
+        throw new Error("openChannelIngressDrain is not used by voice-call store tests");
+      }) as never,
     },
   });
 }
@@ -45,7 +48,6 @@ describe("voice-call call record store", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    clearVoiceCallStateRuntime();
     resetPluginStateStoreForTests();
   });
 
@@ -93,6 +95,9 @@ describe("voice-call call record store", () => {
         }) as never,
         openChannelIngressQueue: (() => {
           throw new Error("openChannelIngressQueue is not used by voice-call store tests");
+        }) as never,
+        openChannelIngressDrain: (() => {
+          throw new Error("openChannelIngressDrain is not used by voice-call store tests");
         }) as never,
       },
     });

@@ -4,6 +4,7 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.core.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
+import { getLoadedChannelThreadingAdapter } from "../../channels/thread-addressing.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/account-id.js";
@@ -19,9 +20,6 @@ import { isSingleUseReplyToMode } from "./reply-reference.js";
 type ReplyToModeChannelConfig = {
   replyToMode?: ReplyToMode;
   replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", ReplyToMode>>;
-  dm?: {
-    replyToMode?: ReplyToMode;
-  };
 };
 
 function normalizeReplyToModeChatType(
@@ -50,12 +48,6 @@ function resolveConfiguredReplyToMode(
     const scopedMode = channelConfig?.replyToModeByChatType?.[normalizedChatType];
     if (scopedMode !== undefined) {
       return scopedMode;
-    }
-  }
-  if (normalizedChatType === "direct") {
-    const legacyDirectMode = channelConfig?.dm?.replyToMode;
-    if (legacyDirectMode !== undefined) {
-      return legacyDirectMode;
     }
   }
   return channelConfig?.replyToMode ?? "all";
@@ -228,10 +220,13 @@ export function createReplyToModeFilterForChannel(
   channel?: OriginatingChannelType,
 ) {
   const normalized = normalizeOptionalLowercaseString(channel);
-  const isWebchat = normalized === "webchat";
-  // Default: allow explicit reply tags/directives even when replyToMode is "off".
-  // Unknown channels fail closed; internal webchat stays allowed.
-  const allowExplicitReplyTagsWhenOff = normalized ? true : isWebchat;
+  const adapter = getLoadedChannelThreadingAdapter(normalized);
+  // Channels may opt out via their threading adapter. Any named channel defaults to
+  // allowing explicit tags — including ids with no loaded plugin, because this filter
+  // also runs where plugins are not loaded and stripping there would break real
+  // channels. Only an absent channel fails closed. Accepted tradeoff, not an oversight.
+  const allowExplicitReplyTagsWhenOff =
+    adapter?.allowExplicitReplyTagsWhenOff ?? adapter?.allowTagsWhenOff ?? Boolean(normalized);
   return createReplyToModeFilter(mode, {
     allowExplicitReplyTagsWhenOff,
   });

@@ -4,10 +4,12 @@ import {
   describeImagesWithModel,
 } from "openclaw/plugin-sdk/media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  openrouterMediaUnderstandingProvider,
-  transcribeOpenRouterAudio,
-} from "./media-understanding-provider.js";
+import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
+
+const transcribeOpenRouterAudio = openrouterMediaUnderstandingProvider.transcribeAudio;
+if (!transcribeOpenRouterAudio) {
+  throw new Error("expected OpenRouter audio transcription provider");
+}
 
 const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRequestConfigMock } =
   vi.hoisted(() => ({

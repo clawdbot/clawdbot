@@ -226,7 +226,7 @@ function coalesceClaudeCliToolMessages(messages: TranscriptLikeMessage[]): Trans
   return coalesced;
 }
 
-export type ClaudeCliPromptTextCandidate = {
+type ClaudeCliPromptTextCandidate = {
   text: string;
   blockIndex?: number;
 };

@@ -22,16 +22,16 @@ const MAX_GATEWAY_PAYLOAD_BYTES = 25 * 1024 * 1024;
 // The base64 field sits inside payloadJSON and the node.invoke response frame.
 const MAX_GATEWAY_ENVELOPE_BYTES = 64 * 1024;
 const MAX_BASE64_BYTES = MAX_GATEWAY_PAYLOAD_BYTES - MAX_GATEWAY_ENVELOPE_BYTES;
-export const MAX_MEDIA_RAW_BYTES = Math.floor(MAX_BASE64_BYTES / 4) * 3;
+const MAX_MEDIA_RAW_BYTES = Math.floor(MAX_BASE64_BYTES / 4) * 3;
 
-export type VideoDevice = {
+type VideoDevice = {
   id: string;
   name: string;
   position: "unknown";
   deviceType: "v4l2";
 };
 
-export type LinuxNodeCommandDeps = {
+type LinuxNodeCommandDeps = {
   config: ResolvedLinuxNodePluginConfig;
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
@@ -96,7 +96,7 @@ function readJpegDimensions(buffer: Buffer): { width: number; height: number } |
   return null;
 }
 
-export async function listLinuxVideoDevices(params: {
+async function listLinuxVideoDevices(params: {
   ffmpeg: string;
   runCommand: RunCommand;
   listEntries?: () => Promise<string[]>;

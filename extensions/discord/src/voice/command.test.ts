@@ -24,6 +24,7 @@ function createVoiceCommandHarness(
   overrides?: {
     cfg?: OpenClawConfig;
     discordConfig?: DiscordAccountConfig;
+    groupPolicy?: DiscordAccountConfig["groupPolicy"];
     useAccessGroups?: boolean;
   },
 ) {
@@ -31,7 +32,7 @@ function createVoiceCommandHarness(
     cfg: overrides?.cfg ?? {},
     discordConfig: overrides?.discordConfig ?? {},
     accountId: "default",
-    groupPolicy: "open",
+    groupPolicy: overrides?.groupPolicy ?? "open",
     useAccessGroups: overrides?.useAccessGroups ?? false,
     getManager: () => manager,
     ephemeralDefault: true,
@@ -166,6 +167,54 @@ describe("createDiscordVoiceCommand", () => {
     const { interaction, reply } = createInteraction({
       guild: { id: "g1", name: "Guild" } as CommandInteraction["guild"],
       user: { id: ownerId, username: "owner" } as CommandInteraction["user"],
+    });
+
+    await status.run(interaction);
+
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenCalledWith({
+      content: "No active voice sessions.",
+      ephemeral: true,
+    });
+  });
+
+  it("admits vc commands through an account wildcard without granting owner authority", async () => {
+    const statusSpy = vi.fn(() => []);
+    const manager = {
+      status: statusSpy,
+    } as unknown as DiscordVoiceManager;
+    const { status } = createVoiceCommandHarness(manager, {
+      discordConfig: { allowFrom: ["*"], guilds: { g1: {} } },
+      groupPolicy: "allowlist",
+      useAccessGroups: true,
+    });
+    const { interaction, reply } = createInteraction({
+      guild: { id: "g1", name: "Guild" } as CommandInteraction["guild"],
+      user: { id: "u-guest", username: "guest" } as CommandInteraction["user"],
+    });
+
+    await status.run(interaction);
+
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenCalledWith({
+      content: "No active voice sessions.",
+      ephemeral: true,
+    });
+  });
+
+  it("normalizes an account wildcard before admitting vc commands", async () => {
+    const statusSpy = vi.fn(() => []);
+    const manager = {
+      status: statusSpy,
+    } as unknown as DiscordVoiceManager;
+    const { status } = createVoiceCommandHarness(manager, {
+      discordConfig: { allowFrom: [" * "], guilds: { g1: {} } },
+      groupPolicy: "allowlist",
+      useAccessGroups: true,
+    });
+    const { interaction, reply } = createInteraction({
+      guild: { id: "g1", name: "Guild" } as CommandInteraction["guild"],
+      user: { id: "u-guest", username: "guest" } as CommandInteraction["user"],
     });
 
     await status.run(interaction);

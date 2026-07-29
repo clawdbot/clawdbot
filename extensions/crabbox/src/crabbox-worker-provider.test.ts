@@ -2,12 +2,8 @@ import path from "node:path";
 import type { WorkerProfile } from "openclaw/plugin-sdk/plugin-entry";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
-import {
-  createCrabboxWorkerProvider,
-  type CrabboxCommandRunner,
-  resolveCrabboxBinary,
-  resolveOpenClawRoot,
-} from "./crabbox-worker-provider.js";
+import { resolveCrabboxBinary } from "./crabbox-worker-profile.js";
+import { createCrabboxWorkerProvider, resolveOpenClawRoot } from "./crabbox-worker-provider.js";
 
 const LEASE_ID = "cbx_012345abcdef";
 const FALLBACK_LEASE_ID = "cbx_20260711123456123456";
@@ -24,6 +20,11 @@ const PROFILE = {
   ttl: "24h",
   idleTimeout: "60m",
 };
+
+type CrabboxWorkerProviderDependencies = NonNullable<
+  Parameters<typeof createCrabboxWorkerProvider>[0]
+>;
+type CrabboxCommandRunner = NonNullable<CrabboxWorkerProviderDependencies["runCommand"]>;
 
 function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
   return {

@@ -160,11 +160,25 @@ function catchSentinel<T>(
   }
 }
 
-async function loadAst(absPath: string, fileName: string): Promise<OcAst> {
+async function loadAst(
+  absPath: string,
+  fileName: string,
+  runtime: OutputRuntimeEnv,
+  mode: OutputMode,
+): Promise<OcAst | null> {
   const raw = await fs.readFile(absPath, "utf-8");
   const kind = inferKind(fileName);
   if (kind === "jsonc") {
-    return parseJsonc(raw).ast;
+    const result = parseJsonc(raw);
+    const sizeDiagnostic = result.diagnostics.find(
+      (diagnostic) => diagnostic.code === "OC_JSONC_INPUT_TOO_LARGE",
+    );
+    if (sizeDiagnostic) {
+      emitError(runtime, mode, sizeDiagnostic.message, sizeDiagnostic.code);
+      runtime.exit(2);
+      return null;
+    }
+    return result.ast;
   }
   if (kind === "jsonl") {
     return parseJsonl(raw).ast;
@@ -270,7 +284,7 @@ function formatUnifiedDiff(oldBytes: string, newBytes: string, fsPath: string): 
 
 // ---------- Commands -----------------------------------------------------
 
-export async function pathResolveCommand(
+async function pathResolveCommand(
   pathStr: string | undefined,
   options: PathCommandOptions,
   runtime: OutputRuntimeEnv,
@@ -283,7 +297,10 @@ export async function pathResolveCommand(
   if (ocPath === null) {
     return;
   }
-  const ast = await loadAst(resolveFsPath(ocPath, options), ocPath.file);
+  const ast = await loadAst(resolveFsPath(ocPath, options), ocPath.file, runtime, mode);
+  if (ast === null) {
+    return;
+  }
   let match: OcMatch | null;
   try {
     match = resolveOcPath(ast, ocPath);
@@ -304,7 +321,7 @@ export async function pathResolveCommand(
   emit(runtime, mode, { resolved: true, ocPath: pathStr, match }, () => formatMatchHuman(match));
 }
 
-export async function pathSetCommand(
+async function pathSetCommand(
   pathStr: string | undefined,
   value: string | undefined,
   options: PathCommandOptions,
@@ -333,7 +350,10 @@ export async function pathSetCommand(
   }
   const fsPath = resolveFsPath(ocPath, options);
   const oldBytes = await fs.readFile(fsPath, "utf-8");
-  const ast = await loadAst(fsPath, ocPath.file);
+  const ast = await loadAst(fsPath, ocPath.file, runtime, mode);
+  if (ast === null) {
+    return;
+  }
 
   const result = catchSentinel("set", runtime, mode, () =>
     setOcPath(ast, ocPath, value, { valueJson: options.valueJson === true }),
@@ -382,7 +402,7 @@ export async function pathSetCommand(
   );
 }
 
-export async function pathFindCommand(
+async function pathFindCommand(
   patternStr: string | undefined,
   options: PathCommandOptions,
   runtime: OutputRuntimeEnv,
@@ -407,7 +427,10 @@ export async function pathFindCommand(
     runtime.exit(2);
     return;
   }
-  const ast = await loadAst(resolveFsPath(pattern, options), pattern.file);
+  const ast = await loadAst(resolveFsPath(pattern, options), pattern.file, runtime, mode);
+  if (ast === null) {
+    return;
+  }
   const matches = findOcPaths(ast, pattern);
   emit(
     runtime,
@@ -434,7 +457,7 @@ export async function pathFindCommand(
   }
 }
 
-export function pathValidateCommand(
+function pathValidateCommand(
   pathStr: string | undefined,
   options: PathCommandOptions,
   runtime: OutputRuntimeEnv,
@@ -492,7 +515,7 @@ export function pathValidateCommand(
   }
 }
 
-export async function pathEmitCommand(
+async function pathEmitCommand(
   fileArg: string | undefined,
   options: PathCommandOptions,
   runtime: OutputRuntimeEnv,
@@ -506,7 +529,10 @@ export async function pathEmitCommand(
       ? resolvePath(options.file)
       : resolvePath(options.cwd ?? process.cwd(), fileArg);
   const fileName = fsPath.split(/[\\/]/).pop() ?? fileArg;
-  const ast = await loadAst(fsPath, fileName);
+  const ast = await loadAst(fsPath, fileName, runtime, mode);
+  if (ast === null) {
+    return;
+  }
   const bytes = catchSentinel("emit", runtime, mode, () => emitForKind(ast, fileName));
   if (bytes === null) {
     return;

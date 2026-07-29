@@ -1,5 +1,6 @@
 // Doctor checks and repairs for exec safeBins profiles and trusted binary directories.
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
+import { listAgentEntriesWithSource } from "../../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCommandResolutionFromArgv } from "../../../infra/exec-command-resolution.js";
 import {
@@ -68,11 +69,7 @@ function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
       });
     }
   }
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  for (const agent of agents) {
-    if (!agent || typeof agent !== "object" || typeof agent.id !== "string") {
-      continue;
-    }
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
     const agentExec = asObjectRecord(agent.tools?.exec);
     if (!agentExec) {
       continue;
@@ -82,7 +79,10 @@ function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
       continue;
     }
     scopes.push({
-      scopePath: `agents.list.${agent.id}.tools.exec`,
+      scopePath:
+        source.kind === "entries"
+          ? `agents.entries.${source.key}.tools.exec`
+          : `agents.list.${source.index}.tools.exec`,
       safeBins,
       exec: agentExec,
       mergedProfiles:

@@ -18,13 +18,15 @@ import type {
 } from "@openclaw/gateway-protocol/frame-guards";
 import { resolveGatewayStartupRetryAfterMs } from "@openclaw/gateway-protocol/startup-unavailable";
 import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
-import {
-  isLoopbackIpAddress,
-  normalizeIpAddress,
-  parseCanonicalIpAddress,
-  type ParsedIpAddress,
-} from "@openclaw/net-policy/ip";
+import { isLoopbackIpAddress, type ParsedIpAddress } from "@openclaw/net-policy/ip";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
+import {
+  isSensitiveUrlQueryParamName,
+  normalizeFingerprint,
+  normalizeLowercaseStringOrEmpty,
+  parseGatewayIpAddress,
+  parseHostForAddressChecks,
+} from "./client-address-utils.js";
 import {
   buildGatewayConnectAuth,
   type GatewayConnectAuthSelection,
@@ -42,7 +44,12 @@ import {
   type GatewayProtocolSocketHandlers,
 } from "./protocol-client.js";
 import { shouldPauseGatewayReconnect } from "./reconnect-policy.js";
-import { resolveConnectChallengeTimeoutMs, resolveSafeTimeoutDelayMs } from "./timeouts.js";
+import {
+  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+  resolveConnectChallengeTimeoutMs,
+  resolvePreauthHandshakeTimeoutMs,
+  resolveSafeTimeoutDelayMs,
+} from "./timeouts.js";
 import { rawDataToString } from "./websocket-data.js";
 
 export type DeviceIdentity = {
@@ -115,40 +122,6 @@ function resolveHostDeps(overrides?: GatewayClientHostDeps): Required<GatewayCli
   ) as Required<GatewayClientHostDeps>;
 }
 
-function normalizeLowercaseStringOrEmpty(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
-
-function isSensitiveUrlQueryParamName(key: string): boolean {
-  return /(?:token|password|secret|key|auth|credential)/iu.test(key);
-}
-
-function normalizeFingerprint(fingerprint: string | undefined): string {
-  return (fingerprint ?? "").replaceAll(":", "").trim().toLowerCase();
-}
-
-function parseHostForAddressChecks(
-  host: string,
-): { isLocalhost: boolean; unbracketedHost: string } | null {
-  if (!host) {
-    return null;
-  }
-  const normalizedHost = host.toLowerCase().trim();
-  const canonicalHost = normalizedHost.replace(/\.+$/, "");
-  if (canonicalHost === "localhost") {
-    return { isLocalhost: true, unbracketedHost: canonicalHost };
-  }
-  return {
-    isLocalhost: false,
-    // URL.hostname canonicalizes IPv6 with brackets in some call sites. Strip
-    // them before net.isIP so address checks do not fall back to hostname rules.
-    unbracketedHost:
-      normalizedHost.startsWith("[") && normalizedHost.endsWith("]")
-        ? normalizedHost.slice(1, -1)
-        : normalizedHost,
-  };
-}
-
 const PRIVATE_OR_LOOPBACK_IPV4_RANGES = new Set<string>([
   "loopback",
   "private",
@@ -162,11 +135,6 @@ const PRIVATE_OR_LOOPBACK_IPV6_RANGES = new Set<string>([
   "uniqueLocal",
   "deprecatedSiteLocal",
 ]);
-
-function parseGatewayIpAddress(host: string): ParsedIpAddress | undefined {
-  const normalized = normalizeIpAddress(host);
-  return normalized ? parseCanonicalIpAddress(normalized) : undefined;
-}
 
 function isPrivateOrLoopbackIpAddress(address: ParsedIpAddress): boolean {
   const ranges =
@@ -287,7 +255,9 @@ class GatewayClientTransientPreHelloCloseError extends Error {
   }
 }
 
-class GatewayClientTransportPolicyError extends Error {}
+class GatewayClientSocketFactoryConfigurationError extends Error {}
+
+class GatewayClientTransportPolicyError extends GatewayClientSocketFactoryConfigurationError {}
 
 const GATEWAY_CONNECT_ASSEMBLY_ERROR = Symbol("gateway.connectAssemblyError");
 
@@ -362,18 +332,6 @@ export type GatewayClientConnectionMetadata = {
   preauthHandshakeTimeoutMs?: number;
 };
 
-function readConnectChallengeTimeoutOverride(
-  opts: Pick<GatewayClientOptions, "connectChallengeTimeoutMs">,
-): number | undefined {
-  if (
-    typeof opts.connectChallengeTimeoutMs === "number" &&
-    Number.isFinite(opts.connectChallengeTimeoutMs)
-  ) {
-    return opts.connectChallengeTimeoutMs;
-  }
-  return undefined;
-}
-
 function isGatewayClientStoppedError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
   return message === "gateway client stopped" || message === "Error: gateway client stopped";
@@ -387,18 +345,6 @@ function formatGatewayClientErrorForLog(err: unknown): string {
       isSensitiveUrlQueryParamName(key) ? `${prefix}${key}=***` : match,
     );
   return redactedUrlLikeString;
-}
-
-function resolveGatewayClientConnectChallengeTimeoutMs(
-  opts: Pick<
-    GatewayClientOptions,
-    "connectChallengeTimeoutMs" | "env" | "preauthHandshakeTimeoutMs"
-  >,
-): number {
-  return resolveConnectChallengeTimeoutMs(readConnectChallengeTimeoutOverride(opts), {
-    env: opts.env,
-    configuredTimeoutMs: opts.preauthHandshakeTimeoutMs,
-  });
 }
 
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;
@@ -444,7 +390,14 @@ export class GatewayClient {
     this.requestTimeoutMs =
       typeof opts.requestTimeoutMs === "number" && Number.isFinite(opts.requestTimeoutMs)
         ? resolveSafeTimeoutDelayMs(opts.requestTimeoutMs, { minMs: 0 })
-        : 30_000;
+        : DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS;
+    const connectChallengeTimeoutMs = resolveConnectChallengeTimeoutMs(
+      this.opts.connectChallengeTimeoutMs,
+      {
+        env: this.opts.env,
+        configuredTimeoutMs: this.opts.preauthHandshakeTimeoutMs,
+      },
+    );
     this.protocol = new GatewayProtocolClient<AssembledConnect>({
       createSocket: (handlers) => this.createSocket(handlers),
       createRequestId: randomUUID,
@@ -497,12 +450,17 @@ export class GatewayClient {
         ),
       handshake: {
         mode: "require-challenge",
-        timeoutMs: resolveGatewayClientConnectChallengeTimeoutMs(this.opts),
+        timeoutMs: connectChallengeTimeoutMs,
         timeoutMessage: (elapsedMs) =>
-          `gateway connect challenge timeout (waited ${elapsedMs}ms, limit ${resolveGatewayClientConnectChallengeTimeoutMs(this.opts)}ms)`,
+          `gateway connect challenge timeout (waited ${elapsedMs}ms, limit ${connectChallengeTimeoutMs}ms)`,
       },
       reconnect: { initialMs: 1_000, multiplier: 2, maxMs: 30_000 },
       requestTimeoutMs: this.requestTimeoutMs,
+      shouldRetrySocketFactoryError: (error) =>
+        !(error instanceof GatewayClientSocketFactoryConfigurationError) &&
+        !(error instanceof SyntaxError) &&
+        !(error instanceof TypeError) &&
+        !(error instanceof RangeError),
       rethrowSocketFactoryError: (error) => error instanceof GatewayClientTransportPolicyError,
     });
   }
@@ -516,6 +474,19 @@ export class GatewayClient {
     };
   }
 
+  updateNodeManifest(manifest: { caps: string[]; commands: string[] }): void {
+    this.opts = {
+      ...this.opts,
+      caps: [...manifest.caps],
+      commands: [...manifest.commands],
+    };
+    // Node command declarations are connect metadata. Reconnect so the Gateway
+    // can reconcile approval before dispatching a newly available command.
+    if (!this.stopped) {
+      this.protocol.closeSocket(1012, "node manifest changed");
+    }
+  }
+
   start() {
     if (this.stopped) {
       return;
@@ -526,7 +497,9 @@ export class GatewayClient {
   private createSocket(handlers: GatewayProtocolSocketHandlers): GatewayProtocolSocket {
     const url = this.opts.url ?? DEFAULT_GATEWAY_CLIENT_URL;
     if (this.opts.tlsFingerprint && !url.startsWith("wss://")) {
-      throw new Error("gateway tls fingerprint requires wss:// gateway url");
+      throw new GatewayClientSocketFactoryConfigurationError(
+        "gateway tls fingerprint requires wss:// gateway url",
+      );
     }
 
     const allowPrivateWs =
@@ -541,7 +514,7 @@ export class GatewayClient {
       } catch {
         // Use raw URL if parsing fails
       }
-      throw new Error(
+      throw new GatewayClientSocketFactoryConfigurationError(
         `SECURITY ERROR: Cannot connect to "${displayHost}" over plaintext ws://. ` +
           "Both credentials and chat data would be exposed to network interception. " +
           "Use wss:// for remote URLs. Safe defaults: keep gateway.bind=loopback and connect via SSH tunnel " +
@@ -554,8 +527,15 @@ export class GatewayClient {
     }
     // Allow node screen snapshots and other large responses.
     this.deps.beforeConnect();
+    // Challenge timeout arms only after `open`. Bound the opening handshake so a
+    // peer that accepts TCP without upgrading cannot hang createSocket forever.
+    const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
+      env: this.opts.env,
+      configuredTimeoutMs: this.opts.preauthHandshakeTimeoutMs,
+    });
     const wsOptions: FingerprintCheckingClientOptions = {
       maxPayload: 25 * 1024 * 1024,
+      handshakeTimeout: handshakeTimeoutMs,
       ...(this.opts.origin ? { origin: this.opts.origin } : {}),
     };
     if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
@@ -1218,6 +1198,7 @@ export class GatewayClient {
       expectFinal,
       timeoutMs,
       signal: opts?.signal,
+      onSent: opts?.onSent,
       onAccepted: opts?.onAccepted,
     });
   }

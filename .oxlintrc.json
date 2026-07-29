@@ -211,6 +211,7 @@
     "dist-runtime/",
     "docs/_layouts/",
     "**/a2ui.bundle.js",
+    "extensions/browser/chrome-extension/modules/copilot-runtime.js",
     "extensions/diffs/assets/viewer-runtime.js",
     "extensions/diffs-language-pack/assets/viewer-runtime.js",
     "node_modules/",
@@ -242,7 +243,6 @@
         "packages/terminal-core/**/*.ts",
         "packages/normalization-core/**/*.ts",
         "packages/model-catalog-core/**/*.ts",
-        "packages/web-content-core/**/*.ts",
         "packages/agent-core/**/*.ts",
         "packages/acp-core/**/*.ts",
         "packages/ai/**/*.ts",
@@ -360,6 +360,18 @@
       ],
       "rules": {
         "max-lines": ["error", { "max": 1000, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["extensions/copilot/src/event-bridge.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 950, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["extensions/copilot/src/attempt-transcript-journal.test.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 1200, "skipBlankLines": true, "skipComments": true }]
       }
     }
   ]

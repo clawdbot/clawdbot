@@ -1,5 +1,6 @@
-// File Transfer tests cover archive-policy process-wrapper failures.
+// File Transfer tests cover archive-policy failures through the node invoke policy.
 import crypto from "node:crypto";
+import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { projectBoundedTextTail } from "./append-bounded-text-tail.js";
 
@@ -11,7 +12,7 @@ vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
   runCommandWithTimeout: runCommandWithTimeoutMock,
 }));
 
-import { testing } from "./node-invoke-policy.js";
+import { createFileTransferNodeInvokePolicy } from "./node-invoke-policy.js";
 
 function commandResult(overrides: Record<string, unknown> = {}) {
   return {
@@ -46,6 +47,51 @@ function mockCommandResult(overrides: Record<string, unknown> = {}) {
   );
 }
 
+function createDirFetchContext(): OpenClawPluginNodeInvokePolicyContext {
+  const archive = Buffer.from("archive");
+  const invokeNode = vi
+    .fn<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>()
+    .mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        ok: true,
+        path: "/tmp/project",
+        entries: ["ok.txt"],
+        preflightOnly: true,
+      },
+    })
+    .mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        ok: true,
+        path: "/tmp/project",
+        tarBase64: archive.toString("base64"),
+        tarBytes: archive.byteLength,
+        sha256: crypto.createHash("sha256").update(archive).digest("hex"),
+        fileCount: 1,
+      },
+    });
+  return {
+    nodeId: "node-1",
+    command: "dir.fetch",
+    params: { path: "/tmp/project" },
+    config: {},
+    pluginConfig: {
+      nodes: {
+        "node-1": {
+          allowReadPaths: ["/tmp/**"],
+        },
+      },
+    },
+    node: { nodeId: "node-1", displayName: "Node One" },
+    invokeNode,
+  };
+}
+
+async function runPolicy() {
+  return await createFileTransferNodeInvokePolicy().handle(createDirFetchContext());
+}
+
 afterEach(() => {
   runCommandWithTimeoutMock.mockReset();
 });
@@ -54,29 +100,17 @@ describe("dir.fetch archive policy process wrapper", () => {
   it("fails archive listing closed on wrapper errors", async () => {
     runCommandWithTimeoutMock.mockRejectedValueOnce(new Error("policy listing read failed"));
 
-    await expect(
-      testing.listDirFetchArchiveEntries({
-        tarBase64: Buffer.from("archive").toString("base64"),
-      }),
-    ).resolves.toEqual({
+    await expect(runPolicy()).resolves.toMatchObject({
       ok: false,
       code: "ARCHIVE_ENTRIES_UNREADABLE",
-      reason: "tar -tzf error: policy listing read failed",
+      message: expect.stringContaining("tar -tzf error: policy listing read failed"),
     });
   });
 
   it("normalizes successful archive entries", async () => {
     mockCommandResult({ stdout: "./ok.txt\n" });
-    const archive = Buffer.from("archive");
 
-    await expect(
-      testing.listDirFetchArchiveEntries({ tarBase64: archive.toString("base64") }),
-    ).resolves.toEqual({
-      ok: true,
-      entries: ["ok.txt"],
-      sizeBytes: archive.byteLength,
-      sha256: crypto.createHash("sha256").update(archive).digest("hex"),
-    });
+    await expect(runPolicy()).resolves.toMatchObject({ ok: true });
     expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
       expect.any(Array),
       expect.objectContaining({ tolerateOutputError: { stderr: true } }),
@@ -88,14 +122,13 @@ describe("dir.fetch archive policy process wrapper", () => {
     const recent = "🤖" + "f".repeat(199);
     mockCommandResult({ code: 2, stderr: oldNoise + recent });
 
-    const result = await testing.listDirFetchArchiveEntries({
-      tarBase64: Buffer.from("archive").toString("base64"),
-    });
+    const result = await runPolicy();
     expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toContain(projectBoundedTextTail(recent, 200));
-      expect(result.reason).not.toContain("🤖");
+    if (result.ok) {
+      throw new Error("expected archive policy failure");
     }
+    expect(result.message).toContain(projectBoundedTextTail(recent, 200));
+    expect(result.message).not.toContain("🤖");
   });
 
   it("stops archive listing as soon as the entry cap is crossed", async () => {
@@ -103,10 +136,9 @@ describe("dir.fetch archive policy process wrapper", () => {
       stdout: Array.from({ length: 5_001 }, (_, index) => `file-${index}`).join("\n") + "\n",
     });
 
-    await expect(
-      testing.listDirFetchArchiveEntries({
-        tarBase64: Buffer.from("archive").toString("base64"),
-      }),
-    ).resolves.toMatchObject({ ok: false, code: "ARCHIVE_ENTRIES_TOO_MANY" });
+    await expect(runPolicy()).resolves.toMatchObject({
+      ok: false,
+      code: "ARCHIVE_ENTRIES_TOO_MANY",
+    });
   });
 });

@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildCodexOpenClawPromptContext,
+  buildCodexWatchedSessionsContext,
   buildCodexWorkspaceBootstrapContext,
   getCodexWorkspaceMemoryToolNames,
   readMirroredSessionHistoryMessages,
@@ -20,7 +21,6 @@ import {
   type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
-import { joinPresentSections } from "./run-attempt-state.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
 import {
   buildDeveloperInstructions,
@@ -56,6 +56,7 @@ export async function prepareCodexAttemptContext(
     usesSupervisionConnection,
     resolvedWorkspace,
     initialInactiveThreadBootstrapBindingForcedFreshStart,
+    sandbox,
   } = connection;
   const { toolBridge } = attemptTools;
   const activeTranscriptTarget = {
@@ -139,14 +140,20 @@ export async function prepareCodexAttemptContext(
     sessionKey: contextSessionKey,
     sessionAgentId,
     memoryToolNames,
+    sandboxed: sandbox?.enabled === true,
   });
-  const baseDeveloperInstructions = joinPresentSections(
-    buildDeveloperInstructions(runtimeParams, { dynamicTools: toolBridge.availableSpecs }),
-    workspaceBootstrapContext.developerInstructions,
-  );
+  const baseDeveloperInstructions = buildDeveloperInstructions(runtimeParams, {
+    dynamicTools: toolBridge.availableSpecs,
+  });
   const openClawPromptContext = buildCodexOpenClawPromptContext({
     params: runtimeParams,
     workspacePromptContext: workspaceBootstrapContext.promptContext,
+    watchedSessionsContext: buildCodexWatchedSessionsContext({
+      attempt: runtimeParams,
+      dynamicTools: toolBridge.availableSpecs,
+      sessionKey: contextSessionKey,
+      sandboxed: sandbox?.enabled === true,
+    }),
   });
   const skillsCollaborationInstructions = renderCodexSkillsCollaborationInstructions({
     attempt: runtimeParams,
@@ -165,7 +172,7 @@ export async function prepareCodexAttemptContext(
   };
   const codexContextProjectionMaxChars = resolveCodexContextEngineProjectionMaxChars({
     contextTokenBudget: effectiveContextTokenBudget,
-    reserveTokens: resolveCodexContextEngineProjectionReserveTokens({ config: params.config }),
+    reserveTokens: resolveCodexContextEngineProjectionReserveTokens(),
   });
   return {
     runtime,

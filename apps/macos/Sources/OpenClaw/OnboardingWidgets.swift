@@ -10,14 +10,20 @@ struct GlowingOpenClawIcon: View {
 
     let size: CGFloat
     let mood: OpenClawMascotMood
+    let accessory: OpenClawMascotAccessory
 
-    init(size: CGFloat = 148, mood: OpenClawMascotMood = .idle) {
+    init(
+        size: CGFloat = 148,
+        mood: OpenClawMascotMood = .idle,
+        accessory: OpenClawMascotAccessory = .none)
+    {
         self.size = size
         self.mood = mood
+        self.accessory = accessory
     }
 
     var body: some View {
-        OpenClawMascotView(mood: self.mood, interactive: true)
+        OpenClawMascotView(mood: self.mood, accessory: self.accessory, interactive: true)
             .frame(width: self.size, height: self.size)
             .shadow(
                 color: OpenClawMascotView.heroGlowColor(for: self.colorScheme),
@@ -32,6 +38,7 @@ extension OnboardingView {
         case connection
         case cli
         case ai
+        case memory
         case permissions
         case chat
         case ready
@@ -46,13 +53,14 @@ extension OnboardingView {
         var aiPhase: OnboardingAISetupModel.Phase = .idle
         var aiBusy = false
         var aiFailed = false
+        var memoryPhase: OnboardingMemoryImportModel.Phase = .idle
         var remoteProbeState: RemoteOnboardingProbeState = .idle
         var allPermissionsGranted = false
     }
 
     /// The hero mascot mirrors what setup is doing: curious while choosing,
-    /// thinking while work is in flight, sad on failures, celebrating once
-    /// the AI answers and on the final page.
+    /// hard-hat working while setup is in flight, sad on failures,
+    /// celebrating once the AI answers and on the final page.
     var mascotMood: OpenClawMascotMood {
         Self.mascotMood(for: MascotMoodSnapshot(
             page: self.mascotPage,
@@ -62,9 +70,14 @@ extension OnboardingView {
             aiPhase: self.aiSetup.phase,
             aiBusy: self.aiSetup.isBusy,
             aiFailed: Self.aiSetupLooksFailed(self.aiSetup),
+            memoryPhase: self.memoryImport.phase,
             remoteProbeState: self.remoteProbeState,
             allPermissionsGranted: Capability.importanceOrdered
-                .allSatisfy { self.permissionMonitor.status[$0] ?? false }))
+                .allSatisfy { self.permissionMonitor.status[$0]?.isGranted == true }))
+    }
+
+    var mascotAccessory: OpenClawMascotAccessory {
+        Self.mascotAccessory(for: self.mascotPage)
     }
 
     private var mascotPage: MascotPage {
@@ -72,6 +85,7 @@ extension OnboardingView {
         case self.connectionPageIndex: .connection
         case self.cliPageIndex: .cli
         case self.aiPageIndex: .ai
+        case self.memoryImportPageIndex: .memory
         case self.permissionsPageIndex: .permissions
         case self.onboardingChatPageIndex: .chat
         case self.readyPageIndex: .ready
@@ -109,7 +123,7 @@ extension OnboardingView {
                 // Mirrors the page's install-failed card.
                 .sad
             } else {
-                .thinking
+                .working
             }
         case .ai:
             if snapshot.aiPhase == .connected {
@@ -121,12 +135,34 @@ extension OnboardingView {
             } else {
                 .curious
             }
+        case .memory:
+            self.memoryImportMood(for: snapshot.memoryPhase)
         case .permissions:
             snapshot.allPermissionsGranted ? .happy : .curious
         case .chat:
             .attentive
         case .ready:
             .celebrating
+        }
+    }
+
+    static func mascotAccessory(for page: MascotPage) -> OpenClawMascotAccessory {
+        switch page {
+        case .ready: .gradCap
+        case .welcome, .connection, .cli, .ai, .memory, .permissions, .chat: .none
+        }
+    }
+
+    static func memoryImportMood(for phase: OnboardingMemoryImportModel.Phase) -> OpenClawMascotMood {
+        switch phase {
+        case .planning, .applying:
+            .thinking
+        case .failed:
+            .sad
+        case .done:
+            .happy
+        case .idle, .offer, .empty:
+            .curious
         }
     }
 }

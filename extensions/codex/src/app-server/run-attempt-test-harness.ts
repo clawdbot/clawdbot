@@ -8,6 +8,7 @@ import {
   resetAgentEventsForTest,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import { resetDiagnosticEventsForTest } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { clearInternalHooks, resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -19,6 +20,7 @@ import type { CodexAppServerClient } from "./client.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
+import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt as runCodexAppServerAttemptImpl } from "./run-attempt.js";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
@@ -31,6 +33,7 @@ import type { CodexAppServerClientFactory, CodexAppServerClientOptions } from ".
 import {
   adaptCodexTestClientFactory,
   createCodexTestModel,
+  createCodexTestToolTerminalObserver,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
 import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
@@ -185,6 +188,7 @@ async function drainActiveAppServerAttemptsForTest(): Promise<void> {
 }
 
 export function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
+  const model = createCodexTestModel("codex");
   return {
     prompt: "hello",
     sessionId: "session-1",
@@ -194,7 +198,10 @@ export function createParams(sessionFile: string, workspaceDir: string): Embedde
     runId: "run-1",
     provider: "codex",
     modelId: "gpt-5.4-codex",
-    model: createCodexTestModel("codex"),
+    model: {
+      ...model,
+      compat: { ...model.compat, supportsTools: false },
+    } as EmbeddedRunAttemptParams["model"] & { compat: { supportsTools: boolean } },
     contextTokenBudget: 150_000,
     contextWindowInfo: {
       tokens: 150_000,
@@ -202,12 +209,28 @@ export function createParams(sessionFile: string, workspaceDir: string): Embedde
       source: "agentContextTokens",
     },
     thinkLevel: "medium",
-    disableTools: true,
+    disableTools: false,
+    config: { tools: { web: { search: { enabled: false } } } },
     timeoutMs: 5_000,
     authStorage: {} as never,
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
+    observeToolTerminal: createCodexTestToolTerminalObserver(),
   } as EmbeddedRunAttemptParams;
+}
+
+export function createTestParams(): EmbeddedRunAttemptParams {
+  return createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
+}
+
+export function setCodexTestModelSupportsTools(
+  params: EmbeddedRunAttemptParams,
+  supportsTools: boolean,
+): void {
+  params.model = {
+    ...params.model,
+    compat: { ...params.model.compat, supportsTools },
+  } as EmbeddedRunAttemptParams["model"] & { compat: { supportsTools: boolean } };
 }
 
 export function createCodexRuntimePlanFixture(): NonNullable<
@@ -267,7 +290,7 @@ export function mockCall(mock: unknown, label: string, index = 0): unknown[] {
   return call;
 }
 
-export function getMockServerVersion() {
+function getMockServerVersion() {
   return "0.132.0";
 }
 
@@ -277,6 +300,7 @@ export function getMockRuntimeIdentity() {
 
 export function mockClientRuntimeMethods() {
   return {
+    getInstanceId: () => "test-client-1",
     getRuntimeIdentity: getMockRuntimeIdentity,
     getServerVersion: getMockServerVersion,
   };
@@ -602,6 +626,7 @@ export function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTes
 export function setupRunAttemptTestHooks(): void {
   beforeEach(async () => {
     resetCodexTestBindingStore();
+    clearRuntimeAuthProfileStoreSnapshots();
     vi.useRealTimers();
     clearInternalHooks();
     clearMemoryPluginState();
@@ -617,6 +642,7 @@ export function setupRunAttemptTestHooks(): void {
     await drainActiveAppServerAttemptsForTest();
     await sandboxExecServerRegistry.closeAll();
     resetCodexAppServerClientFactoryForTest();
+    clearRuntimeAuthProfileStoreSnapshots();
     dynamicToolBuildState.openClawCodingToolsFactory = undefined;
     codexWorkspaceDirCache.clear();
     nativeHookRelayUnregisterQueue.clear();
@@ -628,6 +654,7 @@ export function setupRunAttemptTestHooks(): void {
     resetGlobalHookRunner();
     clearInternalHooks();
     defaultCodexAppInventoryCache.clear();
+    defaultCodexPluginMetadataCache.clear();
     vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllEnvs();

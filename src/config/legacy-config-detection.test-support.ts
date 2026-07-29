@@ -19,11 +19,3 @@ export function expectSchemaConfigValue(params: {
   }
   expect(params.readValue(res.data)).toBe(params.expectedValue);
 }
-
-export function expectSchemaValid(
-  schema: { safeParse: (value: unknown) => SchemaParseResult },
-  config: unknown,
-) {
-  const res = schema.safeParse(config);
-  expect(res.success).toBe(true);
-}

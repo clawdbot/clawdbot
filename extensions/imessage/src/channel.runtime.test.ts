@@ -127,6 +127,7 @@ describe("sendIMessageOutbound approval identity", () => {
         cfg: {} as never,
         to: "+15551230000",
         text: "approval text",
+        conversationReadOrigin: "delegated",
         deps: { imessage: send },
       }),
     ).resolves.toEqual(
@@ -137,6 +138,11 @@ describe("sendIMessageOutbound approval identity", () => {
           imessageVisibleText: "delivered approval text",
         },
       }),
+    );
+    expect(send).toHaveBeenCalledWith(
+      "+15551230000",
+      "approval text",
+      expect.objectContaining({ conversationReadOrigin: "delegated" }),
     );
   });
 });

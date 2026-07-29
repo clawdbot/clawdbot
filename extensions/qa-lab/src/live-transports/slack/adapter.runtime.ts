@@ -1,4 +1,5 @@
 // Qa Lab plugin module implements Slack live transport adapter behavior.
+import { setTimeout as sleep } from "node:timers/promises";
 import { createSlackWebClient, createSlackWriteClient } from "@openclaw/slack/api.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
@@ -6,19 +7,53 @@ import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../shared/credential-lease.runtime.js";
-import { __testing as slackLive } from "./slack-live.runtime.js";
+import { createSlackQaScenarioEnvironment } from "./scenario-environment.js";
+import {
+  buildSlackQaConfig,
+  parseSlackQaCredentialPayload,
+  resolveSlackQaRuntimeEnv,
+} from "./slack-live.config.js";
+import type { SlackMessage, SlackQaRuntimeEnv } from "./slack-live.contracts.js";
+import { waitForSlackChannelStable } from "./slack-live.message-observations.js";
+import {
+  getSlackIdentity,
+  listSlackMessages,
+  listSlackThreadMessages,
+  sendSlackChannelMessage,
+} from "./slack-live.observations.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
-type SlackRuntimeEnv = ReturnType<typeof slackLive.resolveSlackQaRuntimeEnv>;
-type SlackObservedMessage = Awaited<ReturnType<typeof slackLive.listSlackMessages>>[number];
+
+const SLACK_POLL_INTERVAL_MS = 500;
+const SLACK_POLL_REQUEST_TIMEOUT_MS = 10_000;
+
+function resolveSlackRateLimitDelayMs(error: unknown): number | undefined {
+  if (!error || typeof error !== "object" || !("retryAfter" in error)) {
+    return undefined;
+  }
+  const retryAfter = error.retryAfter;
+  return typeof retryAfter === "number" && Number.isFinite(retryAfter) && retryAfter > 0
+    ? retryAfter * 1_000
+    : undefined;
+}
+
+async function waitForSlackPoll(delayMs: number, signal: AbortSignal) {
+  try {
+    await sleep(delayMs, undefined, { signal });
+  } catch (error) {
+    if (!signal.aborted) {
+      throw error;
+    }
+  }
+}
 
 async function recordSlackObservedMessage(params: {
   accountId: string;
   busMessageIds: Map<string, string>;
   logicalConversationId: string;
-  message: SlackObservedMessage;
+  message: SlackMessage;
   messages: FactoryContext["messages"];
   observedText: Map<string, string>;
   sutUserId: string;
@@ -59,29 +94,42 @@ export async function createSlackQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
   const options = context.adapterOptions ?? {};
-  const lease = await acquireQaCredentialLease<SlackRuntimeEnv>({
+  const lease = await acquireQaCredentialLease<SlackQaRuntimeEnv>({
     kind: "slack",
     source: options.credentialSource,
     role: options.credentialRole,
-    resolveEnvPayload: () => slackLive.resolveSlackQaRuntimeEnv(),
-    parsePayload: slackLive.parseSlackQaCredentialPayload,
+    resolveEnvPayload: () => resolveSlackQaRuntimeEnv(),
+    parsePayload: parseSlackQaCredentialPayload,
   });
   const heartbeat = startQaCredentialLeaseHeartbeat(lease);
   const runtimeEnv = lease.payload;
-  let driverIdentity: Awaited<ReturnType<typeof slackLive.getSlackIdentity>>;
-  let sutIdentity: Awaited<ReturnType<typeof slackLive.getSlackIdentity>>;
+  let driverIdentity: Awaited<ReturnType<typeof getSlackIdentity>>;
+  let sutIdentity: Awaited<ReturnType<typeof getSlackIdentity>>;
   try {
     [driverIdentity, sutIdentity] = await Promise.all([
-      slackLive.getSlackIdentity(runtimeEnv.driverBotToken),
-      slackLive.getSlackIdentity(runtimeEnv.sutBotToken),
+      getSlackIdentity(runtimeEnv.driverBotToken),
+      getSlackIdentity(runtimeEnv.sutBotToken),
     ]);
+    if (driverIdentity.userId === sutIdentity.userId) {
+      throw new Error("Slack QA requires two distinct bots for driver and SUT.");
+    }
   } catch (error) {
-    await heartbeat.stop();
-    await lease.release();
+    try {
+      await heartbeat.stop();
+    } finally {
+      await lease.release();
+    }
     throw error;
   }
   const driverClient = createSlackWriteClient(runtimeEnv.driverBotToken);
   const sutClient = createSlackWebClient(runtimeEnv.sutBotToken);
+  const sutWriteClient = createSlackWriteClient(runtimeEnv.sutBotToken);
+  const pollingAbort = new AbortController();
+  const pollingClient = createSlackWebClient(runtimeEnv.sutBotToken, {
+    rejectRateLimitedCalls: true,
+    retryConfig: { retries: 0 },
+    timeout: SLACK_POLL_REQUEST_TIMEOUT_MS,
+  });
   const accountId = options.sutAccountId?.trim() || "sut";
   let oldestTs = `${Math.floor(Date.now() / 1_000)}.000000`;
   let stopped = false;
@@ -92,37 +140,15 @@ export async function createSlackQaTransportAdapter(
   const busMessageIds = new Map<string, string>();
   const activeThreadRoots = new Set<string>();
   const polling = (async () => {
-    for (;;) {
-      if (stopped) {
-        return;
-      }
-      const messages = await slackLive.listSlackMessages({
-        channelId: runtimeEnv.channelId,
-        client: sutClient,
-        oldestTs,
-      });
-      for (const message of messages.toReversed()) {
-        const observedTs = await recordSlackObservedMessage({
-          accountId,
-          busMessageIds,
-          logicalConversationId,
-          message,
-          messages: context.messages,
-          observedText,
-          sutUserId: sutIdentity.userId,
-        });
-        if (observedTs) {
-          oldestTs = observedTs;
-        }
-      }
-      for (const threadTs of activeThreadRoots) {
-        const threadMessages = await slackLive.listSlackThreadMessages({
+    while (!pollingAbort.signal.aborted) {
+      try {
+        const messages = await listSlackMessages({
           channelId: runtimeEnv.channelId,
-          client: sutClient,
-          threadTs,
+          client: pollingClient,
+          oldestTs,
         });
-        for (const message of threadMessages) {
-          await recordSlackObservedMessage({
+        for (const message of messages.toReversed()) {
+          const observedTs = await recordSlackObservedMessage({
             accountId,
             busMessageIds,
             logicalConversationId,
@@ -131,11 +157,40 @@ export async function createSlackQaTransportAdapter(
             observedText,
             sutUserId: sutIdentity.userId,
           });
+          if (observedTs) {
+            oldestTs = observedTs;
+          }
         }
+        for (const threadTs of activeThreadRoots) {
+          const threadMessages = await listSlackThreadMessages({
+            channelId: runtimeEnv.channelId,
+            client: pollingClient,
+            threadTs,
+          });
+          for (const message of threadMessages) {
+            await recordSlackObservedMessage({
+              accountId,
+              busMessageIds,
+              logicalConversationId,
+              message,
+              messages: context.messages,
+              observedText,
+              sutUserId: sutIdentity.userId,
+            });
+          }
+        }
+      } catch (error) {
+        if (pollingAbort.signal.aborted) {
+          return;
+        }
+        const retryDelayMs = resolveSlackRateLimitDelayMs(error);
+        if (retryDelayMs === undefined) {
+          throw error;
+        }
+        await waitForSlackPoll(retryDelayMs, pollingAbort.signal);
+        continue;
       }
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 500);
-      });
+      await waitForSlackPoll(SLACK_POLL_INTERVAL_MS, pollingAbort.signal);
     }
   })().catch((error: unknown) => {
     if (!stopped) {
@@ -160,7 +215,7 @@ export async function createSlackQaTransportAdapter(
       logicalConversationId = input.conversation.id;
       const text = input.text.replaceAll("@openclaw", `<@${sutIdentity.userId}>`);
       const nativeThreadTs = input.threadId ? nativeMessageIds.get(input.threadId) : undefined;
-      const sent = await slackLive.sendSlackChannelMessage({
+      const sent = await sendSlackChannelMessage({
         channelId: runtimeEnv.channelId,
         client: driverClient,
         text,
@@ -183,15 +238,26 @@ export async function createSlackQaTransportAdapter(
       activeThreadRoots.clear();
     },
     createGatewayConfig: () =>
-      slackLive.buildSlackQaConfig({} as OpenClawConfig, {
+      buildSlackQaConfig({} as OpenClawConfig, {
         channelId: runtimeEnv.channelId,
         driverBotUserId: driverIdentity.userId,
         sutAccountId: accountId,
         sutAppToken: runtimeEnv.sutAppToken,
         sutBotToken: runtimeEnv.sutBotToken,
       }),
+    prepareFlow: createSlackQaScenarioEnvironment({
+      accountId,
+      channelId: runtimeEnv.channelId,
+      driverBotUserId: driverIdentity.userId,
+      driverClient,
+      sutAppToken: runtimeEnv.sutAppToken,
+      sutBotToken: runtimeEnv.sutBotToken,
+      sutIdentity,
+      sutReadClient: sutClient,
+      sutWriteClient,
+    }).prepareFlow,
     waitReady: async ({ gateway }) =>
-      await slackLive.waitForSlackChannelStable(gateway as never, accountId, "connected"),
+      await waitForSlackChannelStable(gateway as never, accountId, "connected"),
     buildAgentDelivery: () => ({
       channel: "slack",
       to: `channel:${runtimeEnv.channelId}`,
@@ -204,11 +270,18 @@ export async function createSlackQaTransportAdapter(
     createReportNotes: () => ["Runs through the Slack live adapter and shared QA suite host."],
     async cleanup() {
       stopped = true;
+      // The Slack SDK's rate-limit sleep is not interruptible, so the observer uses
+      // bounded requests and an abortable local backoff that teardown can stop.
+      pollingAbort.abort();
       await polling.catch(() => undefined);
-      await heartbeat.stop();
-      await lease.release();
+      // Lease release must still run when heartbeat shutdown reports an error.
+      try {
+        await heartbeat.stop();
+      } finally {
+        await lease.release();
+      }
     },
   };
 }
 
-export const testing = { recordSlackObservedMessage };
+export const testing = { recordSlackObservedMessage, resolveSlackRateLimitDelayMs };

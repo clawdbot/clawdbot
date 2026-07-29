@@ -107,9 +107,6 @@ describe("live model turn probes", () => {
       true,
     );
     expect(
-      shouldSkipLiveModelFileProbe({ provider: "openrouter", id: "arcee-ai/trinity-mini" }),
-    ).toBe(true);
-    expect(
       shouldSkipLiveModelFileProbe({
         provider: "openrouter",
         id: "deepseek/deepseek-chat-v3.1",

@@ -5,7 +5,13 @@ import {
   isEmbeddedAgentRunAbortableForRunId,
   retainEmbeddedAgentRunAbortabilityForRunId,
 } from "../../agents/embedded-agent-runner/runs.js";
+import {
+  commitMainSessionRecovery,
+  type MainSessionRecoveryPendingTarget,
+} from "../../agents/main-session-recovery-store.js";
+import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -43,6 +49,9 @@ export type PreparedAgentRunDispatch = {
   lifecycleStorePath: string;
   resolvedThreadId?: string | number;
   dispatchTaskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent">;
+  restoreAdmittedRestartRecoveryInterrupted?: () => Promise<
+    MainSessionRecoveryPendingTarget | undefined
+  >;
 };
 
 export async function prepareAgentRunDispatch(params: {
@@ -71,6 +80,7 @@ export async function prepareAgentRunDispatch(params: {
   pendingChatRun?: { sessionKey: string; agentId?: string };
   inputProvenance?: InputProvenance;
   isOneShotModelRun: boolean;
+  isRestartRecoveryResumeRun: boolean;
   runId: string;
   agentDedupeKeys: readonly string[];
   context: GatewayRequestHandlerOptions["context"];
@@ -137,13 +147,35 @@ export async function prepareAgentRunDispatch(params: {
     : params.request.thinking;
   const effectiveAllowModelOverride =
     params.allowModelOverride || params.restoredCronContinuation !== undefined;
-  const activeModelProvider =
-    effectiveProviderOverride ??
-    resolveSessionModelRef(
-      params.cfgForAgent ?? params.cfg,
-      params.sessionEntry,
-      params.activeSessionAgentId,
-    ).provider;
+  const runtimeConfig = params.cfgForAgent ?? params.cfg;
+  const sessionModel = resolveSessionModelRef(
+    runtimeConfig,
+    params.sessionEntry,
+    params.activeSessionAgentId,
+  );
+  const activeModel = effectiveModelOverride
+    ? (resolvePersistedOverrideModelRef({
+        defaultProvider: effectiveProviderOverride ?? sessionModel.provider,
+        overrideProvider: effectiveProviderOverride,
+        overrideModel: effectiveModelOverride,
+      }) ?? sessionModel)
+    : {
+        provider: effectiveProviderOverride ?? sessionModel.provider,
+        model: sessionModel.model,
+      };
+  const resolvedRuntime = {
+    harness: resolveEffectiveAgentRuntime({
+      cfg: runtimeConfig,
+      provider: activeModel.provider,
+      modelId: activeModel.model,
+      agentId: params.activeSessionAgentId,
+      sessionKey: params.resolvedSessionKey,
+      sessionEntry: params.sessionEntry,
+    }),
+    provider: activeModel.provider,
+    model: activeModel.model,
+  };
+  const activeModelProvider = activeModel.provider;
   const lifecycleStorePath = params.resolvedSessionKey
     ? loadSessionEntry(params.resolvedSessionKey, {
         ...(params.activeSessionAgentId ? { agentId: params.activeSessionAgentId } : {}),
@@ -276,12 +308,82 @@ export async function prepareAgentRunDispatch(params: {
       dispatchTaskTrackingMode = "cli";
     }
   }
+  let restoreAdmittedRestartRecoveryInterrupted:
+    | (() => Promise<MainSessionRecoveryPendingTarget | undefined>)
+    | undefined;
+  if (params.isRestartRecoveryResumeRun) {
+    const recoverySessionKey = params.resolvedSessionKey;
+    if (!recoverySessionKey) {
+      activeRunAbort.cleanup({ force: true });
+      activeGatewayWorkAdmission.release();
+      params.respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "restart recovery session target is unavailable"),
+      );
+      return undefined;
+    }
+    try {
+      const recoveryAdmission = await commitMainSessionRecovery({
+        command: {
+          kind: "admit_recovery",
+          lifecycleGeneration: params.lifecycleGeneration,
+          now: Date.now(),
+          runId: params.runId,
+          sessionId: params.request.expectedExistingSessionId ?? params.getAdmittedSessionId(),
+        },
+        requireWriteSuccess: true,
+        target: { sessionKey: recoverySessionKey, storePath: lifecycleStorePath },
+      });
+      if (recoveryAdmission.transition.kind !== "admitted_recovery") {
+        throw new Error(
+          `Session "${recoverySessionKey}" restart recovery reservation is stale; recovery was skipped.`,
+        );
+      }
+      const admittedRecoverySessionKey = recoveryAdmission.sessionKey ?? recoverySessionKey;
+      let restored = false;
+      restoreAdmittedRestartRecoveryInterrupted = async () => {
+        if (restored) {
+          return undefined;
+        }
+        const recovery = await commitMainSessionRecovery({
+          command: {
+            kind: "mark_admitted_recovery_interrupted",
+            lifecycleGeneration: params.lifecycleGeneration,
+            now: Date.now(),
+            runId: params.runId,
+            sessionId: params.request.expectedExistingSessionId ?? params.getAdmittedSessionId(),
+          },
+          requireWriteSuccess: true,
+          target: { sessionKey: admittedRecoverySessionKey, storePath: lifecycleStorePath },
+        });
+        restored = true;
+        const expectedSessionId =
+          params.request.expectedExistingSessionId ?? params.getAdmittedSessionId();
+        return recovery.transition.kind === "applied" &&
+          recovery.entry?.sessionId === expectedSessionId &&
+          recovery.sessionKey
+          ? {
+              sessionId: recovery.entry.sessionId,
+              sessionKey: recovery.sessionKey,
+              storePath: lifecycleStorePath,
+            }
+          : undefined;
+      };
+    } catch (err) {
+      activeRunAbort.cleanup({ force: true });
+      activeGatewayWorkAdmission.release();
+      params.respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      return undefined;
+    }
+  }
   const accepted = {
     runId: params.runId,
     sessionKey: params.resolvedSessionKey,
     ...(params.resolvedSessionKey === "global" ? { agentId: params.activeSessionAgentId } : {}),
     status: "accepted" as const,
     acceptedAt: Date.now(),
+    ...(taskTrackingMode === "plugin_subagent" ? { runtime: resolvedRuntime } : {}),
   };
   params.markAgentRunAccepted(true);
   setGatewayDedupeEntries({
@@ -311,5 +413,6 @@ export async function prepareAgentRunDispatch(params: {
     lifecycleStorePath,
     resolvedThreadId,
     dispatchTaskTrackingMode,
+    restoreAdmittedRestartRecoveryInterrupted,
   };
 }

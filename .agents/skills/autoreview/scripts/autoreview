@@ -12,6 +12,7 @@ import functools
 import hashlib
 import io
 import json
+import math
 import os
 import queue
 import re
@@ -50,6 +51,7 @@ SAFE_GIT_CONFIG_ARGS = (
     "pager.show=cat",
 )
 SAFE_DIFF_FLAGS = ("--no-ext-diff", "--no-textconv", "--no-renames")
+DIFF_HUNK_CONTENT_BOUNDARY = "\0autoreview-diff-hunk-boundary\0"
 ENGINE_GIT_CONFIG_OVERRIDES = (
     ("core.fsmonitor", "false"),
     ("core.pager", "cat"),
@@ -192,6 +194,9 @@ SECRET_ASSIGNMENT_KEY_PATTERN = (
     rf"|(?<![A-Za-z0-9]){SECRET_ASSIGNMENT_KEY_NAME_PATTERN}"
     rf"(?![A-Za-z0-9]))"
 )
+# A colon before an explicit Boolean type is an annotation, not a value.
+# Only scan the initializer after `=` so real credential literals still fail closed.
+SECRET_BOOLEAN_TYPE_PATTERN = r"(?-i:Boolean\??|boolean|Bool\??)"
 SECRET_ASSIGNMENT_PATTERN = re.compile(
     rf"(?i){SECRET_ASSIGNMENT_KEY_PATTERN}\s*[:=]\s*"
     r"(?:\"(?P<double_value>[^\"\r\n]{8,})\"|"
@@ -201,7 +206,8 @@ SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*)*)(?=[ \t]*\()|"
     r"(?P<reference_value>[A-Za-z_$][A-Za-z0-9_$]*"
     r"(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*"
-    r"|\[(?:[\"'][A-Za-z_$][A-Za-z0-9_$]*[\"']|[0-9]+)\])+)"
+    r"|(?:\?\.)?\[(?:[A-Za-z_$][A-Za-z0-9_$]*"
+    r"|[\"'][A-Za-z_$][A-Za-z0-9_$]*[\"']|[0-9]+)\])+)"
     r"(?![A-Za-z0-9_./+=:@#$%&*!?-])|"
     r"(?P<bare_value>[A-Za-z0-9_./+=:@#$%&*!?-]{8,}))"
 )
@@ -209,12 +215,63 @@ SECRET_ASSIGNMENT_PREFIX_PATTERN = re.compile(
     rf"(?i){SECRET_ASSIGNMENT_KEY_PATTERN}"
     r"\s*(?:=(?!=|>)|:(?![:=]))\s*"
 )
+SECRET_BOOLEAN_DECLARATION_PATTERN = re.compile(
+    r"(?im)^[ \t]*(?:(?:abstract|const|declare|export|final|internal|lateinit|"
+    r"open|override|private|protected|public|readonly|static)\s+)*"
+    rf"(?:val|var|let|const)\s+"
+    rf"(?P<boolean_key>{SECRET_ASSIGNMENT_KEY_PATTERN})\s*:\s*"
+    rf"(?P<boolean_type>{SECRET_BOOLEAN_TYPE_PATTERN})"
+    r"(?=\s*(?:=|[,;)\]}]|$))"
+)
+PRIVATE_KEY_BOUNDARY_PREFIX = r"-----"
+PRIVATE_KEY_BEGIN_PATTERN = re.compile(
+    PRIVATE_KEY_BOUNDARY_PREFIX
+    + r"BEGIN (?:RSA |DSA |EC |OPENSSH |PGP |ENCRYPTED )?"
+    r"PRIVATE KEY(?: BLOCK)?-----"
+)
+PRIVATE_KEY_END_PATTERN = re.compile(
+    PRIVATE_KEY_BOUNDARY_PREFIX
+    + r"END (?:RSA |DSA |EC |OPENSSH |PGP |ENCRYPTED )?"
+    r"PRIVATE KEY(?: BLOCK)?-----"
+)
+PRIVATE_KEY_BODY_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9+/])"
+    r"(?:[A-Za-z0-9+/]{4,}={0,2}|[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)"
+    r"(?![A-Za-z0-9+/=])"
+)
+ESCAPED_PRIVATE_KEY_BODY_PATTERN = re.compile(
+    r"\\[nr](?P<body>"
+    r"(?:[A-Za-z0-9+/]{4,}={0,2}|[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)"
+    r")(?![A-Za-z0-9+/=])"
+)
+BEARER_CREDENTIAL_PATTERN = re.compile(
+    r"(?i)bearer\s+(?P<credential>[A-Za-z0-9._~+/-]{20,}=*)"
+)
+SECRET_FALLBACK_LITERAL_PATTERNS = (
+    re.compile(r'"(?P<value>[^"\r\n]+)"'),
+    re.compile(r"'(?P<value>[^'\r\n]+)'"),
+    re.compile(r"`(?P<value>[^`\r\n]+)`"),
+)
+SECRET_FALLBACK_UNQUOTED_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_./+=:@#$%&*!?-])"
+    r"(?P<value>[A-Za-z0-9_./+=:@#$%&*!?-]{4,})"
+    r"(?![A-Za-z0-9_./+=:@#$%&*!?-])"
+)
+CONFIG_PATH_SEGMENT_PATTERN = (
+    r"(?:[a-z][A-Za-z0-9]{0,63}|[a-z][a-z0-9]*(?:-[a-z0-9]+)+"
+    r"|\$\{[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*\})"
+)
+CANONICAL_CONFIG_PATH_REFERENCE_PATTERN = re.compile(
+    rf"{CONFIG_PATH_SEGMENT_PATTERN}(?:\.{CONFIG_PATH_SEGMENT_PATTERN}){{2,}}"
+    r"\.[a-z][A-Za-z0-9]{0,63}"
+)
+CONFIG_PATH_CREDENTIAL_FIELD_PATTERN = re.compile(
+    r"(?:apiKey|password|Password|secret|Secret|token|Token|credential|Credential"
+    r"|keyRef|KeyRef|privateKey|PrivateKey|serviceAccount)"
+)
 SECRET_VALUE_PATTERNS = [
-    re.compile(
-        r"-----BEGIN (?:RSA |DSA |EC |OPENSSH |PGP |ENCRYPTED )?"
-        r"PRIVATE KEY(?: BLOCK)?-----"
-    ),
-    re.compile(r"(?i)bearer\s+[A-Za-z0-9._-]{20,}"),
+    PRIVATE_KEY_BEGIN_PATTERN,
+    BEARER_CREDENTIAL_PATTERN,
     re.compile(r"\b(?:sk|rk|pk|org|proj)-[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b"),
@@ -277,22 +334,35 @@ class ReviewChunk(NamedTuple):
     content: str
     context: str = ""
 SECRET_PLACEHOLDER_VALUES = {
+    "__openclaw_redacted__",
     "changeme",
+    "decoy-token",
     "dummy",
     "example",
     "fake",
     "gateway-token",
+    "matrix_qa_e2ee_cli_gateway",
+    "matrix_qa_e2ee_thread",
+    "matrix_qa_e2ee_verify_notice",
     "not-a-real",
+    "not-a-valid-matrix-recovery-key",
     "placeholder",
     "redacted",
     "sample",
     "secret-token",
     "test-auth-token",
+    "test-key",
+    "test-secret",
+    "test-token",
     "test-token-placeholder",
     "token-oversized",
     "clawrouter-e2e-secret",
+    "config-token",
     "very-long-browser-token-0123456789",
 }
+SYNTHETIC_SECRET_PREFIXES = frozenset(
+    {"dummy", "example", "fake", "fixture", "mock", "sample", "test"}
+)
 FETCH_CREDENTIAL_MODE_VALUES = {"include", "omit", "same-origin"}
 URI_PASSWORD_PLACEHOLDER_VALUES = {
     "clawrouter-e2e-secret",
@@ -406,6 +476,23 @@ CSHARP_METHOD_PREFIX_PATTERN = (
     r"(?:where\s+[^{;]+)?\{"
 )
 CSHARP_EVIDENCE_WINDOW = 8192
+SOURCE_CODE_REFERENCE_ROOT_VALUES = {
+    "accountConfig",
+    "attemptAuthProfileStore",
+    "baseConfig",
+    "merged",
+}
+SOURCE_CODE_REFERENCE_ROOT_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_$?.])(?:"
+    + "|".join(
+        re.escape(value)
+        for value in sorted(SOURCE_CODE_REFERENCE_ROOT_VALUES, key=len, reverse=True)
+    )
+    + r")(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*"
+    r"|(?:\?\.)?\[(?:[A-Za-z_$][A-Za-z0-9_$]*"
+    r"|[\"']profiles[\"']|[0-9]+)\])+"
+    r"(?![A-Za-z0-9_$])"
+)
 QUOTED_SECRET_REFERENCE_PATTERNS = (
     re.compile(r"^\$[A-Za-z_][A-Za-z0-9_]*$"),
     re.compile(r"^\$env:[A-Za-z_][A-Za-z0-9_]*$", re.IGNORECASE),
@@ -414,7 +501,7 @@ QUOTED_SECRET_REFERENCE_PATTERNS = (
     re.compile(r"^\{\{\s*[A-Za-z_][A-Za-z0-9_.-]*\s*\}\}$"),
     re.compile(
         r"^\$\{(?:process\.env|os\.environ|env|cfg|config|params|payload|provider|user|"
-        r"request|response|result|account|client|options|auth|auth_response|oauth_response|"
+        r"request|response|result|input|runtime|account|client|options|auth|auth_response|oauth_response|"
         r"token_response|api_response|authentication|credentials|settings|self|this)"
         r"(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*"
         r"|\[(?:[\"'][A-Za-z_$][A-Za-z0-9_$]*[\"']|[0-9]+)\])+\}$"
@@ -425,7 +512,7 @@ UNQUOTED_SECRET_REFERENCE_PATTERNS = (
     *QUOTED_SECRET_REFERENCE_PATTERNS,
     re.compile(
         r"^(?:process\.env|os\.environ|env|cfg|config|params|payload|provider|user|"
-        r"request|response|result|account|client|options|auth|auth_response|oauth_response|"
+        r"request|response|result|input|runtime|account|client|options|auth|auth_response|oauth_response|"
         r"token_response|api_response|authentication|credentials|settings|self|this)"
         r"(?:(?:\?\.|[.\[]).*)$"
     ),
@@ -454,6 +541,53 @@ BACKTICK_SECRET_REFERENCE_PATTERNS = (
 BACKTICK_TEMPLATE_INTERPOLATION_PATTERN = re.compile(r"\$\{([^{}\r\n]+)\}")
 BACKTICK_TEMPLATE_SAFE_LITERAL_PATTERN = re.compile(
     r"(?i)(?:(?:Bearer|Basic)[ \t]+|[ \t:./,_-]*)"
+)
+BACKTICK_TEMPLATE_FIXTURE_PREFIX_VALUES = {"matrix-qa-"}
+SOURCE_CODE_REFERENCE_VALUES = {
+    "cliDevice.accessToken",
+    "context.driverAccessToken",
+    "context.driverPassword",
+    "context.observerAccessToken",
+    "context.observerPassword",
+    "context.sutAccessToken",
+    "context.sutPassword",
+    "driverAccount.accessToken",
+    "driverAccount.password",
+    "driverPassword",
+    "data.session?.access_token",
+    "providerConfig.api_key",
+    "providerConfig.api_secret",
+    "recoveryDevice.accessToken",
+    "recoveryDevice.password",
+    "resolution.value",
+}
+SOURCE_CODE_REFERENCE_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_$?.])(?:" + "|".join(
+        re.escape(value)
+        for value in sorted(SOURCE_CODE_REFERENCE_VALUES, key=len, reverse=True)
+    ) + r")(?![A-Za-z0-9_$])"
+)
+SOURCE_CODE_SECRET_REFERENCE_TERM_PATTERN = (
+    r"(?:apiKey|ApiKey|key|Key|credential|Credential|credentials|Credentials"
+    r"|password|Password|secret|Secret|token|Token)"
+)
+SOURCE_CODE_SECRET_REFERENCE_SUFFIX_PATTERN = (
+    r"(?:Diagnostics?|File|Info|Reference|Ref|Resolution|Result)"
+)
+SOURCE_CODE_LIFECYCLE_REFERENCE_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_$?.])(?:"
+    r"(?:account|base|cached|channel|current|existing|file|inline|loaded|merged"
+    r"|previous|resolved|saved|stored|successful)"
+    r"[A-Za-z0-9_$]{0,64}"
+    rf"{SOURCE_CODE_SECRET_REFERENCE_TERM_PATTERN}"
+    rf"(?:{SOURCE_CODE_SECRET_REFERENCE_SUFFIX_PATTERN})?"
+    r"|[A-Za-z0-9_$]{0,64}"
+    rf"{SOURCE_CODE_SECRET_REFERENCE_TERM_PATTERN}"
+    r"[A-Za-z0-9_$]{0,64}"
+    rf"{SOURCE_CODE_SECRET_REFERENCE_SUFFIX_PATTERN}"
+    rf"|{SOURCE_CODE_SECRET_REFERENCE_TERM_PATTERN}"
+    r")(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*)*"
+    r"(?![A-Za-z0-9_$])"
 )
 DEFAULT_ENGINE_PATHS = ("/usr/local/bin", "/usr/bin", "/bin")
 # Keep this explicit: suffix matching leaks unrelated process credentials such
@@ -916,6 +1050,29 @@ def safe_temp_root(repo: Path) -> Path:
             "unset or relocate TMPDIR/TMP/TEMP"
         )
     return root
+
+
+def parallel_test_temp_root(repo: Path) -> Path:
+    root = safe_temp_root(repo)
+    if os.name == "nt" or not env_truthy("OPENCLAW_TESTBOX"):
+        return root
+
+    # Blacksmith stores its SSH control socket below HOME. macOS temp roots can
+    # already consume the Unix-socket path budget before the socket name.
+    try:
+        short_root = Path("/tmp").resolve(strict=True)
+        short_root_stat = short_root.stat()
+    except OSError as exc:
+        raise SystemExit(f"unable to resolve short Testbox temp root: {exc}") from exc
+    if not stat.S_ISDIR(short_root_stat.st_mode):
+        raise SystemExit("short Testbox temp root must be a directory")
+    if is_within(short_root, repo.resolve()):
+        raise SystemExit("short Testbox temp root must be outside the reviewed repository")
+    if short_root_stat.st_mode & stat.S_IWOTH and not (
+        short_root_stat.st_mode & stat.S_ISVTX
+    ):
+        raise SystemExit("world-writable Testbox temp root must have the sticky bit set")
+    return short_root
 
 
 def safe_proxy_url(value: str) -> bool:
@@ -1766,6 +1923,524 @@ def validate_git_ref(repo: Path, ref: str, label: str) -> str:
     return ref
 
 
+TRUFFLEHOG_INSTALL_URL = "https://github.com/trufflesecurity/trufflehog#installation"
+TRUFFLEHOG_FINDINGS_EXIT_CODE = 183
+
+
+def git_bytes(
+    repo: Path,
+    *args: str,
+    check: bool = True,
+) -> subprocess.CompletedProcess[bytes]:
+    result = subprocess.run(
+        [
+            resolve_command("git", repo),
+            "--no-optional-locks",
+            *SAFE_GIT_CONFIG_ARGS,
+            *args,
+        ],
+        cwd=repo,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=safe_git_env(repo),
+    )
+    if check and result.returncode != 0:
+        detail = (result.stderr or result.stdout).decode(
+            SUBPROCESS_TEXT_ENCODING,
+            errors=SUBPROCESS_TEXT_ERRORS,
+        )
+        raise SystemExit(
+            f"Git failed while preparing the TruffleHog scan ({result.returncode}): "
+            f"{display_escape(detail, 1000, multiline=True)}"
+        )
+    return result
+
+
+def snapshot_destination(root: Path, rel: str) -> Path:
+    path = PurePosixPath(rel)
+    if (
+        path.is_absolute()
+        or not path.parts
+        or path.parts[0].casefold() == ".git"
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
+        raise SystemExit("Git returned an unsafe path while preparing the TruffleHog scan")
+    return root.joinpath(*path.parts)
+
+
+def write_snapshot_blob(root: Path, rel: str, content: bytes) -> None:
+    destination = snapshot_destination(root, rel)
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+    except OSError as exc:
+        raise SystemExit(
+            "unable to prepare changed content for the TruffleHog scan: "
+            f"{display_escape(exc, 500)}"
+        ) from exc
+
+
+def materialize_index_snapshot(repo: Path, root: Path, paths: list[str]) -> int:
+    if not paths:
+        return 0
+    records = git_bytes(
+        repo,
+        "--literal-pathspecs",
+        "ls-files",
+        "--stage",
+        "-z",
+        "--",
+        *paths,
+    ).stdout
+    count = 0
+    for record in records.split(b"\0"):
+        if not record:
+            continue
+        metadata, raw_path = record.split(b"\t", 1)
+        mode, object_id, stage = metadata.split()
+        if stage != b"0":
+            raise SystemExit(
+                "cannot run TruffleHog with unmerged index entries; resolve the conflict and rerun autoreview"
+            )
+        if mode == b"160000":
+            continue
+        rel = raw_path.decode(SUBPROCESS_TEXT_ENCODING, errors="strict")
+        content = git_bytes(
+            repo,
+            "cat-file",
+            "blob",
+            object_id.decode("ascii"),
+        ).stdout
+        write_snapshot_blob(root, rel, content)
+        count += 1
+    return count
+
+
+def materialize_tree_snapshot(
+    repo: Path,
+    root: Path,
+    ref: str,
+    paths: list[str],
+) -> int:
+    if not paths:
+        return 0
+    records = git_bytes(
+        repo,
+        "--literal-pathspecs",
+        "ls-tree",
+        "-rz",
+        ref,
+        "--",
+        *paths,
+    ).stdout
+    count = 0
+    for record in records.split(b"\0"):
+        if not record:
+            continue
+        metadata, raw_path = record.split(b"\t", 1)
+        mode, object_type, object_id = metadata.split()
+        if object_type != b"blob" or mode == b"160000":
+            continue
+        rel = raw_path.decode(SUBPROCESS_TEXT_ENCODING, errors="strict")
+        content = git_bytes(
+            repo,
+            "cat-file",
+            "blob",
+            object_id.decode("ascii"),
+        ).stdout
+        write_snapshot_blob(root, rel, content)
+        count += 1
+    return count
+
+
+def open_worktree_parent(repo: Path, rel_path: Path) -> int | bool | None:
+    required_dir_fd = {os.open, os.stat, os.readlink}
+    if not required_dir_fd <= os.supports_dir_fd:
+        return None
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptor = os.open(repo.resolve(), flags)
+    try:
+        for part in rel_path.parts[:-1]:
+            try:
+                component = os.stat(
+                    part,
+                    dir_fd=descriptor,
+                    follow_symlinks=False,
+                )
+            except (FileNotFoundError, NotADirectoryError):
+                os.close(descriptor)
+                return False
+            if stat.S_ISLNK(component.st_mode):
+                raise OSError("symlinked parent directory")
+            if not stat.S_ISDIR(component.st_mode):
+                os.close(descriptor)
+                return False
+            next_descriptor = os.open(part, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_descriptor
+        return descriptor
+    except OSError as exc:
+        os.close(descriptor)
+        raise SystemExit(
+            "refusing to snapshot changed content through a symlinked or unstable parent directory: "
+            f"{display_escape(exc, 500)}"
+        ) from exc
+
+
+def copy_worktree_file(repo: Path, root: Path, rel: str) -> bool:
+    rel_path = Path(*PurePosixPath(rel).parts)
+    parent_descriptor = open_worktree_parent(repo, rel_path)
+    if parent_descriptor is False:
+        return False
+    if parent_descriptor is not None:
+        try:
+            source_stat = os.stat(
+                rel_path.name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except (FileNotFoundError, NotADirectoryError):
+            os.close(parent_descriptor)
+            return False
+        except OSError as exc:
+            os.close(parent_descriptor)
+            raise SystemExit(
+                "unable to read changed content for the TruffleHog scan: "
+                f"{display_escape(exc, 500)}"
+            ) from exc
+        if stat.S_ISLNK(source_stat.st_mode):
+            try:
+                content = os.fsencode(
+                    os.readlink(rel_path.name, dir_fd=parent_descriptor)
+                )
+            except OSError as exc:
+                raise SystemExit(
+                    "unable to read changed symlink for the TruffleHog scan: "
+                    f"{display_escape(exc, 500)}"
+                ) from exc
+            finally:
+                os.close(parent_descriptor)
+            write_snapshot_blob(root, rel, content)
+            return True
+        if stat.S_ISDIR(source_stat.st_mode):
+            os.close(parent_descriptor)
+            return False
+        if not stat.S_ISREG(source_stat.st_mode):
+            os.close(parent_descriptor)
+            raise SystemExit(
+                "changed content is not a regular file; remove it or resolve the repository state before rerunning autoreview"
+            )
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_BINARY", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        try:
+            descriptor = os.open(
+                rel_path.name,
+                flags,
+                dir_fd=parent_descriptor,
+            )
+        except OSError as exc:
+            raise SystemExit(
+                "unable to snapshot changed content for the TruffleHog scan: "
+                f"{display_escape(exc, 500)}"
+            ) from exc
+        finally:
+            os.close(parent_descriptor)
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or (
+            source_stat.st_dev,
+            source_stat.st_ino,
+        ) != (
+            opened.st_dev,
+            opened.st_ino,
+        ):
+            os.close(descriptor)
+            raise SystemExit(
+                "unable to snapshot changed content for the TruffleHog scan: file changed while opening"
+            )
+        destination = snapshot_destination(root, rel)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with destination.open("wb") as output:
+                while chunk := os.read(descriptor, 1024 * 1024):
+                    output.write(chunk)
+            after = os.fstat(descriptor)
+            if (
+                opened.st_mode,
+                opened.st_size,
+                opened.st_mtime_ns,
+            ) != (
+                after.st_mode,
+                after.st_size,
+                after.st_mtime_ns,
+            ):
+                raise OSError("file changed while reading")
+        except OSError as exc:
+            destination.unlink(missing_ok=True)
+            raise SystemExit(
+                "unable to snapshot changed content for the TruffleHog scan: "
+                f"{display_escape(exc, 500)}"
+            ) from exc
+        finally:
+            os.close(descriptor)
+        return True
+
+    source = repo / rel_path
+    if rel_path.parent != Path(".") and raw_repo_path_has_symlink_component(
+        repo,
+        rel_path.parent,
+    ):
+        raise SystemExit(
+            "refusing to snapshot changed content through a symlinked parent directory"
+        )
+    try:
+        source_stat = source.lstat()
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    if stat.S_ISLNK(source_stat.st_mode):
+        write_snapshot_blob(root, rel, os.fsencode(os.readlink(source)))
+        return True
+    if stat.S_ISDIR(source_stat.st_mode):
+        return False
+    if not stat.S_ISREG(source_stat.st_mode):
+        raise SystemExit(
+            "changed content is not a regular file; remove it or resolve the repository state before rerunning autoreview"
+        )
+    content = source.read_bytes()
+    if source.lstat() != source_stat:
+        raise SystemExit(
+            "unable to snapshot changed content for the TruffleHog scan: file changed while reading"
+        )
+    write_snapshot_blob(root, rel, content)
+    return True
+
+
+def materialize_worktree_snapshot(repo: Path, root: Path, paths: list[str]) -> int:
+    return sum(copy_worktree_file(repo, root, rel) for rel in paths)
+
+
+def clear_snapshot_paths(root: Path, paths: list[str]) -> None:
+    for rel in paths:
+        destination = snapshot_destination(root, rel)
+        if destination.is_symlink() or destination.is_file():
+            destination.unlink()
+        elif destination.exists():
+            shutil.rmtree(destination)
+
+
+def commit_snapshot(repo: Path, label: str) -> str:
+    git(repo, "add", "-A", "-f")
+    git(
+        repo,
+        "-c",
+        "user.name=Autoreview",
+        "-c",
+        "user.email=autoreview@example.invalid",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        label,
+    )
+    return git(repo, "rev-parse", "HEAD").strip()
+
+
+def safe_trufflehog_env(repo: Path) -> dict[str, str]:
+    env = safe_git_env(repo)
+    for key in (
+        "ALL_PROXY",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "all_proxy",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+    ):
+        value = os.environ.get(key)
+        if not value:
+            continue
+        if key.casefold() != "no_proxy" and not safe_proxy_url(value):
+            raise SystemExit(
+                f"unsafe credentialed or malformed proxy URL in {key}; "
+                "configure a credential-free proxy URL before running autoreview"
+            )
+        env[key] = value
+    return env
+
+
+def prepare_trufflehog_history(
+    repo: Path,
+    target: str,
+    target_ref: str | None,
+    commit_ref: str,
+    root: Path,
+) -> str:
+    git(root, "init", "-q")
+    if target == "local":
+        staged_paths = git_path_list(
+            repo,
+            "diff",
+            *SAFE_DIFF_FLAGS,
+            "--name-only",
+            "--cached",
+            "-z",
+        )
+        unstaged_paths = git_path_list(
+            repo,
+            "diff",
+            *SAFE_DIFF_FLAGS,
+            "--name-only",
+            "-z",
+        )
+        unstaged_paths.extend(
+            git_path_list(
+                repo,
+                *global_excludes_git_args(repo),
+                "ls-files",
+                "--others",
+                "--exclude-standard",
+                "-z",
+            )
+        )
+        paths = sorted(set(staged_paths + unstaged_paths))
+        head = git(repo, "rev-parse", "--verify", "HEAD", check=False).strip()
+        if head:
+            materialize_tree_snapshot(repo, root, head, paths)
+        base_commit = commit_snapshot(root, "baseline")
+        clear_snapshot_paths(root, paths)
+        materialize_index_snapshot(repo, root, paths)
+        commit_snapshot(root, "staged")
+        clear_snapshot_paths(root, paths)
+        materialize_worktree_snapshot(repo, root, paths)
+        commit_snapshot(root, "working")
+        # TruffleHog's Git parser scans additions only. Reverse commits make
+        # deleted bytes additions without exposing unchanged baseline content.
+        clear_snapshot_paths(root, paths)
+        materialize_index_snapshot(repo, root, paths)
+        commit_snapshot(root, "reverse staged")
+        clear_snapshot_paths(root, paths)
+        if head:
+            materialize_tree_snapshot(repo, root, head, paths)
+        commit_snapshot(root, "reverse baseline")
+        return base_commit
+
+    if target == "branch":
+        assert target_ref
+        target_ref = validate_git_ref(repo, target_ref, "base")
+        paths = git_path_list(
+            repo,
+            "diff",
+            *SAFE_DIFF_FLAGS,
+            "--name-only",
+            "-z",
+            "--end-of-options",
+            f"{target_ref}...HEAD",
+        )
+        base_ref = git(repo, "merge-base", target_ref, "HEAD").strip()
+        reviewed_ref = "HEAD"
+    else:
+        reviewed_ref = validate_git_ref(repo, commit_ref, "commit")
+        parents = git(repo, "rev-list", "--parents", "-n", "1", reviewed_ref).split()
+        if len(parents) > 2:
+            raise SystemExit(
+                "commit review does not accept merge commits; review the branch diff "
+                "or an individual parent-relative commit instead"
+            )
+        base_ref = parents[1] if len(parents) == 2 else ""
+        paths = git_path_list(
+            repo,
+            "show",
+            *SAFE_DIFF_FLAGS,
+            "--name-only",
+            "--format=",
+            "-z",
+            "--end-of-options",
+            reviewed_ref,
+        )
+    if base_ref:
+        materialize_tree_snapshot(repo, root, base_ref, paths)
+    base_commit = commit_snapshot(root, "baseline")
+    clear_snapshot_paths(root, paths)
+    materialize_tree_snapshot(repo, root, reviewed_ref, paths)
+    commit_snapshot(root, "reviewed")
+    # Scan the reverse diff too so deleted bytes become additions for
+    # TruffleHog without scanning unchanged content from the baseline.
+    clear_snapshot_paths(root, paths)
+    if base_ref:
+        materialize_tree_snapshot(repo, root, base_ref, paths)
+    commit_snapshot(root, "reverse baseline")
+    return base_commit
+
+
+def run_trufflehog_preflight(
+    repo: Path,
+    target: str,
+    target_ref: str | None,
+    commit_ref: str,
+) -> None:
+    trufflehog_bin = find_command("trufflehog", repo)
+    if not trufflehog_bin:
+        raise SystemExit(
+            "TruffleHog is required but was not found. Install it using the official "
+            f"instructions, then rerun autoreview: {TRUFFLEHOG_INSTALL_URL}"
+        )
+    started = time.monotonic()
+    with tempfile.TemporaryDirectory(
+        prefix="autoreview-trufflehog.",
+        dir=safe_temp_root(repo),
+    ) as tempdir:
+        scan_repo = Path(tempdir)
+        base_commit = prepare_trufflehog_history(
+            repo,
+            target,
+            target_ref,
+            commit_ref,
+            scan_repo,
+        )
+        result = run(
+            [
+                trufflehog_bin,
+                "git",
+                scan_repo.resolve().as_uri(),
+                "--since-commit",
+                base_commit,
+                "--branch",
+                "HEAD",
+                "--no-update",
+                "--no-color",
+                # Match TruffleHog's pre-commit mode. Unverified heuristic
+                # candidates are excluded to avoid restoring false positives.
+                "--results=verified,unknown",
+                "--fail",
+                "--fail-on-scan-errors",
+            ],
+            repo,
+            check=False,
+            env=safe_trufflehog_env(repo),
+        )
+    if result.returncode == TRUFFLEHOG_FINDINGS_EXIT_CODE:
+        raise SystemExit(
+            "TruffleHog found verified or unknown credentials in the reviewed changes. "
+            "Remove or rotate them, then rerun autoreview."
+        )
+    if result.returncode != 0:
+        raise SystemExit(
+            "TruffleHog could not complete the credential scan. Run TruffleHog directly "
+            "to diagnose the scanner error, then rerun autoreview."
+        )
+    print(f"trufflehog: clean ({time.monotonic() - started:.1f}s)")
+
+
 def bounded(text: str, limit: int = 180_000) -> str:
     if len(text) <= limit:
         return text
@@ -1906,8 +2581,19 @@ def raw_repo_path_has_symlink_component(repo: Path, rel_path: Path) -> bool:
     return False
 
 
-def fallback_expression(text: str) -> str:
-    operator = re.match(r"\s*(?:\|\||&&|\?\?|\+|\?|or\b|and\b|if\b|unless\b)", text)
+def fallback_expression(text: str, *, typescript: bool = False) -> str:
+    operator_keywords = (
+        r"|as(?![\w$])|satisfies(?![\w$])" if typescript else ""
+    )
+    operator = re.match(
+        r"\s*(?:\|\||&&|\?\?|[=<>!~:+\-*/%&|^?.,]"
+        r"|and\b|else\b|if\b|in(?![\w$])|instanceof(?![\w$])"
+        r"|is\b|not\b|or\b"
+        r"|unless\b"
+        + operator_keywords
+        + r")",
+        text,
+    )
     cursor = operator.end() if operator is not None else 0
     stack: list[str] = []
     operand_started = False
@@ -1920,9 +2606,16 @@ def fallback_expression(text: str) -> str:
         char = text[cursor]
         next_char = text[cursor + 1] if cursor + 1 < len(text) else ""
         if line_comment:
-            if char == "\n":
+            if char in "\r\n\u2028\u2029":
                 line_comment = False
-                if operand_started and not stack:
+                if (
+                    operand_started
+                    and not stack
+                    and not javascript_continues_after_line_terminator(
+                        text[cursor + 1 :],
+                        typescript=typescript,
+                    )
+                ):
                     break
             cursor += 1
             continue
@@ -1974,12 +2667,52 @@ def fallback_expression(text: str) -> str:
             continue
         if not stack and char in ",;)]}":
             break
-        if char == "\n" and operand_started and not stack:
-            break
-        if not char.isspace():
+        if char in "\r\n\u2028\u2029" and operand_started and not stack:
+            if not javascript_continues_after_line_terminator(
+                text[cursor + 1 :],
+                typescript=typescript,
+            ):
+                break
+        if not stack and (char.isalpha() or char in "_$"):
+            word_end = cursor + 1
+            while word_end < len(text) and (
+                text[word_end].isalnum() or text[word_end] in "_$"
+            ):
+                word_end += 1
+            word = text[cursor:word_end]
+            word_operators = {"in", "instanceof"}
+            if typescript:
+                word_operators.update({"as", "satisfies"})
+            operand_started = word not in word_operators
+            cursor = word_end
+            continue
+        if not stack and char in "=<>!~:+-*/%&|^?.":
+            operand_started = False
+        elif not char.isspace():
             operand_started = True
         cursor += 1
     return text[:cursor]
+
+
+def javascript_continues_after_line_terminator(
+    text: str,
+    *,
+    typescript: bool = False,
+) -> bool:
+    suffix = text.lstrip()
+    if suffix.startswith(("++", "--", "~")) or (
+        suffix.startswith("!") and not suffix.startswith("!=")
+    ):
+        return False
+    type_operators = (
+        r"|as(?![\w$])|satisfies(?![\w$])" if typescript else ""
+    )
+    return re.match(
+        r"(?:[=<>!:+\-*/%&|^?.,([`]|in(?![\w$])|instanceof(?![\w$])"
+        + type_operators
+        + r")",
+        suffix,
+    ) is not None
 
 
 def top_level_fallback_suffix(
@@ -2956,18 +3689,7 @@ def credentialed_uri_risk(
             )
         ):
             return True
-        if uri_password_is_interpolated(
-            text,
-            credential.scheme_start,
-            credential.value,
-            credential.host,
-            credential.context,
-        ):
-            continue
-        if credential.has_password or uri_userinfo_literal_risk(
-            credential.value,
-            allow_plus_address=True,
-        ):
+        if uri_credential_value_risk(text, credential):
             return True
     return False
 
@@ -3561,6 +4283,24 @@ def uri_password_is_format_placeholder(
     return False
 
 
+def uri_credential_value_risk(
+    text: str,
+    credential: UriAuthorityCredential,
+) -> bool:
+    if uri_password_is_interpolated(
+        text,
+        credential.scheme_start,
+        credential.value,
+        credential.host,
+        credential.context,
+    ):
+        return False
+    return credential.has_password or uri_userinfo_literal_risk(
+        credential.value,
+        allow_plus_address=True,
+    )
+
+
 def format_arguments_are_references(arguments: str) -> bool:
     values = split_top_level_call_arguments(arguments)
     if not values or any(not value.strip() for value in values):
@@ -3680,7 +4420,12 @@ def shell_command_prefix(text: str, position: int) -> bool:
     )
 
 
-def secret_literal_risk(expression: str, minimum_length: int = 12) -> bool:
+def secret_literal_risk(
+    expression: str,
+    minimum_length: int = 12,
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
     if credentialed_uri_risk(expression) or basic_authorization_risk(expression) or any(
         pattern.search(expression) for pattern in SECRET_VALUE_PATTERNS
     ):
@@ -3710,6 +4455,18 @@ def secret_literal_risk(expression: str, minimum_length: int = 12) -> bool:
         if match.group("bare") is not None:
             if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
                 continue
+            if (
+                javascript_dialect is not None
+                and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*:", value)
+            ):
+                # Object/type property names are syntax, not credential content.
+                # Any literal value after the colon is scanned independently.
+                continue
+            if (
+                javascript_dialect is not None
+                and SOURCE_CODE_REFERENCE_ROOT_PATTERN.fullmatch(value)
+            ):
+                continue
             suffix = expression[match.end() :].lstrip()
             if suffix.startswith("("):
                 continue
@@ -3717,14 +4474,50 @@ def secret_literal_risk(expression: str, minimum_length: int = 12) -> bool:
     return False
 
 
-def fallback_secret_risk(text: str, minimum_length: int = 8) -> bool:
+def fallback_secret_risk(
+    text: str,
+    minimum_length: int = 8,
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
     return secret_literal_risk(
-        fallback_expression(text),
+        fallback_expression(
+            text,
+            typescript=javascript_dialect == "typescript",
+        ),
         minimum_length=minimum_length,
+        javascript_dialect=javascript_dialect,
     )
 
 
-def safe_secret_assignment_suffix(text: str, end: int) -> bool:
+def synthetic_secret_fixture(value: str, key: str) -> bool:
+    normalized = value.casefold()
+    if normalized in SECRET_PLACEHOLDER_VALUES:
+        return True
+    if len(normalized) > 80:
+        return False
+    camel_split_key = re.sub(
+        r"(?<=[a-z0-9])(?=[A-Z])",
+        "-",
+        key.strip("\"'"),
+    )
+    normalized_key = re.sub(
+        r"[^a-z0-9]+",
+        "-",
+        camel_split_key.casefold(),
+    ).strip("-")
+    return any(
+        normalized == f"{prefix}-{normalized_key}"
+        for prefix in SYNTHETIC_SECRET_PREFIXES
+    )
+
+
+def safe_secret_assignment_suffix(
+    text: str,
+    end: int,
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
     cursor = end
     raw_diff = text.startswith("diff --git ")
     while cursor < len(text):
@@ -3758,7 +4551,10 @@ def safe_secret_assignment_suffix(text: str, end: int) -> bool:
                 or (suffix.startswith("?") and not suffix.startswith("?."))
                 or re.match(r"(?:or|and)\b", suffix) is not None
             ):
-                return not fallback_secret_risk(suffix)
+                return not fallback_secret_risk(
+                    suffix,
+                    javascript_dialect=javascript_dialect,
+                )
             return True
         if text.startswith("//", cursor) or text.startswith("#", cursor):
             cursor = text.find("\n", cursor)
@@ -3777,7 +4573,10 @@ def safe_secret_assignment_suffix(text: str, end: int) -> bool:
             or (suffix.startswith("?") and not suffix.startswith("?."))
             or re.match(r"(?:or|and|if|unless)\b", suffix) is not None
         ):
-            return not fallback_secret_risk(suffix)
+            return not fallback_secret_risk(
+                suffix,
+                javascript_dialect=javascript_dialect,
+            )
         if text[cursor] in ",;)]}":
             return True
         if text[cursor] in {'"', "'", "`"}:
@@ -4334,6 +5133,123 @@ def safe_credential_lookup_argument(
     )
 
 
+def mask_javascript_comments(text: str) -> str:
+    masked = list(text)
+    cursor = 0
+    quote: str | None = None
+    escaped = False
+    while cursor < len(text):
+        char = text[cursor]
+        next_char = text[cursor + 1] if cursor + 1 < len(text) else ""
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            cursor += 1
+            continue
+        regex_end = javascript_regex_literal_end(text, cursor)
+        if regex_end is not None:
+            cursor = regex_end
+            continue
+        if char == "/" and next_char == "/":
+            comment_end = text.find("\n", cursor + 2)
+            comment_end = len(text) if comment_end < 0 else comment_end
+            for index in range(cursor, comment_end):
+                masked[index] = " "
+            cursor = comment_end
+            continue
+        if char == "/" and next_char == "*":
+            comment_end = text.find("*/", cursor + 2)
+            comment_end = len(text) if comment_end < 0 else comment_end + 2
+            for index in range(cursor, comment_end):
+                if masked[index] not in "\r\n":
+                    masked[index] = " "
+            cursor = comment_end
+            continue
+        if char in {'"', "'", "`"}:
+            quote = char
+        cursor += 1
+    return "".join(masked)
+
+
+def safe_javascript_config_path_literal(
+    text: str,
+    literal: re.Match[str],
+    *,
+    call_target: str,
+    context_start: int,
+    context_end: int,
+    argument_index: int,
+    javascript_dialect: str | None = None,
+) -> bool:
+    if javascript_dialect is None:
+        return False
+    value = literal.group("value")
+    if CANONICAL_CONFIG_PATH_REFERENCE_PATTERN.fullmatch(value) is None:
+        return False
+    final_segment = value.rsplit(".", 1)[-1]
+    if CONFIG_PATH_CREDENTIAL_FIELD_PATTERN.search(final_segment) is None:
+        return False
+    normalized_target = call_target.replace("?.", ".").rsplit(".", 1)[-1]
+    secret_file_reader = normalized_target in {
+        "readCredentialFile",
+        "readCredentialFileSync",
+        "readSecretFile",
+        "readSecretFileSync",
+        "tryReadCredentialFile",
+        "tryReadCredentialFileSync",
+        "tryReadSecretFile",
+        "tryReadSecretFileSync",
+    }
+    quote_start = literal.start("value") - 1
+    quote_end = literal.end("value") + 1
+    argument_prefix = mask_javascript_comments(text[context_start:quote_start])
+    property_match = re.search(
+        r"(?:^|[^A-Za-z0-9_$])(?P<key>configPath|path)\s*:\s*$",
+        argument_prefix,
+    )
+    if property_match is not None:
+        return (
+            property_match.group("key") == "configPath" and secret_file_reader
+        ) or (
+            property_match.group("key") == "path"
+            and normalized_target == "normalizeResolvedSecretInputString"
+        )
+    return (
+        secret_file_reader
+        and argument_index == 1
+        and not text[context_start:quote_start].strip()
+        and not text[quote_end:context_end].strip()
+    )
+
+
+def mask_safe_javascript_config_path_literals(
+    argument: str,
+    call_target: str,
+    *,
+    argument_index: int,
+    javascript_dialect: str | None = None,
+) -> str:
+    spans = [
+        literal.span("value")
+        for pattern in SECRET_FALLBACK_LITERAL_PATTERNS
+        for literal in pattern.finditer(argument)
+        if safe_javascript_config_path_literal(
+            argument,
+            literal,
+            call_target=call_target,
+            context_start=0,
+            context_end=len(argument),
+            argument_index=argument_index,
+            javascript_dialect=javascript_dialect,
+        )
+    ]
+    return redact_review_spans(argument, spans)
+
+
 def prompt_service_segment_is_secret_like(segment: str) -> bool:
     suffix = re.search(r"\d{4,}$", segment)
     if suffix is None:
@@ -4472,93 +5388,176 @@ def public_call_argument_risk(
     return False if generic_credential_prompt_is_safe(value) else None
 
 
-def call_arguments_risk(arguments: str, call_target: str) -> bool:
+def call_arguments_risk(
+    arguments: str,
+    call_target: str,
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
     for index, argument in enumerate(split_top_level_call_arguments(arguments)):
         public_risk = public_call_argument_risk(call_target, argument, index)
         if public_risk is not None:
             if public_risk:
                 return True
             continue
+        scanned_argument = mask_safe_javascript_config_path_literals(
+            argument,
+            call_target,
+            argument_index=index,
+            javascript_dialect=javascript_dialect,
+        )
         if not safe_credential_lookup_argument(
-            call_target, argument, index
-        ) and fallback_secret_risk(argument, minimum_length=12):
+            call_target, scanned_argument, index
+        ) and fallback_secret_risk(
+            scanned_argument,
+            minimum_length=12,
+            javascript_dialect=javascript_dialect,
+        ):
             return True
     return False
 
 
-def safe_secret_call_suffix(text: str, end: int, call_target: str) -> bool:
+def truncated_call_arguments_risk(
+    arguments: str,
+    call_target: str,
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
+    if call_arguments_risk(
+        arguments,
+        call_target,
+        javascript_dialect=javascript_dialect,
+    ):
+        return True
+    for argument in split_top_level_call_arguments(arguments):
+        match = SECRET_FALLBACK_UNQUOTED_PATTERN.fullmatch(argument.strip())
+        if match is None:
+            continue
+        value = match.group("value")
+        if value.casefold() in SECRET_PLACEHOLDER_VALUES or any(
+            pattern.fullmatch(value)
+            for pattern in UNQUOTED_SECRET_REFERENCE_PATTERNS
+        ):
+            continue
+        if len(value) >= 7 and (
+            any(character.isdigit() for character in value)
+            or re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", value) is None
+        ):
+            return True
+    return False
+
+
+def balanced_delimiter_end(
+    text: str,
+    start: int,
+    opener: str,
+    closer: str,
+) -> int | None:
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    line_comment = False
+    block_comment = False
+    index = start
+    while index < len(text):
+        char = text[index]
+        next_char = text[index + 1] if index + 1 < len(text) else ""
+        if line_comment:
+            if char == "\n":
+                line_comment = False
+            index += 1
+            continue
+        if block_comment:
+            if char == "*" and next_char == "/":
+                block_comment = False
+                index += 2
+            else:
+                index += 1
+            continue
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            index += 1
+            continue
+        regex_end = javascript_regex_literal_end(text, index)
+        if regex_end is not None:
+            index = regex_end
+        elif char == "/" and next_char == "/":
+            line_comment = True
+            index += 2
+        elif char == "/" and next_char == "*":
+            block_comment = True
+            index += 2
+        elif char == "#" and not javascript_private_member_marker(text, index):
+            line_comment = True
+            index += 1
+        elif char in {'"', "'", "`"}:
+            quote = char
+            index += 1
+        elif char == opener:
+            depth += 1
+            index += 1
+        elif char == closer:
+            depth -= 1
+            if depth == 0:
+                return index + 1
+            index += 1
+        elif depth == 0:
+            return None
+        else:
+            index += 1
+    return None
+
+
+def safe_secret_call_suffix(
+    text: str,
+    end: int,
+    call_target: str,
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
     if end >= len(text) or text[end] != "(":
         return False
 
-    def balanced_end(start: int, opener: str, closer: str) -> int | None:
-        depth = 0
-        quote: str | None = None
-        escaped = False
-        line_comment = False
-        block_comment = False
-        index = start
-        while index < len(text):
-            char = text[index]
-            next_char = text[index + 1] if index + 1 < len(text) else ""
-            if line_comment:
-                if char == "\n":
-                    line_comment = False
-                index += 1
-                continue
-            if block_comment:
-                if char == "*" and next_char == "/":
-                    block_comment = False
-                    index += 2
-                else:
-                    index += 1
-                continue
-            if quote is not None:
-                if escaped:
-                    escaped = False
-                elif char == "\\":
-                    escaped = True
-                elif char == quote:
-                    quote = None
-                index += 1
-                continue
-            regex_end = javascript_regex_literal_end(text, index)
-            if regex_end is not None:
-                index = regex_end
-            elif char == "/" and next_char == "/":
-                line_comment = True
-                index += 2
-            elif char == "/" and next_char == "*":
-                block_comment = True
-                index += 2
-            elif char == "#" and not javascript_private_member_marker(
-                text,
-                index,
-            ):
-                line_comment = True
-                index += 1
-            elif char in {'"', "'", "`"}:
-                quote = char
-                index += 1
-            elif char == opener:
-                depth += 1
-                index += 1
-            elif char == closer:
-                depth -= 1
-                if depth == 0:
-                    return index + 1
-                index += 1
-            elif depth == 0:
-                return None
-            else:
-                index += 1
-        return None
-
     def safe_call_end(start: int, target: str) -> int | None:
-        cursor = balanced_end(start, "(", ")")
+        cursor = balanced_delimiter_end(text, start, "(", ")")
         if cursor is None:
-            return None
+            if javascript_dialect is None:
+                return None
+            boundary = re.search(r"(?m)^;\r?$", text[start + 1 :])
+            visible_end = (
+                start + 1 + boundary.start()
+                if boundary is not None
+                else len(text)
+            )
+            visible_arguments = text[start + 1 : visible_end]
+            return (
+                None
+                if any(
+                    pattern.search(visible_arguments)
+                    for pattern in SECRET_FALLBACK_LITERAL_PATTERNS
+                )
+                or truncated_call_arguments_risk(
+                    visible_arguments,
+                    target,
+                    javascript_dialect=javascript_dialect,
+                )
+                else visible_end
+            )
         arguments = text[start + 1 : cursor - 1]
-        return None if call_arguments_risk(arguments, target) else cursor
+        return (
+            None
+            if call_arguments_risk(
+                arguments,
+                target,
+                javascript_dialect=javascript_dialect,
+            )
+            else cursor
+        )
 
     cursor = safe_call_end(end, call_target)
     if cursor is None:
@@ -4602,7 +5601,7 @@ def safe_secret_call_suffix(text: str, end: int, call_target: str) -> bool:
             chained_target = "<call-result>"
             continue
         if call_start < len(text) and text[call_start] == "[":
-            cursor = balanced_end(call_start, "[", "]")
+            cursor = balanced_delimiter_end(text, call_start, "[", "]")
             if cursor is None:
                 return False
             chained_target = "<call-result>"
@@ -4610,27 +5609,37 @@ def safe_secret_call_suffix(text: str, end: int, call_target: str) -> bool:
         return safe_secret_assignment_suffix(text, cursor)
 
 
+def safe_backtick_literal_segment(value: str) -> bool:
+    return bool(
+        BACKTICK_TEMPLATE_SAFE_LITERAL_PATTERN.fullmatch(value)
+        or value.casefold() in BACKTICK_TEMPLATE_FIXTURE_PREFIX_VALUES
+    )
+
+
+def safe_backtick_interpolation_expression(expression: str) -> bool:
+    quoted_reference = "${" + expression + "}"
+    if any(
+        pattern.fullmatch(quoted_reference)
+        for pattern in QUOTED_SECRET_REFERENCE_PATTERNS
+    ):
+        return True
+    return re.fullmatch(r"(?:crypto\.)?randomUUID\(\)", expression) is not None
+
+
 def safe_backtick_secret_template(value: str) -> bool:
     cursor = 0
     found_interpolation = False
     for match in BACKTICK_TEMPLATE_INTERPOLATION_PATTERN.finditer(value):
         literal = value[cursor : match.start()]
-        if BACKTICK_TEMPLATE_SAFE_LITERAL_PATTERN.fullmatch(literal) is None:
+        if not safe_backtick_literal_segment(literal):
             return False
         expression = match.group(1).strip()
-        quoted_reference = "${" + expression + "}"
-        if not any(
-            pattern.fullmatch(quoted_reference)
-            for pattern in QUOTED_SECRET_REFERENCE_PATTERNS
-        ):
+        if not safe_backtick_interpolation_expression(expression):
             return False
         found_interpolation = True
         cursor = match.end()
     literal = value[cursor:]
-    return (
-        found_interpolation
-        and BACKTICK_TEMPLATE_SAFE_LITERAL_PATTERN.fullmatch(literal) is not None
-    )
+    return found_interpolation and safe_backtick_literal_segment(literal)
 
 
 def javascript_template_literal_end(
@@ -4764,6 +5773,87 @@ def mask_reference_declaration_evidence(text: str) -> str:
     return mask_csharp_evidence_prefix("".join(masked))
 
 
+@functools.lru_cache(maxsize=8)
+def javascript_reference_spans(text: str) -> frozenset[tuple[int, int]]:
+    return frozenset(
+        (match.start(), match.end())
+        for pattern in (
+            SOURCE_CODE_REFERENCE_PATTERN,
+            SOURCE_CODE_REFERENCE_ROOT_PATTERN,
+            SOURCE_CODE_LIFECYCLE_REFERENCE_PATTERN,
+        )
+        for match in pattern.finditer(text)
+    )
+
+
+def javascript_source_whitespace(char: str) -> bool:
+    return (
+        char in "\t\v\f \r\n\u2028\u2029\ufeff"
+        or unicodedata.category(char) == "Zs"
+    )
+
+
+def safe_javascript_reference_suffix(
+    text: str,
+    end: int,
+    *,
+    typescript: bool,
+) -> bool:
+    line_terminators = "\r\n\u2028\u2029"
+    cursor = end
+    saw_newline = False
+    while cursor < len(text):
+        while cursor < len(text) and javascript_source_whitespace(text[cursor]):
+            saw_newline = saw_newline or text[cursor] in line_terminators
+            cursor += 1
+        if text.startswith("//", cursor):
+            newline = re.search(r"[\r\n\u2028\u2029]", text[cursor + 2 :])
+            if newline is None:
+                return True
+            cursor += 2 + newline.start()
+            saw_newline = True
+            continue
+        if text.startswith("/*", cursor):
+            comment_end = text.find("*/", cursor + 2)
+            if comment_end < 0:
+                return True
+            comment = text[cursor : comment_end + 2]
+            saw_newline = saw_newline or any(
+                terminator in comment for terminator in line_terminators
+            )
+            cursor = comment_end + 2
+            continue
+        break
+    if cursor >= len(text):
+        return True
+    if text[cursor] in ";}])" or text[cursor] == ",":
+        return True
+    if saw_newline and (
+        text.startswith(("++", "--"), cursor)
+        or text[cursor] == "~"
+        or (text[cursor] == "!" and not text.startswith("!=", cursor))
+    ):
+        return True
+    continuation_keyword = re.match(
+        (
+            r"(?:as|in|instanceof|satisfies)(?![\w$])"
+            if typescript
+            else r"(?:in|instanceof)(?![\w$])"
+        ),
+        text[cursor:],
+    )
+    continuation = (
+        text[cursor] in "=<>!~:+-*/%&|^?.,([`"
+        or continuation_keyword is not None
+    )
+    if continuation:
+        return not fallback_secret_risk(
+            text[cursor:],
+            javascript_dialect="typescript" if typescript else "javascript",
+        )
+    return saw_newline
+
+
 def bare_code_reference(
     text: str,
     start: int,
@@ -4848,10 +5938,171 @@ def basic_authorization_risk(text: str) -> bool:
     return False
 
 
-def secret_text_risk(text: str) -> bool:
+def safe_self_reference_assignment(
+    text: str,
+    match: re.Match[str],
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
+    if javascript_dialect is None:
+        return False
+    value = (
+        match.group("reference_value")
+        or match.group("call_value")
+        or match.group("bare_value")
+    )
+    if value is None:
+        return False
+    key = re.split(r"\s*[:=]\s*", match.group(0), maxsplit=1)[0].strip("\"'")
+    if value != key:
+        return False
+    separator = re.search(r"[:=]", match.group(0))
+    if separator is None or separator.group(0) != "=":
+        return False
+    line_end_candidates = [
+        position
+        for position in (
+            text.find("\n", match.end()),
+            text.find("\r", match.end()),
+        )
+        if position >= 0
+    ]
+    line_end = min(line_end_candidates, default=len(text))
+    if not safe_secret_assignment_suffix(
+        text[:line_end],
+        match.end(),
+        javascript_dialect=javascript_dialect,
+    ):
+        return False
+    return safe_javascript_reference_suffix(
+        text,
+        line_end,
+        typescript=javascript_dialect == "typescript",
+    )
+
+
+def unsafe_multiline_self_reference_assignment(
+    text: str,
+    match: re.Match[str],
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
+    if javascript_dialect is None:
+        return False
+    value = (
+        match.group("reference_value")
+        or match.group("call_value")
+        or match.group("bare_value")
+    )
+    if value is None:
+        return False
+    key = re.split(r"\s*[:=]\s*", match.group(0), maxsplit=1)[0].strip("\"'")
+    separator = re.search(r"[:=]", match.group(0))
+    if value != key or separator is None or separator.group(0) != "=":
+        return False
+    line_end_candidates = [
+        position
+        for position in (
+            text.find("\n", match.end()),
+            text.find("\r", match.end()),
+        )
+        if position >= 0
+    ]
+    line_end = min(line_end_candidates, default=len(text))
+    return line_end < len(text) and not safe_javascript_reference_suffix(
+        text,
+        line_end,
+        typescript=javascript_dialect == "typescript",
+    )
+
+
+def boolean_declaration_initializer_range(
+    text: str,
+    match: re.Match[str],
+    *,
+    javascript_dialect: str | None = None,
+) -> tuple[int, int] | None:
+    initializer = re.match(r"\s*=\s*", text[match.end() :])
+    if initializer is None:
+        return None
+    start = match.end() + initializer.end()
+    expression = fallback_expression(
+        text[start:],
+        typescript=javascript_dialect == "typescript",
+    )
+    return start, start + len(expression)
+
+
+def boolean_declaration_initializer_risk(
+    text: str,
+    match: re.Match[str],
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
+    initializer_range = boolean_declaration_initializer_range(
+        text,
+        match,
+        javascript_dialect=javascript_dialect,
+    )
+    if initializer_range is None:
+        return False
+    start, end = initializer_range
+    return secret_literal_risk(
+        text[start:end],
+        minimum_length=8,
+        javascript_dialect=javascript_dialect,
+    )
+
+
+def boolean_declaration_initializer_spans(
+    text: str,
+    match: re.Match[str],
+    *,
+    javascript_dialect: str | None = None,
+) -> list[tuple[int, int]]:
+    initializer_range = boolean_declaration_initializer_range(
+        text,
+        match,
+        javascript_dialect=javascript_dialect,
+    )
+    if initializer_range is None:
+        return []
+    start, end = initializer_range
+    if not secret_literal_risk(
+        text[start:end],
+        minimum_length=8,
+        javascript_dialect=javascript_dialect,
+    ):
+        return []
+    return top_level_fallback_value_spans(text, start, end)
+
+
+def secret_text_risk(
+    text: str,
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
+    if DIFF_HUNK_CONTENT_BOUNDARY in text:
+        return any(
+            secret_text_risk(segment, javascript_dialect=javascript_dialect)
+            for segment in text.split(DIFF_HUNK_CONTENT_BOUNDARY)
+        )
     uri_authorities = uri_authority_ranges(text)
     if credentialed_uri_risk(text, uri_authorities) or basic_authorization_risk(text) or any(
         pattern.search(text) for pattern in SECRET_VALUE_PATTERNS
+    ):
+        return True
+    boolean_declarations = tuple(SECRET_BOOLEAN_DECLARATION_PATTERN.finditer(text))
+    boolean_declaration_positions = {
+        match.start("boolean_key") for match in boolean_declarations
+    }
+    if any(
+        boolean_declaration_initializer_risk(
+            text,
+            match,
+            javascript_dialect=javascript_dialect,
+        )
+        for match in boolean_declarations
     ):
         return True
     safe_uri_credentials = interpolated_empty_password_uri_ranges(
@@ -4869,7 +6120,27 @@ def secret_text_risk(text: str) -> bool:
         text,
         {prefix.start() for prefix in assignment_prefixes},
     )
+    source_reference_spans = (
+        javascript_reference_spans(text)
+        if javascript_dialect is not None
+        else frozenset()
+    )
     for prefix in assignment_prefixes:
+        if prefix.start() in boolean_declaration_positions:
+            continue
+        assignment = SECRET_ASSIGNMENT_PATTERN.match(text, prefix.start())
+        if assignment is not None and safe_self_reference_assignment(
+            text,
+            assignment,
+            javascript_dialect=javascript_dialect,
+        ):
+            continue
+        if assignment is not None and unsafe_multiline_self_reference_assignment(
+            text,
+            assignment,
+            javascript_dialect=javascript_dialect,
+        ):
+            return True
         fallback = top_level_fallback_suffix(
             text[prefix.end() :],
             allow_chained_assignment=(
@@ -4877,7 +6148,10 @@ def secret_text_risk(text: str) -> bool:
                 and prefix.start() in chained_assignment_positions
             ),
         )
-        if fallback is not None and fallback_secret_risk(fallback):
+        if fallback is not None and fallback_secret_risk(
+            fallback,
+            javascript_dialect=javascript_dialect,
+        ):
             return True
     for match in secret_assignment_matches(
         SECRET_ASSIGNMENT_PATTERN,
@@ -4885,6 +6159,8 @@ def secret_text_risk(text: str) -> bool:
         assignment_scan_text,
         safe_uri_credentials,
     ):
+        if match.start() in boolean_declaration_positions:
+            continue
         quoted = any(
             match.group(name) is not None
             for name in ("double_value", "single_value", "backtick_value")
@@ -4903,10 +6179,20 @@ def secret_text_risk(text: str) -> bool:
         separator_match = re.search(r"[:=]", match.group(0))
         assert separator_match is not None
         separator = separator_match.group(0)
+        if safe_self_reference_assignment(
+            text,
+            match,
+            javascript_dialect=javascript_dialect,
+        ):
+            continue
         if (
             key.strip("\"'").lower() == "credentials"
             and value.lower() in FETCH_CREDENTIAL_MODE_VALUES
-            and safe_secret_assignment_suffix(text, match.end())
+            and safe_secret_assignment_suffix(
+                text,
+                match.end(),
+                javascript_dialect=javascript_dialect,
+            )
         ):
             continue
         if (
@@ -4918,11 +6204,19 @@ def secret_text_risk(text: str) -> bool:
                 )
                 or safe_backtick_secret_template(value)
             )
-            and safe_secret_assignment_suffix(text, match.end())
+            and safe_secret_assignment_suffix(
+                text,
+                match.end(),
+                javascript_dialect=javascript_dialect,
+            )
         ):
             continue
-        if value.lower() in SECRET_PLACEHOLDER_VALUES:
-            if safe_secret_assignment_suffix(text, match.end()):
+        if synthetic_secret_fixture(value, key):
+            if safe_secret_assignment_suffix(
+                text,
+                match.end(),
+                javascript_dialect=javascript_dialect,
+            ):
                 continue
             return True
         if (
@@ -4930,7 +6224,11 @@ def secret_text_risk(text: str) -> bool:
             and len(value) < 12
             and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", value)
         ):
-            if safe_secret_assignment_suffix(text, match.end()):
+            if safe_secret_assignment_suffix(
+                text,
+                match.end(),
+                javascript_dialect=javascript_dialect,
+            ):
                 continue
             return True
         if (
@@ -4942,9 +6240,31 @@ def secret_text_risk(text: str) -> bool:
                 separator,
                 value,
             )
-            and safe_secret_assignment_suffix(text, match.end())
+            and safe_secret_assignment_suffix(
+                text,
+                match.end(),
+                javascript_dialect=javascript_dialect,
+            )
         ):
             continue
+        if not quoted:
+            source_start = match.end() - len(value)
+            source_end = match.end() - (1 if value.endswith("!") else 0)
+            if (
+                (
+                    (source_start, source_end) in source_reference_spans
+                    or (
+                        javascript_dialect is not None
+                        and SOURCE_CODE_REFERENCE_ROOT_PATTERN.fullmatch(value)
+                    )
+                )
+                and safe_javascript_reference_suffix(
+                    text,
+                    match.end(),
+                    typescript=javascript_dialect == "typescript",
+                )
+            ):
+                continue
         reference_patterns = (
             QUOTED_SECRET_REFERENCE_PATTERNS
             if quoted
@@ -4971,6 +6291,7 @@ def secret_text_risk(text: str) -> bool:
                     text,
                     call_start,
                     call_target.group(0),
+                    javascript_dialect=javascript_dialect,
                 )
             ):
                 continue
@@ -4980,23 +6301,918 @@ def secret_text_risk(text: str) -> bool:
             and call_target
             and text[call_start : call_start + 1] == "("
         ):
-            if safe_secret_call_suffix(text, call_start, value):
+            if safe_secret_call_suffix(
+                text,
+                call_start,
+                value,
+                javascript_dialect=javascript_dialect,
+            ):
                 continue
             return True
         if any(pattern.fullmatch(value) for pattern in reference_patterns):
-            if safe_secret_assignment_suffix(text, match.end()):
+            if safe_secret_assignment_suffix(
+                text,
+                match.end(),
+                javascript_dialect=javascript_dialect,
+            ):
                 continue
             return True
         return True
     return False
 
 
-def require_no_secret_values(label: str, text: str) -> None:
-    if secret_text_risk(text):
+def require_no_secret_values(
+    label: str,
+    text: str,
+    *,
+    javascript_dialect: str | None = None,
+) -> None:
+    if secret_text_risk(text, javascript_dialect=javascript_dialect):
         raise SystemExit(
             "refusing to include secret-like content in review bundle; "
             f"clean or redact {label} before running autoreview"
         )
+
+
+def assignment_fallback_literal_spans(
+    text: str,
+    match: re.Match[str],
+    *,
+    javascript_dialect: str | None = None,
+) -> list[tuple[int, int]]:
+    line_end_candidates = [
+        position
+        for position in (
+            text.find("\n", match.end()),
+            text.find("\r", match.end()),
+        )
+        if position >= 0
+    ]
+    line_end = min(line_end_candidates, default=len(text))
+    expression_end = line_end
+    if (
+        javascript_dialect is not None
+        and line_end < len(text)
+        and not safe_javascript_reference_suffix(
+            text,
+            line_end,
+            typescript=javascript_dialect == "typescript",
+        )
+    ):
+        continued = fallback_expression(
+            text[line_end:],
+            typescript=javascript_dialect == "typescript",
+        )
+        expression_end = line_end + len(continued)
+    fallback_start = match.end()
+    if match.group("call_value") is not None:
+        whitespace = re.match(r"[ \t]*", text[fallback_start:expression_end])
+        assert whitespace is not None
+        call_start = fallback_start + whitespace.end()
+        if call_start < line_end and text[call_start] == "(":
+            depth = 0
+            quote: str | None = None
+            escaped = False
+            cursor = call_start
+            while cursor < expression_end:
+                char = text[cursor]
+                if quote is not None:
+                    if escaped:
+                        escaped = False
+                    elif char == "\\":
+                        escaped = True
+                    elif char == quote:
+                        quote = None
+                elif char in {'"', "'", "`"}:
+                    quote = char
+                elif char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                    if depth == 0:
+                        fallback_start = cursor + 1
+                        break
+                cursor += 1
+    operator_span = top_level_fallback_operator_span(
+        text,
+        fallback_start,
+        expression_end,
+    )
+    if operator_span is None:
+        return []
+    expression_start = operator_span[1]
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    cursor = expression_start
+    while cursor < line_end:
+        char = text[cursor]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+        elif char in {'"', "'", "`"}:
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            if depth == 0:
+                expression_end = cursor
+                break
+            depth -= 1
+        elif depth == 0 and char in ";,":
+            expression_end = cursor
+            break
+        cursor += 1
+    return top_level_fallback_value_spans(
+        text,
+        expression_start,
+        expression_end,
+        include_nested=True,
+    )
+
+
+def top_level_fallback_operator_span(
+    text: str,
+    start: int,
+    end: int,
+) -> tuple[int, int] | None:
+    stack: list[str] = []
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    quote: str | None = None
+    escaped = False
+    line_comment = False
+    block_comment = False
+    cursor = start
+    while cursor < end:
+        char = text[cursor]
+        next_char = text[cursor + 1] if cursor + 1 < end else ""
+        if line_comment:
+            if char in "\r\n":
+                line_comment = False
+            cursor += 1
+            continue
+        if block_comment:
+            if char == "*" and next_char == "/":
+                block_comment = False
+                cursor += 2
+            else:
+                cursor += 1
+            continue
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            cursor += 1
+            continue
+        if char == "/" and next_char == "/":
+            line_comment = True
+            cursor += 2
+            continue
+        if char == "/" and next_char == "*":
+            block_comment = True
+            cursor += 2
+            continue
+        if char == "#":
+            line_comment = True
+            cursor += 1
+            continue
+        if char in {'"', "'", "`"}:
+            quote = char
+            cursor += 1
+            continue
+        if char in pairs:
+            stack.append(pairs[char])
+            cursor += 1
+            continue
+        if stack and char == stack[-1]:
+            stack.pop()
+            cursor += 1
+            continue
+        if not stack and text.startswith(("||", "??"), cursor):
+            return cursor, cursor + 2
+        if not stack and text.startswith("or", cursor):
+            before = text[cursor - 1] if cursor > start else ""
+            after = text[cursor + 2] if cursor + 2 < end else ""
+            if not (before.isalnum() or before == "_") and not (
+                after.isalnum() or after == "_"
+            ):
+                return cursor, cursor + 2
+        cursor += 1
+    return None
+
+
+def top_level_fallback_value_spans(
+    text: str,
+    start: int,
+    end: int,
+    *,
+    include_nested: bool = False,
+) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    stack: list[str] = []
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    cursor = start
+    while cursor < end:
+        char = text[cursor]
+        next_char = text[cursor + 1] if cursor + 1 < end else ""
+        if char == "/" and next_char == "/":
+            newline = re.search(r"[\r\n]", text[cursor + 2 : end])
+            if newline is None:
+                break
+            cursor += 2 + newline.end()
+            continue
+        if char == "/" and next_char == "*":
+            comment_end = text.find("*/", cursor + 2, end)
+            if comment_end < 0:
+                break
+            cursor = comment_end + 2
+            continue
+        if char == "#":
+            newline = re.search(r"[\r\n]", text[cursor + 1 : end])
+            if newline is None:
+                break
+            cursor += 1 + newline.end()
+            continue
+        if char in {'"', "'", "`"}:
+            quote = char
+            value_start = cursor + 1
+            cursor = value_start
+            escaped = False
+            while cursor < end:
+                current = text[cursor]
+                if escaped:
+                    escaped = False
+                elif current == "\\":
+                    escaped = True
+                elif current == quote:
+                    value = text[value_start:cursor]
+                    repeatable_nested_value = (
+                        include_nested
+                        and value.casefold() not in SECRET_PLACEHOLDER_VALUES
+                        and len(value) >= 7
+                        and any(character.isdigit() for character in value)
+                        and not any(
+                            pattern.fullmatch(value)
+                            for pattern in QUOTED_SECRET_REFERENCE_PATTERNS
+                        )
+                    )
+                    if cursor > value_start and (
+                        not stack or repeatable_nested_value
+                    ):
+                        spans.append((value_start, cursor))
+                    cursor += 1
+                    break
+                cursor += 1
+            continue
+        if char in pairs:
+            stack.append(pairs[char])
+            cursor += 1
+            continue
+        if stack and char == stack[-1]:
+            stack.pop()
+            cursor += 1
+            continue
+        if not stack:
+            bare = SECRET_FALLBACK_UNQUOTED_PATTERN.match(text, cursor, end)
+            if bare is not None:
+                value = bare.group("value")
+                if len(value) >= 7 and (
+                    any(candidate.isdigit() for candidate in value)
+                    or re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", value) is None
+                ):
+                    spans.append(bare.span("value"))
+                cursor = bare.end()
+                continue
+        cursor += 1
+    return sorted(set(spans))
+
+
+def review_call_literal_spans(
+    text: str,
+    match: re.Match[str],
+    *,
+    javascript_dialect: str | None = None,
+) -> list[tuple[int, int]]:
+    whitespace = re.match(r"[ \t]*", text[match.end() :])
+    assert whitespace is not None
+    call_start = match.end() + whitespace.end()
+    if call_start >= len(text) or text[call_start] != "(":
+        return []
+    call_end = balanced_delimiter_end(text, call_start, "(", ")")
+    if call_end is None or not secret_text_risk(
+        text[match.start() : call_end],
+        javascript_dialect=javascript_dialect,
+    ):
+        return []
+    candidates = sorted(
+        (
+            literal
+            for pattern in SECRET_FALLBACK_LITERAL_PATTERNS
+            for literal in pattern.finditer(text, call_start + 1, call_end - 1)
+        ),
+        key=lambda literal: literal.start("value"),
+    )
+    argument_ranges: list[tuple[int, int]] = []
+    argument_start = call_start + 1
+    for argument in split_top_level_call_arguments(
+        text[call_start + 1 : call_end - 1]
+    ):
+        argument_end = argument_start + len(argument)
+        argument_ranges.append((argument_start, argument_end))
+        argument_start = argument_end + 1
+    candidates_with_argument_index: list[tuple[re.Match[str], int]] = []
+    argument_index = 0
+    for literal in candidates:
+        while (
+            argument_index < len(argument_ranges)
+            and argument_ranges[argument_index][1] <= literal.start("value")
+        ):
+            argument_index += 1
+        matched_index = (
+            argument_index
+            if argument_index < len(argument_ranges)
+            and argument_ranges[argument_index][0]
+            <= literal.start("value")
+            < argument_ranges[argument_index][1]
+            else -1
+        )
+        candidates_with_argument_index.append((literal, matched_index))
+    return [
+        literal.span("value")
+        for literal, argument_index in candidates_with_argument_index
+        if len(literal.group("value")) >= 7
+        and any(char.isalpha() for char in literal.group("value"))
+        and literal.group("value").casefold() not in SECRET_PLACEHOLDER_VALUES
+        and not any(
+            pattern.fullmatch(literal.group("value"))
+            for pattern in QUOTED_SECRET_REFERENCE_PATTERNS
+        )
+        and not safe_javascript_config_path_literal(
+            text,
+            literal,
+            call_target=match.group("call_value") or "",
+            context_start=(
+                argument_ranges[argument_index][0]
+                if 0 <= argument_index < len(argument_ranges)
+                else call_start + 1
+            ),
+            context_end=(
+                argument_ranges[argument_index][1]
+                if 0 <= argument_index < len(argument_ranges)
+                else call_end - 1
+            ),
+            argument_index=argument_index,
+            javascript_dialect=javascript_dialect,
+        )
+    ]
+
+
+def review_repeatable_secret_spans(
+    text: str,
+    *,
+    javascript_dialect: str | None = None,
+) -> list[tuple[int, int]]:
+    boolean_declarations = tuple(SECRET_BOOLEAN_DECLARATION_PATTERN.finditer(text))
+    boolean_declaration_positions = {
+        match.start("boolean_key") for match in boolean_declarations
+    }
+    spans = [
+        span
+        for match in boolean_declarations
+        for span in boolean_declaration_initializer_spans(
+            text,
+            match,
+            javascript_dialect=javascript_dialect,
+        )
+    ]
+    for match in SECRET_ASSIGNMENT_PATTERN.finditer(text):
+        if match.start() in boolean_declaration_positions:
+            continue
+        selected_name = next(
+            (
+                name
+                for name in (
+                    "double_value",
+                    "single_value",
+                    "backtick_value",
+                    "reference_value",
+                    "call_value",
+                    "bare_value",
+                )
+                if match.group(name) is not None
+            ),
+            None,
+        )
+        if selected_name is None:
+            continue
+        if safe_self_reference_assignment(
+            text,
+            match,
+            javascript_dialect=javascript_dialect,
+        ):
+            continue
+        fallback_spans = (
+            assignment_fallback_literal_spans(
+                text,
+                match,
+                javascript_dialect=javascript_dialect,
+            )
+            if selected_name in {"reference_value", "call_value", "bare_value"}
+            else []
+        )
+        if fallback_spans:
+            spans.extend(fallback_spans)
+            continue
+        if selected_name == "call_value":
+            spans.extend(
+                review_call_literal_spans(
+                    text,
+                    match,
+                    javascript_dialect=javascript_dialect,
+                )
+            )
+            continue
+        if secret_text_risk(
+            match.group(0),
+            javascript_dialect=javascript_dialect,
+        ):
+            spans.append(match.span(selected_name))
+    for pattern in SECRET_VALUE_PATTERNS:
+        spans.extend(
+            match.span("credential")
+            if pattern is BEARER_CREDENTIAL_PATTERN
+            else match.span()
+            for match in pattern.finditer(text)
+        )
+    spans.extend(
+        match.span("credential")
+        for match in BASIC_AUTHORIZATION_PATTERN.finditer(text)
+    )
+    for authority_range in uri_authority_ranges(text):
+        credential = uri_authority_credential(text, authority_range)
+        if (
+            credential is not None
+            and credential.value
+            and uri_credential_value_risk(text, credential)
+        ):
+            spans.append((credential.value_start, credential.value_end))
+    return spans
+
+
+def review_secret_value_spans(
+    text: str,
+    *,
+    javascript_dialect: str | None = None,
+) -> list[tuple[int, int]]:
+    boolean_declarations = tuple(SECRET_BOOLEAN_DECLARATION_PATTERN.finditer(text))
+    boolean_declaration_positions = {
+        match.start("boolean_key") for match in boolean_declarations
+    }
+    spans = [
+        span
+        for match in boolean_declarations
+        for span in boolean_declaration_initializer_spans(
+            text,
+            match,
+            javascript_dialect=javascript_dialect,
+        )
+    ]
+    for match in SECRET_ASSIGNMENT_PATTERN.finditer(text):
+        if match.start() in boolean_declaration_positions:
+            continue
+        for name in (
+            "double_value",
+            "single_value",
+            "backtick_value",
+            "reference_value",
+            "call_value",
+            "bare_value",
+        ):
+            if match.group(name) is not None:
+                if safe_self_reference_assignment(
+                    text,
+                    match,
+                    javascript_dialect=javascript_dialect,
+                ):
+                    break
+                fallback_spans = (
+                    assignment_fallback_literal_spans(
+                        text,
+                        match,
+                        javascript_dialect=javascript_dialect,
+                    )
+                    if name in {"reference_value", "call_value", "bare_value"}
+                    else []
+                )
+                if fallback_spans:
+                    spans.extend(fallback_spans)
+                    break
+                if name == "call_value":
+                    spans.extend(
+                        review_call_literal_spans(
+                            text,
+                            match,
+                            javascript_dialect=javascript_dialect,
+                        )
+                    )
+                    break
+                if secret_text_risk(
+                    match.group(0),
+                    javascript_dialect=javascript_dialect,
+                ):
+                    spans.append(match.span(name))
+                break
+    for pattern in SECRET_VALUE_PATTERNS:
+        spans.extend(
+            match.span("credential")
+            if pattern is BEARER_CREDENTIAL_PATTERN
+            else match.span()
+            for match in pattern.finditer(text)
+        )
+    spans.extend(
+        match.span("credential")
+        for match in BASIC_AUTHORIZATION_PATTERN.finditer(text)
+    )
+    for authority_range in uri_authority_ranges(text):
+        credential = uri_authority_credential(text, authority_range)
+        if (
+            credential is not None
+            and credential.value
+            and uri_credential_value_risk(text, credential)
+        ):
+            spans.append((credential.value_start, credential.value_end))
+    return spans
+
+
+def redact_review_spans(text: str, spans: list[tuple[int, int]]) -> str:
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if start >= end:
+            continue
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+        else:
+            merged.append((start, end))
+    if not merged:
+        return text
+    parts: list[str] = []
+    cursor = 0
+    for start, end in merged:
+        parts.extend((text[cursor:start], "redacted"))
+        cursor = end
+    parts.append(text[cursor:])
+    return "".join(parts)
+
+
+def known_secret_fragment_pattern(fragments: list[str]) -> re.Pattern[str] | None:
+    if not fragments:
+        return None
+    alternatives = "|".join(re.escape(fragment) for fragment in fragments)
+    return re.compile(rf"(?=(?P<fragment>{alternatives}))")
+
+
+def known_secret_fragment_spans(
+    text: str,
+    pattern: re.Pattern[str] | None,
+) -> list[tuple[int, int]]:
+    if pattern is None:
+        return []
+    return [match.span("fragment") for match in pattern.finditer(text)]
+
+
+def javascript_regex_literal_ranges(text: str) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    cursor = 0
+    while cursor < len(text):
+        end = javascript_regex_literal_end(text, cursor)
+        if end is None:
+            cursor += 1
+            continue
+        ranges.append((cursor, end))
+        cursor = end
+    return ranges
+
+
+def repeated_secret_fragment_spans(
+    text: str,
+    pattern: re.Pattern[str] | None,
+    *,
+    javascript_dialect: str | None = None,
+) -> list[tuple[int, int]]:
+    matches = known_secret_fragment_spans(text, pattern)
+    contexts = string_contexts_at(text, {start for start, _ in matches})
+    regex_ranges = (
+        javascript_regex_literal_ranges(text)
+        if javascript_dialect is not None
+        else []
+    )
+    regex_index = 0
+    spans: list[tuple[int, int]] = []
+    for start, end in matches:
+        while (
+            regex_index < len(regex_ranges)
+            and regex_ranges[regex_index][1] <= start
+        ):
+            regex_index += 1
+        if (
+            regex_index < len(regex_ranges)
+            and regex_ranges[regex_index][0] <= start
+            and end <= regex_ranges[regex_index][1]
+        ):
+            spans.append((start, end))
+            continue
+        token_start = start
+        while token_start > 0 and re.match(r"[A-Za-z0-9_$.-]", text[token_start - 1]):
+            token_start -= 1
+        token_end = end
+        while token_end < len(text) and re.match(r"[A-Za-z0-9_$.-]", text[token_end]):
+            token_end += 1
+        key_position = re.match(
+            r"\s*(?:=(?!=|>)|:(?![:=]))",
+            text[token_end:],
+        ) is not None
+        unquoted_token_substring = (
+            contexts[start] is None
+            and (token_start < start or end < token_end)
+        )
+        unquoted_identifier = (
+            contexts[start] is None
+            and token_start == start
+            and token_end == end
+            and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$.-]*", text[start:end])
+            is not None
+        )
+        if contexts[start] is None and (
+            key_position or unquoted_token_substring or unquoted_identifier
+        ):
+            continue
+        spans.append((start, end))
+    return spans
+
+
+def private_key_body_spans(text: str) -> list[tuple[int, int]]:
+    matches = list(PRIVATE_KEY_BODY_PATTERN.finditer(text))
+    contexts = string_contexts_at(text, {match.start() for match in matches})
+    wrapper_parts: list[str] = []
+    cursor = 0
+    for match in matches:
+        wrapper_parts.append(text[cursor : match.start()])
+        cursor = match.end()
+    wrapper_parts.append(text[cursor:])
+    body_only_line = re.fullmatch(
+        r"(?:(?:#|//|/\*|\*)\s*)?[\s\"'`,;+\[\]]*",
+        "".join(wrapper_parts).strip(),
+    ) is not None
+    return [
+        match.span()
+        for match in matches
+        if body_only_line or contexts[match.start()] is not None
+    ]
+
+
+def private_key_token_spans(text: str) -> list[tuple[int, int]]:
+    escaped_spans = [
+        match.span("body")
+        for match in ESCAPED_PRIVATE_KEY_BODY_PATTERN.finditer(text)
+    ]
+    ordinary_spans = [
+        match.span()
+        for match in PRIVATE_KEY_BODY_PATTERN.finditer(text)
+        if not (
+            match.start() > 0
+            and text[match.start() - 1] == "\\"
+            and match.group(0)[:1] in {"n", "r"}
+        )
+        and not any(
+            start < match.end() and match.start() < end
+            for start, end in escaped_spans
+        )
+    ]
+    return sorted(escaped_spans + ordinary_spans)
+
+
+def normalized_private_key_fragment(text: str, start: int, end: int) -> str:
+    fragment = text[start:end]
+    if start > 0 and text[start - 1] == "\\" and fragment[:1] in {"n", "r"}:
+        return fragment[1:]
+    return fragment
+
+
+def likely_private_key_token(value: str) -> bool:
+    encoded = value.rstrip("=")
+    if not encoded:
+        return False
+    entropy = -sum(
+        (frequency := encoded.count(char) / len(encoded)) * math.log2(frequency)
+        for char in set(encoded)
+    )
+    return (
+        (len(encoded) >= 48 or encoded.startswith("MII"))
+        and any(char.islower() for char in encoded)
+        and any(char.isupper() for char in encoded)
+        and any(char.isdigit() or char in "+/=" for char in value)
+        and entropy >= 4.25
+    )
+
+
+def wrapped_private_key_body_matches(text: str) -> list[re.Match[str]]:
+    matches = list(PRIVATE_KEY_BODY_PATTERN.finditer(text))
+    if not matches:
+        return []
+    wrapper_parts: list[str] = []
+    cursor = 0
+    for match in matches:
+        wrapper_parts.append(text[cursor : match.start()])
+        cursor = match.end()
+    wrapper_parts.append(text[cursor:])
+    if re.fullmatch(
+        r"(?:(?:#|//|/\*|\*)\s*)?[\s\\\"'`,;+\[\]]*"
+        r"(?:\*/[\s\\\"'`,;+\[\]]*)?",
+        "".join(wrapper_parts).strip(),
+    ) is None:
+        return []
+    return matches
+
+
+def orphan_private_key_body_spans(text: str) -> list[tuple[int, int]]:
+    matches = wrapped_private_key_body_matches(text)
+    if not matches:
+        return []
+    values = [match.group(0) for match in matches]
+    raw_encoded = "".join(values)
+    encoded = raw_encoded.rstrip("=")
+    if not encoded:
+        return []
+    entropy = -sum(
+        (frequency := encoded.count(char) / len(encoded)) * math.log2(frequency)
+        for char in set(encoded)
+    )
+    mixed_short_chunks = (
+        len(encoded) >= 20
+        and len(matches) >= 2
+        and all(
+            any(char.isdigit() for char in value)
+            and any(char.isupper() or char in "+/" for char in value)
+            for value in values
+        )
+        and any(char.islower() for char in encoded)
+        and entropy >= 4.25
+    )
+    long_base64_line = len(matches) == 1 and likely_private_key_token(raw_encoded)
+    if not long_base64_line and not mixed_short_chunks:
+        return []
+    return [match.span() for match in matches]
+
+
+def bare_source_identifier_span(text: str, start: int, end: int) -> bool:
+    if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", text[start:end]) is None:
+        return False
+    before = text[:start].rstrip()[-1:]
+    after = text[end:].lstrip()[:1]
+    return before in {"=", "+", "(", "[", "{", ",", ":"} and after in {
+        "+",
+        ")",
+        "]",
+        "}",
+        ",",
+        ";",
+        ":",
+    }
+
+
+def explicit_private_key_body_spans(
+    text: str,
+    *,
+    in_pem: bool,
+) -> list[tuple[int, int]]:
+    if not in_pem:
+        return []
+    candidates = private_key_token_spans(text)
+    if not candidates:
+        return []
+    wrapper_parts: list[str] = []
+    cursor = 0
+    for start, end in candidates:
+        wrapper_parts.append(text[cursor:start])
+        cursor = end
+    wrapper_parts.append(text[cursor:])
+    wrapper_text = "".join(wrapper_parts).strip()
+    escaped_body_only = ("\\n" in wrapper_text or "\\r" in wrapper_text) and re.fullmatch(
+        r"(?:(?:\\[nr])|\s)*",
+        wrapper_text,
+    ) is not None
+    if escaped_body_only:
+        return candidates
+    contexts = string_contexts_at(text, {start for start, _ in candidates})
+    wrapped = {match.span() for match in wrapped_private_key_body_matches(text)}
+    return [
+        (start, end)
+        for start, end in candidates
+        if not bare_source_identifier_span(text, start, end)
+        and (
+            (start, end) in wrapped
+            or contexts[start] is not None
+            or any(char.isdigit() or char in "+/=" for char in text[start:end])
+        )
+    ]
+
+
+def markerless_private_key_body_spans(text: str) -> list[tuple[int, int]]:
+    spans = orphan_private_key_body_spans(text)
+    matches = list(PRIVATE_KEY_BODY_PATTERN.finditer(text))
+    contexts = string_contexts_at(text, {match.start() for match in matches})
+    spans.extend(
+        match.span()
+        for match in matches
+        if contexts[match.start()] is not None
+        and likely_private_key_token(match.group(0))
+    )
+    return sorted(set(spans))
+
+
+def pem_line_body_spans(
+    text: str,
+    in_pem: bool,
+) -> tuple[list[tuple[int, int]], bool]:
+    markers = sorted(
+        [
+            (match.start(), match.end(), True)
+            for match in PRIVATE_KEY_BEGIN_PATTERN.finditer(text)
+        ]
+        + [
+            (match.start(), match.end(), False)
+            for match in PRIVATE_KEY_END_PATTERN.finditer(text)
+        ]
+    )
+    if not markers and not in_pem:
+        return markerless_private_key_body_spans(text), False
+    spans: list[tuple[int, int]] = []
+    cursor = 0
+    for start, end, begins_pem in markers:
+        if in_pem:
+            spans.extend(
+                (cursor + body_start, cursor + body_end)
+                for body_start, body_end in explicit_private_key_body_spans(
+                    text[cursor:start],
+                    in_pem=in_pem,
+                )
+            )
+        else:
+            spans.extend(
+                (cursor + body_start, cursor + body_end)
+                for body_start, body_end in markerless_private_key_body_spans(
+                    text[cursor:start]
+                )
+            )
+        if begins_pem:
+            if in_pem:
+                raise SystemExit("refusing review bundle with nested private-key BEGIN markers")
+            in_pem = True
+        else:
+            if not in_pem:
+                raise SystemExit(
+                    "refusing review bundle with a private-key END marker but no visible BEGIN"
+                )
+            in_pem = False
+        cursor = end
+    if in_pem:
+        spans.extend(
+            (cursor + body_start, cursor + body_end)
+            for body_start, body_end in explicit_private_key_body_spans(
+                text[cursor:],
+                in_pem=in_pem,
+            )
+        )
+    else:
+        spans.extend(
+            (cursor + body_start, cursor + body_end)
+            for body_start, body_end in markerless_private_key_body_spans(text[cursor:])
+        )
+    return spans, in_pem
+
+
+def private_key_body_fragments(text: str) -> set[str]:
+    # Do not join short markerless chunks across lines. Without PEM boundaries,
+    # code and data are indistinguishable; explicit markers or long tokens redact.
+    fragments: set[str] = set()
+    in_private_key = False
+    for line in text.split("\n"):
+        spans, in_private_key = pem_line_body_spans(line, in_private_key)
+        fragments.update(
+            fragment
+            for start, end in spans
+            if (fragment := normalized_private_key_fragment(line, start, end))
+        )
+    if in_private_key:
+        raise SystemExit("refusing review bundle with an unterminated private-key block")
+    return fragments
 
 
 def unified_diff_contents(patch: str) -> tuple[str, str]:
@@ -5004,17 +7220,18 @@ def unified_diff_contents(patch: str) -> tuple[str, str]:
     new_content: list[str] = []
     in_hunk = False
     prefix_columns = 1
-    for line in patch.splitlines():
+    for line in patch.split("\n"):
+        line = line.removesuffix("\r")
         hunk_header = re.match(r"^(@{2,})", line)
         if hunk_header:
-            old_content.append(";")
-            new_content.append(";")
+            old_content.append(DIFF_HUNK_CONTENT_BOUNDARY)
+            new_content.append(DIFF_HUNK_CONTENT_BOUNDARY)
             in_hunk = True
             prefix_columns = len(hunk_header.group(1)) - 1
             continue
         if line.startswith("diff --"):
-            old_content.append(";")
-            new_content.append(";")
+            old_content.append(DIFF_HUNK_CONTENT_BOUNDARY)
+            new_content.append(DIFF_HUNK_CONTENT_BOUNDARY)
             in_hunk = False
             continue
         prefix = line[:prefix_columns]
@@ -5033,30 +7250,9 @@ def unified_diff_contents(patch: str) -> tuple[str, str]:
     return "\n".join(old_content), "\n".join(new_content)
 
 
-def unified_diff_metadata(patch: str) -> str:
-    metadata: list[str] = []
-    in_hunk = False
-    prefix_columns = 1
-    for line in patch.splitlines():
-        hunk_header = re.match(r"^(@{2,})", line)
-        if hunk_header:
-            metadata.append(line)
-            in_hunk = True
-            prefix_columns = len(hunk_header.group(1)) - 1
-            continue
-        if line.startswith("diff --"):
-            metadata.append(line)
-            in_hunk = False
-            continue
-        prefix = line[:prefix_columns]
-        hunk_content = (
-            in_hunk
-            and len(prefix) == prefix_columns
-            and set(prefix) <= {"+", "-", " "}
-        )
-        if not hunk_content:
-            metadata.append(line)
-    return "\n".join(metadata)
+REVIEW_SECURITY_REDACTION = (
+    "[security-sensitive review material omitted before model review]"
+)
 
 
 def sensitive_repo_path_risk(rel: str) -> str | None:
@@ -5078,6 +7274,7 @@ def sensitive_repo_path_risk(rel: str) -> str | None:
     if (
         any(pattern.search(normalized) for pattern in SENSITIVE_NAME_PATTERNS)
         and not design_token_artifact_path(path, SENSITIVE_NAME_PATTERNS)
+        and not github_workflow_path(path)
     ):
         return "sensitive filename"
     return None
@@ -5111,6 +7308,14 @@ def design_token_artifact_path(
         part.lower() not in allowed_design_token_dirs
         and any(pattern.search(part) for pattern in sensitive_patterns)
         for part in path.parts[:-1]
+    )
+
+
+def github_workflow_path(path: Path) -> bool:
+    return (
+        path.parts[:2] == (".github", "workflows")
+        and len(path.parts) == 3
+        and path.suffix in {".yml", ".yaml"}
     )
 
 
@@ -5172,9 +7377,203 @@ def tracked_sensitive_repo_path_risk(rel: str) -> str | None:
     if (
         any(pattern.search(normalized) for pattern in TRACKED_SENSITIVE_NAME_PATTERNS)
         and not design_token_artifact_path(path, TRACKED_SENSITIVE_NAME_PATTERNS)
+        and not github_workflow_path(path)
     ):
         return "sensitive filename"
     return None
+
+
+def javascript_review_dialect(rel: str) -> str | None:
+    suffix = Path(rel).suffix.lower()
+    if suffix in {".cts", ".mts", ".ts", ".tsx"}:
+        return "typescript"
+    if suffix in {".cjs", ".js", ".jsx", ".mjs"}:
+        return "javascript"
+    return None
+
+
+def git_c_unquote(value: str) -> str | None:
+    if len(value) < 2 or value[0] != '"' or value[-1] != '"':
+        return None
+    escapes = {
+        "a": 7,
+        "b": 8,
+        "f": 12,
+        "n": 10,
+        "r": 13,
+        "t": 9,
+        "v": 11,
+        "\\": 92,
+        '"': 34,
+    }
+    decoded = bytearray()
+    cursor = 1
+    while cursor < len(value) - 1:
+        char = value[cursor]
+        if char != "\\":
+            decoded.extend(char.encode("utf-8"))
+            cursor += 1
+            continue
+        cursor += 1
+        if cursor >= len(value) - 1:
+            return None
+        escape = value[cursor]
+        if escape in escapes:
+            decoded.append(escapes[escape])
+            cursor += 1
+            continue
+        octal = re.match(r"[0-7]{1,3}", value[cursor:-1])
+        if octal is None:
+            return None
+        decoded.append(int(octal.group(0), 8))
+        cursor += octal.end()
+    try:
+        return decoded.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def diff_marker_path(value: str) -> str | None:
+    if value == "/dev/null":
+        return None
+    if value.startswith('"'):
+        decoded = git_c_unquote(value)
+        if decoded is None:
+            return None
+        value = decoded
+    if not value.startswith(("a/", "b/")):
+        return None
+    return value[2:]
+
+
+def diff_section_paths(section: str) -> tuple[str | None, str | None]:
+    old_path: str | None = None
+    new_path: str | None = None
+    for line in section.splitlines():
+        if line.startswith("@@"):
+            break
+        if line.startswith("--- "):
+            old_path = diff_marker_path(line[4:])
+        elif line.startswith("+++ "):
+            new_path = diff_marker_path(line[4:])
+    return old_path, new_path
+
+
+def tracked_sensitive_paths(paths: list[str]) -> set[str]:
+    return {
+        rel
+        for rel in paths
+        if tracked_sensitive_repo_path_risk(rel) is not None
+    }
+
+
+def omit_tracked_sensitive_diff_units(
+    patch: str,
+    paths: list[str],
+    blocked_paths: set[str],
+) -> str:
+    if not blocked_paths:
+        return patch
+    units = review_bundle_units(patch)
+    diff_indexes = [
+        index for index, unit in enumerate(units) if unit.startswith("diff --git ")
+    ]
+    if len(diff_indexes) != len(paths):
+        return REVIEW_SECURITY_REDACTION + "\n"
+    path_by_unit = dict(zip(diff_indexes, paths))
+    retained = [
+        unit
+        for index, unit in enumerate(units)
+        if path_by_unit.get(index) not in blocked_paths
+    ]
+    retained.insert(0, REVIEW_SECURITY_REDACTION + "\n")
+    return "".join(retained)
+
+
+def redact_review_patch_metadata(patch: str) -> str:
+    redacted: list[str] = []
+    metadata: list[str] = []
+    in_hunk = False
+    prefix_columns = 1
+    old_remaining: list[int] = []
+    new_remaining = 0
+
+    def flush_metadata() -> None:
+        if not metadata:
+            return
+        text = "".join(metadata)
+        redacted.append(
+            REVIEW_SECURITY_REDACTION + "\n"
+            if secret_text_risk(text)
+            else text
+        )
+        metadata.clear()
+
+    def parse_range_count(token: str) -> int | None:
+        match = re.fullmatch(r"[+-]\d+(?:,(\d+))?", token)
+        if match is None:
+            return None
+        return int(match.group(1) or "1")
+
+    for line in literal_lf_lines(patch):
+        body = line.rstrip("\r\n")
+        if body.startswith("diff --"):
+            flush_metadata()
+            metadata.append(line)
+            in_hunk = False
+            prefix_columns = 1
+            old_remaining = []
+            new_remaining = 0
+            continue
+        hunk_header = re.match(
+            r"^(?P<marker>@{2,}) (?P<ranges>.+?) (?P=marker)(?: .*)?$",
+            body,
+        )
+        if hunk_header:
+            flush_metadata()
+            metadata.append(line)
+            marker = hunk_header.group("marker")
+            ranges = hunk_header.group("ranges").split()
+            old_counts = [
+                count
+                for token in ranges
+                if token.startswith("-")
+                and (count := parse_range_count(token)) is not None
+            ]
+            new_counts = [
+                count
+                for token in ranges
+                if token.startswith("+")
+                and (count := parse_range_count(token)) is not None
+            ]
+            prefix_columns = len(marker) - 1
+            in_hunk = (
+                len(old_counts) == prefix_columns
+                and len(new_counts) == 1
+            )
+            old_remaining = old_counts
+            new_remaining = new_counts[0] if new_counts else 0
+            continue
+        prefix = body[:prefix_columns]
+        hunk_content = (
+            in_hunk
+            and len(prefix) == prefix_columns
+            and set(prefix) <= {"+", "-", " "}
+        )
+        if hunk_content:
+            flush_metadata()
+            redacted.append(line)
+            for index, marker in enumerate(prefix):
+                if marker != "+":
+                    old_remaining[index] = max(0, old_remaining[index] - 1)
+            if any(marker != "-" for marker in prefix):
+                new_remaining = max(0, new_remaining - 1)
+            if new_remaining == 0 and not any(old_remaining):
+                in_hunk = False
+        else:
+            metadata.append(line)
+    flush_metadata()
+    return "".join(redacted)
 
 
 def validate_review_patch(
@@ -5183,27 +7582,21 @@ def validate_review_patch(
     patch: str,
     limit: int | None = None,
 ) -> str:
-    blocked = [
-        f"{display_escape(rel, 500)} ({risk})"
-        for rel in paths
-        if (risk := tracked_sensitive_repo_path_risk(rel)) is not None
-    ]
-    if blocked:
-        details = "\n".join(f"- {item}" for item in blocked[:20])
-        more = f"\n... {len(blocked) - 20} more" if len(blocked) > 20 else ""
-        raise SystemExit(
-            f"refusing to include tracked sensitive paths in {label}:\n"
-            f"{details}{more}"
-        )
     patch_bytes = len(patch.encode("utf-8"))
     if limit is not None and patch_bytes > limit:
         raise SystemExit(
             f"{label} is too large to review safely "
             f"({patch_bytes} bytes; limit {limit}); split the change into smaller review targets"
         )
-    require_no_secret_values(label, unified_diff_metadata(patch))
-    for content in unified_diff_contents(patch):
-        require_no_secret_values(label, content)
+    blocked_paths = tracked_sensitive_paths(paths)
+    patch = omit_tracked_sensitive_diff_units(patch, paths, blocked_paths)
+    patch = redact_review_patch_metadata(patch)
+    patch_bytes = len(patch.encode("utf-8"))
+    if limit is not None and patch_bytes > limit:
+        raise SystemExit(
+            f"{label} is too large to review safely after metadata redaction "
+            f"({patch_bytes} bytes; limit {limit}); split the change into smaller review targets"
+        )
     return patch
 
 
@@ -5312,12 +7705,12 @@ def file_bundle_snapshot(
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         return "", True, "non-UTF-8 file"
-    if secret_text_risk(text):
-        return "", True, "secret-like content"
     return text, False, None
 
 
-def safe_untracked_file_snapshots(repo: Path) -> list[tuple[str, str, bool]]:
+def collect_untracked_file_snapshots(
+    repo: Path,
+) -> tuple[list[tuple[str, str, bool]], int]:
     files = git_path_list(
         repo,
         *global_excludes_git_args(repo),
@@ -5326,7 +7719,7 @@ def safe_untracked_file_snapshots(repo: Path) -> list[tuple[str, str, bool]]:
         "--exclude-standard",
         "-z",
     )
-    blocked: list[str] = []
+    omitted = 0
     included: list[tuple[str, str, bool]] = []
     for rel in files:
         content, truncated, risk = file_bundle_snapshot(
@@ -5336,29 +7729,46 @@ def safe_untracked_file_snapshots(repo: Path) -> list[tuple[str, str, bool]]:
             allow_binary_omission=True,
         )
         if risk:
-            blocked.append(f"{display_escape(rel, 500)} ({risk})")
+            if (
+                sensitive_repo_path_risk(rel) is not None
+                or risk
+                in {
+                    "secret-like content",
+                    "symlink",
+                    "path outside repository",
+                }
+            ):
+                omitted += 1
+            else:
+                raise SystemExit(
+                    "cannot safely include untracked file "
+                    f"{display_escape(rel, 500)}: {risk}"
+                )
         else:
             included.append((rel, content, truncated))
-    if blocked:
-        details = "\n".join(f"- {item}" for item in blocked[:20])
-        more = f"\n... {len(blocked) - 20} more" if len(blocked) > 20 else ""
-        raise SystemExit(
-            "refusing to include untracked sensitive files in review bundle; "
-            "stage, ignore, remove, or redact them before running autoreview:\n"
-            f"{details}{more}"
-        )
-    return included
+    return included, omitted
+
+
+def safe_untracked_file_snapshots(repo: Path) -> list[tuple[str, str, bool]]:
+    snapshots, _omitted = collect_untracked_file_snapshots(repo)
+    return snapshots
 
 
 def safe_untracked_files(repo: Path) -> list[str]:
     return [rel for rel, _content, _truncated in safe_untracked_file_snapshots(repo)]
 
 
-def local_status(repo: Path, untracked: list[str]) -> str:
+def local_status(repo: Path, untracked: list[str], *, redact: bool = False) -> str:
+    if redact:
+        return REVIEW_SECURITY_REDACTION
     status = git(repo, "status", "--short", "--untracked-files=no").rstrip()
     lines = [status] if status else []
     lines.extend(f"?? {rel}" for rel in untracked)
     return "\n".join(lines)
+
+
+def redact_secret_like_review_metadata(text: str) -> str:
+    return REVIEW_SECURITY_REDACTION if secret_text_risk(text) else text
 
 
 def local_bundle(repo: Path) -> tuple[str, bool]:
@@ -5395,22 +7805,57 @@ def local_bundle(repo: Path) -> tuple[str, bool]:
         "--name-only",
         "-z",
     )
-    untracked_snapshots = safe_untracked_file_snapshots(repo)
+    untracked_snapshots, omitted_untracked = collect_untracked_file_snapshots(repo)
     untracked = [rel for rel, _content, _truncated in untracked_snapshots]
-    if not staged_patch.strip() and not unstaged_patch.strip() and not untracked:
+    omitted_tracked = len(
+        tracked_sensitive_paths(staged_paths) | tracked_sensitive_paths(unstaged_paths)
+    )
+    if (
+        not staged_patch.strip()
+        and not unstaged_patch.strip()
+        and not untracked
+        and not omitted_untracked
+    ):
         raise SystemExit("no local changes to review")
     staged_patch = validate_review_patch("local staged diff", staged_paths, staged_patch)
     unstaged_patch = validate_review_patch("local unstaged diff", unstaged_paths, unstaged_patch)
     parts = [
         "# Git Status",
-        local_status(repo, untracked),
+        redact_secret_like_review_metadata(
+            local_status(
+                repo,
+                untracked,
+                redact=bool(omitted_tracked or omitted_untracked),
+            )
+        ),
         "# Staged Diff",
-        git(repo, "diff", *SAFE_DIFF_FLAGS, "--cached", "--stat"),
+        (
+            REVIEW_SECURITY_REDACTION
+            if tracked_sensitive_paths(staged_paths)
+            else redact_secret_like_review_metadata(
+                git(repo, "diff", *SAFE_DIFF_FLAGS, "--cached", "--stat")
+            )
+        ),
         staged_patch,
         "# Unstaged Diff",
-        git(repo, "diff", *SAFE_DIFF_FLAGS, "--stat"),
+        (
+            REVIEW_SECURITY_REDACTION
+            if tracked_sensitive_paths(unstaged_paths)
+            else redact_secret_like_review_metadata(
+                git(repo, "diff", *SAFE_DIFF_FLAGS, "--stat")
+            )
+        ),
         unstaged_patch,
     ]
+    if omitted_tracked or omitted_untracked:
+        parts[0:0] = [
+            "# Review Input Redactions",
+            REVIEW_SECURITY_REDACTION,
+            (
+                f"Omitted tracked changes: {omitted_tracked}; "
+                f"omitted untracked files: {omitted_untracked}."
+            ),
+        ]
     input_truncated = False
     if untracked:
         parts.append("# Untracked Files")
@@ -5623,18 +8068,29 @@ def branch_bundle(repo: Path, base_ref: str) -> tuple[str, bool]:
             diff_range,
         ),
     )
+    omitted_tracked = bool(tracked_sensitive_paths(branch_paths))
     branch_patch = validate_review_patch("branch diff", branch_paths, branch_patch)
     return "\n\n".join(
         [
             "# Branch Diff",
-            f"base: {base_ref}",
-            git(
-                repo,
-                "diff",
-                *SAFE_DIFF_FLAGS,
-                "--stat",
-                "--end-of-options",
-                diff_range,
+            (
+                REVIEW_SECURITY_REDACTION
+                if secret_text_risk(base_ref)
+                else f"base: {base_ref}"
+            ),
+            (
+                REVIEW_SECURITY_REDACTION
+                if omitted_tracked
+                else redact_secret_like_review_metadata(
+                    git(
+                        repo,
+                        "diff",
+                        *SAFE_DIFF_FLAGS,
+                        "--stat",
+                        "--end-of-options",
+                        diff_range,
+                    )
+                )
             ),
             branch_patch,
         ]
@@ -5694,20 +8150,28 @@ def commit_bundle(repo: Path, commit_ref: str) -> tuple[str, bool]:
             commit_ref,
         ),
     )
+    omitted_tracked = bool(tracked_sensitive_paths(commit_paths))
     commit_patch = validate_review_patch("commit diff", commit_paths, commit_patch)
+    commit_summary = git(
+        repo,
+        "show",
+        *SAFE_DIFF_FLAGS,
+        "--stat",
+        "--format=fuller",
+        "--end-of-options",
+        commit_ref,
+    )
+    if omitted_tracked or secret_text_risk(commit_summary):
+        commit_summary = REVIEW_SECURITY_REDACTION
     return "\n\n".join(
         [
             "# Commit Diff",
-            f"commit: {commit_ref}",
-            git(
-                repo,
-                "show",
-                *SAFE_DIFF_FLAGS,
-                "--stat",
-                "--format=fuller",
-                "--end-of-options",
-                commit_ref,
+            (
+                REVIEW_SECURITY_REDACTION
+                if secret_text_risk(commit_ref)
+                else f"commit: {commit_ref}"
             ),
+            commit_summary,
             commit_patch,
         ]
     ), False
@@ -6173,11 +8637,15 @@ def render_review_prompt(
     datasets: str,
     chunk_position: tuple[int, int] | None = None,
 ) -> str:
-    target_line = f"{target} {target_ref}" if target_ref else target
+    safe_target_ref = (
+        REVIEW_SECURITY_REDACTION
+        if target_ref and secret_text_risk(target_ref)
+        else target_ref
+    )
+    target_line = f"{target} {safe_target_ref}" if safe_target_ref else target
     branch = current_branch(repo)
-    require_no_secret_values("current branch", branch)
-    if target_ref:
-        require_no_secret_values("review target ref", target_ref)
+    if secret_text_risk(branch):
+        branch = REVIEW_SECURITY_REDACTION
     scope_policy = review_scope_policy()
     chunk_policy = ""
     if chunk_position:
@@ -6214,6 +8682,7 @@ def render_review_prompt(
         - Before returning, sweep the bundle once more for independent defects in other files or failure modes that you may have stopped scanning for after an earlier find.
         - Include security findings: injection, secret leaks, authz/authn bypass, path traversal, unsafe deserialization, unsafe filesystem or shell use, privacy leaks, and credential handling.
         - Do not reject legitimate functionality merely because it touches shell, filesystem, network, auth, or sensitive data. Report a security finding only when the patch creates a concrete exploitable risk, removes an important safety check, or lacks validation at a trust boundary.
+        - Security-sensitive bundle material may be redacted or omitted before review. Continue reviewing the material that is present. A redaction notice is not itself a defect and does not prove either safety or vulnerability in the omitted material.
         - For each finding, use the smallest file/line location that demonstrates the issue.
         - If there are no actionable findings, return an empty findings array and mark the patch correct.
 
@@ -8550,7 +11019,10 @@ def start_parallel_tests(
 ) -> tuple[subprocess.Popen, float]:
     print(f"tests: {command}")
     test_home = Path(
-        tempfile.mkdtemp(prefix="autoreview-test-home-", dir=safe_temp_root(repo))
+        tempfile.mkdtemp(
+            prefix="autoreview-test-home-",
+            dir=parallel_test_temp_root(repo),
+        )
     )
     try:
         env = safe_test_env(repo, test_home)
@@ -9406,6 +11878,7 @@ def main() -> int:
         return 0
 
     review_source_snapshot = source_tree_snapshot(repo)
+    run_trufflehog_preflight(repo, target, target_ref, args.commit)
     if target == "local":
         bundle, bundle_truncated = local_bundle(repo)
     elif target == "branch":

@@ -4,6 +4,7 @@ import {
   createMessageReceiptFromOutboundResults,
   verifyChannelMessageAdapterCapabilityProofs,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPluginSetupWizardStatus,
@@ -11,7 +12,8 @@ import {
   type WizardPrompter,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { listSignalAccountIds } from "./accounts.js";
 import {
   clearSignalApprovalReactionTargetsForTest,
   resolveSignalApprovalReactionTargetWithPersistence,
@@ -28,17 +30,22 @@ import {
 } from "./identity.js";
 import { probeSignal } from "./probe.js";
 import {
-  clearSignalReplyAuthorsForTest,
   registerSignalReplyContext,
   resolveSignalReplyContextWithPersistence,
 } from "./reply-authors.js";
 import {
+  buildSignalSetupPatch,
   createSignalCliPathTextInput,
   normalizeSignalAccountInput,
   signalDmPolicy,
 } from "./setup-core.js";
+import * as transportDetectionModule from "./transport-detection.js";
 
 const getSignalSetupStatus = createPluginSetupWizardStatus(signalPlugin);
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("looksLikeUuid", () => {
   it("accepts hyphenated UUIDs", () => {
@@ -60,6 +67,25 @@ describe("looksLikeUuid", () => {
 });
 
 describe("signal sender identity", () => {
+  it("keeps IPv6 bind hosts on the managed transport", () => {
+    expect(buildSignalSetupPatch({ httpHost: "::1", httpPort: "9090" })).toMatchObject({
+      transport: {
+        kind: "managed-native",
+        httpHost: "::1",
+        httpPort: 9090,
+      },
+    });
+  });
+
+  it("uses external-native ownership for an explicit HTTP URL", () => {
+    expect(buildSignalSetupPatch({ httpUrl: "http://signal.example:9090" })).toMatchObject({
+      transport: {
+        kind: "external-native",
+        url: "http://signal.example:9090",
+      },
+    });
+  });
+
   it("prefers sourceNumber over sourceUuid and keeps the uuid as an alias", () => {
     const sender = resolveSignalSender({
       sourceNumber: " +15550001111 ",
@@ -154,6 +180,14 @@ describe("probeSignal", () => {
         enabled: true,
         configured: true,
         baseUrl: "http://127.0.0.1:8080",
+        transport: {
+          kind: "managed-native",
+          baseUrl: "http://127.0.0.1:8080",
+          cliPath: "signal-cli",
+          httpHost: "127.0.0.1",
+          httpPort: 8080,
+          startupTimeoutMs: 30_000,
+        },
       } as never,
       timeoutMs: 1000,
     };
@@ -197,15 +231,31 @@ describe("probeSignal", () => {
     expect(res.version).toBe(null);
   });
 
+  it("returns auto transport detection failures as probe data", async () => {
+    vi.spyOn(transportDetectionModule, "detectSignalTransport").mockRejectedValueOnce(
+      new Error("Signal transport not reachable at http://127.0.0.1:8080"),
+    );
+
+    const res = await probeSignal("http://127.0.0.1:8080", 1000, { apiMode: "auto" });
+
+    expect(res).toMatchObject({
+      ok: false,
+      status: null,
+      error: "Signal transport not reachable at http://127.0.0.1:8080",
+      version: null,
+    });
+    expect(res.elapsedMs).toBeGreaterThanOrEqual(0);
+  });
+
   it("setup status lines use the selected account cliPath", async () => {
     const status = await getSignalSetupStatus({
       cfg: {
         channels: {
           signal: {
-            cliPath: "/tmp/root-signal-cli",
+            transport: { kind: "managed-native", cliPath: "/tmp/root-signal-cli" },
             accounts: {
               work: {
-                cliPath: "/tmp/work-signal-cli",
+                transport: { kind: "managed-native", cliPath: "/tmp/work-signal-cli" },
               },
             },
           },
@@ -222,11 +272,11 @@ describe("probeSignal", () => {
       cfg: {
         channels: {
           signal: {
-            cliPath: "/tmp/root-signal-cli",
+            transport: { kind: "managed-native", cliPath: "/tmp/root-signal-cli" },
             defaultAccount: "work",
             accounts: {
               work: {
-                cliPath: "/tmp/work-signal-cli",
+                transport: { kind: "managed-native", cliPath: "/tmp/work-signal-cli" },
               },
             },
           },
@@ -244,16 +294,13 @@ describe("probeSignal", () => {
         channels: {
           signal: {
             defaultAccount: "work",
-            cliPath: "/tmp/root-signal-cli",
+            transport: { kind: "managed-native", cliPath: "/tmp/root-signal-cli" },
             accounts: {
               alerts: {
-                cliPath: "/tmp/alerts-signal-cli",
+                transport: { kind: "managed-native", cliPath: "/tmp/alerts-signal-cli" },
               },
               work: {
-                cliPath: "",
                 account: "",
-                httpHost: "",
-                httpUrl: "",
               },
             },
           },
@@ -1036,7 +1083,6 @@ describe("signal outbound", () => {
     await expect(resolveSignalReplyContextWithPersistence(replyContext)).resolves.toEqual({
       ambiguous: true,
     });
-    await clearSignalReplyAuthorsForTest();
   });
 
   it("keeps newer reply context when older events arrive out of order", async () => {
@@ -1058,11 +1104,9 @@ describe("signal outbound", () => {
       author: "+15551234567",
       body: "newer",
     });
-    await clearSignalReplyAuthorsForTest();
   });
 
   it("hydrates durable Signal sends with stored native quote context", async () => {
-    await clearSignalReplyAuthorsForTest();
     await registerSignalReplyContext({
       to: "signal:+15555550123",
       replyToId: "1700000000001",
@@ -1089,7 +1133,6 @@ describe("signal outbound", () => {
       replyToAuthor: "+15555550123",
       replyToBody: "original message",
     });
-    await clearSignalReplyAuthorsForTest();
   });
 
   it("declares message adapter durable text and media with receipt proofs", async () => {
@@ -1165,6 +1208,24 @@ describe("signal outbound", () => {
 });
 
 describe("signal setup parsing", () => {
+  it("removes an accountUuid-only default account when named accounts remain", () => {
+    const next = signalPlugin.config?.deleteAccount?.({
+      cfg: {
+        channels: {
+          signal: {
+            accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+            transport: { kind: "managed-native" },
+            accounts: { work: { account: "+15555550123" } },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(next?.channels?.signal?.accountUuid).toBeUndefined();
+    expect(listSignalAccountIds(next ?? {})).toEqual(["work"]);
+  });
+
   it("accepts already normalized numbers", () => {
     expect(normalizeSignalAccountInput("+15555550123")).toBe("+15555550123");
   });
@@ -1210,84 +1271,18 @@ describe("signal setup parsing", () => {
     ]);
   });
 
-  it("reads the named-account DM policy instead of the channel root", () => {
-    expect(
-      signalDmPolicy.getCurrent(
-        {
-          channels: {
-            signal: {
-              dmPolicy: "disabled",
-              accounts: {
-                work: {
-                  account: "+15555550123",
-                  dmPolicy: "allowlist",
-                },
-              },
-            },
-          },
-        },
-        "work",
-      ),
-    ).toBe("allowlist");
-  });
-
-  it("reports account-scoped config keys for named accounts", () => {
-    expect(signalDmPolicy.resolveConfigKeys?.({ channels: { signal: {} } }, "work")).toEqual({
-      policyKey: "channels.signal.accounts.work.dmPolicy",
-      allowFromKey: "channels.signal.accounts.work.allowFrom",
-    });
-  });
-
-  it("uses configured defaultAccount for omitted DM policy account context", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        signal: {
-          defaultAccount: "work",
-          dmPolicy: "disabled",
-          allowFrom: ["+15555550123"],
-          accounts: {
-            work: {
-              account: "+15555550999",
-              dmPolicy: "allowlist",
-            },
-          },
-        },
+  installChannelDmPolicyContractSuite({
+    dmPolicy: signalDmPolicy,
+    cases: [
+      {
+        name: "Signal named accounts",
+        channel: "signal",
+        accountId: "work",
+        accountConfig: { account: "+15555550999" },
+        inheritedAllowFrom: ["+15555550123"],
+        defaultAccount: { rootAllowFrom: ["+15555550123"] },
       },
-    };
-
-    expect(signalDmPolicy.getCurrent(cfg)).toBe("allowlist");
-    expect(signalDmPolicy.resolveConfigKeys?.(cfg)).toEqual({
-      policyKey: "channels.signal.accounts.work.dmPolicy",
-      allowFromKey: "channels.signal.accounts.work.allowFrom",
-    });
-
-    const next = signalDmPolicy.setPolicy(cfg, "open");
-    expect(next.channels?.signal?.dmPolicy).toBe("disabled");
-    expect(next.channels?.signal?.allowFrom).toEqual(["+15555550123"]);
-    expect(next.channels?.signal?.accounts?.work?.dmPolicy).toBe("open");
-    expect(next.channels?.signal?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
-  });
-
-  it('writes open policy state to the named account and stores inherited allowFrom with "*"', () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        signal: {
-          allowFrom: ["+15555550123"],
-          accounts: {
-            work: {
-              account: "+15555550999",
-            },
-          },
-        },
-      },
-    };
-
-    const next = signalDmPolicy.setPolicy(cfg, "open", "work");
-
-    expect(next.channels?.signal?.dmPolicy).toBeUndefined();
-    expect(next.channels?.signal?.allowFrom).toEqual(["+15555550123"]);
-    expect(next.channels?.signal?.accounts?.work?.dmPolicy).toBe("open");
-    expect(next.channels?.signal?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
+    ],
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -5,7 +5,8 @@
   "description": "OpenClaw iMessage channel plugin using imsg on a signed-in Mac",
   "type": "module",
   "dependencies": {
-    "typebox": "1.3.3"
+    "typebox": "1.3.6",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -16,10 +17,14 @@
     ],
     "setupEntry": "./setup-entry.ts",
     "setupFeatures": {
+      "configPromotion": true,
       "legacyStateMigrations": true
     },
     "channel": {
       "id": "imessage",
+      "approvalFlags": [
+        "native"
+      ],
       "label": "iMessage",
       "selectionLabel": "iMessage (imsg)",
       "detailLabel": "iMessage",
@@ -30,20 +35,31 @@
         "imsg"
       ],
       "systemImage": "message.fill",
-      "cliAddOptions": [
-        {
-          "flags": "--db-path <path>",
-          "description": "iMessage database path"
-        },
-        {
-          "flags": "--service <service>",
-          "description": "iMessage service (imessage|sms|auto)"
-        },
-        {
-          "flags": "--region <region>",
-          "description": "iMessage region (for SMS)"
-        }
-      ]
+      "setup": {
+        "fields": [
+          {
+            "key": "cliPath",
+            "kind": "string",
+            "cli": { "flags": "--cli-path <path>", "description": "iMessage CLI path" }
+          },
+          {
+            "key": "dbPath",
+            "kind": "string",
+            "cli": { "flags": "--db-path <path>", "description": "iMessage database path" }
+          },
+          {
+            "key": "service",
+            "kind": "choice",
+            "choices": ["imessage", "sms", "auto"],
+            "cli": { "flags": "--service <service>", "description": "iMessage service" }
+          },
+          {
+            "key": "region",
+            "kind": "string",
+            "cli": { "flags": "--region <region>", "description": "SMS region" }
+          }
+        ]
+      }
     },
     "compat": {
       "pluginApi": ">=2026.7.2"

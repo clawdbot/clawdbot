@@ -1,12 +1,16 @@
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 // Msteams plugin module implements reply dispatcher behavior.
 import {
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
+  normalizeAgentPlanSteps,
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createChannelMessageReplyPipeline,
@@ -163,7 +167,15 @@ export function createMSTeamsReplyDispatcher(params: {
     resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
   });
   const feedbackLoopEnabled = params.cfg.channels?.msteams?.feedbackEnabled !== false;
+  // Teams native streams are provider-visible before outbound modifiers run. Keep them off
+  // whenever a hook can rewrite or cancel so the original payload cannot escape the final gate.
+  const hookRunner = getGlobalHookRunner();
+  const allowProviderPreview = !(
+    (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
+    (hookRunner?.hasHooks("message_sending") ?? false)
+  );
   const streamController = createTeamsReplyStreamController({
+    allowProviderPreview,
     conversationType,
     context: params.context,
     feedbackLoopEnabled,
@@ -290,13 +302,9 @@ export function createMSTeamsReplyDispatcher(params: {
     }
   };
 
-  const {
-    dispatcher,
-    replyOptions,
-    markDispatchIdle: baseMarkDispatchIdle,
-  } = core.channel.reply.createReplyDispatcherWithTyping({
+  const dispatcherOptions: NonNullable<ChannelInboundTurnPlan["dispatcherOptions"]> = {
     ...replyPipeline,
-    humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
+    humanDelay: resolveHumanDelayConfig(params.cfg, params.agentId),
     onReplyStart: async () => {
       await streamController.onReplyStart();
       // Always start the typing keepalive loop when typing is enabled and
@@ -311,6 +319,8 @@ export function createMSTeamsReplyDispatcher(params: {
       }
     },
     typingCallbacks,
+  };
+  const delivery: ChannelInboundTurnPlan["delivery"] = {
     deliver: async (payload) => {
       const preparedPayload = streamController.preparePayload(payload);
       if (!preparedPayload) {
@@ -339,9 +349,9 @@ export function createMSTeamsReplyDispatcher(params: {
         hint,
       });
     },
-  });
+  };
 
-  const markDispatchIdle = (): Promise<void> => {
+  const settleDelivery = (): Promise<void> => {
     return flushPendingMessages()
       .catch((err: unknown) => {
         const errMsg = formatUnknownError(err);
@@ -363,9 +373,6 @@ export function createMSTeamsReplyDispatcher(params: {
           queueReplyPayload(fallbackPayload);
           await flushPendingMessages();
         }
-      })
-      .finally(() => {
-        baseMarkDispatchIdle();
       });
   };
 
@@ -379,6 +386,7 @@ export function createMSTeamsReplyDispatcher(params: {
   const suppressDefaultToolProgressMessages =
     resolveChannelStreamingSuppressDefaultToolProgressMessages(msteamsCfg);
   const shouldSuppressDefaultToolProgressMessages =
+    streamController.hasStream() &&
     teamsStreamMode === "progress" &&
     suppressDefaultToolProgressMessages &&
     previewToolProgressEnabled;
@@ -459,20 +467,9 @@ export function createMSTeamsReplyDispatcher(params: {
           if (payload?.phase !== "update") {
             return;
           }
-          await streamController.pushProgressLine(
-            buildChannelProgressDraftLine({
-              event: "plan",
-              phase: payload.phase as string,
-              ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
-              ...(typeof payload?.explanation === "string"
-                ? { explanation: payload.explanation }
-                : {}),
-              ...(Array.isArray(payload?.steps) &&
-              payload.steps.every((s: unknown) => typeof s === "string")
-                ? { steps: payload.steps }
-                : {}),
-            }),
-          );
+          await streamController.pushPlanProgress(normalizeAgentPlanSteps(payload.steps), {
+            explanation: typeof payload.explanation === "string" ? payload.explanation : undefined,
+          });
         },
         onApprovalEvent: async (payload: PipelinePayload) => {
           if (payload?.phase !== "requested") {
@@ -542,9 +539,12 @@ export function createMSTeamsReplyDispatcher(params: {
     : {};
 
   return {
-    dispatcher,
+    dispatcherOptions: {
+      ...dispatcherOptions,
+      onSettled: settleDelivery,
+    },
+    delivery,
     replyOptions: {
-      ...replyOptions,
       ...(streamController.hasStream()
         ? {
             onPartialReply: (payload: { text?: string }) =>
@@ -565,6 +565,5 @@ export function createMSTeamsReplyDispatcher(params: {
       disableBlockStreaming: blockStreamingResolved == null ? undefined : !blockStreamingResolved,
       onModelSelected,
     },
-    markDispatchIdle,
   };
 }

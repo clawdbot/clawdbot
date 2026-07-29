@@ -5,8 +5,8 @@ import type {
   ToolCallLocation,
   ToolKind,
 } from "@agentclientprotocol/sdk";
-import { asRecord } from "@openclaw/acp-core/record-shared";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   hasNonEmptyString,
   normalizeLowercaseStringOrEmpty,

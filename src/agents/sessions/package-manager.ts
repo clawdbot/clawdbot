@@ -4,10 +4,20 @@
  * Resolves extension, skill, prompt, and theme sources from npm, git, local paths, and project manifests.
  */
 import { createHash } from "node:crypto";
-import { existsSync, globSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import {
+  chmodSync,
+  existsSync,
+  globSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { minimatch } from "minimatch";
+import { isDefaultStateDir } from "../../config/paths.js";
 import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ignore-rules.js";
 import { CONFIG_DIR_NAME } from "../config.js";
 import { type GitSource, parseGitUrl } from "../utils/git.js";
@@ -123,6 +133,14 @@ function getHomeDir(): string {
   return process.env.HOME || homedir();
 }
 
+function getAgentResourceTempDir(agentDir: string): string {
+  const tempDir = join(agentDir, "tmp", "resources");
+  // Temporary packages can contain executable code, so other local users must not modify them.
+  mkdirSync(tempDir, { recursive: true, mode: 0o700 });
+  chmodSync(tempDir, 0o700);
+  return tempDir;
+}
+
 function isPattern(s: string): boolean {
   return (
     s.startsWith("!") ||
@@ -167,7 +185,9 @@ function collectFiles(
   }
 
   const root = rootDir ?? dir;
-  const ig = addIgnoreRules(dir, root, ignoreMatcher);
+  const ig = ignoreMatcher
+    ? addIgnoreRules(dir, root, ignoreMatcher, { ignoreCase: true })
+    : addIgnoreRules(dir, root);
 
   try {
     const entries = readdirSync(dir, { withFileTypes: true });
@@ -226,7 +246,9 @@ function collectSkillEntries(
   }
 
   const root = rootDir ?? dir;
-  const ig = addIgnoreRules(dir, root, ignoreMatcher);
+  const ig = ignoreMatcher
+    ? addIgnoreRules(dir, root, ignoreMatcher, { ignoreCase: true })
+    : addIgnoreRules(dir, root);
 
   try {
     const dirEntries = readdirSync(dir, { withFileTypes: true });
@@ -935,7 +957,7 @@ export class DefaultPackageManager implements PackageManager {
       .update(`${prefix}-${suffix ?? ""}`)
       .digest("hex")
       .slice(0, 8);
-    return join(tmpdir(), "openclaw-resources", prefix, hash, suffix ?? "");
+    return join(getAgentResourceTempDir(this.agentDir), prefix, hash, suffix ?? "");
   }
 
   private getBaseDirForScope(scope: SourceScope): string {
@@ -1338,19 +1360,21 @@ export class DefaultPackageManager implements PackageManager {
       globalBaseDir,
     );
 
-    // User skills from ~/.agents/ (with its own baseDir)
-    const userAgentsBaseDir = dirname(userAgentsSkillsDir);
-    const userAgentsMetadata: PathMetadata = {
-      ...userMetadata,
-      baseDir: userAgentsBaseDir,
-    };
-    addResources(
-      "skills",
-      collectAutoSkillEntries(userAgentsSkillsDir, "agents"),
-      userAgentsMetadata,
-      userOverrides.skills,
-      userAgentsBaseDir,
-    );
+    if (isDefaultStateDir()) {
+      // Home-scoped personal skills belong to the default install, not isolated state roots.
+      const userAgentsBaseDir = dirname(userAgentsSkillsDir);
+      const userAgentsMetadata: PathMetadata = {
+        ...userMetadata,
+        baseDir: userAgentsBaseDir,
+      };
+      addResources(
+        "skills",
+        collectAutoSkillEntries(userAgentsSkillsDir, "agents"),
+        userAgentsMetadata,
+        userOverrides.skills,
+        userAgentsBaseDir,
+      );
+    }
 
     addResources(
       "prompts",

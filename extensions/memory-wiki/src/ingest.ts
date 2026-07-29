@@ -12,6 +12,7 @@ import {
   slugifyWikiPageStem,
   slugifyWikiSegment,
 } from "./markdown.js";
+import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
@@ -64,7 +65,7 @@ async function readExistingSourcePage(pagePath: string): Promise<string> {
   throw readError;
 }
 
-export async function ingestMemoryWikiSource(params: {
+async function ingestMemoryWikiSourceUnlocked(params: {
   config: ResolvedMemoryWikiConfig;
   inputPath: string;
   title?: string;
@@ -141,4 +142,18 @@ export async function ingestMemoryWikiSource(params: {
     created,
     indexUpdatedFiles: compile.updatedFiles,
   };
+}
+
+export async function ingestMemoryWikiSource(params: {
+  config: ResolvedMemoryWikiConfig;
+  inputPath: string;
+  title?: string;
+  nowMs?: number;
+}): Promise<IngestMemoryWikiSourceResult> {
+  // Ingest read-modify-writes the source page and recompiles the vault; hold
+  // the vault mutation lock across the whole span so it cannot interleave
+  // with the other serialized vault mutators (apply/compile/source-sync).
+  return await withMemoryWikiVaultMutation(params.config.vault.path, () =>
+    ingestMemoryWikiSourceUnlocked(params),
+  );
 }

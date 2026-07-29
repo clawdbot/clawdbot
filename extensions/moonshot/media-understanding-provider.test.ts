@@ -2,11 +2,21 @@
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "openclaw/plugin-sdk/test-env";
+} from "openclaw/plugin-sdk/test-media-understanding";
 import { describe, expect, it } from "vitest";
-import { describeMoonshotVideo } from "./media-understanding-provider.js";
+import { moonshotMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();
+
+async function describeVideo(
+  params: Parameters<NonNullable<typeof moonshotMediaUnderstandingProvider.describeVideo>>[0],
+) {
+  const handler = moonshotMediaUnderstandingProvider.describeVideo;
+  if (!handler) {
+    throw new Error("expected Moonshot video description support");
+  }
+  return await handler(params);
+}
 
 function oversizedJsonResponse(params: { chunkCount: number; chunkSize: number }): {
   response: Response;
@@ -47,7 +57,7 @@ describe("describeMoonshotVideo", () => {
       choices: [{ message: { content: "video ok" } }],
     });
 
-    const result = await describeMoonshotVideo({
+    const result = await describeVideo({
       buffer: Buffer.from("video-bytes"),
       fileName: "clip.mp4",
       apiKey: "moonshot-test",
@@ -112,7 +122,7 @@ describe("describeMoonshotVideo", () => {
       choices: [{ message: { content: "", reasoning_content: "reasoned answer" } }],
     });
 
-    const result = await describeMoonshotVideo({
+    const result = await describeVideo({
       buffer: Buffer.from("video"),
       fileName: "clip.mp4",
       apiKey: "moonshot-test",
@@ -128,7 +138,7 @@ describe("describeMoonshotVideo", () => {
     const streamed = oversizedJsonResponse({ chunkCount: 64, chunkSize: 1024 * 1024 });
 
     await expect(
-      describeMoonshotVideo({
+      describeVideo({
         buffer: Buffer.from("video-bytes"),
         fileName: "clip.mp4",
         mime: "video/mp4",
@@ -150,7 +160,7 @@ describe("describeMoonshotVideo", () => {
     });
 
     await expect(
-      describeMoonshotVideo({
+      describeVideo({
         buffer: Buffer.from("video-bytes"),
         fileName: "clip.mp4",
         mime: "video/mp4",

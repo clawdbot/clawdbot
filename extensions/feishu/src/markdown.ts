@@ -5,13 +5,16 @@ import { gfmTable } from "micromark-extension-gfm-table";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { MentionTarget } from "./mention-target.types.js";
 
-type PositionedMarkdownNode = {
+export type FeishuMarkdownNode = {
   type: string;
+  depth?: number;
+  identifier?: string;
+  url?: string;
   position?: {
     start: { offset?: number };
     end: { offset?: number };
   };
-  children?: PositionedMarkdownNode[];
+  children?: FeishuMarkdownNode[];
 };
 
 type FeishuPostMessageElement =
@@ -19,6 +22,14 @@ type FeishuPostMessageElement =
   | { tag: "md"; text: string };
 
 const FEISHU_POST_MAX_BYTES = 30 * 1024;
+
+/** One parser contract for Feishu message and document Markdown decisions. */
+export function parseFeishuMarkdown(text: string): FeishuMarkdownNode {
+  return fromMarkdown(text, {
+    extensions: [gfmTable()],
+    mdastExtensions: [gfmTableFromMarkdown()],
+  }) as FeishuMarkdownNode;
+}
 
 function buildFeishuPostMentionElements(mentions?: MentionTarget[]): FeishuPostMessageElement[] {
   if (!mentions?.length) {
@@ -66,10 +77,7 @@ export function assertFeishuPostWithinEnvelope(content: string, label: string): 
 }
 
 function collectSoftBreakOffsets(text: string): number[] {
-  const root = fromMarkdown(text, {
-    extensions: [gfmTable()],
-    mdastExtensions: [gfmTableFromMarkdown()],
-  }) as PositionedMarkdownNode;
+  const root = parseFeishuMarkdown(text);
   const offsets: number[] = [];
   const pending = [root];
 
@@ -160,9 +168,10 @@ export function chunkFeishuPostMarkdown(params: {
   limit: number;
   mode?: ChunkMode;
   firstChunkMentions?: MentionTarget[];
+  chunkMentions?: MentionTarget[];
   initialChunks?: string[];
 }): string[] {
-  const { text, firstChunkMentions } = params;
+  const { text, firstChunkMentions, chunkMentions } = params;
   if (!text) {
     return [];
   }
@@ -173,9 +182,13 @@ export function chunkFeishuPostMarkdown(params: {
     params.initialChunks ??
     chunkFeishuMarkdownWithMode(text, requestedLimit, params.mode ?? "length");
   const output: string[] = [];
+  const resolveMentions = (isFirst: boolean): MentionTarget[] | undefined => {
+    const mentions = [...(chunkMentions ?? []), ...(isFirst ? (firstChunkMentions ?? []) : [])];
+    return mentions.length > 0 ? mentions : undefined;
+  };
 
   for (const initialChunk of initialChunks) {
-    const mentions = output.length === 0 ? firstChunkMentions : undefined;
+    const mentions = resolveMentions(output.length === 0);
     if (postContentBytes(initialChunk, mentions) <= FEISHU_POST_MAX_BYTES) {
       output.push(initialChunk);
       continue;
@@ -194,12 +207,12 @@ export function chunkFeishuPostMarkdown(params: {
       let oversizedMentions: MentionTarget[] | undefined;
 
       for (const [index, chunk] of chunks.entries()) {
-        const chunkMentions = output.length === 0 && index === 0 ? firstChunkMentions : undefined;
-        const contentBytes = postContentBytes(chunk, chunkMentions);
+        const mentionsForChunk = resolveMentions(output.length === 0 && index === 0);
+        const contentBytes = postContentBytes(chunk, mentionsForChunk);
         largestContentBytes = Math.max(largestContentBytes, contentBytes);
         if (contentBytes > FEISHU_POST_MAX_BYTES && oversizedChunk === undefined) {
           oversizedChunk = chunk;
-          oversizedMentions = chunkMentions;
+          oversizedMentions = mentionsForChunk;
         }
       }
 

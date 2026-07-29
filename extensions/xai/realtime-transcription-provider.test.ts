@@ -251,6 +251,14 @@ describe("xai realtime transcription provider", () => {
     });
   });
 
+  it("does not treat a blank environment api key as configured", () => {
+    vi.stubEnv("XAI_API_KEY", "   ");
+    isProviderAuthProfileConfiguredMock.mockReturnValue(false);
+    const provider = buildXaiRealtimeTranscriptionProvider();
+
+    expect(provider.isConfigured({ cfg: {}, providerConfig: {} })).toBe(false);
+  });
+
   it("threads cfg into the lazy WebSocket bearer resolver", async () => {
     delete process.env.XAI_API_KEY;
     resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "oauth-bearer" });

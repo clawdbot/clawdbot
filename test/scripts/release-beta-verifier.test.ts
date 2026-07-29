@@ -1,6 +1,7 @@
 // Release Beta Verifier tests cover release beta verifier script behavior.
 /* oxlint-disable typescript/no-base-to-string -- fetch mock normalizes standard RequestInfo inputs for URL assertions. */
 import { createHash } from "node:crypto";
+import { resolve } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -10,6 +11,7 @@ import {
   parseNpmViewFields,
   parseReleaseVerifyBetaArgs,
   readBoundedJsonResponse,
+  resolveOpenClawNpmPostpublishVerifier,
   runNpmViewWithRetry,
   validateClawHubBootstrapEvidence,
 } from "../../scripts/lib/release-beta-verifier.ts";
@@ -91,6 +93,7 @@ describe("parseReleaseVerifyBetaArgs", () => {
       pluginSelection: [],
       clawHubBootstrapPlugins: [],
       evidenceOut: undefined,
+      postpublishVerifier: undefined,
       skipPostpublish: false,
       skipGitHubRelease: false,
       skipClawHub: false,
@@ -128,7 +131,8 @@ describe("parseReleaseVerifyBetaArgs", () => {
         "44",
         "--evidence-out",
         ".artifacts/release-evidence.json",
-        "--skip-postpublish",
+        "--postpublish-verifier",
+        "/tmp/trusted-postpublish.ts",
         "--skip-github-release",
         "--skip-clawhub",
         "--rerun-failed-clawhub",
@@ -145,7 +149,8 @@ describe("parseReleaseVerifyBetaArgs", () => {
       pluginSelection: ["@openclaw/plugin-a", "@openclaw/plugin-b"],
       clawHubBootstrapPlugins: ["@openclaw/plugin-b"],
       evidenceOut: ".artifacts/release-evidence.json",
-      skipPostpublish: true,
+      postpublishVerifier: "/tmp/trusted-postpublish.ts",
+      skipPostpublish: false,
       skipGitHubRelease: true,
       skipClawHub: true,
       rerunFailedClawHub: true,
@@ -158,6 +163,27 @@ describe("parseReleaseVerifyBetaArgs", () => {
         npmTelegram: "44",
       },
     });
+  });
+
+  it("only accepts the trusted tooling postpublish verifier override", () => {
+    expect(resolveOpenClawNpmPostpublishVerifier("/tmp/release")).toBe(
+      "/tmp/release/scripts/openclaw-npm-postpublish-verify.ts",
+    );
+    const trustedVerifier = resolve("scripts/openclaw-npm-postpublish-verify.ts");
+    expect(resolveOpenClawNpmPostpublishVerifier("/tmp/release", trustedVerifier)).toBe(
+      trustedVerifier,
+    );
+    expect(() =>
+      resolveOpenClawNpmPostpublishVerifier("/tmp/release", "/tmp/untrusted-verifier.ts"),
+    ).toThrow("must select the trusted tooling verifier");
+    expect(() =>
+      parseReleaseVerifyBetaArgs([
+        "2026.5.10-beta.3",
+        "--postpublish-verifier",
+        trustedVerifier,
+        "--skip-postpublish",
+      ]),
+    ).toThrow("cannot be combined");
   });
 
   it("requires exact target and package inputs for bootstrap run verification", () => {

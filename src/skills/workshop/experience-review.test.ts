@@ -19,6 +19,7 @@ function completedRun(
     skillWorkshopAvailable?: boolean;
     compacted?: boolean;
     modelMetadata?: boolean;
+    modelIterations?: number;
   } = {},
 ): SkillExperienceReviewParams {
   const iterations = options.iterations ?? 10;
@@ -53,6 +54,9 @@ function completedRun(
             authProfileId: "openai:work",
           }),
       skillWorkshopAvailable: options.skillWorkshopAvailable ?? true,
+      ...(options.modelIterations === undefined
+        ? {}
+        : { modelIterations: options.modelIterations }),
       compacted: options.compacted,
       trigger: "user",
     },
@@ -89,6 +93,36 @@ describe("skill experience review scheduler", () => {
       ctx: { authProfileId: "openai:work" },
     });
     expect(runReview.mock.calls[0]?.[0]).not.toHaveProperty("event");
+    scheduler.clear();
+  });
+
+  it("uses exact harness iterations for a Codex-style projected trajectory", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun({ iterations: 1, modelIterations: 10 }));
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(runReview).toHaveBeenCalledWith(expect.objectContaining({ modelIterations: 10 }));
+    scheduler.clear();
+  });
+
+  it("does not infer iterations when a harness explicitly reports none", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun({ iterations: 10, modelIterations: 0 }));
+    await vi.runAllTimersAsync();
+
+    expect(runReview).not.toHaveBeenCalled();
     scheduler.clear();
   });
 
@@ -339,5 +373,37 @@ describe("skill experience review scheduler", () => {
     expect(prompt).toContain("cannot update a live skill");
     expect(prompt).toContain("NOTHING_TO_LEARN");
     expect(prompt).toContain("[tool call: exec]");
+  });
+});
+
+function hasDanglingSurrogate(value: string): boolean {
+  return /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
+}
+
+describe("formatSkillExperienceReviewTranscript", () => {
+  it("keeps first-message truncation UTF-16 safe at the 6 000-char boundary", () => {
+    const content = `${"a".repeat(5_992)}😀rest`;
+    const messages = [
+      { role: "user", content },
+      { role: "user", content: "d".repeat(60_000) },
+    ];
+    expect(hasDanglingSurrogate(`[user]\n${content}`.slice(0, 6_000))).toBe(true);
+
+    const transcript = formatSkillExperienceReviewTranscript(messages);
+    expect(hasDanglingSurrogate(transcript)).toBe(false);
+    expect(transcript).toContain("[older trajectory omitted]");
+  });
+
+  it("keeps tail truncation UTF-16 safe", () => {
+    const messages = [
+      { role: "user", content: "b".repeat(20_000) },
+      { role: "user", content: `🦞${"z".repeat(53_919)}` },
+    ];
+    const full = `[user]\n${messages[0]?.content}\n\n[user]\n${messages[1]?.content}`;
+    expect(hasDanglingSurrogate(full.slice(-53_920))).toBe(true);
+
+    const transcript = formatSkillExperienceReviewTranscript(messages);
+    expect(hasDanglingSurrogate(transcript)).toBe(false);
+    expect(transcript.length).toBeLessThanOrEqual(60_000);
   });
 });

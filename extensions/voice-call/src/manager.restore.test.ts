@@ -14,7 +14,7 @@ import {
   writeCallsToStore,
 } from "./manager.test-harness.js";
 import { loadActiveCallsFromStore } from "./manager/store.js";
-import { clearVoiceCallStateRuntime, setVoiceCallStateRuntime } from "./runtime-state.js";
+import { setVoiceCallStateRuntime } from "./runtime-state.js";
 
 function installStateRuntime(): void {
   setVoiceCallStateRuntime({
@@ -27,6 +27,9 @@ function installStateRuntime(): void {
         createPluginStateSyncKeyedStoreForTests("voice-call", options),
       openChannelIngressQueue: (() => {
         throw new Error("openChannelIngressQueue is not used by voice-call restore tests");
+      }) as never,
+      openChannelIngressDrain: (() => {
+        throw new Error("openChannelIngressDrain is not used by voice-call restore tests");
       }) as never,
     },
   });
@@ -63,7 +66,6 @@ describe("CallManager verification on restore", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-    clearVoiceCallStateRuntime();
     resetPluginStateStoreForTests();
   });
 

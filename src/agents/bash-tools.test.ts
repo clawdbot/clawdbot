@@ -21,9 +21,9 @@ import {
   getFinishedSession,
   markBackgrounded,
   markExited,
-  resetProcessRegistryForTests,
   type ProcessSession,
 } from "./bash-process-registry.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
 import { getBashShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 

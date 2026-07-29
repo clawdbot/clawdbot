@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildXaiCatalogModels, resolveXaiCatalogEntry } from "./model-definitions.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
-import { wrapXaiWebSearchError } from "./src/web-search-shared.js";
+import { requestXaiWebSearch } from "./src/web-search-shared.js";
 import { testing } from "./test-api.js";
 import { createXaiWebSearchProvider as createXaiWebSearchContractProvider } from "./web-search-contract-api.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
@@ -749,25 +749,6 @@ describe("xai web search config resolution", () => {
     });
   });
 
-  it("reuses the legacy grok web search api key for provider auth fallback", () => {
-    expect(
-      resolveFallbackXaiAuth({
-        tools: {
-          web: {
-            search: {
-              grok: {
-                apiKey: "xai-legacy-fallback", // pragma: allowlist secret
-              },
-            },
-          },
-        },
-      } as never),
-    ).toEqual({
-      apiKey: "xai-legacy-fallback",
-      source: "tools.web.search.grok.apiKey",
-    });
-  });
-
   it("returns a managed marker for SecretRef-backed plugin auth fallback", () => {
     expect(
       resolveFallbackXaiAuth({
@@ -947,13 +928,23 @@ describe("xai web search config resolution", () => {
     expect(externalContent?.wrapped).toBe(true);
   });
 
-  it("converts internal xAI timeout aborts into structured tool errors", () => {
+  it("converts internal xAI timeout aborts into structured tool errors", async () => {
     const abort = new DOMException("This operation was aborted", "AbortError");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(abort));
+    const request = () =>
+      requestXaiWebSearch({
+        query: "OpenClaw",
+        model: "grok-4.3",
+        apiKey: "xai-test-key",
+        endpoint: "https://api.x.ai/v1/responses",
+        timeoutSeconds: 60,
+        inlineCitations: false,
+      });
 
-    expect(() => wrapXaiWebSearchError(abort, 60)).toThrow("xAI web search timed out after 60s");
+    await expect(request()).rejects.toThrow("xAI web search timed out after 60s");
 
     try {
-      wrapXaiWebSearchError(abort, 60);
+      await request();
     } catch (error) {
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).name).toBe("Error");

@@ -4,20 +4,18 @@ import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "../config/sessions/session-transcript-turn-lifecycle.types.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import type { MediaFactInput } from "../media/media-facts.js";
 import type { InputProvenance } from "./input-provenance.js";
 
-type UserTurnSessionEntry = {
-  sessionId: string;
-  updatedAt: number;
-  sessionFile?: string;
-  threadId?: string | number;
-} & Record<string, unknown>;
+type UserTurnSessionEntry = SessionEntry;
 
-export type PersistedUserTurnMediaInput = {
-  path?: string | null;
-  url?: string | null;
-  contentType?: string | null;
+export type PersistedUserTurnMediaInput = Pick<
+  MediaFactInput,
+  "contentType" | "hydrationSuppressed" | "messageId" | "path" | "transcribed" | "url"
+> & {
   kind?: string | null;
+  workspaceDir?: string | null;
 };
 
 export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }>;
@@ -25,13 +23,28 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }>;
 export type UserTurnInput = {
   text?: string | null;
   media?: readonly PersistedUserTurnMediaInput[] | null;
+  /** Restart-safe native image placement; model-visible prompt bytes remain separate. */
+  mediaImageLayout?: {
+    slots: readonly {
+      kind: "inline" | "offloaded";
+      factIndex?: number;
+    }[];
+    suppressedFactIndexes?: readonly number[];
+  } | null;
   timestamp?: number;
   idempotencyKey?: string;
   senderIsOwner?: boolean;
   provenance?: InputProvenance;
-  mediaOnlyText?: string;
   /** Durable participant attribution. Callers must opt in at the product boundary. */
   sender?: { id?: string | null; name?: string | null; username?: string | null } | null;
+  /** Durable transport correlation; stored privately and never rendered into model input. */
+  transport?: {
+    channel?: string;
+    conversationRef?: string;
+    messageId?: string;
+    replyToId?: string;
+    threadId?: string;
+  };
 };
 
 export type UserTurnTranscriptUpdateMode = "inline" | "none";
@@ -134,6 +147,11 @@ export type UserTurnTranscriptRecorder = {
     target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;
     cwd?: string;
+    expectedSessionId?: string;
+    expectedSessionState?: SessionTranscriptTurnExpectedState;
+    sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+    /** Allow a later explicit persistence attempt when this attempt appends nothing. */
+    retryIfUnpersisted?: boolean;
   }) => Promise<UserTurnTranscriptPersistResult | undefined>;
   persistBlocked: (
     message: PersistedUserTurnMessage,

@@ -5,10 +5,14 @@ import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
 } from "./config.js";
+import { resolveRecoverableCodexPluginConfigKeys } from "./plugin-inventory.js";
+import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
+import { createCodexPluginThreadConfigStartupProvider } from "./plugin-thread-config-deadline.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   buildCodexPluginThreadConfig,
   buildCodexPluginThreadConfigInputFingerprint,
+  buildCodexPluginThreadConfigTimeoutFallback,
   isCodexPluginThreadBindingStale,
   mergeCodexThreadConfigs,
   shouldBuildCodexPluginThreadConfig,
@@ -1391,6 +1395,7 @@ describe("Codex plugin thread config", () => {
 
   it("re-reads app readiness after re-enabling an installed plugin", async () => {
     const appCache = new CodexAppInventoryCache();
+    const metadataCache = new CodexPluginMetadataCache();
     await appCache.refreshNow({
       key: "runtime",
       nowMs: 0,
@@ -1445,6 +1450,7 @@ describe("Codex plugin thread config", () => {
       },
       appCache,
       appCacheKey: "runtime",
+      metadataCache,
       nowMs: 1,
       request,
     });
@@ -1475,7 +1481,6 @@ describe("Codex plugin thread config", () => {
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "plugin/list",
       "plugin/read",
-      "plugin/list",
       "plugin/install",
       "plugin/list",
       "skills/list",
@@ -1483,7 +1488,6 @@ describe("Codex plugin thread config", () => {
       "config/mcpServer/reload",
       "app/list",
       "app/list",
-      "plugin/list",
       "plugin/read",
     ]);
     expect(appListParams).toEqual([
@@ -1813,6 +1817,229 @@ describe("Codex plugin thread config", () => {
       "features.hooks": true,
       hooks: { PreToolUse: [] },
       apps: { _default: { enabled: false } },
+    });
+  });
+
+  it("builds a diagnostic deny-all fallback after plugin config timeout", () => {
+    const fallback = buildCodexPluginThreadConfigTimeoutFallback({
+      pluginConfig: { codexPlugins: { enabled: true } },
+      appCacheKey: "runtime",
+      message: "Plugin discovery timed out.",
+    });
+
+    expect(fallback.configPatch?.apps).toEqual({
+      _default: {
+        enabled: false,
+        destructive_enabled: false,
+        open_world_enabled: false,
+      },
+    });
+    expect(fallback.diagnostics).toEqual([
+      { code: "plugin_config_timeout", message: "Plugin discovery timed out." },
+    ]);
+  });
+
+  it("bounds a coalesced metadata wait by the caller's shared deadline", async () => {
+    const metadataCache = new CodexPluginMetadataCache();
+    let release: ((response: v2.PluginListResponse) => void) | undefined;
+    const pending = metadataCache.load({
+      appCacheKey: "runtime",
+      queryKind: "curated-global",
+      requestParams: {},
+      request: async () =>
+        await new Promise<v2.PluginListResponse>((resolve) => {
+          release = resolve;
+        }),
+    });
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    const request = vi.fn(async () => pluginList([]));
+
+    const config = await createCodexPluginThreadConfigStartupProvider({
+      inputFingerprint: undefined,
+      enabledPluginConfigKeys: undefined,
+      policy: undefined,
+      requestTimeoutMs: 100,
+      signal: new AbortController().signal,
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            calendar: {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "calendar",
+            },
+          },
+        },
+      },
+      appCache: new CodexAppInventoryCache(),
+      appCacheKey: "runtime",
+      metadataCache,
+      client: { request },
+    }).build();
+
+    expect(config.diagnostics).toEqual([
+      expect.objectContaining({ code: "plugin_config_timeout" }),
+    ]);
+    expect(request).not.toHaveBeenCalled();
+    release?.(pluginList([]));
+    await pending;
+  });
+
+  it("allows a long-running app server to use its full plugin startup budget", async () => {
+    const request = vi.fn(
+      async (
+        _method: string,
+        _params: unknown,
+        _options: { timeoutMs: number; signal: AbortSignal },
+      ) => pluginList([]),
+    );
+
+    await createCodexPluginThreadConfigStartupProvider({
+      inputFingerprint: undefined,
+      enabledPluginConfigKeys: undefined,
+      policy: undefined,
+      requestTimeoutMs: 240_000,
+      signal: new AbortController().signal,
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            calendar: {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "calendar",
+            },
+          },
+        },
+      },
+      appCache: new CodexAppInventoryCache(),
+      appCacheKey: "runtime-long-startup",
+      metadataCache: new CodexPluginMetadataCache(),
+      client: { request },
+    }).build();
+
+    expect(request).toHaveBeenCalled();
+    const timeoutMs = request.mock.calls[0]?.[2]?.timeoutMs;
+    expect(timeoutMs).toBeGreaterThan(55_000);
+    expect(timeoutMs).toBeLessThanOrEqual(60_000);
+  });
+
+  it("propagates an outer abort while waiting on coalesced metadata", async () => {
+    const metadataCache = new CodexPluginMetadataCache();
+    let release: ((response: v2.PluginListResponse) => void) | undefined;
+    const pending = metadataCache.load({
+      appCacheKey: "runtime",
+      queryKind: "curated-global",
+      requestParams: {},
+      request: async () =>
+        await new Promise<v2.PluginListResponse>((resolve) => {
+          release = resolve;
+        }),
+    });
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    const controller = new AbortController();
+    const build = createCodexPluginThreadConfigStartupProvider({
+      inputFingerprint: undefined,
+      enabledPluginConfigKeys: undefined,
+      policy: undefined,
+      requestTimeoutMs: 1_000,
+      signal: controller.signal,
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            calendar: {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "calendar",
+            },
+          },
+        },
+      },
+      appCacheKey: "runtime",
+      metadataCache,
+      client: { request: vi.fn(async () => pluginList([])) },
+    }).build();
+    controller.abort(new Error("outer abort"));
+
+    await expect(build).rejects.toThrow("outer abort");
+    release?.(pluginList([]));
+    await pending;
+  });
+
+  it("does not start plugin discovery when the outer signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("outer abort"));
+    const request = vi.fn(async () => pluginList([]));
+
+    await expect(
+      createCodexPluginThreadConfigStartupProvider({
+        inputFingerprint: undefined,
+        enabledPluginConfigKeys: undefined,
+        policy: undefined,
+        requestTimeoutMs: 1_000,
+        signal: controller.signal,
+        pluginConfig: { codexPlugins: { enabled: true } },
+        appCacheKey: "runtime",
+        client: { request },
+      }).build(),
+    ).rejects.toThrow("outer abort");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("settles a missing plugin from one successful metadata snapshot", async () => {
+    const appCache = new CodexAppInventoryCache();
+    const metadataCache = new CodexPluginMetadataCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({ data: [], nextCursor: null }),
+    });
+    const pluginConfig = {
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          calendar: {
+            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+            pluginName: "calendar",
+          },
+        },
+      },
+    };
+    const request = vi.fn(async (method: string, params: unknown) => {
+      if (method !== "plugin/list") {
+        throw new Error(`unexpected request ${method}`);
+      }
+      expect(params).toEqual({});
+      return pluginList([], { name: "openai-curated-remote", path: null });
+    });
+    const build = () =>
+      buildCodexPluginThreadConfig({
+        pluginConfig,
+        appCache,
+        appCacheKey: "runtime",
+        metadataCache,
+        nowMs: 1,
+        request,
+      });
+
+    const first = await build();
+    const second = await build();
+
+    expect(first.diagnostics.map((diagnostic) => diagnostic.code)).toContain("plugin_missing");
+    expect(second.diagnostics.map((diagnostic) => diagnostic.code)).toContain("plugin_missing");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(
+      resolveRecoverableCodexPluginConfigKeys({
+        policy: first.inventory?.policy ?? second.inventory!.policy,
+        metadataCache,
+        appCacheKey: "runtime",
+      }),
+    ).toEqual([]);
+    expect(second.configPatch?.apps).toEqual({
+      _default: {
+        enabled: false,
+        destructive_enabled: false,
+        open_world_enabled: false,
+      },
     });
   });
 

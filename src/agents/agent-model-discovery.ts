@@ -176,9 +176,3 @@ export function discoverModels(
     options,
   );
 }
-
-export {
-  addEnvBackedAgentCredentials,
-  resolveAgentCredentialsForDiscovery,
-  type DiscoverAuthStorageOptions,
-} from "./agent-auth-discovery.js";

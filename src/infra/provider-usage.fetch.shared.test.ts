@@ -44,8 +44,7 @@ describe("provider usage fetch shared helpers", () => {
     expect(parseFiniteNumber(value)).toBe(expected);
   });
 
-  it("forwards request init and clears the timeout on success", async () => {
-    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+  it("forwards request init with a deadline signal", async () => {
     const fetchFnMock = vi.fn(
       async (_input: URL | RequestInfo, init?: RequestInit) =>
         new Response(JSON.stringify({ aborted: init?.signal?.aborted ?? false }), { status: 200 }),
@@ -69,44 +68,95 @@ describe("provider usage fetch shared helpers", () => {
     expect(init?.headers).toEqual({ authorization: "Bearer test" });
     expect(init?.signal).toBeInstanceOf(AbortSignal);
     await expect(response.json()).resolves.toEqual({ aborted: false });
-    expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("aborts timed out requests and clears the timer on rejection", async () => {
-    vi.useFakeTimers();
-    try {
-      const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
-      const fetchFnMock = vi.fn(
-        (_input: URL | RequestInfo, init?: RequestInit) =>
-          new Promise<Response>((_, reject) => {
-            init?.signal?.addEventListener("abort", () => reject(new Error("aborted by timeout")), {
+  it("aborts timed out requests", async () => {
+    const fetchFnMock = vi.fn(
+      (_input: URL | RequestInfo, init?: RequestInit) =>
+        new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("aborted by timeout")), {
+            once: true,
+          });
+        }),
+    );
+    const fetchFn = withFetchPreconnect(fetchFnMock);
+
+    await expect(fetchJson("https://example.com/usage", {}, 10, fetchFn)).rejects.toThrow(
+      "aborted by timeout",
+    );
+  });
+
+  it("keeps the timeout active while the response body is read", async () => {
+    let signal: AbortSignal | undefined;
+    const fetchFnMock = vi.fn(async (_input: URL | RequestInfo, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("{"));
+            signal?.addEventListener("abort", () => controller.error(signal?.reason), {
               once: true,
             });
-          }),
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
       );
-      const fetchFn = withFetchPreconnect(fetchFnMock);
-      const responsePromise = fetchJson("https://example.com/usage", {}, 10, fetchFn);
-      const rejection = expect(responsePromise).rejects.toThrow("aborted by timeout");
+    });
+    const fetchFn = withFetchPreconnect(fetchFnMock);
 
-      await vi.advanceTimersByTimeAsync(10);
-      await rejection;
-      expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
+    const response = await fetchJson("https://example.com/usage", {}, 10, fetchFn);
+
+    await expect(readUsageJson("deepseek", response)).resolves.toEqual({
+      ok: false,
+      snapshot: expect.objectContaining({
+        provider: "deepseek",
+        error: "Malformed usage response",
+      }),
+    });
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("keeps caller cancellation active while the response body is read", async () => {
+    const callerAbort = new AbortController();
+    const callerReason = new Error("cancelled by caller");
+    let signal: AbortSignal | undefined;
+    const fetchFnMock = vi.fn(async (_input: URL | RequestInfo, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            signal?.addEventListener("abort", () => controller.error(signal?.reason), {
+              once: true,
+            });
+          },
+        }),
+      );
+    });
+    const fetchFn = withFetchPreconnect(fetchFnMock);
+
+    const response = await fetchJson(
+      "https://example.com/usage",
+      { signal: callerAbort.signal },
+      1_000,
+      fetchFn,
+    );
+    const bodyRead = response.text();
+    callerAbort.abort(callerReason);
+
+    await expect(bodyRead).rejects.toBe(callerReason);
+    expect(signal?.reason).toBe(callerReason);
   });
 
   it("caps oversized request timeouts before scheduling", async () => {
     const timeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
-    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+      .spyOn(AbortSignal, "timeout")
+      .mockReturnValue(new AbortController().signal);
     const fetchFnMock = vi.fn(async () => new Response("{}", { status: 200 }));
     const fetchFn = withFetchPreconnect(fetchFnMock);
 
     await fetchJson("https://example.com/usage", {}, MAX_TIMER_TIMEOUT_MS + 1_000_000, fetchFn);
 
-    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("cancels unread response bodies when discarding usage responses", async () => {

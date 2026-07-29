@@ -10,10 +10,10 @@ import type {
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
 } from "../../plugins/hook-types.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type {
   PluginHookAgentContext,
   PluginHookBeforeAgentReplyResult,
-  PluginHookBeforeAgentStartResult,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
@@ -66,6 +66,45 @@ type MockResolvedModel = {
   reasoning?: boolean;
 };
 
+const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
+  policyHash: "",
+  index: {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "",
+    generatedAtMs: 1,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  },
+  registryDiagnostics: [],
+  manifestRegistry: { plugins: [], diagnostics: [] },
+  plugins: [],
+  diagnostics: [],
+  byPluginId: new Map(),
+  normalizePluginId: (pluginId: string) => pluginId,
+  owners: {
+    channels: new Map(),
+    channelConfigs: new Map(),
+    providers: new Map(),
+    modelCatalogProviders: new Map(),
+    cliBackends: new Map(),
+    setupProviders: new Map(),
+    commandAliases: new Map(),
+    contracts: new Map(),
+  },
+  metrics: {
+    registrySnapshotMs: 0,
+    manifestRegistryMs: 0,
+    ownerMapsMs: 0,
+    totalMs: 0,
+    indexPluginCount: 0,
+    manifestPluginCount: 0,
+  },
+};
+
 type MockAgentDiscoveryStores = {
   authStorage: {
     setRuntimeApiKey: ReturnType<typeof vi.fn>;
@@ -85,12 +124,6 @@ export const mockedGlobalHookRunner = {
       _eventValue: { cleanedBody: string },
       _ctx: PluginHookAgentContext,
     ): Promise<PluginHookBeforeAgentReplyResult | undefined> => undefined,
-  ),
-  runBeforeAgentStart: vi.fn(
-    async (
-      _eventValue: { prompt: string; messages?: unknown[] },
-      _ctx: PluginHookAgentContext,
-    ): Promise<PluginHookBeforeAgentStartResult | undefined> => undefined,
   ),
   runBeforeAgentFinalize: vi.fn(
     async (
@@ -140,8 +173,8 @@ function makeMockRuntimePlan(): MockRuntimePlan {
 }
 
 export const mockedCompactDirect = mockedContextEngine.compact;
-export const mockedResolveContextEngine = vi.fn(async () => mockedContextEngine);
-export const mockedResolveContextEngineOwnerPluginId = vi.fn(() => undefined);
+const mockedResolveContextEngine = vi.fn(async () => mockedContextEngine);
+const mockedResolveContextEngineOwnerPluginId = vi.fn(() => undefined);
 export const mockedBuildAgentRuntimePlan = vi.fn<() => AgentRuntimePlan>(
   () => makeMockRuntimePlan() as AgentRuntimePlan,
 );
@@ -159,7 +192,7 @@ function createMockAgentDiscoveryStores(): MockAgentDiscoveryStores {
   };
 }
 
-export const mockedCreateEmptyAgentDiscoveryStores = vi.fn(createMockAgentDiscoveryStores);
+const mockedCreateEmptyAgentDiscoveryStores = vi.fn(createMockAgentDiscoveryStores);
 function createMockResolvedModel(
   provider = "anthropic",
   modelId = "test-model",
@@ -191,7 +224,7 @@ export const mockedResolveModelAsync = vi.fn(
   async (provider?: string, modelId?: string, _agentDir?: string, cfg?: unknown) =>
     createMockResolvedModel(provider, modelId, cfg),
 );
-export const mockedPrepareProviderRuntimeAuth = vi.fn(async () => undefined);
+const mockedPrepareProviderRuntimeAuth = vi.fn(async () => undefined);
 export const mockedRunEmbeddedAttempt =
   vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 export const mockedBuildEmbeddedRunPayloads = vi.fn<
@@ -204,7 +237,7 @@ export const mockedWaitForDeferredTurnMaintenanceForSession = vi.fn(
   async (_sessionKey?: string) => undefined,
 );
 export const mockedSessionLikelyHasOversizedToolResults = vi.fn(() => false);
-export const mockedResolveLiveToolResultMaxChars = vi.fn(() => 32_000);
+const mockedResolveLiveToolResultMaxChars = vi.fn(() => 32_000);
 type MockTruncateOversizedToolResultsResult = {
   truncated: boolean;
   truncatedCount: number;
@@ -264,7 +297,7 @@ export const mockedLog: {
   isEnabled: vi.fn(() => false),
 };
 
-export const mockedFormatBillingErrorMessage = vi.fn(() => "");
+const mockedFormatBillingErrorMessage = vi.fn(() => "");
 export const mockedClassifyFailoverReason = vi.fn<(raw: string) => FailoverReason | null>(
   () => null,
 );
@@ -277,12 +310,12 @@ export const mockedExtractObservedOverflowTokenCount = vi.fn((msg?: string) => {
   return match?.[1] ? Number(match[1].replaceAll(",", "")) : undefined;
 });
 export const mockedFormatAssistantErrorText = vi.fn(() => "");
-export const mockedIsAuthAssistantError = vi.fn(() => false);
-export const mockedIsBillingAssistantError = vi.fn(() => false);
+const mockedIsAuthAssistantError = vi.fn(() => false);
+const mockedIsBillingAssistantError = vi.fn(() => false);
 export const mockedIsCompactionFailureError = vi.fn(() => false);
 export const mockedIsFailoverAssistantError = vi.fn<MockAssistantErrorProbe>(() => false);
-export const mockedIsFailoverErrorMessage = vi.fn(() => false);
-export const mockedIsGenericUnknownStreamErrorMessage = vi.fn((raw: string) =>
+const mockedIsFailoverErrorMessage = vi.fn(() => false);
+const mockedIsGenericUnknownStreamErrorMessage = vi.fn((raw: string) =>
   /^\s*an unknown error occurred\.?\s*$/i.test(raw),
 );
 export const mockedIsLikelyContextOverflowError = vi.fn((msg?: string) => {
@@ -294,10 +327,10 @@ export const mockedIsLikelyContextOverflowError = vi.fn((msg?: string) => {
     lower.includes("prompt is too long")
   );
 });
-export const mockedParseImageSizeError = vi.fn(() => null);
-export const mockedParseImageDimensionError = vi.fn(() => null);
+const mockedParseImageSizeError = vi.fn(() => null);
+const mockedParseImageDimensionError = vi.fn(() => null);
 export const mockedIsRateLimitAssistantError = vi.fn<MockAssistantErrorProbe>(() => false);
-export const mockedIsTimeoutErrorMessage = vi.fn(() => false);
+const mockedIsTimeoutErrorMessage = vi.fn(() => false);
 export const mockedPickFallbackThinkingLevel = vi.fn<(params?: unknown) => ThinkLevel | null>(
   () => null,
 );
@@ -313,11 +346,11 @@ export const mockedResolveContextWindowInfo = vi.fn(() => ({
   tokens: 200000,
   source: "model",
 }));
-export const mockedFormatContextWindowWarningMessage = vi.fn(
+const mockedFormatContextWindowWarningMessage = vi.fn(
   (params: { provider: string; modelId: string; guard: { tokens: number; source: string } }) =>
     `low context window: ${params.provider}/${params.modelId} ctx=${params.guard.tokens} source=${params.guard.source}`,
 );
-export const mockedFormatContextWindowBlockMessage = vi.fn(
+const mockedFormatContextWindowBlockMessage = vi.fn(
   (params: { guard: { tokens: number; source: string } }) =>
     `Model context window too small (${params.guard.tokens} tokens; source=${params.guard.source}). Minimum is 1000.`,
 );
@@ -369,7 +402,7 @@ export const mockedResolveAuthProfileOrder = vi.fn<(_params?: unknown) => string
 type AuthProfileOrderResolution = ReturnType<
   typeof import("../model-auth.js").resolveAuthProfileOrderWithMetadata
 >;
-export const mockedResolveAuthProfileOrderWithMetadata = vi.fn<
+const mockedResolveAuthProfileOrderWithMetadata = vi.fn<
   (_params?: unknown) => AuthProfileOrderResolution
 >((params?: unknown) => ({
   profileIds: mockedResolveAuthProfileOrder(params),
@@ -378,14 +411,14 @@ export const mockedResolveAuthProfileOrderWithMetadata = vi.fn<
 export const mockedResolveProviderEntryApiKeyProfileReference = vi.fn<
   (_params?: unknown) => unknown
 >(() => ({ kind: "none" }));
-export const mockedHasUsableCustomProviderApiKey = vi.fn(() => false);
+const mockedHasUsableCustomProviderApiKey = vi.fn(() => false);
 export const mockedMarkAuthProfileSuccess = vi.fn(async () => {});
-export const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
+const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 
 export const overflowBaseRunParams = {
+  agentId: "main",
   sessionId: "test-session",
   sessionKey: "test-key",
-  sessionFile: "/tmp/session.json",
   workspaceDir: "/tmp/workspace",
   prompt: "hello",
   timeoutMs: 30000,
@@ -405,14 +438,23 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
         ? { supported: true, priority: 100 }
         : { supported: false },
     runAttempt: async (params) => await mockedRunEmbeddedAttempt(params),
+    finalizeSettledTurn: async ({ attempt }) => {
+      const result = await mockedRunEmbeddedAttempt({ ...attempt, disableTools: true });
+      const assistant =
+        result.currentAttemptCompletedAssistant ??
+        result.currentAttemptAssistant ??
+        result.lastAssistant;
+      if (!assistant) {
+        throw new Error("mocked settled-turn finalization returned no assistant message");
+      }
+      return { assistant, ...(result.attemptUsage ? { usage: result.attemptUsage } : {}) };
+    },
   });
 
   mockedGlobalHookRunner.hasHooks.mockReset();
   mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
   mockedGlobalHookRunner.runBeforeAgentReply.mockReset();
   mockedGlobalHookRunner.runBeforeAgentReply.mockResolvedValue(undefined);
-  mockedGlobalHookRunner.runBeforeAgentStart.mockReset();
-  mockedGlobalHookRunner.runBeforeAgentStart.mockResolvedValue(undefined);
   mockedGlobalHookRunner.runBeforeAgentFinalize.mockReset();
   mockedGlobalHookRunner.runBeforeAgentFinalize.mockResolvedValue(undefined);
   mockedGlobalHookRunner.runBeforePromptBuild.mockReset();
@@ -806,11 +848,12 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   });
 
   vi.doMock("../workspace-run.js", () => ({
-    resolveRunWorkspaceDir: vi.fn((params: { workspaceDir: string }) => ({
+    resolveRunWorkspaceDir: vi.fn((params: { workspaceDir: string; agentId?: string }) => ({
       workspaceDir: params.workspaceDir,
       usedFallback: false,
+      isCanonicalWorkspace: false,
       fallbackReason: undefined,
-      agentId: "main",
+      agentId: params.agentId ?? "main",
     })),
     redactRunIdentifier: vi.fn((value?: string) => value ?? ""),
   }));
@@ -876,6 +919,27 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     ensureOpenClawModelsJson: vi.fn(async () => {}),
   }));
 
+  vi.doMock("../prepared-model-runtime.js", () => ({
+    activateStandalonePreparedModelRuntime: vi.fn(async () => {}),
+    acquireAgentRunPreparedModelRuntime: vi.fn(async (input: Record<string, unknown>) => ({
+      snapshot: {
+        agentId: input.agentId,
+        agentDir: input.agentDir,
+        config: input.config,
+        workspaceDir: input.workspaceDir,
+        metadataSnapshot: {
+          ...emptyPluginMetadataSnapshot,
+          workspaceDir: input.workspaceDir as string | undefined,
+        },
+        createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+      },
+      release: vi.fn(),
+    })),
+    prepareModelRuntimeSnapshot: vi.fn(async () => ({
+      createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+    })),
+  }));
+
   vi.doMock("../context-window-guard.js", () => ({
     CONTEXT_WINDOW_HARD_MIN_TOKENS: 1000,
     evaluateContextWindowGuard: mockedEvaluateContextWindowGuard,
@@ -884,9 +948,15 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     resolveContextWindowInfo: mockedResolveContextWindowInfo,
   }));
 
-  vi.doMock("../../utils/message-channel.js", () => ({
-    isMarkdownCapableMessageChannel: vi.fn(() => true),
-  }));
+  vi.doMock("../../utils/message-channel.js", async () => {
+    const actual = await vi.importActual<typeof import("../../utils/message-channel.js")>(
+      "../../utils/message-channel.js",
+    );
+    return {
+      ...actual,
+      isMarkdownCapableMessageChannel: vi.fn(() => true),
+    };
+  });
 
   vi.doMock("../defaults.js", () => ({
     DEFAULT_CONTEXT_TOKENS: 200000,
@@ -933,7 +1003,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   });
 
   const { runEmbeddedAgent } = await import("./run.js");
-  return { runEmbeddedAgent };
+  return {
+    runEmbeddedAgent: (params) =>
+      runEmbeddedAgent({ ...params, agentId: params.agentId ?? "main" }),
+  };
 }
 
 /** Move one-time runner compilation out of individual behavior timings. */

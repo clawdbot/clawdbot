@@ -3,6 +3,16 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import {
+  getAgentEventLifecycleGeneration,
+  withAgentRunLifecycleGeneration,
+} from "../infra/agent-events.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import type { CliOutput } from "./cli-output.js";
 import { cliBackendLog } from "./cli-runner/log.js";
 
@@ -80,6 +90,29 @@ const baseRunParams = {
 
 let runCliAgent: typeof import("./cli-runner.js").runCliAgent;
 
+async function captureRejectedClaudeRun(
+  params: Parameters<typeof runCliAgent>[0],
+): Promise<{ error: unknown; events: DiagnosticEventPayload[] }> {
+  const events: DiagnosticEventPayload[] = [];
+  const unsubscribe = onTrustedInternalDiagnosticEvent((event) => {
+    if ("runId" in event && event.runId === params.runId) {
+      events.push(event);
+    }
+  });
+  let error: unknown;
+  try {
+    await runCliAgent(params);
+  } catch (caught) {
+    error = caught;
+  } finally {
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    unsubscribe();
+  }
+  return { error, events };
+}
+
 function makeStubContext(params: typeof baseRunParams & { trigger?: string }) {
   // Stub only the prepared context shape runCliAgent needs after the hook gate.
   return {
@@ -118,10 +151,132 @@ beforeAll(async () => {
 });
 
 afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
   vi.clearAllMocks();
+  resetDiagnosticEventsForTest();
 });
 
-describe("runCliAgent cron before_agent_reply seam", () => {
+describe("runCliAgent before_agent_reply seam", () => {
+  it("adds Claude CLI harness and run ownership at the runner entrypoint", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const unsubscribe = onTrustedInternalDiagnosticEvent((event) => {
+      if ("runId" in event && event.runId === "claude-entrypoint-run") {
+        events.push(event);
+      }
+    });
+    executePreparedCliRunMock.mockResolvedValue({ text: "real Claude reply" });
+
+    let result: Awaited<ReturnType<typeof runCliAgent>> | undefined;
+    try {
+      result = await runCliAgent({
+        ...baseRunParams,
+        provider: "claude-cli",
+        modelProvider: "anthropic",
+        model: "claude-opus-4-7",
+        runId: "claude-entrypoint-run",
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    const harnessStarted = events.find((event) => event.type === "harness.run.started");
+    const runStarted = events.find((event) => event.type === "run.started");
+    expect(events).toHaveLength(4);
+    expect(events.map((event) => event.type)).toEqual(
+      expect.arrayContaining([
+        "harness.run.started",
+        "run.started",
+        "run.completed",
+        "harness.run.completed",
+      ]),
+    );
+    expect(harnessStarted).toMatchObject({
+      harnessId: "claude-cli",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+    });
+    expect(runStarted?.trace?.parentSpanId).toBe(harnessStarted?.trace?.spanId);
+    expect(result?.diagnosticTrace).toEqual(harnessStarted?.trace);
+  });
+
+  it("bypasses Claude CLI diagnostics when no event listener is active", async () => {
+    executePreparedCliRunMock.mockResolvedValue({ text: "real Claude reply" });
+
+    const result = await runCliAgent({
+      ...baseRunParams,
+      provider: "claude-cli",
+      modelProvider: "anthropic",
+      model: "claude-opus-4-7",
+      runId: "claude-no-diagnostics-listener",
+    });
+
+    expect(result.diagnosticTrace).toBeUndefined();
+    expect(executePreparedCliRunMock).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the send phase when execution fails before successful cleanup", async () => {
+    executePreparedCliRunMock.mockRejectedValueOnce(new Error("CLI process failed"));
+
+    const { error, events } = await captureRejectedClaudeRun({
+      ...baseRunParams,
+      provider: "claude-cli",
+      modelProvider: "anthropic",
+      model: "claude-opus-4-7",
+      runId: "claude-send-error",
+      cleanupCliLiveSessionOnRunEnd: true,
+    });
+
+    expect(error).toMatchObject({ message: "CLI process failed" });
+    expect(closeClaudeLiveSessionForContextMock).toHaveBeenCalledTimes(1);
+    expect(events.find((event) => event.type === "harness.run.error")).toMatchObject({
+      type: "harness.run.error",
+      phase: "send",
+    });
+  });
+
+  it("classifies post-execution response validation failures as resolve", async () => {
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "" });
+
+    const { error, events } = await captureRejectedClaudeRun({
+      ...baseRunParams,
+      provider: "claude-cli",
+      modelProvider: "anthropic",
+      model: "claude-opus-4-7",
+      runId: "claude-resolve-error",
+    });
+
+    expect(error).toMatchObject({ message: "CLI backend returned an empty response." });
+    expect(events.find((event) => event.type === "harness.run.error")).toMatchObject({
+      type: "harness.run.error",
+      phase: "resolve",
+    });
+  });
+
+  it("classifies a surfaced outer cleanup failure as cleanup", async () => {
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "real Claude reply" });
+    closeClaudeLiveSessionForContextMock.mockRejectedValueOnce(
+      new Error("managed session cleanup failed"),
+    );
+
+    const { error, events } = await captureRejectedClaudeRun({
+      ...baseRunParams,
+      provider: "claude-cli",
+      modelProvider: "anthropic",
+      model: "claude-opus-4-7",
+      runId: "claude-cleanup-error",
+      cleanupCliLiveSessionOnRunEnd: true,
+    });
+
+    expect(error).toMatchObject({ message: "managed session cleanup failed" });
+    expect(events.find((event) => event.type === "harness.run.error")).toMatchObject({
+      type: "harness.run.error",
+      phase: "cleanup",
+    });
+  });
+
   it("rejects stale lifecycle ownership before CLI preparation", async () => {
     await expect(
       runCliAgent({
@@ -191,28 +346,47 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     }
   });
 
+  it.each(["manual", "memory", "overflow"] as const)(
+    "does not expose internal %s runs to before_agent_reply hooks",
+    async (trigger) => {
+      hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+      executePreparedCliRunMock.mockResolvedValue({ text: "manual result" });
+
+      await runCliAgent({
+        ...baseRunParams,
+        trigger,
+      });
+
+      expect(runBeforeAgentReplyMock).not.toHaveBeenCalled();
+      expect(prepareCliRunContextMock).toHaveBeenCalledTimes(1);
+      expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("clears stateless CLI bindings when before_agent_reply claims a cron turn", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "codex-cli",
+          pluginId: "test-codex-cli",
+          config: {
+            command: "codex",
+            args: ["exec"],
+            output: "text",
+            input: "arg",
+            sessionMode: "none",
+          },
+        },
+      ],
+    });
     hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
     runBeforeAgentReplyMock.mockResolvedValue({ handled: true });
 
     const result = await runCliAgent({
       ...baseRunParams,
       trigger: "cron",
-      config: {
-        agents: {
-          defaults: {
-            cliBackends: {
-              "codex-cli": {
-                command: "codex",
-                args: ["exec"],
-                output: "text",
-                input: "arg",
-                sessionMode: "none",
-              },
-            },
-          },
-        },
-      },
+      config: {},
     });
 
     expect(result.meta.agentMeta?.sessionId).toBe("");
@@ -283,14 +457,61 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     expect(result.payloads?.[0]?.text).toBe(SILENT_REPLY_TOKEN);
   });
 
-  it("does not invoke before_agent_reply for non-cron triggers", async () => {
+  it("lets before_agent_reply claim user runs before CLI preparation", async () => {
     hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    runBeforeAgentReplyMock.mockResolvedValue({
+      handled: true,
+      reply: { text: "user turn claimed" },
+    });
+
+    const result = await runCliAgent({ ...baseRunParams, trigger: "user" });
+
+    expect(runBeforeAgentReplyMock).toHaveBeenCalledTimes(1);
+    const [, hookContext] = runBeforeAgentReplyMock.mock.calls.at(0) ?? [];
+    expect(hookContext).toMatchObject({ trigger: "user" });
+    expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
+    expect(result.payloads?.[0]?.text).toBe("user turn claimed");
+  });
+
+  it("lets before_agent_reply claim heartbeat runs before CLI preparation", async () => {
+    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    runBeforeAgentReplyMock.mockResolvedValue({
+      handled: true,
+      reply: { text: "heartbeat claimed" },
+    });
+
+    const result = await runCliAgent({ ...baseRunParams, trigger: "heartbeat" });
+
+    expect(runBeforeAgentReplyMock).toHaveBeenCalledTimes(1);
+    const [, hookContext] = runBeforeAgentReplyMock.mock.calls.at(0) ?? [];
+    expect(hookContext).toMatchObject({ trigger: "heartbeat" });
+    expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+    expect(result.payloads?.[0]?.text).toBe("heartbeat claimed");
+  });
+
+  it("dispatches a declining hook once when model fallback re-enters the CLI runner", async () => {
+    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    runBeforeAgentReplyMock.mockResolvedValue(undefined);
     executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
+    const onExecutionPhase = vi.fn();
 
-    await runCliAgent({ ...baseRunParams, trigger: "user" });
+    await withAgentRunLifecycleGeneration(getAgentEventLifecycleGeneration(), async () => {
+      await runCliAgent({ ...baseRunParams, trigger: "user", onExecutionPhase });
+      await runCliAgent({
+        ...baseRunParams,
+        trigger: "user",
+        model: "fallback-model",
+        onExecutionPhase,
+      });
+    });
 
-    expect(runBeforeAgentReplyMock).not.toHaveBeenCalled();
-    expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
+    expect(runBeforeAgentReplyMock).toHaveBeenCalledTimes(1);
+    expect(
+      onExecutionPhase.mock.calls.filter(([event]) => event.phase === "before_agent_reply"),
+    ).toHaveLength(1);
+    expect(prepareCliRunContextMock).toHaveBeenCalledTimes(2);
+    expect(executePreparedCliRunMock).toHaveBeenCalledTimes(2);
   });
 
   it("falls through to the CLI subprocess when no before_agent_reply hook is registered", async () => {

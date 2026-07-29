@@ -14,6 +14,9 @@ const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM 
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const expectUploadSurface = process.env.OPENCLAW_TERMINAL_UPLOAD_EXPECT_PRESENT !== "0";
 const screenshotPath = process.env.OPENCLAW_TERMINAL_UPLOAD_SCREENSHOT?.trim();
+const progressScreenshotPath = process.env.OPENCLAW_TERMINAL_UPLOAD_PROGRESS_SCREENSHOT?.trim();
+const errorScreenshotPath = process.env.OPENCLAW_TERMINAL_UPLOAD_ERROR_SCREENSHOT?.trim();
+const videoDir = process.env.OPENCLAW_TERMINAL_UPLOAD_VIDEO_DIR?.trim();
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -38,6 +41,7 @@ describeControlUiE2e("Control UI terminal file upload", () => {
     const context = await browser.newContext({
       serviceWorkers: "block",
       viewport: { width: 1280, height: 800 },
+      ...(videoDir ? { recordVideo: { dir: videoDir, size: { width: 1280, height: 800 } } } : {}),
     });
     const page = await context.newPage();
     await page.addInitScript(() => {
@@ -51,6 +55,8 @@ describeControlUiE2e("Control UI terminal file upload", () => {
       };
     });
     const stagedPath = "/tmp/openclaw-terminal-upload/sample file.pdf";
+    const stagedNotesPath = "/tmp/openclaw-terminal-upload/notes.txt";
+    const stagedDropPath = "/tmp/openclaw-terminal-upload/dropped.png";
     const gateway = await installMockGateway(page, {
       deferredMethods: ["connect"],
       featureMethods: ["terminal.open", "terminal.upload"],
@@ -89,6 +95,7 @@ describeControlUiE2e("Control UI terminal file upload", () => {
         await page.screenshot({ path: screenshotPath });
       }
 
+      await gateway.deferNext("terminal.upload");
       await page.locator("input.tp-file-input").setInputFiles([
         { name: "sample file.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF") },
         { name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("note") },
@@ -97,13 +104,54 @@ describeControlUiE2e("Control UI terminal file upload", () => {
         .poll(async () => (await gateway.getRequests("terminal.upload")).length, {
           timeout: 10_000,
         })
+        .toBe(1);
+      await page.getByText("Uploading 1 of 2").waitFor();
+      const progress = page.locator(".tp-upload-progress");
+      await expect.poll(async () => await progress.getAttribute("aria-valuenow")).toBe("0");
+      await expect.poll(async () => await progress.getAttribute("aria-valuemax")).toBe("2");
+      if (progressScreenshotPath) {
+        await page.screenshot({ path: progressScreenshotPath });
+      }
+
+      await gateway.deferNext("terminal.upload");
+      await gateway.resolveDeferred("terminal.upload", { path: stagedPath, size: 4 });
+      await expect
+        .poll(async () => (await gateway.getRequests("terminal.upload")).length, {
+          timeout: 10_000,
+        })
         .toBe(2);
+      await page.getByText("Uploading 2 of 2").waitFor();
+      await expect.poll(async () => await progress.getAttribute("aria-valuenow")).toBe("1");
+      await gateway.rejectDeferred("terminal.upload", {
+        code: "UNAVAILABLE",
+        message: "paired node went offline",
+      });
+      await page.getByText("Upload failed").waitFor();
+      await page.getByText("paired node went offline").waitFor();
+      expect(await page.getByRole("button", { name: "Retry" }).isVisible()).toBe(true);
+      expect((await gateway.getRequests("terminal.input")).length).toBe(0);
+      if (errorScreenshotPath) {
+        await page.screenshot({ path: errorScreenshotPath });
+      }
+
+      await gateway.setMethodResponse("terminal.upload", { path: stagedNotesPath, size: 4 });
+      await page.getByRole("button", { name: "Retry" }).click();
+      await expect
+        .poll(async () => (await gateway.getRequests("terminal.upload")).length, {
+          timeout: 10_000,
+        })
+        .toBe(3);
       const pickedUploads = await gateway.getRequests("terminal.upload");
-      expect(pickedUploads.map((request) => request.params)).toEqual([
+      expect(pickedUploads.slice(0, 3).map((request) => request.params)).toEqual([
         {
           sessionId: "terminal-upload-e2e",
           name: "sample file.pdf",
           contentBase64: "JVBERg==",
+        },
+        {
+          sessionId: "terminal-upload-e2e",
+          name: "notes.txt",
+          contentBase64: "bm90ZQ==",
         },
         {
           sessionId: "terminal-upload-e2e",
@@ -120,8 +168,10 @@ describeControlUiE2e("Control UI terminal file upload", () => {
         data?: string;
       };
       expect(pickedInput.data).toContain("'/tmp/openclaw-terminal-upload/sample file.pdf'");
+      expect(pickedInput.data).toContain("/tmp/openclaw-terminal-upload/notes.txt");
       expect(pickedInput.data).not.toMatch(/[\r\n]/);
 
+      await gateway.setMethodResponse("terminal.upload", { path: stagedDropPath, size: 3 });
       await page.locator("wa-tab-panel.tp-viewport").evaluate((target) => {
         const transfer = new DataTransfer();
         transfer.items.add(new File([new Uint8Array([1, 2, 3])], "dropped.png"));
@@ -136,7 +186,7 @@ describeControlUiE2e("Control UI terminal file upload", () => {
         .poll(async () => (await gateway.getRequests("terminal.upload")).length, {
           timeout: 10_000,
         })
-        .toBe(3);
+        .toBe(4);
       const droppedUpload = (await gateway.getRequests("terminal.upload")).at(-1);
       expect(droppedUpload?.params).toEqual({
         sessionId: "terminal-upload-e2e",
@@ -151,8 +201,29 @@ describeControlUiE2e("Control UI terminal file upload", () => {
       const droppedInput = (await gateway.getRequests("terminal.input")).at(-1)?.params as {
         data?: string;
       };
-      expect(droppedInput.data).toContain("'/tmp/openclaw-terminal-upload/sample file.pdf'");
+      expect(droppedInput.data).toContain("/tmp/openclaw-terminal-upload/dropped.png");
       expect(droppedInput.data).not.toMatch(/[\r\n]/);
+
+      await gateway.deferNext("terminal.upload");
+      await page.locator("input.tp-file-input").setInputFiles({
+        name: "cancelled.zip",
+        mimeType: "application/zip",
+        buffer: Buffer.from("zip"),
+      });
+      await expect
+        .poll(async () => (await gateway.getRequests("terminal.upload")).length, {
+          timeout: 10_000,
+        })
+        .toBe(5);
+      await page.getByText("Uploading 1 of 1").waitFor();
+      await page.getByRole("button", { name: "Cancel" }).click();
+      await expect.poll(async () => await page.locator(".tp-upload-card").count()).toBe(0);
+      await gateway.resolveDeferred("terminal.upload", {
+        path: "/tmp/openclaw-terminal-upload/cancelled.zip",
+        size: 3,
+      });
+      await page.waitForTimeout(100);
+      expect((await gateway.getRequests("terminal.input")).length).toBe(2);
     } finally {
       await context.close();
     }

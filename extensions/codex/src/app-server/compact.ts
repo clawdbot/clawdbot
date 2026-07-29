@@ -409,6 +409,9 @@ function readIgnoredCompactionOverridePaths(params: CompactEmbeddedAgentSessionP
     if (typeof entry.record.model === "string" && entry.record.model.trim()) {
       ignored.add(`${entry.path}.compaction.model`);
     }
+    if (typeof entry.record.thinkingLevel === "string" && entry.record.thinkingLevel.trim()) {
+      ignored.add(`${entry.path}.compaction.thinkingLevel`);
+    }
     if (providerPath) {
       ignored.add(providerPath);
     }
@@ -555,8 +558,12 @@ async function compactCodexNativeThread(
   const shouldReleaseDefaultLease = !options.clientFactory;
   const clientFactory = options.clientFactory ?? getLeasedSharedCodexAppServerClient;
   const runtimeAuthPlan = params.runtimeAuthPlan ?? params.runtimePlan?.auth;
+  // A user-home app-server keeps its native Codex account; injecting a prepared key
+  // would rewrite the CODEX_HOME auth that Codex CLI and Desktop share.
   const usesPreparedApiKey =
-    !usesSupervisionConnection && runtimeAuthPlan?.modelRoute?.authRequirement === "api-key";
+    !usesSupervisionConnection &&
+    appServer.start.homeScope !== "user" &&
+    runtimeAuthPlan?.modelRoute?.authRequirement === "api-key";
   const preparedApiKey = usesPreparedApiKey ? params.resolvedApiKey?.trim() : undefined;
   if (usesPreparedApiKey && !preparedApiKey) {
     return {
@@ -905,6 +912,13 @@ function isSameNativeCompactionBinding(
 }
 
 function isCodexThreadNotFoundError(error: unknown): boolean {
+  // codex-rs exposes no dedicated error code for a missing compaction thread:
+  // thread/compact/start returns generic INVALID_REQUEST (-32600), and the
+  // app-server's own contract/test asserts the "thread not found" MESSAGE as
+  // the discriminator (thread_processor.rs load_thread → invalid_request;
+  // compaction.rs asserts message.contains("thread not found")). So the message
+  // is the authoritative positive signal here, not the generic code. This is a
+  // self-heal recovery gate, not user-facing classification.
   return formatCompactionError(error).toLowerCase().includes("thread not found");
 }
 

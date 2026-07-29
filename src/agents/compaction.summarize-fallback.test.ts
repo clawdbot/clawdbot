@@ -3,7 +3,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import type { UserMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { summarizeWithFallback } from "./compaction.js";
+import { summarizeWithFallback } from "./compaction.test-support.js";
 
 const agentSessionMocks = vi.hoisted(() => ({
   generateSummary: vi.fn(),
@@ -135,6 +135,39 @@ describe("summarizeWithFallback", () => {
     ).rejects.toMatchObject({ name: "AbortError" });
 
     // Caller abort is terminal — no retry, no fallback to placeholder.
+    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops retry backoff promptly when the caller aborts mid-sleep", async () => {
+    // The first attempt fails with a retryable error, then the caller aborts
+    // while retryAsync sits in its backoff sleep (>= 500ms minDelay). The
+    // sleep must reject on abort instead of riding out the full delay.
+    const controller = new AbortController();
+    agentSessionMocks.generateSummary.mockRejectedValueOnce(new Error("transient rate limit"));
+
+    const startedAt = Date.now();
+    const promise = summarizeWithFallback({
+      messages: [
+        {
+          role: "user",
+          content: "hello",
+          timestamp: 1,
+        } satisfies UserMessage,
+      ],
+      model: testModel,
+      apiKey: "test-key", // pragma: allowlist secret
+      signal: controller.signal,
+      reserveTokens: 1000,
+      maxChunkTokens: 50_000,
+      contextWindow: 200_000,
+    });
+    const rejection = expect(promise).rejects.toThrow("aborted");
+    setTimeout(() => controller.abort(), 50);
+    await rejection;
+    const elapsedMs = Date.now() - startedAt;
+
+    // Well under the 500ms minimum backoff — the abort interrupted the sleep.
+    expect(elapsedMs).toBeLessThan(400);
     expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
   });
 

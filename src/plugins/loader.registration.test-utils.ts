@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { getContextEngineFactory, listContextEngineIds } from "../context-engine/registry.js";
+import { getContextEngineRegistration } from "../context-engine/registry.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
@@ -60,8 +60,10 @@ import {
   getMemoryRuntime,
   listActiveMemoryPublicArtifacts,
   listMemoryCorpusSupplements,
+  listMemoryPromptPreparations,
   registerMemoryCapability,
   registerMemoryCorpusSupplement,
+  registerMemoryPromptPreparation,
   registerMemoryPromptSupplement,
   resolveMemoryFlushPlan,
 } from "./memory-state.test-fixtures.js";
@@ -248,8 +250,7 @@ describe("loadOpenClawPlugins", () => {
     expect(registry.securityAuditCollectors).toStrictEqual([]);
     expect(registry.interactiveHandlers).toStrictEqual([]);
     expect(resolvePluginInteractiveNamespaceMatch("slack", "failme:payload")).toBeNull();
-    expect(getContextEngineFactory("failme-context")).toBeUndefined();
-    expect(listContextEngineIds()).not.toContain("failme-context");
+    expect(getContextEngineRegistration("failme-context")).toBeUndefined();
 
     const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
     await triggerInternalHook(event);
@@ -500,6 +501,7 @@ describe("loadOpenClawPlugins", () => {
       get: async () => null,
     });
     registerMemoryPromptSupplement("memory-wiki", () => ["active wiki supplement"]);
+    registerMemoryPromptPreparation("memory-wiki", async () => ["active prepared wiki"]);
     const activeRuntime = {
       async getMemorySearchManager() {
         return { manager: null, error: "active" };
@@ -531,21 +533,23 @@ describe("loadOpenClawPlugins", () => {
               id: "snapshot",
               create: async () => ({ provider: null }),
             });
-            api.registerMemoryPromptSection(() => ["snapshot memory section"]);
-            api.registerMemoryFlushPlan(() => ({
-              softThresholdTokens: 10,
-              forceFlushTranscriptBytes: 20,
-              reserveTokensFloor: 30,
-              prompt: "snapshot",
-              systemPrompt: "snapshot",
-              relativePath: "memory/snapshot.md",
-            }));
-            api.registerMemoryRuntime({
-              async getMemorySearchManager() {
-                return { manager: null, error: "snapshot" };
-              },
-              resolveMemoryBackendConfig() {
-                return { backend: "qmd", qmd: {} };
+            api.registerMemoryCapability({
+              promptBuilder: () => ["snapshot memory section"],
+              flushPlanResolver: () => ({
+                softThresholdTokens: 10,
+                forceFlushTranscriptBytes: 20,
+                reserveTokensFloor: 30,
+                prompt: "snapshot",
+                systemPrompt: "snapshot",
+                relativePath: "memory/snapshot.md",
+              }),
+              runtime: {
+                async getMemorySearchManager() {
+                  return { manager: null, error: "snapshot" };
+                },
+                resolveMemoryBackendConfig() {
+                  return { backend: "qmd", qmd: {} };
+                },
               },
             });
           },
@@ -575,6 +579,7 @@ describe("loadOpenClawPlugins", () => {
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
     expect(getMemoryRuntime()).toBe(activeRuntime);
     expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
+    expect(listMemoryPromptPreparations()).toHaveLength(1);
   });
 
   it("does not replace active embedding providers during non-activating loads", () => {
@@ -724,27 +729,30 @@ describe("loadOpenClawPlugins", () => {
               id: "failed",
               create: async () => ({ provider: null }),
             });
-            api.registerMemoryPromptSection(() => ["stale failure section"]);
+            api.registerMemoryCapability({
+              promptBuilder: () => ["stale failure section"],
+              flushPlanResolver: () => ({
+                softThresholdTokens: 10,
+                forceFlushTranscriptBytes: 20,
+                reserveTokensFloor: 30,
+                prompt: "failed",
+                systemPrompt: "failed",
+                relativePath: "memory/failed.md",
+              }),
+              runtime: {
+                async getMemorySearchManager() {
+                  return { manager: null, error: "failed" };
+                },
+                resolveMemoryBackendConfig() {
+                  return { backend: "builtin" };
+                },
+              },
+            });
             api.registerMemoryPromptSupplement(() => ["stale failure supplement"]);
+            api.registerMemoryPromptPreparation(async () => ["stale prepared supplement"]);
             api.registerMemoryCorpusSupplement({
               search: async () => [],
               get: async () => null,
-            });
-            api.registerMemoryFlushPlan(() => ({
-              softThresholdTokens: 10,
-              forceFlushTranscriptBytes: 20,
-              reserveTokensFloor: 30,
-              prompt: "failed",
-              systemPrompt: "failed",
-              relativePath: "memory/failed.md",
-            }));
-            api.registerMemoryRuntime({
-              async getMemorySearchManager() {
-                return { manager: null, error: "failed" };
-              },
-              resolveMemoryBackendConfig() {
-                return { backend: "builtin" };
-              },
             });
             throw new Error("memory register failed");
           },
@@ -767,6 +775,7 @@ describe("loadOpenClawPlugins", () => {
     expect(registry.plugins.find((entry) => entry.id === "failing-memory")?.status).toBe("error");
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toStrictEqual([]);
     expect(listMemoryCorpusSupplements()).toStrictEqual([]);
+    expect(listMemoryPromptPreparations()).toStrictEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
     expect(listMemoryEmbeddingProviders()).toStrictEqual([]);

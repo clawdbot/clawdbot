@@ -1,15 +1,14 @@
 // Run context lifecycle contract tests cover plugin run context setup and cleanup.
-import fs from "node:fs/promises";
 import path from "node:path";
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadSessionStore, updateSessionStore } from "../../config/sessions.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
-import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { loadSessionStore, updateSessionStore } from "../../plugin-sdk/session-store-runtime.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runPluginHostCleanup } from "../host-hook-cleanup.js";
 import {
   clearPluginHostRuntimeState,
@@ -686,16 +685,16 @@ describe("plugin run context lifecycle", () => {
       },
     });
 
-    const stateDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-run-context-restart-state-"),
-    );
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-run-context-restart-state-",
+    });
+    const stateDir = openClawState.stateDir;
     const storePath = path.join(stateDir, "sessions.json");
     const tempConfig = {
       session: { store: storePath },
     };
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
-      process.env.OPENCLAW_STATE_DIR = stateDir;
       await withTempConfig({
         cfg: tempConfig,
         run: async () => {
@@ -748,12 +747,7 @@ describe("plugin run context lifecycle", () => {
         },
       });
     } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fs.rm(stateDir, { recursive: true, force: true });
+      await openClawState.cleanup();
     }
   });
 

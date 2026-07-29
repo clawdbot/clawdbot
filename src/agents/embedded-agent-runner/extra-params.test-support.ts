@@ -1,9 +1,40 @@
 // Shared harness for extra-params wrapper tests.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Context, Model, SimpleStreamOptions } from "../../llm/types.js";
+import type {
+  prepareProviderExtraParams,
+  resolveProviderExtraParamsForTransport,
+  wrapProviderStreamFn,
+} from "../../plugins/provider-hook-runtime.js";
 import type { StreamFn } from "../runtime/index.js";
-import { testing as extraParamsTesting, applyExtraParamsToAgent } from "./extra-params.js";
+import { applyExtraParamsToAgent } from "./extra-params.js";
 import type { ProviderThinkLevel } from "./utils.js";
+
+type ExtraParamsTestApi = {
+  supportsGptParallelToolCallsPayload(api: unknown): boolean;
+  setProviderRuntimeDepsForTest(
+    deps:
+      | Partial<{
+          prepareProviderExtraParams: typeof prepareProviderExtraParams;
+          resolveProviderExtraParamsForTransport: typeof resolveProviderExtraParamsForTransport;
+          wrapProviderStreamFn: typeof wrapProviderStreamFn;
+        }>
+      | undefined,
+  ): void;
+  resetProviderRuntimeDepsForTest(): void;
+};
+
+function getTestApi(): ExtraParamsTestApi {
+  const api = (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.extraParamsTestApi")
+  ];
+  if (!api) {
+    throw new Error("extra params test API is unavailable");
+  }
+  return api as ExtraParamsTestApi;
+}
+
+export const testing = getTestApi();
 
 type ExtraParamsCapture<TPayload extends Record<string, unknown>> = {
   headers?: Record<string, string>;
@@ -60,7 +91,7 @@ export function runExtraParamsCase<
   const agent = { streamFn: baseStreamFn };
 
   if (params.mockProviderRuntime === true) {
-    extraParamsTesting.setProviderRuntimeDepsForTest({
+    testing.setProviderRuntimeDepsForTest({
       prepareProviderExtraParams: () => undefined,
       resolveProviderExtraParamsForTransport: () => undefined,
       wrapProviderStreamFn: () => undefined,
@@ -79,7 +110,7 @@ export function runExtraParamsCase<
     );
   } finally {
     if (params.mockProviderRuntime === true) {
-      extraParamsTesting.resetProviderRuntimeDepsForTest();
+      testing.resetProviderRuntimeDepsForTest();
     }
   }
 

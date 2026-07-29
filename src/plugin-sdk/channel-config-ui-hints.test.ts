@@ -32,4 +32,20 @@ describe("channel config UI hint helpers", () => {
     ]);
     expect(hints["streaming.progress.label"]?.label).toBe("Example Progress Label");
   });
+
+  it("builds the shared implicit mention hint group", () => {
+    const hints = createChannelConfigUiHints({
+      channelLabel: "Example",
+      implicitMentions: true,
+    });
+    expect(Object.keys(hints)).toEqual([
+      "implicitMentions",
+      "implicitMentions.replyToBot",
+      "implicitMentions.quotedBot",
+      "implicitMentions.threadParticipation",
+    ]);
+    expect(hints["implicitMentions.threadParticipation"]?.label).toBe(
+      "Example Thread Participation",
+    );
+  });
 });

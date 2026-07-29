@@ -7,7 +7,7 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   sessionKey: "",
   clearAgent: false,
   enabled: true,
-  deleteAfterRun: true,
+  deleteAfterRun: false,
   scheduleKind: "every",
   scheduleAt: "",
   everyAmount: "30",

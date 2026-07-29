@@ -14,12 +14,24 @@ export type OpenClawPluginNodeHostCommandIo = {
   signal: AbortSignal;
 };
 
+export type OpenClawPluginNodeHostCommandContext = {
+  /** Emit one node-owned event through the active Gateway connection. */
+  sendNodeEvent(event: string, payload: unknown): Promise<unknown>;
+  /** Agent session that owns this invocation, when the caller supplied one. */
+  sessionKey?: string;
+};
+
 type OpenClawPluginNodeHostCommandBase = {
   command: string;
   cap?: string;
   dangerous?: boolean;
   /** Return false to omit this command and capability from the node declaration. */
   isAvailable?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => boolean;
+  /** Watch node-local availability and request a fresh Gateway declaration. */
+  watchAvailability?: (
+    context: OpenClawPluginNodeHostCommandAvailabilityContext,
+    onChange: () => void,
+  ) => (() => void) | void;
   agentTool?: {
     name: string;
     description: string;
@@ -35,5 +47,9 @@ export type OpenClawPluginNodeHostCommand = OpenClawPluginNodeHostCommandBase & 
   // plain `command.handle(params)` uncallable for consumers holding the union.
   // The node host enforces io presence for duplex commands at runtime.
   duplex?: boolean;
-  handle: (paramsJSON?: string | null, io?: OpenClawPluginNodeHostCommandIo) => Promise<string>;
+  handle: (
+    paramsJSON?: string | null,
+    io?: OpenClawPluginNodeHostCommandIo,
+    context?: OpenClawPluginNodeHostCommandContext,
+  ) => Promise<string>;
 };

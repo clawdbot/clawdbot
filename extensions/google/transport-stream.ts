@@ -29,6 +29,7 @@ import {
   finalizeTransportStream,
   mergeTransportHeaders,
   sanitizeTransportPayloadText,
+  sortPromptCacheToolsByName,
   stripSystemPromptCacheBoundary,
   transformTransportMessages,
   type WritableTransportStream,
@@ -367,10 +368,7 @@ function resolveGoogleVertexLocation(options: GoogleTransportOptions | undefined
   return location;
 }
 
-export function resolveGoogleVertexBaseOrigin(
-  model: GoogleTransportModel,
-  location: string,
-): string {
+function resolveGoogleVertexBaseOrigin(model: GoogleTransportModel, location: string): string {
   const configured = normalizeOptionalString(model.baseUrl);
   if (configured && !configured.includes("{location}")) {
     try {
@@ -661,7 +659,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
       const imageContent = model.input.includes("image")
         ? msg.content.filter(
             (item): item is Extract<(typeof msg.content)[number], { type: "image" }> =>
-              item.type === "image",
+              item.type === "image" && describeToolResultMediaPlaceholder([item]) !== undefined,
           )
         : [];
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
@@ -712,7 +710,7 @@ function convertGoogleTools(tools: NonNullable<Context["tools"]>) {
   }
   return [
     {
-      functionDeclarations: tools.map((tool) => ({
+      functionDeclarations: sortPromptCacheToolsByName(tools).map((tool) => ({
         name: tool.name,
         description: tool.description,
         parametersJsonSchema: tool.parameters,
@@ -884,7 +882,7 @@ function isOfficialGoogleGenerativeAiBaseUrl(baseUrl: string | undefined): boole
   }
 }
 
-export function resolveGoogleGemini3FirstResponseRetryMs(env = process.env): number {
+function resolveGoogleGemini3FirstResponseRetryMs(env = process.env): number {
   const raw = env[GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV];
   if (raw === undefined || raw.trim() === "") {
     return GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
@@ -922,7 +920,7 @@ function cloneGoogleGenerateContentRequest(
   return JSON.parse(serialized) as GoogleGenerateContentRequest;
 }
 
-export function buildGoogleGemini3FirstResponseRetryParams(params: {
+function buildGoogleGemini3FirstResponseRetryParams(params: {
   model: GoogleTransportModel;
   request: GoogleGenerateContentRequest;
 }): GoogleGenerateContentRequest | undefined {

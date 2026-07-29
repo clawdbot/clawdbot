@@ -18,7 +18,7 @@ import {
   resolveCrabboxBinary,
 } from "./crabbox-worker-profile.js";
 
-export { resolveCrabboxBinary, resolveOpenClawRoot } from "./crabbox-worker-profile.js";
+export { resolveOpenClawRoot } from "./crabbox-worker-profile.js";
 
 const CRABBOX_WORKER_PROVIDER_ID = "crabbox";
 const CRABBOX_KEY_REF_PROVIDER = "crabbox";
@@ -52,7 +52,7 @@ const UNUSABLE_PROVISION_STATES = new Set([...DESTROYED_STATES, "deleting", "fai
 const LEASE_ID_PATTERN = /^(?:cbx_|tbx_)[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 const LEASE_TOKEN_IN_OUTPUT_PATTERN = /^leased\s+(\S{1,128})(?=\s|$)/mu;
 
-export type CrabboxCommandRunner = typeof runCommandWithTimeout;
+type CrabboxCommandRunner = typeof runCommandWithTimeout;
 
 type LeaseCommandContext = {
   binary: string;

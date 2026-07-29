@@ -3,11 +3,11 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
-import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
@@ -34,6 +34,7 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   isReplaceableAssistantStreamEvent,
@@ -62,6 +63,7 @@ import {
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
   resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import { resolveOpenAiCompatError, validateOpenAiSamplingParams } from "./openai-compat-errors.js";
@@ -133,15 +135,9 @@ function resolveOpenAiChatCompletionsLimits(
 ): ResolvedOpenAiChatCompletionsLimits {
   const imageConfig = config?.images;
   return {
-    maxBodyBytes: config?.maxBodyBytes ?? DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES,
-    maxImageParts: resolveIntegerOption(config?.maxImageParts, DEFAULT_OPENAI_MAX_IMAGE_PARTS, {
-      min: 0,
-    }),
-    maxTotalImageBytes: resolveIntegerOption(
-      config?.maxTotalImageBytes,
-      DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES,
-      { min: 1 },
-    ),
+    maxBodyBytes: DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES,
+    maxImageParts: DEFAULT_OPENAI_MAX_IMAGE_PARTS,
+    maxTotalImageBytes: DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES,
     images: {
       allowUrl: imageConfig?.allowUrl ?? DEFAULT_OPENAI_IMAGE_LIMITS.allowUrl,
       urlAllowlist: normalizeInputHostnameAllowlist(imageConfig?.urlAllowlist),
@@ -164,6 +160,7 @@ function buildAgentCommandInput(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
+  senderIsOwner: boolean;
   abortSignal?: AbortSignal;
   streamParams?: AgentStreamParams;
 }) {
@@ -177,6 +174,7 @@ function buildAgentCommandInput(params: {
     runId: params.runId,
     deliver: false as const,
     messageChannel: params.messageChannel,
+    senderIsOwner: params.senderIsOwner,
     bestEffortDeliver: false as const,
     allowModelOverride: params.modelOverride !== undefined,
     abortSignal: params.abortSignal,
@@ -327,8 +325,14 @@ function splitArgumentsForStreaming(argumentsValue: string): string[] {
   }
   const chunkSize = 256;
   const chunks: string[] = [];
-  for (let i = 0; i < argumentsValue.length; i += chunkSize) {
-    chunks.push(argumentsValue.slice(i, i + chunkSize));
+  for (let start = 0; start < argumentsValue.length;) {
+    const end = avoidTrailingHighSurrogateBreak(
+      argumentsValue,
+      start,
+      Math.min(start + chunkSize, argumentsValue.length),
+    );
+    chunks.push(argumentsValue.slice(start, end));
+    start = end;
   }
   return chunks.length > 0 ? chunks : [""];
 }
@@ -903,6 +907,7 @@ export async function handleOpenAiHttpRequest(
     sendMissingScopeForbidden(res, modelOverrideAuth.missingScope);
     return true;
   }
+  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);
   const payload = coerceRequest(handled.body);
   const stream = Boolean(payload.stream);
   const streamIncludeUsage = stream && resolveIncludeUsageForStreaming(payload);
@@ -1075,6 +1080,7 @@ export async function handleOpenAiHttpRequest(
     sessionKey,
     runId,
     messageChannel,
+    senderIsOwner,
     abortSignal: abortController.signal,
     streamParams,
   });
@@ -1289,6 +1295,10 @@ export async function handleOpenAiHttpRequest(
   wroteRole = true;
   writeAssistantRoleChunk(res, { runId, model });
 
+  // The streamed run outlives this handler, whose root-work admission is
+  // released on return. Without retaining it, subordinate session/lane
+  // admissions inherit a released lease and fail as GatewayDrainingError.
+  const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
   void (async () => {
     try {
       const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
@@ -1423,6 +1433,7 @@ export async function handleOpenAiHttpRequest(
       });
       requestFinalize();
     } finally {
+      releaseRootWork?.();
       if (!closed) {
         emitAgentEvent({
           runId,

@@ -3,17 +3,34 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveOpenPathCommand } from "./open-path.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
+import {
+  assistantToolCall,
+  createSessionEntryFixture,
+  createSessionFilesHandlerInvoker,
+  createVisibleMessagesMock,
+  createWorkspaceFixture,
+  expectError,
+  expectOkPayload,
+  hashContent,
+  writeWorkspaceFile,
+} from "./sessions-files.test-support.js";
 import { updateWorkspaceFile } from "./workspace-fs.js";
 
 const hoisted = vi.hoisted(() => ({
+  execOpenPath: vi.fn(),
   loadSessionEntry: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
-  visitSessionMessagesAsync: vi.fn(),
+  readSessionTranscriptVisibleMessageDelta: vi.fn(),
 }));
+
+vi.mock("./open-path.js", async () => {
+  const actual = await vi.importActual<typeof import("./open-path.js")>("./open-path.js");
+  return { ...actual, execOpenPath: hoisted.execOpenPath };
+});
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: hoisted.resolveAgentWorkspaceDir,
@@ -25,6 +42,7 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...actual,
     loadSessionEntry: hoisted.loadSessionEntry,
+    loadSessionEntryReadOnly: hoisted.loadSessionEntry,
   };
 });
 
@@ -34,87 +52,78 @@ vi.mock("../session-transcript-readers.js", async () => {
   );
   return {
     ...actual,
-    visitSessionMessagesAsync: hoisted.visitSessionMessagesAsync,
+    readSessionTranscriptVisibleMessageDelta: hoisted.readSessionTranscriptVisibleMessageDelta,
   };
 });
 
-function createResponder() {
-  const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-  return {
-    calls,
-    respond: (ok: boolean, payload?: unknown, error?: unknown) => {
-      calls.push({ ok, payload, error });
-    },
-  };
-}
-
-type SessionFilesMethod = "sessions.files.list" | "sessions.files.get" | "sessions.files.set";
-
-async function invokeSessionFilesHandler(
-  method: SessionFilesMethod,
-  params: Record<string, unknown>,
-) {
-  const responder = createResponder();
-  await sessionsFilesHandlers[method]?.({
-    req: { type: "req", id: method, method, params: {} },
-    params,
-    client: null,
-    isWebchatConnect: () => false,
-    respond: responder.respond,
-    context: {} as never,
-  });
-  return responder.calls;
-}
-
-function expectOkPayload(calls: ReturnType<typeof createResponder>["calls"]): Record<string, any> {
-  expect(calls).toHaveLength(1);
-  expect(calls[0]?.ok).toBe(true);
-  return calls[0]?.payload as Record<string, any>;
-}
-
-function expectError(calls: ReturnType<typeof createResponder>["calls"]): Record<string, any> {
-  expect(calls).toHaveLength(1);
-  expect(calls[0]?.ok).toBe(false);
-  return calls[0]?.error as Record<string, any>;
-}
-
-function assistantToolCall(name: string, args: Record<string, unknown>) {
-  return {
-    role: "assistant",
-    content: [
-      {
-        type: "toolCall",
-        name,
-        arguments: args,
-      },
-    ],
-  };
-}
-
-function writeWorkspaceFile(root: string, filePath: string, content: string) {
-  const resolved = path.join(root, filePath);
-  fs.mkdirSync(path.dirname(resolved), { recursive: true });
-  fs.writeFileSync(resolved, content, "utf8");
-}
-
-function hashContent(content: string): string {
-  return createHash("sha256").update(content, "utf8").digest("hex");
-}
+const invokeSessionFilesHandler = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
+const mockVisibleMessages = createVisibleMessagesMock(
+  hoisted.readSessionTranscriptVisibleMessageDelta,
+);
 
 describe("sessions.files RPC handlers", () => {
   let workspaceRoot: string;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    const tempRoot = fs.realpathSync(os.tmpdir());
-    workspaceRoot = fs.mkdtempSync(path.join(tempRoot, "openclaw-session-files-test-"));
+    hoisted.readSessionTranscriptVisibleMessageDelta.mockReset();
+    workspaceRoot = createWorkspaceFixture("openclaw-session-files-test-");
     hoisted.resolveDefaultAgentId.mockReturnValue("main");
     hoisted.resolveAgentWorkspaceDir.mockReturnValue(workspaceRoot);
-    writeWorkspaceFile(workspaceRoot, "package.json", '{"name":"openclaw-test"}\n');
-    writeWorkspaceFile(workspaceRoot, "src/readme.md", "# Read me\n");
-    writeWorkspaceFile(workspaceRoot, "ui/chat.ts", "export const chat = true;\n");
-    writeWorkspaceFile(workspaceRoot, "ui/vite.config.ts", "export default {};\n");
+    hoisted.execOpenPath.mockResolvedValue(undefined);
+    hoisted.loadSessionEntry.mockReturnValue(createSessionEntryFixture(workspaceRoot, "sess-main"));
+    mockVisibleMessages([
+      assistantToolCall("edit", { path: "ui/chat.ts" }),
+      assistantToolCall("read", { path: "src/readme.md" }),
+      assistantToolCall("apply_patch", {
+        input: "*** Begin Patch\n*** Update File: package.json\n*** End Patch\n",
+      }),
+    ]);
+  });
 
+  afterEach(() => {
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  });
+
+  it("reveals the same workspace root returned by sessions.files.list", async () => {
+    const listPayload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+    const revealPayload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.reveal", {
+        key: "agent:main:main",
+      }),
+    );
+
+    expect(revealPayload).toEqual({ ok: true, path: listPayload.root });
+    // Compare against the resolver's own output so the assertion holds on
+    // every supported platform (open / xdg-open / PowerShell Start-Process).
+    expect(hoisted.execOpenPath).toHaveBeenCalledWith(
+      resolveOpenPathCommand(listPayload.root as string),
+    );
+  });
+
+  it("refuses to reveal a remote session workspace", async () => {
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler(
+        "sessions.files.reveal",
+        { key: "agent:main:main" },
+        {
+          workerSessionPlacementService: {
+            getMany: () => new Map([["sess-main", { state: "active" }]]),
+          },
+        },
+      ),
+    );
+
+    expect(payload).toMatchObject({ ok: false, path: workspaceRoot });
+    expect(payload.error).toContain("runs remotely");
+    expect(hoisted.execOpenPath).not.toHaveBeenCalled();
+  });
+
+  it("refuses to reveal an exec-node session workspace", async () => {
     hoisted.loadSessionEntry.mockReturnValue({
       canonicalKey: "agent:main:main",
       cfg: {},
@@ -123,115 +132,56 @@ describe("sessions.files RPC handlers", () => {
         sessionId: "sess-main",
         sessionFile: "sess-main.jsonl",
         spawnedCwd: workspaceRoot,
+        execNode: "build-mac",
       },
     });
-    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
-      [
-        assistantToolCall("edit", { path: "ui/chat.ts" }),
-        assistantToolCall("read", { path: "src/readme.md" }),
-        assistantToolCall("apply_patch", {
-          input: "*** Begin Patch\n*** Update File: package.json\n*** End Patch\n",
-        }),
-      ].forEach((message, index) => visit(message, index + 1));
-      return 3;
-    });
-  });
 
-  afterEach(() => {
-    fs.rmSync(workspaceRoot, { recursive: true, force: true });
-  });
-
-  it("lists session-touched files with a browser rooted at the session workspace", async () => {
     const payload = expectOkPayload(
-      await invokeSessionFilesHandler("sessions.files.list", {
-        sessionKey: "agent:main:main",
-      }),
+      await invokeSessionFilesHandler("sessions.files.reveal", { key: "agent:main:main" }),
     );
 
-    expect(payload.root).toBe(workspaceRoot);
-    expect(payload.files.map((file: Record<string, unknown>) => [file.path, file.kind])).toEqual([
-      ["package.json", "modified"],
-      ["ui/chat.ts", "modified"],
-      ["src/readme.md", "read"],
-    ]);
-    expect(payload.browser.path).toBe("");
-    expect(
-      payload.browser.entries.map((entry: Record<string, unknown>) => [
-        entry.path,
-        entry.kind,
-        entry.sessionKind,
-      ]),
-    ).toEqual([
-      ["src", "directory", "read"],
-      ["ui", "directory", "modified"],
-      ["package.json", "file", "modified"],
-    ]);
+    expect(payload).toMatchObject({ ok: false, path: workspaceRoot });
+    expect(payload.error).toContain("exec node");
+    expect(hoisted.execOpenPath).not.toHaveBeenCalled();
   });
 
-  it("collects touched files from existing transcript tool-call spellings", async () => {
-    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
-      visit(
-        {
-          role: "assistant",
-          content: [
-            { type: "tool_use", name: "read", input: { path: "src/readme.md" } },
-            { type: "toolcall", name: "edit", arguments: { path: "ui/vite.config.ts" } },
-            { type: "tool_use", name: "read", args: { path: "ui/chat.ts" } },
-            {
-              type: "tool_call",
-              name: "apply_patch",
-              input: {
-                input: "*** Begin Patch\n*** Update File: package.json\n*** End Patch\n",
-              },
-            },
-          ],
-        },
-        1,
-      );
-      return 1;
+  it("refuses to reveal when the session has no workspace root", async () => {
+    hoisted.resolveAgentWorkspaceDir.mockReturnValue(undefined);
+    hoisted.loadSessionEntry.mockReturnValue({
+      canonicalKey: "agent:main:main",
+      cfg: {},
+      storePath: path.join(workspaceRoot, ".sessions.json"),
+      entry: { sessionId: "sess-main", sessionFile: "sess-main.jsonl" },
     });
 
     const payload = expectOkPayload(
-      await invokeSessionFilesHandler("sessions.files.list", {
-        sessionKey: "agent:main:main",
-      }),
+      await invokeSessionFilesHandler("sessions.files.reveal", { key: "agent:main:main" }),
     );
 
-    expect(payload.files.map((file: Record<string, unknown>) => [file.path, file.kind])).toEqual([
-      ["package.json", "modified"],
-      ["ui/vite.config.ts", "modified"],
-      ["src/readme.md", "read"],
-      ["ui/chat.ts", "read"],
-    ]);
+    expect(payload).toEqual({
+      ok: false,
+      error: "No workspace root is available for this session.",
+    });
+    expect(hoisted.execOpenPath).not.toHaveBeenCalled();
   });
 
-  it("collects changed files from structured apply_patch changes", async () => {
-    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
-      visit(
-        assistantToolCall("apply_patch", {
-          changes: [
-            { path: "ui/chat.ts", kind: "update" },
-            { path: "src/readme.md", kind: "delete" },
-            { path: "old-name.md", kind: { type: "update", move_path: "package.json" } },
-          ],
-        }),
-        1,
-      );
-      return 1;
-    });
+  it("returns opener failures as successful RPC results", async () => {
+    const warn = vi.fn();
+    hoisted.execOpenPath.mockRejectedValueOnce(new Error("xdg-open: no method available"));
 
     const payload = expectOkPayload(
-      await invokeSessionFilesHandler("sessions.files.list", {
-        sessionKey: "agent:main:main",
-      }),
+      await invokeSessionFilesHandler(
+        "sessions.files.reveal",
+        { key: "agent:main:main" },
+        { logGateway: { warn } },
+      ),
     );
 
-    expect(payload.files.map((file: Record<string, unknown>) => [file.path, file.kind])).toEqual([
-      ["old-name.md", "modified"],
-      ["package.json", "modified"],
-      ["src/readme.md", "modified"],
-      ["ui/chat.ts", "modified"],
-    ]);
+    expect(payload).toMatchObject({ ok: false, path: workspaceRoot });
+    expect(payload.error).toContain("headless environment");
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("sessions.files.reveal failed path="),
+    );
   });
 
   it("prefers the spawned workspace root over a nested spawned cwd", async () => {
@@ -250,11 +200,10 @@ describe("sessions.files RPC handlers", () => {
         spawnedWorkspaceDir: workspaceRoot,
       },
     });
-    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
-      visit(assistantToolCall("read", { path: "src/readme.md" }), 1);
-      visit(assistantToolCall("read", { path: "../shared/config.ts" }), 2);
-      return 2;
-    });
+    mockVisibleMessages([
+      assistantToolCall("read", { path: "src/readme.md" }),
+      assistantToolCall("read", { path: "../shared/config.ts" }),
+    ]);
 
     const payload = expectOkPayload(
       await invokeSessionFilesHandler("sessions.files.list", {
@@ -347,10 +296,7 @@ describe("sessions.files RPC handlers", () => {
         sessionFile: "sess-main.jsonl",
       },
     });
-    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
-      visit(assistantToolCall("read", { path: "src/readme.md" }), 1);
-      return 1;
-    });
+    mockVisibleMessages([assistantToolCall("read", { path: "src/readme.md" })]);
 
     const payload = expectOkPayload(
       await invokeSessionFilesHandler("sessions.files.list", {
@@ -379,10 +325,7 @@ describe("sessions.files RPC handlers", () => {
         sessionFile: "sess-main.jsonl",
       },
     });
-    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
-      visit(assistantToolCall("read", { path: "src/readme.md" }), 1);
-      return 1;
-    });
+    mockVisibleMessages([assistantToolCall("read", { path: "src/readme.md" })]);
 
     const payload = expectOkPayload(
       await invokeSessionFilesHandler("sessions.files.list", {
@@ -480,10 +423,7 @@ describe("sessions.files RPC handlers", () => {
         sessionFile: "missing-session.jsonl",
       },
     });
-    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
-      visit(assistantToolCall("read", { path: outsidePath }), 1);
-      return 1;
-    });
+    mockVisibleMessages([assistantToolCall("read", { path: outsidePath })]);
 
     try {
       for (const requestedPath of [outsidePath, "../outside.txt"]) {
@@ -499,49 +439,6 @@ describe("sessions.files RPC handlers", () => {
           type: "session_file_not_found",
         });
       }
-    } finally {
-      fs.rmSync(outsidePath, { force: true });
-    }
-  });
-
-  it("omits transcript paths outside the workspace without hiding missing workspace files", async () => {
-    const outsidePath = path.join(os.tmpdir(), `openclaw-outside-list-${Date.now()}.txt`);
-    fs.writeFileSync(outsidePath, "outside\n", "utf8");
-    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
-      [
-        outsidePath,
-        "../outside.txt",
-        "~/.openclaw-external.txt",
-        pathToFileURL(outsidePath).href,
-        `@${outsidePath}`,
-        "..cache/missing.txt",
-        "missing.txt",
-        "src/readme.md",
-      ].forEach((filePath, index) =>
-        visit(assistantToolCall("read", { path: filePath }), index + 1),
-      );
-      return 8;
-    });
-
-    try {
-      const payload = expectOkPayload(
-        await invokeSessionFilesHandler("sessions.files.list", {
-          sessionKey: "agent:main:main",
-        }),
-      );
-
-      expect(payload.files).toHaveLength(3);
-      expect(payload.files).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ path: "..cache/missing.txt", missing: true }),
-          expect.objectContaining({ path: "missing.txt", missing: true }),
-          expect.objectContaining({
-            path: "src/readme.md",
-            missing: false,
-            workspacePath: "src/readme.md",
-          }),
-        ]),
-      );
     } finally {
       fs.rmSync(outsidePath, { force: true });
     }
@@ -639,10 +536,7 @@ describe("sessions.files RPC handlers", () => {
         sessionFile: "sess-main.jsonl",
       },
     });
-    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
-      visit(assistantToolCall("read", { path: "secret.txt" }), 1);
-      return 1;
-    });
+    mockVisibleMessages([assistantToolCall("read", { path: "secret.txt" })]);
     try {
       const listPayload = expectOkPayload(
         await invokeSessionFilesHandler("sessions.files.list", {
@@ -676,10 +570,7 @@ describe("sessions.files RPC handlers", () => {
 
   it("reports oversized existing files without marking them missing", async () => {
     writeWorkspaceFile(workspaceRoot, "large.log", "x".repeat(260 * 1024));
-    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
-      visit(assistantToolCall("read", { path: "large.log" }), 1);
-      return 1;
-    });
+    mockVisibleMessages([assistantToolCall("read", { path: "large.log" })]);
 
     const error = expectError(
       await invokeSessionFilesHandler("sessions.files.get", {
@@ -721,7 +612,6 @@ describe("sessions.files RPC handlers", () => {
     });
     expect(Number.isInteger(payload.file.updatedAtMs)).toBe(true);
     expect(payload.file.content).toBeUndefined();
-    expect(hoisted.visitSessionMessagesAsync).not.toHaveBeenCalled();
   });
 
   it("rejects a stale file hash with the current hash", async () => {
@@ -845,22 +735,29 @@ describe("sessions.files RPC handlers", () => {
     expect(fs.existsSync(path.join(workspaceRoot, "missing.txt"))).toBe(false);
   });
 
-  it("rejects replacement content over the workspace preview limit", async () => {
-    const error = expectError(
-      await invokeSessionFilesHandler("sessions.files.set", {
-        sessionKey: "agent:main:main",
-        path: "ui/vite.config.ts",
-        content: "x".repeat(256 * 1024 + 1),
-        expectedHash: hashContent("export default {};\n"),
-      }),
-    );
+  it("rejects oversized replacement content before allocating an encoded Buffer", async () => {
+    const content = "é".repeat(128 * 1024 + 1);
+    const bufferFrom = vi.spyOn(Buffer, "from");
+    try {
+      const error = expectError(
+        await invokeSessionFilesHandler("sessions.files.set", {
+          sessionKey: "agent:main:main",
+          path: "ui/vite.config.ts",
+          content,
+          expectedHash: hashContent("export default {};\n"),
+        }),
+      );
 
-    expect(error.details).toMatchObject({
-      maxPreviewBytes: 256 * 1024,
-      path: "ui/vite.config.ts",
-      size: 256 * 1024 + 1,
-      type: "session_file_too_large",
-    });
+      expect(error.details).toMatchObject({
+        maxPreviewBytes: 256 * 1024,
+        path: "ui/vite.config.ts",
+        size: 256 * 1024 + 2,
+        type: "session_file_too_large",
+      });
+      expect(bufferFrom).not.toHaveBeenCalled();
+    } finally {
+      bufferFrom.mockRestore();
+    }
   });
 
   it("round-trips a UTF-8 BOM through get and set", async () => {

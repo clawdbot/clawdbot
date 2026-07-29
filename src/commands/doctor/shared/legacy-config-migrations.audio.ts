@@ -23,10 +23,21 @@ function applyLegacyAudioTranscriptionModel(params: {
   const tools = ensureRecord(params.raw, "tools");
   const media = ensureRecord(tools, "media");
   const mediaAudio = ensureRecord(media, "audio");
-  const models = Array.isArray(mediaAudio.models) ? (mediaAudio.models as unknown[]) : [];
-  if (models.length === 0) {
+  const models = Array.isArray(media.models) ? (media.models as unknown[]) : [];
+  const isAudioCompatible = (value: unknown) => {
+    const model = getRecord(value);
+    return (
+      model !== null && (!Array.isArray(model.capabilities) || model.capabilities.includes("audio"))
+    );
+  };
+  const hasAudioModel =
+    (Array.isArray(mediaAudio.models) && mediaAudio.models.some(isAudioCompatible)) ||
+    models.some(isAudioCompatible);
+  if (!hasAudioModel) {
     mediaAudio.enabled = true;
-    mediaAudio.models = [mapped];
+    mediaAudio.preferredModel =
+      typeof mapped.command === "string" ? `cli:${mapped.command}` : undefined;
+    media.models = [...models, { ...mapped, capabilities: ["audio"] }];
     params.changes.push(params.movedMessage);
     return;
   }
@@ -37,7 +48,13 @@ function applyLegacyAudioTranscriptionModel(params: {
 export const LEGACY_CONFIG_MIGRATIONS_AUDIO: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "audio.transcription-v2",
-    describe: "Move audio.transcription to tools.media.audio.models",
+    describe: "Move audio.transcription to tools.media.models",
+    legacyRules: [
+      {
+        path: ["audio", "transcription"],
+        message: "Use a capability-tagged tools.media.models entry instead.",
+      },
+    ],
     apply: (raw, changes) => {
       const audio = getRecord(raw.audio);
       if (audio?.transcription === undefined) {
@@ -48,8 +65,8 @@ export const LEGACY_CONFIG_MIGRATIONS_AUDIO: LegacyConfigMigrationSpec[] = [
         raw,
         source: audio.transcription,
         changes,
-        movedMessage: "Moved audio.transcription → tools.media.audio.models.",
-        alreadySetMessage: "Removed audio.transcription (tools.media.audio.models already set).",
+        movedMessage: "Moved audio.transcription → tools.media.models.",
+        alreadySetMessage: "Removed audio.transcription (tools.media.models already set).",
         invalidMessage: "Removed audio.transcription (invalid or empty command).",
       });
       delete audio.transcription;

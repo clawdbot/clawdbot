@@ -88,7 +88,7 @@ describe("embedded gateway stub", () => {
 
     expect(runtime.loadCombinedSessionStoreForGateway).toHaveBeenCalledWith(
       { agents: { list: [{ id: "main", default: true }] } },
-      { agentId: "work" },
+      { agentId: "work", projection: "list" },
     );
     expect(runtime.listSessionsFromStoreAsync).toHaveBeenCalledWith({
       cfg: { agents: { list: [{ id: "main", default: true }] } },

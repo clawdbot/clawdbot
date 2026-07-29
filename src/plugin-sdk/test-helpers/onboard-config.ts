@@ -1,6 +1,6 @@
 // Onboard config test helpers build model/provider config fixtures for plugin tests.
+import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelApi } from "../provider-model-shared.js";
-import type { OpenClawConfig } from "../testing.js";
 
 export const EXPECTED_FALLBACKS = ["anthropic/claude-opus-4-5"] as const;
 

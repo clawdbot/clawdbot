@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
-import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store.js";
+import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store-writer-state.js";
 import {
   createDeferred,
   createRunningCronServiceState,
@@ -148,8 +148,4 @@ export function createIsolatedRegressionJob(params: {
     delivery: { mode: "announce" },
     state: params.state ?? {},
   };
-}
-
-export async function writeCronStoreSnapshot(storePath: string, jobs: unknown[]) {
-  await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs }), "utf-8");
 }

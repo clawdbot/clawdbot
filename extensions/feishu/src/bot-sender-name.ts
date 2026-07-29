@@ -1,4 +1,5 @@
 // Feishu plugin module implements bot sender name behavior.
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -29,6 +30,7 @@ const FEISHU_SCOPE_CORRECTIONS: Record<string, string> = {
   "contact:contact.base:readonly": "contact:user.base:readonly",
 };
 const SENDER_NAME_TTL_MS = 10 * 60 * 1000;
+const SENDER_NAME_CACHE_MAX_SIZE = 500;
 const senderNameCache = new Map<string, { name: string; expireAt: number }>();
 
 function correctFeishuScopeInUrl(url: string): string {
@@ -117,6 +119,7 @@ export async function resolveFeishuSenderName(params: {
       const expireAt = resolveExpiresAtMsFromDurationMs(SENDER_NAME_TTL_MS);
       if (expireAt !== undefined) {
         senderNameCache.set(normalizedSenderId, { name, expireAt });
+        pruneMapToMaxSize(senderNameCache, SENDER_NAME_CACHE_MAX_SIZE);
       }
       return { name };
     }

@@ -1,4 +1,6 @@
 // Shared build identity normalization for the runtime artifact and Vite config.
+// Vite loads this module before source-package aliases exist, so use the canonical source path.
+import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.js";
 import type { ControlUiBuildInfo } from "./build-info-types.ts";
 
 type ControlUiBuildMetadata = Pick<ControlUiBuildInfo, "version" | "commit" | "builtAt">;
@@ -18,7 +20,7 @@ function normalizeControlUiCommit(value: unknown): string | null {
 
 function normalizeControlUiBranch(value: unknown): string | null {
   const branch = normalizeOptionalString(value);
-  return branch && branch !== "HEAD" ? branch.slice(0, 100) : null;
+  return branch && branch !== "HEAD" ? truncateUtf16Safe(branch, 100) : null;
 }
 
 function normalizeControlUiBuildTimestamp(value: unknown): string | null {
@@ -58,6 +60,7 @@ export function normalizeControlUiBuildInfo(value: unknown): ControlUiBuildInfo 
   const metadata = { version, commit, builtAt };
   return {
     ...metadata,
+    commitAt: normalizeControlUiBuildTimestamp(record.commitAt),
     branch: normalizeControlUiBranch(record.branch),
     dirty: typeof record.dirty === "boolean" ? record.dirty : null,
     buildId: normalizeControlUiBuildId(record.buildId ?? deriveControlUiBuildId(metadata)),

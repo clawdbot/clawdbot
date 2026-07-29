@@ -338,26 +338,27 @@ export function writeConfig({ homeDir, workspaceDir, port, token }) {
     agents: {
       defaults: {
         workspace: workspaceDir,
-        memorySearch: {
-          provider: "none",
-          model: "",
-          store: {
-            vector: { enabled: false },
-          },
-          sync: {
-            watch: true,
-            onSessionStart: false,
-            onSearch: false,
-          },
-        },
       },
-      list: [
-        {
-          id: "main",
+      entries: {
+        main: {
           default: true,
           tools: { allow: ["memory_search"] },
         },
-      ],
+      },
+    },
+    memory: {
+      search: {
+        provider: "none",
+        model: "",
+        store: {
+          vector: { enabled: false },
+        },
+        sync: {
+          watch: true,
+          onSessionStart: false,
+          onSearch: false,
+        },
+      },
     },
     plugins: { allow: ["memory-core"] },
     gateway: {

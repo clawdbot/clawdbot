@@ -7,7 +7,11 @@ import {
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  ensureMemoryIndexSchema,
+  requireNodeSqlite,
+  type MemorySource,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { buildSessionEntryMock } = vi.hoisted(() => ({
@@ -182,6 +186,20 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
   }
 }
 
+class EmbeddingCacheSeedHarness extends SessionSyncYieldHarness {
+  protected override readonly cache = { enabled: true };
+  protected override db: DatabaseSync;
+
+  constructor(db: DatabaseSync) {
+    super(() => {});
+    this.db = db;
+  }
+
+  async seedCache(sourceDb: DatabaseSync): Promise<void> {
+    await this.seedEmbeddingCache(sourceDb);
+  }
+}
+
 describe("session sync responsiveness", () => {
   beforeEach(() => {
     setSyncYieldStateDir();
@@ -227,5 +245,77 @@ describe("session sync responsiveness", () => {
     expect(harness.indexedPaths).toHaveLength(files.length);
     expect(observedBeforeLastFile).toEqual([true]);
     await immediate;
+  });
+});
+
+describe("embedding cache seed responsiveness", () => {
+  const { DatabaseSync: NodeDatabaseSync } = requireNodeSqlite();
+
+  function createCacheDb(): DatabaseSync {
+    const db = new NodeDatabaseSync(":memory:");
+    ensureMemoryIndexSchema({
+      db,
+      cacheEnabled: true,
+      ftsEnabled: false,
+      ftsTokenizer: "unicode61",
+    });
+    return db;
+  }
+
+  function countCacheRows(db: DatabaseSync): number {
+    const row = db.prepare("SELECT count(*) AS count FROM memory_embedding_cache").get() as {
+      count: number;
+    };
+    return row.count;
+  }
+
+  it("commits each materialized page before yielding", async () => {
+    const sourceDb = createCacheDb();
+    const targetDb = createCacheDb();
+    try {
+      const insert = sourceDb.prepare(
+        `INSERT INTO memory_embedding_cache
+           (provider, model, provider_key, hash, embedding, dims, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      );
+      sourceDb.exec("BEGIN");
+      for (let index = 0; index < 1_001; index += 1) {
+        insert.run("test", "model", "key", `hash-${index}`, "[0.5]", 1, index);
+      }
+      sourceDb.exec("COMMIT");
+
+      let duringYield: {
+        sourceInTransaction: boolean;
+        targetInTransaction: boolean;
+        rows: number;
+      } | null = null;
+      const observedYield = new Promise<void>((resolve, reject) => {
+        setImmediate(() => {
+          try {
+            duringYield = {
+              sourceInTransaction: sourceDb.isTransaction,
+              targetInTransaction: targetDb.isTransaction,
+              rows: countCacheRows(targetDb),
+            };
+            resolve();
+          } catch (error) {
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
+        });
+      });
+
+      await new EmbeddingCacheSeedHarness(targetDb).seedCache(sourceDb);
+      await observedYield;
+
+      expect(duringYield).toEqual({
+        sourceInTransaction: false,
+        targetInTransaction: false,
+        rows: 1_000,
+      });
+      expect(countCacheRows(targetDb)).toBe(1_001);
+    } finally {
+      sourceDb.close();
+      targetDb.close();
+    }
   });
 });

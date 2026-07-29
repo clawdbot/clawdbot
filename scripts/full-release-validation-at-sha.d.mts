@@ -18,17 +18,13 @@ export function releaseProfileForTarget(
   readPackageJson?: (sha: string) => string,
 ): "beta" | "stable";
 export function releaseEvidenceVerificationArgs(parentRunId: unknown): string[];
+export function shouldDeleteTemporaryWorkflowRef(params: {
+  keepBranch: boolean;
+  dryRun: boolean;
+  parentConclusion: string;
+}): boolean;
 export function releaseEvidenceVerifierPath(worktreeRoot: unknown): string;
 export function resolveRemoteTargetRefSha(
   targetRef: string,
   executeGit?: (args: string[]) => string,
 ): string;
-export type WorkflowRunCheckSuite = {
-  status?: string;
-  conclusion?: string | null;
-  workflowRun?: { url?: string } | null;
-};
-export function selectWorkflowRunCheckSuite(
-  nodes: WorkflowRunCheckSuite[],
-  parentRunId: unknown,
-): WorkflowRunCheckSuite | undefined;

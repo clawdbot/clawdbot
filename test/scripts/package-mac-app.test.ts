@@ -1,16 +1,15 @@
 // Package Mac App tests cover package mac app script behavior.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptPath = "scripts/package-mac-app.sh";
 
 function makePlist(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-plistbuddy-"));
-  tempDirs.push(dir);
+  const dir = tempDirs.make("openclaw-plistbuddy-");
   const plist = path.join(dir, "Info.plist");
   writeFileSync(
     plist,
@@ -70,6 +69,17 @@ function getSparkleBuildHelperBlock(): string {
   return script.slice(start, end);
 }
 
+function getSwiftPackageResolutionBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("run_with_locked_swift_packages()");
+  const end = script.indexOf("PNPM_CMD=()");
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
 function getStopPackagedAppBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf("running_packaged_app_pids()");
@@ -92,10 +102,140 @@ function getSwiftCompatibilityBlock(): string {
   return script.slice(start, end);
 }
 
+function getSwiftPMResourceBundleBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf('echo "📦 Copying SwiftPM resource bundles"');
+  const end = script.indexOf("running_packaged_app_pids()");
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
+function getSwiftPMResourcePatchBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("PATCHED_SWIFTPM_RESOURCE_SOURCES=()");
+  const end = script.indexOf("PNPM_CMD=()");
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
+const swiftPMResourceBundles = [
+  "GRDB_GRDB.bundle",
+  "OpenClaw_OpenClaw.bundle",
+  "OpenClawKit_OpenClawKit.bundle",
+  "KeyboardShortcuts_KeyboardShortcuts.bundle",
+  "SwiftMath_SwiftMath.bundle",
+] as const;
+
+function runSwiftPMResourceBundleHarness(missingBundle?: string) {
+  const root = tempDirs.make("openclaw-package-resources-root-");
+  const buildRoot = path.join(root, "build");
+  const appRoot = path.join(root, "OpenClaw.app");
+  const buildProducts = path.join(buildRoot, "arm64", "debug");
+
+  mkdirSync(path.join(appRoot, "Contents", "Resources"), { recursive: true });
+  for (const bundle of swiftPMResourceBundles) {
+    if (bundle === missingBundle) {
+      continue;
+    }
+    const source = path.join(buildProducts, bundle);
+    mkdirSync(source, { recursive: true });
+    writeFileSync(path.join(source, "marker"), bundle, "utf8");
+  }
+
+  const result = runHelper(`
+    set -euo pipefail
+    BUILD_ROOT=${JSON.stringify(buildRoot)}
+    APP_ROOT=${JSON.stringify(appRoot)}
+    PRIMARY_ARCH=arm64
+    BUILD_CONFIG=debug
+    build_path_for_arch() {
+      echo "$BUILD_ROOT/$1"
+    }
+    ${getSwiftPMResourceBundleBlock()}
+  `);
+
+  return { appRoot, result };
+}
+
+function runSwiftPMResourcePatchHarness() {
+  const root = tempDirs.make("openclaw-package-resource-patch-");
+  const buildPath = path.join(root, "build");
+  const checkoutRoot = path.join(buildPath, "checkouts");
+  const keyboardShortcuts = path.join(
+    checkoutRoot,
+    "KeyboardShortcuts/Sources/KeyboardShortcuts/Utilities.swift",
+  );
+  const swiftMathFont = path.join(
+    checkoutRoot,
+    "SwiftMath/Sources/SwiftMath/MathBundle/MathFont.swift",
+  );
+  const swiftMathLegacyFont = path.join(
+    checkoutRoot,
+    "SwiftMath/Sources/SwiftMath/MathRender/MTFont.swift",
+  );
+  const fixtures = new Map([
+    [
+      keyboardShortcuts,
+      [
+        "import Foundation",
+        "extension String {",
+        "  var localized: String {",
+        "    NSLocalizedString(self, bundle: .module, comment: self)",
+        "  }",
+        "}",
+        "",
+        "extension Data {",
+        "}",
+        "",
+      ].join("\n"),
+    ],
+    [
+      swiftMathFont,
+      [
+        "import Foundation",
+        "#if os(macOS)",
+        "import AppKit",
+        "#endif",
+        "",
+        "/// Now available for everyone to use",
+        'let first = Bundle.module.url(forResource: "mathFonts", withExtension: "bundle")',
+        'let second = Bundle.module.url(forResource: "mathFonts", withExtension: "bundle")',
+        "",
+      ].join("\n"),
+    ],
+    [
+      swiftMathLegacyFont,
+      'let font = Bundle.module.url(forResource: "mathFonts", withExtension: "bundle")\n',
+    ],
+  ]);
+
+  for (const [file, contents] of fixtures) {
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, contents, "utf8");
+  }
+
+  const result = runHelper(`
+    set -euo pipefail
+    ${getSwiftPMResourcePatchBlock()}
+    patch_swiftpm_resource_lookups ${JSON.stringify(buildPath)}
+    grep -q keyboardShortcutsPackagedResources ${JSON.stringify(keyboardShortcuts)}
+    test "$(grep -c swiftMathPackagedResources ${JSON.stringify(swiftMathFont)})" -eq 3
+    grep -q swiftMathPackagedResources ${JSON.stringify(swiftMathLegacyFont)}
+    restore_swiftpm_resource_sources
+  `);
+
+  return { fixtures, result };
+}
+
 function runStopPackagedAppHarness(killZeroStatus: 0 | 1) {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-package-stop-root-"));
-  const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-stop-tools-"));
-  tempDirs.push(root, toolsDir);
+  const root = tempDirs.make("openclaw-package-stop-root-");
+  const toolsDir = tempDirs.make("openclaw-package-stop-tools-");
 
   const appRoot = path.join(root, "dist", "OpenClaw.app");
   const appBinary = path.join(appRoot, "Contents", "MacOS", "OpenClaw");
@@ -131,12 +271,11 @@ function runStopPackagedAppHarness(killZeroStatus: 0 | 1) {
 }
 
 function runSwiftCompatibilityHarness(buildConfig: "debug" | "release") {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-package-swift-root-"));
-  const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-swift-tools-"));
+  const root = tempDirs.make("openclaw-package-swift-root-");
+  const toolsDir = tempDirs.make("openclaw-package-swift-tools-");
   const developerDir = path.join(root, "Xcode.app", "Contents", "Developer");
   const appRoot = path.join(root, "OpenClaw.app");
   const xcodeSelectPath = path.join(toolsDir, "xcode-select");
-  tempDirs.push(root, toolsDir);
 
   writeFileSync(
     xcodeSelectPath,
@@ -155,11 +294,34 @@ function runSwiftCompatibilityHarness(buildConfig: "debug" | "release") {
   `);
 }
 
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+function runSwiftPackageResolutionHarness(mutateLockfile: boolean) {
+  const root = tempDirs.make("openclaw-swift-resolve-root-");
+  const toolsDir = tempDirs.make("openclaw-swift-resolve-tools-");
+  const resolvedFile = path.join(root, "apps", "macos", "Package.resolved");
+  const swiftPath = path.join(toolsDir, "swift");
+
+  mkdirSync(path.dirname(resolvedFile), { recursive: true });
+  writeFileSync(resolvedFile, "locked\n", { encoding: "utf8", flag: "wx" });
+  writeFileSync(
+    swiftPath,
+    [
+      "#!/usr/bin/env bash",
+      mutateLockfile ? `printf 'changed\\n' > ${JSON.stringify(resolvedFile)}` : ":",
+    ].join("\n"),
+    "utf8",
+  );
+  chmodSync(swiftPath, 0o755);
+
+  const result = runHelper(`
+    set -euo pipefail
+    ROOT_DIR=${JSON.stringify(root)}
+    PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+    ${getSwiftPackageResolutionBlock()}
+    run_with_locked_swift_packages swift package --scratch-path "$ROOT_DIR/apps/macos/.build/arm64" resolve
+  `);
+
+  return { result, resolvedFile };
+}
 
 describe("package-mac-app plist stamping", () => {
   it("resolves canonical build provenance and rejects explicit invalid overrides", () => {
@@ -354,10 +516,9 @@ describe("package-mac-app plist stamping", () => {
 
   it("falls back to corepack pnpm when the pnpm shim is absent", () => {
     const helperBlock = getPackageManagerHelperBlock();
-    const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-root-"));
-    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-tools-"));
+    const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
+    const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
     const logPath = path.join(tempRoot, "corepack.log");
-    tempDirs.push(tempRoot, toolsDir);
 
     const corepackPath = path.join(toolsDir, "corepack");
     writeFileSync(
@@ -396,11 +557,10 @@ describe("package-mac-app plist stamping", () => {
 
   it("prefers repo Corepack pnpm over a global pnpm shim", () => {
     const helperBlock = getPackageManagerHelperBlock();
-    const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-root-"));
-    const outerRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-outer-"));
-    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-tools-"));
+    const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
+    const outerRoot = tempDirs.make("openclaw-package-pnpm-outer-");
+    const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
     const logPath = path.join(tempRoot, "pnpm.log");
-    tempDirs.push(tempRoot, outerRoot, toolsDir);
 
     writeFileSync(
       path.join(tempRoot, "package.json"),
@@ -458,9 +618,8 @@ describe("package-mac-app plist stamping", () => {
 
   it("fails with an actionable error when neither pnpm nor corepack pnpm is available", () => {
     const helperBlock = getPackageManagerHelperBlock();
-    const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-root-"));
-    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-tools-"));
-    tempDirs.push(tempRoot, toolsDir);
+    const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
+    const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
 
     const result = runHelper(`
       set -euo pipefail
@@ -485,8 +644,7 @@ describe("package-mac-app plist stamping", () => {
 
   it("fails with an actionable error when Swift tools are too old", () => {
     const helperBlock = getSwiftToolchainBlock();
-    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-swift-tools-"));
-    tempDirs.push(toolsDir);
+    const toolsDir = tempDirs.make("openclaw-package-swift-tools-");
 
     const swiftPath = path.join(toolsDir, "swift");
     writeFileSync(
@@ -514,8 +672,7 @@ describe("package-mac-app plist stamping", () => {
 
   it("accepts Swift tools 6.2 or newer", () => {
     const helperBlock = getSwiftToolchainBlock();
-    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-swift-tools-"));
-    tempDirs.push(toolsDir);
+    const toolsDir = tempDirs.make("openclaw-package-swift-tools-");
 
     const swiftPath = path.join(toolsDir, "swift");
     writeFileSync(
@@ -542,9 +699,8 @@ describe("package-mac-app plist stamping", () => {
 
   it("runs Sparkle build metadata derivation from the repository root", () => {
     const helperBlock = getSparkleBuildHelperBlock();
-    const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-sparkle-root-"));
-    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-sparkle-tools-"));
-    tempDirs.push(tempRoot, toolsDir);
+    const tempRoot = tempDirs.make("openclaw-package-sparkle-root-");
+    const toolsDir = tempDirs.make("openclaw-package-sparkle-tools-");
 
     const nodePath = path.join(toolsDir, "node");
     writeFileSync(
@@ -636,25 +792,98 @@ describe("package-mac-app plist stamping", () => {
     expect(macosCi).toContain("test/scripts/notarize-mac-artifact.test.ts");
   });
 
-  it("fails closed when required Swift resources are missing", () => {
+  it("copies generated SwiftPM bundles into packaged app resources", () => {
+    const { appRoot, result } = runSwiftPMResourceBundleHarness();
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    for (const bundle of swiftPMResourceBundles) {
+      expect(
+        readFileSync(path.join(appRoot, "Contents", "Resources", bundle, "marker"), "utf8"),
+      ).toBe(bundle);
+      expect(existsSync(path.join(appRoot, bundle))).toBe(false);
+    }
+  });
+
+  it("routes dependency resource lookups into signed app resources and restores sources", () => {
+    const { fixtures, result } = runSwiftPMResourcePatchHarness();
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    for (const [file, contents] of fixtures) {
+      expect(readFileSync(file, "utf8")).toBe(contents);
+      expect(existsSync(`${file}.openclaw-original`)).toBe(false);
+    }
+  });
+
+  it("fails closed when any required SwiftPM resource bundle is missing", () => {
+    for (const missingBundle of swiftPMResourceBundles) {
+      const { result } = runSwiftPMResourceBundleHarness(missingBundle);
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("ERROR: Required SwiftPM resource bundle not found at");
+      expect(result.stderr).toContain(missingBundle);
+    }
+  });
+
+  it("keeps generated SwiftPM bundles in the signed resources directory", () => {
     const script = readFileSync(scriptPath, "utf8");
-    const openClawKitBlock = script.slice(
-      script.indexOf(
-        'OPENCLAWKIT_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClawKit_OpenClawKit.bundle"',
-      ),
-      script.indexOf("running_packaged_app_pids()"),
-    );
+    const resourceBlock = getSwiftPMResourceBundleBlock();
 
     expect(script).toContain(
       'node --import tsx "$ROOT_DIR/scripts/apple-app-i18n.ts" compile-macos',
     );
     expect(script).toContain('--output "$APP_ROOT/Contents/Resources"');
-    expect(openClawKitBlock).toContain("ERROR: OpenClawKit resource bundle not found");
-    expect(openClawKitBlock).toContain("exit 1");
-    expect(openClawKitBlock).not.toContain("WARN:");
-    expect(openClawKitBlock).not.toContain("continuing");
+    expect(resourceBlock).toContain(
+      'for resource_bundle_src in "$SWIFTPM_BUILD_PRODUCTS"/*.bundle',
+    );
+    expect(resourceBlock).toContain(
+      'cp -R "$resource_bundle_src" "$APP_ROOT/Contents/Resources/$resource_bundle"',
+    );
+    for (const bundle of swiftPMResourceBundles) {
+      expect(resourceBlock).toContain(`"${bundle}"`);
+    }
+    expect(resourceBlock).toContain("ERROR: Required SwiftPM resource bundle not found");
+    expect(resourceBlock).toContain("exit 1");
+    expect(resourceBlock).not.toContain(
+      'cp -R "$resource_bundle_src" "$APP_ROOT/$resource_bundle"',
+    );
+    expect(resourceBlock).not.toContain("WARN:");
+    expect(resourceBlock).not.toContain("continuing");
     expect(script).not.toContain("Textual resource bundle");
     expect(script).not.toContain("ALLOW_MISSING_TEXTUAL_BUNDLE");
+  });
+
+  it("preserves locked Swift package resolution before building", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const resolveCall =
+      'run_with_locked_swift_packages swift package --scratch-path "$BUILD_PATH" resolve';
+    const buildCall =
+      'run_with_locked_swift_packages swift build -c "$BUILD_CONFIG" --product "$PRODUCT"';
+
+    expect(script).toContain('resolved_file="$ROOT_DIR/apps/macos/Package.resolved"');
+    expect(script).toContain('cmp -s "$resolved_snapshot" "$resolved_file"');
+    expect(script).toContain('cp "$resolved_snapshot" "$resolved_file"');
+    expect(script).toContain("ERROR: Swift package resolution changed Package.resolved");
+    expect(script).toContain(resolveCall);
+    expect(script).toContain(buildCall);
+    expect(script.indexOf(resolveCall)).toBeLessThan(script.indexOf(buildCall));
+  });
+
+  it("restores and rejects a Swift package resolution that changes the lockfile", () => {
+    const { result, resolvedFile } = runSwiftPackageResolutionHarness(true);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("ERROR: Swift package resolution changed Package.resolved");
+    expect(readFileSync(resolvedFile, "utf8")).toBe("locked\n");
+  });
+
+  it("accepts a Swift package resolution that preserves the lockfile", () => {
+    const { result, resolvedFile } = runSwiftPackageResolutionHarness(false);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(readFileSync(resolvedFile, "utf8")).toBe("locked\n");
   });
 
   it("embeds the canonical CLI installer as a signed app resource", () => {

@@ -4,10 +4,13 @@
  * Runs the configured runtime provider and returns normalized cached search results.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
+import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { runWebSearch } from "../../web-search/runtime.js";
 import type { AnyAgentTool } from "./common.js";
 import { asToolParamsRecord, jsonResult } from "./common.js";
+import { normalizeWebSearchOutput, WebSearchOutputSchema } from "./web-search-output.js";
 import { MAX_SEARCH_COUNT } from "./web-search-provider-common.js";
 import { resolveWebSearchToolRuntimeContext } from "./web-tool-runtime-context.js";
 
@@ -89,12 +92,14 @@ export function createWebSearchTool(options?: {
   return {
     label: "Web Search",
     name: "web_search",
-    description: "Search current web; normalized provider results.",
+    description:
+      "Search current web; normalized provider results. Supports freshness and date-range filters (freshness, date_after/date_before) and domain filtering (domain_filter).",
     parameters: WebSearchSchema,
+    outputSchema: WebSearchOutputSchema,
     execute: async (_toolCallId, args, signal) => {
       // Late binding lets long-lived agents pick up runtime web-search credentials/config without
       // rebuilding the tool object.
-      const { config, preferRuntimeProviders, runtimeWebSearch } =
+      const { config, preferRuntimeProviders, providerSelectionId, runtimeWebSearch } =
         resolveWebSearchToolRuntimeContext({
           config: options?.config,
           lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
@@ -103,19 +108,29 @@ export function createWebSearchTool(options?: {
       if (isWebSearchDisabled(config)) {
         throw new Error("web_search is disabled.");
       }
+      if (providerSelectionId) {
+        assertSecretOwnerAvailable(
+          "capability",
+          runtimeWebSecretOwnerId("search", providerSelectionId),
+        );
+      }
+      const toolArgs = asToolParamsRecord(args);
       const result = await runWebSearch({
         config,
         agentDir: options?.agentDir,
         sandboxed: options?.sandboxed,
         runtimeWebSearch,
         preferRuntimeProviders,
-        args: asToolParamsRecord(args),
+        args: toolArgs,
         signal,
       });
-      return jsonResult({
-        ...result.result,
-        provider: result.provider,
-      });
+      return jsonResult(
+        normalizeWebSearchOutput({
+          result: result.result,
+          provider: result.provider,
+          query: typeof toolArgs.query === "string" ? toolArgs.query : "",
+        }),
+      );
     },
   };
 }

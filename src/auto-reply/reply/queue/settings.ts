@@ -39,7 +39,6 @@ export function resolveQueueSettings(params: ResolveQueueSettingsParams): QueueS
     params.sessionEntry?.queueDebounceMs ??
     resolveChannelDebounce(queueCfg?.debounceMsByChannel, channelKey) ??
     params.pluginDebounceMs ??
-    queueCfg?.debounceMs ??
     DEFAULT_QUEUE_DEBOUNCE_MS;
   const capRaw =
     params.inlineOptions?.cap ??

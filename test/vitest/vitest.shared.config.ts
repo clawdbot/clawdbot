@@ -161,6 +161,21 @@ export const sharedVitestConfig = {
   resolve: {
     alias: [
       {
+        // Route bare `zod` through a runtime shim (same pattern as the
+        // discord-api-types shims below): zod's own entry re-exports `z` as a
+        // namespace binding, which Bun's linker drops under Vitest's loader
+        // hooks. The shim exposes the identical surface on Node and Bun.
+        find: /^zod$/u,
+        replacement: path.join(repoRoot, "test", "vitest", "zod-runtime.ts"),
+      },
+      {
+        // Bun substitutes its built-in fetch shim for bare `undici`, whose
+        // MockAgent is a non-functional stub; pin the real package so
+        // mock-http interception works. Node resolves to this file anyway.
+        find: /^undici$/u,
+        replacement: path.join(repoRoot, "node_modules", "undici", "index.js"),
+      },
+      {
         find: "discord-api-types/v10",
         replacement: path.join(repoRoot, "test", "vitest", "discord-api-types-v10-runtime.ts"),
       },
@@ -174,16 +189,16 @@ export const sharedVitestConfig = {
         ),
       },
       {
-        find: "openclaw/extension-api",
-        replacement: path.join(repoRoot, "src", "extensionAPI.ts"),
-      },
-      {
         find: "@openclaw/qa-channel/api.js",
         replacement: path.join(repoRoot, "extensions", "qa-channel", "api.ts"),
       },
       {
         find: "@openclaw/discord/api.js",
         replacement: path.join(repoRoot, "extensions", "discord", "api.ts"),
+      },
+      {
+        find: "@openclaw/matrix/test-api.js",
+        replacement: path.join(repoRoot, "extensions", "matrix", "test-api.ts"),
       },
       {
         find: "@openclaw/slack/api.js",
@@ -226,6 +241,16 @@ export const sharedVitestConfig = {
       {
         find: "@openclaw/gateway-protocol/frame-guards",
         replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "frame-guards.ts"),
+      },
+      {
+        find: "@openclaw/gateway-protocol/gateway-error-details",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "gateway-protocol",
+          "src",
+          "gateway-error-details.ts",
+        ),
       },
       {
         find: "@openclaw/gateway-protocol/schema",
@@ -410,6 +435,10 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/normalization-core/cjk-chars",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "cjk-chars.ts"),
+      },
+      {
         find: "@openclaw/normalization-core/error-coercion",
         replacement: path.join(
           repoRoot,
@@ -427,6 +456,16 @@ export const sharedVitestConfig = {
           "normalization-core",
           "src",
           "number-coercion.ts",
+        ),
+      },
+      {
+        find: "@openclaw/normalization-core/phone-presentation",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "phone-presentation.ts",
         ),
       },
       {
@@ -484,6 +523,8 @@ export const sharedVitestConfig = {
       sourcePackageAlias("media-core", "read-byte-stream-with-limit"),
       sourcePackageAlias("media-core"),
       sourcePackageAlias("retry"),
+      sourcePackageAlias("session-url-contract", "parse"),
+      sourcePackageAlias("session-url-contract"),
       sourcePackageAlias("workboard-contract"),
       ...sourcePackageAliasesFromExports("acp-core", acpCorePackageJson.exports),
       ...sourcePluginSdkSubpaths.map((subpath) => ({
@@ -494,10 +535,6 @@ export const sharedVitestConfig = {
         find: `@openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "packages", "plugin-sdk", "src", `${subpath}.ts`),
       })),
-      {
-        find: "openclaw/plugin-sdk",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "index.ts"),
-      },
     ],
   },
   test: {

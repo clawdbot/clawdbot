@@ -11,6 +11,7 @@ import {
 } from "./plugin-registration.js";
 import type { OpenClawPluginApi } from "./runtime-api.js";
 import setupPlugin from "./setup-api.js";
+import { BrowserToolOutputSchema } from "./src/browser-tool.schema.js";
 
 type BrowserAutoEnableProbe = Parameters<OpenClawPluginApi["registerAutoEnableProbe"]>[0];
 
@@ -76,19 +77,38 @@ function createApi() {
     entries: vi.fn(async () => []),
     clear: vi.fn(async () => undefined),
   }));
+  const openSyncKeyedStore = vi.fn(() => ({
+    register: vi.fn(),
+    registerIfAbsent: vi.fn(() => true),
+    lookup: vi.fn(() => undefined),
+    consume: vi.fn(() => undefined),
+    delete: vi.fn(() => false),
+    entries: vi.fn(() => []),
+    clear: vi.fn(),
+  }));
   const api = createTestPluginApi({
     id: "browser",
     name: "Browser",
     source: "test",
     rootDir: "/plugins/browser",
     config: {},
-    runtime: { state: { openKeyedStore } } as unknown as OpenClawPluginApi["runtime"],
+    runtime: {
+      state: { openKeyedStore, openSyncKeyedStore },
+    } as unknown as OpenClawPluginApi["runtime"],
     registerCli,
     registerGatewayMethod,
     registerService,
     registerTool,
   });
-  return { api, openKeyedStore, registerCli, registerGatewayMethod, registerService, registerTool };
+  return {
+    api,
+    openKeyedStore,
+    openSyncKeyedStore,
+    registerCli,
+    registerGatewayMethod,
+    registerService,
+    registerTool,
+  };
 }
 
 function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
@@ -124,6 +144,18 @@ describe("browser plugin", () => {
       namespace: "browser.system-profile-import",
       maxEntries: 1,
     });
+  });
+
+  it("initializes the shared durable session-tab registry without loading browser control", () => {
+    const { api, openSyncKeyedStore } = createApi();
+    registerBrowserPlugin(api);
+
+    expect(openSyncKeyedStore).toHaveBeenCalledWith({
+      namespace: "browser.session-tabs",
+      maxEntries: 5_000,
+      overflowPolicy: "reject-new",
+    });
+    expect(runtimeApiMocks.createBrowserPluginService).not.toHaveBeenCalled();
   });
 
   it("exposes static browser metadata on the plugin definition", () => {
@@ -184,6 +216,7 @@ describe("browser plugin", () => {
     expect(tool.name).toBe("browser");
     expect(tool.description).toContain("action=profiles");
     expect(tool.description).not.toContain('profile="user"');
+    expect(tool.outputSchema).toBe(BrowserToolOutputSchema);
     expect(runtimeApiMocks.createBrowserTool).not.toHaveBeenCalled();
     await tool.execute("call-1", { action: "status" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
@@ -208,6 +241,7 @@ describe("browser plugin", () => {
 
     const tool = factory({
       sessionKey: "agent:main:webchat:direct:123",
+      agentId: "main",
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
       activeModel: { provider: "openai", modelId: "gpt-5.5" },
@@ -220,6 +254,7 @@ describe("browser plugin", () => {
     await tool.execute("call-1", { action: "status" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
       agentSessionKey: "agent:main:webchat:direct:123",
+      agentId: "main",
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
       activeModel: { provider: "openai", model: "gpt-5.5" },
@@ -229,6 +264,42 @@ describe("browser plugin", () => {
         chatType: "direct",
       },
     });
+  });
+
+  it("passes the browser-owned run binding into the tool layer", async () => {
+    const { api, registerTool } = createApi();
+    registerBrowserPlugin(api);
+    const factory = mockCallArg(registerTool);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register a tool factory");
+    }
+    const binding = {
+      kind: "tab",
+      tabId: 7,
+      target: "host",
+      profile: "chrome",
+      targetId: "target-7",
+    };
+    const tool = factory({ toolBindings: { browser: binding } });
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("expected browser plugin to return a single tool");
+    }
+
+    await tool.execute("call-1", { action: "snapshot" });
+    expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({ runToolBinding: binding });
+  });
+
+  it("rejects malformed run bindings before creating the lazy browser tool", () => {
+    const { api, registerTool } = createApi();
+    registerBrowserPlugin(api);
+    const factory = mockCallArg(registerTool);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register a tool factory");
+    }
+
+    expect(() => factory({ toolBindings: { browser: { kind: "tab" } } })).toThrow(
+      "invalid browser run binding",
+    );
   });
 
   it("derives group chat type for browser media scope", async () => {
@@ -273,6 +344,7 @@ describe("browser plugin", () => {
           name: "browser",
           description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
           hasSubcommands: true,
+          machineOutput: expect.any(Function),
         },
       ],
     });

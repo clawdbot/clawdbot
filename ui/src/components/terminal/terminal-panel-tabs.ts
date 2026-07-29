@@ -1,6 +1,6 @@
-import { html, nothing, svg } from "lit";
+import { svg } from "lit";
 import { t } from "../../i18n/index.ts";
-import "../web-awesome-tabs.ts";
+import { renderPanelTabStrip, type PanelTabStripTab } from "../panel-tab-strip.ts";
 
 export type TerminalPanelTab = {
   id: string;
@@ -8,14 +8,14 @@ export type TerminalPanelTab = {
   shellName: string | null;
   agentId: string | null;
   cwd: string | null;
-  status: "live" | "exited";
+  status: "connecting" | "live" | "exited";
   exitReason?: string;
   exitCode?: number | null;
+  /** Set for PTYs an agent opened; surfaces an "agent" pill on the tab. */
+  agentOwned?: boolean;
 };
 
 const TERMINAL_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4l3 3-3 3M8 11h5" /></svg>`;
-const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
-const PLUS_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10" /></svg>`;
 
 function terminalTabLabel(tab: TerminalPanelTab): string {
   return tab.shellName ?? t("terminal.tabLabel", { n: String(tab.sequence) });
@@ -28,6 +28,9 @@ function terminalTabHint(tab: TerminalPanelTab): string | null {
 }
 
 function terminalTabStatusLabel(tab: TerminalPanelTab): string | null {
+  if (tab.status === "connecting") {
+    return t("terminal.connecting");
+  }
   if (tab.status !== "exited") {
     return null;
   }
@@ -47,51 +50,28 @@ export function renderTerminalPanelTabs(params: {
   onClose: (id: string) => void;
   onNew: () => void;
 }) {
-  return html`
-    <wa-tab-group
-      class="tp-tabs"
-      .active=${params.activeId ?? ""}
-      activation="auto"
-      without-scroll-controls
-      @wa-tab-show=${(event: CustomEvent<{ name: string }>) => params.onSelect(event.detail.name)}
-    >
-      ${params.tabs.map((tab) => {
-        const statusLabel = terminalTabStatusLabel(tab);
-        return html`
-          <wa-tab
-            id=${`terminal-tab-${tab.id}`}
-            class="tp-tab ${tab.status === "exited" ? "is-exited" : ""}"
-            panel=${tab.id}
-            aria-controls="terminal-tab-panel"
-            title=${terminalTabHint(tab) || nothing}
-          >
-            <span class="tp-tab__icon" aria-hidden="true">${TERMINAL_GLYPH}</span>
-            <span class="tp-tab__label">${terminalTabLabel(tab)}</span>
-            ${statusLabel ? html`<span class="tp-tab__status">${statusLabel}</span>` : nothing}
-          </wa-tab>
-          <button
-            slot="nav"
-            class="tp-tab__close"
-            type="button"
-            title=${t("terminal.closeSession")}
-            aria-label=${`${t("terminal.closeSession")}: ${terminalTabLabel(tab)}`}
-            @click=${() => params.onClose(tab.id)}
-          >
-            ${CLOSE_GLYPH}
-          </button>
-        `;
-      })}
-      <button
-        slot="nav"
-        class="tp-new"
-        type="button"
-        ?disabled=${params.booting}
-        title=${t("terminal.newSession")}
-        aria-label=${t("terminal.newSession")}
-        @click=${params.onNew}
-      >
-        ${PLUS_GLYPH}
-      </button>
-    </wa-tab-group>
-  `;
+  const tabs: PanelTabStripTab[] = params.tabs.map((tab) => {
+    const label = terminalTabLabel(tab);
+    return {
+      id: tab.id,
+      domId: `terminal-tab-${tab.id}`,
+      label,
+      title: terminalTabHint(tab),
+      icon: TERMINAL_GLYPH,
+      statusLabel: terminalTabStatusLabel(tab),
+      badge: tab.agentOwned ? t("terminal.agentOwnedBadge") : null,
+      className: `is-${tab.status}`,
+      closeLabel: `${t("terminal.closeSession")}: ${label}`,
+    };
+  });
+  return renderPanelTabStrip({
+    tabs,
+    activeId: params.activeId,
+    ariaControls: "terminal-tab-panel",
+    onSelect: params.onSelect,
+    onClose: params.onClose,
+    onNew: params.onNew,
+    newLabel: t("terminal.newSession"),
+    newDisabled: params.booting,
+  });
 }

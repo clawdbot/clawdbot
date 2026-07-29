@@ -6,16 +6,20 @@ import {
   appendTranscriptEvent,
   listSessionEntries,
   loadSessionEntry,
+  replaceTranscriptEvents,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
 import {
   appendAssistantMirrorMessageByIdentity,
   appendSessionTranscriptMessageByIdentity,
+  appendSessionTranscriptMessageByIdentityStrict,
+  appendSessionTranscriptMessagesByIdentity,
   formatSessionTranscriptMemoryHitKey,
   parseSessionTranscriptMemoryHitKey,
   publishSessionTranscriptUpdateByIdentity,
   readLatestAssistantTextByIdentity,
+  readSessionTranscriptRawDelta,
   readSessionTranscriptEvents,
   readVisibleSessionTranscriptMessageEntries,
   resolveSessionTranscriptIdentity,
@@ -77,6 +81,231 @@ describe("session transcript runtime SDK", () => {
     });
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([]);
     expect(loadSessionEntry(scope)?.sessionFile).toBeUndefined();
+  });
+
+  it("atomically appends and idempotently replays an ordered message group", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "batch-session",
+      sessionKey: "agent:main:batch",
+      storePath,
+    };
+    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    const messages = [
+      {
+        eventId: "batch-assistant",
+        idempotencyLookup: "scan" as const,
+        message: { role: "assistant", content: "checking", idempotencyKey: "batch:assistant" },
+        now: 1_000,
+      },
+      {
+        eventId: "batch-result",
+        idempotencyLookup: "scan" as const,
+        message: { role: "toolResult", content: "done", idempotencyKey: "batch:result" },
+        now: 2_000,
+      },
+    ];
+
+    const appended = await appendSessionTranscriptMessagesByIdentity({ ...scope, messages });
+    const replayed = await appendSessionTranscriptMessagesByIdentity({ ...scope, messages });
+
+    expect(appended.map((result) => result.appended)).toEqual([true, true]);
+    expect(replayed.map((result) => result.appended)).toEqual([false, false]);
+    const events = await readSessionTranscriptEvents(scope);
+    expect(events).toHaveLength(3);
+    expect(events.slice(1)).toMatchObject([
+      { id: "batch-assistant", parentId: null },
+      { id: "batch-result", parentId: "batch-assistant" },
+    ]);
+  });
+
+  it("distinguishes strict singleton results, suppression, and session rebound", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "strict-session",
+      sessionKey: "agent:main:strict",
+      storePath,
+    };
+    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+
+    await expect(
+      appendSessionTranscriptMessageByIdentityStrict({
+        ...scope,
+        message: { role: "user", content: "blocked" },
+        prepareMessageAfterIdempotencyCheck: () => undefined,
+      }),
+    ).resolves.toEqual({ kind: "suppressed" });
+    await expect(
+      appendSessionTranscriptMessageByIdentityStrict({
+        ...scope,
+        message: { role: "user", content: "persisted", idempotencyKey: "strict:user" },
+      }),
+    ).resolves.toMatchObject({ kind: "result", result: { appended: true } });
+
+    await upsertSessionEntry(scope, { sessionId: "replacement-session", updatedAt: 20 });
+    await expect(
+      appendSessionTranscriptMessageByIdentityStrict({
+        ...scope,
+        message: { role: "assistant", content: "stale" },
+      }),
+    ).resolves.toEqual({ kind: "rejected", reason: "session-rebound" });
+  });
+
+  it("pages raw events across appends and resets after replacement", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "raw-delta-session",
+      sessionKey: "agent:main:raw-delta",
+      storePath,
+    };
+    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    for (const id of ["event-1", "event-2", "event-3"]) {
+      await appendTranscriptEvent(scope, { id, type: "custom" });
+    }
+
+    const first = await readSessionTranscriptRawDelta({
+      ...scope,
+      maxBytes: 10_000,
+      maxEvents: 2,
+    });
+    expect(first).toMatchObject({
+      kind: "page",
+      events: [
+        { event: { id: "event-1", type: "custom" }, seq: 0 },
+        { event: { id: "event-2", type: "custom" }, seq: 1 },
+      ],
+      hasMore: true,
+    });
+    if (first.kind !== "page") {
+      throw new Error("expected the first raw transcript page");
+    }
+
+    await appendTranscriptEvent(scope, { id: "event-4", type: "custom" });
+    const second = await readSessionTranscriptRawDelta({
+      ...scope,
+      cursor: first.cursor,
+      maxBytes: 10_000,
+      maxEvents: 2,
+    });
+    expect(second).toMatchObject({
+      kind: "page",
+      events: [
+        { event: { id: "event-3", type: "custom" }, seq: 2 },
+        { event: { id: "event-4", type: "custom" }, seq: 3 },
+      ],
+      hasMore: false,
+    });
+
+    await replaceTranscriptEvents(scope, [{ id: "replacement", type: "custom" }]);
+    await expect(
+      readSessionTranscriptRawDelta({
+        ...scope,
+        cursor: first.cursor,
+        maxBytes: 10_000,
+        maxEvents: 2,
+      }),
+    ).resolves.toMatchObject({ kind: "reset", reason: "generation_mismatch" });
+  });
+
+  it("bounds raw pages before parsing an oversized event", async () => {
+    const missingScope = {
+      agentId: "main",
+      sessionId: "missing-raw-delta",
+      sessionKey: "agent:main:missing-raw-delta",
+      storePath,
+    };
+    await upsertSessionEntry(missingScope, { sessionId: missingScope.sessionId, updatedAt: 10 });
+    await expect(
+      readSessionTranscriptRawDelta({ ...missingScope, maxBytes: 10, maxEvents: 1 }),
+    ).resolves.toEqual({ kind: "missing" });
+
+    const scope = {
+      ...missingScope,
+      sessionId: "oversized-raw-delta",
+      sessionKey: "agent:main:oversized-raw-delta",
+    };
+    await appendTranscriptEvent(scope, { id: "large", text: "x".repeat(200), type: "custom" });
+    const blocked = await readSessionTranscriptRawDelta({
+      ...scope,
+      cursor: "not-a-cursor",
+      maxBytes: 10,
+      maxEvents: 1,
+    });
+    expect(blocked).toMatchObject({ kind: "reset", reason: "invalid_cursor" });
+    await expect(
+      readSessionTranscriptRawDelta({
+        ...scope,
+        cursor: "",
+        maxBytes: 10,
+        maxEvents: 1,
+      }),
+    ).resolves.toMatchObject({ kind: "reset", reason: "invalid_cursor" });
+    if (blocked.kind !== "reset") {
+      throw new Error("expected invalid cursor reset");
+    }
+    const unsafeCursor = Buffer.from(
+      JSON.stringify({
+        agentId: scope.agentId,
+        generation: "untrusted",
+        lastSeq: 1e100,
+        sessionId: scope.sessionId,
+        version: 1,
+      }),
+      "utf8",
+    ).toString("base64url");
+    await expect(
+      readSessionTranscriptRawDelta({
+        ...scope,
+        cursor: unsafeCursor,
+        maxBytes: 10,
+        maxEvents: 1,
+      }),
+    ).resolves.toMatchObject({ kind: "reset", reason: "invalid_cursor" });
+
+    const bounded = await readSessionTranscriptRawDelta({
+      ...scope,
+      cursor: blocked.cursor,
+      maxBytes: 10,
+      maxEvents: 1,
+    });
+    expect(bounded).toMatchObject({
+      kind: "page",
+      events: [],
+      hasMore: true,
+      requiredBytes: expect.any(Number),
+      serializedBytes: 0,
+    });
+    if (bounded.kind !== "page" || bounded.requiredBytes === undefined) {
+      throw new Error("expected oversized event metadata");
+    }
+
+    const retried = await readSessionTranscriptRawDelta({
+      ...scope,
+      cursor: bounded.cursor,
+      maxBytes: bounded.requiredBytes,
+      maxEvents: 1,
+    });
+    expect(retried).toMatchObject({
+      kind: "page",
+      events: [{ event: { id: "large", text: "x".repeat(200), type: "custom" }, seq: 0 }],
+      hasMore: false,
+      serializedBytes: bounded.requiredBytes,
+    });
+
+    const otherScope = {
+      ...scope,
+      sessionId: "other-raw-delta",
+      sessionKey: "agent:main:other-raw-delta",
+    };
+    await appendTranscriptEvent(otherScope, { id: "other", type: "custom" });
+    await expect(
+      readSessionTranscriptRawDelta({
+        ...otherScope,
+        cursor: retried.kind === "page" ? retried.cursor : "",
+        maxBytes: 1_000,
+        maxEvents: 1,
+      }),
+    ).resolves.toMatchObject({ kind: "reset", reason: "scope_mismatch" });
   });
 
   it("projects only visible transcript message entries with read-order metadata", async () => {
@@ -480,6 +709,7 @@ describe("session transcript runtime SDK", () => {
         agentId: "main",
         sessionId: "publish-session",
         sessionKey: "agent:main:main",
+        storePath: path.join(tempDir, "openclaw-agent.sqlite"),
       },
     });
     expect(internalUpdates).toEqual([
@@ -492,6 +722,7 @@ describe("session transcript runtime SDK", () => {
           agentId: "main",
           sessionId: "publish-session",
           sessionKey: "agent:main:main",
+          storePath: path.join(tempDir, "openclaw-agent.sqlite"),
         },
       },
     ]);
@@ -616,6 +847,7 @@ describe("session transcript runtime SDK", () => {
         agentId: "main",
         sessionId: "queued-publish-session",
         sessionKey: "agent:main:main",
+        storePath: path.join(tempDir, "openclaw-agent.sqlite"),
       },
     });
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([

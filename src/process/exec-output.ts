@@ -113,8 +113,9 @@ function trimTruncatedUtf8Boundary(
   buffer: Buffer,
   mode: CommandOutputCaptureMode,
   truncatedBytes: number,
+  forceUtf8: boolean,
 ): Buffer {
-  if (truncatedBytes === 0 || buffer.length === 0 || process.platform === "win32") {
+  if (truncatedBytes === 0 || buffer.length === 0 || (process.platform === "win32" && !forceUtf8)) {
     return buffer;
   }
   if (mode === "tail") {
@@ -140,9 +141,10 @@ function trimTruncatedUtf8Boundary(
 export function finalizeCapturedOutput(
   capture: CapturedOutputBuffers,
   mode: CommandOutputCaptureMode,
+  forceUtf8 = false,
 ): Buffer {
   const buffered = Buffer.concat(capture.chunks, capture.bytes);
-  const trimmed = trimTruncatedUtf8Boundary(buffered, mode, capture.truncatedBytes);
+  const trimmed = trimTruncatedUtf8Boundary(buffered, mode, capture.truncatedBytes, forceUtf8);
   capture.truncatedBytes += buffered.byteLength - trimmed.byteLength;
   return trimmed;
 }

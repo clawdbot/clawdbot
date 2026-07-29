@@ -56,6 +56,26 @@
       }
     },
     {
+      "name": "@openclaw/codex",
+      "description": "OpenClaw Codex app-server harness and native session catalog",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "codex",
+          "label": "Codex"
+        },
+        "contracts": {
+          "migrationProviders": ["codex"]
+        },
+        "install": {
+          "npmSpec": "@openclaw/codex",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.1-beta.1"
+        }
+      }
+    },
+    {
       "name": "@openclaw/copilot",
       "description": "OpenClaw GitHub Copilot agent runtime plugin",
       "source": "official",

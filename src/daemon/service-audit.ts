@@ -27,6 +27,7 @@ import {
   collectInlineManagedServiceEnvKeys,
   hasInlineEnvironmentSource,
   isEnvironmentFileOnlySource,
+  readEnvironmentValueSource,
 } from "./service-managed-env.js";
 import { isNonMinimalServicePathEntry, normalizeServicePathEntry } from "./service-path-policy.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
@@ -297,15 +298,19 @@ function readGatewayServiceCommandPortState(
   if (!programArguments || programArguments.length === 0) {
     return { kind: "missing" };
   }
-  for (const [index, arg] of programArguments.entries()) {
+  let latest: GatewayServiceCommandPort = { kind: "missing" };
+  for (let index = 0; index < programArguments.length; index += 1) {
+    const arg = programArguments[index];
     if (arg === "--port") {
-      return parseGatewayPortArg(programArguments[index + 1]);
+      latest = parseGatewayPortArg(programArguments[index + 1]);
+      index += 1;
+      continue;
     }
-    if (arg.startsWith("--port=")) {
-      return parseGatewayPortArg(arg.slice("--port=".length));
+    if (arg?.startsWith("--port=")) {
+      latest = parseGatewayPortArg(arg.slice("--port=".length));
     }
   }
-  return { kind: "missing" };
+  return latest;
 }
 
 function auditGatewayServicePort(params: {
@@ -389,18 +394,6 @@ function normalizeServiceEnvKey(key: string): string | null {
   return normalizeEnvVarKey(key, { portable: true })?.toUpperCase() ?? null;
 }
 
-function readEnvironmentValueSource(
-  command: GatewayServiceCommand,
-  normalizedKey: string,
-): GatewayServiceEnvironmentValueSource | undefined {
-  for (const [rawKey, source] of Object.entries(command?.environmentValueSources ?? {})) {
-    if (normalizeServiceEnvKey(rawKey) === normalizedKey) {
-      return source;
-    }
-  }
-  return undefined;
-}
-
 const SERVICE_PROXY_ENV_KEY_SET = new Set(
   SERVICE_PROXY_ENV_KEYS.flatMap((key) => {
     const normalized = normalizeServiceEnvKey(key);
@@ -421,7 +414,11 @@ function collectInlineProxyEnvKeys(command: GatewayServiceCommand): string[] {
     if (!normalized || !SERVICE_PROXY_ENV_KEY_SET.has(normalized)) {
       continue;
     }
-    if (!hasInlineEnvironmentSource(readEnvironmentValueSource(command, normalized))) {
+    if (
+      !hasInlineEnvironmentSource(
+        readEnvironmentValueSource(command.environmentValueSources, normalized),
+      )
+    ) {
       continue;
     }
     inlineKeys.push(normalized);

@@ -11,21 +11,28 @@ const MAX_TERMINAL_UPLOAD_BYTES = 16 * 1024 * 1024;
 
 describe("terminal file upload", () => {
   it("requests terminal.upload with the session-bound payload", async () => {
-    const requests: Array<{ method: string; params: unknown }> = [];
+    const requests: Array<{ method: string; params: unknown; signal?: AbortSignal }> = [];
+    const abortController = new AbortController();
     const client = {
-      request: async <T>(method: string, params?: unknown) => {
-        requests.push({ method, params });
+      request: async <T>(method: string, params?: unknown, options?: { signal?: AbortSignal }) => {
+        requests.push({ method, params, signal: options?.signal });
         return { path: "/tmp/scan.pdf", size: 1 } as T;
       },
     };
 
     await expect(
-      uploadTerminalFile(client, "s1", { name: "scan.pdf", contentBase64: "AA==" }),
+      uploadTerminalFile(
+        client,
+        "s1",
+        { name: "scan.pdf", contentBase64: "AA==" },
+        abortController.signal,
+      ),
     ).resolves.toEqual({ path: "/tmp/scan.pdf", size: 1 });
     expect(requests).toEqual([
       {
         method: "terminal.upload",
         params: { sessionId: "s1", name: "scan.pdf", contentBase64: "AA==" },
+        signal: abortController.signal,
       },
     ]);
   });

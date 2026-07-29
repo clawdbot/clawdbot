@@ -87,7 +87,6 @@ describe("buildMinimaxSpeechProvider", () => {
         "speech-02-turbo",
         "speech-01-hd",
         "speech-01-turbo",
-        "speech-01-240228",
       ]);
       expect(provider.voices).toContain("English_expressive_narrator");
     });
@@ -147,6 +146,11 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
     });
 
+    it("returns false when MINIMAX_API_KEY env var is blank", () => {
+      process.env.MINIMAX_API_KEY = "   ";
+      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(false);
+    });
+
     it("returns true when a MiniMax Token Plan env var is set", () => {
       expect(tokenPlanEnvConfigured).toBe(true);
     });
@@ -181,7 +185,7 @@ describe("buildMinimaxSpeechProvider", () => {
           providers: {
             minimax: {
               baseUrl: "https://custom.api.com",
-              model: "speech-01-240228",
+              model: "speech-01-turbo",
               voiceId: "Chinese (Mandarin)_Warm_Girl",
               speed: 1.5,
               vol: 2,
@@ -193,7 +197,7 @@ describe("buildMinimaxSpeechProvider", () => {
         timeoutMs: 30000,
       });
       expect(config.baseUrl).toBe("https://custom.api.com");
-      expect(config.model).toBe("speech-01-240228");
+      expect(config.model).toBe("speech-01-turbo");
       expect(config.voiceId).toBe("Chinese (Mandarin)_Warm_Girl");
       expect(config.speed).toBe(1.5);
       expect(config.vol).toBe(2);
@@ -202,11 +206,11 @@ describe("buildMinimaxSpeechProvider", () => {
 
     it("keeps trusted MINIMAX_API_HOST fallback for TTS baseUrl", () => {
       process.env.MINIMAX_API_HOST = "https://api.minimax.io/anthropic";
-      process.env.MINIMAX_TTS_MODEL = "speech-01-240228";
+      process.env.MINIMAX_TTS_MODEL = "speech-01-turbo";
       process.env.MINIMAX_TTS_VOICE_ID = "Chinese (Mandarin)_Gentle_Boy";
       const config = resolveProviderConfig({ rawConfig: {}, cfg: {} as never, timeoutMs: 30000 });
       expect(config.baseUrl).toBe("https://api.minimax.io");
-      expect(config.model).toBe("speech-01-240228");
+      expect(config.model).toBe("speech-01-turbo");
       expect(config.voiceId).toBe("Chinese (Mandarin)_Gentle_Boy");
     });
 
@@ -258,11 +262,11 @@ describe("buildMinimaxSpeechProvider", () => {
     it("handles model key", () => {
       const result = parseDirectiveToken({
         key: "model",
-        value: "speech-01-240228",
+        value: "speech-01-turbo",
         policy,
       });
       expect(result.handled).toBe(true);
-      expect(result.overrides?.model).toBe("speech-01-240228");
+      expect(result.overrides?.model).toBe("speech-01-turbo");
     });
 
     it("handles speed key with valid value", () => {
@@ -498,7 +502,7 @@ describe("buildMinimaxSpeechProvider", () => {
         cfg: {} as never,
         providerConfig: { apiKey: "sk-test" },
         providerOverrides: {
-          model: "speech-01-240228",
+          model: "speech-01-turbo",
           voiceId: "custom_voice",
           speed: 1.5,
           vol: 1.5,
@@ -509,7 +513,7 @@ describe("buildMinimaxSpeechProvider", () => {
       });
 
       const body = firstFetchBody();
-      expect(body.model).toBe("speech-01-240228");
+      expect(body.model).toBe("speech-01-turbo");
       const voiceSetting = body.voice_setting as Record<string, unknown>;
       expect(voiceSetting.voice_id).toBe("custom_voice");
       expect(voiceSetting.speed).toBe(1.5);
@@ -606,6 +610,22 @@ describe("buildMinimaxSpeechProvider", () => {
           timeoutMs: 30000,
         }),
       ).rejects.toThrow("MiniMax TTS auth missing");
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+
+    it("does not send a request for a blank environment API key", async () => {
+      process.env.MINIMAX_API_KEY = "   ";
+
+      await expect(
+        provider.synthesize({
+          text: "Test",
+          cfg: {} as never,
+          providerConfig: {},
+          target: "audio-file",
+          timeoutMs: 30000,
+        }),
+      ).rejects.toThrow("MiniMax TTS auth missing");
+      expect(globalThis.fetch).not.toHaveBeenCalled();
     });
 
     it("throws on API error with response body", async () => {

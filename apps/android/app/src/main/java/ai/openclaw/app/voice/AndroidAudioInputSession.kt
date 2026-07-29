@@ -7,15 +7,27 @@ import android.media.AudioDeviceInfo
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.AudioRouting
 import android.media.MediaRecorder
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import java.net.URLDecoder
+import java.net.URLEncoder
+
+internal data class AudioInputDeviceOption(
+  val key: String,
+  val productName: String,
+  val type: Int,
+)
 
 /** Owns one recorder and its Bluetooth route for the full capture lifecycle. */
 internal class AndroidAudioInputSession private constructor(
   private val audioManager: AudioManager,
   private val audioRecord: AudioRecord,
+  private val preferredInputKey: String?,
+  private val onAppliedPreferredDeviceChanged: (String?) -> Unit,
+  private val setPreferredDevice: (AudioDeviceInfo?) -> Boolean,
 ) : AutoCloseable {
   companion object {
     private const val tag = "AudioInput"
@@ -25,6 +37,9 @@ internal class AndroidAudioInputSession private constructor(
       context: Context,
       sampleRateHz: Int,
       frameBytes: Int,
+      preferredDeviceKey: String? = null,
+      onAppliedPreferredDeviceChanged: (String?) -> Unit = {},
+      setPreferredDevice: ((AudioDeviceInfo?) -> Boolean)? = null,
     ): AndroidAudioInputSession {
       val minBuffer =
         AudioRecord.getMinBufferSize(
@@ -49,7 +64,13 @@ internal class AndroidAudioInputSession private constructor(
           ).setBufferSizeInBytes(maxOf(minBuffer, frameBytes * 4))
           .build()
       val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-      return AndroidAudioInputSession(audioManager, audioRecord).also { session ->
+      return AndroidAudioInputSession(
+        audioManager = audioManager,
+        audioRecord = audioRecord,
+        preferredInputKey = preferredDeviceKey,
+        onAppliedPreferredDeviceChanged = onAppliedPreferredDeviceChanged,
+        setPreferredDevice = setPreferredDevice ?: audioRecord::setPreferredDevice,
+      ).also { session ->
         try {
           session.openRoute()
         } catch (err: RuntimeException) {
@@ -58,6 +79,40 @@ internal class AndroidAudioInputSession private constructor(
         }
       }
     }
+
+    fun listAvailableDevices(context: Context): List<AudioInputDeviceOption> {
+      val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+      return audioManager
+        .getDevices(AudioManager.GET_DEVICES_INPUTS)
+        .map { device ->
+          AudioInputDeviceOption(
+            key = audioInputDeviceKey(device),
+            productName = device.productName.toString().trim(),
+            type = device.type,
+          )
+        }.distinctBy(AudioInputDeviceOption::key)
+        .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER, AudioInputDeviceOption::productName).thenBy(AudioInputDeviceOption::type))
+    }
+
+    fun observeAvailableDevices(
+      context: Context,
+      onChanged: (List<AudioInputDeviceOption>) -> Unit,
+    ): AutoCloseable {
+      val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+      val callback =
+        object : AudioDeviceCallback() {
+          override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+            onChanged(listAvailableDevices(context))
+          }
+
+          override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+            onChanged(listAvailableDevices(context))
+          }
+        }
+      audioManager.registerAudioDeviceCallback(callback, Handler(Looper.getMainLooper()))
+      onChanged(listAvailableDevices(context))
+      return AutoCloseable { audioManager.unregisterAudioDeviceCallback(callback) }
+    }
   }
 
   private val lock = Any()
@@ -65,9 +120,11 @@ internal class AndroidAudioInputSession private constructor(
   private val callbackHandler = Handler(Looper.getMainLooper())
   private var closed = false
   private var callbackRegistered = false
+  private var routingListenerRegistered = false
   private var requestedInput: AudioDeviceInfo? = null
   private var requestedCommunicationDevice: AudioDeviceInfo? = null
   private var selectedInput: AudioDeviceInfo? = null
+  private var appliedPreferredInputKey: String? = null
 
   private val deviceCallback =
     object : AudioDeviceCallback() {
@@ -79,14 +136,24 @@ internal class AndroidAudioInputSession private constructor(
         refreshRouteSafely()
       }
     }
+  private val routingChangedListener = AudioRouting.OnRoutingChangedListener { refreshActualRouteSafely() }
   internal val preferredInputType: Int?
     get() = synchronized(lock) { selectedInput?.type }
 
   internal val requestedInputType: Int?
     get() = synchronized(lock) { requestedInput?.type }
 
+  internal val appliedPreferredDeviceKey: String?
+    get() = synchronized(lock) { appliedPreferredInputKey }
+
   fun startRecording() {
+    synchronized(lock) {
+      check(!closed) { "audio input session closed" }
+      audioRecord.addOnRoutingChangedListener(routingChangedListener, callbackHandler)
+      routingListenerRegistered = true
+    }
     audioRecord.startRecording()
+    refreshActualRouteSafely()
     Log.d(tag, "capture started preferred=${preferredInputType ?: "default"} routed=${audioRecord.routedDevice?.type ?: "pending"}")
   }
 
@@ -116,20 +183,74 @@ internal class AndroidAudioInputSession private constructor(
     synchronized(lock) {
       if (closed) return
       val inputs = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS).toList()
-      val communicationDevice = selectBluetoothDevice(audioManager.availableCommunicationDevices, requestedCommunicationDevice)
-      val communicationSelected = bluetoothCommunicationRoute.update(audioManager, communicationRouteOwner, communicationDevice)
-      requestedCommunicationDevice = communicationDevice.takeIf { communicationSelected }
-      val input = selectBluetoothInput(inputs, requestedInput, requestedCommunicationDevice)
-      if (!sameDevice(requestedInput, input) || !sameDevice(selectedInput, input)) {
-        requestedInput = input
-        if (audioRecord.setPreferredDevice(input)) {
-          selectedInput = input
-          Log.d(tag, "preferred input changed type=${input?.type ?: "default"}")
-        } else {
-          selectedInput = null
-          Log.w(tag, "preferred input rejected type=${input?.type ?: "default"}")
-        }
+      val preferredInput = resolvePreferredAudioInput(inputs, preferredInputKey)
+      if (preferredInput != null && applyRoute(inputs, preferredInput)) {
+        return
       }
+      // A rejected record preference may have set a Bluetooth communication route.
+      // Recalculate automatic priority instead of retaining that rejected target.
+      if (preferredInput != null) requestedCommunicationDevice = null
+      setAppliedPreferredInputKey(null)
+      applyRoute(inputs, null)
+    }
+  }
+
+  private fun applyRoute(
+    inputs: List<AudioDeviceInfo>,
+    preferredInput: AudioDeviceInfo?,
+  ): Boolean {
+    val communicationDevice =
+      if (preferredInput == null) {
+        selectBluetoothDevice(audioManager.availableCommunicationDevices, requestedCommunicationDevice)
+      } else {
+        selectCommunicationDevice(audioManager.availableCommunicationDevices, preferredInput)
+      }
+    val communicationSelected = bluetoothCommunicationRoute.update(audioManager, communicationRouteOwner, communicationDevice)
+    requestedCommunicationDevice = communicationDevice.takeIf { communicationSelected }
+    val input = preferredInput ?: selectBluetoothInput(inputs, requestedInput, requestedCommunicationDevice)
+    if (sameDevice(requestedInput, input) && sameDevice(selectedInput, input)) return true
+    requestedInput = input
+    return if (setPreferredDevice(input)) {
+      selectedInput = input
+      Log.d(tag, "preferred input changed type=${input?.type ?: "default"}")
+      true
+    } else {
+      selectedInput = null
+      Log.w(tag, "preferred input rejected type=${input?.type ?: "default"}")
+      false
+    }
+  }
+
+  private fun setAppliedPreferredInputKey(value: String?) {
+    if (appliedPreferredInputKey == value) return
+    appliedPreferredInputKey = value
+    onAppliedPreferredDeviceChanged(value)
+  }
+
+  private fun refreshActualRouteSafely() {
+    try {
+      refreshActualRoute()
+    } catch (err: RuntimeException) {
+      Log.w(tag, "audio route verification failed: ${err.message ?: err::class.simpleName}")
+    }
+  }
+
+  private fun refreshActualRoute() {
+    synchronized(lock) {
+      if (closed) return
+      val inputs = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS).toList()
+      val expectedInput = resolvePreferredAudioInput(inputs, preferredInputKey)
+      if (expectedInput == null) {
+        setAppliedPreferredInputKey(null)
+        applyRoute(inputs, null)
+        return
+      }
+      val routedInput = audioRecord.routedDevice
+      if (sameDevice(routedInput, expectedInput)) {
+        setAppliedPreferredInputKey(preferredInputKey)
+        return
+      }
+      setAppliedPreferredInputKey(null)
     }
   }
 
@@ -141,9 +262,14 @@ internal class AndroidAudioInputSession private constructor(
         runCatching { audioManager.unregisterAudioDeviceCallback(deviceCallback) }
         callbackRegistered = false
       }
+      if (routingListenerRegistered) {
+        runCatching { audioRecord.removeOnRoutingChangedListener(routingChangedListener) }
+        routingListenerRegistered = false
+      }
       runCatching { audioRecord.setPreferredDevice(null) }
       requestedInput = null
       selectedInput = null
+      setAppliedPreferredInputKey(null)
       if (audioRecord.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
         runCatching { audioRecord.stop() }
       }
@@ -246,6 +372,44 @@ private fun selectBluetoothInput(
   }
   // setCommunicationDevice chooses the matching source; only override it when unambiguous.
   return candidates.singleOrNull()
+}
+
+private fun selectCommunicationDevice(
+  devices: List<AudioDeviceInfo>,
+  input: AudioDeviceInfo,
+): AudioDeviceInfo? {
+  if (bluetoothPriority(input.type) == null) return null
+  val candidates = devices.filter { it.type == input.type }
+  val address = input.address.trim()
+  return candidates.firstOrNull { address.isNotEmpty() && it.address == address } ?: candidates.singleOrNull()
+}
+
+internal fun audioInputDeviceKey(device: AudioDeviceInfo): String = audioInputDeviceKey(device.type, device.address, device.productName.toString())
+
+internal fun resolvePreferredAudioInput(
+  devices: List<AudioDeviceInfo>,
+  preferredDeviceKey: String?,
+): AudioDeviceInfo? = preferredDeviceKey?.let { key -> devices.firstOrNull { audioInputDeviceKey(it) == key } }
+
+internal fun audioInputDeviceKey(
+  type: Int,
+  address: String,
+  productName: String,
+): String {
+  // AudioDeviceInfo.id is per-boot; persist routing attributes and re-resolve each session.
+  // Fields are URL-encoded so the key stays XML-safe in SharedPreferences; a raw
+  // control-char separator can corrupt the whole plain prefs file on reload.
+  return listOf(type.toString(), address, productName).joinToString("|") { URLEncoder.encode(it, "UTF-8") }
+}
+
+internal fun audioInputDeviceOptionFromKey(key: String): AudioInputDeviceOption? {
+  val parts = key.split("|", limit = 3).map { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrNull() ?: return null }
+  if (parts.size != 3) return null
+  return AudioInputDeviceOption(
+    key = key,
+    productName = parts[2],
+    type = parts[0].toIntOrNull() ?: return null,
+  )
 }
 
 private fun bluetoothPriority(type: Int): Int? =

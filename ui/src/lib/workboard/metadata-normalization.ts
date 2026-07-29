@@ -8,7 +8,6 @@ import {
   WORKBOARD_DIAGNOSTIC_KINDS,
   WORKBOARD_DIAGNOSTIC_SEVERITIES,
   WORKBOARD_EVENT_KINDS,
-  WORKBOARD_EXECUTION_ENGINES,
   WORKBOARD_EXECUTION_MODES,
   WORKBOARD_EXECUTION_STATUSES,
   WORKBOARD_LINK_TYPES,
@@ -28,7 +27,6 @@ import {
   type WorkboardEvent,
   type WorkboardEventKind,
   type WorkboardExecution,
-  type WorkboardExecutionEngine,
   type WorkboardExecutionMode,
   type WorkboardExecutionStatus,
   type WorkboardLink,
@@ -50,9 +48,7 @@ export function normalizeExecution(value: unknown): WorkboardExecution | undefin
     return undefined;
   }
   const id = typeof value.id === "string" && value.id.trim() ? value.id.trim() : "";
-  const engine = WORKBOARD_EXECUTION_ENGINES.includes(value.engine as WorkboardExecutionEngine)
-    ? (value.engine as WorkboardExecutionEngine)
-    : null;
+  const engine = typeof value.engine === "string" ? value.engine.trim() : "";
   const mode = WORKBOARD_EXECUTION_MODES.includes(value.mode as WorkboardExecutionMode)
     ? (value.mode as WorkboardExecutionMode)
     : null;
@@ -62,18 +58,18 @@ export function normalizeExecution(value: unknown): WorkboardExecution | undefin
   const model = typeof value.model === "string" && value.model.trim() ? value.model.trim() : "";
   const startedAt = typeof value.startedAt === "number" ? value.startedAt : 0;
   const updatedAt = typeof value.updatedAt === "number" ? value.updatedAt : startedAt;
-  if (!id || !engine || !mode || !model || !startedAt) {
+  if (!id || !mode || !startedAt) {
     return undefined;
   }
   return {
     id,
     kind: "agent-session",
-    engine,
     mode,
     status,
-    model,
     startedAt,
     updatedAt,
+    ...(engine ? { engine } : {}),
+    ...(model ? { model } : {}),
     ...(typeof value.sessionKey === "string" ? { sessionKey: value.sessionKey } : {}),
     ...(typeof value.runId === "string" ? { runId: value.runId } : {}),
   };
@@ -142,15 +138,14 @@ export function normalizeMetadata(value: unknown): WorkboardMetadata | undefined
         const status = WORKBOARD_ATTEMPT_STATUSES.includes(entry.status as WorkboardAttemptStatus)
           ? (entry.status as WorkboardAttemptStatus)
           : "running";
+        const engine = typeof entry.engine === "string" ? entry.engine.trim() : "";
         return [
           {
             id: entry.id,
             status,
             startedAt: entry.startedAt,
             ...(typeof entry.endedAt === "number" ? { endedAt: entry.endedAt } : {}),
-            ...(WORKBOARD_EXECUTION_ENGINES.includes(entry.engine as WorkboardExecutionEngine)
-              ? { engine: entry.engine as WorkboardExecutionEngine }
-              : {}),
+            ...(engine ? { engine } : {}),
             ...(WORKBOARD_EXECUTION_MODES.includes(entry.mode as WorkboardExecutionMode)
               ? { mode: entry.mode as WorkboardExecutionMode }
               : {}),
@@ -394,7 +389,7 @@ export function normalizeMetadata(value: unknown): WorkboardMetadata | undefined
         reason:
           typeof value.stale.reason === "string"
             ? value.stale.reason
-            : "Session has not reported recent activity.",
+            : "Thread has not reported recent activity.",
       }
     : undefined;
   const automation = normalizeAutomation(value.automation);

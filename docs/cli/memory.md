@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw memory` (status/index/search/promote/promote-explain/rem-harness/rem-backfill)"
+summary: "CLI reference for `openclaw memory` (status/index/search/promote/promote-explain/rem-harness/rem-backfill/session-backfill)"
 read_when:
   - You want to index or search semantic memory
   - You're debugging memory availability or indexing
@@ -24,7 +24,7 @@ Related: [Memory](/concepts/memory) concept, [Dreaming](/concepts/dreaming),
 openclaw memory status [--agent <id>] [--deep] [--index] [--fix] [--json] [--verbose]
 ```
 
-Without `--agent`, runs for every agent in `agents.list`; if no agent list is
+Without `--agent`, runs for every agent in `agents.entries`; if no agent list is
 configured, falls back to the default agent.
 
 | Flag        | Effect                                                                                                                                                                                                                                                                                                    |
@@ -40,7 +40,7 @@ scheduled sweeps never seem to run, the managed dreaming cron depends on the
 default agent's heartbeat firing to trigger reconciliation. See
 [Dreaming](/concepts/dreaming) for scheduling details.
 
-Status also lists any extra search paths from `agents.defaults.memorySearch.extraPaths`.
+Status also lists any extra search paths from `memory.search.extraPaths`.
 
 ## `memory index`
 
@@ -138,6 +138,50 @@ openclaw memory rem-backfill --rollback [--rollback-short-term] [--json]
   `DREAMS.md`.
 - `--rollback-short-term`: remove previously staged grounded short-term
   candidates.
+
+## `memory session-backfill`
+
+Distill retained session history through the same provenance and short-term
+staging pipeline used by dreaming. The default is a read-only preview, ordered
+from the oldest unprocessed day to the newest.
+
+```bash
+openclaw memory session-backfill --agent <id> [--from YYYY-MM-DD] [--to YYYY-MM-DD] \
+  [--limit-days <n>] [--archive-files <path...>] [--rem | --apply] [--json]
+openclaw memory session-backfill --agent <id> --rollback [--json]
+```
+
+| Flag                        | Default      | Effect                                                                                                        |
+| --------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------- |
+| `--from YYYY-MM-DD`         |              | Include messages on or after this day in the dreaming timezone.                                               |
+| `--to YYYY-MM-DD`           |              | Include messages on or before this day in the dreaming timezone.                                              |
+| `--limit-days <n>`          | `92`         | Process at most this many hash-untracked days, oldest first.                                                  |
+| `--archive-files <path...>` |              | Also inspect foreign transcript files as untrusted input; embedded owner metadata is not accepted.            |
+| `--rem`                     |              | Write deterministic grounded per-day previews to `DREAMS.md` only.                                            |
+| `--apply`                   | preview only | Stage trusted candidates and write reversible `DREAMS.md` diary blocks.                                       |
+| `--rollback`                |              | Remove all grounded backfill candidates and shared backfill diary blocks, including `rem-backfill` artifacts. |
+| `--json`                    |              | Print machine-readable per-day counts and top candidates.                                                     |
+
+The command reads the selected agent's canonical session store, including
+retained SQLite transcript identities from session rotation. It uses the same
+tracked message hashes and per-run caps as live session ingestion, so repeated
+`--apply` runs skip already ingested messages. Owner and agent lines from the
+canonical store are eligible; tool output, web or non-owner input, and turns
+without trustworthy owner provenance are excluded. Foreign archive files have
+no authenticated owner-provenance contract, so their embedded ownership fields
+remain untrusted and cannot be staged.
+
+`--apply` writes only the session corpus under `memory/.dreams/`, short-term
+staging state, and reversible diary entries in `DREAMS.md`. It never writes
+`MEMORY.md` or `USER.md`; durable promotion remains a separate `memory promote`
+or dreaming decision. `--rem` and `--apply` are mutually exclusive.
+
+Backfill rollback is intentionally shared with `memory rem-backfill`: both
+commands use the same grounded-only staging class and diary markers. Run
+`session-backfill --rollback` only when you intend to clear both commands'
+grounded backfill artifacts from that workspace. Rollback preserves transcript
+ingestion cursors and tracked message hashes, so removed messages are not
+automatically re-ingested.
 
 ## Dreaming
 

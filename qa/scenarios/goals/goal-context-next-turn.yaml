@@ -3,12 +3,12 @@ title: Active goal context on the next turn
 scenario:
   id: goal-context-next-turn
   surface: goals
-  category: session-memory-and-context-engine.context-engine
+  category: session-memory.context-engine
   coverage:
     primary:
-      - goals.context-injection
+      - session-memory.goal-continuance-context-injection
     secondary:
-      - goals.continuance
+      - session-memory.goal-continuance-continuance
   objective: Verify an active session goal is injected into the next unrelated turn sent to the model.
   successCriteria:
     - An authorized channel turn starts a session goal through the public `/goal start` command.
@@ -25,8 +25,8 @@ scenario:
   execution:
     kind: flow
     summary: Start a goal, send an unrelated next turn, and inspect the exact mock-provider request payload.
+    channel: qa-channel
     config:
-      requiredChannelDriver: qa-channel
       requiredProviderMode: mock-openai
       conversationId: goal-context-next-turn
       senderId: qa-goal-operator

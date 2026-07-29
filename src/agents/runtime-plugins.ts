@@ -1,10 +1,7 @@
-/**
- * Ensures runtime plugin registries are loaded for agent execution. Startup
- * plugin IDs from metadata scope the load when available.
- */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRuntimeSubagentMode } from "../plugins/runtime.js";
 import { ensureStandaloneRuntimePluginRegistryLoaded } from "../plugins/runtime/standalone-runtime-registry-loader.js";
 import { resolveUserPath } from "../utils.js";
@@ -37,9 +34,9 @@ export function ensureRuntimePluginsLoaded(params: {
   config?: OpenClawConfig;
   workspaceDir?: string | null;
   allowGatewaySubagentBinding?: boolean;
-}): void {
+}): PluginRegistry | undefined {
   if (params.config && !normalizePluginsConfig(params.config.plugins).enabled) {
-    return;
+    return undefined;
   }
   const workspaceDir =
     typeof params.workspaceDir === "string" && params.workspaceDir.trim()
@@ -52,7 +49,7 @@ export function ensureRuntimePluginsLoaded(params: {
   const allowGatewaySubagentBinding =
     params.allowGatewaySubagentBinding === true ||
     getActivePluginRuntimeSubagentMode() === "gateway-bindable";
-  ensureStandaloneRuntimePluginRegistryLoaded({
+  return ensureStandaloneRuntimePluginRegistryLoaded({
     requiredPluginIds: startupPluginIds,
     loadOptions: {
       config: params.config,

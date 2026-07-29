@@ -19,10 +19,15 @@ function makeContext(stream?: ReturnType<typeof makeStream>) {
 }
 
 function makeController(
-  opts: { conversationType?: string; stream?: ReturnType<typeof makeStream> } = {},
+  opts: {
+    allowProviderPreview?: boolean;
+    conversationType?: string;
+    stream?: ReturnType<typeof makeStream>;
+  } = {},
 ) {
   const stream = opts.stream;
   return createTeamsReplyStreamController({
+    allowProviderPreview: opts.allowProviderPreview ?? true,
     conversationType: opts.conversationType ?? "personal",
     context: makeContext(stream),
     feedbackLoopEnabled: false,
@@ -35,6 +40,19 @@ describe("createTeamsReplyStreamController", () => {
     const ctrl = makeController({ stream });
     ctrl.onPartialReply({ text: "hello" });
     expect(stream.emit).toHaveBeenCalledWith("hello");
+  });
+
+  it("falls back to normal delivery when provider previews are disabled", () => {
+    const stream = makeStream();
+    const ctrl = makeController({ allowProviderPreview: false, stream });
+
+    ctrl.onPartialReply({ text: "original partial" });
+
+    expect(ctrl.hasStream()).toBe(false);
+    expect(stream.emit).not.toHaveBeenCalled();
+    expect(ctrl.preparePayload({ text: "authoritative final" })).toEqual({
+      text: "authoritative final",
+    });
   });
 
   it("emits only the delta when openclaw sends cumulative text on each chunk", () => {
@@ -270,6 +288,7 @@ describe("createTeamsReplyStreamController", () => {
     const stream = makeStream();
     try {
       const ctrl = createTeamsReplyStreamController({
+        allowProviderPreview: true,
         conversationType: "personal",
         context: makeContext(stream),
         feedbackLoopEnabled: false,
@@ -297,11 +316,38 @@ describe("createTeamsReplyStreamController", () => {
     }
   });
 
+  it("replaces Teams plan snapshots and keeps the explanation", async () => {
+    const stream = makeStream();
+    const ctrl = createTeamsReplyStreamController({
+      allowProviderPreview: true,
+      conversationType: "personal",
+      context: makeContext(stream),
+      feedbackLoopEnabled: false,
+      msteamsConfig: {
+        streaming: { mode: "progress", progress: { label: false } },
+      } as never,
+    });
+
+    await ctrl.pushPlanProgress([{ step: "Inspect", status: "in_progress" }], {
+      explanation: "Initial plan",
+    });
+    await ctrl.pushPlanProgress(
+      [
+        { step: "Inspect", status: "completed" },
+        { step: "Patch", status: "in_progress" },
+      ],
+      { explanation: "Revised plan" },
+    );
+
+    expect(stream.update).toHaveBeenLastCalledWith("Revised plan\n\n✅ Inspect\n▸ Patch");
+  });
+
   it("cancels the pending progress gate at finalize so no stale card posts after close", async () => {
     vi.useFakeTimers();
     const stream = makeStream();
     try {
       const ctrl = createTeamsReplyStreamController({
+        allowProviderPreview: true,
         conversationType: "personal",
         context: makeContext(stream),
         feedbackLoopEnabled: false,
@@ -329,6 +375,7 @@ describe("createTeamsReplyStreamController", () => {
   it("suppresses block delivery when progress final text is emitted to the stream", () => {
     const stream = makeStream();
     const ctrl = createTeamsReplyStreamController({
+      allowProviderPreview: true,
       conversationType: "personal",
       context: makeContext(stream),
       feedbackLoopEnabled: false,
@@ -339,12 +386,29 @@ describe("createTeamsReplyStreamController", () => {
     expect(stream.emit).toHaveBeenCalledWith("complete final answer");
   });
 
+  it("ignores plan updates after final answer streaming starts", async () => {
+    const stream = makeStream();
+    const ctrl = createTeamsReplyStreamController({
+      allowProviderPreview: true,
+      conversationType: "personal",
+      context: makeContext(stream),
+      feedbackLoopEnabled: false,
+      msteamsConfig: { streaming: { mode: "progress" } } as never,
+    });
+
+    expect(ctrl.preparePayload({ text: "complete final answer" })).toBeUndefined();
+    await ctrl.pushPlanProgress([{ step: "Late plan", status: "in_progress" }]);
+
+    expect(stream.update).not.toHaveBeenCalled();
+  });
+
   it("falls back to normal delivery when progress final streaming fails", () => {
     const stream = makeStream();
     stream.emit.mockImplementation(() => {
       throw new Error("progress final failed");
     });
     const ctrl = createTeamsReplyStreamController({
+      allowProviderPreview: true,
       conversationType: "personal",
       context: makeContext(stream),
       feedbackLoopEnabled: false,
@@ -392,6 +456,7 @@ describe("createTeamsReplyStreamController", () => {
         throw makeCancelError();
       });
       const ctrl = createTeamsReplyStreamController({
+        allowProviderPreview: true,
         conversationType: "personal",
         context: makeContext(stream),
         feedbackLoopEnabled: false,

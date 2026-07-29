@@ -58,6 +58,7 @@ export function createOpenAiGuard(options: AdapterOptions): GuardAdapter {
         }),
       });
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         throw new Error(`guard HTTP ${response.status}`);
       }
       const envelope = await parseJsonResponse(response);
@@ -113,6 +114,7 @@ export function createAnthropicGuard(options: AdapterOptions): GuardAdapter {
         }),
       });
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         throw new Error(`guard HTTP ${response.status}`);
       }
       const envelope = await parseJsonResponse(response);

@@ -14,7 +14,8 @@ import type { McpCatalogTool } from "./agent-bundle-mcp-types.js";
 import type { McpToolCatalogDiagnostic } from "./agent-bundle-mcp-types.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { getMcpAppViewLease, testing as mcpUiResourceTesting } from "./mcp-ui-resource.js";
+import { getMcpAppViewLease } from "./mcp-ui-resource.js";
+import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
 
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
@@ -156,6 +157,7 @@ describe("createBundleMcpToolRuntime", () => {
         _meta: { "ui/state": { selected: true } },
       },
     });
+    sessionRuntime.sessionKey = "agent:main:main";
     sessionRuntime.mcpAppsEnabled = true;
     sessionRuntime.readResource = async () => ({
       contents: [
@@ -182,6 +184,7 @@ describe("createBundleMcpToolRuntime", () => {
           toolName: "show",
           uiResourceUri: "ui://demo/app",
           toolCallId: "call-1",
+          originSessionKey: "agent:main:main",
           resultMetaState: "unavailable",
         },
       },
@@ -305,6 +308,47 @@ describe("createBundleMcpToolRuntime", () => {
         content: "pong",
       },
     });
+  });
+
+  it("preserves non-text MCP content alongside structuredContent without duplicating mirrored text", async () => {
+    const structuredContent = { description: "captured screenshot" };
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        result: {
+          content: [
+            { type: "text", text: "captured screenshot" },
+            { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+            {
+              type: "resource_link",
+              uri: "https://example.com/report",
+              name: "report",
+              title: "Report",
+            },
+            { type: "resource", resource: { uri: "memo://one", text: "memo body" } },
+            { type: "audio", data: "AAAA", mimeType: "audio/mpeg" },
+          ],
+          structuredContent,
+        },
+      }),
+    });
+
+    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
+      "call-bundle-probe",
+      {},
+      undefined,
+      undefined,
+    );
+
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: `structuredContent:\n${JSON.stringify(structuredContent, null, 2)}`,
+      },
+      { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+      { type: "text", text: "[Report] https://example.com/report" },
+      { type: "text", text: "memo body" },
+      { type: "text", text: "[audio audio/mpeg]" },
+    ]);
   });
 
   it("coerces non-text/image MCP tool-result blocks to text (resource_link/resource/audio)", async () => {

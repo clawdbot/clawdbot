@@ -7,11 +7,7 @@ import { createAbortError } from "../../infra/abort-signal.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
-import {
-  sanitizeEnvVars,
-  sanitizeExplicitSandboxEnvVars,
-  type EnvSanitizationOptions,
-} from "./sanitize-env-vars.js";
+import { sanitizeEnvVars, sanitizeExplicitSandboxEnvVars } from "./sanitize-env-vars.js";
 
 type ExecDockerRawOptions = {
   allowFailure?: boolean;
@@ -99,7 +95,7 @@ import {
 } from "./constants.js";
 import { handleHotSandboxConfigMismatch } from "./current-config.js";
 import { readRegistryEntry, updateRegistry } from "./registry.js";
-import { resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
+import { buildSandboxContainerName, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
 import {
@@ -322,12 +318,6 @@ export function buildSandboxCreateArgs(params: {
   allowSourcesOutsideAllowedRoots?: boolean;
   allowReservedContainerTargets?: boolean;
   allowContainerNamespaceJoin?: boolean;
-  /**
-   * @deprecated Docker container creation now treats cfg.env as explicit sandbox
-   * configuration and ignores host-env name filters. This field is kept so SDK
-   * callers with existing object literals do not hit excess-property failures.
-   */
-  envSanitizationOptions?: EnvSanitizationOptions;
 }) {
   // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
   validateSandboxSecurity({
@@ -513,8 +503,7 @@ export async function ensureSandboxContainer(params: {
 }) {
   const scopeKey = resolveSandboxScopeKey(params.cfg.scope, params.sessionKey);
   const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(scopeKey);
-  const name = `${params.cfg.docker.containerPrefix}${slug}`;
-  const containerName = name.slice(0, 63);
+  const containerName = buildSandboxContainerName(params.cfg.docker.containerPrefix, slug);
   const readOnlyWorkspaceSkillMounts = resolveReadOnlyWorkspaceSkillMounts({
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,
