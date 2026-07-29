@@ -52,6 +52,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Codex scoped tool-hook relays:** let plugins attach exact tool-name matchers to tool hooks, trusted tool policies, and result middleware so Codex skips relay processes for unrelated tools while preserving unscoped match-all behavior. (#109603) Thanks @nakamasato.
 - **macOS and Control UI keyboard navigation:** let Tab traverse links and controls inside embedded Dashboard, browser, and Canvas web views, and keep shortcuts working on non-Latin keyboard layouts without firing during IME composition.
 - **Control UI session diffs:** hide unchanged checkout modifications and untracked files that already existed when a thread started, so the diff panel attributes only files touched by that session. Fixes #115628.
 - **Code Mode small-model repair:** give malformed pre-dispatch `exec` calls one bounded correction turn, expose typed failure-phase and bridge-dispatch evidence, and stop retries after nested tools begin. Fixes #115311.
