@@ -487,6 +487,7 @@ export const dispatchTelegramMessage = async ({
   const shouldSendFailureFallback =
     !isRoomEvent &&
     !suppressFailureFallback &&
+    !state.suppressSilentReplyFallback &&
     !progress.finalAnswerDelivered() &&
     (state.dispatchError ||
       deliverySummary.skippedNonSilent > 0 ||

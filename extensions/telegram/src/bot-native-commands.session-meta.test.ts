@@ -1354,6 +1354,28 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(deliveryMocks.deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("does not emit the empty fallback for a message-tool-only native reply", async () => {
+    dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
+      plan.dispatcherOptions?.onSkip?.({}, { kind: "final", reason: "empty" });
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: plan.ctxPayload,
+        routeSessionKey: plan.route.sessionKey,
+        dispatchResult: {
+          queuedFinal: false,
+          counts: { block: 0, final: 0, tool: 0 },
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      };
+    });
+    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
+
+    await handler(createTelegramPrivateCommandContext());
+
+    expect(deliveryMocks.deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("retains the empty fallback for a true non-silent metadata-only native reply", async () => {
     dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
       plan.dispatcherOptions?.onSkip?.({}, { kind: "final", reason: "empty" });

@@ -1743,14 +1743,16 @@ export const registerTelegramNativeCommands = ({
             disableBlockStreaming,
           },
         };
-        await (
+        const turnResult = await (
           telegramDeps.dispatchChannelInboundTurn ??
           defaultTelegramNativeCommandDeps.dispatchChannelInboundTurn
         )(turnPlan);
         if (
           !deliveryState.delivered &&
           !deliveryState.intentionallySuppressed &&
-          deliveryState.skippedNonSilent > 0
+          deliveryState.skippedNonSilent > 0 &&
+          (!turnResult.dispatched ||
+            turnResult.dispatchResult.sourceReplyDeliveryMode !== "message_tool_only")
         ) {
           await deliverReplies({
             replies: [{ text: EMPTY_RESPONSE_FALLBACK }],
