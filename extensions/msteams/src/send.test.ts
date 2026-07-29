@@ -22,6 +22,7 @@ const mockState = vi.hoisted(() => ({
   getDriveItemProperties: vi.fn(),
   buildTeamsFileInfoCard: vi.fn(),
   createMSTeamsTokenProvider: vi.fn(),
+  uploadAndShareOneDrive: vi.fn(),
 }));
 
 // `loadOutboundMediaFromUrl` is re-exported from msteams's runtime-api which
@@ -236,6 +237,7 @@ describe("sendMessageMSTeams", () => {
     mockState.uploadAndShareSharePoint.mockReset();
     mockState.getDriveItemProperties.mockReset();
     mockState.buildTeamsFileInfoCard.mockReset();
+    mockState.uploadAndShareOneDrive.mockReset();
 
     mockState.extractFilename.mockResolvedValue("fallback.bin");
     mockState.requiresFileConsent.mockReturnValue(false);
