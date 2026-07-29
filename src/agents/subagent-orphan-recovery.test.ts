@@ -528,6 +528,43 @@ describe("subagent-orphan-recovery", () => {
     expect(dispatchAgent).not.toHaveBeenCalled();
   });
 
+  it("keeps overlapping orphan scans from resuming the same child twice", async () => {
+    mockSingleAbortedSession();
+    let resolveRead: (messages: unknown[]) => void = () => {};
+    const parkedRead = new Promise<unknown[]>((resolve) => {
+      resolveRead = resolve;
+    });
+    readSessionMessages.mockImplementationOnce(() => parkedRead);
+    let resolveDispatch: (result: { runId: string }) => void = () => {};
+    const parkedDispatch = new Promise<{ runId: string }>((resolve) => {
+      resolveDispatch = resolve;
+    });
+    dispatchAgent.mockImplementationOnce(() => parkedDispatch);
+    const activeRuns = createActiveRuns(createTestRunRecord());
+
+    const first = recoverOrphanedSubagentSessions({
+      getActiveRuns: () => activeRuns,
+      resumedSessionKeys: new Set<string>(),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(readSessionMessages).toHaveBeenCalledOnce();
+    expect(dispatchAgent).not.toHaveBeenCalled();
+    const second = await recoverOrphanedSubagentSessions({
+      getActiveRuns: () => activeRuns,
+      resumedSessionKeys: new Set<string>(),
+    });
+
+    expect(second).toMatchObject({ recovered: 0, failed: 0, skipped: 1 });
+    resolveRead([]);
+    await Promise.resolve();
+    expect(dispatchAgent).toHaveBeenCalledOnce();
+    resolveDispatch({ runId: "resumed-run" });
+    await expect(first).resolves.toMatchObject({ recovered: 1, failed: 0, skipped: 0 });
+    expect(sessionAccessor.patchSessionEntry).toHaveBeenCalledOnce();
+  });
+
   it("handles multiple orphaned sessions", async () => {
     sessionMocks.loadSessionStore.mockReturnValue({
       "agent:main:subagent:session-a": {
