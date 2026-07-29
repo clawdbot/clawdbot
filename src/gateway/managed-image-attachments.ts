@@ -1186,7 +1186,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
         throw createManagedMediaByteLimitError({ kind: mediaKind, label, maxBytes });
       }
 
-      let originalStats = {
+      let originalStats: Awaited<ReturnType<typeof getVariantStats>> = {
         width: null as number | null,
         height: null as number | null,
         sizeBytes: savedOriginal.size,
