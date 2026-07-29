@@ -1,6 +1,10 @@
-import { buildDeprecatedFlatWhatsAppInboundAdmission } from "./admission.js";
+import {
+  buildDeprecatedFlatWhatsAppInboundAdmission,
+  requireAdmittedWhatsAppInboundMessage,
+} from "./admission.js";
 import { resolveWhatsAppGroupConversationId } from "./group-conversation.js";
 import type {
+  AdmittedWebInboundCallbackMessage,
   DeprecatedWebInboundAdmissionTopLevelFields,
   DeprecatedWebInboundMessageFlatAliases,
   LegacyFlatWebInboundMessage,
@@ -453,4 +457,12 @@ export function normalizeWebInboundMessage(msg: WebInboundMessageInput): WebInbo
   }
 
   return normalizeLegacyFlatWebInboundMessage(msg);
+}
+
+export function normalizeAdmittedWebInboundMessage(
+  msg: WebInboundMessageInput,
+): AdmittedWebInboundCallbackMessage {
+  return requireAdmittedWhatsAppInboundMessage(
+    normalizeWebInboundMessage(msg),
+  ) as AdmittedWebInboundCallbackMessage;
 }

@@ -1,6 +1,7 @@
 // WhatsApp tests cover inbound message alias compatibility.
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
+  normalizeAdmittedWebInboundMessage,
   normalizeWebInboundMessage,
   withDeprecatedWebInboundMessageFlatAliases,
 } from "./message-aliases.js";
@@ -10,9 +11,16 @@ import {
   createTestLegacyFlatWebInboundMessage,
   createTestWhatsAppInboundAdmission,
 } from "./test-message.test-helper.js";
-import type { LegacyFlatWebInboundMessage, WebInboundCallbackMessage } from "./types.js";
+import type {
+  LegacyFlatWebInboundMessage,
+  WebInboundCallbackMessage,
+  WebInboundMessageInput,
+} from "./types.js";
 
 type MonitorWebInboxMessage = Parameters<Parameters<typeof monitorWebInbox>[0]["onMessage"]>[0];
+type MonitorWebChannel = typeof import("../auto-reply/monitor.js").monitorWebChannel;
+type ListenerFactory = NonNullable<Parameters<MonitorWebChannel>[1]>;
+type ListenerFactoryMessage = Parameters<Parameters<ListenerFactory>[0]["onMessage"]>[0];
 
 function createCanonicalMessage(overrides: Partial<WebInboundCallbackMessage> = {}) {
   return withDeprecatedWebInboundMessageFlatAliases({
@@ -107,6 +115,16 @@ describe("WhatsApp inbound flat aliases", () => {
       accessControlPassed?: boolean;
       chatType: "direct" | "group";
     }>();
+  });
+
+  it("keeps deprecated flat inputs at both WhatsApp listener boundaries", () => {
+    expectTypeOf<WebInboundMessageInput>().toMatchTypeOf<ListenerFactoryMessage>();
+
+    const admitted = normalizeAdmittedWebInboundMessage(createTestLegacyFlatWebInboundMessage());
+    expect(admitted.admission.ingress).toMatchObject({
+      admission: "dispatch",
+      decisiveGateId: "legacy-flat-compat",
+    });
   });
 
   it("keeps deprecated flat aliases live against canonical contexts", async () => {

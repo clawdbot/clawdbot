@@ -7,14 +7,9 @@ import type { WhatsAppIngressLifecycle, WhatsAppReadReceiptTarget } from "./dura
 import { attachWhatsAppIngressLifecycle } from "./ingress-lifecycle.js";
 import { withDeprecatedWebInboundMessageFlatAliases } from "./message-aliases.js";
 import type {
-  AdmittedWebInboundMessage,
-  WebInboundMessage,
+  AdmittedWebInboundCallbackMessage,
   WebInboundMessageInput,
 } from "./types.js";
-
-type AdmittedWebInboundCallbackMessage = WebInboundMessage & {
-  admission: AdmittedWebInboundMessage["admission"];
-};
 
 export type WhatsAppQueuedInboundMessage = AdmittedWebInboundCallbackMessage & {
   debounceKey?: string;
