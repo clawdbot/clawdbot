@@ -959,10 +959,10 @@ describe("openshell fs bridges", () => {
     expect(createFileExclusive).toBeTypeOf("function");
 
     await expect(
-      createFileExclusive!({ filePath: "nested/file.txt", data: "first", mkdir: true }),
+      createFileExclusive!({ filePath: "nested/file.txt", data: "first" }),
     ).resolves.toBe("created");
     await expect(
-      createFileExclusive!({ filePath: "nested/file.txt", data: "replacement", mkdir: true }),
+      createFileExclusive!({ filePath: "nested/file.txt", data: "replacement" }),
     ).resolves.toBe("exists");
     await expect(fs.readFile(path.join(workspaceDir, "nested", "file.txt"), "utf8")).resolves.toBe(
       "first",

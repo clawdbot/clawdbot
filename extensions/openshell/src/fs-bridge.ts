@@ -131,7 +131,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
     const root = await fsRoot(target.mountHostRoot);
     try {
       await root.create(path.relative(target.mountHostRoot, hostPath), buffer, {
-        mkdir: params.mkdir,
+        mkdir: params.mkdir !== false,
       });
     } catch (error) {
       if (error instanceof FsSafeError && error.code === "already-exists") {

@@ -78,24 +78,61 @@ const FORCED_COPY_FAILURE_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.repla
 );
 
 const FORCED_CREATE_FAILURE_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
-  "        os.fsync(file_fd)",
-  "        raise OSError(errno.ENOSPC, 'forced create failure')\n        os.fsync(file_fd)",
+  "        # exclusive create payload is durable before publication",
+  "        raise OSError(errno.ENOSPC, 'forced create failure')\n        # exclusive create payload is durable before publication",
 );
 
 const FORCED_CREATE_FAILURE_WITH_REPLACEMENT_MUTATION_PYTHON =
   SANDBOX_PINNED_MUTATION_PYTHON.replace(
-    "        os.fsync(file_fd)",
+    "        # Publish with a native atomic no-replace rename.",
     [
-      "        os.unlink(basename, dir_fd=parent_fd)",
       "        replacement_fd = os.open(basename, WRITE_FLAGS, 0o600, dir_fd=parent_fd)",
       "        try:",
       "            os.write(replacement_fd, b'replacement')",
       "        finally:",
       "            os.close(replacement_fd)",
-      "        raise OSError(errno.ENOSPC, 'forced create failure after replacement')",
-      "        os.fsync(file_fd)",
+      "        # Publish with a native atomic no-replace rename.",
     ].join("\n"),
   );
+
+const FORCED_CREATE_TEMP_SUBSTITUTION_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+  "        # Publish with a native atomic no-replace rename.",
+  [
+    "        os.unlink(temp_name, dir_fd=staging_fd)",
+    "        replacement_fd = os.open(temp_name, WRITE_FLAGS, 0o600, dir_fd=staging_fd)",
+    "        try:",
+    "            os.write(replacement_fd, b'replacement')",
+    "        finally:",
+    "            os.close(replacement_fd)",
+    "        # Publish with a native atomic no-replace rename.",
+  ].join("\n"),
+);
+
+const FORCED_MISSING_RENAMEAT2_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+  "    is_linux = sys.platform.startswith('linux')",
+  "    is_linux = True",
+).replace("        rename_fn = getattr(libc, 'renameat2', None)", "        rename_fn = None");
+
+const FORCED_UNSUPPORTED_RENAMEAT2_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+  "    is_linux = sys.platform.startswith('linux')",
+  "    is_linux = True",
+).replace(
+  "        rename_fn = getattr(libc, 'renameat2', None)",
+  [
+    "        class UnsupportedRename:",
+    "            argtypes = None",
+    "            restype = None",
+    "            def __call__(self, *_args):",
+    "                ctypes.set_errno(errno.ENOSYS)",
+    "                return -1",
+    "        rename_fn = UnsupportedRename()",
+  ].join("\n"),
+);
+
+const FORCED_STAGING_OPEN_FAILURE_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+  "            staging_fd = open_dir(candidate, dir_fd=parent_fd)",
+  "            raise OSError(errno.EMFILE, 'forced staging open failure')\n            staging_fd = open_dir(candidate, dir_fd=parent_fd)",
+);
 
 const FORCED_EXDEV_WITH_LATE_SOURCE_WRITE_MUTATION_PYTHON = FORCED_EXDEV_MUTATION_PYTHON.replace(
   "        remove_copied_entry(src_parent_fd, src_basename, ('dir', entry_identity(src_stat), copied_children))",
@@ -163,6 +200,72 @@ describe("sandbox pinned mutation helper", () => {
     });
   });
 
+  it("creates a file whose basename approaches the filesystem component limit", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      const basename = "n".repeat(240);
+      await fs.mkdir(workspace, { recursive: true });
+
+      const result = runMutation(["create", workspace, "", basename, "0"], "hello");
+
+      expect(result.status).toBe(0);
+      await expect(fs.readFile(path.join(workspace, basename), "utf8")).resolves.toBe("hello");
+    });
+  });
+
+  it("falls back when Linux libc does not export renameat2", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      const filePath = path.join(workspace, "note.txt");
+      await fs.mkdir(workspace, { recursive: true });
+
+      const result = runMutationWithSource(
+        FORCED_MISSING_RENAMEAT2_MUTATION_PYTHON,
+        ["create", workspace, "", "note.txt", "0"],
+        "hello",
+      );
+
+      expect(result.status).toBe(0);
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("hello");
+      await expect(fs.readdir(workspace)).resolves.toStrictEqual(["note.txt"]);
+    });
+  });
+
+  it("falls back when Linux renameat2 is unsupported at runtime", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      const filePath = path.join(workspace, "note.txt");
+      await fs.mkdir(workspace, { recursive: true });
+
+      const result = runMutationWithSource(
+        FORCED_UNSUPPORTED_RENAMEAT2_MUTATION_PYTHON,
+        ["create", workspace, "", "note.txt", "0"],
+        "hello",
+      );
+
+      expect(result.status).toBe(0);
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("hello");
+      await expect(fs.readdir(workspace)).resolves.toStrictEqual(["note.txt"]);
+    });
+  });
+
+  it("removes a staging directory when opening it fails", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(workspace, { recursive: true });
+
+      const result = runMutationWithSource(
+        FORCED_STAGING_OPEN_FAILURE_MUTATION_PYTHON,
+        ["create", workspace, "", "note.txt", "0"],
+        "hello",
+      );
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("forced staging open failure");
+      await expect(fs.readdir(workspace)).resolves.toStrictEqual([]);
+    });
+  });
+
   it("refuses to create over an existing file and leaves it untouched", async () => {
     await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
       const workspace = path.join(root, "workspace");
@@ -177,7 +280,7 @@ describe("sandbox pinned mutation helper", () => {
     });
   });
 
-  it("retains a failed exclusive-create target rather than unlinking by pathname", async () => {
+  it("removes private staging when writing fails before publication", async () => {
     await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
       const workspace = path.join(root, "workspace");
       const filePath = path.join(workspace, "note.txt");
@@ -191,11 +294,12 @@ describe("sandbox pinned mutation helper", () => {
 
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("forced create failure");
-      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("partial");
+      await expectPathMissing(filePath);
+      await expect(fs.readdir(workspace)).resolves.toStrictEqual([]);
     });
   });
 
-  it("preserves a replacement raced into a failed exclusive-create target", async () => {
+  it("preserves a destination raced into a staged exclusive create", async () => {
     await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
       const workspace = path.join(root, "workspace");
       const filePath = path.join(workspace, "note.txt");
@@ -207,9 +311,28 @@ describe("sandbox pinned mutation helper", () => {
         "partial",
       );
 
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("forced create failure after replacement");
+      expect(result.status).toBe(SANDBOX_CREATE_EXISTS_EXIT_CODE);
       await expect(fs.readFile(filePath, "utf8")).resolves.toBe("replacement");
+      await expect(fs.readdir(workspace)).resolves.toStrictEqual(["note.txt"]);
+    });
+  });
+
+  it("fails when the staged exclusive-create pathname is substituted", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      const filePath = path.join(workspace, "note.txt");
+      await fs.mkdir(workspace, { recursive: true });
+
+      const result = runMutationWithSource(
+        FORCED_CREATE_TEMP_SUBSTITUTION_MUTATION_PYTHON,
+        ["create", workspace, "", "note.txt", "0"],
+        "expected",
+      );
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("exclusive publication source changed");
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("replacement");
+      await expect(fs.readdir(workspace)).resolves.toStrictEqual(["note.txt"]);
     });
   });
 
