@@ -226,7 +226,8 @@ Behavior worth knowing:
   `$${VAR}` escape remains available when the literal `${VAR}` text is intentional.
 - Two entries whose names differ only in case collapse to the later entry, so a
   request never carries a comma-joined value the receiving gateway cannot parse.
-  The dropped name is logged without either value.
+  The dropped name is logged without either value. If the later entry is unusable,
+  neither value is sent.
 - Rejection happens before the cache key is computed, so the key always matches the
   bytes actually sent: changing a header that is really sent partitions the fetch
   cache, while adding one that gets dropped does not.

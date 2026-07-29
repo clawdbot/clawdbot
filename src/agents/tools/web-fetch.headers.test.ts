@@ -265,6 +265,33 @@ describe("web_fetch configured request headers", () => {
     expect(collisionWarnings[0]).not.toContain("prod");
   });
 
+  it("does not send an earlier value when a later case variant is unusable", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Rejected Collision"));
+    global.fetch = withFetchPreconnect(fetchSpy);
+    const warnSpy = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+
+    const tool = createToolWithHeaders({
+      "X-Routing-Target": "staging",
+      "x-routing-target": "東京",
+    });
+
+    await tool?.execute?.("call", { url: "https://example.com/rejected-collision" });
+
+    const headers = getRequestHeaders(fetchSpy);
+    expect(
+      Object.keys(headers).some((name) => name.toLowerCase() === "x-routing-target"),
+    ).toBe(false);
+    const warnings = warnSpy.mock.calls.map(([message]) => message);
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(JSON.stringify("X-Routing-Target")),
+        expect.stringContaining(JSON.stringify("x-routing-target")),
+      ]),
+    );
+    expect(warnings.join("\n")).not.toContain("staging");
+    expect(warnings.join("\n")).not.toContain("東京");
+  });
+
   it("ignores entries whose name or value the request cannot carry", async () => {
     const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Normalized"));
     global.fetch = withFetchPreconnect(fetchSpy);

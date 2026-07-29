@@ -107,11 +107,22 @@ export function resolveOperatorRequestHeaders(params: {
     // Match Fetch's header-value normalization so caller-side cache fingerprints
     // use the bytes sent without stripping valid obs-text such as U+00A0.
     const value = typeof rawValue === "string" ? trimHttpWhitespace(rawValue) : rawValue;
-    if (!HTTP_HEADER_NAME_PATTERN.test(name) || !isSendableHeaderValue(value) || value === "") {
+    if (!HTTP_HEADER_NAME_PATTERN.test(name)) {
       ignored.push(rawName);
       continue;
     }
     const lowerName = name.toLowerCase();
+    const existing = usable.get(lowerName);
+    if (existing) {
+      collisions.push(existing.name);
+      usable.delete(lowerName);
+    }
+    // A later case variant owns this slot even when its value is unusable. Leaving
+    // an earlier valid value behind would send stale routing metadata.
+    if (!isSendableHeaderValue(value) || value === "") {
+      ignored.push(rawName);
+      continue;
+    }
     if (
       reserved.has(lowerName) ||
       FRAMING_HEADER_NAMES.has(lowerName) ||
@@ -119,15 +130,6 @@ export function resolveOperatorRequestHeaders(params: {
     ) {
       refused.push(name);
       continue;
-    }
-    // Fragment matching is loose enough to flag innocent names, so this warns
-    // through the result instead of refusing.
-    if (isLikelySensitiveModelProviderHeaderName(lowerName)) {
-      suspicious.push(name);
-    }
-    const existing = usable.get(lowerName);
-    if (existing) {
-      collisions.push(existing.name);
     }
     usable.set(lowerName, { name, value });
   }
@@ -137,5 +139,13 @@ export function resolveOperatorRequestHeaders(params: {
   const entries = [...usable.values()]
     .map(({ name, value }) => [name, value] as const)
     .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  // Fragment matching is loose enough to flag innocent names, so this warns
+  // through the result instead of refusing. Derive it from the final entries so
+  // a later rejected case variant cannot leave an inaccurate "is sent" warning.
+  suspicious.push(
+    ...entries
+      .filter(([name]) => isLikelySensitiveModelProviderHeaderName(name))
+      .map(([name]) => name),
+  );
   return { headers: Object.fromEntries(entries), ignored, refused, suspicious, collisions };
 }

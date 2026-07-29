@@ -55,6 +55,16 @@ describe("resolveOperatorRequestHeaders", () => {
     expect(collisions).toEqual(["X-Dup"]);
   });
 
+  it("does not retain an earlier value when a later case variant is unusable", () => {
+    const { headers, ignored, collisions } = resolve({
+      "X-Route": "staging",
+      "x-route": "東京",
+    });
+    expect(headers).toBeUndefined();
+    expect(ignored).toEqual(["x-route"]);
+    expect(collisions).toEqual(["X-Route"]);
+  });
+
   it("refuses reserved, framing, and credential names", () => {
     const { headers, refused } = resolve({
       Accept: "text/plain",
