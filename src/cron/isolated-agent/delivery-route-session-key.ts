@@ -9,8 +9,9 @@ import type { CronJob } from "../types.js";
  * Picks the session-key identity used to resolve a cron delivery's outbound route.
  *
  * An isolated run does not carry its bound source conversation's namespace.
- * Reuse only a canonical conversation belonging to the same agent and actual
- * delivery provider; otherwise cross-channel jobs can adopt the wrong session.
+ * Reuse only a canonical conversation belonging to the same agent, actual
+ * delivery provider, and destination; otherwise jobs can adopt another peer's
+ * conversation or thread.
  */
 export function selectCronRouteCurrentSessionKey(
   job: CronJob,
@@ -24,7 +25,7 @@ export function selectCronRouteCurrentSessionKey(
   if (!parsedBound || !parsedRun || parsedBound.agentId !== parsedRun.agentId) {
     return agentSessionKey;
   }
-  const conversation = /^([^:]+):(direct|group|channel):[^:]+(?::thread:[^:]+)?$/i.exec(
+  const conversation = /^([^:]+):(direct|group|channel):([^:]+)(?::thread:[^:]+)?$/i.exec(
     parsedBound.rest,
   );
   const targetPeerId = stripTargetKindPrefix(
