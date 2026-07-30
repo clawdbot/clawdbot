@@ -74,6 +74,8 @@ create_default_service_state() {
     "$account_home/.local/bin/openclaw-wrapper" \
     "$account_home/openclaw-wrapper-argv.log"
   openclaw_test_state_create "$account_home" empty
+  export HOME="$account_home"
+  export USERPROFILE="$account_home"
   unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH
 }
 

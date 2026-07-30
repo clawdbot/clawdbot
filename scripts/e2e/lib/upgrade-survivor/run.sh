@@ -690,6 +690,7 @@ install_baseline() {
 }
 
 seed_state() {
+  local account_home=""
   openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}"
   if [ "$ROOT_MANAGED_VPS" = "1" ]; then
     if [ "$(id -u)" -ne 0 ]; then
@@ -700,6 +701,17 @@ seed_state() {
     openclaw_test_state_create /root minimal
   else
     openclaw_test_state_create "$STATE_HOME_ROOT" minimal
+  fi
+  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    account_home="$(getent passwd "$(id -u)" | cut -d: -f6)"
+    if [ -z "$account_home" ]; then
+      echo "Could not resolve the current account home" >&2
+      return 1
+    fi
+    export HOME="$account_home"
+    export USERPROFILE="$account_home"
+    export OPENCLAW_STATE_DIR="$account_home/.openclaw"
+    export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
   fi
   export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION="$baseline_version"
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed
