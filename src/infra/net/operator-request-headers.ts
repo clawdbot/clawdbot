@@ -63,6 +63,8 @@ export type OperatorRequestHeaderResolution = {
   ignored: string[];
   /** Names refused as tool-owned, connection-level, or credential material. */
   refused: string[];
+  /** Accepted names matched by the deliberately loose credential audit heuristic. */
+  suspicious: string[];
   /** Earlier names replaced by a later entry with the same case-insensitive name. */
   collisions: string[];
 };
@@ -90,9 +92,10 @@ export function resolveOperatorRequestHeaders(params: {
 }): OperatorRequestHeaderResolution {
   const ignored: string[] = [];
   const refused: string[] = [];
+  const suspicious: string[] = [];
   const collisions: string[] = [];
   if (!isRecord(params.configured)) {
-    return { ignored, refused, collisions };
+    return { ignored, refused, suspicious, collisions };
   }
   const reserved = new Set(
     [...(params.reservedNames ?? [])].map((name) => normalizeLowercaseStringOrEmpty(name)),
@@ -123,8 +126,7 @@ export function resolveOperatorRequestHeaders(params: {
     if (
       reserved.has(lowerName) ||
       FRAMING_HEADER_NAMES.has(lowerName) ||
-      isAlwaysCredentialHeaderName(lowerName) ||
-      isLikelySensitiveModelProviderHeaderName(lowerName)
+      isAlwaysCredentialHeaderName(lowerName)
     ) {
       refused.push(name);
       continue;
@@ -132,10 +134,15 @@ export function resolveOperatorRequestHeaders(params: {
     usable.set(lowerName, { name, value });
   }
   if (usable.size === 0) {
-    return { ignored, refused, collisions };
+    return { ignored, refused, suspicious, collisions };
   }
   const entries = [...usable.values()]
     .map(({ name, value }) => [name, value] as const)
     .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
-  return { headers: Object.fromEntries(entries), ignored, refused, collisions };
+  suspicious.push(
+    ...entries
+      .filter(([name]) => isLikelySensitiveModelProviderHeaderName(name))
+      .map(([name]) => name),
+  );
+  return { headers: Object.fromEntries(entries), ignored, refused, suspicious, collisions };
 }

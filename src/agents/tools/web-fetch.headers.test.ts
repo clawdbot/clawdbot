@@ -67,6 +67,7 @@ describe("web_fetch configured request headers", () => {
 
     const tool = createToolWithHeaders({
       "ATL-SG-SERVICE-INJECTION-URL": "http://host.docker.internal:9999",
+      "X-Tokenizer-Version": "v2",
     });
 
     await tool?.execute?.("call", { url: "https://example.com/routed" });
@@ -74,6 +75,7 @@ describe("web_fetch configured request headers", () => {
     expect(getRequestHeaders(fetchSpy)["ATL-SG-SERVICE-INJECTION-URL"]).toBe(
       "http://host.docker.internal:9999",
     );
+    expect(getRequestHeaders(fetchSpy)["X-Tokenizer-Version"]).toBe("v2");
   });
 
   it("keeps fetch-owned header names and casing when no headers are configured", async () => {

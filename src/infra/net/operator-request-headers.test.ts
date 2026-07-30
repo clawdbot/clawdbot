@@ -132,4 +132,16 @@ describe("resolveOperatorRequestHeaders", () => {
     expect(ignored).toEqual(expect.arrayContaining(["X Invalid", "X-Unicode"]));
   });
 
+  it("accepts non-credential metadata that only matches the loose audit heuristic", () => {
+    const { headers, suspicious } = resolve({
+      "X-Tokenizer-Version": "v2",
+      "X-Secret-Scan-Status": "clean",
+    });
+
+    expect(headers).toEqual({
+      "X-Secret-Scan-Status": "clean",
+      "X-Tokenizer-Version": "v2",
+    });
+    expect(suspicious).toEqual(["X-Secret-Scan-Status", "X-Tokenizer-Version"]);
+  });
 });

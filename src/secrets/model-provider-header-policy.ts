@@ -22,6 +22,9 @@ const ALWAYS_SENSITIVE_MODEL_PROVIDER_HEADER_NAMES = new Set([
   "private-token",
   "x-vault-token",
   "x-amz-security-token",
+  "x-github-token",
+  "x-apikey",
+  "x-trace-token",
 ]);
 
 // Substring matching catches provider-specific auth headers without forcing every plugin to
