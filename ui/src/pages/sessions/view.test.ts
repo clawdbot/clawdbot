@@ -334,9 +334,7 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const pageSize = container.querySelector<HTMLSelectElement>(
-      ".data-table-pagination__size",
-    );
+    const pageSize = container.querySelector<HTMLSelectElement>(".data-table-pagination__size");
     expect(pageSize?.getAttribute("aria-label")).toBe("Rows per page");
     expect(pageSize?.value).toBe("25");
     expect(pageSize?.selectedOptions[0]?.textContent?.trim()).toBe("25 per page");
