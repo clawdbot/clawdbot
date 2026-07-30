@@ -175,10 +175,10 @@ export async function prepareReplyAgentPayloads(state: {
     });
     return recovery.kind === "diagnostic" ? recovery.payload : undefined;
   };
-  // Route-aware message-tool delivery attests observed delivery in every mode:
-  // an automatic-mode turn answered via the message tool plus NO_REPLY must not
-  // draw the no-visible-reply fallback into the source conversation. The dedupe
-  // route matcher keeps unrelated-target tool sends from counting as the reply.
+  // Structured source-reply delivery evidence is the canonical owner for current
+  // runtimes. The route matcher remains only for legacy results that recorded
+  // successful target/text/media aggregates before structured receipts existed.
+  // It still keeps unrelated-target tool sends from counting as the source reply.
   const sourceRoutedMessagingToolDelivery =
     completedSourceReplyDelivery ||
     ((runResult.messagingToolSentTargets?.length ?? 0) > 0 &&
