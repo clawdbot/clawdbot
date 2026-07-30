@@ -556,7 +556,7 @@ Query-string tokens are rejected.
 
   </Accordion>
   <Accordion title="Mapped hooks (POST /hooks/<name>)">
-    Custom hook names resolve via `hooks.mappings` in config. Mappings can transform arbitrary payloads into `wake` or `agent` actions with templates or code transforms. Mapped `agent` actions use the same 15-second admission and `200`/`409`/`502`/`503` response contract as `POST /hooks/agent`.
+    Custom hook names resolve via `hooks.mappings` in config. Mappings can transform arbitrary payloads into `wake` or `agent` actions with templates or code transforms. Mapped `agent` actions use the same 15-second admission and `200`/`400`/`409`/`502`/`503` response contract as `POST /hooks/agent`.
 
     Persistent mapped hooks require a stable mapping `sessionKey` or `hooks.defaultSessionKey`. Template-derived keys retain the request-key opt-in and prefix policy above.
 
