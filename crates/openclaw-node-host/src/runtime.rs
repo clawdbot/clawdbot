@@ -1,13 +1,13 @@
 use futures_util::FutureExt;
 use serde_json::Value;
 use std::{
-    collections::{hash_map::Entry, BTreeMap, HashMap},
+    collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap},
     future::Future,
     io::{self, Write},
     panic::AssertUnwindSafe,
     pin::Pin,
     sync::{Arc, Mutex, Weak},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use thiserror::Error;
 use tokio::{
@@ -36,6 +36,8 @@ const DUPLEX_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 type HandlerFuture = Pin<Box<dyn Future<Output = Result<Value, HandlerError>> + Send>>;
 type Handler = Arc<dyn Fn(InvocationContext) -> HandlerFuture + Send + Sync>;
+type AdmissionFuture = Pin<Box<dyn Future<Output = Result<(), HandlerError>> + Send>>;
+type AdmissionPolicy = Arc<dyn Fn(InvocationAdmissionContext) -> AdmissionFuture + Send + Sync>;
 type HandlerTaskResult = (Result<(), ClientError>, tokio::sync::OwnedSemaphorePermit);
 
 /// Cooperative local cancellation for a command handler and any child work it starts.
@@ -85,6 +87,18 @@ pub struct InvocationContext {
     pub io: Option<InvocationIo>,
 }
 
+/// Input to an embedding-owned command admission policy.
+///
+/// The Gateway remains authoritative for node pairing and approved command
+/// surfaces. This callback lets a native host compose its current local policy
+/// and approval state before any platform handler runs, without reimplementing
+/// that policy in the Rust runtime.
+#[derive(Clone, Debug)]
+pub struct InvocationAdmissionContext {
+    pub invocation: NodeInvocation,
+    pub cancellation: CancellationToken,
+}
+
 /// Structured handler rejection returned to the Gateway.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 #[error("{code}: {message}")]
@@ -106,6 +120,8 @@ impl HandlerError {
 /// Registration-time errors for the bounded command runtime.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum RuntimeBuildError {
+    #[error("capability name must not be empty")]
+    EmptyCapability,
     #[error("command name must not be empty")]
     EmptyCommand,
     #[error("OpenClaw-owned system command namespace is reserved: {0}")]
@@ -140,6 +156,8 @@ struct RegisteredHandler {
 /// Builder for a reusable command runtime with explicit resource bounds.
 pub struct CommandRuntimeBuilder {
     registrations: Vec<Registration>,
+    capabilities: Vec<String>,
+    admission_policy: Option<AdmissionPolicy>,
     max_concurrency: usize,
     max_input_bytes: usize,
     max_output_bytes: usize,
@@ -152,6 +170,8 @@ impl Default for CommandRuntimeBuilder {
     fn default() -> Self {
         Self {
             registrations: Vec::new(),
+            capabilities: Vec::new(),
+            admission_policy: None,
             max_concurrency: DEFAULT_MAX_CONCURRENCY,
             max_input_bytes: DEFAULT_MAX_INPUT_BYTES,
             max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
@@ -163,6 +183,26 @@ impl Default for CommandRuntimeBuilder {
 }
 
 impl CommandRuntimeBuilder {
+    /// Declare one exact node capability supplied by this runtime.
+    #[must_use]
+    pub fn capability(mut self, capability: impl Into<String>) -> Self {
+        self.capabilities.push(capability.into());
+        self
+    }
+
+    /// Consult an embedding-owned admission policy before every handler.
+    ///
+    /// A rejection, panic, or timeout fails closed and the handler is not run.
+    #[must_use]
+    pub fn admission_policy<F, Fut>(mut self, policy: F) -> Self
+    where
+        F: Fn(InvocationAdmissionContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<(), HandlerError>> + Send + 'static,
+    {
+        self.admission_policy = Some(Arc::new(move |context| Box::pin(policy(context))));
+        self
+    }
+
     /// Register one exact command name and asynchronous handler.
     #[must_use]
     pub fn command<F, Fut>(self, command: impl Into<String>, handler: F) -> Self
@@ -244,6 +284,14 @@ impl CommandRuntimeBuilder {
     ///
     /// Returns an error for empty, duplicate, or reserved command names.
     pub fn build(self) -> Result<CommandRuntime, RuntimeBuildError> {
+        let mut capabilities = BTreeSet::new();
+        for capability in self.capabilities {
+            let capability = capability.trim().to_owned();
+            if capability.is_empty() {
+                return Err(RuntimeBuildError::EmptyCapability);
+            }
+            capabilities.insert(capability);
+        }
         let mut handlers = BTreeMap::new();
         for registration in self.registrations {
             let command = registration.command.trim().to_owned();
@@ -270,6 +318,8 @@ impl CommandRuntimeBuilder {
         Ok(CommandRuntime {
             inner: Arc::new(RuntimeInner {
                 handlers,
+                capabilities,
+                admission_policy: self.admission_policy,
                 permits: Arc::new(Semaphore::new(self.max_concurrency.max(1))),
                 delivery_capacity: self.max_concurrency.max(1),
                 session_scopes: Mutex::new(HashMap::new()),
@@ -285,6 +335,8 @@ impl CommandRuntimeBuilder {
 
 struct RuntimeInner {
     handlers: BTreeMap<String, RegisteredHandler>,
+    capabilities: BTreeSet<String>,
+    admission_policy: Option<AdmissionPolicy>,
     permits: Arc<Semaphore>,
     delivery_capacity: usize,
     session_scopes: Mutex<HashMap<usize, SessionScope>>,
@@ -312,9 +364,17 @@ impl CommandRuntime {
         self.inner.handlers.keys().map(String::as_str)
     }
 
+    /// Exact capability names declared by this runtime, in deterministic order.
+    pub fn capability_names(&self) -> impl Iterator<Item = &str> {
+        self.inner.capabilities.iter().map(String::as_str)
+    }
+
     /// Declare every registered command and activate the supplied connect options.
     #[must_use]
     pub fn activate(&self, mut options: NodeConnectOptions) -> NodeConnectOptions {
+        for capability in self.capability_names() {
+            options = options.capability(capability);
+        }
         for command in self.command_names() {
             options = options.command(command);
         }
@@ -610,7 +670,7 @@ impl CommandRuntime {
                 tracking,
             );
         }
-        let Ok(timeout) = self.resolve_timeout(&invocation) else {
+        let Ok(mut timeout) = self.resolve_timeout(&invocation) else {
             cancellation.cancel();
             return Evaluation::tracked(
                 failure(
@@ -619,6 +679,16 @@ impl CommandRuntime {
                 ),
                 tracking,
             );
+        };
+        timeout = match self
+            .evaluate_admission(&invocation, &cancellation, timeout)
+            .await
+        {
+            Ok(remaining) => remaining,
+            Err(result) => {
+                tracking.cancel();
+                return Evaluation::tracked(result, tracking);
+            }
         };
         let duplex = InvocationDuplex::start(
             registration.duplex,
@@ -658,27 +728,12 @@ impl CommandRuntime {
                 tracking.cancel();
                 failure("HANDLER_PANIC", "command handler panicked")
             }
-            Ok(Ok(Err(error))) => {
-                let code = if error.code.is_empty() {
-                    "HANDLER_ERROR".to_owned()
-                } else {
-                    error.code
-                };
-                let message = if error.message.is_empty() {
-                    "command handler failed".to_owned()
-                } else {
-                    error.message
-                };
-                let handler_error = serde_json::json!({"code": &code, "message": &message});
-                if serialized_json_within_limit(&handler_error, self.inner.max_output_bytes) {
-                    InvocationResult::failure(code, message)
-                } else {
-                    failure(
-                        "OUTPUT_TOO_LARGE",
-                        "command error exceeds the runtime limit",
-                    )
-                }
-            }
+            Ok(Ok(Err(error))) => handler_failure(
+                error,
+                "HANDLER_ERROR",
+                "command handler failed",
+                self.inner.max_output_bytes,
+            ),
             Ok(Ok(Ok(result))) => {
                 if serialized_json_within_limit(&result, self.inner.max_output_bytes) {
                     InvocationResult::success(result)
@@ -691,6 +746,65 @@ impl CommandRuntime {
             }
         };
         Evaluation::tracked(result, tracking)
+    }
+
+    async fn evaluate_admission(
+        &self,
+        invocation: &NodeInvocation,
+        cancellation: &CancellationToken,
+        timeout: Option<Duration>,
+    ) -> Result<Option<Duration>, InvocationResult> {
+        let Some(admission_policy) = &self.inner.admission_policy else {
+            return Ok(timeout);
+        };
+        let started = Instant::now();
+        let admission = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            admission_policy(InvocationAdmissionContext {
+                invocation: invocation.clone(),
+                cancellation: cancellation.clone(),
+            })
+        }))
+        .map_err(|_| failure("ADMISSION_PANIC", "command admission policy panicked"))?;
+        let outcome = match timeout {
+            Some(remaining) => {
+                tokio::time::timeout(remaining, AssertUnwindSafe(admission).catch_unwind()).await
+            }
+            None => Ok(AssertUnwindSafe(admission).catch_unwind().await),
+        };
+        match outcome {
+            Err(_) => {
+                cancellation.cancel();
+                Err(failure(
+                    "HANDLER_TIMEOUT",
+                    "command admission exceeded its deadline",
+                ))
+            }
+            Ok(Err(_)) => Err(failure(
+                "ADMISSION_PANIC",
+                "command admission policy panicked",
+            )),
+            Ok(Ok(Err(error))) => Err(handler_failure(
+                error,
+                "ADMISSION_DENIED",
+                "command denied by admission policy",
+                self.inner.max_output_bytes,
+            )),
+            Ok(Ok(Ok(()))) => match timeout {
+                Some(remaining) => {
+                    let remaining = remaining.saturating_sub(started.elapsed());
+                    if remaining.is_zero() {
+                        cancellation.cancel();
+                        Err(failure(
+                            "HANDLER_TIMEOUT",
+                            "command handler deadline already elapsed",
+                        ))
+                    } else {
+                        Ok(Some(remaining))
+                    }
+                }
+                None => Ok(None),
+            },
+        }
     }
 
     fn resolve_timeout(&self, invocation: &NodeInvocation) -> Result<Option<Duration>, ()> {
@@ -778,6 +892,33 @@ fn route_invocation_control(active: &ActiveInvocations, event: NodeSessionEvent)
         }
         NodeSessionEvent::InvocationCancelled { invoke_id, .. } => active.cancel(&invoke_id),
         NodeSessionEvent::Invocation(_) => unreachable!("invocations are dispatched separately"),
+    }
+}
+
+fn handler_failure(
+    error: HandlerError,
+    fallback_code: &str,
+    fallback_message: &str,
+    max_output_bytes: usize,
+) -> InvocationResult {
+    let code = if error.code.is_empty() {
+        fallback_code.to_owned()
+    } else {
+        error.code
+    };
+    let message = if error.message.is_empty() {
+        fallback_message.to_owned()
+    } else {
+        error.message
+    };
+    let payload = serde_json::json!({"code": &code, "message": &message});
+    if serialized_json_within_limit(&payload, max_output_bytes) {
+        InvocationResult::failure(code, message)
+    } else {
+        failure(
+            "OUTPUT_TOO_LARGE",
+            "command error exceeds the runtime limit",
+        )
     }
 }
 
@@ -1039,8 +1180,9 @@ fn serialized_json_within_limit(value: &Value, maximum: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
     use serde_json::json;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tokio::sync::Notify;
 
     fn invocation(id: &str, command: &str, params: Value) -> NodeInvocation {
@@ -1052,6 +1194,117 @@ mod tests {
             InvocationResult::Failure { code, .. } => Some(code),
             InvocationResult::Success(_) => None,
         }
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct IntegrationFixture {
+        version: u32,
+        declared_capabilities: Vec<String>,
+        expected_capabilities: Vec<String>,
+        declared_commands: Vec<String>,
+        expected_commands: Vec<String>,
+        approved_commands: Vec<String>,
+        invocations: Vec<IntegrationInvocation>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct IntegrationInvocation {
+        command: String,
+        expected: String,
+        error_code: Option<String>,
+        error_message: Option<String>,
+    }
+
+    fn integration_fixture() -> IntegrationFixture {
+        serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test/fixtures/node-runtime-integration-contract.json"
+        )))
+        .expect("valid node runtime integration fixture")
+    }
+
+    #[tokio::test]
+    async fn shared_catalog_and_admission_contract_matches_openclaw() {
+        let fixture = integration_fixture();
+        assert_eq!(fixture.version, 1);
+        let approved = Arc::new(
+            fixture
+                .approved_commands
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+        );
+        let handler_runs = Arc::new(AtomicUsize::new(0));
+        let mut builder = CommandRuntime::builder();
+        for capability in fixture.declared_capabilities {
+            builder = builder.capability(capability);
+        }
+        for command in fixture.declared_commands {
+            let handler_runs = Arc::clone(&handler_runs);
+            builder = builder.command(command, move |_context| {
+                let handler_runs = Arc::clone(&handler_runs);
+                async move {
+                    handler_runs.fetch_add(1, Ordering::SeqCst);
+                    Ok(json!({"handled": true}))
+                }
+            });
+        }
+        let runtime = builder
+            .admission_policy(move |context| {
+                let approved = Arc::clone(&approved);
+                async move {
+                    if approved.contains(&context.invocation.command) {
+                        Ok(())
+                    } else {
+                        Err(HandlerError::new(
+                            "COMMAND_NOT_APPROVED",
+                            "command is outside the current OpenClaw-approved surface",
+                        ))
+                    }
+                }
+            })
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            runtime.capability_names().collect::<Vec<_>>(),
+            fixture
+                .expected_capabilities
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            runtime.command_names().collect::<Vec<_>>(),
+            fixture
+                .expected_commands
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+        );
+
+        for (index, contract) in fixture.invocations.into_iter().enumerate() {
+            let result = runtime
+                .evaluate(invocation(
+                    &format!("fixture-{index}"),
+                    &contract.command,
+                    Value::Null,
+                ))
+                .await;
+            match contract.expected.as_str() {
+                "allow" => assert!(matches!(result, InvocationResult::Success(_))),
+                "deny" => assert_eq!(
+                    result,
+                    InvocationResult::failure(
+                        contract.error_code.expect("denial code"),
+                        contract.error_message.expect("denial message")
+                    )
+                ),
+                other => panic!("unknown fixture outcome: {other}"),
+            }
+        }
+        assert_eq!(handler_runs.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -1378,8 +1631,43 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn admission_policy_panics_fail_closed_before_handler_execution() {
+        let handler_ran = Arc::new(AtomicBool::new(false));
+        let handler_state = Arc::clone(&handler_ran);
+        let runtime = CommandRuntime::builder()
+            .admission_policy(|_context| async {
+                panic!("policy unavailable");
+            })
+            .command("example.status", move |_context| {
+                let handler_state = Arc::clone(&handler_state);
+                async move {
+                    handler_state.store(true, Ordering::SeqCst);
+                    Ok(Value::Null)
+                }
+            })
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            failure_code(
+                &runtime
+                    .evaluate(invocation("1", "example.status", Value::Null))
+                    .await
+            ),
+            Some("ADMISSION_PANIC")
+        );
+        assert!(!handler_ran.load(Ordering::SeqCst));
+    }
+
     #[test]
     fn rejects_invalid_registrations() {
+        let empty_capability = CommandRuntime::builder().capability(" ").build();
+        assert!(matches!(
+            empty_capability,
+            Err(RuntimeBuildError::EmptyCapability)
+        ));
+
         let empty = CommandRuntime::builder()
             .command("", |_context| async { Ok(Value::Null) })
             .build();

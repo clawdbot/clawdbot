@@ -1,10 +1,11 @@
 //! Reusable `OpenClaw` node profile, bounded command runtime, and headless host.
 //!
-//! Register ordinary handlers with [`CommandRuntimeBuilder::command`] and long-lived
-//! handlers with [`CommandRuntimeBuilder::duplex_command`]. Duplex handlers receive
-//! transport-neutral ordered input, UTF-8 progress output, heartbeats, and cooperative
-//! cancellation through [`InvocationContext`]. Process spawning, command policy, and
-//! platform credential storage remain embedding-owned.
+//! Register capabilities and exact command handlers with [`CommandRuntimeBuilder`].
+//! Embeddings can compose their canonical local approval state through
+//! [`CommandRuntimeBuilder::admission_policy`] before any handler runs. Duplex handlers
+//! receive transport-neutral ordered input, UTF-8 progress output, heartbeats, and
+//! cooperative cancellation through [`InvocationContext`]. Process spawning, policy
+//! decisions, and platform credential storage remain embedding-owned.
 
 mod duplex;
 mod host;
@@ -30,6 +31,6 @@ pub use reconnect::{
     RecoveryStep, StoredDeviceTokenRetry,
 };
 pub use runtime::{
-    CancellationToken, CommandRuntime, CommandRuntimeBuilder, HandlerError, InvocationContext,
-    RuntimeBuildError, RuntimeError,
+    CancellationToken, CommandRuntime, CommandRuntimeBuilder, HandlerError,
+    InvocationAdmissionContext, InvocationContext, RuntimeBuildError, RuntimeError,
 };

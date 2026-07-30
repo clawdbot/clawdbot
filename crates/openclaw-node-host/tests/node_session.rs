@@ -107,7 +107,7 @@ async fn duplex_runtime_routes_ordered_input_and_progress() {
         )
         .await;
         let connect = receive_json(&mut socket).await;
-        assert_eq!(connect["params"]["commands"], json!(["example.duplex"]));
+        assert_example_connect_surface(&connect);
         send_json(
             &mut socket,
             json!({"type":"res", "id":connect["id"], "ok":true,
@@ -166,6 +166,7 @@ async fn duplex_runtime_routes_ordered_input_and_progress() {
     });
 
     let runtime = CommandRuntime::builder()
+        .capability("example")
         .duplex_command("example.duplex", |context| async move {
             let io = context.io.expect("duplex command I/O");
             let first = io.recv().await.expect("first input");
@@ -278,4 +279,9 @@ where
 {
     let message = socket.next().await.unwrap().unwrap();
     serde_json::from_str(message.into_text().unwrap().as_str()).unwrap()
+}
+
+fn assert_example_connect_surface(connect: &Value) {
+    assert_eq!(connect["params"]["caps"], json!(["example"]));
+    assert_eq!(connect["params"]["commands"], json!(["example.duplex"]));
 }
