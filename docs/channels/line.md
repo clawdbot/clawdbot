@@ -64,7 +64,10 @@ Security notes:
 ## Inbound durability
 
 The [Setup](#setup) webhook contract acknowledges an event only after it is durably
-queued. From there, delivery runs through the shared channel-ingress drain with
+queued. The durable `200` carries `x-openclaw-delivery-accepted: durable`; signed
+verification pings (empty event lists) and error responses omit the marker, so
+reverse proxies can require it to distinguish durable acceptance from a generic
+`200`. From there, delivery runs through the core channel-ingress drain with
 LINE-specific settings:
 
 - **Per-conversation ordering.** Events are serialized by source lane —
@@ -78,11 +81,11 @@ LINE-specific settings:
   (`retry-limit-exceeded`) immediately: LINE opts out of the generic 24-hour
   dead-letter age floor so a poison event cannot block its conversation lane for
   a day.
-- **Non-retryable failures** dead-letter immediately, with no further retries
-  regardless of the attempt count: stored payloads
-  that no longer parse (`invalid-event`), deliveries that already committed side
-  effects (`delivery-side-effects-committed`), and LINE API authentication
-  failures (`authentication-failed`, HTTP 401/403).
+- **Non-retryable failures.** These dead-letter immediately, with no further
+  retries regardless of the attempt count: stored payloads that no longer parse
+  (`invalid-event`), deliveries that already committed side effects
+  (`delivery-side-effects-committed`), and LINE API authentication failures
+  (`authentication-failed`, HTTP 401/403).
 - **Stall watchdog.** A claimed delivery that never reaches agent-turn adoption
   dead-letters as `handler-timeout` after 5 minutes.
 - **Crash recovery.** A delivery claimed by a Gateway process that died is
@@ -96,7 +99,7 @@ LINE-specific settings:
   second dispatch.
 
 The `500`-on-persistence-failure contract recovers events only when **Webhook
-redelivery** is enabled for the channel in the LINE Developers console (Messaging
+redelivery** is enabled for the channel in the LINE Developers Console (Messaging
 API settings). Without it, LINE does not re-send failed webhook deliveries, and an
 event refused with `500` is lost.
 
