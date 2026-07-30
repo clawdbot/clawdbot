@@ -70,6 +70,7 @@ export function createTelegramHandlerMessageRuntime({
   const { resolveTelegramSessionState, resolvePromptContextAmbientWatermark } = sessionRuntime;
   const {
     recordMessageForReplyChain,
+    resolveCachedMessageThreadId,
     buildReplyChainForMessage,
     toReplyChainEntry,
     buildPromptContextForMessage,
@@ -424,6 +425,7 @@ export function createTelegramHandlerMessageRuntime({
     resolveTelegramSessionState,
     resolvePromptContextAmbientWatermark,
     recordMessageForReplyChain,
+    resolveCachedMessageThreadId,
     processMessageWithReplyChain,
   };
 }

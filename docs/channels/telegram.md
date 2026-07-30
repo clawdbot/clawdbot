@@ -718,7 +718,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     `own` means user reactions to bot-sent messages only (best-effort via a sent-message cache). Reaction events still respect Telegram access controls (`dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`); unauthorized senders are dropped.
 
-    Telegram does not provide thread IDs in reaction updates: non-forum groups route to the group chat session; forum groups route to the general-topic session (`:topic:1`), not the exact originating topic.
+    Telegram does not provide thread IDs in reaction updates. Non-forum groups route to the group chat session. Forum groups recover the originating topic from OpenClaw's bounded message cache (keyed by account, chat, and message ID), so the reaction routes to that topic's session, including its topic agent and conversation bindings. When the reacted-to message is no longer cached the topic is unknown, so OpenClaw skips the reaction notification and logs a warning instead of attributing it to General (`:topic:1`).
 
     `allowed_updates` for polling/webhook include `message_reaction` automatically.
 
