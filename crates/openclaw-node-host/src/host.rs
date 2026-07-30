@@ -677,7 +677,9 @@ fn reconnect_delay(
 
 fn client_error_class(error: &ClientError) -> &'static str {
     match error {
-        ClientError::InvalidUrl(_) | ClientError::InsecureRemoteGateway => "configuration",
+        ClientError::InvalidUrl(_) | ClientError::InsecureRemoteGateway | ClientError::Tls(_) => {
+            "configuration"
+        }
         ClientError::Transport(_) | ClientError::ChallengeTimeout | ClientError::Closed(_) => {
             "transport"
         }

@@ -49,6 +49,7 @@ async fn connects_publishes_events_and_correlates_requests() {
             }),
         )
         .await;
+        socket.close(None).await.unwrap();
     });
 
     let session = GatewayClient::connect(
@@ -66,19 +67,19 @@ async fn connects_publishes_events_and_correlates_requests() {
     .unwrap();
     assert_eq!(session.hello()["protocol"], 4);
     assert_eq!(
-        session
-            .request("node.echo", json!({"value":42}))
-            .await
-            .unwrap(),
-        json!({"echo":{"value":42}})
-    );
-    assert_eq!(
         session.next_event().await.unwrap(),
         Event {
             event: "node.test".into(),
             payload: json!({"ready":true}),
             seq: Some(7)
         }
+    );
+    assert_eq!(
+        session
+            .request("node.echo", json!({"value":42}))
+            .await
+            .unwrap(),
+        json!({"echo":{"value":42}})
     );
     server.await.unwrap();
 }
@@ -119,6 +120,64 @@ async fn idle_disconnect_unblocks_the_retained_event_receiver() {
         .await
         .expect("idle disconnect must unblock next_event");
     assert!(matches!(result, Err(ClientError::Closed(_))));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn drains_a_queued_event_before_reporting_disconnect() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(tcp).await.unwrap();
+        send_json(
+            &mut socket,
+            json!({
+                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-final"}
+            }),
+        )
+        .await;
+        let connect = receive_json(&mut socket).await;
+        send_json(
+            &mut socket,
+            json!({
+                "type":"res", "id":connect["id"], "ok":true,
+                "payload":{"type":"hello-ok","protocol":4}
+            }),
+        )
+        .await;
+        send_json(
+            &mut socket,
+            json!({
+                "type":"event", "event":"node.final", "payload":{"ready":true}
+            }),
+        )
+        .await;
+        socket.close(None).await.unwrap();
+    });
+
+    let session = GatewayClient::connect(
+        GatewayClientConfig::new(format!("ws://{address}")).unwrap(),
+        |_| async { Ok::<_, io::Error>(json!({"role":"node"})) },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        session.wait_closed().await,
+        Err(ClientError::Closed(_))
+    ));
+    assert_eq!(
+        session.next_event().await.unwrap(),
+        Event {
+            event: "node.final".into(),
+            payload: json!({"ready":true}),
+            seq: None,
+        }
+    );
+    assert!(matches!(
+        session.next_event().await,
+        Err(ClientError::Closed(_))
+    ));
     server.await.unwrap();
 }
 
@@ -258,6 +317,9 @@ fn plaintext_policy_accepts_trusted_private_targets_only() {
         "ws://127.0.0.1:18789",
         "ws://192.168.1.10:18789",
         "ws://100.64.0.1:18789",
+        "ws://[::ffff:127.0.0.1]:18789",
+        "ws://[::ffff:192.168.1.10]:18789",
+        "ws://[::ffff:100.64.0.1]:18789",
         "ws://studio.local:18789",
         "ws://studio.example.ts.net:18789",
         "ws://[fd00::1]:18789",
@@ -266,6 +328,10 @@ fn plaintext_policy_accepts_trusted_private_targets_only() {
     }
     assert!(matches!(
         GatewayClientConfig::new("ws://gateway.example.com:18789"),
+        Err(ClientError::InsecureRemoteGateway)
+    ));
+    assert!(matches!(
+        GatewayClientConfig::new("ws://[::ffff:8.8.8.8]:18789"),
         Err(ClientError::InsecureRemoteGateway)
     ));
 }

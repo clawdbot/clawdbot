@@ -205,15 +205,18 @@ impl GatewayClient {
         .await
         .map_err(|_| ClientError::RequestTimeout("connect".into()))??;
 
-        let (command_tx, command_rx) = mpsc::channel(config.max_in_flight.max(1));
-        let (cancel_tx, cancel_rx) = mpsc::unbounded_channel();
+        // Keep requests and cancellations on one bounded, ordered stream so a
+        // timeout cannot overtake its request. Each request carries its
+        // semaphore permit through the session task, bounding queued and
+        // pending requests even if the caller drops its future.
+        let command_capacity = config.max_in_flight.max(1);
+        let (command_tx, command_rx) = mpsc::channel(command_capacity);
         let (event_tx, initial_event_rx) = broadcast::channel(config.event_capacity.max(1));
         let (activity_tx, activity_rx) = watch::channel(0_u64);
         let (closed_tx, closed_rx) = watch::channel(None);
         tokio::spawn(run_session(
             socket,
             command_rx,
-            cancel_rx,
             event_tx.clone(),
             activity_tx,
             closed_tx,
@@ -222,7 +225,6 @@ impl GatewayClient {
         Ok(GatewaySession {
             hello,
             command_tx,
-            cancel_tx,
             event_tx,
             event_rx: Arc::new(Mutex::new(initial_event_rx)),
             activity_rx,
@@ -238,7 +240,6 @@ impl GatewayClient {
 pub struct GatewaySession {
     hello: Value,
     command_tx: mpsc::Sender<SessionCommand>,
-    cancel_tx: mpsc::UnboundedSender<String>,
     event_tx: broadcast::Sender<Event>,
     event_rx: Arc<Mutex<broadcast::Receiver<Event>>>,
     activity_rx: watch::Receiver<u64>,
@@ -266,11 +267,20 @@ impl GatewaySession {
 
     pub async fn next_event(&self) -> Result<Event, ClientError> {
         let mut closed = self.closed_rx.clone();
+        let mut events = self.event_rx.lock().await;
+        match events.try_recv() {
+            Ok(event) => return Ok(event),
+            Err(broadcast::error::TryRecvError::Lagged(count)) => {
+                return Err(ClientError::EventLagged(count));
+            }
+            Err(broadcast::error::TryRecvError::Closed) => return Err(self.closed_error()),
+            Err(broadcast::error::TryRecvError::Empty) => {}
+        }
         if closed.borrow().is_some() {
             return Err(self.closed_error());
         }
-        let mut events = self.event_rx.lock().await;
         tokio::select! {
+            biased;
             event = events.recv() => match event {
                 Ok(event) => Ok(event),
                 Err(broadcast::error::RecvError::Lagged(count)) => {
@@ -296,7 +306,7 @@ impl GatewaySession {
                 "request method must not be empty".into(),
             ));
         }
-        let _permit = self
+        let permit = self
             .in_flight
             .clone()
             .acquire_owned()
@@ -313,6 +323,7 @@ impl GatewaySession {
                 method: method.clone(),
                 params,
                 reply: reply_tx,
+                permit,
             })
             .await
             .map_err(|_| self.closed_error())?;
@@ -321,7 +332,10 @@ impl GatewaySession {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(self.closed_error()),
             Err(_) => {
-                let _ = self.cancel_tx.send(id);
+                let _ = self
+                    .command_tx
+                    .send(SessionCommand::CancelRequest { id })
+                    .await;
                 Err(ClientError::RequestTimeout(method))
             }
         }
@@ -383,6 +397,10 @@ enum SessionCommand {
         method: String,
         params: Value,
         reply: oneshot::Sender<Result<Value, ClientError>>,
+        permit: tokio::sync::OwnedSemaphorePermit,
+    },
+    CancelRequest {
+        id: String,
     },
     Close,
 }
@@ -514,7 +532,6 @@ where
 async fn run_session<S>(
     mut socket: tokio_tungstenite::WebSocketStream<S>,
     mut commands: mpsc::Receiver<SessionCommand>,
-    mut cancellations: mpsc::UnboundedReceiver<String>,
     events: broadcast::Sender<Event>,
     activity: watch::Sender<u64>,
     closed: watch::Sender<Option<SessionCloseCause>>,
@@ -524,16 +541,16 @@ async fn run_session<S>(
     let mut pending = HashMap::new();
     let close_reason = loop {
         tokio::select! {
-            Some(id) = cancellations.recv() => {
-                pending.remove(&id);
-            }
             command = commands.recv() => {
                 match command {
-                    Some(SessionCommand::Request { id, method, params, reply }) => {
+                    Some(SessionCommand::Request { id, method, params, reply, permit }) => {
                         match send_request(&mut socket, &id, &method, params).await {
-                            Ok(()) => { pending.insert(id, (method, reply)); }
+                            Ok(()) => { pending.insert(id, (method, reply, permit)); }
                             Err(error) => { let _ = reply.send(Err(error)); }
                         }
+                    }
+                    Some(SessionCommand::CancelRequest { id }) => {
+                        pending.remove(&id);
                     }
                     Some(SessionCommand::Close) | None => {
                         let _ = socket.close(None).await;
@@ -552,7 +569,7 @@ async fn run_session<S>(
                                 let _ = events.send(Event { event, payload, seq });
                             }
                             Ok(IncomingFrame::Response { id, ok, payload, error }) => {
-                                if let Some((method, reply)) = pending.remove(&id) {
+                                if let Some((method, reply, _permit)) = pending.remove(&id) {
                                     let _ = reply.send(response_result(&method, ok, payload, error));
                                 }
                             }
@@ -575,7 +592,7 @@ async fn run_session<S>(
         }
     };
 
-    for (_, (method, reply)) in pending {
+    for (_, (method, reply, _permit)) in pending {
         let _ = reply.send(Err(close_reason.pending_request_error(&method)));
     }
     let _ = closed.send(Some(close_reason));
@@ -663,6 +680,9 @@ fn is_trusted_plaintext_address(address: &IpAddr) -> bool {
                 || (first == 100 && (64..=127).contains(&second))
         }
         IpAddr::V6(address) => {
+            if let Some(address) = address.to_ipv4_mapped() {
+                return is_trusted_plaintext_address(&IpAddr::V4(address));
+            }
             let first = address.segments()[0];
             address.is_loopback() || first & 0xfe00 == 0xfc00 || first & 0xffc0 == 0xfe80
         }
