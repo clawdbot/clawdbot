@@ -75,9 +75,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         SessionKey: "test:session",
         ...command,
       }),
-      cfg: policy
-        ? { ...emptyConfig, messages: { operationalReplies: { policy } } }
-        : emptyConfig,
+      cfg: policy ? { ...emptyConfig, messages: { operationalReplies: { policy } } } : emptyConfig,
       dispatcher,
       replyResolver,
       replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
