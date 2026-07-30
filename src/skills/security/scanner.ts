@@ -59,6 +59,7 @@ const SCANNABLE_EXTENSIONS = new Set([
 
 const DEFAULT_MAX_SCAN_FILES = 500;
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
+const MAX_LINE_RULE_FINDINGS_PER_RULE = 32;
 const FILE_SCAN_CACHE_MAX = 5000;
 const DIR_ENTRY_CACHE_MAX = 5000;
 const TEST_DIRECTORY_NAMES = new Set(["__fixtures__", "__mocks__", "__tests__", "test", "tests"]);
@@ -400,6 +401,9 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       continue;
     }
 
+    let acceptedMatches = 0;
+    let omittedMatches = 0;
+    let lastOmittedLine: number | undefined;
     for (const [i, line] of lines.entries()) {
       const matches = line.matchAll(
         new RegExp(
@@ -420,8 +424,14 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
           }
         }
 
-        // Every call is independently reviewable. Stopping after the first match
-        // lets later execution sites hide behind an already-approved finding.
+        if (acceptedMatches >= MAX_LINE_RULE_FINDINGS_PER_RULE) {
+          omittedMatches += 1;
+          lastOmittedLine = i + 1;
+          continue;
+        }
+
+        // Retain distinct calls up to the cap, then aggregate every remaining match.
+        // This keeps hostile output bounded without hiding that later sites exist.
         findings.push({
           ruleId: rule.ruleId,
           severity: rule.severity,
@@ -430,7 +440,18 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
           message: rule.message,
           evidence: formatScanEvidence(line),
         });
+        acceptedMatches += 1;
       }
+    }
+    if (lastOmittedLine !== undefined) {
+      findings.push({
+        ruleId: `${rule.ruleId}-truncated`,
+        severity: rule.severity,
+        file: filePath,
+        line: lastOmittedLine,
+        message: `${omittedMatches} additional ${rule.ruleId} matches omitted after ${MAX_LINE_RULE_FINDINGS_PER_RULE} findings`,
+        evidence: `[${omittedMatches} additional matches omitted after ${MAX_LINE_RULE_FINDINGS_PER_RULE} findings]`,
+      });
     }
   }
 
