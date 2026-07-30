@@ -83,16 +83,17 @@ export type ApprovalReactionPromptPayload = ReplyPayload & {
   reactionBindings: readonly ApprovalReactionDecisionBinding[];
 };
 
-/** Reaction-enabled, native-control, and manual-fallback approval prompt payloads. */
+/** Reaction-enabled and manual-fallback approval prompt payloads, plus native-control copy. */
 export type ApprovalReactionPendingContent = {
   reactionPayload: ApprovalReactionPromptPayload;
   /**
    * Prompt copy for channels whose native controls (Apple Messages polls,
    * inline buttons) own the decision surface. Carries the same bold headers and
    * labels as `reactionPayload` (#85954) minus the tapback hint, which would
-   * advertise a second, redundant control path next to the native one.
+   * advertise a second, redundant control path next to the native one. Text
+   * only: the native control itself carries the decision metadata.
    */
-  nativeControlsPayload: ReplyPayload;
+  nativeControlsText: string;
   manualFallbackPayload: ReplyPayload;
 };
 
@@ -474,15 +475,10 @@ export function buildApprovalReactionPendingContent(params: {
   const reactionPayload = buildApprovalPendingPromptPayload(params);
   // Same rich copy as the reaction prompt, without the tapback hint: the
   // channel's native controls already own the decision surface.
-  const nativeControlsPayload = buildMetadataPayload({
-    request: params.request,
+  const nativeControlsText = buildApprovalReactionPromptText({
     view: params.view,
-    text: buildApprovalReactionPromptText({
-      view: params.view,
-      nowMs: params.nowMs,
-      reactionHint: null,
-    }),
-    allowedDecisions: reactionPayload.allowedDecisions,
+    nowMs: params.nowMs,
+    reactionHint: null,
   });
   const manualFallbackPayload =
     params.view.approvalKind === "plugin"
@@ -515,7 +511,7 @@ export function buildApprovalReactionPendingContent(params: {
             nowMs: params.nowMs,
           } satisfies ExecApprovalPendingReplyParams),
         );
-  return { reactionPayload, nativeControlsPayload, manualFallbackPayload };
+  return { reactionPayload, nativeControlsText, manualFallbackPayload };
 }
 
 /** Build reaction and manual-fallback pending approval content directly from a request. */

@@ -100,7 +100,7 @@ function buildPendingPayload(params: {
     // details message because bridge capability cannot prove recipient support.
     // Same bold headers and labels as the tapback prompt (#85954): both are
     // delivered through the attributed-body send path.
-    pollText: pendingContent.nativeControlsPayload.text ?? "",
+    pollText: pendingContent.nativeControlsText,
     allowedDecisions: pendingContent.reactionPayload.allowedDecisions,
   };
 }

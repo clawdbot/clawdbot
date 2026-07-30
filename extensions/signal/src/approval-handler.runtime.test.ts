@@ -21,7 +21,7 @@ function buildPendingContent(params: {
   const allowedDecisions = params.allowedDecisions ?? ["allow-once"];
   return {
     manualFallbackPayload: { text: params.manualText },
-    nativeControlsPayload: { text: params.manualText },
+    nativeControlsText: params.manualText,
     reactionPayload: {
       text: params.reactionText ?? params.manualText,
       allowedDecisions,
