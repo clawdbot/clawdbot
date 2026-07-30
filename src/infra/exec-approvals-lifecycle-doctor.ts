@@ -57,3 +57,28 @@ export function classifyOpenClawDoctorArgv(argv: readonly string[], start: numbe
     stateSqlite === "compact" || ["compact", "import", "recover", "restore"].includes(sessionSqlite)
   );
 }
+
+/** Return true when substitution output occupies a doctor mutation-flag position. */
+export function unresolvedOpenClawDoctorArgvMayMutate(
+  argv: readonly string[],
+  start: number,
+  isUnresolved: (value: string | undefined) => boolean,
+): boolean {
+  for (let index = start; index < argv.length; index += 1) {
+    const token = argv[index]?.trim() ?? "";
+    const name = optionName(token);
+    if (HELP_OR_VERSION_FLAGS.has(token)) {
+      return false;
+    }
+    if (OPTIONS_WITH_VALUE.has(name)) {
+      if (!token.includes("=")) {
+        index += 1;
+      }
+      continue;
+    }
+    if (isUnresolved(token)) {
+      return true;
+    }
+  }
+  return false;
+}

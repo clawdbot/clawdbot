@@ -136,7 +136,12 @@ function hasEffectivePackageNoExecute(argv: readonly string[], start: number): b
     const token = argv[index]?.trim() ?? "";
     const name = optionName(token);
     if (["-h", "-v", "--help", "--version"].includes(name)) {
-      return true;
+      const value = token.includes("=")
+        ? token.slice(token.indexOf("=") + 1).toLowerCase()
+        : "true";
+      if (!["0", "false", "no", "off"].includes(value)) {
+        return true;
+      }
     }
     if (name === "--dry-run") {
       const value = token.includes("=")

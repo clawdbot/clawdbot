@@ -1,3 +1,10 @@
+import { unresolvedOpenClawConfigActionMayMutate } from "./exec-approvals-lifecycle-config.js";
+import { unresolvedOpenClawDoctorArgvMayMutate } from "./exec-approvals-lifecycle-doctor.js";
+import {
+  classifyOpenClawGatewayArgv,
+  unresolvedGatewayMethodMayHideLifecycle,
+} from "./exec-approvals-lifecycle-gateway.js";
+import { unresolvedOpenClawApprovalPolicyActionMayMutate } from "./exec-approvals-lifecycle-policy.js";
 // Extracts shell command/process substitutions without treating quoted text as executable.
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 import { POSIX_INLINE_COMMAND_FLAGS, resolveInlineCommandMatch } from "./shell-inline-command.js";
@@ -34,6 +41,9 @@ const SUBSTITUTION_RESULT_SENSITIVE_EXECUTABLES = new Set([
 const LIFECYCLE_MUTATION_HINT_RE =
   /\b(?:daemon|gateway|install|kill|remove|restart|rm|start|stop|uninstall|update)\b/iu;
 const SUBSTITUTION_TOKEN_RE = /\$\(|`|[<>=]\(/u;
+const OPENCLAW_GLOBAL_FLAGS = new Set(["--dev", "--no-color"]);
+const OPENCLAW_GLOBAL_OPTIONS = new Set(["--container", "--log-level", "--profile"]);
+const UPDATE_OPTIONS_WITH_VALUE = new Set(["--channel", "--tag", "--timeout"]);
 
 export type ShellSubstitutionScan = {
   commands: string[];
@@ -177,6 +187,73 @@ export function extractShellSubstitutionCommands(command: string): ShellSubstitu
   return extractAtDepth(command, 0);
 }
 
+function optionName(token: string): string {
+  return token.trim().toLowerCase().split("=", 1)[0] ?? "";
+}
+
+function scanFirstPositional(
+  argv: readonly string[],
+  start: number,
+  optionsWithValue: ReadonlySet<string>,
+  standaloneOptions: ReadonlySet<string> = new Set(),
+): number {
+  for (let index = start; index < argv.length; index += 1) {
+    const token = argv[index]?.trim() ?? "";
+    if (token === "--") {
+      return index + 1;
+    }
+    const name = optionName(token);
+    if (standaloneOptions.has(name)) {
+      continue;
+    }
+    if (optionsWithValue.has(name)) {
+      if (!token.includes("=")) {
+        index += 1;
+      }
+      continue;
+    }
+    if (!token.startsWith("-") || token === "-") {
+      return index;
+    }
+  }
+  return argv.length;
+}
+
+function openClawSubstitutionMayHideLifecycle(argv: readonly string[]): boolean {
+  const commandIndex = scanFirstPositional(argv, 1, OPENCLAW_GLOBAL_OPTIONS, OPENCLAW_GLOBAL_FLAGS);
+  const command = (argv[commandIndex] ?? "").trim().toLowerCase();
+  const isSubstitution = (value: string | undefined): boolean =>
+    SUBSTITUTION_TOKEN_RE.test(value ?? "");
+  if (isSubstitution(argv[commandIndex])) {
+    return true;
+  }
+  if (["daemon", "gateway"].includes(command)) {
+    return (
+      classifyOpenClawGatewayArgv(argv, commandIndex + 1) ||
+      unresolvedGatewayMethodMayHideLifecycle(argv, commandIndex + 1, isSubstitution)
+    );
+  }
+  if (command === "config") {
+    return unresolvedOpenClawConfigActionMayMutate(argv, commandIndex + 1, isSubstitution);
+  }
+  if (["approvals", "exec-approvals", "exec-policy"].includes(command)) {
+    return unresolvedOpenClawApprovalPolicyActionMayMutate(
+      command,
+      argv,
+      commandIndex + 1,
+      isSubstitution,
+    );
+  }
+  if (command === "update") {
+    const actionIndex = scanFirstPositional(argv, commandIndex + 1, UPDATE_OPTIONS_WITH_VALUE);
+    return isSubstitution(argv[actionIndex]);
+  }
+  if (command === "doctor") {
+    return unresolvedOpenClawDoctorArgvMayMutate(argv, commandIndex + 1, isSubstitution);
+  }
+  return ["configure", "onboard", "setup"].includes(command);
+}
+
 /** Return true when substitution output can occupy a lifecycle-sensitive argv position. */
 export function lifecycleSubstitutionResultMayHideLifecycle(argv: readonly string[]): boolean {
   const substitutionIndexes = argv.flatMap((token, index) =>
@@ -190,7 +267,7 @@ export function lifecycleSubstitutionResultMayHideLifecycle(argv: readonly strin
   }
   const executable = normalizeExecutableToken(argv[0] ?? "");
   if (executable === "openclaw" || executable.startsWith("openclaw@")) {
-    return true;
+    return openClawSubstitutionMayHideLifecycle(argv);
   }
   if (!SUBSTITUTION_RESULT_SENSITIVE_EXECUTABLES.has(executable)) {
     return false;

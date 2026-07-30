@@ -30,6 +30,7 @@ const mutationCases: Array<[string, string[]]> = [
   ["openclaw gateway --token status", ["openclaw", "gateway", "--token", "status"]],
   ["openclaw gateway --token --help", ["openclaw", "gateway", "--token", "--help"]],
   ["openclaw gateway --password health", ["openclaw", "gateway", "--password", "health"]],
+  [`openclaw gateway "$(printf restart)"`, ["openclaw", "gateway", "$(printf restart)"]],
   ["openclaw daemon stop", ["openclaw", "daemon", "stop"]],
   ["/usr/bin/opencla? gateway restart", ["/usr/bin/opencla?", "gateway", "restart"]],
   ["open{c..c}law gateway restart", ["open{c..c}law", "gateway", "restart"]],
@@ -69,6 +70,10 @@ const mutationCases: Array<[string, string[]]> = [
   [
     "openclaw config set gateway.port 19001",
     ["openclaw", "config", "set", "gateway.port", "19001"],
+  ],
+  [
+    `openclaw config "$(printf set)" gateway.port 19001`,
+    ["openclaw", "config", "$(printf set)", "gateway.port", "19001"],
   ],
   ["openclaw config patch --stdin", ["openclaw", "config", "patch", "--stdin"]],
   ["openclaw config unset gateway.port", ["openclaw", "config", "unset", "gateway.port"]],
@@ -232,6 +237,8 @@ const mutationCases: Array<[string, string[]]> = [
   ["npm install -g openclaw@latest", ["npm", "install", "-g", "openclaw@latest"]],
   ["npm rebuild openclaw", ["npm", "rebuild", "openclaw"]],
   ["pnpm rebuild openclaw", ["pnpm", "rebuild", "openclaw"]],
+  ["npm --help=false install openclaw", ["npm", "--help=false", "install", "openclaw"]],
+  ["npm --version=false install openclaw", ["npm", "--version=false", "install", "openclaw"]],
   [
     "npm install -g github:openclaw/openclaw#main",
     ["npm", "install", "-g", "github:openclaw/openclaw#main"],
@@ -405,6 +412,16 @@ const nonMutationCases: Array<[string, string[]]> = [
   ["npm install --dry-run openclaw", ["npm", "install", "--dry-run", "openclaw"]],
   ["npm uninstall --dry-run openclaw", ["npm", "uninstall", "--dry-run", "openclaw"]],
   ["pnpm rebuild --dry-run openclaw", ["pnpm", "rebuild", "--dry-run", "openclaw"]],
+  ["npm --help=true install openclaw", ["npm", "--help=true", "install", "openclaw"]],
+  ["npm --version install openclaw", ["npm", "--version", "install", "openclaw"]],
+  [
+    `openclaw gateway status --token "$(cat token)"`,
+    ["openclaw", "gateway", "status", "--token", "$(cat token)"],
+  ],
+  [
+    `openclaw config get "$(printf gateway.port)"`,
+    ["openclaw", "config", "get", "$(printf gateway.port)"],
+  ],
 ];
 
 describe("OpenClaw lifecycle exec approvals", () => {
