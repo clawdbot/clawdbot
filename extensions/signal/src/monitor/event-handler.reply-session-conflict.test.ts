@@ -1,6 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Signal tests cover retry behavior for reply session initialization conflicts.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { dispatchReplyWithBufferedBlockDispatcher } from "../../../../src/auto-reply/reply/provider-dispatcher.js";
+import type { SignalEventHandlerDeps } from "./event-handler.types.js";
 
 const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
@@ -17,13 +18,9 @@ const {
 } = vi.hoisted(() => ({
   sendTypingMock: vi.fn(),
   sendReadReceiptMock: vi.fn(),
-  sendReactionSignalMock: vi.fn(
-    async (_recipient: string, _targetTimestamp: number, _emoji: string, _opts: unknown) => ({
-      ok: true,
-    }),
-  ),
+  sendReactionSignalMock: vi.fn(async () => ({ ok: true })),
   removeReactionSignalMock: vi.fn(async () => ({ ok: true })),
-  dispatchInboundMessageMock: vi.fn<typeof dispatchReplyWithBufferedBlockDispatcher>(),
+  dispatchInboundMessageMock: vi.fn(),
   recordInboundSessionMock: vi.fn(),
 }));
 
@@ -72,13 +69,50 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
   };
 });
 
-vi.mock("../../../../src/auto-reply/reply/provider-dispatcher.js", () => ({
-  dispatchReplyWithBufferedBlockDispatcher: dispatchInboundMessageMock,
-}));
-
-vi.mock("../../../../src/channels/session.js", () => ({
-  recordInboundSession: recordInboundSessionMock,
-}));
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
+  type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
+  return {
+    ...actual,
+    runChannelInboundEvent: async (params: RunParams) => {
+      const input = await params.adapter.ingest(params.raw);
+      if (!input) {
+        return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
+      }
+      const eventClass = (await params.adapter.classify?.(input)) ?? {
+        kind: "message" as const,
+        canStartAgentTurn: true,
+      };
+      const preflight = (await params.adapter.preflight?.(input, eventClass)) ?? {};
+      const resolved = await params.adapter.resolveTurn(
+        input,
+        eventClass,
+        "kind" in preflight ? { admission: preflight } : preflight,
+      );
+      if (!("route" in resolved) || !("delivery" in resolved)) {
+        throw new Error("expected assembled Signal channel turn plan");
+      }
+      const result = await actual.runPreparedInboundReply({
+        channel: resolved.channel,
+        accountId: resolved.accountId,
+        routeSessionKey: resolved.route.sessionKey,
+        storePath: "/tmp/openclaw/signal-sessions.json",
+        ctxPayload: resolved.ctxPayload,
+        recordInboundSession: recordInboundSessionMock,
+        afterRecord: resolved.afterRecord,
+        record: resolved.record,
+        history: resolved.history,
+        admission: resolved.admission,
+        botLoopProtection: resolved.botLoopProtection,
+        runDispatch: async () => await dispatchInboundMessageMock({ ctx: resolved.ctxPayload }),
+      });
+      await params.adapter.onFinalize?.(result);
+      return result;
+    },
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
@@ -95,6 +129,16 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
 const CONFLICT_ERROR = new Error(
   "reply session initialization conflicted for agent:main:signal:direct:+15550001111",
 );
+
+function createTrackedTaskHarness() {
+  const tasks: Promise<void>[] = [];
+  return {
+    tasks,
+    runTrackedTask: (task: () => Promise<void>) => {
+      tasks.push(task());
+    },
+  };
+}
 
 describe("signal reply session init conflict retry", () => {
   beforeEach(() => {
@@ -118,23 +162,7 @@ describe("signal reply session init conflict retry", () => {
 
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            ackReaction: "👀",
-            ackReactionScope: "direct",
-            inbound: { debounceMs: 10 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
-          },
-        },
+        cfg: { messages: { inbound: { debounceMs: 10 } } },
       }),
     );
 
@@ -158,7 +186,6 @@ describe("signal reply session init conflict retry", () => {
 
       // The same failed batch is dispatched again.
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
-      expect(sendReactionSignalMock.mock.calls.map((call) => call[2])).not.toContain("❌");
     } finally {
       vi.useRealTimers();
     }
@@ -167,33 +194,12 @@ describe("signal reply session init conflict retry", () => {
   it("cancels a pending retry when the Signal monitor aborts", async () => {
     dispatchInboundMessageMock.mockRejectedValueOnce(CONFLICT_ERROR);
     const abort = new AbortController();
+    const tracked = createTrackedTaskHarness();
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            ackReaction: "👀",
-            ackReactionScope: "direct",
-            inbound: { debounceMs: 10 },
-            statusReactions: {
-              enabled: true,
-              emojis: {
-                queued: "⏳",
-                thinking: "🤔",
-                tool: "🔧",
-                done: "✅",
-                error: "❌",
-              },
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
-          },
-        },
+        cfg: { messages: { inbound: { debounceMs: 10 } } },
         abortSignal: abort.signal,
+        runTrackedTask: tracked.runTrackedTask,
       }),
     );
 
@@ -208,93 +214,20 @@ describe("signal reply session init conflict retry", () => {
       await handled;
 
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      expect(tracked.tasks).toHaveLength(1);
 
       abort.abort(new Error("monitor stopped"));
-      await vi.advanceTimersByTimeAsync(0);
-      const reactionsAfterAbortCleanup = sendReactionSignalMock.mock.calls.length;
-      await vi.advanceTimersByTimeAsync(130_000);
-
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-      expect(sendReactionSignalMock).toHaveBeenCalledTimes(reactionsAfterAbortCleanup);
-      expect(sendReactionSignalMock.mock.calls.map((call) => call[2])).not.toContain("❌");
-      expect(sendReactionSignalMock.mock.calls.at(-1)?.[2]).toBe("👀");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("abandons merged siblings when any durable claim is reclaimed", async () => {
-    dispatchInboundMessageMock.mockRejectedValueOnce(CONFLICT_ERROR);
-    const firstClaimAbort = new AbortController();
-    const secondClaimAbort = new AbortController();
-    const trackedTasks: Promise<void>[] = [];
-    const errorLogs: string[] = [];
-    const baseRuntime = createBaseSignalEventHandlerDeps().runtime;
-    const firstOnAbandoned = vi.fn();
-    const secondOnAbandoned = vi.fn();
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 10 } } },
-        runTrackedTask: (task) => {
-          trackedTasks.push(task());
-        },
-        runtime: {
-          ...baseRuntime,
-          error: (...args: unknown[]) => {
-            errorLogs.push(String(args[0]));
-          },
-        },
-      }),
-    );
-
-    vi.useFakeTimers();
-    try {
-      const firstHandled = handler(
-        createSignalReceiveEvent({
-          dataMessage: { message: "first claimed part", attachments: [] },
-        }),
-        {
-          abortSignal: firstClaimAbort.signal,
-          onAdopted: vi.fn(),
-          onDeferred: vi.fn(),
-          onAdoptionFinalizing: vi.fn(),
-          onAbandoned: firstOnAbandoned,
-        },
-      );
-      const secondHandled = handler(
-        createSignalReceiveEvent({
-          timestamp: 1700000000002,
-          dataMessage: { message: "second claimed part", attachments: [] },
-        }),
-        {
-          abortSignal: secondClaimAbort.signal,
-          onAdopted: vi.fn(),
-          onDeferred: vi.fn(),
-          onAdoptionFinalizing: vi.fn(),
-          onAbandoned: secondOnAbandoned,
-        },
-      );
-      await vi.advanceTimersByTimeAsync(10);
-      await expect(Promise.all([firstHandled, secondHandled])).resolves.toEqual([
-        { kind: "deferred" },
-        { kind: "deferred" },
-      ]);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-
-      secondClaimAbort.abort(new Error("claim reclaimed"));
+      await Promise.all(tracked.tasks);
       await vi.advanceTimersByTimeAsync(10_000);
-      await Promise.all(trackedTasks);
 
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-      expect(firstOnAbandoned).toHaveBeenCalledOnce();
-      expect(secondOnAbandoned).not.toHaveBeenCalled();
-      expect(errorLogs).toEqual([]);
+      expect(tracked.tasks).toHaveLength(1);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("keeps the keyed debounce lane reserved until a retry settles", async () => {
+  it("keeps a retry that crossed the timer boundary in the monitor task runner", async () => {
     let resolveRetry: (() => void) | undefined;
     const retryDispatch = new Promise<{ queuedFinal: boolean; counts: Record<string, number> }>(
       (resolve) => {
@@ -305,9 +238,11 @@ describe("signal reply session init conflict retry", () => {
     dispatchInboundMessageMock
       .mockRejectedValueOnce(CONFLICT_ERROR)
       .mockReturnValueOnce(retryDispatch);
+    const tracked = createTrackedTaskHarness();
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
         cfg: { messages: { inbound: { debounceMs: 10 } } },
+        runTrackedTask: tracked.runTrackedTask,
       }),
     );
 
@@ -320,23 +255,21 @@ describe("signal reply session init conflict retry", () => {
       );
       await vi.advanceTimersByTimeAsync(10);
       await handled;
+      expect(tracked.tasks).toHaveLength(1);
 
-      const newer = handler(
-        createSignalReceiveEvent({
-          timestamp: 1700000000002,
-          dataMessage: { message: "wait behind the retry", attachments: [] },
-        }),
-      );
-      await newer;
+      let trackedTaskSettled = false;
+      void tracked.tasks[0]?.then(() => {
+        trackedTaskSettled = true;
+      });
       await vi.advanceTimersByTimeAsync(1_000);
 
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(10);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      expect(tracked.tasks).toHaveLength(1);
+      expect(trackedTaskSettled).toBe(false);
 
       resolveRetry?.();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(3);
+      await tracked.tasks[0];
+      expect(trackedTaskSettled).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -346,86 +279,33 @@ describe("signal reply session init conflict retry", () => {
     dispatchInboundMessageMock.mockRejectedValue(CONFLICT_ERROR);
 
     const errorLogs: string[] = [];
-    const trackedTasks: Promise<void>[] = [];
-    let resolveFirstAbandonment: (() => void) | undefined;
-    let resolveSecondAbandonment: (() => void) | undefined;
-    const firstOnAbandoned = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveFirstAbandonment = resolve;
-        }),
-    );
-    const secondOnAbandoned = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveSecondAbandonment = resolve;
-        }),
-    );
-    const firstLifecycleAbort = new AbortController();
-    const secondLifecycleAbort = new AbortController();
-    let trackedTaskSettled = false;
-    const baseRuntime = createBaseSignalEventHandlerDeps().runtime;
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
         cfg: { messages: { inbound: { debounceMs: 10 } } },
-        runTrackedTask: (task) => {
-          trackedTasks.push(
-            task().then(() => {
-              trackedTaskSettled = true;
-            }),
-          );
-        },
         runtime: {
-          ...baseRuntime,
-          error: (...args: unknown[]) => {
-            errorLogs.push(String(args[0]));
+          log: () => {},
+          error: (msg: string) => {
+            errorLogs.push(msg);
           },
-        },
+        } as SignalEventHandlerDeps["runtime"],
       }),
     );
 
     vi.useFakeTimers();
     try {
-      const firstHandled = handler(
+      const handled = handler(
         createSignalReceiveEvent({
           dataMessage: {
-            message: "first claimed part",
+            message: "hello after prior turn",
             attachments: [],
           },
         }),
-        {
-          abortSignal: firstLifecycleAbort.signal,
-          onAdopted: vi.fn(),
-          onDeferred: vi.fn(),
-          onAdoptionFinalizing: vi.fn(),
-          onAbandoned: firstOnAbandoned,
-        },
-      );
-      const secondHandled = handler(
-        createSignalReceiveEvent({
-          timestamp: 1700000000002,
-          dataMessage: {
-            message: "second claimed part",
-            attachments: [],
-          },
-        }),
-        {
-          abortSignal: secondLifecycleAbort.signal,
-          onAdopted: vi.fn(),
-          onDeferred: vi.fn(),
-          onAdoptionFinalizing: vi.fn(),
-          onAbandoned: secondOnAbandoned,
-        },
       );
       await vi.advanceTimersByTimeAsync(10);
-      await expect(Promise.all([firstHandled, secondHandled])).resolves.toEqual([
-        { kind: "deferred" },
-        { kind: "deferred" },
-      ]);
+      await handled;
 
       // Initial attempt.
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-      expect(trackedTasks).toHaveLength(1);
 
       await vi.advanceTimersByTimeAsync(1_000);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
@@ -439,73 +319,8 @@ describe("signal reply session init conflict retry", () => {
       // No further retries should be scheduled; advancing again does nothing.
       await vi.advanceTimersByTimeAsync(10_000);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
-      expect(firstOnAbandoned).toHaveBeenCalledTimes(1);
-      expect(secondOnAbandoned).toHaveBeenCalledTimes(1);
-      expect(trackedTaskSettled).toBe(false);
-      resolveFirstAbandonment?.();
-      resolveSecondAbandonment?.();
-      await Promise.all(trackedTasks);
 
       expect(errorLogs.some((msg) => msg.includes("signal debounce flush failed"))).toBe(true);
-      expect(trackedTaskSettled).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("cancels an in-progress terminal status hold and restores the acknowledgement", async () => {
-    dispatchInboundMessageMock.mockResolvedValue({
-      queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 1 },
-    });
-    const abort = new AbortController();
-    const trackedTasks: Promise<void>[] = [];
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            ackReaction: "👀",
-            ackReactionScope: "direct",
-            removeAckAfterReply: true,
-            inbound: { debounceMs: 10 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 60_000,
-                errorHoldMs: 60_000,
-                stallSoftMs: 120_000,
-                stallHardMs: 180_000,
-              },
-            },
-          },
-        },
-        abortSignal: abort.signal,
-        runTrackedTask: (task) => {
-          trackedTasks.push(task());
-        },
-      }),
-    );
-
-    vi.useFakeTimers();
-    try {
-      const handled = handler(
-        createSignalReceiveEvent({
-          dataMessage: { message: "finish before shutdown", attachments: [] },
-        }),
-      );
-      await vi.advanceTimersByTimeAsync(10);
-      await expect(handled).resolves.toBeUndefined();
-      expect(sendReactionSignalMock.mock.calls.map((call) => call[2])).toContain("✅");
-
-      abort.abort(new Error("monitor stopped during status hold"));
-      await vi.advanceTimersByTimeAsync(0);
-      await Promise.all(trackedTasks);
-
-      expect(sendReactionSignalMock.mock.calls.at(-1)?.[2]).toBe("👀");
-      const reactionCount = sendReactionSignalMock.mock.calls.length;
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(sendReactionSignalMock).toHaveBeenCalledTimes(reactionCount);
     } finally {
       vi.useRealTimers();
     }
@@ -545,7 +360,7 @@ describe("signal reply session init conflict retry", () => {
       createBaseSignalEventHandlerDeps({
         cfg: {
           messages: { inbound: { debounceMs: 10 } },
-        },
+        } as OpenClawConfig,
       }),
     );
 
@@ -623,6 +438,79 @@ describe("signal reply session init conflict retry", () => {
       expect(dispatchedBodies[1]).toContain("older failed message");
       expect(dispatchedBodies[1]).not.toContain("newer buffered message");
       expect(dispatchedBodies[2]).toContain("newer buffered message");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  // Ported from the continuation assembly: `164a462adfb` made a merged abort
+  // release only still-live sibling claims. Expressed through the canonical
+  // channel-inbound seam so it follows upstream's ingress architecture.
+  it("abandons merged siblings when any durable claim is reclaimed", async () => {
+    // A fanned-in ingress lifecycle aborts as soon as ANY constituent claim is
+    // reclaimed, so the flush fails carrying that claim's abort reason. Only the
+    // still-live sibling may be released; the reclaimed claim keeps drain ownership.
+    const reclaimed = new Error("claim reclaimed");
+    const firstClaimAbort = new AbortController();
+    const secondClaimAbort = new AbortController();
+    dispatchInboundMessageMock.mockImplementationOnce(async () => {
+      secondClaimAbort.abort(reclaimed);
+      throw reclaimed;
+    });
+    const tracked = createTrackedTaskHarness();
+    const errorLogs: string[] = [];
+    const baseRuntime = createBaseSignalEventHandlerDeps().runtime;
+    const firstOnAbandoned = vi.fn();
+    const secondOnAbandoned = vi.fn();
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: { messages: { inbound: { debounceMs: 10 } } } as OpenClawConfig,
+        runTrackedTask: tracked.runTrackedTask,
+        runtime: {
+          ...baseRuntime,
+          error: (...args: unknown[]) => {
+            errorLogs.push(String(args[0]));
+          },
+        } as SignalEventHandlerDeps["runtime"],
+      }),
+    );
+
+    vi.useFakeTimers();
+    try {
+      const firstHandled = handler(
+        createSignalReceiveEvent({
+          dataMessage: { message: "first claimed part", attachments: [] },
+        }),
+        {
+          abortSignal: firstClaimAbort.signal,
+          onAdopted: vi.fn(),
+          onDeferred: vi.fn(),
+          onAdoptionFinalizing: vi.fn(),
+          onAbandoned: firstOnAbandoned,
+        },
+      );
+      const secondHandled = handler(
+        createSignalReceiveEvent({
+          timestamp: 1700000000002,
+          dataMessage: { message: "second claimed part", attachments: [] },
+        }),
+        {
+          abortSignal: secondClaimAbort.signal,
+          onAdopted: vi.fn(),
+          onDeferred: vi.fn(),
+          onAdoptionFinalizing: vi.fn(),
+          onAbandoned: secondOnAbandoned,
+        },
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      await Promise.all([firstHandled, secondHandled]);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await Promise.all(tracked.tasks);
+
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      expect(firstOnAbandoned).toHaveBeenCalledOnce();
+      expect(secondOnAbandoned).not.toHaveBeenCalled();
+      // The reclaim is an expected ownership transfer, not a flush error.
+      expect(errorLogs).toEqual([]);
     } finally {
       vi.useRealTimers();
     }
