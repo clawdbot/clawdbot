@@ -101,6 +101,24 @@ function captureFetch(sent: SentRequest[], status = 200): typeof fetch {
 
 const silentLogger = { warn: () => {}, info: () => {} };
 
+// Returns a fetch whose responses stream an unread body; the source `cancel`
+// increments the counter so a test can assert the caller released the body.
+function cancelTrackingFetch(status = 200): { fetchFn: typeof fetch; canceled: () => number } {
+  let canceled = 0;
+  const fetchFn = (async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("{}"));
+      },
+      cancel() {
+        canceled += 1;
+      },
+    });
+    return new Response(body, { status });
+  }) as typeof fetch;
+  return { fetchFn, canceled: () => canceled };
+}
+
 describe("parseBeamMirrorConfig", () => {
   it("returns undefined without mirror config", () => {
     expect(parseBeamMirrorConfig({ plugins: { entries: { beam: { enabled: true } } } })).toBe(
@@ -352,5 +370,38 @@ describe("createBeamMirrorRunner", () => {
     });
     await runner.tick();
     expect(sent).toHaveLength(0);
+  });
+
+  // Beam only reads the upload status; the unread response body must be
+  // released so a slow/non-terminating receiver cannot retain a connection
+  // slot and stall later retries (Undici requires consuming or canceling it).
+  it("cancels the response body after a successful upload", async () => {
+    const { fetchFn, canceled } = cancelTrackingFetch(200);
+    const runner = createBeamMirrorRunner({
+      runtime: fakeRuntime(mirrorConfig()),
+      logger: silentLogger,
+      fetchFn,
+      now: () => NOW,
+      listCatalogs: () => [
+        fakeCatalog({ id: "claude", sessions: [{ threadId: "t1", recencyAt: NOW - 60_000 }] }),
+      ],
+    });
+    await runner.tick();
+    expect(canceled()).toBe(1);
+  });
+
+  it("cancels the response body after a rejected upload", async () => {
+    const { fetchFn, canceled } = cancelTrackingFetch(503);
+    const runner = createBeamMirrorRunner({
+      runtime: fakeRuntime(mirrorConfig()),
+      logger: silentLogger,
+      fetchFn,
+      now: () => NOW,
+      listCatalogs: () => [
+        fakeCatalog({ id: "claude", sessions: [{ threadId: "t1", recencyAt: NOW - 60_000 }] }),
+      ],
+    });
+    await runner.tick();
+    expect(canceled()).toBe(1);
   });
 });

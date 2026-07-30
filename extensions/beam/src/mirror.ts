@@ -293,6 +293,10 @@ export function createBeamMirrorRunner(params: {
       },
       body: JSON.stringify(payload),
     });
+    // Beam only needs the upload status; release the unread response body so a
+    // slow or non-terminating receiver cannot retain a connection slot and
+    // stall later mirror retries (Undici requires callers to consume/cancel).
+    await response.body?.cancel().catch(() => undefined);
     if (!response.ok) {
       warnThrottled(`beam mirror upload failed (${response.status}) for ${payload.source}`);
       return false;
