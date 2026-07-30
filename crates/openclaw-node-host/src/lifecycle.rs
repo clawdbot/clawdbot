@@ -421,8 +421,8 @@ mod tests {
         let mut stop_tx = Some(stop_tx);
 
         NodeLifecycle::new(ReconnectPolicy::new(
-            Duration::from_secs(60),
-            Duration::from_secs(60),
+            Duration::from_mins(1),
+            Duration::from_mins(1),
         ))
         .run(
             move || {
@@ -457,7 +457,7 @@ mod tests {
                 },
                 LifecycleEvent::BackingOff {
                     attempt: 1,
-                    delay: Duration::from_secs(60),
+                    delay: Duration::from_mins(1),
                     reason: LifecycleDisconnectReason::Client(ClientErrorClass::Transport),
                 },
                 LifecycleEvent::Stopped {

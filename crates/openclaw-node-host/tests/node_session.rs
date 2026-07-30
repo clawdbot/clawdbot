@@ -100,76 +100,7 @@ async fn duplex_runtime_routes_ordered_input_and_progress() {
     let server_fixture = fixture.clone();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-        let (tcp, _) = listener.accept().await.unwrap();
-        let mut socket = accept_async(tcp).await.unwrap();
-        send_json(
-            &mut socket,
-            json!({
-                "type":"event", "event":"connect.challenge", "payload":{"nonce":"node-nonce"}
-            }),
-        )
-        .await;
-        let connect = receive_json(&mut socket).await;
-        assert_example_connect_surface(&connect);
-        send_json(
-            &mut socket,
-            json!({"type":"res", "id":connect["id"], "ok":true,
-                "payload":{"type":"hello-ok","protocol":4}}),
-        )
-        .await;
-        send_json(
-            &mut socket,
-            json!({"type":"event", "event":"node.invoke.request",
-                "payload":server_fixture["request"]["canonical"]}),
-        )
-        .await;
-        let inputs = server_fixture["input"]["canonical"]
-            .as_array()
-            .expect("canonical input array");
-        for payload in [
-            inputs[0].clone(),
-            json!({"id":"invoke-1","nodeId":"wrong-node","seq":1,"payloadJSON":"wrong"}),
-            json!({"id":"invoke-1","nodeId":"node-1","seq":0,"payloadJSON":"duplicate"}),
-            inputs[1].clone(),
-        ] {
-            send_json(
-                &mut socket,
-                json!({"type":"event", "event":"node.invoke.input", "payload":payload}),
-            )
-            .await;
-        }
-
-        let first = receive_json(&mut socket).await;
-        assert_eq!(first["method"], "node.invoke.progress");
-        assert_eq!(first["params"]["seq"], 0);
-        assert_eq!(
-            first["params"]["chunk"].as_str().unwrap().len(),
-            16 * 1024 - 1
-        );
-        send_json(
-            &mut socket,
-            json!({"type":"res", "id":first["id"], "ok":true, "payload":{"ok":true}}),
-        )
-        .await;
-        let second = receive_json(&mut socket).await;
-        assert_eq!(second["method"], "node.invoke.progress");
-        assert_eq!(second["params"], server_fixture["progress"]["canonical"]);
-        send_json(
-            &mut socket,
-            json!({"type":"res", "id":second["id"], "ok":true, "payload":{"ok":true}}),
-        )
-        .await;
-
-        let result = receive_json(&mut socket).await;
-        assert_eq!(result["method"], "node.invoke.result");
-        assert_eq!(result["params"], server_fixture["results"]["success"]);
-        send_json(
-            &mut socket,
-            json!({"type":"res", "id":result["id"], "ok":true, "payload":{"accepted":true}}),
-        )
-        .await;
-    });
+    let server = tokio::spawn(serve_duplex_runtime(listener, server_fixture));
 
     let runtime = CommandRuntime::builder()
         .capability("example")
@@ -386,6 +317,81 @@ async fn connect_with_command(
     )
     .await
     .unwrap()
+}
+
+async fn serve_duplex_runtime(listener: TcpListener, fixture: Value) {
+    let (tcp, _) = listener.accept().await.unwrap();
+    let mut socket = accept_async(tcp).await.unwrap();
+    send_json(
+        &mut socket,
+        json!({"type":"event", "event":"connect.challenge",
+            "payload":{"nonce":"node-nonce"}}),
+    )
+    .await;
+    let connect = receive_json(&mut socket).await;
+    assert_example_connect_surface(&connect);
+    send_json(
+        &mut socket,
+        json!({"type":"res", "id":connect["id"], "ok":true,
+            "payload":{"type":"hello-ok","protocol":4}}),
+    )
+    .await;
+    send_json(
+        &mut socket,
+        json!({"type":"event", "event":"node.invoke.request",
+            "payload":fixture["request"]["canonical"]}),
+    )
+    .await;
+    let inputs = fixture["input"]["canonical"]
+        .as_array()
+        .expect("canonical input array");
+    for payload in [
+        inputs[0].clone(),
+        json!({"id":"invoke-1","nodeId":"wrong-node","seq":1,"payloadJSON":"wrong"}),
+        json!({"id":"invoke-1","nodeId":"node-1","seq":0,"payloadJSON":"duplicate"}),
+        inputs[1].clone(),
+    ] {
+        send_json(
+            &mut socket,
+            json!({"type":"event", "event":"node.invoke.input", "payload":payload}),
+        )
+        .await;
+    }
+
+    let first = receive_json(&mut socket).await;
+    assert_eq!(first["method"], "node.invoke.progress");
+    assert_eq!(first["params"]["seq"], 0);
+    assert_eq!(
+        first["params"]["chunk"].as_str().unwrap().len(),
+        16 * 1024 - 1
+    );
+    acknowledge(&mut socket, &first).await;
+
+    let second = receive_json(&mut socket).await;
+    assert_eq!(second["method"], "node.invoke.progress");
+    assert_eq!(second["params"], fixture["progress"]["canonical"]);
+    acknowledge(&mut socket, &second).await;
+
+    let result = receive_json(&mut socket).await;
+    assert_eq!(result["method"], "node.invoke.result");
+    assert_eq!(result["params"], fixture["results"]["success"]);
+    send_json(
+        &mut socket,
+        json!({"type":"res", "id":result["id"], "ok":true,
+            "payload":{"accepted":true}}),
+    )
+    .await;
+}
+
+async fn acknowledge<S>(socket: &mut tokio_tungstenite::WebSocketStream<S>, request: &Value)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    send_json(
+        socket,
+        json!({"type":"res", "id":request["id"], "ok":true, "payload":{"ok":true}}),
+    )
+    .await;
 }
 
 async fn send_json<S>(socket: &mut tokio_tungstenite::WebSocketStream<S>, value: Value)
