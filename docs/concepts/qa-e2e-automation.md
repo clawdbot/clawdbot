@@ -214,7 +214,7 @@ Matrix live implementations live under
 `extensions/qa-lab/src/live-transports/matrix/scenarios/`.
 
 The adapter provisions a disposable Tuwunel homeserver in Docker (default image
-`ghcr.io/matrix-construct/tuwunel:v1.6.2`, pinned to its multi-architecture OCI
+`ghcr.io/matrix-construct/tuwunel:v1.8.2`, pinned to its multi-architecture OCI
 index digest; server name `matrix-qa.test`, port `28008`), registers temporary
 driver, SUT, and observer users, seeds the required rooms, and records the
 redacted request/response boundary. It then runs the real Matrix plugin inside
