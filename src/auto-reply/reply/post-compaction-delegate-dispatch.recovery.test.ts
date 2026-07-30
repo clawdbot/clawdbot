@@ -216,7 +216,7 @@ function createDeliveryDeps(params: {
     return { status: params.spawnStatus ?? "accepted" };
   });
   const markPendingDelegateSpawnAccepted = vi.fn(() => true);
-  const markPendingDelegateFailed = vi.fn(() => true);
+  const failReleasedPostCompactionDelegate = vi.fn(() => true);
   // Mirrors the real store: the marker write bumps the TaskFlow revision, and a
   // row that already carries a marker returns that same hop on every replay.
   const reserveAcceptedPostCompactionChainHop = vi.fn(
@@ -244,14 +244,14 @@ function createDeliveryDeps(params: {
     spawnSubagentDirect,
     revalidatePendingDelegateForSpawn: vi.fn(() => ({ allowed: true }) as const),
     markPendingDelegateSpawnAccepted,
-    markPendingDelegateFailed,
+    failReleasedPostCompactionDelegate,
     reserveAcceptedPostCompactionChainHop,
   };
   return {
     deps,
     enqueueSystemEvent,
     log,
-    markPendingDelegateFailed,
+    failReleasedPostCompactionDelegate,
     markPendingDelegateSpawnAccepted,
     reserveAcceptedPostCompactionChainHop,
     spawnSubagentDirect,
@@ -646,7 +646,7 @@ describe("post-compaction delegate dispatch extraction", () => {
       combinedSource.match(/export async function deliverQueuedPostCompactionDelegate/g),
     ).toHaveLength(1);
     expect(dispatchSource).not.toMatch(
-      /\b(?:updateSessionStore|loadSessionStore|spawnSubagentDirect|markPendingDelegateSpawnAccepted|markPendingDelegateFailed)\b/,
+      /\b(?:updateSessionStore|loadSessionStore|spawnSubagentDirect|markPendingDelegateSpawnAccepted|failReleasedPostCompactionDelegate)\b/,
     );
     expect(deliverySource).not.toMatch(
       /\b(?:DispatchPostCompactionDelegatesParams|buildPostCompactionLifecycleEvent|postCompactionDelegatesToPreserve|readPostCompactionContext|drainPostCompactionDelegateDeliveries)\b/,

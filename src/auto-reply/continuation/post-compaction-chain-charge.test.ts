@@ -12,121 +12,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 
-type MockTaskFlowRecord = {
-  flowId: string;
-  syncMode: "managed";
-  ownerKey: string;
-  controllerId: string;
-  status: string;
-  stateJson: unknown;
-  goal: string;
-  currentStep: string;
-  revision: number;
-  createdAt: number;
-  updatedAt: number;
-  endedAt?: number;
-  cancelRequestedAt?: number;
-};
-
-const mockFlows = new Map<string, MockTaskFlowRecord>();
-let flowIdCounter = 0;
-
-vi.mock("../../tasks/task-flow-registry.js", () => ({
-  createManagedTaskFlow: vi.fn(
-    (params: {
-      ownerKey: string;
-      controllerId: string;
-      stateJson: unknown;
-      goal: string;
-      currentStep: string;
-    }) => {
-      const flowId = `flow-${++flowIdCounter}`;
-      mockFlows.set(flowId, {
-        flowId,
-        syncMode: "managed",
-        ownerKey: params.ownerKey,
-        controllerId: params.controllerId,
-        status: "queued",
-        stateJson: params.stateJson,
-        goal: params.goal,
-        currentStep: params.currentStep,
-        revision: 0,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      });
-      return mockFlows.get(flowId);
-    },
-  ),
-  listTaskFlowsForOwnerKey: vi.fn((ownerKey: string) =>
-    [...mockFlows.values()].filter((flow) => flow.ownerKey === ownerKey),
-  ),
-  listTaskFlowRecords: vi.fn(() => [...mockFlows.values()]),
-  getTaskFlowById: vi.fn((flowId: string) => mockFlows.get(flowId)),
-  updateFlowRecordByIdExpectedRevision: vi.fn(
-    (params: { flowId: string; expectedRevision: number; patch: Record<string, unknown> }) => {
-      const flow = mockFlows.get(params.flowId);
-      if (!flow || flow.revision !== params.expectedRevision) {
-        return {
-          applied: false,
-          reason: flow ? "revision_conflict" : "not_found",
-          current: flow ? { ...flow } : undefined,
-        };
-      }
-      Object.assign(flow, params.patch);
-      flow.revision = flow.revision + 1;
-      return { applied: true, flow: { ...flow } };
-    },
-  ),
-  finishFlow: vi.fn(
-    (params: {
-      flowId: string;
-      expectedRevision: number;
-      updatedAt?: number;
-      endedAt?: number;
-      stateJson?: unknown;
-    }) => {
-      const flow = mockFlows.get(params.flowId);
-      if (!flow || flow.revision !== params.expectedRevision) {
-        return {
-          applied: false,
-          reason: flow ? "revision_conflict" : "not_found",
-          current: flow ? { ...flow } : undefined,
-        };
-      }
-      flow.status = "succeeded";
-      flow.stateJson = params.stateJson ?? flow.stateJson;
-      flow.endedAt = params.endedAt ?? params.updatedAt ?? Date.now();
-      flow.updatedAt = params.updatedAt ?? flow.endedAt;
-      flow.revision = flow.revision + 1;
-      return { applied: true, flow: { ...flow } };
-    },
-  ),
-  failFlow: vi.fn((params: { flowId: string; expectedRevision: number; stateJson?: unknown }) => {
-    const flow = mockFlows.get(params.flowId);
-    if (!flow || flow.revision !== params.expectedRevision) {
-      return {
-        applied: false,
-        reason: flow ? "revision_conflict" : "not_found",
-        current: flow ? { ...flow } : undefined,
-      };
-    }
-    flow.status = "failed";
-    if (params.stateJson !== undefined) {
-      flow.stateJson = params.stateJson;
-    }
-    flow.revision = flow.revision + 1;
-    return { applied: true };
-  }),
-  deleteTaskFlowRecordById: vi.fn((flowId: string) => {
-    mockFlows.delete(flowId);
-  }),
-}));
+vi.mock("../../tasks/task-flow-registry.js", async () => {
+  const harness = await import("./delegate-taskflow-registry.test-harness.js");
+  return harness.createTaskFlowRegistryMock();
+});
 
 import {
   claimStagedPostCompactionTaskFlowDelegates,
   markPendingDelegateSpawnAccepted,
   stagePostCompactionTaskFlowDelegate,
 } from "./delegate-store.js";
+import { resetMockTaskFlows } from "./delegate-taskflow-registry.test-harness.js";
 import { reserveAcceptedPostCompactionChainHop } from "./post-compaction-chain-charge.js";
 import type { ChainState } from "./types.js";
 
@@ -159,12 +55,11 @@ beforeEach(() => {
   setRuntimeConfigSnapshot({
     tools: { sessions_spawn: { attachments: { enabled: true } } },
   });
-  mockFlows.clear();
-  flowIdCounter = 0;
+  resetMockTaskFlows();
 });
 
 afterEach(() => {
-  mockFlows.clear();
+  resetMockTaskFlows();
 });
 
 describe("reserveAcceptedPostCompactionChainHop", () => {

@@ -239,7 +239,7 @@ function createDeliveryDeps(params: {
     sessionAccessorModule.loadSessionEntry({ storePath, sessionKey }),
   );
   const markPendingDelegateSpawnAccepted = vi.fn(() => true);
-  const markPendingDelegateFailed = vi.fn(() => true);
+  const failReleasedPostCompactionDelegate = vi.fn(() => true);
   const revalidatePendingDelegateForSpawn = vi.fn(
     () => params.spawnFence ?? ({ allowed: true } as const),
   );
@@ -268,7 +268,7 @@ function createDeliveryDeps(params: {
     spawnSubagentDirect,
     revalidatePendingDelegateForSpawn,
     markPendingDelegateSpawnAccepted,
-    markPendingDelegateFailed,
+    failReleasedPostCompactionDelegate,
     reserveAcceptedPostCompactionChainHop,
   };
   return {
@@ -276,7 +276,7 @@ function createDeliveryDeps(params: {
     enqueueSystemEvent,
     loadSessionEntry,
     log,
-    markPendingDelegateFailed,
+    failReleasedPostCompactionDelegate,
     markPendingDelegateSpawnAccepted,
     reserveAcceptedPostCompactionChainHop,
     revalidatePendingDelegateForSpawn,
@@ -472,7 +472,7 @@ describe("post-compaction delegate dispatch extraction", () => {
         deps,
         enqueueSystemEvent,
         log,
-        markPendingDelegateFailed,
+        failReleasedPostCompactionDelegate,
         markPendingDelegateSpawnAccepted,
         spawnSubagentDirect,
       } = createDeliveryDeps({
@@ -492,7 +492,7 @@ describe("post-compaction delegate dispatch extraction", () => {
       );
 
       expect(spawnSubagentDirect).not.toHaveBeenCalled();
-      expect(markPendingDelegateFailed).not.toHaveBeenCalled();
+      expect(failReleasedPostCompactionDelegate).not.toHaveBeenCalled();
       expect(markPendingDelegateSpawnAccepted).toHaveBeenCalledWith(
         {
           flowId: "pc-flow-source",
@@ -531,7 +531,7 @@ describe("post-compaction delegate dispatch extraction", () => {
         forbidden.deps,
       );
 
-      expect(forbidden.markPendingDelegateFailed).toHaveBeenCalledWith(
+      expect(forbidden.failReleasedPostCompactionDelegate).toHaveBeenCalledWith(
         {
           flowId: "pc-flow-source",
           expectedRevision: 7,
@@ -541,7 +541,7 @@ describe("post-compaction delegate dispatch extraction", () => {
         "Post-compaction delegate rejected",
       );
       expect(forbidden.markPendingDelegateSpawnAccepted).not.toHaveBeenCalled();
-      expect(forbidden.markPendingDelegateFailed.mock.invocationCallOrder[0]).toBeLessThan(
+      expect(forbidden.failReleasedPostCompactionDelegate.mock.invocationCallOrder[0]).toBeLessThan(
         removeUnacceptedDelegateArtifactPolicyMock.mock.invocationCallOrder[0]!,
       );
       expect(removeUnacceptedDelegateArtifactPolicyMock).toHaveBeenCalledWith("pc-flow-source");
@@ -565,7 +565,7 @@ describe("post-compaction delegate dispatch extraction", () => {
         ),
       ).rejects.toThrow("post-compaction delegate spawn error");
 
-      expect(transient.markPendingDelegateFailed).not.toHaveBeenCalled();
+      expect(transient.failReleasedPostCompactionDelegate).not.toHaveBeenCalled();
       expect(transient.markPendingDelegateSpawnAccepted).not.toHaveBeenCalled();
       expect(removeUnacceptedDelegateArtifactPolicyMock).not.toHaveBeenCalled();
 
@@ -583,7 +583,7 @@ describe("post-compaction delegate dispatch extraction", () => {
         ),
       ).rejects.toThrow("post-compaction delegate spawn forbidden");
 
-      expect(nonSourceForbidden.markPendingDelegateFailed).not.toHaveBeenCalled();
+      expect(nonSourceForbidden.failReleasedPostCompactionDelegate).not.toHaveBeenCalled();
       expect(nonSourceForbidden.markPendingDelegateSpawnAccepted).not.toHaveBeenCalled();
     });
   });
@@ -729,7 +729,7 @@ describe("post-compaction delegate dispatch extraction", () => {
       expect(disabled.loadSessionEntry).not.toHaveBeenCalled();
       expect(disabled.spawnSubagentDirect).not.toHaveBeenCalled();
       expect(disabled.markPendingDelegateSpawnAccepted).not.toHaveBeenCalled();
-      expect(disabled.markPendingDelegateFailed).not.toHaveBeenCalled();
+      expect(disabled.failReleasedPostCompactionDelegate).not.toHaveBeenCalled();
       expect(await loadPendingSessionDelivery(deliveryId, stateDir)).toBeTruthy();
 
       await drainPostCompactionDelegateDeliveriesDispatch({
@@ -764,11 +764,16 @@ describe("post-compaction delegate dispatch extraction", () => {
       await seedSessionStore(storePath, {
         main: { sessionId: "session", updatedAt: 1, continuationChainCount: 2 },
       });
-      const { deps, enqueueSystemEvent, log, markPendingDelegateFailed, spawnSubagentDirect } =
-        createDeliveryDeps({
-          storePath,
-          runtimeConfig: { maxChainLength: 2 },
-        });
+      const {
+        deps,
+        enqueueSystemEvent,
+        log,
+        failReleasedPostCompactionDelegate,
+        spawnSubagentDirect,
+      } = createDeliveryDeps({
+        storePath,
+        runtimeConfig: { maxChainLength: 2 },
+      });
 
       await deliverQueuedPostCompactionDelegate(
         {
@@ -788,7 +793,7 @@ describe("post-compaction delegate dispatch extraction", () => {
         "[continuation] Post-compaction delegate rejected: chain length 2 reached. Task: queued delegate",
         { sessionKey: "main" },
       );
-      expect(markPendingDelegateFailed).toHaveBeenCalledWith(
+      expect(failReleasedPostCompactionDelegate).toHaveBeenCalledWith(
         {
           flowId: "pc-flow-source",
           expectedRevision: 7,
@@ -806,11 +811,16 @@ describe("post-compaction delegate dispatch extraction", () => {
       await seedSessionStore(storePath, {
         main: { sessionId: "session", updatedAt: 1, continuationChainTokens: 11 },
       });
-      const { deps, enqueueSystemEvent, log, markPendingDelegateFailed, spawnSubagentDirect } =
-        createDeliveryDeps({
-          storePath,
-          runtimeConfig: { costCapTokens: 10 },
-        });
+      const {
+        deps,
+        enqueueSystemEvent,
+        log,
+        failReleasedPostCompactionDelegate,
+        spawnSubagentDirect,
+      } = createDeliveryDeps({
+        storePath,
+        runtimeConfig: { costCapTokens: 10 },
+      });
 
       await deliverQueuedPostCompactionDelegate(
         {
@@ -830,7 +840,7 @@ describe("post-compaction delegate dispatch extraction", () => {
         "[continuation] Post-compaction delegate rejected: cost cap exceeded (11 > 10). Task: queued delegate",
         { sessionKey: "main" },
       );
-      expect(markPendingDelegateFailed).toHaveBeenCalledWith(
+      expect(failReleasedPostCompactionDelegate).toHaveBeenCalledWith(
         {
           flowId: "source-flow-cost",
           expectedRevision: 4,
@@ -846,11 +856,16 @@ describe("post-compaction delegate dispatch extraction", () => {
     await withTempDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
       await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: 1 } });
-      const { deps, enqueueSystemEvent, log, markPendingDelegateFailed, spawnSubagentDirect } =
-        createDeliveryDeps({
-          storePath,
-          runtimeConfig: { crossSessionTargeting: "disabled" },
-        });
+      const {
+        deps,
+        enqueueSystemEvent,
+        log,
+        failReleasedPostCompactionDelegate,
+        spawnSubagentDirect,
+      } = createDeliveryDeps({
+        storePath,
+        runtimeConfig: { crossSessionTargeting: "disabled" },
+      });
 
       await deliverQueuedPostCompactionDelegate(
         {
@@ -876,7 +891,7 @@ describe("post-compaction delegate dispatch extraction", () => {
       expect(Object.values(stored).some((entry) => entry.continuationChainCount != null)).toBe(
         false,
       );
-      expect(markPendingDelegateFailed).toHaveBeenCalledWith(
+      expect(failReleasedPostCompactionDelegate).toHaveBeenCalledWith(
         {
           flowId: "source-flow-cross-session",
           expectedRevision: 5,

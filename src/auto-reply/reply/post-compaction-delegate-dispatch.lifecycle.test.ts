@@ -117,7 +117,7 @@ function createDeliveryDeps(params: {
     sessionAccessorModule.loadSessionEntry({ storePath, sessionKey }),
   );
   const markPendingDelegateSpawnAccepted = vi.fn(() => true);
-  const markPendingDelegateFailed = vi.fn(() => true);
+  const failReleasedPostCompactionDelegate = vi.fn(() => true);
   const revalidatePendingDelegateForSpawn = vi.fn(() => ({ allowed: true }) as const);
   // Mirrors the real store: the marker write bumps the TaskFlow revision, and a
   // row that already carries a marker returns that same hop on every replay.
@@ -144,7 +144,7 @@ function createDeliveryDeps(params: {
     spawnSubagentDirect,
     revalidatePendingDelegateForSpawn,
     markPendingDelegateSpawnAccepted,
-    markPendingDelegateFailed,
+    failReleasedPostCompactionDelegate,
     reserveAcceptedPostCompactionChainHop,
   };
   return {
@@ -152,7 +152,7 @@ function createDeliveryDeps(params: {
     enqueueSystemEvent,
     loadSessionEntry,
     log,
-    markPendingDelegateFailed,
+    failReleasedPostCompactionDelegate,
     markPendingDelegateSpawnAccepted,
     reserveAcceptedPostCompactionChainHop,
     spawnSubagentDirect,
@@ -183,7 +183,7 @@ function collectEmittedText(harness: ReturnType<typeof createDeliveryDeps>): str
   return [
     ...harness.log.mock.calls.flat(),
     ...harness.enqueueSystemEvent.mock.calls.flat(),
-    ...harness.markPendingDelegateFailed.mock.calls.flat(),
+    ...harness.failReleasedPostCompactionDelegate.mock.calls.flat(),
   ]
     .map((value) => (typeof value === "string" ? value : JSON.stringify(value)))
     .join("\n");
@@ -382,6 +382,39 @@ describe("post-compaction delivery: continuation depth follows accepted children
       );
     });
   });
+
+  it("does not re-spawn a source-less entry whose post-acceptance chain persist failed", async () => {
+    await withTempDir({ prefix: "openclaw-post-compaction-sourceless-" }, async (tempDir) => {
+      const storePath = path.join(tempDir, "sessions.json");
+      await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: Date.now() } });
+      const { deps, spawnSubagentDirect } = createDeliveryDeps({ storePath });
+      // Delegates persisted through the session-entry path lose their flowId in
+      // `normalizePostCompactionDelegate`, so their queue entries are source-less.
+      const entry = createQueuedEntry({ id: "queue-sourceless" });
+
+      const persist = vi.fn<typeof sessionAccessorModule.patchSessionEntry>();
+      persist.mockRejectedValueOnce(new Error("persist failed"));
+      deps.patchSessionEntry = persist;
+      await expect(deliverQueuedPostCompactionDelegate({ entry }, deps)).rejects.toThrow(
+        "persist failed",
+      );
+      expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
+
+      // The child the first attempt accepted is keyed off the QUEUE ENTRY ID,
+      // because that is what the spawn passes as `continuationDelegateFlowId`.
+      // The replay guard must derive it the same way or this retry duplicates
+      // the child (karmaterminal/openclaw#1198).
+      mockRegistryState.acceptedChildSessionKeys.add(
+        deriveTestContinuationChildSessionKey("main", "queue-sourceless"),
+      );
+      deps.patchSessionEntry = sessionAccessorModule.patchSessionEntry;
+      await deliverQueuedPostCompactionDelegate({ entry }, deps);
+      expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
+      // No durable marker exists for a source-less row, so the replay reclaims
+      // the delivery without risking a second charge for the same accepted hop.
+      expect(readSessionStore(storePath).main?.continuationChainCount ?? 0).toBe(0);
+    });
+  });
 });
 
 describe("post-compaction delivery: RFC §4.4 stale work dies before materialization", () => {
@@ -414,7 +447,7 @@ describe("post-compaction delivery: RFC §4.4 stale work dies before materializa
       expect(harness.reserveAcceptedPostCompactionChainHop).not.toHaveBeenCalled();
 
       // The row is terminal, not retryable, and its accepted-artifact policy is released.
-      expect(harness.markPendingDelegateFailed).toHaveBeenCalledWith(
+      expect(harness.failReleasedPostCompactionDelegate).toHaveBeenCalledWith(
         { flowId: "pc-flow-source", expectedRevision: 7, task: SECRET_TASK },
         `Post-compaction delegate rejected as stale after ${POST_COMPACTION_DELEGATE_TTL_MS + 1}ms.`,
         "Post-compaction delegate rejected",
@@ -510,7 +543,7 @@ describe("post-compaction delivery: RFC §4.4 stale work dies before materializa
       // leave it eligible again the moment continuation is re-enabled.
       await deliverQueuedPostCompactionDelegate({ entry: staleEntry }, disabled.deps);
       expect(disabled.spawnSubagentDirect).not.toHaveBeenCalled();
-      expect(disabled.markPendingDelegateFailed).toHaveBeenCalledTimes(1);
+      expect(disabled.failReleasedPostCompactionDelegate).toHaveBeenCalledTimes(1);
 
       const reEnabled = createDeliveryDeps({ storePath });
       await deliverQueuedPostCompactionDelegate({ entry: staleEntry }, reEnabled.deps);
@@ -539,7 +572,7 @@ describe("post-compaction delivery: RFC §4.4 stale work dies before materializa
         harness.deps,
       );
 
-      expect(harness.markPendingDelegateFailed).not.toHaveBeenCalled();
+      expect(harness.failReleasedPostCompactionDelegate).not.toHaveBeenCalled();
       expect(harness.markPendingDelegateSpawnAccepted).toHaveBeenCalledTimes(1);
     });
   });
