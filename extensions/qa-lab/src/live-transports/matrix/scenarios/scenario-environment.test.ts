@@ -77,6 +77,8 @@ describe("matrix scenario environment", () => {
       config: {},
       gateway,
       outputDir: "/tmp/matrix-qa/output",
+      scenarioId: "matrix-observer-reset",
+      scenarioTitle: "Matrix observer reset",
       timeoutMs: 1_000,
       waitForConfigRestartSettle: vi.fn(),
     };
