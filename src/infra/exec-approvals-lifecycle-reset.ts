@@ -1,5 +1,8 @@
 // Classifies destructive OpenClaw reset operations and their preview mode.
-import { lifecycleHasEffectiveBooleanOption } from "./exec-approvals-lifecycle-tokens.js";
+import {
+  lifecycleBooleanOptionValueMayBeDynamic,
+  lifecycleHasEffectiveBooleanOption,
+} from "./exec-approvals-lifecycle-tokens.js";
 
 const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "--version"]);
 const OPTIONS_WITH_VALUE = new Set(["--scope"]);
@@ -31,4 +34,19 @@ export function classifyOpenClawResetArgv(argv: readonly string[], start: number
     }
   }
   return !dryRun;
+}
+
+/** Return true when runtime expansion can disable reset preview mode. */
+export function unresolvedOpenClawResetArgvMayMutate(
+  argv: readonly string[],
+  start: number,
+  isUnresolved: (value: string | undefined) => boolean,
+): boolean {
+  return lifecycleBooleanOptionValueMayBeDynamic(
+    argv,
+    start,
+    DRY_RUN_OPTION,
+    isUnresolved,
+    OPTIONS_WITH_VALUE,
+  );
 }

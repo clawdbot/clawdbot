@@ -1,5 +1,8 @@
 // Resolves package-runner argv without letting supported option layouts hide commands.
-import { lifecycleHasEffectiveBooleanOption } from "./exec-approvals-lifecycle-tokens.js";
+import {
+  lifecycleBooleanOptionValueMayBeDynamic,
+  lifecycleHasEffectiveBooleanOption,
+} from "./exec-approvals-lifecycle-tokens.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 
 const PACKAGE_GLOBAL_OPTIONS_WITH_VALUE = new Set([
@@ -18,6 +21,7 @@ const PACKAGE_GLOBAL_OPTIONS_WITH_VALUE = new Set([
   "--prefix",
   "--registry",
   "--script-shell",
+  "--shell",
   "--userconfig",
   "--workspace",
 ]);
@@ -191,6 +195,36 @@ function hasEffectivePackageNoExecute(argv: readonly string[], start: number): b
   );
 }
 
+function packageNoExecuteOptionValueMayBeDynamic(
+  argv: readonly string[],
+  start: number,
+  isDynamic: (value: string | undefined) => boolean,
+): boolean {
+  return (
+    lifecycleBooleanOptionValueMayBeDynamic(
+      argv,
+      start,
+      PACKAGE_HELP_OPTIONS,
+      isDynamic,
+      PACKAGE_TARGET_OPTIONS_WITH_VALUE,
+    ) ||
+    lifecycleBooleanOptionValueMayBeDynamic(
+      argv,
+      start,
+      PACKAGE_VERSION_OPTIONS,
+      isDynamic,
+      PACKAGE_TARGET_OPTIONS_WITH_VALUE,
+    ) ||
+    lifecycleBooleanOptionValueMayBeDynamic(
+      argv,
+      start,
+      PACKAGE_DRY_RUN_OPTION,
+      isDynamic,
+      PACKAGE_TARGET_OPTIONS_WITH_VALUE,
+    )
+  );
+}
+
 function packageOperationMutatesOpenClaw(
   argv: readonly string[],
   subcommandIndex: number,
@@ -314,6 +348,12 @@ export function unresolvedPackageMutationMayTargetOpenClaw(
   const subcommandScan = scanPackageSubcommand(argv, 1);
   const subcommandIndex = subcommandScan.index;
   const subcommand = normalizedToken(argv[subcommandIndex]);
+  if (
+    packageNoExecuteOptionValueMayBeDynamic(argv, subcommandIndex + 1, isUnresolved) &&
+    looksLikeUnresolvedLifecycleRunner(argv)
+  ) {
+    return true;
+  }
   if (hasEffectivePackageNoExecute(argv, subcommandIndex + 1)) {
     return false;
   }

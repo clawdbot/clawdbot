@@ -125,6 +125,13 @@ describe("OpenClaw lifecycle runner parsing edges", () => {
     ).toBe(true);
   });
 
+  it("unwraps npx --shell before classifying the package target", () => {
+    const command = "npx --shell /bin/sh openclaw gateway restart";
+    expect(
+      requiresApproval(command, ["npx", "--shell", "/bin/sh", "openclaw", "gateway", "restart"]),
+    ).toBe(true);
+  });
+
   it("preserves PowerShell Start-Process ArgumentList arrays", () => {
     const command =
       'Start-Process openclaw -ArgumentList "plugins", "install", "memory" -WorkingDirectory C:\\tmp';
@@ -147,5 +154,42 @@ describe("OpenClaw lifecycle runner parsing edges", () => {
     expect(
       requiresApproval(command, ["Start-Process", "openclaw", "-ArgumentList", "plugins,", "list"]),
     ).toBe(false);
+  });
+});
+
+describe("OpenClaw lifecycle substitution-controlled options", () => {
+  it.each([
+    [
+      'openclaw update --dry-run="$(printf false)"',
+      ["openclaw", "update", "--dry-run=$(printf false)"],
+    ],
+    [
+      'openclaw config set gateway.port 19001 --dry-run="$(printf false)"',
+      ["openclaw", "config", "set", "gateway.port", "19001", "--dry-run=$(printf false)"],
+    ],
+    [
+      'openclaw reset --dry-run="$(printf false)"',
+      ["openclaw", "reset", "--dry-run=$(printf false)"],
+    ],
+    [
+      'openclaw plugins update memory --dry-run="$(printf false)"',
+      ["openclaw", "plugins", "update", "memory", "--dry-run=$(printf false)"],
+    ],
+    [
+      'openclaw hooks update audit --dry-run="$(printf false)"',
+      ["openclaw", "hooks", "update", "audit", "--dry-run=$(printf false)"],
+    ],
+  ] as Array<[string, string[]]>)(
+    "fails closed for dynamic preview option: %s",
+    (command, argv) => {
+      expect(requiresApproval(command, argv)).toBe(true);
+    },
+  );
+
+  it("fails closed for a substitution-generated plugin registry refresh", () => {
+    const command = 'openclaw plugins registry "$(printf -- --refresh)"';
+    expect(
+      requiresApproval(command, ["openclaw", "plugins", "registry", "$(printf -- --refresh)"]),
+    ).toBe(true);
   });
 });

@@ -33,3 +33,28 @@ export function lifecycleHasEffectiveBooleanOption(
   }
   return enabled;
 }
+
+/** Return true when a boolean option's attached value is resolved only at shell runtime. */
+export function lifecycleBooleanOptionValueMayBeDynamic(
+  argv: readonly string[],
+  start: number,
+  names: ReadonlySet<string>,
+  isDynamic: (value: string | undefined) => boolean,
+  optionsWithValue: ReadonlySet<string> = NO_OPTIONS_WITH_VALUE,
+): boolean {
+  for (let index = start; index < argv.length; index += 1) {
+    const token = argv[index]?.trim() ?? "";
+    if (token === "--") {
+      break;
+    }
+    const name = lifecycleOptionName(token);
+    if (optionsWithValue.has(name) && !token.includes("=")) {
+      index += 1;
+      continue;
+    }
+    if (names.has(name) && token.includes("=") && isDynamic(token)) {
+      return true;
+    }
+  }
+  return false;
+}

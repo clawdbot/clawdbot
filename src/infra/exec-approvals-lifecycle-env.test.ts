@@ -186,6 +186,38 @@ describe("OpenClaw lifecycle environment data positions", () => {
       }),
     ).toBe(true);
   });
+
+  it.each([
+    [`openclaw update --dry-run="$DRY"`, ["openclaw", "update", "--dry-run=$DRY"]],
+    [
+      `openclaw config set gateway.port 19001 --dry-run="$DRY"`,
+      ["openclaw", "config", "set", "gateway.port", "19001", "--dry-run=$DRY"],
+    ],
+    [`openclaw reset --dry-run="$DRY"`, ["openclaw", "reset", "--dry-run=$DRY"]],
+    [
+      `openclaw plugins update memory --dry-run="$DRY"`,
+      ["openclaw", "plugins", "update", "memory", "--dry-run=$DRY"],
+    ],
+    [
+      `openclaw hooks update audit --dry-run="$DRY"`,
+      ["openclaw", "hooks", "update", "audit", "--dry-run=$DRY"],
+    ],
+    [`openclaw uninstall --dry-run="$DRY"`, ["openclaw", "uninstall", "--dry-run=$DRY"]],
+    [`npm install openclaw --dry-run="$DRY"`, ["npm", "install", "openclaw", "--dry-run=$DRY"]],
+  ] as Array<[string, string[]]>)(
+    "fails closed when runtime expansion can disable preview mode: %s",
+    (payload, argv) => {
+      const command = `DRY=false; export DRY; ${payload}`;
+      expect(
+        commandRequiresOpenClawLifecycleApproval({
+          command,
+          env: { DRY: "true" },
+          platform: "linux",
+          segments: [{ raw: payload, argv }],
+        }),
+      ).toBe(true);
+    },
+  );
 });
 
 describe("OpenClaw lifecycle dynamic carrier edges", () => {

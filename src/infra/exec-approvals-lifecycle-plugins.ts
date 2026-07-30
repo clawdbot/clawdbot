@@ -1,5 +1,6 @@
 // Classifies plugin and hook commands that persist config, code, or registry state.
 import {
+  lifecycleBooleanOptionValueMayBeDynamic,
   lifecycleHasEffectiveBooleanOption,
   lifecycleOptionName,
 } from "./exec-approvals-lifecycle-tokens.js";
@@ -135,6 +136,18 @@ export function unresolvedOpenClawPluginsActionMayMutate(
     return true;
   }
   const action = lifecycleOptionName(actionToken ?? "");
+  if (
+    ["uninstall", "update"].includes(action) &&
+    lifecycleBooleanOptionValueMayBeDynamic(
+      argv,
+      actionIndex + 1,
+      DRY_RUN_OPTION,
+      isUnresolved,
+      PLUGIN_OPTIONS_WITH_VALUE,
+    )
+  ) {
+    return true;
+  }
   if (action === "registry") {
     return argv.slice(actionIndex + 1).some(isUnresolved);
   }
@@ -154,5 +167,19 @@ export function unresolvedOpenClawHooksActionMayMutate(
   if (hasEffectiveHelpOrVersion(argv, start, HOOK_OPTIONS_WITH_VALUE)) {
     return false;
   }
-  return isUnresolved(argv[firstPositional(argv, start)]);
+  const actionIndex = firstPositional(argv, start);
+  const actionToken = argv[actionIndex];
+  if (isUnresolved(actionToken)) {
+    return true;
+  }
+  return (
+    lifecycleOptionName(actionToken ?? "") === "update" &&
+    lifecycleBooleanOptionValueMayBeDynamic(
+      argv,
+      actionIndex + 1,
+      DRY_RUN_OPTION,
+      isUnresolved,
+      HOOK_OPTIONS_WITH_VALUE,
+    )
+  );
 }

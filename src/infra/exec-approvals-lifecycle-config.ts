@@ -1,5 +1,6 @@
 // Classifies direct OpenClaw config reads, dry-runs, and persistent writes.
 import {
+  lifecycleBooleanOptionValueMayBeDynamic,
   lifecycleHasEffectiveBooleanOption,
   lifecycleOptionName,
 } from "./exec-approvals-lifecycle-tokens.js";
@@ -81,6 +82,17 @@ export function unresolvedOpenClawConfigActionMayMutate(
   start: number,
   isUnresolved: (value: string | undefined) => boolean,
 ): boolean {
+  if (
+    lifecycleBooleanOptionValueMayBeDynamic(
+      argv,
+      start,
+      DRY_RUN_OPTION,
+      isUnresolved,
+      CONFIG_OPTIONS_WITH_VALUE,
+    )
+  ) {
+    return true;
+  }
   const dryRun = lifecycleHasEffectiveBooleanOption(
     argv,
     start,

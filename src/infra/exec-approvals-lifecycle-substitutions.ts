@@ -5,7 +5,13 @@ import {
   unresolvedGatewayMethodMayHideLifecycle,
 } from "./exec-approvals-lifecycle-gateway.js";
 import { unresolvedOpenClawNodeServiceActionMayMutate } from "./exec-approvals-lifecycle-node-service.js";
+import {
+  unresolvedOpenClawHooksActionMayMutate,
+  unresolvedOpenClawPluginsActionMayMutate,
+} from "./exec-approvals-lifecycle-plugins.js";
 import { unresolvedOpenClawApprovalPolicyActionMayMutate } from "./exec-approvals-lifecycle-policy.js";
+import { unresolvedOpenClawResetArgvMayMutate } from "./exec-approvals-lifecycle-reset.js";
+import { lifecycleBooleanOptionValueMayBeDynamic } from "./exec-approvals-lifecycle-tokens.js";
 // Extracts shell command/process substitutions without treating quoted text as executable.
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 import { POSIX_INLINE_COMMAND_FLAGS, resolveInlineCommandMatch } from "./shell-inline-command.js";
@@ -45,6 +51,7 @@ const SUBSTITUTION_TOKEN_RE = /\$\(|`|[<>=]\(/u;
 const OPENCLAW_GLOBAL_FLAGS = new Set(["--dev", "--no-color"]);
 const OPENCLAW_GLOBAL_OPTIONS = new Set(["--container", "--log-level", "--profile"]);
 const UPDATE_OPTIONS_WITH_VALUE = new Set(["--channel", "--tag", "--timeout"]);
+const DRY_RUN_OPTION = new Set(["--dry-run"]);
 
 export type ShellSubstitutionScan = {
   commands: string[];
@@ -248,9 +255,35 @@ function openClawSubstitutionMayHideLifecycle(argv: readonly string[]): boolean 
   if (command === "node") {
     return unresolvedOpenClawNodeServiceActionMayMutate(argv, commandIndex + 1, isSubstitution);
   }
+  if (command === "plugins") {
+    return unresolvedOpenClawPluginsActionMayMutate(argv, commandIndex + 1, isSubstitution);
+  }
+  if (command === "hooks") {
+    return unresolvedOpenClawHooksActionMayMutate(argv, commandIndex + 1, isSubstitution);
+  }
+  if (command === "reset") {
+    return unresolvedOpenClawResetArgvMayMutate(argv, commandIndex + 1, isSubstitution);
+  }
   if (command === "update") {
     const actionIndex = scanFirstPositional(argv, commandIndex + 1, UPDATE_OPTIONS_WITH_VALUE);
-    return isSubstitution(argv[actionIndex]);
+    return (
+      isSubstitution(argv[actionIndex]) ||
+      lifecycleBooleanOptionValueMayBeDynamic(
+        argv,
+        commandIndex + 1,
+        DRY_RUN_OPTION,
+        isSubstitution,
+        UPDATE_OPTIONS_WITH_VALUE,
+      )
+    );
+  }
+  if (command === "uninstall") {
+    return lifecycleBooleanOptionValueMayBeDynamic(
+      argv,
+      commandIndex + 1,
+      DRY_RUN_OPTION,
+      isSubstitution,
+    );
   }
   if (command === "doctor") {
     return unresolvedOpenClawDoctorArgvMayMutate(argv, commandIndex + 1, isSubstitution);

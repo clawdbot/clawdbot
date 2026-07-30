@@ -14,6 +14,7 @@ import {
 } from "./exec-approvals-lifecycle-plugins.js";
 import { unresolvedOpenClawApprovalPolicyActionMayMutate } from "./exec-approvals-lifecycle-policy.js";
 import { unresolvedPowerShellStartProcessMayHideLifecycle } from "./exec-approvals-lifecycle-powershell.js";
+import { unresolvedOpenClawResetArgvMayMutate } from "./exec-approvals-lifecycle-reset.js";
 import {
   resolveLifecyclePackageRunnerArgv,
   unresolvedPackageMutationMayTargetOpenClaw,
@@ -22,6 +23,7 @@ import {
   type LifecycleShellDialect,
   splitLifecycleInlineCommands,
 } from "./exec-approvals-lifecycle-shell.js";
+import { lifecycleBooleanOptionValueMayBeDynamic } from "./exec-approvals-lifecycle-tokens.js";
 import { extractShellWrapperInlineCommand } from "./shell-wrapper-resolution.js";
 const POSIX_VARIABLE_RE = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/gu;
 const POWERSHELL_VARIABLE_RE = /\$env:([A-Za-z_][A-Za-z0-9_]*)/giu;
@@ -36,6 +38,7 @@ const POWERSHELL_ENV_NAME_RE = /^\$env:([A-Za-z_][A-Za-z0-9_]*)$/iu;
 const OPENCLAW_GLOBAL_FLAGS = new Set(["--dev", "--no-color"]);
 const OPENCLAW_GLOBAL_OPTIONS = new Set(["--container", "--log-level", "--profile"]);
 const UPDATE_OPTIONS_WITH_VALUE = new Set(["--channel", "--tag", "--timeout"]);
+const DRY_RUN_OPTION = new Set(["--dry-run"]);
 const SYSTEMCTL_OPTIONS_WITH_VALUE = new Set([
   "-h",
   "-m",
@@ -243,9 +246,29 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
     if (command === "hooks") {
       return unresolvedOpenClawHooksActionMayMutate(argv, commandIndex + 1, isVariableReference);
     }
+    if (command === "reset") {
+      return unresolvedOpenClawResetArgvMayMutate(argv, commandIndex + 1, isVariableReference);
+    }
     if (command === "update") {
       const actionIndex = scanFirstPositional(argv, commandIndex + 1, UPDATE_OPTIONS_WITH_VALUE);
-      return isVariableReference(argv[actionIndex]);
+      return (
+        isVariableReference(argv[actionIndex]) ||
+        lifecycleBooleanOptionValueMayBeDynamic(
+          argv,
+          commandIndex + 1,
+          DRY_RUN_OPTION,
+          isVariableReference,
+          UPDATE_OPTIONS_WITH_VALUE,
+        )
+      );
+    }
+    if (command === "uninstall") {
+      return lifecycleBooleanOptionValueMayBeDynamic(
+        argv,
+        commandIndex + 1,
+        DRY_RUN_OPTION,
+        isVariableReference,
+      );
     }
     return ["configure", "doctor", "onboard", "setup"].includes(command);
   }
