@@ -4724,6 +4724,11 @@ export const en: TranslationMap = {
         tools: "Tools",
       },
     },
+    skills: {
+      menu: "Skill references",
+      label: "Skills",
+      loading: "Loading skills…",
+    },
     splitView: {
       open: "Open split view",
       splitRight: "Split right",

@@ -779,6 +779,95 @@ describe("handleInlineActions", () => {
     expect(commandArgs.skillCommands).toEqual(skillCommands);
   });
 
+  it("keeps normal prompt text while making $ skill references explicit to the model", async () => {
+    const typing = createTypingController();
+    const original = "Review this plan with $office_hours and $release_notes.";
+    const ctx = buildTestCtx({ Body: original, CommandBody: original });
+    const skillCommands: SkillCommandSpec[] = [
+      {
+        name: "office_hours",
+        skillName: "office-hours",
+        description: "Engineering office hours",
+      },
+      {
+        name: "release_notes",
+        skillName: "release-notes",
+        description: "Draft release notes",
+      },
+    ];
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: original,
+        command: {
+          isAuthorizedSender: true,
+          rawBodyNormalized: original,
+          commandBodyNormalized: original,
+        },
+        overrides: {
+          allowTextCommands: true,
+          cfg: { commands: { text: true } },
+          skillCommands,
+        },
+      }),
+    );
+
+    expect(result.kind).toBe("continue");
+    if (result.kind !== "continue") {
+      throw new Error("expected referenced skills to continue to the model");
+    }
+    expect(result.cleanedBody).toBe(
+      [
+        "Use the following explicitly referenced skills for this request. Read each skill's SKILL.md before acting:",
+        "- office-hours",
+        "- release-notes",
+        "",
+        "User request:",
+        original,
+      ].join("\n"),
+    );
+    expect(ctx.Body).toBe(result.cleanedBody);
+    expect(handleCommandsMock).not.toHaveBeenCalled();
+  });
+
+  it("returns a visible error instead of silently dropping excess skill references", async () => {
+    const typing = createTypingController();
+    const skillCommands: SkillCommandSpec[] = Array.from({ length: 9 }, (_, index) => ({
+      name: `skill_${index + 1}`,
+      skillName: `skill-${index + 1}`,
+      description: `Skill ${index + 1}`,
+    }));
+    const original = skillCommands.map((skill) => `$${skill.name}`).join(" ");
+    const ctx = buildTestCtx({ Body: original, CommandBody: original });
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: original,
+        command: {
+          isAuthorizedSender: true,
+          rawBodyNormalized: original,
+          commandBodyNormalized: original,
+        },
+        overrides: {
+          allowTextCommands: true,
+          cfg: { commands: { text: true } },
+          skillCommands,
+        },
+      }),
+    );
+
+    expect(result).toEqual({
+      kind: "reply",
+      reply: { text: "Too many skill references. Use at most 8 skills in one message." },
+    });
+    expect(typing.cleanup).toHaveBeenCalledOnce();
+    expect(handleCommandsMock).not.toHaveBeenCalled();
+  });
+
   it("reloads preloaded skill commands when final exec overrides are present", async () => {
     const typing = createTypingController();
     handleCommandsMock.mockResolvedValue({ shouldContinue: false, reply: { text: "done" } });
