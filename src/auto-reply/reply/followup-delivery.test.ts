@@ -829,7 +829,11 @@ describe("deliverFollowupDecision", () => {
   it("never forwards cross-channel reply content to the live dispatcher on route failure", async () => {
     const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
     deliveryState.routeReply.mockReset();
-    deliveryState.routeReply.mockResolvedValue({ ok: false, error: "offline" });
+    deliveryState.routeReply.mockResolvedValue({
+      ok: false,
+      delivered: false,
+      error: "offline",
+    });
     const turn = createTurn();
     turn.queued.run.messageProvider = "slack";
 
@@ -850,7 +854,11 @@ describe("deliverFollowupDecision", () => {
   it("allows the latest same-channel dispatcher to recover a route failure", async () => {
     const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
     deliveryState.routeReply.mockReset();
-    deliveryState.routeReply.mockResolvedValue({ ok: false, error: "offline" });
+    deliveryState.routeReply.mockResolvedValue({
+      ok: false,
+      delivered: false,
+      error: "offline",
+    });
     const turn = createTurn();
     turn.queued.run.messageProvider = "discord";
 
@@ -869,7 +877,7 @@ describe("deliverFollowupDecision", () => {
 
   it("keeps block-status delivery out of the assistant transcript", async () => {
     deliveryState.routeReply.mockReset();
-    deliveryState.routeReply.mockResolvedValue({ ok: true });
+    deliveryState.routeReply.mockResolvedValue({ ok: true, delivered: true });
 
     await deliverFollowupDecision({
       decision: { kind: "deliver", payloads: [{ text: "compacting" }] },
@@ -888,7 +896,11 @@ describe("deliverFollowupDecision", () => {
   it("reports an origin delivery failure when no dispatcher can recover it", async () => {
     deliveryState.routeReply.mockReset();
     deliveryState.runtimeError.mockReset();
-    deliveryState.routeReply.mockResolvedValue({ ok: false, error: "offline" });
+    deliveryState.routeReply.mockResolvedValue({
+      ok: false,
+      delivered: false,
+      error: "offline",
+    });
 
     await deliverFollowupDecision({
       decision: { kind: "deliver", payloads: [{ text: "undelivered" }] },
@@ -909,7 +921,11 @@ describe("deliverFollowupDecision", () => {
 
   it("applies redirect policy to route failures without a dispatcher", async () => {
     deliveryState.routeReply.mockReset();
-    deliveryState.routeReply.mockResolvedValue({ ok: false, error: "offline" });
+    deliveryState.routeReply.mockResolvedValue({
+      ok: false,
+      delivered: false,
+      error: "offline",
+    });
     const turn = createTurn({
       config: {
         messages: {
@@ -934,5 +950,48 @@ describe("deliverFollowupDecision", () => {
         runFollowup: vi.fn(async () => {}),
       }),
     ).rejects.toThrow("messages.operationalReplies.redirectSessionKey is required");
+  });
+
+  it("does not duplicate a follow-up after a partial route failure delivered it", async () => {
+    const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
+    deliveryState.routeReply.mockReset();
+    deliveryState.routeReply.mockResolvedValue({
+      ok: false,
+      delivered: true,
+      error: "later chunk failed",
+    });
+    const turn = createTurn();
+    turn.queued.run.messageProvider = "discord";
+
+    await deliverFollowupDecision({
+      decision: { kind: "deliver", payloads: [{ text: "already delivered" }] },
+      turn,
+      defaults: createDefaults(onBlockReply),
+      runId: "run-1",
+      runFollowup: vi.fn(async () => {}),
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("does not retry an intentionally suppressed routed follow-up", async () => {
+    const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
+    deliveryState.routeReply.mockReset();
+    deliveryState.routeReply.mockResolvedValue({
+      ok: true,
+      delivered: false,
+      suppressed: true,
+      reason: "reasoning_payload_not_external",
+    });
+
+    await deliverFollowupDecision({
+      decision: { kind: "deliver", payloads: [{ text: "internal reasoning", isReasoning: true }] },
+      turn: createTurn(),
+      defaults: createDefaults(onBlockReply),
+      runId: "run-1",
+      runFollowup: vi.fn(async () => {}),
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
   });
 });

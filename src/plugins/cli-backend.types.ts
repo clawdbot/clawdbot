@@ -175,6 +175,49 @@ export type CliBackendResolveExecutionArgs = (
   ctx: CliBackendResolveExecutionArgsContext,
 ) => readonly string[] | null | undefined;
 
+export type CliBackendJsonlUsage = {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+};
+
+export type CliBackendParsedJsonlEvent =
+  | { kind: "text"; text: string }
+  | { kind: "thinking"; text: string }
+  | {
+      kind: "toolStart";
+      toolCallId: string;
+      name: string;
+      args?: Record<string, unknown>;
+    }
+  | {
+      kind: "toolResult";
+      toolCallId: string;
+      name?: string;
+      isError?: boolean;
+      result?: unknown;
+    }
+  | {
+      kind: "result";
+      text?: string;
+      sessionId?: string;
+      usage?: CliBackendJsonlUsage;
+      errorText?: string;
+    }
+  | { kind: "sessionId"; sessionId: string };
+
+export type CliBackendParseJsonlEventContext = {
+  backendId: string;
+  backend: Readonly<CliBackendConfig>;
+};
+
+export type CliBackendParseJsonlEvent = (
+  line: string,
+  ctx: CliBackendParseJsonlEventContext,
+) => CliBackendParsedJsonlEvent | readonly CliBackendParsedJsonlEvent[] | null | undefined;
+
 export type CliBackendAuthEpochMode = "combined" | "profile-only";
 
 export type CliBackendNativeToolMode = "none" | "always-on" | "selectable";
@@ -337,6 +380,13 @@ export type CliBackendPlugin = {
   resolveExecutionArgs?: CliBackendResolveExecutionArgs;
   /** How this backend enforces an exact per-run `toolAvailability` contract. */
   toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
+  /**
+   * Backend-owned JSONL line parser for provider-specific stream formats.
+   *
+   * Tool events report execution already performed by the backend. OpenClaw
+   * renders them but does not treat them as host tool execution or delivery evidence.
+   */
+  parseJsonlEvent?: CliBackendParseJsonlEvent;
   /**
    * Whether this CLI backend can expose native tools outside OpenClaw's tool
    * catalog. Exact restricted runs require `selectable` plus a declared

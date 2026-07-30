@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   GatewayBrowserClient,
   GatewayBrowserClientOptions,
+  GatewayEventFrame,
   GatewayHelloOk,
 } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
@@ -17,6 +18,7 @@ vi.mock("../build-info.ts", () => ({
     builtAt: null,
     branch: null,
     dirty: null,
+    release: false,
     buildId: "test",
   },
 }));
@@ -26,6 +28,16 @@ const HELLO: GatewayHelloOk = {
   protocol: 1,
   auth: { role: "operator", scopes: [] },
 };
+
+function createGatewayEvent(event = "chat", payload: unknown = {}, seq = 1): GatewayEventFrame {
+  return {
+    type: "event",
+    event,
+    payload,
+    seq,
+    stateVersion: { presence: seq, health: seq },
+  };
+}
 
 class FakeGatewayClient {
   started = 0;
@@ -328,6 +340,29 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.snapshot.phase).toBe("reconnecting");
   });
 
+  it("discards the gapped frame after recovery synchronously replaces its client", () => {
+    const { gateway, current } = createStore();
+    const listener = vi.fn();
+    gateway.subscribeEvents(listener);
+    gateway.start();
+    const stale = current();
+    stale.opts.onHello?.(HELLO);
+
+    // The protocol invokes onGap before onEvent for the same received frame.
+    stale.opts.onGap?.({ expected: 2, received: 5 });
+    stale.opts.onEvent?.(createGatewayEvent("stale.gap", { stale: true }, 5));
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(gateway.eventLog).toEqual([]);
+
+    const activeEvent = createGatewayEvent("fresh.event", { active: true }, 6);
+    current().opts.onEvent?.(activeEvent);
+
+    expect(listener).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledWith(activeEvent);
+    expect(gateway.eventLog).toMatchObject([{ event: "fresh.event", payload: { active: true } }]);
+  });
+
   it("resets the session lineage on stop so the next start uses the gate again", () => {
     const { gateway, current } = createStore();
     gateway.start();
@@ -354,6 +389,235 @@ describe("createApplicationGateway connection phase", () => {
 
     // The superseded client cannot demote the fresh attempt's snapshot.
     expect(gateway.snapshot.phase).toBe("reconnecting");
+  });
+
+  it("fans active events out once without binding subscribers to the transport", () => {
+    const { gateway, current } = createStore();
+    const first = vi.fn();
+    const second = vi.fn();
+    gateway.subscribeEvents(first);
+    gateway.start();
+    const active = current();
+    const addEventListener = vi.spyOn(active, "addEventListener");
+    const unsubscribeSecond = gateway.subscribeEvents(second);
+    const event = createGatewayEvent("chat", { text: "hello" });
+
+    active.opts.onEvent?.(event);
+
+    expect(first).toHaveBeenCalledExactlyOnceWith(event);
+    expect(second).toHaveBeenCalledExactlyOnceWith(event);
+    expect(addEventListener).not.toHaveBeenCalled();
+    expect(gateway.eventLog).toMatchObject([{ event: "chat", payload: { text: "hello" } }]);
+
+    unsubscribeSecond();
+    const nextEvent = createGatewayEvent("chat", { text: "next" }, 2);
+    active.opts.onEvent?.(nextEvent);
+
+    expect(first).toHaveBeenCalledTimes(2);
+    expect(second).toHaveBeenCalledOnce();
+    expect(addEventListener).not.toHaveBeenCalled();
+  });
+
+  it("keeps event subscriptions across reconnects and a stopped gateway", () => {
+    const { gateway, current } = createStore();
+    const listener = vi.fn();
+    gateway.subscribeEvents(listener);
+    gateway.start();
+    const first = current();
+    const firstEvent = createGatewayEvent("chat", { text: "first connection" });
+    first.opts.onEvent?.(firstEvent);
+
+    gateway.connect();
+    const second = current();
+    first.opts.onEvent?.(createGatewayEvent("chat", { text: "stale connection" }, 2));
+    const secondEvent = createGatewayEvent("chat", { text: "second connection" }, 3);
+    second.opts.onEvent?.(secondEvent);
+
+    gateway.stop();
+    second.opts.onEvent?.(createGatewayEvent("chat", { text: "stopped connection" }, 4));
+
+    gateway.start();
+    const thirdEvent = createGatewayEvent("chat", { text: "restarted connection" }, 5);
+    current().opts.onEvent?.(thirdEvent);
+
+    expect(listener.mock.calls).toEqual([[firstEvent], [secondEvent], [thirdEvent]]);
+    expect(gateway.eventLog.map((entry) => entry.payload)).toEqual([
+      { text: "restarted connection" },
+      { text: "second connection" },
+      { text: "first connection" },
+    ]);
+  });
+
+  it("snapshots subscribers when an event adds or removes another listener", () => {
+    const { gateway, current } = createStore();
+    const second = vi.fn();
+    const third = vi.fn();
+    let unsubscribeSecond = () => {};
+    const first = vi.fn(() => {
+      unsubscribeSecond();
+      gateway.subscribeEvents(third);
+    });
+    gateway.subscribeEvents(first);
+    unsubscribeSecond = gateway.subscribeEvents(second);
+    gateway.start();
+    const firstEvent = createGatewayEvent("chat", { text: "first" });
+
+    current().opts.onEvent?.(firstEvent);
+
+    expect(first).toHaveBeenCalledExactlyOnceWith(firstEvent);
+    expect(second).toHaveBeenCalledExactlyOnceWith(firstEvent);
+    expect(third).not.toHaveBeenCalled();
+
+    const secondEvent = createGatewayEvent("chat", { text: "second" }, 2);
+    current().opts.onEvent?.(secondEvent);
+
+    expect(first).toHaveBeenCalledTimes(2);
+    expect(second).toHaveBeenCalledOnce();
+    expect(third).toHaveBeenCalledExactlyOnceWith(secondEvent);
+  });
+
+  it("isolates a failing subscriber from later event subscribers", () => {
+    const { gateway, current } = createStore();
+    const failure = new Error("subscriber failed");
+    const reportError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const failing = vi.fn(() => {
+      throw failure;
+    });
+    const healthy = vi.fn();
+    gateway.subscribeEvents(failing);
+    gateway.subscribeEvents(healthy);
+    gateway.start();
+    const event = createGatewayEvent("chat", { text: "still delivered" });
+
+    current().opts.onEvent?.(event);
+
+    expect(failing).toHaveBeenCalledExactlyOnceWith(event);
+    expect(healthy).toHaveBeenCalledExactlyOnceWith(event);
+    expect(reportError).toHaveBeenCalledExactlyOnceWith(
+      "[gateway] event listener handler error:",
+      failure,
+    );
+    expect(gateway.eventLog).toMatchObject([
+      { event: "chat", payload: { text: "still delivered" } },
+    ]);
+  });
+
+  it("delivers active events when an event-log subscriber throws", () => {
+    const { gateway, current } = createStore();
+    const failure = new Error("event log subscriber failed");
+    const reportError = vi.spyOn(console, "error").mockImplementation(() => {});
+    gateway.subscribeEventLog(() => {
+      throw failure;
+    });
+    const listener = vi.fn();
+    gateway.subscribeEvents(listener);
+    gateway.start();
+    const event = createGatewayEvent("chat", { text: "still delivered" });
+
+    current().opts.onEvent?.(event);
+
+    expect(listener).toHaveBeenCalledExactlyOnceWith(event);
+    expect(reportError).toHaveBeenCalledExactlyOnceWith("[gateway] event handler error:", failure);
+    expect(gateway.eventLog).toMatchObject([
+      { event: "chat", payload: { text: "still delivered" } },
+    ]);
+  });
+
+  it("stops delivering a replaced client's event to remaining subscribers", () => {
+    const { gateway, clients, current } = createStore();
+    const first = vi.fn(() => gateway.connect());
+    const second = vi.fn();
+    gateway.subscribeEvents(first);
+    gateway.subscribeEvents(second);
+    gateway.start();
+    const stale = current();
+    const event = createGatewayEvent("chat", { text: "replace connection" });
+
+    stale.opts.onEvent?.(event);
+
+    expect(clients).toHaveLength(2);
+    expect(first).toHaveBeenCalledExactlyOnceWith(event);
+    expect(second).not.toHaveBeenCalled();
+
+    const activeEvent = createGatewayEvent("chat", { text: "fresh connection" }, 2);
+    current().opts.onEvent?.(activeEvent);
+
+    expect(first).toHaveBeenCalledTimes(2);
+    expect(second).not.toHaveBeenCalled();
+  });
+
+  it("ignores queued events after the gateway is stopped", () => {
+    const { gateway, current } = createStore();
+    const listener = vi.fn();
+    gateway.subscribeEvents(listener);
+    gateway.start();
+    const stale = current();
+
+    gateway.stop();
+    stale.opts.onEvent?.(createGatewayEvent("chat", { text: "stopped" }));
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(gateway.eventLog).toEqual([]);
+  });
+
+  it("ignores presence and event-log callbacks from superseded clients", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+    const stale = current();
+
+    gateway.connect();
+    const active = current();
+    active.opts.onHello?.({
+      ...HELLO,
+      snapshot: {
+        presence: [
+          {
+            instanceId: active.instanceId,
+            user: { id: "current-user", name: "Current user" },
+          },
+        ],
+      },
+    });
+
+    stale.opts.onEvent?.({
+      type: "event",
+      event: "presence",
+      payload: {
+        presence: [
+          {
+            instanceId: active.instanceId,
+            user: { id: "stale-user", name: "Stale user" },
+          },
+        ],
+      },
+      seq: 1,
+      stateVersion: { presence: 1, health: 1 },
+    });
+
+    expect(gateway.snapshot.selfUser).toEqual({ id: "current-user", name: "Current user" });
+    expect(gateway.eventLog).toEqual([]);
+
+    active.opts.onEvent?.({
+      type: "event",
+      event: "presence",
+      payload: {
+        presence: [
+          {
+            instanceId: active.instanceId,
+            user: { id: "current-user", name: "Updated current user" },
+          },
+        ],
+      },
+      seq: 2,
+      stateVersion: { presence: 2, health: 1 },
+    });
+
+    expect(gateway.snapshot.selfUser).toEqual({
+      id: "current-user",
+      name: "Updated current user",
+    });
+    expect(gateway.eventLog).toHaveLength(1);
   });
 
   it("projects only this browser connection's optional presence identity", () => {

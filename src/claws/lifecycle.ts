@@ -56,6 +56,7 @@ export type ClawAddPlanContext = {
     integrity?: string;
     installId?: string;
     warning?: string;
+    requirements?: ClawLocalPrerequisite[];
     installedVersion?: string;
     code?: string;
     message?: string;
@@ -459,6 +460,9 @@ export async function buildClawAddPlan(params: {
     if (diagnostic) {
       blockers.push(diagnostic);
     }
+    if (preflight.ok && preflight.requirements) {
+      readinessRequirements.push(...preflight.requirements);
+    }
     actions.push({
       kind: "package",
       id: `${pkg.kind}:${pkg.ref}`,
@@ -470,6 +474,7 @@ export async function buildClawAddPlan(params: {
         ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
         ...(preflight.installId ? { installId: preflight.installId } : {}),
         ...(preflight.warning ? { riskWarning: preflight.warning } : {}),
+        ...(preflight.requirements ? { prerequisites: preflight.requirements } : {}),
         expectedState: !preflight.ok
           ? "unresolved"
           : preflight.action === "reuse"
@@ -538,7 +543,7 @@ export async function buildClawAddPlan(params: {
         ...server,
         expectedState: exactExisting ? "present-exact" : "absent",
         prerequisites: readinessRequirements.filter(
-          (requirement) => requirement.mcpServer === name,
+          (requirement) => requirement.kind !== "plugin-setup" && requirement.mcpServer === name,
         ),
       },
       blocked,

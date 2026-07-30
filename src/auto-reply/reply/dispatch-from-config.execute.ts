@@ -22,6 +22,7 @@ import {
   markOperationalReplyPolicyDelivered,
 } from "./operational-reply-policy.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
+import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 
 export async function executeDispatch(state: PrepareDispatchExecutionReadyState) {
   const {
@@ -76,6 +77,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     recordRoutedBlockReplyDelivery,
     replyConfig,
     replyContextAccountId,
+    replyOperationRunState,
     replyResolver,
     replyRoute,
     resolveToolDeliveryPayload,
@@ -83,7 +85,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     routeReplyThreadId,
     routeReplyTo,
     runWithDispatchLifecycleAdmission,
-    sendTrackedBlockReply,
+    sendTrackedBlockReplyDelivery,
     sendPlanUpdate,
     sendPolicy,
     sendPolicyDenied,
@@ -114,6 +116,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     suppressToolErrorWarnings,
     traceReplyPhase,
     trackDispatchLifecycleWork,
+    turnLedger,
     typing,
     waitForPendingDirectBlockReplyDelivery,
     wrapProgressCallback,
@@ -128,6 +131,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
               ctx,
               {
                 ...getReplyOptions(),
+                [REPLY_OPERATION_RUN_STATE]: replyOperationRunState,
                 sourceReplyDeliveryMode,
                 sessionPromptSourceReplyDeliveryMode: sessionStableSourceReplyDeliveryMode,
                 onSessionMetadataChanges: notifySessionMetadataChanges,
@@ -353,9 +357,8 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     } else {
                       markInboundDedupeReplayUnsafe();
                       const delivered = await settleDirectOperationalPolicyAfterDispatch(
-                        deliveryPayload,
                         policyResult,
-                        () => dispatcher.sendToolResult(deliveryPayload),
+                        () => turnLedger.sendQueued("tool", deliveryPayload),
                       );
                       if (delivered && hasAskUserPayload(deliveryPayload)) {
                         // ask_user blocks until this callback resolves; drain its prompt now
@@ -618,9 +621,8 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                         markInboundDedupeReplayUnsafe();
                         dispatchOwnsPolicySettlement = true;
                         const delivered = await settleDirectOperationalPolicyAfterDispatch(
-                          normalizedPayload,
                           policyResult,
-                          () => sendTrackedBlockReply(normalizedPayload),
+                          () => sendTrackedBlockReplyDelivery(normalizedPayload),
                         );
                         if (delivered) {
                           state.hasPendingDirectBlockReplyDelivery = true;

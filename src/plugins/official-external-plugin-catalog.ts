@@ -652,7 +652,7 @@ async function readHostedCatalogResponseText(params: {
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`hosted catalog feed read timed out after ${chunkTimeoutMs}ms`),
   });
-  return new TextDecoder().decode(buffer);
+  return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
 }
 
 function bundledOfficialExternalPluginCatalogEntries(): OfficialExternalPluginCatalogEntry[] {

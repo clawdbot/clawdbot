@@ -321,6 +321,47 @@ describe("createModelSelectionState catalog loading", () => {
     expect(loadModelCatalogLocal).toHaveBeenCalledOnce();
   });
 
+  it("uses the prepared gateway owner catalog without an exact-generation reload", async () => {
+    vi.mocked(loadModelCatalogLocal).mockClear();
+    catalogRuntimeMocks.loadModelCatalogSnapshot.mockClear();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.4": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [makeConfiguredModel({ reasoning: undefined })],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.4",
+      provider: "openai",
+      model: "gpt-5.4",
+      hasModelDirective: false,
+      preparedModelCatalog: {
+        entries: [{ provider: "openai", id: "gpt-5.4", name: "GPT-5.4", reasoning: true }],
+        routeVariants: [],
+        authoritative: true,
+      },
+    });
+
+    await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("medium");
+    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
+    expect(catalogRuntimeMocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
+  });
+
   it("uses manifest metadata before hydrating the runtime thinking catalog", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
     vi.mocked(loadManifestModelCatalog).mockClear();
@@ -1555,7 +1596,13 @@ describe("createModelSelectionState auto-failover overrides", () => {
       modelOverrideRouteResolution: params.modelOverrideRouteResolution,
       modelOverrideFallbackOriginProvider: params.modelOverrideFallbackOriginProvider,
       modelOverrideFallbackOriginModel: params.modelOverrideFallbackOriginModel,
-      fallbackNoticeSelectedModel: params.fallbackNoticeSelectedModel,
+      fallbackNotice: params.fallbackNoticeSelectedModel
+        ? {
+            kind: "active",
+            selectedModel: params.fallbackNoticeSelectedModel,
+            activeModel: `${params.providerOverride}/${params.modelOverride}`,
+          }
+        : undefined,
       authProfileOverride: params.authProfileOverride,
       authProfileOverrideSource: params.authProfileOverrideSource,
     });

@@ -22,10 +22,13 @@ import {
 import type { ChooseDispatchRouteReadyState } from "./dispatch-from-config.choose-route.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import { loadGetReplyFromConfigRuntime } from "./dispatch-from-config.runtime-loaders.js";
-import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
+import {
+  withFullRuntimeReplyConfig,
+  withPublishedRuntimeReplyConfig,
+} from "./get-reply-fast-path.js";
 import { markOperationalReplyPolicyDelivered } from "./operational-reply-policy.js";
 import {
-  captureReplyDispatchDeliveryOutcome,
+  type ReplyDispatchDeliveryOutcome,
   waitForReplyDispatcherIdle,
 } from "./reply-dispatcher.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -68,26 +71,28 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     suppressHookUserDelivery,
     suppressUserDeliveryBySourceReplyPolicy,
     traceReplyPhase,
+    turnLedger,
   } = state;
   const settleDirectOperationalPolicyAfterDispatch = async (
-    payload: ReplyPayload,
     policyResult: Awaited<ReturnType<typeof applyDispatchOperationalReplyPolicy>>,
-    dispatch: () => boolean,
+    dispatch: () => {
+      queued: boolean;
+      outcome?: Promise<ReplyDispatchDeliveryOutcome>;
+    },
   ): Promise<boolean> => {
-    const deliveryOutcome = captureReplyDispatchDeliveryOutcome(payload);
-    let delivered: boolean;
+    let delivery: ReturnType<typeof dispatch>;
     try {
-      delivered = dispatch();
+      delivery = dispatch();
     } catch (error) {
       await markOperationalReplyPolicyDelivered(policyResult, false);
       throw error;
     }
-    if (!delivered) {
+    if (!delivery.queued) {
       await markOperationalReplyPolicyDelivered(policyResult, false);
       return false;
     }
-    if (deliveryOutcome.isTracked()) {
-      const settlement = deliveryOutcome.promise.then(async (outcome) => {
+    if (delivery.outcome) {
+      const settlement = delivery.outcome.then(async (outcome) => {
         await markOperationalReplyPolicyDelivered(policyResult, outcome === "delivered");
       });
       registerReplyDispatcherSettledTask(dispatcher, () => settlement);
@@ -179,8 +184,8 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       return;
     }
     markInboundDedupeReplayUnsafe();
-    await settleDirectOperationalPolicyAfterDispatch(payload, policyResult, () =>
-      dispatcher.sendToolResult(payload),
+    await settleDirectOperationalPolicyAfterDispatch(policyResult, () =>
+      turnLedger.sendQueued("tool", payload),
     );
   };
   const sendPlanUpdate = async (payload: {
@@ -212,8 +217,8 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       return;
     }
     markInboundDedupeReplayUnsafe();
-    await settleDirectOperationalPolicyAfterDispatch(replyPayload, policyResult, () =>
-      dispatcher.sendToolResult(replyPayload),
+    await settleDirectOperationalPolicyAfterDispatch(policyResult, () =>
+      turnLedger.sendQueued("tool", replyPayload),
     );
   };
   const summarizeApprovalLabel = (payload: {
@@ -499,14 +504,18 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     suppressAutomaticSourceDelivery &&
     allowSuppressedSourceProgressCallbacks &&
     canForwardItemEvents;
+  const shouldDeliverDurableCommentaryProgress = (
+    payload: Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0],
+  ) =>
+    deliverStandaloneCommentaryProgress &&
+    payload.kind === "preamble" &&
+    payload.suppressDurableProgress !== true;
   const forwardItemEvent = canForwardItemEvents
     ? wrapProgressCallback(params.replyOptions?.onItemEvent, {
         ...itemEventForwardingOptions,
         waitForDirectBlockReplyDelivery: true,
         onForward: (payload) =>
-          preserveProgressCallbackStartOrder &&
-          deliverStandaloneCommentaryProgress &&
-          payload.kind === "preamble"
+          preserveProgressCallbackStartOrder && shouldDeliverDurableCommentaryProgress(payload)
             ? noteCommentaryProgress(payload)
             : undefined,
         onVisible: (payload) => {
@@ -530,8 +539,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
         }
         if (
           (!forwardItemEvent || !preserveProgressCallbackStartOrder) &&
-          deliverStandaloneCommentaryProgress &&
-          payload.kind === "preamble"
+          shouldDeliverDurableCommentaryProgress(payload)
         ) {
           await noteCommentaryProgress(payload);
         }
@@ -551,14 +559,17 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     params.replyResolver ??
     (await traceReplyPhase("reply.load_reply_resolver", () => loadGetReplyFromConfigRuntime()))
       .getReplyFromConfig;
-  // Channel runtimes can outlive a config reload. Resolve one live snapshot
-  // per turn so reply setup and dispatch callbacks share the same authority.
-  const runtimeReplyConfig = getRuntimeConfigSnapshot() ?? cfg;
-  const replyConfig = withFullRuntimeReplyConfig(
-    params.configOverride
-      ? (applyMergePatch(runtimeReplyConfig, params.configOverride) as OpenClawConfig)
-      : runtimeReplyConfig,
-  );
+  // Channel runtimes can outlive a config reload. Ordinary Gateway turns rebind to the
+  // committed model owner; an explicit per-turn projection stays exact to its caller config.
+  const publishedRuntimeReplyConfig = getRuntimeConfigSnapshot();
+  const runtimeReplyConfig = publishedRuntimeReplyConfig ?? cfg;
+  const replyConfig = params.configOverride
+    ? withFullRuntimeReplyConfig(
+        applyMergePatch(runtimeReplyConfig, params.configOverride) as OpenClawConfig,
+      )
+    : params.usePublishedModelRuntime || publishedRuntimeReplyConfig
+      ? withPublishedRuntimeReplyConfig(runtimeReplyConfig)
+      : withFullRuntimeReplyConfig(cfg);
   recordAgentDispatchStarted();
   const nextState = extendPreparedDispatchState(
     state,

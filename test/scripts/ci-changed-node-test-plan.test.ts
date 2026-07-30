@@ -228,4 +228,21 @@ describe("CI changed Node test plan", () => {
     const targets = targetShards.flatMap((shard) => shard.targets ?? []);
     expect(new Set(targets).size).toBe(targets.length);
   });
+
+  it("serializes changed-test chunks that contain Memory Core integration tests", () => {
+    const shards = createChangedNodeTestShards([
+      "extensions/memory-core/src/memory/mmr.ts",
+      "extensions/memory-core/src/memory/mmr.test.ts",
+    ]);
+    expect(shards).not.toBeNull();
+    const targetShards = shards?.filter((shard) => shard.targets) ?? [];
+    expect(targetShards.length).toBeGreaterThan(0);
+    expect(
+      targetShards
+        .filter((shard) =>
+          shard.targets?.some((target) => target.startsWith("extensions/memory-core/")),
+        )
+        .every((shard) => shard.planConcurrency === 1),
+    ).toBe(true);
+  });
 });

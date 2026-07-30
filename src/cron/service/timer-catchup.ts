@@ -2,7 +2,6 @@ import { markCronJobActive } from "../active-jobs.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import {
-  computeJobPreviousRunAtMs,
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   isJobEnabled,
   recomputeNextRunsForMaintenance,
@@ -35,7 +34,11 @@ import {
   clearUnstartedStartupCatchupReservationMarkers,
   createCompletedCronRunOutcomeDrain,
 } from "./timer-outcome-finalization.js";
-import { collectRunnableJobs, isRunnableJob } from "./timer-runnable.js";
+import {
+  collectRunnableJobs,
+  hasMissedCronSlotSinceLastRun,
+  isRunnableJob,
+} from "./timer-runnable.js";
 import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-scheduler.js";
 
 function deferPendingBackoffMissedCronSlots(
@@ -61,20 +64,7 @@ function deferPendingBackoffMissedCronSlots(
     if (backoffUntilMs === undefined || nowMs >= backoffUntilMs) {
       continue;
     }
-    let previousRunAtMs: number | undefined;
-    try {
-      previousRunAtMs = computeJobPreviousRunAtMs(job, nowMs);
-    } catch {
-      continue;
-    }
-    const lastRunAtMs = job.state.lastRunAtMs;
-    if (
-      typeof previousRunAtMs !== "number" ||
-      !Number.isFinite(previousRunAtMs) ||
-      typeof lastRunAtMs !== "number" ||
-      !Number.isFinite(lastRunAtMs) ||
-      previousRunAtMs <= lastRunAtMs
-    ) {
+    if (!hasMissedCronSlotSinceLastRun(job, nowMs)) {
       continue;
     }
     if (job.state.nextRunAtMs !== backoffUntilMs) {

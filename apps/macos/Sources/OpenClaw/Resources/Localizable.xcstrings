@@ -2041,6 +2041,142 @@
         }
       }
     },
+    "1 second": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 second"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 秒"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 秒"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 segundo"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 Sekunde"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 segundo"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1秒"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1초"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 seconde"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 सेकंड"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ثانية واحدة"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 secondo"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 saniye"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 секунда"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 detik"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 sekunda"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 วินาที"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 giây"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 seconde"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "۱ ثانیه"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 секунда"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 sekund"
+          }
+        }
+      }
+    },
     "1 token": {
       "localizations": {
         "en": {
@@ -3401,6 +3537,142 @@
         }
       }
     },
+    "Accessibility grant may be stale": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accessibility grant may be stale"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "辅助功能授权可能已失效"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "輔助使用權限可能已失效"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A permissão de Acessibilidade pode estar desatualizada"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Bedienungshilfen-Berechtigung ist möglicherweise veraltet"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El permiso de accesibilidad puede estar desactualizado"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アクセシビリティの許可が古くなっている可能性があります"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "손쉬운 사용 권한이 최신 상태가 아닐 수 있음"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’autorisation d’accessibilité est peut-être obsolète"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accessibility की अनुमति पुरानी हो सकती है"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "قد يكون منح تسهيلات الاستخدام قديمًا"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’autorizzazione per l’accessibilità potrebbe non essere aggiornata"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erişilebilirlik izni güncelliğini yitirmiş olabilir"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дозвіл на універсальний доступ може бути застарілим"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Izin Aksesibilitas mungkin sudah tidak berlaku"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uprawnienie Dostępności może być nieaktualne"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "สิทธิ์การช่วยการเข้าถึงอาจไม่เป็นปัจจุบัน"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quyền Trợ năng có thể đã hết hiệu lực"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toestemming voor toegankelijkheid is mogelijk verouderd"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ممکن است مجوز دسترس‌پذیری منقضی شده باشد"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешение на универсальный доступ могло устареть"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Behörigheten för hjälpmedelsfunktioner kan vara inaktuell"
+          }
+        }
+      }
+    },
     "Accessibility permission is required to paste.": {
       "localizations": {
         "en": {
@@ -3533,6 +3805,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Behörighet för hjälpmedel krävs för att klistra in."
+          }
+        }
+      }
+    },
+    "Accessibility, Event Posting, and Screen Recording are granted.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accessibility, Event Posting, and Screen Recording are granted."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已授予辅助功能、事件发布和屏幕录制权限。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已授予輔助使用、事件發送及螢幕錄製權限。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "As permissões de Acessibilidade, Envio de Eventos e Gravação de Tela foram concedidas."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bedienungshilfen, Ereignisübermittlung und Bildschirmaufnahme sind erlaubt."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Los permisos de accesibilidad, publicación de eventos y grabación de pantalla están concedidos."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アクセシビリティ、イベント送信、画面収録が許可されています。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "손쉬운 사용, 이벤트 게시 및 화면 기록 권한이 허용되었습니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les autorisations d’accessibilité, de publication d’événements et d’enregistrement de l’écran sont accordées."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accessibility, Event Posting और Screen Recording की अनुमतियाँ दी गई हैं।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تم منح أذونات تسهيلات الاستخدام ونشر الأحداث وتسجيل الشاشة."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le autorizzazioni per Accessibilità, Pubblicazione eventi e Registrazione schermo sono state concesse."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erişilebilirlik, Olay Gönderme ve Ekran Kaydı izinleri verildi."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дозволи на універсальний доступ, надсилання подій і запис екрана надано."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aksesibilitas, Pengiriman Peristiwa, dan Perekaman Layar telah diizinkan."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Przyznano uprawnienia do Dostępności, wysyłania zdarzeń i nagrywania ekranu."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "อนุญาตสิทธิ์การช่วยการเข้าถึง การโพสต์เหตุการณ์ และการบันทึกหน้าจอแล้ว"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đã cấp quyền Trợ năng, Đăng sự kiện và Ghi màn hình."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toegankelijkheid, het plaatsen van gebeurtenissen en schermopname zijn toegestaan."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "مجوزهای دسترس‌پذیری، ارسال رویداد و ضبط صفحه اعطا شده‌اند."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Предоставлены разрешения на универсальный доступ, отправку событий и запись экрана."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Behörigheter för hjälpmedelsfunktioner, händelsepublicering och skärminspelning har beviljats."
           }
         }
       }
@@ -5437,6 +5845,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Lägg till ord"
+          }
+        }
+      }
+    },
+    "Additional images hidden: %lld": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Additional images hidden: %lld"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已隐藏其他图像：%lld"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已隱藏其他影像：%lld"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imagens adicionais ocultas: %lld"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Weitere Bilder ausgeblendet: %lld"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imágenes adicionales ocultas: %lld"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "非表示の追加画像：%lld"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "숨겨진 추가 이미지: %lld"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Images supplémentaires masquées : %lld"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "अतिरिक्त छवियाँ छिपी हुई हैं: %lld"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "صور إضافية مخفية: %lld"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Immagini aggiuntive nascoste: %lld"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gizlenen ek görseller: %lld"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Додаткові зображення приховано: %lld"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gambar tambahan disembunyikan: %lld"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ukryte dodatkowe obrazy: %lld"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ซ่อนรูปภาพเพิ่มเติม: %lld"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đã ẩn thêm hình ảnh: %lld"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Extra afbeeldingen verborgen: %lld"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تصاویر اضافی پنهان‌شده: %lld"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скрыто дополнительных изображений: %lld"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ytterligare bilder dolda: %lld"
           }
         }
       }
@@ -13339,128 +13883,128 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "Attachment"
+            "state": "translated",
+            "value": "附件"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "Attachment"
+            "state": "translated",
+            "value": "附件"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "Attachment"
+            "state": "translated",
+            "value": "Anexo"
           }
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "Attachment"
+            "state": "translated",
+            "value": "Anhang"
           }
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "Attachment"
+            "state": "translated",
+            "value": "Archivo adjunto"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "Attachment"
+            "state": "translated",
+            "value": "添付ファイル"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Attachment"
+            "state": "translated",
+            "value": "첨부 파일"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Attachment"
+            "state": "translated",
+            "value": "Pièce jointe"
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Attachment"
+            "state": "translated",
+            "value": "अटैचमेंट"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "Attachment"
+            "state": "translated",
+            "value": "مرفق"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "Attachment"
+            "state": "translated",
+            "value": "Allegato"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Attachment"
+            "state": "translated",
+            "value": "Ek"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "Attachment"
+            "state": "translated",
+            "value": "Вкладення"
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "Attachment"
+            "state": "translated",
+            "value": "Lampiran"
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Attachment"
+            "state": "translated",
+            "value": "Załącznik"
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "Attachment"
+            "state": "translated",
+            "value": "ไฟล์แนบ"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Attachment"
+            "state": "translated",
+            "value": "Tệp đính kèm"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Attachment"
+            "state": "translated",
+            "value": "Bijlage"
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "Attachment"
+            "state": "translated",
+            "value": "پیوست"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "Attachment"
+            "state": "translated",
+            "value": "Вложение"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "Attachment"
+            "state": "translated",
+            "value": "Bilaga"
           }
         }
       }
@@ -24889,6 +25433,142 @@
         }
       }
     },
+    "Close image preview": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Close image preview"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关闭图片预览"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "關閉圖片預覽"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fechar pré-visualização da imagem"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bildvorschau schließen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cerrar la vista previa de la imagen"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "画像プレビューを閉じる"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이미지 미리보기 닫기"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fermer l’aperçu de l’image"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "इमेज का पूर्वावलोकन बंद करें"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "إغلاق معاينة الصورة"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiudi l’anteprima dell’immagine"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Görsel önizlemesini kapat"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Закрити попередній перегляд зображення"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tutup pratinjau gambar"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zamknij podgląd obrazu"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ปิดตัวอย่างรูปภาพ"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đóng bản xem trước hình ảnh"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Afbeeldingsvoorbeeld sluiten"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "بستن پیش‌نمایش تصویر"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Закрыть предпросмотр изображения"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stäng bildförhandsvisning"
+          }
+        }
+      }
+    },
     "Collapse plan": {
       "localizations": {
         "en": {
@@ -26381,6 +27061,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kompaktera sessionslogg?"
+          }
+        }
+      }
+    },
+    "Computer Control access": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Computer Control access"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "电脑控制访问权限"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "電腦控制權限"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acesso ao Controle do Computador"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zugriff auf die Computersteuerung"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acceso al control del ordenador"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コンピュータ制御アクセス"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "컴퓨터 제어 접근 권한"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accès au contrôle de l’ordinateur"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "कंप्यूटर नियंत्रण एक्सेस"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "الوصول إلى التحكم بالكمبيوتر"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accesso al controllo del computer"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bilgisayar Denetimi erişimi"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступ до керування комп’ютером"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Akses Kontrol Komputer"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dostęp do sterowania komputerem"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "สิทธิ์เข้าถึงการควบคุมคอมพิวเตอร์"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quyền Điều khiển máy tính"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toegang tot computerbediening"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "دسترسی کنترل رایانه"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступ к управлению компьютером"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Åtkomst till datorstyrning"
           }
         }
       }
@@ -46785,6 +47601,142 @@
         }
       }
     },
+    "Exec approvals unavailable. Retry to refresh.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exec approvals unavailable. Retry to refresh."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "执行审批不可用。请重试以刷新。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "執行核准目前無法使用。請重試以重新整理。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "As aprovações de execução estão indisponíveis. Tente novamente para atualizar."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exec-Genehmigungen sind nicht verfügbar. Versuchen Sie es erneut, um sie zu aktualisieren."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Las aprobaciones de ejecución no están disponibles. Vuelve a intentarlo para actualizar."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "実行の承認を利用できません。再試行して更新してください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "실행 승인을 사용할 수 없습니다. 새로 고치려면 다시 시도하세요."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les approbations d’exécution sont indisponibles. Réessayez pour actualiser."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exec अनुमोदन उपलब्ध नहीं हैं। रीफ़्रेश करने के लिए फिर से प्रयास करें।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "موافقات التنفيذ غير متاحة. أعد المحاولة للتحديث."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Approvazioni di esecuzione non disponibili. Riprova per aggiornare."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çalıştırma onayları kullanılamıyor. Yenilemek için tekrar deneyin."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Схвалення виконання недоступні. Повторіть спробу, щоб оновити."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persetujuan exec tidak tersedia. Coba lagi untuk memuat ulang."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zatwierdzenia wykonywania są niedostępne. Ponów próbę, aby odświeżyć."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "การอนุมัติ Exec ไม่พร้อมใช้งาน โปรดลองอีกครั้งเพื่อรีเฟรช"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Các phê duyệt thực thi không khả dụng. Thử lại để làm mới."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uitvoeringsgoedkeuringen zijn niet beschikbaar. Probeer opnieuw om te vernieuwen."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تأییدهای اجرا در دسترس نیستند. برای تازه‌سازی دوباره تلاش کنید."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подтверждения выполнения недоступны. Повторите попытку, чтобы обновить."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exec-godkännanden är inte tillgängliga. Försök igen för att uppdatera."
+          }
+        }
+      }
+    },
     "Existing gateway detected": {
       "localizations": {
         "en": {
@@ -58753,6 +59705,142 @@
         }
       }
     },
+    "Image unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Image unavailable"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "图片不可用"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "圖片無法使用"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imagem indisponível"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bild nicht verfügbar"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imagen no disponible"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "画像を表示できません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이미지를 사용할 수 없음"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Image indisponible"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "इमेज उपलब्ध नहीं है"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "الصورة غير متاحة"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Immagine non disponibile"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Görsel kullanılamıyor"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Зображення недоступне"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gambar tidak tersedia"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Obraz niedostępny"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "รูปภาพไม่พร้อมใช้งาน"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hình ảnh không khả dụng"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Afbeelding niet beschikbaar"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تصویر در دسترس نیست"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Изображение недоступно"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bilden är inte tillgänglig"
+          }
+        }
+      }
+    },
     "Import": {
       "localizations": {
         "en": {
@@ -63241,142 +64329,6 @@
         }
       }
     },
-    "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "允许授权代理在此 Mac 上移动指针、点击和输入。还需要辅助功能、屏幕录制和网关命令授权。高风险。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "讓授權的代理程式在此 Mac 上移動指標、點擊及輸入。同時需要輔助使用、螢幕錄製及 Gateway 指令授權。高風險。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Permite que um agente autorizado mova o ponteiro, clique e digite neste Mac. Também requer Acessibilidade, Gravação de Tela e autorização de comandos do gateway. Alto risco."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Einem autorisierten Agenten erlauben, den Zeiger zu bewegen, zu klicken und auf diesem Mac zu tippen. Erfordert außerdem Bedienungshilfen, Bildschirmaufnahme und Gateway-Befehlsautorisierung. Hohes Risiko."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Permite que un agente autorizado mueva el puntero, haga clic y escriba en este Mac. También requiere Accesibilidad, Grabación de pantalla y autorización de comandos del gateway. Alto riesgo."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "承認されたエージェントがこの Mac 上でポインタの移動、クリック、入力を行えるようにします。アクセシビリティ、画面収録、および gateway コマンドの承認も必要です。高リスク。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "인증된 에이전트가 이 Mac에서 포인터를 이동하고 클릭하고 입력하도록 허용합니다. 손쉬운 사용, 화면 기록, gateway 명령 권한도 필요합니다. 높은 위험."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Permettre à un agent autorisé de déplacer le pointeur, cliquer et taper sur ce Mac. Requiert également l'Accessibilité, l'Enregistrement d'écran et l'autorisation des commandes du gateway. Risque élevé."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "किसी अधिकृत एजेंट को इस Mac पर पॉइंटर हिलाने, क्लिक करने और टाइप करने दें। इसके लिए Accessibility, Screen Recording और gateway कमांड प्राधिकरण भी आवश्यक है। उच्च जोखिम।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "اسمح لعميل مصرّح له بتحريك المؤشر والنقر والكتابة على هذا الـ Mac. يتطلب أيضًا إمكانية الوصول وتسجيل الشاشة وتفويض أوامر Gateway. خطر مرتفع."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Consenti a un agente autorizzato di spostare il puntatore, fare clic e digitare su questo Mac. Richiede anche Accessibilità, Registrazione schermo e l'autorizzazione dei comandi del gateway. Rischio elevato."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Yetkili bir aracının bu Mac'te işaretçiyi hareket ettirmesine, tıklamasına ve yazmasına izin verin. Ayrıca Erişilebilirlik, Ekran Kaydı ve gateway komut yetkilendirmesi gerektirir. Yüksek risk."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Дозвольте авторизованому агенту переміщувати вказівник, натискати та вводити текст на цьому Mac. Також потрібні дозволи «Доступність», «Запис екрана» та авторизація команд gateway. Високий ризик."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Izinkan agen resmi menggerakkan penunjuk, mengklik, dan mengetik di Mac ini. Juga memerlukan Aksesibilitas, Perekaman Layar, dan otorisasi perintah gateway. Risiko tinggi."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pozwól autoryzowanemu agentowi przesuwać wskaźnik, klikać i pisać na tym Macu. Wymaga również Dostępności, Nagrywania ekranu i autoryzacji poleceń gateway. Wysokie ryzyko."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "อนุญาตให้เอเจนต์ที่ได้รับอนุญาตเลื่อนตัวชี้ คลิก และพิมพ์บน Mac นี้ ต้องมีสิทธิ์การเข้าถึง (Accessibility), การบันทึกหน้าจอ (Screen Recording) และการอนุญาตคำสั่ง gateway ด้วย มีความเสี่ยงสูง"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cho phép một tác nhân được ủy quyền di chuyển con trỏ, nhấp và gõ trên máy Mac này. Cũng yêu cầu Trợ năng, Ghi màn hình và ủy quyền lệnh gateway. Rủi ro cao."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Laat een geautoriseerde agent de aanwijzer bewegen, klikken en typen op deze Mac. Vereist ook Toegankelijkheid, Schermopname en gateway-commando-autorisatie. Hoog risico."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "به یک عامل مجاز اجازه دهید نشانگر را حرکت دهد، کلیک کند و روی این مک تایپ کند. همچنین به Accessibility، Screen Recording و مجوز فرمان gateway نیاز دارد. ریسک بالا."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Позволяет авторизованному агенту перемещать указатель, нажимать и печатать на этом Mac. Также требуются доступ к Универсальному доступу, записи экрана и авторизация команд gateway. Высокий риск."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Låt en auktoriserad agent flytta pekaren, klicka och skriva på denna Mac. Kräver även Hjälpmedel, Skärminspelning och auktorisering av gateway-kommandon. Hög risk."
-          }
-        }
-      }
-    },
     "Let bundled skill command-line tools run without prompting.": {
       "localizations": {
         "en": {
@@ -65685,6 +66637,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Läser in hela meddelandet…"
+          }
+        }
+      }
+    },
+    "Loading image…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading image…"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在加载图片…"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在載入圖片…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Carregando imagem…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bild wird geladen…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cargando imagen…"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "画像を読み込み中…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이미지 로드 중…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chargement de l’image…"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "इमेज लोड हो रही है…"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "جارٍ تحميل الصورة…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Caricamento dell’immagine…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Görsel yükleniyor…"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Завантаження зображення…"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Memuat gambar…"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wczytywanie obrazu…"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "กำลังโหลดรูปภาพ…"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đang tải hình ảnh…"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Afbeelding laden…"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "در حال بارگذاری تصویر…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загрузка изображения…"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Läser in bild…"
           }
         }
       }
@@ -70445,6 +71533,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Behörighet för mikrofon och taligenkänning krävs."
+          }
+        }
+      }
+    },
+    "Missing permission": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Missing permission"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "缺少权限"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "缺少權限"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permissão ausente"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Berechtigung fehlt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falta el permiso"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "権限がありません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "권한 없음"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autorisation manquante"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "अनुमति नहीं है"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "الإذن مفقود"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autorizzazione mancante"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İzin eksik"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Немає дозволу"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Izin belum diberikan"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Brak uprawnienia"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ไม่มีสิทธิ์อนุญาต"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thiếu quyền"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toestemming ontbreekt"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "مجوز وجود ندارد"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отсутствует разрешение"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Behörighet saknas"
           }
         }
       }
@@ -89621,6 +90845,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "OpenClaw — konfigurationshjälp"
+          }
+        }
+      }
+    },
+    "Opens image preview": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opens image preview"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开图片预览"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "開啟圖片預覽"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abre a pré-visualização da imagem"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öffnet die Bildvorschau"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abre la vista previa de la imagen"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "画像プレビューを開きます"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이미지 미리보기 열기"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ouvre l’aperçu de l’image"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "इमेज का पूर्वावलोकन खोलता है"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "يفتح معاينة الصورة"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apre l’anteprima dell’immagine"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Görsel önizlemesini açar"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Відкриває попередній перегляд зображення"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Membuka pratinjau gambar"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otwiera podgląd obrazu"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เปิดตัวอย่างรูปภาพ"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mở bản xem trước hình ảnh"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opent afbeeldingsvoorbeeld"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "پیش‌نمایش تصویر را باز می‌کند"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открывает предпросмотр изображения"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öppnar bildförhandsvisning"
           }
         }
       }
@@ -115601,6 +116961,142 @@
         }
       }
     },
+    "Searching…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Searching…"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在搜索…"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "搜尋中…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pesquisando…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Suchen…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Buscando…"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "検索中…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "검색 중…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recherche…"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "खोज जारी है…"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "جارٍ البحث…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ricerca in corso…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aranıyor…"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пошук…"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mencari…"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wyszukiwanie…"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "กำลังค้นหา…"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đang tìm kiếm…"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zoeken…"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "در حال جست‌وجو…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поиск…"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Söker…"
+          }
+        }
+      }
+    },
     "Seconds (optional)": {
       "localizations": {
         "en": {
@@ -128517,6 +130013,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Startar…"
+          }
+        }
+      }
+    },
+    "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "默认启用。此 Mac 完成配对并授予 macOS 访问权限后，已配对的 Gateway 无需逐项确认即可移动指针、点击和输入。风险较高。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "預設為啟用。此 Mac 配對且授予 macOS 存取權後，已配對的 Gateway 無需逐次確認即可移動指標、點按及輸入。高風險。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inicia ativado. Depois que este Mac for emparelhado e o acesso do macOS for concedido, o Gateway emparelhado poderá mover o cursor, clicar e digitar sem confirmação para cada ação. Alto risco."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ist standardmäßig aktiviert. Nachdem dieser Mac gekoppelt und der macOS-Zugriff gewährt wurde, kann das gekoppelte Gateway den Mauszeiger bewegen, klicken und Text eingeben, ohne dass jede Aktion einzeln bestätigt werden muss. Hohes Risiko."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se inicia habilitado. Una vez que este Mac esté emparejado y se conceda el acceso de macOS, el Gateway emparejado podrá mover el puntero, hacer clic y escribir sin confirmación para cada acción. Riesgo alto."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "初期状態で有効です。このMacがペアリングされ、macOSでアクセスが許可されると、ペアリング済みのGatewayは操作ごとの確認なしにポインタの移動、クリック、入力を行えます。高リスクです。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "처음부터 활성화됩니다. 이 Mac이 페어링되고 macOS 접근 권한이 허용되면, 페어링된 Gateway가 작업별 확인 없이 포인터를 이동하고 클릭하고 입력할 수 있습니다. 위험도가 높습니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activé par défaut. Une fois ce Mac jumelé et l’accès macOS accordé, le Gateway jumelé peut déplacer le pointeur, cliquer et saisir du texte sans confirmation pour chaque action. Risque élevé."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "शुरू में सक्षम रहता है। इस Mac के पेयर हो जाने और macOS एक्सेस की अनुमति मिलने के बाद, पेयर किया गया Gateway हर कार्रवाई की पुष्टि के बिना पॉइंटर को चला सकता है, क्लिक कर सकता है और टाइप कर सकता है। उच्च जोखिम।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "يبدأ مفعّلًا. بعد إقران جهاز Mac هذا ومنح أذونات الوصول في macOS، يمكن لـ Gateway المقترن تحريك المؤشر والنقر والكتابة من دون تأكيد كل إجراء. خطورة عالية."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Si avvia abilitato. Dopo aver abbinato questo Mac e concesso l’accesso a macOS, il Gateway abbinato può spostare il puntatore, fare clic e digitare senza conferma per ogni azione. Rischio elevato."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Etkin olarak başlar. Bu Mac eşleştirildikten ve macOS erişimi verildikten sonra eşleştirilmiş Gateway, her işlem için onay gerektirmeden işaretçiyi hareket ettirebilir, tıklayabilir ve yazabilir. Yüksek risk."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Початково ввімкнено. Після створення пари з цим Mac і надання доступу в macOS підключений Gateway зможе переміщувати вказівник, натискати та вводити текст без підтвердження кожної дії. Високий ризик."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diaktifkan secara default. Setelah Mac ini dipasangkan dan akses macOS diberikan, Gateway yang dipasangkan dapat menggerakkan penunjuk, mengeklik, dan mengetik tanpa konfirmasi untuk setiap tindakan. Berisiko tinggi."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Funkcja jest domyślnie włączona. Po sparowaniu tego Maca i przyznaniu dostępu w macOS sparowany Gateway może przesuwać wskaźnik, klikać i pisać bez potwierdzania każdej czynności. Wysokie ryzyko."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เปิดใช้งานตั้งแต่เริ่มต้น หลังจากจับคู่ Mac เครื่องนี้และอนุญาตสิทธิ์เข้าถึง macOS แล้ว Gateway ที่จับคู่จะสามารถเลื่อนตัวชี้ คลิก และพิมพ์ได้โดยไม่ต้องยืนยันแต่ละการดำเนินการ มีความเสี่ยงสูง"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Được bật khi khởi động. Sau khi máy Mac này được ghép nối và quyền truy cập macOS được cấp, Gateway đã ghép nối có thể di chuyển con trỏ, nhấp và nhập mà không cần xác nhận cho từng thao tác. Rủi ro cao."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Staat standaard aan. Nadat deze Mac is gekoppeld en macOS-toegang is verleend, kan de gekoppelde Gateway de aanwijzer verplaatsen, klikken en typen zonder bevestiging per actie. Hoog risico."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "در ابتدا فعال است. پس از جفت‌شدن این Mac و اعطای دسترسی macOS، Gateway جفت‌شده می‌تواند بدون تأیید جداگانه برای هر عمل، نشانگر را حرکت دهد، کلیک کند و تایپ کند. پرخطر."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Изначально включено. После сопряжения этого Mac и предоставления доступа в macOS сопряжённый Gateway сможет перемещать указатель, нажимать и вводить текст без подтверждения каждого действия. Высокий риск."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aktiverad från början. När denna Mac har parkopplats och macOS-åtkomst har beviljats kan den parkopplade Gateway flytta pekaren, klicka och skriva utan bekräftelse för varje åtgärd. Hög risk."
           }
         }
       }
@@ -154085,6 +155717,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Röstväckning detekterad!"
+          }
+        }
+      }
+    },
+    "Waiting": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "等待中"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "等待中"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aguardando"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warten"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En espera"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "待機中"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "대기 중"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En attente"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "प्रतीक्षा में"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "في الانتظار"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In attesa"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bekliyor"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очікування"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Menunggu"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Oczekiwanie"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "กำลังรอ"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đang chờ"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wachten"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "در انتظار"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ожидание"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Väntar"
           }
         }
       }

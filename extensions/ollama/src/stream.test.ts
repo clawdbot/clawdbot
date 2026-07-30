@@ -1,4 +1,6 @@
 // Ollama tests cover stream plugin behavior.
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -497,6 +499,155 @@ describe("createOllamaStreamFn thinking events", () => {
     await timerPromise;
 
     expect(yieldedBeforeDone).toBe(true);
+  });
+
+  it("refreshes the guarded-fetch idle timeout for each streamed Ollama response", async () => {
+    const chunks = [
+      {
+        model: "qwen3.5",
+        created_at: "2026-01-01T00:00:00Z",
+        message: { role: "assistant" as const, content: "Hello" },
+        done: false,
+      },
+      {
+        model: "qwen3.5",
+        created_at: "2026-01-01T00:00:01Z",
+        message: { role: "assistant" as const, content: " world" },
+        done: false,
+      },
+      makeOllamaResponse({ content: "" }),
+    ];
+    const refreshTimeout = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(makeNdjsonBody(chunks), { status: 200 }),
+      release: vi.fn(async () => undefined),
+      refreshTimeout,
+    });
+
+    const streamFn = createOllamaStreamFn("http://localhost:11434");
+    const stream = streamFn(
+      { api: "ollama", provider: "ollama", id: "qwen3.5", contextWindow: 65536 } as never,
+      { messages: [{ role: "user", content: "test" }] } as never,
+      {},
+    );
+
+    const events: Array<{ type: string }> = [];
+    for await (const event of stream as AsyncIterable<{ type: string }>) {
+      events.push(event);
+    }
+
+    expect(events.some((event) => event.type === "done")).toBe(true);
+    expect(refreshTimeout).toHaveBeenCalledTimes(chunks.length);
+  });
+
+  it("keeps a real slow native Ollama response alive while NDJSON chunks advance", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/x-ndjson" });
+
+      let chunkIndex = 0;
+      let nextChunk: ReturnType<typeof setTimeout> | undefined;
+      const sendChunk = () => {
+        if (chunkIndex === 6) {
+          response.end(`${JSON.stringify(makeOllamaResponse({ content: "" }))}\n`);
+          return;
+        }
+        response.write(
+          `${JSON.stringify({
+            model: "qwen3.5",
+            created_at: "2026-01-01T00:00:00Z",
+            message: { role: "assistant", content: String(chunkIndex) },
+            done: false,
+          })}\n`,
+        );
+        chunkIndex += 1;
+        nextChunk = setTimeout(sendChunk, 35);
+      };
+
+      response.once("close", () => {
+        if (nextChunk) {
+          clearTimeout(nextChunk);
+        }
+      });
+      sendChunk();
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const { fetchWithSsrFGuard } = await vi.importActual<
+        typeof import("openclaw/plugin-sdk/ssrf-runtime")
+      >("openclaw/plugin-sdk/ssrf-runtime");
+      fetchWithSsrFGuardMock.mockImplementation(fetchWithSsrFGuard);
+
+      const address = server.address() as AddressInfo;
+      const streamFn = createOllamaStreamFn(`http://127.0.0.1:${address.port}`);
+      const stream = streamFn(
+        { api: "ollama", provider: "ollama", id: "qwen3.5", contextWindow: 65536 } as never,
+        { messages: [{ role: "user", content: "test" }] } as never,
+        { requestTimeoutMs: 120 } as never,
+      );
+
+      const events: Array<{ type: string }> = [];
+      for await (const event of stream as AsyncIterable<{ type: string }>) {
+        events.push(event);
+      }
+
+      expect(events.some((event) => event.type === "error")).toBe(false);
+      expect(events.some((event) => event.type === "done")).toBe(true);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("still times out a real native Ollama stream that stops making progress", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/x-ndjson" });
+      response.write(
+        `${JSON.stringify({
+          model: "qwen3.5",
+          created_at: "2026-01-01T00:00:00Z",
+          message: { role: "assistant", content: "partial" },
+          done: false,
+        })}\n`,
+      );
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const { fetchWithSsrFGuard } = await vi.importActual<
+        typeof import("openclaw/plugin-sdk/ssrf-runtime")
+      >("openclaw/plugin-sdk/ssrf-runtime");
+      fetchWithSsrFGuardMock.mockImplementation(fetchWithSsrFGuard);
+
+      const address = server.address() as AddressInfo;
+      const streamFn = createOllamaStreamFn(`http://127.0.0.1:${address.port}`);
+      const stream = streamFn(
+        { api: "ollama", provider: "ollama", id: "qwen3.5", contextWindow: 65536 } as never,
+        { messages: [{ role: "user", content: "test" }] } as never,
+        { requestTimeoutMs: 120 } as never,
+      );
+
+      const events: Array<{ type: string }> = [];
+      for await (const event of stream as AsyncIterable<{ type: string }>) {
+        events.push(event);
+      }
+
+      expect(events.some((event) => event.type === "error")).toBe(true);
+      expect(events.some((event) => event.type === "done")).toBe(false);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("reports caller aborts during dense native stream processing as aborted", async () => {

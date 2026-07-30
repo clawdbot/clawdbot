@@ -361,8 +361,16 @@ All under `memory.search.query`:
 | `maxResults` | `number` | `6`     | Max memory hits returned before injection |
 | `minScore`   | `number` | `0.35`  | Minimum relevance score to include a hit  |
 
-Hybrid retrieval remains enabled; MMR and temporal decay remain disabled by
-the built-in engine policy.
+Hybrid retrieval remains enabled. The builtin engine always applies a fixed
+30-day recency half-life to dated daily notes and a fixed importance
+multiplier after hybrid relevance. `MEMORY.md`, `USER.md`, and other evergreen
+memory files do not decay. Nullable importance is neutral, so no migration or
+new tuning key is required for existing indexes.
+
+Strong trigger matches on promoted, trusted entries can inject up to three
+compact memories on eligible interactive turns. Today, root `MEMORY.md` and
+`USER.md` are the curated eligible tier. Daily notes and transcripts are never
+auto-injected.
 
 ### Full example
 
@@ -646,12 +654,13 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 
 ### User settings
 
-| Key                                    | Type      | Default       | Description                                                                                                                      |
-| -------------------------------------- | --------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`                              | `boolean` | `false`       | Enable or disable dreaming entirely                                                                                              |
-| `frequency`                            | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep                                                                                |
-| `model`                                | `string`  | default model | Optional Dream Diary subagent model override                                                                                     |
-| `phases.deep.maxPromotedSnippetTokens` | `number`  | `160`         | Maximum estimated tokens kept from each short-term recall snippet promoted into `MEMORY.md`; provenance metadata remains visible |
+| Key                                     | Type      | Default       | Description                                                                                                                      |
+| --------------------------------------- | --------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                               | `boolean` | `true`        | Enable or disable dreaming entirely                                                                                              |
+| `frequency`                             | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep                                                                                |
+| `model`                                 | `string`  | default model | Optional Dream Diary subagent model override                                                                                     |
+| `phases.deep.maxPromotedSnippetTokens`  | `number`  | `160`         | Maximum estimated tokens kept from each short-term recall snippet promoted into `MEMORY.md`; provenance metadata remains visible |
+| `phases.deep.maxPriorEntryLossFraction` | `number`  | `0.25`        | Reject a consolidation rewrite that removes more than this fraction of prior entries                                             |
 
 ### Example
 
@@ -680,6 +689,8 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 <Note>
 - Dreaming writes machine state to `memory/.dreams/`.
 - Dreaming writes human-readable narrative output to `DREAMS.md` (or existing `dreams.md`).
+- Deep consolidation stores the prior `MEMORY.md` in SQLite-backed plugin state and records rewrite counts and highlights in `DREAMS.md`.
+- Untrusted and system-derived candidates are structurally excluded before consolidation and durable promotion.
 - `dreaming.model` uses the existing plugin subagent trust gate; set `plugins.entries.memory-core.subagent.allowModelOverride: true` before enabling it.
 - Dream Diary retries once with the session default model when the configured model is unavailable. Trust or allowlist failures are logged and are not silently retried.
 - The light/deep/REM phase policy and thresholds are internal behavior, not user-facing config.

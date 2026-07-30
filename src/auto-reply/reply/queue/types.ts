@@ -8,7 +8,7 @@ import type { ModelFallbackRouteResolution } from "../../../agents/model-fallbac
 import type { SilentReplyPromptMode } from "../../../agents/system-prompt.types.js";
 import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
-import type { SessionEntry } from "../../../config/sessions.js";
+import type { SessionEntry, SessionToolOverrides } from "../../../config/sessions.js";
 import type { ReplyToMode } from "../../../config/types.base.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { MediaFact } from "../../../media/media-facts.js";
@@ -25,6 +25,7 @@ import type {
 } from "../../get-reply-options.types.js";
 import type { OriginatingChannelType } from "../../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
+import { releaseRecentQueueMessageId } from "./recent-message-ids.js";
 
 export type QueueMode = "steer" | "followup" | "collect" | "interrupt";
 
@@ -153,6 +154,7 @@ export type FollowupRun = {
     /** Task working directory for runtime execution. Defaults to workspaceDir. */
     cwd?: string;
     config: OpenClawConfig;
+    toolOverrides?: SessionToolOverrides;
     skillsSnapshot?: SkillSnapshot;
     provider: string;
     model: string;
@@ -284,6 +286,10 @@ export function completeFollowupRunLifecycle(run: FollowupLifecycleRun): void {
     // non-rejecting promise. onSettled must still run after a synchronous throw.
     try {
       if (!admittedTurnAdoptionLifecycles.has(lifecycle)) {
+        // The queue is relinquishing an un-admitted message: free its dedupe
+        // identity so the abandonment-triggered ingress retry can re-enqueue
+        // instead of being rejected as a recent duplicate and falsely completed.
+        releaseRecentQueueMessageId(run);
         lifecycle.onAbandoned?.();
       }
     } finally {

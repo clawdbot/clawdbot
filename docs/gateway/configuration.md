@@ -438,6 +438,8 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
             match: { path: "gmail" },
             action: "agent",
             agentId: "main",
+            sessionKey: "hook:gmail",
+            sessionMode: "persistent",
             deliver: true,
           },
         ],
@@ -452,6 +454,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     - `hooks.path` cannot be `/`; keep webhook ingress on a dedicated subpath such as `/hooks`.
     - Keep unsafe-content bypass flags disabled (`hooks.gmail.allowUnsafeExternalContent`, `hooks.mappings[].allowUnsafeExternalContent`) unless doing tightly scoped debugging.
     - If you enable `hooks.allowRequestSessionKey`, also set `hooks.allowedSessionKeyPrefixes` to bound caller-selected session keys.
+    - Keep hook sessions isolated unless durable context is intentional. Direct persistent hooks require an explicit, prefix-bounded request `sessionKey`; mapped persistent hooks require a stable mapping key or `hooks.defaultSessionKey`.
     - For hook-driven agents, prefer strong modern model tiers and strict tool policy (for example messaging-only plus sandboxing where possible).
 
     See [full reference](/gateway/configuration-reference#hooks) for all mapping options and Gmail integration.

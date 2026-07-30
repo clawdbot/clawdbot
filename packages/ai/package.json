@@ -93,12 +93,12 @@
     }
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "0.112.3",
-    "@google/genai": "2.12.0",
+    "@anthropic-ai/sdk": "0.115.0",
+    "@google/genai": "2.13.0",
     "@mistralai/mistralai": "2.5.0",
-    "openai": "6.48.0",
+    "openai": "6.49.0",
     "partial-json": "0.1.7",
-    "typebox": "1.3.6"
+    "typebox": "1.3.8"
   },
   "engines": {
     "node": ">=22.19.0"

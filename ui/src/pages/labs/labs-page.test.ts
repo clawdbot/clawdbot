@@ -88,6 +88,9 @@ describe("LabsPage", () => {
     });
 
     expect(page.querySelector(".settings-page__intro")?.textContent).toContain("experimental");
+    const introLink = page.querySelector<HTMLAnchorElement>(".settings-page__intro a");
+    expect(introLink?.textContent?.trim()).toBe("Learn more");
+    expect(introLink?.href).toBe("https://docs.openclaw.ai/concepts/experimental-features");
     expect(page.querySelectorAll(".settings-row")).toHaveLength(LAB_FEATURES.length);
     expect(page.textContent).toContain("Code Mode");
     expect(page.textContent).toContain("Swarm");
@@ -130,10 +133,12 @@ describe("LabsPage", () => {
 
   it.each([
     {
+      // The on position restores the shipped "auto" tier, never `true`: Labs
+      // offers Auto/Off, and force-on stays a config-only power-user state.
       label: "Code Mode",
       index: 0,
       sourceConfig: { tools: { codeMode: { enabled: false } } },
-      expectedPatch: { tools: { codeMode: { enabled: true } } },
+      expectedPatch: { tools: { codeMode: { enabled: "auto" } } },
       note: "labs: update codeMode",
     },
     {
@@ -154,8 +159,15 @@ describe("LabsPage", () => {
       note: "labs: update toolSearch",
     },
     {
-      label: "Lean tools for local models",
+      label: "Tool-loop detection",
       index: 3,
+      sourceConfig: { tools: { loopDetection: { enabled: false } } },
+      expectedPatch: { tools: { loopDetection: { enabled: true } } },
+      note: "labs: update loopDetection",
+    },
+    {
+      label: "Lean tools for local models",
+      index: 4,
       sourceConfig: {},
       expectedPatch: { agents: { defaults: { experimental: { localModelLean: true } } } },
       note: "labs: update localModelLean",
@@ -164,12 +176,12 @@ describe("LabsPage", () => {
       // Not a boolean gate: the on state is the conservative `direct` mode, so
       // enabling here cannot start recording group or unknown conversations.
       label: "Message audit metadata",
-      index: 4,
+      index: 5,
       sourceConfig: { logging: { audit: { messages: "off" } } },
       expectedPatch: { logging: { audit: { messages: "direct" } } },
       note: "labs: update auditMessages",
     },
-  ])("writes true at the registered config path when enabling $label", async (testCase) => {
+  ])("writes the on value at the registered config path when enabling $label", async (testCase) => {
     const { page, runtimeConfig } = await mountPage(testCase.sourceConfig);
     const toggle = labToggle(page, testCase.index, testCase.label);
 
@@ -228,6 +240,47 @@ describe("LabsPage", () => {
   });
 });
 
+describe("LabsPage code mode enablement", () => {
+  // Mirrors resolveCodeModeConfig: the shipped default is "auto", so the row
+  // reads as on until an explicit `false` opts out. `true` stays a valid
+  // config-only force-on and must also read as on.
+  it.each([
+    { label: "unset", config: {}, expected: true },
+    {
+      label: "object without enabled",
+      config: { tools: { codeMode: { timeoutMs: 5000 } } },
+      expected: true,
+    },
+    { label: "explicit true", config: { tools: { codeMode: { enabled: true } } }, expected: true },
+    {
+      label: "explicit disabled",
+      config: { tools: { codeMode: { enabled: false } } },
+      expected: false,
+    },
+    { label: "boolean shorthand false", config: { tools: { codeMode: false } }, expected: false },
+    { label: "auto shorthand", config: { tools: { codeMode: "auto" } }, expected: true },
+  ])("reads $label as $expected", async ({ config, expected }) => {
+    const { page, provider } = await mountPage(config);
+
+    expect(codeModeToggle(page).checked).toBe(expected);
+    provider.remove();
+  });
+
+  it("writes an explicit false when disabling the shipped default", async () => {
+    const { page, runtimeConfig } = await mountPage({});
+    const toggle = codeModeToggle(page);
+
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+
+    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: { tools: { codeMode: { enabled: false } } },
+      note: "labs: update codeMode",
+    });
+  });
+});
+
 describe("LabsPage tool search enablement", () => {
   const toolSearchIndex = LAB_FEATURES.findIndex((feature) => feature.id === "toolSearch");
 
@@ -275,6 +328,47 @@ describe("LabsPage tool search enablement", () => {
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
       raw: { tools: { toolSearch: { enabled: false } } },
       note: "labs: update toolSearch",
+    });
+  });
+});
+
+describe("LabsPage tool loop detection enablement", () => {
+  const loopDetectionIndex = LAB_FEATURES.findIndex((feature) => feature.id === "loopDetection");
+
+  // Mirrors resolveToolLoopDetectionConfig and the detector default: only an
+  // explicit true enables the rolling-history detectors.
+  it.each([
+    { label: "unset", config: {}, expected: false },
+    {
+      label: "explicit enabled",
+      config: { tools: { loopDetection: { enabled: true } } },
+      expected: true,
+    },
+    {
+      label: "explicit disabled",
+      config: { tools: { loopDetection: { enabled: false } } },
+      expected: false,
+    },
+  ])("reads $label as $expected", async ({ config, expected }) => {
+    const { page, provider } = await mountPage(config);
+
+    expect(labToggle(page, loopDetectionIndex, "Tool-loop detection").checked).toBe(expected);
+    provider.remove();
+  });
+
+  it("patches only enabled so sibling settings remain untouched", async () => {
+    const { page, runtimeConfig } = await mountPage({
+      tools: { loopDetection: { enabled: false, warningThreshold: 12 } },
+    });
+    const toggle = labToggle(page, loopDetectionIndex, "Tool-loop detection");
+
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+
+    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: { tools: { loopDetection: { enabled: true } } },
+      note: "labs: update loopDetection",
     });
   });
 });

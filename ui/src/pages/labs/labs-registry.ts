@@ -47,12 +47,23 @@ export const LAB_FEATURES = [
     description: () => t("labsPage.codeMode.description"),
     docsUrl: "https://docs.openclaw.ai/tools/code-mode",
     configPath: ["tools", "codeMode", "enabled"],
-    onValue: true,
+    // The on position writes the shipped "auto" tier, never `true`: Labs offers
+    // Auto/Off, and force-on for unevaluated models stays a config-only choice.
+    onValue: "auto",
     offValue: false,
-    // "auto" engages code mode per model catalog flag; it must read as on so
-    // the toggle does not silently narrow an operator's deliberate auto tier.
     activeValues: [true, "auto"],
-    readEnabled: null,
+    // Mirrors resolveCodeModeConfig: the shipped default is "auto", so an unset
+    // gate reads as on; only an explicit `false` (shorthand or leaf) reads off.
+    // `true` remains a valid config-only force-on and must also read as on.
+    readEnabled: (raw) => {
+      if (typeof raw === "boolean") {
+        return raw;
+      }
+      if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+        return (raw as Record<string, unknown>).enabled !== false;
+      }
+      return true;
+    },
     enableAlso: null,
     restartHint: null,
   },
@@ -98,6 +109,21 @@ export const LAB_FEATURES = [
     // form, which is the surface with the weakest recall. Pin the bounded
     // directory instead, so enabling from Labs is the variant we recommend.
     enableAlso: { mode: "directory" },
+    restartHint: null,
+  },
+  {
+    id: "loopDetection",
+    title: () => t("labsPage.loopDetection.title"),
+    description: () => t("labsPage.loopDetection.description"),
+    docsUrl: "https://docs.openclaw.ai/tools/loop-detection",
+    configPath: ["tools", "loopDetection", "enabled"],
+    onValue: true,
+    offValue: false,
+    activeValues: [true],
+    // ToolLoopDetectionSchema accepts object form only, and
+    // resolveToolLoopDetectionConfig reads this enabled leaf directly.
+    readEnabled: null,
+    enableAlso: null,
     restartHint: null,
   },
   {

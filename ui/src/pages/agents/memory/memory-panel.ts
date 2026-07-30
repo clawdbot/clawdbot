@@ -21,7 +21,7 @@ import {
   loadDreamDiary,
   loadDreamingStatus,
   loadWikiImportInsights,
-  loadWikiMemoryPalace,
+  loadWikiOverview,
   repairDreamingArtifacts,
   resetGroundedShortTerm,
   resetDreamDiary,
@@ -78,7 +78,7 @@ function readWikiPagePreview(value: unknown, lookup: string): WikiPagePreview {
   const content =
     typeof payload?.content === "string" && payload.content.length > 0
       ? payload.content
-      : "No wiki content available.";
+      : t("dreaming.wiki.noContent");
   const updatedAt =
     typeof payload?.updatedAt === "string" && payload.updatedAt.trim()
       ? payload.updatedAt.trim()
@@ -298,7 +298,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
       this.runDreamingTask(loadDreamingStatus, scope),
       this.runDreamingTask(loadDreamDiary, scope),
       this.runDreamingTask(loadWikiImportInsights, scope),
-      this.runDreamingTask(loadWikiMemoryPalace, scope),
+      this.runDreamingTask(loadWikiOverview, scope),
     ]);
   }
 
@@ -470,13 +470,13 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
         wikiImportInsightsLoading: dreaming.wikiImportInsightsLoading,
         wikiImportInsightsError: dreaming.wikiImportInsightsError,
         wikiImportInsights: dreaming.wikiImportInsights,
-        wikiMemoryPalaceLoading: dreaming.wikiMemoryPalaceLoading,
-        wikiMemoryPalaceError: dreaming.wikiMemoryPalaceError,
-        wikiMemoryPalace: dreaming.wikiMemoryPalace,
+        wikiOverviewLoading: dreaming.wikiOverviewLoading,
+        wikiOverviewError: dreaming.wikiOverviewError,
+        wikiOverview: dreaming.wikiOverview,
         onRefresh: () => void this.loadAll(true),
         onRefreshDiary: () => void this.runDreamingTask(loadDreamDiary),
         onRefreshImports: () => void this.refreshWikiData(loadWikiImportInsights),
-        onRefreshMemoryPalace: () => void this.refreshWikiData(loadWikiMemoryPalace),
+        onRefreshWikiOverview: () => void this.refreshWikiData(loadWikiOverview),
         onOpenConfig: () => void this.context.runtimeConfig.openFile(),
         onOpenWikiPage: (lookup) => this.openWikiPage(lookup),
         onBackfillDiary: () => void this.runDreamingTask(backfillDreamDiary),

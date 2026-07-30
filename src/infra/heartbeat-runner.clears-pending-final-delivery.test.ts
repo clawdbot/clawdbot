@@ -55,16 +55,13 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
     return {
       telegram: sendTelegram as unknown,
       getQueueSize: () => 0,
-      // A fixed clock lets a test seed pendingFinalDeliveryCreatedAt relative to
+      // A fixed clock lets a test seed pending delivery creation relative to
       // the run's startedAt, which is what the ownership guard compares against.
       nowMs: () => now ?? Date.now(),
       getReplyFromConfig: replySpy,
     } satisfies HeartbeatDeps;
   }
 
-  // seedMainSessionStore exposes only part of the pendingFinalDelivery* family;
-  // patch in lastHeartbeat* and the three unexposed pending fields so each test can
-  // prove all eight recovery fields get cleared.
   async function patchEntry(
     storePath: string,
     sessionKey: string,
@@ -79,13 +76,6 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
 
   function expectPendingFinalDeliveryCleared(entry: StoredEntry): void {
     expect(entry?.pendingFinalDelivery).toBeUndefined();
-    expect(entry?.pendingFinalDeliveryText).toBeUndefined();
-    expect(entry?.pendingFinalDeliveryCreatedAt).toBeUndefined();
-    expect(entry?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
-    expect(entry?.pendingFinalDeliveryAttemptCount).toBeUndefined();
-    expect(entry?.pendingFinalDeliveryLastError).toBeUndefined();
-    expect(entry?.pendingFinalDeliveryContext).toBeUndefined();
-    expect(entry?.pendingFinalDeliveryIntentId).toBeUndefined();
   }
 
   it("nulls every pendingFinalDelivery* field after delivering substantive heartbeat content", async () => {
@@ -102,16 +92,13 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
         lastProvider: "telegram",
         lastTo: TELEGRAM_GROUP,
         updatedAt: NOW,
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: "HEARTBEAT_OK",
-        pendingFinalDeliveryCreatedAt: NOW,
-        pendingFinalDeliveryAttemptCount: 3,
-        pendingFinalDeliveryLastError: "prior-error",
-      });
-      await patchEntry(storePath, sessionKey, {
-        pendingFinalDeliveryLastAttemptAt: NOW,
-        pendingFinalDeliveryContext: { foo: "bar" },
-        pendingFinalDeliveryIntentId: "intent-send-success",
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "HEARTBEAT_OK",
+          createdAt: NOW,
+          context: { channel: "telegram", to: "target" },
+          intentId: "intent-send-success",
+        },
       });
 
       // Substantive reply text forces the post-success store write path
@@ -565,22 +552,19 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
         lastProvider: "telegram",
         lastTo: TELEGRAM_GROUP,
         updatedAt: staleAt,
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: body, // prefix-less; diverges from deliveredText
-        // createdAt at run start: this run produced the pending (real runs stamp
-        // a fresh createdAt during the agent turn the defer gate ran ahead of).
-        pendingFinalDeliveryCreatedAt: NOW,
-        pendingFinalDeliveryAttemptCount: 3,
-        pendingFinalDeliveryLastError: "prior-error",
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: body, // prefix-less; diverges from deliveredText
+          createdAt: NOW,
+          context: { channel: "telegram", to: "target" },
+          intentId: "intent-duplicate-skip",
+        },
       });
       await patchEntry(storePath, sessionKey, {
         // lastHeartbeat* proves the same payload already went out within 24h,
         // which is what makes this run a duplicate and the pending clear safe.
         lastHeartbeatText: deliveredText,
         lastHeartbeatSentAt: staleAt,
-        pendingFinalDeliveryLastAttemptAt: NOW,
-        pendingFinalDeliveryContext: { foo: "bar" },
-        pendingFinalDeliveryIntentId: "intent-duplicate-skip",
       });
 
       // Reply is the prefix-less body; normalizeHeartbeatReply re-adds "🤖 ", so
@@ -622,16 +606,13 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
         lastTo: TELEGRAM_GROUP,
         // Stale so the substantive-pending defer gate does not bail this run.
         updatedAt: NOW - 60_000,
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: olderText,
-        pendingFinalDeliveryCreatedAt: olderCreatedAt,
-        pendingFinalDeliveryAttemptCount: 2,
-        pendingFinalDeliveryLastError: "prior-delivery-failure",
-      });
-      await patchEntry(storePath, sessionKey, {
-        pendingFinalDeliveryLastAttemptAt: NOW - 50_000,
-        pendingFinalDeliveryContext: { channel: "telegram", to: "older-chat" },
-        pendingFinalDeliveryIntentId: "intent-older-unsatisfied",
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: olderText,
+          createdAt: olderCreatedAt,
+          context: { channel: "telegram", to: "older-chat" },
+          intentId: "intent-older-unsatisfied",
+        },
       });
 
       // A fresh, different heartbeat payload that gets delivered this run.
@@ -651,10 +632,12 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
       // Send-success records the dedupe markers for the delivered payload...
       expect(entry?.lastHeartbeatText).toBe(replyText);
       // ...but the older, unowned pending-final survives for its own recovery.
-      expect(entry?.pendingFinalDelivery).toBe(true);
-      expect(entry?.pendingFinalDeliveryText).toBe(olderText);
-      expect(entry?.pendingFinalDeliveryCreatedAt).toBe(olderCreatedAt);
-      expect(entry?.pendingFinalDeliveryIntentId).toBe("intent-older-unsatisfied");
+      expect(entry?.pendingFinalDelivery).toMatchObject({
+        kind: "replayable",
+        text: olderText,
+        createdAt: olderCreatedAt,
+        intentId: "intent-older-unsatisfied",
+      });
     });
   });
 
@@ -670,19 +653,18 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
         lastProvider: "telegram",
         lastTo: TELEGRAM_GROUP,
         updatedAt: NOW - 60_000,
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: olderText,
-        pendingFinalDeliveryCreatedAt: olderCreatedAt,
-        pendingFinalDeliveryAttemptCount: 2,
-        pendingFinalDeliveryLastError: "prior-delivery-failure",
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: olderText,
+          createdAt: olderCreatedAt,
+          context: { channel: "telegram", to: "older-chat" },
+          intentId: "intent-older-dupe",
+        },
       });
       await patchEntry(storePath, sessionKey, {
         // Same payload already delivered within 24h -> this run is a duplicate skip.
         lastHeartbeatText: body,
         lastHeartbeatSentAt: NOW - 60_000,
-        pendingFinalDeliveryLastAttemptAt: NOW - 50_000,
-        pendingFinalDeliveryContext: { channel: "telegram", to: "older-chat" },
-        pendingFinalDeliveryIntentId: "intent-older-dupe",
       });
 
       replySpy.mockResolvedValue({ text: body });
@@ -699,10 +681,12 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
 
       const entry = await readEntry(storePath, sessionKey);
       // The duplicate-skip clear must not retire the older, unowned pending-final.
-      expect(entry?.pendingFinalDelivery).toBe(true);
-      expect(entry?.pendingFinalDeliveryText).toBe(olderText);
-      expect(entry?.pendingFinalDeliveryCreatedAt).toBe(olderCreatedAt);
-      expect(entry?.pendingFinalDeliveryIntentId).toBe("intent-older-dupe");
+      expect(entry?.pendingFinalDelivery).toMatchObject({
+        kind: "replayable",
+        text: olderText,
+        createdAt: olderCreatedAt,
+        intentId: "intent-older-dupe",
+      });
     });
   });
 });

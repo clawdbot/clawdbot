@@ -589,6 +589,71 @@ const SkillProposalOriginSchema = closedObject({
   messageId: Type.Optional(NonEmptyString),
 });
 
+const SkillProposalEvaluationFindingSchema = closedObject({
+  ruleId: Type.String({ minLength: 1, maxLength: 256 }),
+  severity: Type.Union([Type.Literal("info"), Type.Literal("warn"), Type.Literal("critical")]),
+  message: Type.String({ minLength: 1, maxLength: 4_000 }),
+  file: Type.Optional(Type.String({ minLength: 1, maxLength: 1_024 })),
+  line: Type.Optional(Type.Integer({ minimum: 1 })),
+});
+
+const SkillProposalEvaluationResultSchema = closedObject({
+  summary: Type.Optional(Type.String({ maxLength: 8_000 })),
+  findings: Type.Optional(Type.Array(SkillProposalEvaluationFindingSchema, { maxItems: 200 })),
+  metrics: Type.Optional(
+    Type.Record(
+      Type.String(),
+      Type.Union([Type.String({ maxLength: 4_000 }), Type.Number(), Type.Boolean()]),
+      {
+        maxProperties: 64,
+        propertyNames: Type.String({ minLength: 1, maxLength: 128 }),
+      },
+    ),
+  ),
+  evaluatorVersion: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  mode: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  decision: Type.Optional(
+    Type.Union([Type.Literal("pass"), Type.Literal("revise"), Type.Literal("block")]),
+  ),
+  decisionReason: Type.Optional(Type.String({ maxLength: 2_000 })),
+});
+
+const SkillProposalEvaluationOutcomeAttribution = {
+  pluginId: Type.String({ minLength: 1, maxLength: 128 }),
+  pluginVersion: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  evaluatorId: Type.String({ minLength: 1, maxLength: 128 }),
+};
+
+const SkillProposalEvaluationOutcomeSchema = Type.Union([
+  closedObject({
+    ...SkillProposalEvaluationOutcomeAttribution,
+    status: Type.Literal("completed"),
+    result: SkillProposalEvaluationResultSchema,
+  }),
+  closedObject({
+    ...SkillProposalEvaluationOutcomeAttribution,
+    status: Type.Literal("skipped"),
+  }),
+  closedObject({
+    ...SkillProposalEvaluationOutcomeAttribution,
+    status: Type.Literal("error"),
+    error: Type.String({ minLength: 1, maxLength: 2_000 }),
+  }),
+]);
+
+/** Latest completed evaluator run attached to a proposal record. */
+export const SkillProposalEvaluationSchema = closedObject({
+  id: NonEmptyString,
+  proposedVersion: NonEmptyString,
+  revisionHash: Sha256String,
+  trigger: Type.Union([Type.Literal("manual"), Type.Literal("apply")]),
+  startedAt: NonEmptyString,
+  completedAt: NonEmptyString,
+  correlationId: Type.Optional(NonEmptyString),
+  targetTreeSha256: Type.Optional(Sha256String),
+  outcomes: Type.Array(SkillProposalEvaluationOutcomeSchema, { maxItems: 64 }),
+});
+
 /** Full persisted skill proposal record. */
 const SkillProposalRecordSchema = closedObject({
   schema: Type.Literal("openclaw.skill-workshop.proposal.v1"),
@@ -614,6 +679,7 @@ const SkillProposalRecordSchema = closedObject({
   quarantinedAt: Type.Optional(NonEmptyString),
   staleAt: Type.Optional(NonEmptyString),
   statusReason: Type.Optional(Type.String()),
+  evaluation: Type.Optional(SkillProposalEvaluationSchema),
 });
 
 /** Condensed proposal manifest entry for list views. */
@@ -651,6 +717,7 @@ export const SkillsProposalInspectParamsSchema = closedObject({
 /** Full proposal inspection result used before apply/revise decisions. */
 export const SkillsProposalInspectResultSchema = closedObject({
   record: SkillProposalRecordSchema,
+  revisionHash: Type.Optional(Sha256String),
   content: Type.String(),
   supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileInputSchema, { maxItems: 64 })),
 });
@@ -681,7 +748,9 @@ export const SkillsProposalUpdateParamsSchema = closedObject({
 export const SkillsProposalReviseParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   proposalId: NonEmptyString,
-  content: SkillProposalContentString,
+  expectedRevisionHash: Type.Optional(Sha256String),
+  correlationId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+  content: Type.Optional(SkillProposalContentString),
   supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileInputSchema, { maxItems: 64 })),
   description: Type.Optional(NonEmptyString),
   goal: Type.Optional(Type.String()),
@@ -693,6 +762,7 @@ export const SkillsProposalRequestRevisionParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   targetAgentId: Type.Optional(NonEmptyString),
   proposalId: NonEmptyString,
+  expectedRevisionHash: Type.Optional(Sha256String),
   instructions: Type.String({ minLength: 1, maxLength: 32_768 }),
   sessionKey: NonEmptyString,
   sessionId: Type.Optional(NonEmptyString),
@@ -718,7 +788,81 @@ export const SkillsProposalRequestRevisionResultSchema = Type.Object(
 export const SkillsProposalActionParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   proposalId: NonEmptyString,
+  expectedRevisionHash: Type.Optional(Sha256String),
+  correlationId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
   reason: Type.Optional(Type.String()),
+});
+
+/** Runs configured proposal evaluators against the current draft. */
+export const SkillsProposalEvaluateParamsSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
+  proposalId: NonEmptyString,
+  expectedRevisionHash: Type.Optional(Sha256String),
+  correlationId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+});
+
+/** Updated proposal record and completed evaluator run returned by manual evaluation. */
+export const SkillsProposalEvaluateResultSchema = closedObject({
+  record: SkillProposalRecordSchema,
+  evaluation: SkillProposalEvaluationSchema,
+});
+
+const SkillProposalLifecycleEventTypeSchema = Type.Union([
+  Type.Literal("created"),
+  Type.Literal("revised"),
+  Type.Literal("evaluation_completed"),
+  Type.Literal("applied"),
+  Type.Literal("rejected"),
+  Type.Literal("quarantined"),
+  Type.Literal("stale"),
+]);
+
+const SkillProposalLifecycleEventActorSchema = closedObject({
+  type: Type.Union([
+    Type.Literal("agent"),
+    Type.Literal("gateway"),
+    Type.Literal("plugin"),
+    Type.Literal("system"),
+  ]),
+  id: Type.Optional(NonEmptyString),
+});
+
+const SkillProposalLifecycleEventPayloadSchema = Type.Record(
+  Type.String(),
+  Type.Union([Type.String({ maxLength: 4_000 }), Type.Number(), Type.Boolean(), Type.Null()]),
+  {
+    maxProperties: 32,
+    propertyNames: Type.String({ minLength: 1, maxLength: 80 }),
+  },
+);
+
+/** Durable Skill Workshop lifecycle event returned for replay. */
+export const SkillProposalLifecycleEventSchema = closedObject({
+  sequence: Type.Integer({ minimum: 1 }),
+  eventId: NonEmptyString,
+  proposalId: NonEmptyString,
+  proposedVersion: NonEmptyString,
+  revisionHash: Sha256String,
+  type: SkillProposalLifecycleEventTypeSchema,
+  occurredAt: NonEmptyString,
+  actor: SkillProposalLifecycleEventActorSchema,
+  correlationId: Type.Optional(NonEmptyString),
+  payload: Type.Optional(SkillProposalLifecycleEventPayloadSchema),
+  evaluation: Type.Optional(SkillProposalEvaluationSchema),
+});
+
+/** Lists durable proposal lifecycle events after an optional sequence cursor. */
+export const SkillsProposalEventsListParamsSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
+  proposalId: Type.Optional(NonEmptyString),
+  afterSequence: Type.Optional(Type.Integer({ minimum: 0 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+});
+
+/** Sequence-ordered proposal lifecycle replay page. */
+export const SkillsProposalEventsListResultSchema = closedObject({
+  events: Type.Array(SkillProposalLifecycleEventSchema, { maxItems: 200 }),
+  nextSequence: Type.Optional(Type.Integer({ minimum: 1 })),
 });
 
 /** Result returned after applying a skill proposal to disk. */
@@ -866,6 +1010,9 @@ export const ToolsEffectiveEntrySchema = closedObject({
   ]),
   pluginId: Type.Optional(NonEmptyString),
   channelId: Type.Optional(NonEmptyString),
+  mcpServer: Type.Optional(NonEmptyString),
+  mcpToolName: Type.Optional(NonEmptyString),
+  deniedBySession: Type.Optional(Type.Literal(true)),
   risk: Type.Optional(
     Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
   ),
@@ -895,6 +1042,7 @@ export const ToolsEffectiveNoticeSchema = closedObject({
   id: NonEmptyString,
   severity: Type.Union([Type.Literal("info"), Type.Literal("warning")]),
   message: Type.String(),
+  servers: Type.Optional(Type.Array(NonEmptyString)),
 });
 
 /** Effective tool set for a session, including profile and filtering notices. */
@@ -993,6 +1141,12 @@ export type SkillsProposalRequestRevisionResult = Static<
   typeof SkillsProposalRequestRevisionResultSchema
 >;
 export type SkillsProposalActionParams = Static<typeof SkillsProposalActionParamsSchema>;
+export type SkillProposalEvaluation = Static<typeof SkillProposalEvaluationSchema>;
+export type SkillsProposalEvaluateParams = Static<typeof SkillsProposalEvaluateParamsSchema>;
+export type SkillsProposalEvaluateResult = Static<typeof SkillsProposalEvaluateResultSchema>;
+export type SkillProposalLifecycleEvent = Static<typeof SkillProposalLifecycleEventSchema>;
+export type SkillsProposalEventsListParams = Static<typeof SkillsProposalEventsListParamsSchema>;
+export type SkillsProposalEventsListResult = Static<typeof SkillsProposalEventsListResultSchema>;
 export type SkillsProposalApplyResult = Static<typeof SkillsProposalApplyResultSchema>;
 export type SkillsProposalRecordResult = Static<typeof SkillsProposalRecordResultSchema>;
 export type SkillsCuratorStatusParams = Static<typeof SkillsCuratorStatusParamsSchema>;

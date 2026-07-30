@@ -598,7 +598,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           replyKind: kind,
           runId: params.runId,
         });
-        if (!result.ok) {
+        if (!result.delivered && !result.suppressed) {
           if (tracksVisibleText) {
             state.failedVisibleTextDelivery = true;
           }
@@ -609,6 +609,13 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         }
         if (result.suppressed) {
           return false;
+        }
+        if (!result.ok) {
+          logVerbose(
+            `dispatch-acp: route-reply (acp/${kind}) partially failed after delivery: ${
+              result.error ?? "unknown error"
+            }`,
+          );
         }
         const policySettle = settleOperationalPolicy(true);
         if (policySettle) {
@@ -633,7 +640,6 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         state.routedCounts[kind] += 1;
         return true;
       }
-
       if (kind === "tool") {
         await waitForPendingDirectBlockReplyDelivery();
       }

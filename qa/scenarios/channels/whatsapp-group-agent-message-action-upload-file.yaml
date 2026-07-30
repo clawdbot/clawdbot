@@ -6,7 +6,6 @@ scenario:
     primary:
       - whatsapp.outbound-image
   execution:
-    profiles: { "whatsapp:mock-default": 13 }
     kind: flow
     channel: whatsapp
     timeoutMs: 90000

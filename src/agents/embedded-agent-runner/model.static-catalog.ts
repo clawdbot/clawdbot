@@ -131,6 +131,7 @@ type StaticCatalogPlugin = Parameters<
 type BundledStaticCatalogParams = {
   cfg?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
   workspaceDir?: string;
 };
 
@@ -150,6 +151,11 @@ const defaultBundledStaticCatalogConfig: OpenClawConfig = {};
 function resolveBundledStaticCatalogMetadataSnapshot(
   params: BundledStaticCatalogParams,
 ): PluginMetadataSnapshot | undefined {
+  // Lifecycle callers pin the catalog to the plugin generation they are publishing.
+  // Rediscovery here can mix generations and repeat manifest work for every model lookup.
+  if (params.metadataSnapshot) {
+    return params.metadataSnapshot;
+  }
   if (params.env !== process.env) {
     return undefined;
   }
@@ -280,11 +286,13 @@ export function createBundledStaticCatalogModelResolver(params?: {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   includeRuntimeDiscovery?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
   workspaceDir?: string;
 }): (lookup: BundledStaticCatalogLookup) => ProviderRuntimeModel | undefined {
   const catalogParams = {
     cfg: params?.cfg,
     env: params?.env ?? process.env,
+    ...(params?.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
     workspaceDir: params?.workspaceDir,
   };
   let standaloneState: BundledStaticCatalogState | undefined;

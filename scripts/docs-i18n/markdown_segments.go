@@ -182,6 +182,11 @@ func markdownListParentItemPath(list *ast.List) string {
 }
 
 func extractMarkdownInlineCodeValues(body string) []string {
+	if _, opening, _, _, _, ok := splitPureFencedDocSection(body); ok {
+		if _, validOpening := parseMarkdownLiteralFenceOpening(opening); validOpening {
+			return nil
+		}
+	}
 	parseSource := []byte(normalizeDocComponentsForMarkdownParse(body))
 	fencedRanges := markdownClosedLiteralFenceByteRanges(string(parseSource))
 	doc := goldmark.New(goldmark.WithExtensions(extension.GFM)).Parser().Parse(text.NewReader(parseSource))

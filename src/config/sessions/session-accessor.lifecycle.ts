@@ -16,19 +16,12 @@ import {
   replaceSessionEntry,
   patchSessionEntry,
 } from "./session-accessor.entry.js";
-import type {
-  DeleteSessionEntryLifecycleResult,
-  SessionArchivedTranscriptCleanupRule,
-  SessionEntryLifecycleMutationResult,
-  SessionEntryLifecycleRemoval,
-  SessionEntryLifecycleUpsert,
-} from "./session-accessor.lifecycle-types.js";
 import {
-  applySqliteSessionEntryLifecycleMutation,
+  applySqliteSessionEntryLifecycleMutation as applySessionEntryLifecycleMutation,
   applySqliteSessionEntryReplacements as applySessionEntryReplacements,
   applySqliteSessionStoreProjection as applySessionStoreProjection,
   cleanupSqliteSessionLifecycleArtifacts as cleanupSessionLifecycleArtifacts,
-  deleteSqliteSessionEntryLifecycle,
+  deleteSqliteSessionEntryLifecycle as deleteSessionEntryLifecycle,
   purgeSqliteDeletedAgentSessionEntries as purgeDeletedAgentSessionEntries,
   rollbackSqliteAgentHarnessSessionEntryLifecycle as rollbackAgentHarnessSessionEntryLifecycle,
   rollbackSqlitePluginOwnedSessionEntryLifecycle as rollbackPluginOwnedSessionEntryLifecycle,
@@ -47,18 +40,18 @@ import type {
   SessionPatchProjectionContext,
   SessionPatchProjectionFailure,
   SessionPatchProjectionResult,
-  DeleteSessionEntryLifecycleParams,
 } from "./session-accessor.types.js";
 import { resolveProjectionExistingEntry } from "./session-entry-selection.js";
-import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 // Session lifecycle storage is canonical SQLite; direct exports keep reset,
 // rollback, cleanup, and bulk projections on their actual transaction owner.
 export {
+  applySessionEntryLifecycleMutation,
   applySessionEntryReplacements,
   applySessionStoreProjection,
   cleanupSessionLifecycleArtifacts,
+  deleteSessionEntryLifecycle,
   purgeDeletedAgentSessionEntries,
   resetSessionEntryLifecycle,
   rollbackAgentHarnessSessionEntryLifecycle,
@@ -288,38 +281,6 @@ export async function preserveTemporarySessionMapping<T>(
     ...(snapshot.canRestore ? {} : { snapshotFailure: snapshot.snapshotFailure }),
     ...(restoreFailure ? { restoreFailure } : {}),
   };
-}
-
-/** Keeps the broader lifecycle compatibility contract at its public boundary. */
-export async function deleteSessionEntryLifecycle(
-  params: DeleteSessionEntryLifecycleParams,
-): Promise<DeleteSessionEntryLifecycleResult> {
-  return await deleteSqliteSessionEntryLifecycle(params);
-}
-
-/** Applies exact entry lifecycle mutations and artifact cleanup at the storage boundary. */
-export async function applySessionEntryLifecycleMutation(params: {
-  agentId?: string;
-  storePath: string;
-  removals?: Iterable<SessionEntryLifecycleRemoval>;
-  upserts?: Iterable<SessionEntryLifecycleUpsert>;
-  activeSessionKey?: string;
-  maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
-  skipMaintenance?: boolean;
-  preserveActiveWork?: boolean;
-  archiveReason?: "deleted" | "reset";
-  restrictArchivedTranscriptsToStoreDir?: boolean;
-  cleanupArchivedTranscripts?: {
-    rules: SessionArchivedTranscriptCleanupRule[];
-    nowMs?: number;
-  };
-  pruneUnreferencedArtifacts?: {
-    olderThanMs: number;
-    dryRun?: boolean;
-  };
-  captureArtifactCleanupError?: boolean;
-}): Promise<SessionEntryLifecycleMutationResult> {
-  return await applySqliteSessionEntryLifecycleMutation(params);
 }
 
 /**

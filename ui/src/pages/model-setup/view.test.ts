@@ -24,21 +24,41 @@ const detected: SystemAgentSetupDetectResult = {
   unavailableCandidates: [
     {
       id: "gemini-cli",
+      brandId: "google-gemini-cli",
       label: "Gemini CLI",
-      detail: "Installed",
-      reason: "No active login",
+      detail: "installed; login status unavailable",
+      reason: "OpenClaw could not confirm a usable login.",
+      authOptionId: "google-gemini-cli",
+      manualProviderId: "gemini-api-key",
     },
   ],
   manualProviders: [
     {
+      id: "gemini-api-key",
+      brandId: "google",
+      groupLabel: "Google",
+      label: "Google Gemini API key",
+      hint: "Use an AI Studio API key.",
+    },
+    {
       id: "openai",
       brandId: "openai",
+      groupLabel: "OpenAI",
       label: "OpenAI",
       hint: "Use a project API key.",
       icon: "https://cdn.example.com/openai.png",
     },
   ],
   authOptions: [
+    {
+      id: "google-gemini-cli",
+      brandId: "google-gemini-cli",
+      label: "Gemini CLI OAuth",
+      groupLabel: "Google",
+      kind: "oauth",
+      featured: true,
+      hint: "Continue with Google.",
+    },
     {
       id: "openai-oauth",
       brandId: "openai",
@@ -86,6 +106,7 @@ function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupViewProp
     manualApiKey: "",
     manualError: null,
     moreSignInOpen: false,
+    firstRun: false,
     iconUrls: {
       "https://cdn.example.com/codex.png": "blob:codex",
       "https://cdn.example.com/openai.png": "blob:openai",
@@ -97,11 +118,13 @@ function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupViewProp
     onStartAuth: vi.fn(),
     onStartPrepare: vi.fn(),
     onManualProviderChange: vi.fn(),
+    onUseManualProvider: vi.fn(),
     onManualApiKeyChange: vi.fn(),
     onManualConnect: vi.fn(),
     onMoreSignInToggle: vi.fn(),
     onIconError: vi.fn(),
     onOpenChat: vi.fn(),
+    onSuccessClose: vi.fn(),
     onWizardValueChange: vi.fn(),
     onWizardAnswer: vi.fn(),
     onWizardCancel: vi.fn(),
@@ -156,16 +179,22 @@ describe("renderModelSetup", () => {
     expect(text(container)).toContain("Found on this Gateway");
     expect(text(container)).toContain("Codex CLI");
     expect(text(container)).toContain("openai/gpt-5 · Signed in locally");
-    expect(text(container)).toContain("Detected, but not auto-tested");
-    expect(text(container)).toContain("No active login");
+    expect(text(container)).toContain("Found, but needs attention");
+    expect(text(container)).toContain("OpenClaw could not confirm a usable login");
     expect(text(container)).toContain("Sign in with a provider");
     expect(text(container)).toContain("Set up a local model");
     expect(text(container)).toContain("Connect with an API key or token");
-    expect(container.querySelector<HTMLSelectElement>(".model-setup__manual select")?.value).toBe(
-      "openai",
+    expect(
+      container.querySelector('[data-manual-provider="openai"][data-selected]'),
+    ).not.toBeNull();
+    expect(text(container.querySelector(".model-setup-provider-select__trigger")!)).toContain(
+      "OpenAI",
     );
     expect(container.querySelector('input[type="password"]')).not.toBeNull();
     expect(container.querySelector("details")?.open).toBe(false);
+    expect(
+      container.querySelector('[data-unavailable-candidate="gemini-cli"] [data-provider-icon]'),
+    ).not.toBeNull();
     expect(
       container.querySelector('[data-candidate-kind="codex-cli"] [data-provider-icon="codex"]'),
     ).not.toBeNull();
@@ -182,6 +211,280 @@ describe("renderModelSetup", () => {
     expect(container.querySelectorAll("img")).toHaveLength(0);
   });
 
+  it("identifies provider families separately from their credential methods", () => {
+    const container = mount(
+      props({
+        manualProviderId: "qwen-cn",
+        page: {
+          phase: "ready",
+          result: {
+            ...detected,
+            manualProviders: [
+              {
+                id: "qwen-cn",
+                brandId: "qwen",
+                groupLabel: "Qwen Cloud",
+                label: "Coding Plan API Key for China (subscription)",
+                hint: "Endpoint: coding.dashscope.aliyuncs.com",
+              },
+              {
+                id: "zai-cn",
+                brandId: "zai",
+                groupLabel: "Z.AI",
+                label: "Coding-Plan-CN",
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(text(container.querySelector(".model-setup-provider-select__trigger")!)).toContain(
+      "Qwen Cloud Coding Plan API Key for China (subscription)",
+    );
+    expect(
+      container.querySelector('[data-manual-provider="qwen-cn"] [data-provider-icon="alibaba"]'),
+    ).not.toBeNull();
+    expect(text(container.querySelector('[data-manual-provider="zai-cn"]')!)).toContain(
+      "Z.AI Coding-Plan-CN",
+    );
+  });
+
+  it("renders the provider picker with the shared Web Awesome primitive", () => {
+    const container = mount(props());
+    const picker = container.querySelector(".model-setup-provider-select");
+    const options = Array.from(
+      container.querySelectorAll<HTMLElement & { checked: boolean; value: string }>(
+        "wa-dropdown-item[data-manual-provider]",
+      ),
+    );
+
+    expect(picker?.localName).toBe("wa-dropdown");
+    expect(options.map((option) => option.value).toSorted()).toEqual(["gemini-api-key", "openai"]);
+    expect(options.find((option) => option.value === "openai")?.checked).toBe(true);
+    expect(options.find((option) => option.value === "gemini-api-key")?.checked).toBe(false);
+  });
+
+  it("claims Escape before the app shortcut and restores the provider trigger", () => {
+    const container = mount(props());
+    const picker = container.querySelector<HTMLElement & { open: boolean }>(
+      ".model-setup-provider-select",
+    )!;
+    const trigger = picker.querySelector<HTMLElement>('[slot="trigger"]')!;
+    const appShortcut = vi.fn();
+    const handleAppShortcut = (event: KeyboardEvent) => {
+      if (!event.defaultPrevented) {
+        appShortcut();
+      }
+    };
+    document.addEventListener("keydown", handleAppShortcut);
+    picker.open = true;
+
+    const event = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Escape",
+    });
+    picker.dispatchEvent(event);
+    picker.dispatchEvent(new CustomEvent("wa-after-hide"));
+    document.removeEventListener("keydown", handleAppShortcut);
+
+    expect(picker.open).toBe(true);
+    expect(event.defaultPrevented).toBe(true);
+    expect(appShortcut).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("moves focus to the credential field after Tab dismisses the picker", () => {
+    const container = mount(props());
+    const picker = container.querySelector<HTMLElement & { open: boolean }>(
+      ".model-setup-provider-select",
+    )!;
+    const option = picker.querySelector<HTMLElement>("[data-manual-provider]")!;
+    const accessValue = container.querySelector<HTMLElement>('input[type="password"]')!;
+    picker.open = true;
+    option.focus();
+
+    const event = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Tab",
+    });
+    option.dispatchEvent(event);
+    picker.dispatchEvent(new CustomEvent("wa-after-hide"));
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(picker.open).toBe(false);
+    expect(document.activeElement).toBe(accessValue);
+  });
+
+  it("returns focus to the provider trigger after Shift+Tab dismisses the picker", () => {
+    const container = mount(props());
+    const picker = container.querySelector<HTMLElement & { open: boolean }>(
+      ".model-setup-provider-select",
+    )!;
+    const trigger = picker.querySelector<HTMLElement>('[slot="trigger"]')!;
+    const option = picker.querySelector<HTMLElement>("[data-manual-provider]")!;
+    picker.open = true;
+    option.focus();
+
+    option.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Tab",
+        shiftKey: true,
+      }),
+    );
+    picker.dispatchEvent(new CustomEvent("wa-after-hide"));
+
+    expect(picker.open).toBe(false);
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("keeps the credential when the selected provider is chosen again", () => {
+    const onManualProviderChange = vi.fn();
+    const container = mount(props({ onManualProviderChange }));
+    const picker = container.querySelector<HTMLElement & { open: boolean }>(
+      ".model-setup-provider-select",
+    )!;
+    const trigger = picker.querySelector<HTMLElement>('[slot="trigger"]')!;
+    const option = picker.querySelector<HTMLElement & { checked: boolean }>(
+      '[data-manual-provider="openai"]',
+    )!;
+    picker.open = true;
+    trigger.focus();
+    picker.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        cancelable: true,
+        detail: { item: option },
+      }),
+    );
+
+    expect(onManualProviderChange).not.toHaveBeenCalled();
+    expect(option.checked).toBe(true);
+    expect(picker.open).toBe(false);
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("focuses the selected provider when the shared dropdown opens", () => {
+    const container = mount(
+      props({
+        manualProviderId: "gemini-api-key",
+        page: {
+          phase: "ready",
+          result: {
+            ...detected,
+            manualProviders: [
+              ...detected.manualProviders,
+              { id: "zai", groupLabel: "Z.AI", label: "API key" },
+            ],
+          },
+        },
+      }),
+    );
+    const picker = container.querySelector(".model-setup-provider-select")!;
+    picker.dispatchEvent(new CustomEvent("wa-after-show"));
+
+    const options = Array.from(
+      picker.querySelectorAll<HTMLElement & { active: boolean }>("[data-manual-provider]"),
+    );
+    expect(
+      options.find((option) => option.dataset.manualProvider === "gemini-api-key")?.active,
+    ).toBe(true);
+    expect(options.find((option) => option.dataset.manualProvider === "openai")?.active).toBe(
+      false,
+    );
+  });
+
+  it("changes provider from the shared dropdown selection event", () => {
+    const onManualProviderChange = vi.fn();
+    const container = mount(props({ onManualProviderChange }));
+    const picker = container.querySelector(".model-setup-provider-select")!;
+    const trigger = picker.querySelector<HTMLElement>('[slot="trigger"]')!;
+    const option = picker.querySelector('[data-manual-provider="gemini-api-key"]')!;
+
+    picker.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        cancelable: true,
+        detail: { item: option },
+      }),
+    );
+    picker.dispatchEvent(new CustomEvent("wa-after-hide"));
+
+    expect(onManualProviderChange).toHaveBeenCalledWith("gemini-api-key");
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("does not repeat the method when an older gateway omits the provider group", () => {
+    const container = mount(
+      props({
+        manualProviderId: "legacy",
+        page: {
+          phase: "ready",
+          result: {
+            ...detected,
+            manualProviders: [{ id: "legacy", label: "Legacy provider" }],
+          },
+        },
+      }),
+    );
+    const trigger = container.querySelector(".model-setup-provider-select__trigger")!;
+    const option = container.querySelector('[data-manual-provider="legacy"]')!;
+
+    expect(trigger.querySelector("strong")?.textContent?.trim()).toBe("Legacy provider");
+    expect(trigger.querySelector(".model-setup-provider-select__copy > span")).toBeNull();
+    expect(option.getAttribute("aria-label")).toBe("Legacy provider");
+  });
+
+  it("shows verified connections in an actionable success dialog", () => {
+    const onOpenChat = vi.fn();
+    const onSuccessClose = vi.fn();
+    const container = mount(
+      props({
+        activation: { phase: "success", modelRef: "openai/gpt-5.6-sol", latencyMs: 73 },
+        onOpenChat,
+        onSuccessClose,
+      }),
+    );
+
+    const dialog = container.querySelector('openclaw-modal-dialog[label="Connection verified"]');
+    expect(dialog).not.toBeNull();
+    expect(text(dialog!)).toContain(
+      "OpenClaw received a real reply from openai/gpt-5.6-sol. You can start chatting now.",
+    );
+    expect(text(dialog!)).toContain("Verified in 73 ms");
+    dialog?.querySelector<HTMLButtonElement>(".primary")?.click();
+    expect(onOpenChat).toHaveBeenCalledOnce();
+    dialog?.querySelectorAll<HTMLButtonElement>("button").item(0).click();
+    expect(onSuccessClose).toHaveBeenCalledOnce();
+  });
+
+  it("offers direct recovery actions for an unavailable provider", () => {
+    const onStartAuth = vi.fn();
+    const onUseManualProvider = vi.fn();
+    const onDetect = vi.fn();
+    const container = mount(props({ onStartAuth, onUseManualProvider, onDetect }));
+    const buttons = container.querySelectorAll<HTMLButtonElement>(
+      '[data-unavailable-candidate="gemini-cli"] button',
+    );
+
+    expect([...buttons].map((button) => button.textContent?.trim())).toEqual([
+      "Sign in with Google",
+      "Use API key",
+      "Check again",
+    ]);
+    buttons[0]?.click();
+    buttons[1]?.click();
+    buttons[2]?.click();
+
+    expect(onStartAuth).toHaveBeenCalledWith(expect.objectContaining({ id: "google-gemini-cli" }));
+    expect(onUseManualProvider).toHaveBeenCalledWith("gemini-api-key");
+    expect(onDetect).toHaveBeenCalledOnce();
+  });
+
   it("derives prepare rows from accepted choice ids and hides usable local candidates", () => {
     const onStartPrepare = vi.fn();
     const container = mount(props({ onStartPrepare }));
@@ -192,7 +495,7 @@ describe("renderModelSetup", () => {
     const llamaCpp = container.querySelector<HTMLButtonElement>(
       '[data-prepare-choice="llama-cpp"] button',
     );
-    expect(ollama?.textContent).toContain("Set up / Download model");
+    expect(ollama?.textContent).toContain("Check & set up");
     expect(llamaCpp).not.toBeNull();
     ollama?.click();
     expect(onStartPrepare).toHaveBeenCalledWith(expect.objectContaining({ id: "ollama" }));
@@ -437,7 +740,7 @@ describe("renderModelSetup", () => {
     expect(old.querySelector(".settings-section")).toBeNull();
   });
 
-  it("renders the success banner and opens chat", () => {
+  it("keeps setup context behind the success dialog and opens chat", () => {
     const onOpenChat = vi.fn();
     const container = mount(
       props({
@@ -445,11 +748,22 @@ describe("renderModelSetup", () => {
         onOpenChat,
       }),
     );
-    expect(text(container)).toContain("Your AI is ready");
-    expect(text(container)).toContain("openai/gpt-5 · 91 ms");
-    container.querySelector<HTMLButtonElement>(".model-setup__success button")?.click();
+    expect(text(container)).toContain("Connection verified");
+    expect(text(container)).toContain("Verified in 91 ms");
+    container.querySelector<HTMLButtonElement>(".model-setup-success .primary")?.click();
     expect(onOpenChat).toHaveBeenCalledOnce();
-    expect(container.querySelector(".settings-section")).toBeNull();
+    expect(container.querySelector(".settings-section")).not.toBeNull();
+  });
+
+  it("continues first-run setup after the model is ready", () => {
+    const container = mount(
+      props({
+        activation: { phase: "success", modelRef: "openai/gpt-5" },
+        firstRun: true,
+      }),
+    );
+    expect(text(container)).toContain("Continue setup");
+    expect(text(container)).not.toContain("Open Chat");
   });
 
   it("renders an idle current connection and verifies it", () => {
@@ -465,6 +779,45 @@ describe("renderModelSetup", () => {
     expect(text(current!)).toContain("Current connection openai/gpt-5 Verify connection");
     current?.querySelector<HTMLButtonElement>("button")?.click();
     expect(onVerify).toHaveBeenCalledOnce();
+  });
+
+  it("does not repeat the current route among detected candidates", () => {
+    const container = mount(
+      props({
+        page: {
+          phase: "ready",
+          result: {
+            ...detected,
+            configuredModel: "openai/gpt-5.6-sol",
+            setupComplete: true,
+            candidates: [
+              {
+                kind: "existing-model",
+                brandId: "openai",
+                label: "Current model",
+                detail: "openai/gpt-5.6-sol — already configured",
+                modelRef: "openai/gpt-5.6-sol",
+                recommended: false,
+                credentials: true,
+              },
+              {
+                kind: "claude-cli",
+                brandId: "claude",
+                label: "Claude Code",
+                detail: "logged in",
+                modelRef: "claude-cli/claude-opus-5",
+                recommended: false,
+                credentials: true,
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(container.querySelector('[data-candidate-kind="existing-model"]')).toBeNull();
+    expect(container.querySelector('[data-candidate-kind="claude-cli"]')).not.toBeNull();
+    expect(text(container)).toContain("Current connection openai/gpt-5.6-sol");
   });
 
   it("renders connection verification progress", () => {

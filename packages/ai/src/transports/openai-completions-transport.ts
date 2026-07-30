@@ -8,6 +8,7 @@ import { getEnvApiKey } from "../env-api-keys.js";
 import { applyProviderReportedUsageCost, calculateCost } from "../model-utils.js";
 import { convertMessages } from "../openai-completions-messages.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
+import { resolveCacheRetention } from "../providers/cache-retention.js";
 import {
   isOpenAIGpt54MiniModel,
   isOpenAIGpt55Model,
@@ -33,6 +34,7 @@ import {
 } from "../utils/assistant-text-phase.js";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
 import {
   createFirstStreamEventAbortController,
@@ -62,13 +64,13 @@ import {
   buildOpenAISdkRequestOptions,
   enforceCodeModeResponsesToolSurface,
   getCompat,
+  resolveCodeModeResponsesVisibleToolNames,
   resolveOpenAIStrictToolFlagWithDiagnostics,
 } from "./openai-transport-params.js";
 import {
   GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP,
   createModelStreamCooperativeScheduler,
   log,
-  resolveCacheRetention,
   resolvePromptCacheKey,
   sortTransportToolsByName,
   throwIfModelStreamAborted,
@@ -320,8 +322,9 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           (options as { openclawCodeModeToolSurface?: unknown } | undefined)
             ?.openclawCodeModeToolSurface === true
         ) {
-          enforceCodeModeResponsesToolSurface(params);
-          assertCodeModeResponsesToolSurface(params);
+          const visibleToolNames = resolveCodeModeResponsesVisibleToolNames(context);
+          enforceCodeModeResponsesToolSurface(params, visibleToolNames);
+          assertCodeModeResponsesToolSurface(params, visibleToolNames);
         }
         const compat = getCompat(model as OpenAIModeModel);
         if (compat.requiresNonEmptyUserOrAssistantMessage) {
@@ -334,7 +337,10 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         firstEventAbort = createFirstStreamEventAbortController(options?.signal);
         const responseStream = (await client.chat.completions.create(
           params as never,
-          buildOpenAISdkRequestOptions(model, firstEventAbort.signal),
+          buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
+            timeoutMs: options?.timeoutMs,
+            maxRetries: options?.maxRetries,
+          }),
         )) as unknown as AsyncIterable<ChatCompletionChunk>;
         stream.push({ type: "start", partial: output as never });
         await processOpenAICompletionsStream(responseStream, output, model, stream, {
@@ -631,6 +637,8 @@ async function processOpenAICompletionsStream(
       await cooperativeScheduler.afterEvent();
       continue;
     }
+    // Hidden reasoning is still provider progress; keep the idle watchdog alive without exposing it.
+    notifyLlmRequestActivity(options?.signal);
     const chunk = rawChunk as ChatCompletionChunk;
     output.responseId ||= chunk.id;
     let hasReasoningUsageActivity = false;

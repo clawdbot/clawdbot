@@ -217,6 +217,31 @@ export function createDiscordDraftPreviewController(params: {
     markPreviewFinalized() {
       finalizedViaPreviewMessage = true;
     },
+    async retarget(channelId: string) {
+      await draftStream?.retarget(channelId);
+    },
+    async finalizeProgressReceipt(receiptLine: string) {
+      if (!draftStream || discordStreamMode !== "progress") {
+        return false;
+      }
+      const receipt = receiptLine.trim();
+      if (!receipt) {
+        return false;
+      }
+      const progressText = lastPartialText.trimEnd();
+      const maxProgressChars = Math.max(0, draftMaxChars - receipt.length - 1);
+      const fittedProgressText =
+        progressText.length > maxProgressChars
+          ? progressText.slice(progressText.length - maxProgressChars).trimStart()
+          : progressText;
+      draftStream.update(fittedProgressText ? `${fittedProgressText}\n${receipt}` : receipt);
+      await draftStream.stop();
+      if (!draftStream.messageId()) {
+        return false;
+      }
+      finalizedViaPreviewMessage = true;
+      return true;
+    },
     disableBlockStreamingForDraft: draftStream ? true : undefined,
     async pushToolProgress(
       line?: string | ChannelProgressDraftLine,
@@ -388,6 +413,7 @@ export function createDiscordDraftPreviewController(params: {
         if (!finalizedViaPreviewMessage && draftStream?.messageId()) {
           await draftStream.clear();
         }
+        await draftStream?.cleanupRetargeted();
       } catch (err) {
         params.log(`discord: draft cleanup failed: ${String(err)}`);
       }

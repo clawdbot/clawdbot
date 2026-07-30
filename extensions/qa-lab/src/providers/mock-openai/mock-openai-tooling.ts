@@ -40,9 +40,10 @@ export function readTargetFromPrompt(prompt: string) {
     return repoScoped;
   }
 
-  const loosePath = /\b[A-Za-z0-9._-]+\.(?:md|json|ts|tsx|js|mjs|cjs|txt|yaml|yml)\b/i
-    .exec(prompt)?.[0]
-    ?.trim();
+  const loosePath =
+    /\b[A-Za-z0-9_][A-Za-z0-9._@!:-]*\.(?:md|json|ts|tsx|js|mjs|cjs|txt|yaml|yml)\b/i
+      .exec(prompt)?.[0]
+      ?.trim();
   if (loosePath) {
     return loosePath;
   }

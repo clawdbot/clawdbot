@@ -351,6 +351,7 @@ final class ExecApprovalsPromptServer {
     static let shared = ExecApprovalsPromptServer()
 
     private let retryDelay: Duration
+    private let maximumRetryDelay: Duration
     private let resolveSocketCredentials: @Sendable () -> (socketPath: String, token: String)
     private let onPrompt: @Sendable (ExecApprovalPromptRequest) async -> ExecApprovalDecision?
     private var server: ExecApprovalsSocketServer?
@@ -360,6 +361,7 @@ final class ExecApprovalsPromptServer {
 
     init(
         retryDelay: Duration = .seconds(1),
+        maximumRetryDelay: Duration = .seconds(30),
         resolveSocketCredentials: @escaping @Sendable () -> (socketPath: String, token: String) = {
             let approvals = ExecApprovalsStore.resolve(agentId: nil)
             return (approvals.socketPath, approvals.token)
@@ -371,6 +373,7 @@ final class ExecApprovalsPromptServer {
         })
     {
         self.retryDelay = retryDelay
+        self.maximumRetryDelay = maximumRetryDelay
         self.resolveSocketCredentials = resolveSocketCredentials
         self.onPrompt = onPrompt
     }
@@ -380,6 +383,7 @@ final class ExecApprovalsPromptServer {
         self.startupGeneration &+= 1
         let generation = self.startupGeneration
         let retryDelay = self.retryDelay
+        let maximumRetryDelay = self.maximumRetryDelay
         let resolveSocketCredentials = self.resolveSocketCredentials
         let onPrompt = self.onPrompt
         let previousStartupTask = self.previousStartupTask
@@ -394,12 +398,15 @@ final class ExecApprovalsPromptServer {
             guard !Task.isCancelled, self?.startupGeneration == generation else { return }
 
             var isFirstAttempt = true
+            var retryBackoff = ExecApprovalsPromptRetryBackoff(
+                initialDelay: retryDelay,
+                maximumDelay: maximumRetryDelay)
             while !Task.isCancelled {
                 if isFirstAttempt {
                     isFirstAttempt = false
                 } else {
                     do {
-                        try await Task.sleep(for: retryDelay)
+                        try await Task.sleep(for: retryBackoff.nextDelay())
                     } catch {
                         return
                     }
@@ -1178,6 +1185,24 @@ private final class ExecApprovalsSocketLifecycleLease: @unchecked Sendable {
         _ = self.processLock.withLock {
             self.reservedPaths.remove(path)
         }
+    }
+}
+
+struct ExecApprovalsPromptRetryBackoff {
+    private var currentDelay: Duration
+    private let maximumDelay: Duration
+
+    init(initialDelay: Duration, maximumDelay: Duration) {
+        self.currentDelay = initialDelay
+        self.maximumDelay = max(initialDelay, maximumDelay)
+    }
+
+    mutating func nextDelay() -> Duration {
+        let delay = self.currentDelay
+        // A second app can hold the lifecycle lease indefinitely. Back off the
+        // SQLite credential read and bind attempt instead of polling every second.
+        self.currentDelay = min(self.currentDelay * 2, self.maximumDelay)
+        return delay
     }
 }
 

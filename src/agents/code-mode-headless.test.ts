@@ -58,6 +58,7 @@ function expectFailed(result: CodeModeHeadlessResult) {
 describe("headless Code Mode", () => {
   afterEach(() => {
     vi.useRealTimers();
+    testing.setTypescriptRuntimeForTest(null);
     expect(testing.activeRuns.size).toBe(0);
     testing.activeRuns.clear();
     testing.resumingRunIds.clear();
@@ -601,6 +602,60 @@ describe("headless Code Mode", () => {
     expect(tool.execute).toHaveBeenCalledOnce();
   });
 
+  it("counts first-class node operations against the headless tool budget", async () => {
+    const nodesTool = fakeTool("nodes", async () => jsonResult({ nodes: [] }));
+
+    const result = expectFailed(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness([nodesTool]),
+        code: `
+          await nodes.list();
+          await nodes.list();
+          return true;
+        `,
+        maxToolCalls: 1,
+        wallClockMs: 5_000,
+      }),
+    );
+
+    expect(result.code).toBe("tool_budget_exceeded");
+    expect(result.toolCallCount).toBe(2);
+    expect(nodesTool.execute).toHaveBeenCalledOnce();
+  });
+
+  it("fails an awaiting promise without bridge work before resuming a worker", async () => {
+    const result = expectFailed(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness(),
+        code: "await new Promise(() => {}); return true;",
+        wallClockMs: 5_000,
+      }),
+    );
+
+    expect(result.code).toBe("internal_error");
+    expect(result.error).toContain("pending without host work");
+    expect(result.toolCallCount).toBe(0);
+  });
+
+  it("bounds output and returned values across separate worker legs", async () => {
+    const tool = fakeTool("output_boundary", async () => jsonResult({ ok: true }));
+
+    const result = expectFailed(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness([tool]),
+        code: `
+          text("x".repeat(700));
+          await tools.call("openclaw:core:output_boundary", {});
+          return "y".repeat(700);
+        `,
+        overrides: { maxOutputBytes: 1_024 },
+      }),
+    );
+
+    expect(result.code).toBe("output_limit_exceeded");
+    expect(tool.execute).toHaveBeenCalledOnce();
+  });
+
   it("honors cron payload tool budgets above the old headless cap", async () => {
     const tool = fakeTool("budgeted", async () => jsonResult({ ok: true }));
     const result = expectCompleted(
@@ -750,6 +805,46 @@ describe("headless Code Mode", () => {
     expect(result).toMatchObject({
       code: "aborted",
       error: "code mode execution aborted",
+    });
+  });
+
+  it("times out an unfinished headless TypeScript runtime load", async () => {
+    testing.setTypescriptRuntimeForTest(new Promise<typeof import("typescript")>(() => {}));
+
+    const result = expectFailed(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness(),
+        language: "typescript",
+        code: "return 42;",
+        wallClockMs: 25,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      code: "timeout",
+      error: "code mode headless wall-clock timeout exceeded",
+      output: [],
+      toolCallCount: 0,
+    });
+  });
+
+  it("aborts an unfinished headless TypeScript runtime load", async () => {
+    testing.setTypescriptRuntimeForTest(new Promise<typeof import("typescript")>(() => {}));
+    const controller = new AbortController();
+    const resultPromise = runCodeModeScriptHeadless({
+      ctx: createHeadlessHarness(),
+      language: "typescript",
+      code: "return 42;",
+      signal: controller.signal,
+    });
+
+    controller.abort();
+
+    expect(expectFailed(await resultPromise)).toMatchObject({
+      code: "aborted",
+      error: "code mode execution aborted",
+      output: [],
+      toolCallCount: 0,
     });
   });
 

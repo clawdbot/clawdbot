@@ -80,6 +80,9 @@ deprecated for new code; see the per-row notes below.
     | `plugin-sdk/setup` | Shared setup wizard helpers, setup translator, allowlist prompts, setup status builders |
     | `plugin-sdk/setup-runtime` | `defineChannelSetupContract`, `createSetupTranslator`, `createPatchedAccountSetupAdapter`, `createEnvPatchedAccountSetupAdapter`, `createSetupInputPresenceValidator`, `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
     | `plugin-sdk/setup-tools` | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR` |
+    | `plugin-sdk/archive` | `extractArchive`, `readArchiveEntry`, archive limits and entry kinds |
+    | `plugin-sdk/root-walk` | `walkRootDirectory`, root-walk options and entries |
+    | `plugin-sdk/secret-file` | `createSecretFileAtomic`, synchronous and asynchronous secret reads |
     | `plugin-sdk/account-core` | Multi-account config/action-gate helpers, default-account fallback helpers |
     | `plugin-sdk/account-id` | `DEFAULT_ACCOUNT_ID`, account-id normalization helpers |
     | `plugin-sdk/account-resolution` | Account lookup + default-fallback helpers |
@@ -205,7 +208,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/ssrf-runtime` | Pinned-dispatcher, SSRF-guarded fetch, SSRF error, SSRF policy helpers, and loopback/private host classification |
     | `plugin-sdk/secret-input` | Secret input parsing helpers |
     | `plugin-sdk/webhook-ingress` | Webhook request/target helpers and raw websocket/body coercion |
-    | `plugin-sdk/webhook-request-guards` | Request body size/timeout helpers and `runDetachedWebhookWork` for tracked post-ack processing |
+    | `plugin-sdk/webhook-request-guards` | Request body size/timeout helpers, canonical Gateway browser-origin acceptance via `resolveAcceptedBrowserOrigin`, and `runDetachedWebhookWork` for tracked post-ack processing |
   </Accordion>
 
 Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It accepts `localhost`, IPv4 loopback literals across `127.0.0.0/8`, `::1`, bracketed IPv6, and IPv4-mapped IPv6 loopback literals. It parses IP literals rather than matching text prefixes, so a DNS name such as `127.0.0.1.evil.com` is not loopback. Use `isPrivateOrLoopbackHost(host)` only when private-network hosts such as RFC 1918 addresses are also valid.
@@ -218,6 +221,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/browser-config` | Private-local after July 2026; Supported browser config facade for normalized profile/defaults, CDP URL parsing, and browser-control auth helpers |
     | `plugin-sdk/agent-harness-task-runtime` | Private-local after July 2026; Generic task lifecycle and completion delivery helpers for harness-backed agents using a host-issued task scope |
     | `plugin-sdk/codex-mcp-projection` | Private-local after July 2026; Reserved bundled Codex helper for projecting user MCP server config into Codex thread config; not for third-party plugins |
+    | `plugin-sdk/codex-session-transcript-runtime` | Private-local bundled Codex helper for serializing transcript-mirror writes; not for third-party plugins |
     | `plugin-sdk/channel-runtime-context` | Generic channel runtime-context registration and lookup helpers |
     | `plugin-sdk/matrix` | Deprecated Matrix compatibility facade for older third-party channel packages; new plugins should import `plugin-sdk/run-command` directly |
     | `plugin-sdk/runtime-store` | `createPluginRuntimeStore` |
@@ -267,7 +271,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/talk-config-runtime` | Private-local after July 2026; Talk provider config resolution helpers |
     | `plugin-sdk/json-store` | Small JSON state read/write helpers |
     | `plugin-sdk/json-unsafe-integers` | Private-local after July 2026; JSON parsing helpers that preserve unsafe integer literals as strings |
-    | `plugin-sdk/file-lock` | Private-local after July 2026; Re-entrant file-lock helpers plus Doctor-safe reclaim of definitely stale, unchanged retired lock sidecars |
+    | `plugin-sdk/file-lock` | Private-local after July 2026; Owner-scoped re-entrant file-lock helpers plus Doctor-safe reclaim of definitely stale, unchanged retired lock sidecars. Nested acquisitions share a refcount only when callers pass the same logical-operation `reentrantOwner`; ownerless or different-owner calls contend normally |
     | `plugin-sdk/persistent-dedupe` | Disk-backed dedupe cache helpers |
     | `plugin-sdk/ingress-effect-once` | Durable claim/commit guard for non-idempotent ingress side effects |
     | `plugin-sdk/acp-runtime` | Private-local after July 2026; ACP runtime/session and reply-dispatch helpers |
@@ -387,6 +391,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | Subpath | Owner and purpose |
     | --- | --- |
     | `plugin-sdk/codex-mcp-projection` | Private-local after July 2026; Bundled Codex plugin helper for projecting user MCP server config into Codex app-server thread config (reserved package export) |
+    | `plugin-sdk/codex-session-transcript-runtime` | Private-local bundled Codex plugin helper for serializing transcript-mirror writes (reserved package export) |
 
   </Accordion>
 </AccordionGroup>

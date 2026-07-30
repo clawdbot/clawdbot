@@ -7,6 +7,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { findGitCheckoutRoot } from "../agents/worktrees/git.js";
 import {
   findLiveRegistryWorktreeByOwner,
   listRegistryWorktrees,
@@ -60,6 +61,21 @@ const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
   setupGatewaySessionsTestHarness();
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+async function makeNonGitTempDir(prefix: string): Promise<string> {
+  let root = await fs.realpath(os.tmpdir());
+  for (;;) {
+    const checkoutRoot = findGitCheckoutRoot(root);
+    if (!checkoutRoot) {
+      return tempDirs.make(prefix, root);
+    }
+    const parent = path.dirname(checkoutRoot);
+    if (parent === checkoutRoot) {
+      throw new Error("could not find a temp root outside a git checkout");
+    }
+    root = parent;
+  }
+}
 
 test("sessions.create and sessions.delete preserve every concurrent session lifecycle", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -125,6 +141,50 @@ test("concurrent sessions.create requests adopt one canonical keyed session", as
   expect(loadSessionEntry({ sessionKey: key, storePath })?.sessionId).toBe(
     created[0]?.payload?.sessionId,
   );
+});
+
+test("keyed sessions remain recoverable across overlapping create and delete waves", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:main:dashboard:concurrent-lifecycle-waves";
+
+  for (let wave = 0; wave < 6; wave += 1) {
+    const operations = await Promise.all(
+      Array.from({ length: 12 }, (_, index) =>
+        index % 3 === 0
+          ? directSessionReq<{ deleted: boolean }>("sessions.delete", {
+              key,
+              deleteTranscript: false,
+            })
+          : directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
+              agentId: "main",
+              key,
+            }),
+      ),
+    );
+
+    expect(
+      operations.every((result) => result.ok),
+      `lifecycle wave ${wave}`,
+    ).toBe(true);
+
+    const recovered = await directSessionReq<{ key: string; sessionId: string }>(
+      "sessions.create",
+      { agentId: "main", key },
+    );
+    expect(recovered.ok, `creation after lifecycle wave ${wave}`).toBe(true);
+    expect(recovered.payload?.key).toBe(key);
+    expect(loadSessionEntry({ sessionKey: key, storePath })?.sessionId).toBe(
+      recovered.payload?.sessionId,
+    );
+
+    const deleted = await directSessionReq<{ deleted: boolean }>("sessions.delete", {
+      key,
+      deleteTranscript: false,
+    });
+    expect(deleted.ok, `deletion after lifecycle wave ${wave}`).toBe(true);
+    expect(deleted.payload?.deleted).toBe(true);
+    expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
+  }
 });
 
 test("sessions.create keeps incognito rows process-local through list, spawn, reset, and delete", async () => {
@@ -1103,7 +1163,7 @@ test("sessions.create persists a Gateway cwd without a managed worktree", async 
 });
 
 test("sessions.create uses a non-git Gateway cwd directly but not as a worktree source", async () => {
-  const cwd = tempDirs.make("openclaw-session-direct-cwd-", await fs.realpath(os.tmpdir()));
+  const cwd = await makeNonGitTempDir("openclaw-session-direct-cwd-");
   const client = { client: { connect: { scopes: ["operator.admin"] } } as never };
   const direct = await directSessionReq("sessions.create", { cwd }, client);
   expect(direct.ok).toBe(true);
@@ -1325,9 +1385,7 @@ test("sessions.create reset-in-place persists the returned worktree cwd", async 
 });
 
 test("sessions.create rejects worktrees for non-git agent workspaces", async () => {
-  const workspace = await fs.mkdtemp(
-    path.join(await fs.realpath(os.tmpdir()), "openclaw-session-plain-workspace-"),
-  );
+  const workspace = await makeNonGitTempDir("openclaw-session-plain-workspace-");
   testState.agentConfig = { workspace };
   await createSessionStoreDir();
   try {
@@ -1344,7 +1402,6 @@ test("sessions.create rejects worktrees for non-git agent workspaces", async () 
     });
   } finally {
     testState.agentConfig = undefined;
-    await fs.rm(workspace, { recursive: true, force: true });
   }
 });
 
@@ -3335,7 +3392,7 @@ test("sessions.create rejects unusable attachment-only input before creating a s
   });
 
   expect(created.ok).toBe(false);
-  expect(created.error?.message).toContain("attachments require usable content");
+  expect(created.error?.message).toContain("must be object");
   const listed = await directSessionReq<{ sessions?: unknown[] }>("sessions.list", {});
   expect(listed.payload?.sessions).toEqual([]);
 });

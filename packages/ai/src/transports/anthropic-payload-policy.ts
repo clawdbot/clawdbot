@@ -1,3 +1,4 @@
+import { resolveCacheRetention } from "../providers/cache-retention.js";
 import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
@@ -64,8 +65,7 @@ export function resolveAnthropicEphemeralCacheControl(
   baseUrl: string | undefined,
   cacheRetention: AnthropicPayloadPolicyInput["cacheRetention"],
 ): AnthropicEphemeralCacheControl | undefined {
-  const retention =
-    cacheRetention ?? (process.env.OPENCLAW_CACHE_RETENTION === "long" ? "long" : "short");
+  const retention = resolveCacheRetention(cacheRetention);
   if (retention === "none") {
     return undefined;
   }

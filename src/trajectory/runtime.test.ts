@@ -130,6 +130,34 @@ describe("trajectory runtime", () => {
     );
   });
 
+  it("records runtime events for the canonical session-key target the dispatcher passes", async () => {
+    // Attempt dispatch stopped passing legacy `sqlite:` markers and now hands
+    // the canonical session key plus a complete target. Recording must not
+    // depend on the marker, or every harness capture silently disappears.
+    const tempDir = makeTempDir();
+    const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+    const sessionKey = "agent:main:main";
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId: "session-1", updatedAt: 10 });
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionKey,
+      sessionFile: sessionKey,
+      sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "responses",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("session.started");
+    await runtimeRecorder.flush();
+
+    await expect(
+      loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }),
+    ).resolves.toEqual([expect.objectContaining({ source: "runtime", type: "session.started" })]);
+  });
+
   it("rejects a legacy SQLite marker for another session", () => {
     const storePath = path.join(makeTempDir(), "sessions.json");
 

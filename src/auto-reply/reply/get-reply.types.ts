@@ -1,3 +1,4 @@
+import type { SessionToolOverrides } from "../../config/sessions/types.js";
 // Shared get-reply type contracts for command, directive, and runtime layers.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ReplyOptionsWithHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
@@ -6,6 +7,7 @@ import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
 import type { QueueMode } from "./queue/types.js";
+import type { ReplyOptionsWithOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
 export type ReplySessionBinding = {
@@ -29,11 +31,13 @@ type InternalReplySessionOptions = {
   queueModeOverride?: QueueMode;
   /** Dispatch-owned operation used to defer hooks until durable run admission. */
   replyOperation?: ReplyOperation;
+  skillOverrides?: SessionToolOverrides["skills"];
 };
 
 export type InternalGetReplyOptions = GetReplyOptions &
   InternalReplySessionOptions &
-  ReplyOptionsWithHeartbeatRunScope;
+  ReplyOptionsWithHeartbeatRunScope &
+  ReplyOptionsWithOperationRunState;
 
 export function shouldBridgeCliPreambleEvents(opts: InternalGetReplyOptions | undefined): boolean {
   return opts?.commentaryProgressEnabled === true || opts?.progressPreambleEnabled === true;

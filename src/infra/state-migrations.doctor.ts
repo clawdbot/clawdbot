@@ -36,6 +36,7 @@ import {
 import {
   detectOpenClawStateDatabaseSchemaMigrations,
   repairOpenClawStateDatabaseSchema,
+  repairOpenClawStateDatabaseSchemaIfNeeded,
   type OpenClawStateDatabaseSchemaMigration,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -956,7 +957,7 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
   });
   const stateDir = resolveStateDir(env, params.homedir ?? os.homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
-  const stateSchema = repairOpenClawStateDatabaseSchema({
+  const stateSchema = repairOpenClawStateDatabaseSchemaIfNeeded({
     env: { ...env, OPENCLAW_STATE_DIR: stateDir },
   });
   const changes = [...stateDirResult.changes, ...stateSchema.changes];
@@ -1347,9 +1348,11 @@ export async function autoMigrateLegacyState(params: {
   });
   const stateDir = resolveStateDir(env, homedir);
   autoMigrateChecked.add(`${path.resolve(stateDir)}\0${migrationMode}`);
-  const stateSchema = repairOpenClawStateDatabaseSchema({
-    env: { ...env, OPENCLAW_STATE_DIR: stateDir },
-  });
+  const stateSchemaOptions = { env: { ...env, OPENCLAW_STATE_DIR: stateDir } };
+  const stateSchema =
+    params.doctorOnlyStateMigrations === true
+      ? repairOpenClawStateDatabaseSchema(stateSchemaOptions)
+      : repairOpenClawStateDatabaseSchemaIfNeeded(stateSchemaOptions);
   if (stateSchema.warnings.length > 0) {
     return {
       migrated: stateDirResult.migrated || stateSchema.changes.length > 0,
