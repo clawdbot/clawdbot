@@ -246,15 +246,19 @@ export function prepareAgentRequestPreflight(
   });
   const cached = readGatewayDedupeEntry({ dedupe: params.context.dedupe, keys: agentDedupeKeys });
   const reservedSubagentReservation = readReservedSubagentDedupeReservation(cached);
+  const reservedSubagentClaimToken = readReservedSubagentClaimToken(request);
   if (
-    reservedSubagentReservation &&
-    !isReservedSubagentDedupeReservationAuthorized({
-      reservation: reservedSubagentReservation,
-      runId,
-      sessionKey: request.sessionKey?.trim(),
-      pluginRuntimeOwnerId: normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId),
-      claimToken: readReservedSubagentClaimToken(request),
-    })
+    (reservedSubagentClaimToken && !reservedSubagentReservation) ||
+    (reservedSubagentReservation &&
+      !isReservedSubagentDedupeReservationAuthorized({
+        reservation: reservedSubagentReservation,
+        runId,
+        sessionKey: request.sessionKey?.trim(),
+        pluginRuntimeOwnerId: normalizeOptionalString(
+          params.client?.internal?.pluginRuntimeOwnerId,
+        ),
+        claimToken: reservedSubagentClaimToken,
+      }))
   ) {
     params.respond(
       false,

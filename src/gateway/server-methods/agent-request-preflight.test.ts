@@ -445,6 +445,40 @@ describe("reserved subagent Gateway admission", () => {
     release();
   });
 
+  it.each([
+    { name: "missing", expire: false },
+    { name: "expired", expire: true },
+  ])("rejects a reserved token when its Gateway marker is $name", ({ expire }) => {
+    const context = createContext();
+    if (expire) {
+      reserveReservedSubagentDedupeEntry({
+        dedupe: context.dedupe,
+        runId,
+        sessionKey,
+        pluginRuntimeOwnerId,
+        claimToken,
+      });
+      const entry = context.dedupe.get(`agent:${runId}`);
+      expect(entry?.payload).toBeDefined();
+      (entry!.payload as { expiresAtMs: number }).expiresAtMs = Date.now() - 1;
+    }
+    const respond = vi.fn();
+    const result = prepareAgentRequestPreflight({
+      params: attachReservedSubagentClaimToken(createRequest(), claimToken),
+      respond,
+      context,
+      client: { internal: { pluginRuntimeOwnerId } },
+    } as never);
+    expect(result).toBeUndefined();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "agent runId is reserved for a different plugin subagent admission.",
+      }),
+    );
+  });
+
   it("blocks an ordinary admission that passed preflight before the reserved claim", () => {
     const context = createContext();
     const ordinaryClient = undefined;

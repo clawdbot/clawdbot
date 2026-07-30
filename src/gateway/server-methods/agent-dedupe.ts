@@ -1,3 +1,4 @@
+import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { DEDUPE_TTL_MS } from "../server-constants.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
@@ -52,6 +53,7 @@ export function readReservedSubagentDedupeReservation(
     typeof payload.sessionKey === "string" &&
     typeof payload.pluginRuntimeOwnerId === "string" &&
     typeof payload.reservedSubagentClaimToken === "string" &&
+    isFutureDateTimestampMs(payload.expiresAtMs, { nowMs: Date.now() }) &&
     payload.reservationId === payload.reservedSubagentClaimToken
     ? (payload as ReservedSubagentDedupeReservation)
     : undefined;
