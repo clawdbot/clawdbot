@@ -72,6 +72,14 @@ const mutationCases: Array<[string, string[]]> = [
     ["openclaw", "config", "set", "gateway.port", "19001"],
   ],
   [
+    "openclaw config set gateway.port 19001 --dry-run=false",
+    ["openclaw", "config", "set", "gateway.port", "19001", "--dry-run=false"],
+  ],
+  [
+    "openclaw config set gateway.port 19001 --dry-run=0",
+    ["openclaw", "config", "set", "gateway.port", "19001", "--dry-run=0"],
+  ],
+  [
     `openclaw config "$(printf set)" gateway.port 19001`,
     ["openclaw", "config", "$(printf set)", "gateway.port", "19001"],
   ],
@@ -639,6 +647,7 @@ describe("OpenClaw lifecycle exec approvals", () => {
       commandRequiresOpenClawLifecycleApproval({
         command: "${TOOL:-openclaw} gateway restart",
         env: {},
+        platform: "linux",
         segments: [
           {
             raw: "${TOOL:-openclaw} gateway restart",
@@ -727,6 +736,7 @@ describe("OpenClaw lifecycle exec approvals", () => {
       commandRequiresOpenClawLifecycleApproval({
         command: 'openclaw --profile status "${COMMAND:-update}"',
         env: {},
+        platform: "linux",
         segments: [
           {
             raw: 'openclaw --profile status "${COMMAND:-update}"',

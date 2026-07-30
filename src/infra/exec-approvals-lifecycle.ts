@@ -21,11 +21,13 @@ import {
   matchesOpenClawUnitPattern,
 } from "./exec-approvals-lifecycle-patterns.js";
 import { classifyOpenClawApprovalPolicyArgv } from "./exec-approvals-lifecycle-policy.js";
-import { resolvePowerShellStartProcessOpenClawArgv } from "./exec-approvals-lifecycle-powershell.js";
+import {
+  commandHasPowerShellLifecyclePipeline,
+  resolvePowerShellStartProcessOpenClawArgv,
+} from "./exec-approvals-lifecycle-powershell.js";
 import { classifyOpenClawResetArgv } from "./exec-approvals-lifecycle-reset.js";
 import { resolveLifecyclePackageRunnerArgv } from "./exec-approvals-lifecycle-runners.js";
 import {
-  splitLifecycleCommandText,
   splitLifecycleInlineCommands,
   stripLifecyclePosixAssignments,
 } from "./exec-approvals-lifecycle-shell.js";
@@ -461,61 +463,6 @@ function classifyProcessMutation(
   return false;
 }
 
-function isPowerShellSelection(argv: readonly string[], allowUnresolved: boolean): boolean {
-  return (
-    ["get-process", "get-service", "gps", "gsv", "ps"].includes(
-      normalizeExecutableToken(argv[0] ?? ""),
-    ) &&
-    argv
-      .slice(1)
-      .some(
-        (token) =>
-          looksLikeOpenClaw(token) ||
-          (allowUnresolved && /\$env:[A-Za-z_][A-Za-z0-9_]*/iu.test(token)),
-      )
-  );
-}
-
-function isPowerShellPipelineMutation(argv: readonly string[]): boolean {
-  return [
-    "kill",
-    "remove-service",
-    "restart-service",
-    "resume-service",
-    "sasv",
-    "set-service",
-    "start-service",
-    "stop-process",
-    "stop-service",
-    "suspend-service",
-    "spps",
-    "spsv",
-  ].includes(normalizeExecutableToken(argv[0] ?? ""));
-}
-
-function commandHasPowerShellLifecyclePipeline(command: string, allowUnresolved = false): boolean {
-  const stages = splitLifecycleCommandText(command, new Set(["|"]), "powershell");
-  if (stages.length < 2) {
-    return false;
-  }
-  let selectedOpenClaw = false;
-  for (const stage of stages) {
-    const normalizedStage = stage.trim().replace(/^[({\s]+|[)}\s]+$/gu, "");
-    const argv = splitShellArgs(normalizedStage);
-    if (!argv) {
-      return false;
-    }
-    if (isPowerShellSelection(argv, allowUnresolved)) {
-      selectedOpenClaw = true;
-      continue;
-    }
-    if (selectedOpenClaw && isPowerShellPipelineMutation(argv)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function commandHasLifecycleSubstitution(
   command: string,
   depth: number,
@@ -558,6 +505,9 @@ function classifyArgv(
   }
   if (lifecycleSubstitutionResultMayHideLifecycle(argv)) {
     return true;
+  }
+  if (shellContext === "powershell" && ["&", "."].includes(argv[0]?.trim() ?? "")) {
+    return classifyArgv(argv.slice(1), raw, depth + 1, shellContext, cwd);
   }
   if (isOpenClawExecutable(argv[0])) {
     return classifyOpenClawArgv(["openclaw", ...argv.slice(1)]);
@@ -668,11 +618,12 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
   const envComplete = params.envComplete ?? params.env !== undefined;
   const platform = params.platform ?? process.platform;
   const shadowedKeys = lifecycleAssignedEnvironmentKeys(params.command);
+  const dialect = lifecycleCommandShellDialect(params.segments[0]?.argv[0], platform);
   const expandedCommand = expandKnownLifecycleEnvironmentCommand(
     params.command,
     params.env,
     shadowedKeys,
-    lifecycleCommandShellDialect(params.segments[0]?.argv[0], platform),
+    dialect,
   );
   const shellContext: ShellContext = platform === "win32" ? "powershell" : undefined;
   if (
@@ -707,6 +658,7 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
           argv,
           env: params.env,
           envComplete,
+          dialect,
           shadowedKeys,
         });
         return (

@@ -1,6 +1,7 @@
 // Resolves PowerShell Start-Process layouts that launch the OpenClaw CLI.
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { isOpenClawExecutablePattern } from "./exec-approvals-lifecycle-patterns.js";
+import { splitLifecycleCommandText } from "./exec-approvals-lifecycle-shell.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 
 const START_PROCESS_NAMES = new Set(["saps", "start", "start-process"]);
@@ -37,6 +38,72 @@ function splitArgumentList(value: string): string[] {
 function inlineOptionValue(token: string): string | undefined {
   const separatorIndex = token.search(/[=:]/u);
   return separatorIndex === -1 ? undefined : token.slice(separatorIndex + 1);
+}
+
+function isPowerShellSelection(argv: readonly string[], allowUnresolved: boolean): boolean {
+  return (
+    ["get-process", "get-service", "gps", "gsv", "ps"].includes(
+      normalizeExecutableToken(argv[0] ?? ""),
+    ) &&
+    argv.slice(1).some((token) => {
+      const normalized = token
+        .trim()
+        .toLowerCase()
+        .replaceAll("`", "")
+        .replaceAll("^", "")
+        .replace(/\[([a-z0-9])\]/giu, "$1")
+        .replace(/["']/gu, "");
+      return (
+        normalized.includes("openclaw") ||
+        /opencla[?*]/u.test(normalized) ||
+        (allowUnresolved && /\$env:[A-Za-z_][A-Za-z0-9_]*/iu.test(token))
+      );
+    })
+  );
+}
+
+function isPowerShellPipelineMutation(argv: readonly string[]): boolean {
+  return [
+    "kill",
+    "remove-service",
+    "restart-service",
+    "resume-service",
+    "sasv",
+    "set-service",
+    "start-service",
+    "stop-process",
+    "stop-service",
+    "suspend-service",
+    "spps",
+    "spsv",
+  ].includes(normalizeExecutableToken(argv[0] ?? ""));
+}
+
+/** Return true when a PowerShell pipeline selects and mutates an OpenClaw process or service. */
+export function commandHasPowerShellLifecyclePipeline(
+  command: string,
+  allowUnresolved = false,
+): boolean {
+  const stages = splitLifecycleCommandText(command, new Set(["|"]), "powershell");
+  if (stages.length < 2) {
+    return false;
+  }
+  let selectedOpenClaw = false;
+  for (const stage of stages) {
+    const normalizedStage = stage.trim().replace(/^[({\s]+|[)}\s]+$/gu, "");
+    const argv = splitShellArgs(normalizedStage);
+    if (!argv) {
+      return false;
+    }
+    if (isPowerShellSelection(argv, allowUnresolved)) {
+      selectedOpenClaw = true;
+      continue;
+    }
+    if (selectedOpenClaw && isPowerShellPipelineMutation(argv)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function parseStartProcessArgv(

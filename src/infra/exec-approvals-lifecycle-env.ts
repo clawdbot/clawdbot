@@ -23,6 +23,7 @@ const POSIX_VARIABLE_RE = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-
 const POWERSHELL_VARIABLE_RE = /\$env:([A-Za-z_][A-Za-z0-9_]*)/giu;
 const CMD_VARIABLE_RE = /%([A-Za-z_][A-Za-z0-9_]*)%/gu;
 const CMD_DELAYED_VARIABLE_RE = /!([A-Za-z_][A-Za-z0-9_]*)!/gu;
+const POWERSHELL_LOCAL_VARIABLE_REFERENCE_RE = /\$(?!env:)[A-Za-z_][A-Za-z0-9_]*/iu;
 const VARIABLE_REFERENCE_RE =
   /\$\{[^}]+\}|\$(?:[A-Za-z_][A-Za-z0-9_]*|env:[A-Za-z_][A-Za-z0-9_]*)|%[A-Za-z_][A-Za-z0-9_]*%|![A-Za-z_][A-Za-z0-9_]*!/iu;
 const POSIX_PARAMETER_OPERATOR_RE = /\$\{(?![A-Za-z_][A-Za-z0-9_]*\})[^}]+\}/u;
@@ -77,9 +78,13 @@ export function lifecycleCommandShellDialect(
   if (executable === "cmd") {
     return "cmd";
   }
-  return ["powershell", "pwsh"].includes(executable) || platform === "win32"
-    ? "powershell"
-    : "posix";
+  if (["powershell", "pwsh"].includes(executable)) {
+    return "powershell";
+  }
+  if (["ash", "bash", "dash", "fish", "ksh", "sh", "zsh"].includes(executable)) {
+    return "posix";
+  }
+  return platform === "win32" ? "powershell" : "posix";
 }
 
 function optionName(token: string): string {
@@ -180,6 +185,9 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
   }
   const executable = normalizedExecutable(argv[0]);
   const tokens = argv.map((token) => token.trim().toLowerCase());
+  if (["&", "."].includes(executable)) {
+    return argv.length > 1 ? unresolvedEnvironmentMayHideLifecycle(argv.slice(1)) : false;
+  }
   if (executable === "launchctl") {
     const actionIndex = scanFirstPositional(argv, 1, new Set(["-d", "-s"]));
     return !["blame", "list", "print", "procinfo"].includes(tokens[actionIndex] ?? "");
@@ -311,16 +319,23 @@ function expandKnownEnvironmentReferences(
   value: string,
   env: NodeJS.ProcessEnv | undefined,
   shadowedKeys: ReadonlySet<string>,
+  dialect: LifecycleShellDialect,
 ): string {
   const replaceKnown = (match: string, key: string): string =>
     shadowedKeys.has(key.toLowerCase()) ? match : (readEnvironmentValue(env, key) ?? match);
-  return value
-    .replace(POWERSHELL_VARIABLE_RE, replaceKnown)
-    .replace(POSIX_VARIABLE_RE, (match, braced: string | undefined, bare: string | undefined) =>
+  if (dialect === "powershell") {
+    return value.replace(POWERSHELL_VARIABLE_RE, replaceKnown);
+  }
+  if (dialect === "cmd") {
+    return value
+      .replace(CMD_VARIABLE_RE, replaceKnown)
+      .replace(CMD_DELAYED_VARIABLE_RE, replaceKnown);
+  }
+  return value.replace(
+    POSIX_VARIABLE_RE,
+    (match, braced: string | undefined, bare: string | undefined) =>
       replaceKnown(match, braced ?? bare ?? ""),
-    )
-    .replace(CMD_VARIABLE_RE, replaceKnown)
-    .replace(CMD_DELAYED_VARIABLE_RE, replaceKnown);
+  );
 }
 
 /** Expand known references in executable command text while preserving single-quoted literals. */
@@ -331,14 +346,14 @@ export function expandKnownLifecycleEnvironmentCommand(
   dialect: LifecycleShellDialect = "posix",
 ): string {
   if (dialect === "cmd") {
-    return expandKnownEnvironmentReferences(command, env, shadowedKeys);
+    return expandKnownEnvironmentReferences(command, env, shadowedKeys, dialect);
   }
   // POSIX shells and PowerShell both suppress environment expansion inside
   // single-quoted strings. cmd.exe does not and is handled above.
   return command
     .split(/('[^']*')/u)
     .map((part, index) =>
-      index % 2 === 0 ? expandKnownEnvironmentReferences(part, env, shadowedKeys) : part,
+      index % 2 === 0 ? expandKnownEnvironmentReferences(part, env, shadowedKeys, dialect) : part,
     )
     .join("");
 }
@@ -348,10 +363,13 @@ export function expandLifecycleEnvironmentArgv(params: {
   argv: readonly string[];
   env?: NodeJS.ProcessEnv;
   envComplete: boolean;
+  dialect?: LifecycleShellDialect;
   shadowedKeys?: ReadonlySet<string>;
 }): LifecycleEnvironmentExpansion {
   let fieldSplitUncertain = false;
-  let unresolved = params.argv.some((token) => POSIX_PARAMETER_OPERATOR_RE.test(token));
+  const dialect = params.dialect ?? "posix";
+  let unresolved =
+    dialect === "posix" && params.argv.some((token) => POSIX_PARAMETER_OPERATOR_RE.test(token));
   const replaceVariable = (key: string): string => {
     if (params.shadowedKeys?.has(key.toLowerCase())) {
       unresolved = true;
@@ -367,14 +385,21 @@ export function expandLifecycleEnvironmentArgv(params: {
     }
     return "";
   };
-  const argv = params.argv.map((token) =>
-    token
-      .replace(POWERSHELL_VARIABLE_RE, (_match, key: string) => replaceVariable(key))
-      .replace(POSIX_VARIABLE_RE, (_match, braced: string | undefined, bare: string | undefined) =>
+  const argv = params.argv.map((token) => {
+    if (dialect === "powershell") {
+      unresolved ||= POWERSHELL_LOCAL_VARIABLE_REFERENCE_RE.test(token);
+      return token.replace(POWERSHELL_VARIABLE_RE, (_match, key: string) => replaceVariable(key));
+    }
+    if (dialect === "cmd") {
+      return token
+        .replace(CMD_VARIABLE_RE, (_match, key: string) => replaceVariable(key))
+        .replace(CMD_DELAYED_VARIABLE_RE, (_match, key: string) => replaceVariable(key));
+    }
+    return token.replace(
+      POSIX_VARIABLE_RE,
+      (_match, braced: string | undefined, bare: string | undefined) =>
         replaceVariable(braced ?? bare ?? ""),
-      )
-      .replace(CMD_VARIABLE_RE, (_match, key: string) => replaceVariable(key))
-      .replace(CMD_DELAYED_VARIABLE_RE, (_match, key: string) => replaceVariable(key)),
-  );
+    );
+  });
   return { argv, fieldSplitUncertain, unresolved };
 }

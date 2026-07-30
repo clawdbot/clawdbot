@@ -113,6 +113,46 @@ describe("OpenClaw lifecycle environment data positions", () => {
       }),
     ).toBe(false);
   });
+
+  it("uses PowerShell scope instead of process environment for local variables", () => {
+    const localInvocation = `$TOOL = 'openclaw'; & $TOOL gateway restart`;
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: localInvocation,
+        env: { TOOL: "echo" },
+        envComplete: true,
+        platform: "win32",
+        segments: [
+          {
+            raw: `& $TOOL gateway restart`,
+            argv: ["&", "$TOOL", "gateway", "restart"],
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `Write-Output $TOOL`,
+        env: { TOOL: "openclaw" },
+        envComplete: true,
+        platform: "win32",
+        segments: [{ raw: `Write-Output $TOOL`, argv: ["Write-Output", "$TOOL"] }],
+      }),
+    ).toBe(false);
+  });
+
+  it("expands explicit PowerShell environment references in invocations", () => {
+    const command = `& $env:TOOL gateway restart`;
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command,
+        env: { TOOL: "openclaw" },
+        envComplete: true,
+        platform: "win32",
+        segments: [{ raw: command, argv: ["&", "$env:TOOL", "gateway", "restart"] }],
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("OpenClaw lifecycle dynamic carrier edges", () => {
