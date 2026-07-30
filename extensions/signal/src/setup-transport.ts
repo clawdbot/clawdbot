@@ -158,7 +158,18 @@ export function prepareSignalManagedNativeTransport(params: {
 }): SignalManagedNativeTransport {
   const existing = resolveConfiguredSignalTransport(params.cfg, params.accountId);
   const existingManaged = existing?.kind === "managed-native" ? existing : undefined;
-  const preferredPort = params.overrides?.httpPort ?? existingManaged?.httpPort;
+
+  // When httpPort is absent, infer it from the url if the url has a local
+  // loopback port. This prevents the managed daemon from binding to the
+  // default port (8080) while the client probes a different port from the URL.
+  const urlPort =
+    params.overrides?.httpPort === undefined && existingManaged?.httpPort === undefined
+      ? resolveLocalSignalTransportPort(
+          params.overrides?.url ?? existingManaged?.url ?? "",
+        )
+      : undefined;
+
+  const preferredPort = params.overrides?.httpPort ?? existingManaged?.httpPort ?? urlPort;
   const prepared: SignalManagedNativeTransport = {
     kind: "managed-native",
     ...existingManaged,
