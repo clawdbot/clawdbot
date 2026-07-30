@@ -1115,7 +1115,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
                   cliPath,
                   dbPath,
                   remoteHost,
-                  ...(ctxPayload.messageIdFull ? { messageGuid: ctxPayload.messageIdFull } : {}),
+                  ...(ctxPayload.MessageSidFull ? { messageGuid: ctxPayload.MessageSidFull } : {}),
                 });
               },
               stop: async () => {
@@ -1126,7 +1126,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
                   cliPath,
                   dbPath,
                   remoteHost,
-                  ...(ctxPayload.messageIdFull ? { messageGuid: ctxPayload.messageIdFull } : {}),
+                  ...(ctxPayload.MessageSidFull ? { messageGuid: ctxPayload.MessageSidFull } : {}),
                 });
               },
               // Keep the native typing bubble alive through long tool chains.
