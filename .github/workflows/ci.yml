@@ -3295,6 +3295,19 @@ jobs:
       - name: Build iOS app
         run: pnpm ios:build
 
+      # Debug's incremental compilation can miss actor-isolation diagnostics
+      # that Swift's optimized whole-module Release build enforces.
+      - name: Build iOS app (Release)
+        if: env.HISTORICAL_TARGET != 'true'
+        run: |
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClaw \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
       # App compilation and screenshots do not execute approval or notification
       # lifecycles. Exercise both owners on the already provisioned simulator.
       - name: Run focused iOS lifecycle simulator tests
