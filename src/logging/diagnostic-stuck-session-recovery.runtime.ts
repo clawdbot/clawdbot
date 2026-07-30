@@ -17,6 +17,7 @@ import {
 } from "../process/command-queue.js";
 import { getDiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
+import { isTerminalDiagnosticProgressReason } from "./diagnostic-session-attention.js";
 import {
   formatStoppedCronSessionDiagnosticFields,
   resolveCronSessionDiagnosticContext,
@@ -70,6 +71,12 @@ function isActiveRunProgressStale(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
   });
+  // A terminal reason means the run already reported completion: there is no
+  // in-flight work left to protect, so reclaim now instead of burning the
+  // full stale-abort timer waiting for evidence that will never arrive.
+  if (isTerminalDiagnosticProgressReason(activity.lastProgressReason)) {
+    return true;
+  }
   const lastProgressAgeMs = activity.lastProgressAgeMs;
   // A missing activity row is the orphan-handle state: classification age is
   // the only progress evidence available, so it owns the stale fallback.

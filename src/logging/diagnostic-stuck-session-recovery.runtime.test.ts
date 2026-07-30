@@ -439,6 +439,31 @@ describe("stuck session recovery", () => {
     ]);
   });
 
+  it("reclaims stale active reply work immediately when the recorded progress is terminal", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+    mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+    mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
+    // The run already reported completion well inside the stale-abort window;
+    // a terminal lastProgressReason must reclaim now, not after staleAbortMs.
+    mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({
+      lastProgressReason: "run:completed",
+      lastProgressAgeMs: 53_000,
+    });
+
+    await recoverStuckDiagnosticSession({
+      sessionId: "queued-reply-session",
+      sessionKey: "agent:main:main",
+      ageMs: 49_000,
+      queueDepth: 2,
+    });
+
+    expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledWith("queued-reply-session");
+    expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
+  });
+
   it("aborts stale reply work without an embedded handle when active abort recovery is enabled", async () => {
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
