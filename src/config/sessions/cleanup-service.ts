@@ -580,12 +580,10 @@ export async function runSessionsCleanup(params: {
         storePath: target.storePath,
         removals,
         activeSessionKey: opts.activeKey,
-        preserveActiveWork: true,
         maintenanceOverride: {
           ...maintenance,
           mode,
         },
-        restrictArchivedTranscriptsToStoreDir: true,
       });
       const postApplyStore = loadCleanupSessionStore(target, { createIfMissing: true });
       const appliedUnreferencedArtifacts =

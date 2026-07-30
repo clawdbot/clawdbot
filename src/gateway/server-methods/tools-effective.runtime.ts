@@ -11,6 +11,7 @@ export {
   resolveEffectiveToolInventory,
   resolveEffectiveToolInventoryRuntimeModelContext,
 } from "../../agents/tools-effective-inventory.js";
+export { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 export {
   buildBundleMcpToolsFromCatalog,
   peekSessionMcpRuntime,

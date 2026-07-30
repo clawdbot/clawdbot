@@ -1,6 +1,11 @@
 // Qa Lab plugin module implements Slack live transport adapter behavior.
 import { setTimeout as sleep } from "node:timers/promises";
-import { createSlackWebClient, createSlackWriteClient } from "@openclaw/slack/api.js";
+import {
+  createSlackWebClient,
+  createSlackWriteClient,
+  resolveSlackWebClientOptions,
+} from "@openclaw/slack/api.js";
+import type { FetchFunction } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
@@ -47,6 +52,17 @@ async function waitForSlackPoll(delayMs: number, signal: AbortSignal) {
       throw error;
     }
   }
+}
+
+function withSlackLifecycleSignal(
+  fetchImpl: FetchFunction,
+  lifecycleSignal: AbortSignal,
+): FetchFunction {
+  return async (url, init) =>
+    await fetchImpl(url, {
+      ...init,
+      signal: init?.signal ? AbortSignal.any([init.signal, lifecycleSignal]) : lifecycleSignal,
+    });
 }
 
 async function recordSlackObservedMessage(params: {
@@ -125,11 +141,16 @@ export async function createSlackQaTransportAdapter(
   const sutClient = createSlackWebClient(runtimeEnv.sutBotToken);
   const sutWriteClient = createSlackWriteClient(runtimeEnv.sutBotToken);
   const pollingAbort = new AbortController();
-  const pollingClient = createSlackWebClient(runtimeEnv.sutBotToken, {
+  const pollingOptions = resolveSlackWebClientOptions({
     rejectRateLimitedCalls: true,
     retryConfig: { retries: 0 },
     timeout: SLACK_POLL_REQUEST_TIMEOUT_MS,
   });
+  pollingOptions.fetch = withSlackLifecycleSignal(
+    pollingOptions.fetch ?? globalThis.fetch,
+    pollingAbort.signal,
+  );
+  const pollingClient = createSlackWebClient(runtimeEnv.sutBotToken, pollingOptions);
   const accountId = options.sutAccountId?.trim() || "sut";
   let oldestTs = `${Math.floor(Date.now() / 1_000)}.000000`;
   let stopped = false;
@@ -139,36 +160,18 @@ export async function createSlackQaTransportAdapter(
   const nativeMessageIds = new Map<string, string>();
   const busMessageIds = new Map<string, string>();
   const activeThreadRoots = new Set<string>();
-  const polling = (async () => {
-    while (!pollingAbort.signal.aborted) {
-      try {
-        const messages = await listSlackMessages({
-          channelId: runtimeEnv.channelId,
-          client: pollingClient,
-          oldestTs,
-        });
-        for (const message of messages.toReversed()) {
-          const observedTs = await recordSlackObservedMessage({
-            accountId,
-            busMessageIds,
-            logicalConversationId,
-            message,
-            messages: context.messages,
-            observedText,
-            sutUserId: sutIdentity.userId,
-          });
-          if (observedTs) {
-            oldestTs = observedTs;
-          }
-        }
-        for (const threadTs of activeThreadRoots) {
-          const threadMessages = await listSlackThreadMessages({
+  let polling: Promise<void> | undefined;
+  const startPolling = () => {
+    polling ??= (async () => {
+      while (!pollingAbort.signal.aborted) {
+        try {
+          const messages = await listSlackMessages({
             channelId: runtimeEnv.channelId,
             client: pollingClient,
-            threadTs,
+            oldestTs,
           });
-          for (const message of threadMessages) {
-            await recordSlackObservedMessage({
+          for (const message of messages.toReversed()) {
+            const observedTs = await recordSlackObservedMessage({
               accountId,
               busMessageIds,
               logicalConversationId,
@@ -177,26 +180,47 @@ export async function createSlackQaTransportAdapter(
               observedText,
               sutUserId: sutIdentity.userId,
             });
+            if (observedTs) {
+              oldestTs = observedTs;
+            }
           }
+          for (const threadTs of activeThreadRoots) {
+            const threadMessages = await listSlackThreadMessages({
+              channelId: runtimeEnv.channelId,
+              client: pollingClient,
+              threadTs,
+            });
+            for (const message of threadMessages) {
+              await recordSlackObservedMessage({
+                accountId,
+                busMessageIds,
+                logicalConversationId,
+                message,
+                messages: context.messages,
+                observedText,
+                sutUserId: sutIdentity.userId,
+              });
+            }
+          }
+        } catch (error) {
+          if (pollingAbort.signal.aborted) {
+            return;
+          }
+          const retryDelayMs = resolveSlackRateLimitDelayMs(error);
+          if (retryDelayMs === undefined) {
+            throw error;
+          }
+          await waitForSlackPoll(retryDelayMs, pollingAbort.signal);
+          continue;
         }
-      } catch (error) {
-        if (pollingAbort.signal.aborted) {
-          return;
-        }
-        const retryDelayMs = resolveSlackRateLimitDelayMs(error);
-        if (retryDelayMs === undefined) {
-          throw error;
-        }
-        await waitForSlackPoll(retryDelayMs, pollingAbort.signal);
-        continue;
+        await waitForSlackPoll(SLACK_POLL_INTERVAL_MS, pollingAbort.signal);
       }
-      await waitForSlackPoll(SLACK_POLL_INTERVAL_MS, pollingAbort.signal);
-    }
-  })().catch((error: unknown) => {
-    if (!stopped) {
-      pollingError = error instanceof Error ? error : new Error(String(error));
-    }
-  });
+    })().catch((error: unknown) => {
+      if (!stopped) {
+        pollingError = error instanceof Error ? error : new Error(String(error));
+      }
+    });
+  };
 
   return {
     id: "slack",
@@ -229,6 +253,9 @@ export async function createSlackQaTransportAdapter(
       nativeMessageIds.set(message.id, sent.ts);
       busMessageIds.set(sent.ts, message.id);
       activeThreadRoots.add(nativeThreadTs ?? sent.ts);
+      // Native Slack scenarios observe their own messages. Start the shared bus
+      // observer only when a generic transport flow actually needs it.
+      startPolling();
       return message;
     },
     resetTransport: () => {
@@ -270,10 +297,11 @@ export async function createSlackQaTransportAdapter(
     createReportNotes: () => ["Runs through the Slack live adapter and shared QA suite host."],
     async cleanup() {
       stopped = true;
-      // The Slack SDK's rate-limit sleep is not interruptible, so the observer uses
-      // bounded requests and an abortable local backoff that teardown can stop.
+      // The observer owns its rejection handler, so cancellation must not hold the
+      // Gateway shutdown boundary open if the Slack SDK never settles its request.
       pollingAbort.abort();
-      await polling.catch(() => undefined);
+    },
+    async cleanupAfterGatewayStop() {
       // Lease release must still run when heartbeat shutdown reports an error.
       try {
         await heartbeat.stop();
@@ -284,4 +312,8 @@ export async function createSlackQaTransportAdapter(
   };
 }
 
-export const testing = { recordSlackObservedMessage, resolveSlackRateLimitDelayMs };
+export const testing = {
+  recordSlackObservedMessage,
+  resolveSlackRateLimitDelayMs,
+  withSlackLifecycleSignal,
+};

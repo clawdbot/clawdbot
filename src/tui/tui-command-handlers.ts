@@ -38,6 +38,10 @@ import {
   TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
   TUI_SESSION_PICKER_LIMIT,
 } from "./tui-session-list-policy.js";
+import {
+  readTuiSessionProjectionScope,
+  reduceTuiSessionProjection,
+} from "./tui-session-projection.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import {
   acceptPendingSubmit,
@@ -916,12 +920,30 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       return;
     }
     const runId = randomUUID();
+    const sendSelection = captureSessionSelection();
+    const sendSessionId = state.currentSessionId;
+    const sendSessionGeneration = state.sessionGeneration ?? 0;
+    const isCurrentSendViewport = () =>
+      isCurrentSessionSelection(sendSelection) &&
+      (state.sessionGeneration ?? 0) === sendSessionGeneration &&
+      (sendSessionId === null || state.currentSessionId === sendSessionId);
+    const sendScope = readTuiSessionProjectionScope(state);
     try {
       if (!isBtw) {
         if (opts.local === true && state.activeChatRunId && !hasPendingSubmit(state)) {
           chatLog.reserveAssistantSlot(state.activeChatRunId);
         }
         chatLog.addPendingUser(runId, text);
+        reduceTuiSessionProjection(state, {
+          type: "sendPending",
+          message: {
+            role: "user",
+            content: [{ type: "text", text }],
+            __openclaw: { idempotencyKey: `${runId}:user` },
+          },
+          runId,
+          scope: sendScope,
+        });
         beginPendingSubmit(state, runId, text);
         noteLocalRunId?.(runId);
         setActivityStatus("sending");
@@ -930,9 +952,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       }
       tui.requestRender();
       const sendResult = await client.sendChat({
-        sessionKey: state.currentSessionKey,
-        ...(state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : {}),
-        sessionId: state.currentSessionId,
+        sessionKey: sendSelection.sessionKey,
+        ...(sendSelection.sessionKey === "global" ? { agentId: sendSelection.agentId } : {}),
+        sessionId: sendSessionId,
         message: text,
         thinking: opts.thinking,
         deliver: deliverDefault,
@@ -943,6 +965,23 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       const terminalAckFailure = isTerminalChatSendAckFailure(sendResult.status);
       const terminalAckSuccess = isTerminalChatSendAckSuccess(sendResult.status);
       const terminalAck = terminalAckFailure || terminalAckSuccess;
+      if (!isCurrentSendViewport()) {
+        if (isBtw) {
+          forgetLocalBtwRunId?.(runId);
+          if (acceptedRunId !== runId) {
+            forgetLocalBtwRunId?.(acceptedRunId);
+          }
+        } else {
+          forgetLocalRunId?.(runId);
+          if (acceptedRunId !== runId) {
+            forgetLocalRunId?.(acceptedRunId);
+          }
+          clearPendingSubmit(state, runId);
+          clearPendingSubmit(state, acceptedRunId);
+          consumeCompletedRunForPendingSend?.(acceptedRunId);
+        }
+        return;
+      }
       if (isBtw && terminalAck) {
         forgetLocalBtwRunId?.(runId);
         if (acceptedRunId !== runId) {
@@ -962,6 +1001,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         return;
       }
       if (!isBtw) {
+        // Adopt a durable turn that beat its ACK; otherwise preserve and re-key
+        // the optimistic viewport until the authoritative message arrives.
+        const acknowledgedProjection = reduceTuiSessionProjection(state, {
+          type: "sendAcknowledged",
+          runId: acceptedRunId,
+          previousRunId: runId,
+          scope: sendScope,
+        });
         const acceptedRunAlreadyCompleted =
           acceptedRunId !== runId &&
           !terminalAck &&
@@ -978,12 +1025,25 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           if (!acceptedRunAlreadyCompleted && !terminalAck) {
             noteLocalRunId?.(acceptedRunId);
           }
-          chatLog.rekeyPendingUser(runId, acceptedRunId);
+          if (
+            acknowledgedProjection.entries.some(
+              (entry) => entry.pending && entry.pendingRunId === acceptedRunId,
+            )
+          ) {
+            chatLog.rekeyPendingUser(runId, acceptedRunId);
+          } else {
+            chatLog.dropPendingUser(runId);
+          }
         }
         if (terminalAck) {
           clearPendingSubmit(state, acceptedRunId);
           forgetLocalRunId?.(acceptedRunId);
           if (terminalAckFailure) {
+            reduceTuiSessionProjection(state, {
+              type: "sendFailed",
+              runId: acceptedRunId,
+              scope: sendScope,
+            });
             chatLog.dropPendingUser(acceptedRunId);
           }
           if (state.activeChatRunId === acceptedRunId) {
@@ -1013,12 +1073,15 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     } catch (err) {
       if (isBtw) {
         forgetLocalBtwRunId?.(runId);
-      }
-      if (!isBtw && state.activeChatRunId && state.activeChatRunId === runId) {
-        forgetLocalRunId?.(state.activeChatRunId);
-      }
-      if (!isBtw) {
+      } else {
         forgetLocalRunId?.(runId);
+      }
+      if (!isCurrentSendViewport()) {
+        clearPendingSubmit(state, runId);
+        return;
+      }
+      if (!isBtw && state.activeChatRunId === runId) {
+        forgetLocalRunId?.(state.activeChatRunId);
       }
       if (!isBtw) {
         // Only clear the failed send's ownership. A queued run may have
@@ -1027,6 +1090,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           state.activeChatRunId = null;
         }
         clearPendingSubmit(state, runId);
+        reduceTuiSessionProjection(state, {
+          type: "sendFailed",
+          runId,
+          scope: sendScope,
+        });
         chatLog.dropPendingUser(runId);
       }
       chatLog.addSystem(`${isBtw ? "btw failed" : "send failed"}: ${formatTuiErrorMessage(err)}`);

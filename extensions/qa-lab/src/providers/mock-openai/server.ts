@@ -84,7 +84,6 @@ import {
   buildDeterministicEmbedding,
 } from "./mock-openai-contracts.js";
 import {
-  extractLastMatchingUserText,
   extractExactReplyDirective,
   extractExactMarkerDirective,
   extractWhatsAppLocationMarkerDirective,
@@ -120,6 +119,7 @@ import {
 } from "./mock-openai-events.js";
 import {
   extractLastUserText,
+  extractLastMatchingUserTurn,
   extractToolOutput,
   extractToolOutputStructuredError,
   extractToolOutputCallId,
@@ -127,7 +127,6 @@ import {
   extractAllToolOutputText,
   extractUserTextAfterLatestToolOutput,
   extractAllUserTexts,
-  extractSystemInputText,
   extractAllInputTexts,
   extractInstructionsText,
   extractAllRequestTexts,
@@ -156,6 +155,44 @@ import {
   extractSnackPreference,
 } from "./mock-openai-tooling.js";
 
+const QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE =
+  /(?:partial|quiet) streaming qa check|final-only marker streaming qa check|block streaming qa check|tool progress(?: error)? qa check/i;
+const QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE =
+  /^Continue with (?:the current Matrix QA scenario|the QA scenario plan and report worked, failed, and blocked items)\.$/i;
+
+function isStreamingToolProgressContinuationText(text: string) {
+  const trimmed = text.trim();
+  return (
+    QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE.test(trimmed) ||
+    trimmed.startsWith(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)
+  );
+}
+
+function extractLatestScenarioFamilyPrompt(texts: string[]) {
+  let envelope = "";
+  for (const text of texts.toReversed()) {
+    if (QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE.test(text)) {
+      envelope = text;
+      break;
+    }
+    if (!isStreamingToolProgressContinuationText(text)) {
+      return "";
+    }
+  }
+  if (!envelope) {
+    return "";
+  }
+  const pattern = new RegExp(
+    QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE.source,
+    `${QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE.flags}g`,
+  );
+  let latestIndex = -1;
+  for (const match of envelope.matchAll(pattern)) {
+    latestIndex = match.index;
+  }
+  return latestIndex < 0 ? "" : envelope.slice(latestIndex);
+}
+
 async function buildResponsesPayload(
   body: Record<string, unknown>,
   scenarioState: MockScenarioState,
@@ -175,9 +212,20 @@ async function buildResponsesPayload(
       ? extractLatestToolOutput(input)
       : "");
   const toolJson = parseToolOutputJson(scenarioToolOutput);
+  const memoryToolUnavailable =
+    toolJson?.unavailable === true ||
+    toolJson?.disabled === true ||
+    (typeof toolJson?.error === "string" && toolJson.error.trim().length > 0);
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
-  const allUserText = extractAllUserTexts(input).join("\n");
+  const allUserTexts = extractAllUserTexts(input);
+  const allUserText = allUserTexts.join("\n");
+  const scenarioFamilyPrompt = extractLatestScenarioFamilyPrompt(allUserTexts) || prompt;
+  const scenarioFamilyReplyDirective =
+    extractExactReplyDirective(scenarioFamilyPrompt) ??
+    extractExactMarkerDirective(scenarioFamilyPrompt) ??
+    extractExactReplyDirective(scenarioToolOutput) ??
+    extractExactMarkerDirective(scenarioToolOutput);
   const userExactReplyDirective =
     promptExactReplyDirective ?? extractExactReplyDirective(allUserText);
   const userExactMarkerDirective =
@@ -195,13 +243,8 @@ async function buildResponsesPayload(
   const whatsAppStickerMarker = shouldUseWhatsAppStickerMarker(prompt)
     ? extractWhatsAppStickerMarkerDirective(allInputText)
     : "";
-  const blockStreamingPrompt =
-    extractLastMatchingUserText(extractAllUserTexts(input), QA_BLOCK_STREAMING_PROMPT_RE) ||
-    prompt ||
-    allInputText;
-  const blockStreamingMarkers =
-    extractBlockStreamingMarkerDirectives(blockStreamingPrompt) ??
-    extractBlockStreamingMarkerDirectives(allInputText);
+  const blockStreamingPrompt = scenarioFamilyPrompt || prompt || allInputText;
+  const blockStreamingMarkers = extractBlockStreamingMarkerDirectives(blockStreamingPrompt);
   const isGroupChat = allInputText.includes('"is_group_chat": true');
   const isBaselineUnmentionedChannelChatter = /\bno bot ping here\b/i.test(prompt);
   const hasReasoningOnlyRetryInstruction = allInputText.includes(QA_REASONING_ONLY_RETRY_NEEDLE);
@@ -223,15 +266,20 @@ async function buildResponsesPayload(
   const canCallSessionsYield =
     hasDeclaredTool(body, "sessions_yield") ||
     QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText);
-  const buildToolProgressReadEvents = (pattern: RegExp) => {
-    const toolProgressPrompt = extractLastMatchingUserText(extractAllUserTexts(input), pattern);
+  const toolProgressTurn = extractLastMatchingUserTurn(input, /tool progress(?: error)? qa check/i);
+  // Progress scenarios share full session transcripts. Scope completion to
+  // the selected prompt so an older turn's tool output cannot finish this one.
+  const toolProgressToolOutput = toolProgressTurn
+    ? extractToolOutput(input.slice(toolProgressTurn.index))
+    : "";
+  const toolProgressToolJson = parseToolOutputJson(toolProgressToolOutput);
+  const buildToolProgressReadEvents = () => {
     return buildToolCallEventsWithArgs("read", {
-      path: readTargetFromPrompt(toolProgressPrompt || prompt || allInputText),
+      path: readTargetFromPrompt(scenarioFamilyPrompt),
     });
   };
-  const buildToolProgressExecEvents = (pattern: RegExp) => {
-    const toolProgressPrompt = extractLastMatchingUserText(extractAllUserTexts(input), pattern);
-    const command = execCommandFromToolProgressPrompt(toolProgressPrompt || prompt || allInputText);
+  const buildToolProgressExecEvents = () => {
+    const command = execCommandFromToolProgressPrompt(scenarioFamilyPrompt);
     return command ? buildToolCallEventsWithArgs("exec", { command }) : null;
   };
   if (QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE.test(allInputText)) {
@@ -610,47 +658,54 @@ async function buildResponsesPayload(
       },
     ]);
   }
-  if (QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText) && exactReplyDirective) {
+  if (
+    QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(scenarioFamilyPrompt) &&
+    scenarioFamilyReplyDirective
+  ) {
     return buildAssistantEvents([
       {
         id: "msg_mock_final_only_marker_stream",
         phase: "final_answer",
         streamDeltas: splitMockStreamingText("QA streaming preview in progress"),
-        text: exactReplyDirective,
+        text: scenarioFamilyReplyDirective,
       },
     ]);
   }
-  if (QA_STREAMING_PROMPT_RE.test(allInputText) && exactReplyDirective) {
+  if (QA_STREAMING_PROMPT_RE.test(scenarioFamilyPrompt) && scenarioFamilyReplyDirective) {
     return buildAssistantEvents([
       {
         id: "msg_mock_quiet_stream",
         phase: "final_answer",
-        streamDeltas: splitMockStreamingText(exactReplyDirective),
-        text: exactReplyDirective,
+        streamDeltas: splitMockStreamingText(scenarioFamilyReplyDirective),
+        text: scenarioFamilyReplyDirective,
       },
     ]);
   }
-  const toolProgressReplyDirective = exactReplyDirective ?? exactMarkerDirective;
-  if (QA_TOOL_PROGRESS_ERROR_PROMPT_RE.test(allInputText) && toolProgressReplyDirective) {
-    if (!toolOutput) {
-      return buildToolProgressReadEvents(QA_TOOL_PROGRESS_ERROR_PROMPT_RE);
+  const toolProgressReplyDirective =
+    extractExactReplyDirective(toolProgressToolOutput) ??
+    extractExactMarkerDirective(toolProgressToolOutput) ??
+    scenarioFamilyReplyDirective;
+  if (QA_TOOL_PROGRESS_ERROR_PROMPT_RE.test(scenarioFamilyPrompt)) {
+    if (!toolProgressToolOutput) {
+      return buildToolProgressReadEvents();
     }
-    return buildAssistantEvents(
-      hasToolErrorOutput(toolJson, toolOutput)
-        ? toolProgressReplyDirective
-        : "BUG-TOOL-DID-NOT-FAIL",
-    );
-  }
-  if (QA_TOOL_PROGRESS_PROMPT_RE.test(allInputText) && toolProgressReplyDirective) {
-    if (!toolOutput) {
-      return (
-        buildToolProgressExecEvents(QA_TOOL_PROGRESS_PROMPT_RE) ??
-        buildToolProgressReadEvents(QA_TOOL_PROGRESS_PROMPT_RE)
+    if (toolProgressReplyDirective) {
+      return buildAssistantEvents(
+        hasToolErrorOutput(toolProgressToolJson, toolProgressToolOutput)
+          ? toolProgressReplyDirective
+          : "BUG-TOOL-DID-NOT-FAIL",
       );
     }
-    return buildAssistantEvents(toolProgressReplyDirective);
   }
-  if (QA_BLOCK_STREAMING_PROMPT_RE.test(allInputText) && blockStreamingMarkers) {
+  if (QA_TOOL_PROGRESS_PROMPT_RE.test(scenarioFamilyPrompt)) {
+    if (!toolProgressToolOutput) {
+      return buildToolProgressExecEvents() ?? buildToolProgressReadEvents();
+    }
+    if (toolProgressReplyDirective) {
+      return buildAssistantEvents(toolProgressReplyDirective);
+    }
+  }
+  if (QA_BLOCK_STREAMING_PROMPT_RE.test(scenarioFamilyPrompt) && blockStreamingMarkers) {
     if (!toolOutput) {
       return buildAssistantThenToolCallEvents(
         {
@@ -682,7 +737,7 @@ async function buildResponsesPayload(
       if (!toolOutput && hasDeclaredTool(body, "message")) {
         return buildToolCallEventsWithArgs("message", {
           action: "send",
-          message: "QA-STRANDED-85714",
+          message: buildStrandedFinalRecoveryText(),
         });
       }
       return buildAssistantEvents("");
@@ -1052,19 +1107,44 @@ async function buildResponsesPayload(
         corpus: "sessions",
       });
     }
+    if (memoryToolUnavailable) {
+      return buildAssistantEvents("NONE");
+    }
     const results = Array.isArray(toolJson?.results)
       ? (toolJson.results as Array<Record<string, unknown>>)
       : [];
     const preferredSessionResult = results.find((result) => {
       const resultPath = typeof result.path === "string" ? result.path : undefined;
-      return result.source === "sessions" || resultPath?.startsWith("sessions/");
+      if (result.source !== "sessions" && !resultPath?.startsWith("sessions/")) {
+        return false;
+      }
+      const memoryText =
+        typeof result.snippet === "string"
+          ? result.snippet
+          : typeof result.text === "string"
+            ? result.text
+            : "";
+      return extractOrbitCode(memoryText) !== null;
     });
-    if (preferredSessionResult) {
+    const sessionMemoryText =
+      typeof preferredSessionResult?.snippet === "string"
+        ? preferredSessionResult.snippet
+        : typeof preferredSessionResult?.text === "string"
+          ? preferredSessionResult.text
+          : "";
+    const retrievedOrbitCode =
+      extractOrbitCode(sessionMemoryText) ??
+      (typeof toolJson?.text === "string" ? extractOrbitCode(toolJson.text) : null);
+    if (retrievedOrbitCode) {
       return buildAssistantEvents(
-        "Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10.",
+        `Protocol note: I checked memory and the current Project Nebula codename is ${retrievedOrbitCode}.`,
       );
     }
-    const first = results[0];
+    const first =
+      results.find((result) => {
+        const resultPath = typeof result.path === "string" ? result.path : undefined;
+        return result.source === "sessions" || resultPath?.startsWith("sessions/");
+      }) ?? results[0];
     if (
       typeof first?.path === "string" &&
       (typeof first.startLine === "number" || typeof first.endLine === "number")
@@ -1081,6 +1161,7 @@ async function buildResponsesPayload(
         lines: 4,
       });
     }
+    return buildAssistantEvents("NONE");
   }
   if (/thread memory check/i.test(allInputText)) {
     if (!scenarioToolOutput) {
@@ -1089,10 +1170,10 @@ async function buildResponsesPayload(
         maxResults: 3,
       });
     }
-    const transcriptOrbitCode =
-      extractOrbitCode(scenarioToolOutput) ??
-      extractOrbitCode(extractUserTextAfterLatestToolOutput(input)) ??
-      extractOrbitCode(extractSystemInputText(input));
+    if (memoryToolUnavailable) {
+      return buildAssistantEvents("NONE");
+    }
+    const transcriptOrbitCode = extractOrbitCode(scenarioToolOutput);
     if (transcriptOrbitCode) {
       return buildAssistantEvents(
         `Protocol note: I checked memory in-thread and the hidden thread codename is ${transcriptOrbitCode}.`,
@@ -1118,8 +1199,13 @@ async function buildResponsesPayload(
         lines: 4,
       });
     }
+    return buildAssistantEvents("NONE");
   }
-  if (QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) && !toolOutput) {
+  if (
+    QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) &&
+    !toolOutput &&
+    hasToolDefinition(body, "image_generate")
+  ) {
     return buildToolCallEventsWithArgs("image_generate", {
       prompt: "A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
       filename: "qa-lighthouse.png",
@@ -1295,7 +1381,7 @@ export async function startQaMockOpenAiServer(params?: {
   const host = params?.host ?? "127.0.0.1";
   const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
   const scenarioState: MockScenarioState = {
-    anthropicThinkingErrorPhase: 0,
+    anthropicThinkingErrorScenarioKeys: new Set<string>(),
     subagentFanoutPhase: 0,
     subagentHandoffSpawned: false,
     toolLoopReadAttempts: 0,

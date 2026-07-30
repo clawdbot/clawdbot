@@ -152,6 +152,7 @@ describe("registerPreActionHooks", () => {
     const programLocal = new Command().name("openclaw");
     const agent = programLocal
       .command("agent")
+      .argument("[note]")
       .requiredOption("-m, --message <text>")
       .option("--local")
       .option("--json")
@@ -201,6 +202,14 @@ describe("registerPreActionHooks", () => {
       .action(() => {});
     programLocal.command("completion").action(() => {});
     programLocal.command("secrets").action(() => {});
+    const skills = programLocal.command("skills");
+    for (const skillCommand of ["install", "verify"]) {
+      skills
+        .command(skillCommand)
+        .argument("<skill-ref>")
+        .option("--version <version>")
+        .action(() => {});
+    }
     programLocal
       .command("qa")
       .command("suite")
@@ -655,6 +664,63 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
   });
 
+  it("bootstraps when Commander consumed --help as a required option value", async () => {
+    const parseProgram = buildProgram();
+    process.argv = ["node", "openclaw", "agent", "--message", "--help", "--message", "hello"];
+
+    await parseProgram.parseAsync(process.argv);
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["agent"],
+    });
+  });
+
+  it.each([
+    {
+      name: "version-pinned skill install",
+      action: "install",
+      argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version", "1.2.3"],
+    },
+    {
+      name: "version-pinned skill verification",
+      action: "verify",
+      argv: ["node", "openclaw", "skills", "verify", "@owner/weather", "--version", "1.2.3"],
+    },
+    {
+      name: "equals-form version-pinned skill install",
+      action: "install",
+      argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version=1.2.3"],
+    },
+    {
+      name: "profiled version-pinned skill verification",
+      action: "verify",
+      argv: [
+        "node",
+        "openclaw",
+        "--profile",
+        "work",
+        "skills",
+        "verify",
+        "@owner/weather",
+        "--version",
+        "1.2.3",
+      ],
+    },
+  ])("runs the execution bootstrap for $name", async ({ action, argv }) => {
+    await runPreAction({
+      parseArgv: ["skills", action],
+      processArgv: argv,
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtime: runtimeMock,
+        commandPath: ["skills", action],
+      }),
+    );
+  });
+
   it("applies --json stdout suppression only for explicit JSON output commands", async () => {
     await runPreAction({
       parseArgv: ["status"],
@@ -692,6 +758,19 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["config", "set"],
     });
+  });
+
+  it("does not select JSON output when Commander consumed --json as an option value", async () => {
+    const parseProgram = buildProgram();
+    process.argv = ["node", "openclaw", "agent", "", "--message", "--json", "--message", "hello"];
+
+    await parseProgram.parseAsync(process.argv);
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["agent"],
+    });
+    expect(routeLogsToStderrMock).not.toHaveBeenCalled();
   });
 
   it("routes logs to stderr in --json mode so stdout stays clean", async () => {

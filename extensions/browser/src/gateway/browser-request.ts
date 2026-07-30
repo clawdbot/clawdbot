@@ -6,6 +6,11 @@ import crypto from "node:crypto";
 import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  BROWSER_PROXY_COMMAND,
+  BROWSER_PROXY_UPLOAD_COMMAND,
+  browserProxyUploadUnavailableMessage,
+} from "../browser-node-commands.js";
 import { isBrowserControlHostUnavailableError } from "../browser-node-fallback.js";
 import {
   BROWSER_PROXY_ERROR_ENVELOPE,
@@ -14,6 +19,10 @@ import {
   type BrowserProxyFile,
   type BrowserProxySuccess,
 } from "../browser-proxy-envelope.js";
+import {
+  isBrowserProxyUploadRequest,
+  prepareBrowserProxyUploadRequest,
+} from "../browser-proxy-upload.js";
 import {
   ErrorCodes,
   applyBrowserProxyPaths,
@@ -50,7 +59,7 @@ type BrowserRequestParams = {
 function isBrowserNode(node: NodeSession) {
   const caps = Array.isArray(node.caps) ? node.caps : [];
   const commands = Array.isArray(node.commands) ? node.commands : [];
-  return caps.includes("browser") || commands.includes("browser.proxy");
+  return caps.includes("browser") || commands.includes(BROWSER_PROXY_COMMAND);
 }
 
 function resolveBrowserNode(nodes: NodeSession[], query: string): NodeSession | null {
@@ -151,32 +160,68 @@ export async function handleBrowserGatewayRequest({
     }
   }
 
+  if (nodeTarget && isPersistentBrowserProfileMutation(methodRaw, path)) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "browser.request cannot mutate persistent browser profiles over a node proxy",
+      ),
+    );
+    return;
+  }
+
+  let preparedUpload: Awaited<ReturnType<typeof prepareBrowserProxyUploadRequest>> | null = null;
+  let proxyCommand = BROWSER_PROXY_COMMAND;
   if (nodeTarget) {
-    if (isPersistentBrowserProfileMutation(methodRaw, path)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "browser.request cannot mutate persistent browser profiles over a node proxy",
-        ),
+    if (
+      isBrowserProxyUploadRequest({ method: methodRaw, path, body }) &&
+      !nodeTarget.commands?.includes(BROWSER_PROXY_UPLOAD_COMMAND)
+    ) {
+      const message = browserProxyUploadUnavailableMessage(nodeTarget.declaredCommands);
+      if (configuredNode) {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
+        return;
+      }
+      logger.warn(
+        `browser node ${nodeTarget.displayName ?? nodeTarget.nodeId} lacks ${BROWSER_PROXY_UPLOAD_COMMAND}; falling back to Gateway host`,
       );
+      nodeTarget = null;
+    }
+  }
+  if (nodeTarget) {
+    try {
+      preparedUpload = await prepareBrowserProxyUploadRequest({
+        method: methodRaw,
+        path,
+        body,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
       return;
     }
+    if (preparedUpload.upload) {
+      proxyCommand = BROWSER_PROXY_UPLOAD_COMMAND;
+    }
+  }
+
+  if (nodeTarget && preparedUpload) {
     const allowlist = resolveNodeCommandAllowlist(cfg, nodeTarget);
     const allowed = isNodeCommandAllowed({
-      command: "browser.proxy",
+      command: proxyCommand,
       declaredCommands: nodeTarget.commands,
       allowlist,
     });
     if (!allowed.ok) {
       const platform = nodeTarget.platform ?? "unknown";
-      const hint = `node command not allowed: ${allowed.reason} (platform: ${platform}, command: browser.proxy)`;
+      const hint = `node command not allowed: ${allowed.reason} (platform: ${platform}, command: ${proxyCommand})`;
       respond(
         false,
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, hint, {
-          details: { reason: allowed.reason, command: "browser.proxy" },
+          details: { reason: allowed.reason, command: proxyCommand },
         }),
       );
       return;
@@ -186,14 +231,15 @@ export async function handleBrowserGatewayRequest({
       method: methodRaw,
       path,
       query,
-      body,
+      body: preparedUpload.body,
+      upload: preparedUpload.upload,
       timeoutMs,
       profile: resolveRequestedBrowserProfile({ query, body }),
       errorEnvelope: BROWSER_PROXY_ERROR_ENVELOPE,
     };
     const res = await context.nodeRegistry.invoke({
       nodeId: nodeTarget.nodeId,
-      command: "browser.proxy",
+      command: proxyCommand,
       params: proxyParams,
       timeoutMs,
       idempotencyKey: crypto.randomUUID(),

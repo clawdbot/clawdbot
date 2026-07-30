@@ -43,6 +43,7 @@ import {
   sanitizeAssistantVisibleText,
 } from "openclaw/plugin-sdk/text-chunking";
 import {
+  inspectZaloAccount,
   listZaloAccountIds,
   resolveDefaultZaloAccountId,
   resolveZaloAccount,
@@ -131,6 +132,10 @@ const zaloMessageAdapter = defineChannelMessageAdapter({
   },
 });
 
+function isZaloAccountConfigured(account: ResolvedZaloAccount): boolean {
+  return account.tokenStatus ? account.tokenStatus !== "missing" : Boolean(account.token?.trim());
+}
+
 const zaloConfigAdapter = createScopedChannelConfigAdapter<ResolvedZaloAccount>({
   sectionKey: "zalo",
   listAccountIds: listZaloAccountIds,
@@ -206,14 +211,16 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
       configSchema: buildChannelConfigSchema(ZaloConfigSchema),
       config: {
         ...zaloConfigAdapter,
-        isConfigured: (account) => Boolean(account.token?.trim()),
+        inspectAccount: adaptScopedAccountAccessor(inspectZaloAccount),
+        isConfigured: isZaloAccountConfigured,
         describeAccount: (account): ChannelAccountSnapshot =>
           describeWebhookAccountSnapshot({
             account,
-            configured: Boolean(account.token?.trim()),
+            configured: isZaloAccountConfigured(account),
             mode: account.config.webhookUrl ? "webhook" : "polling",
             extra: {
               tokenSource: account.tokenSource,
+              tokenStatus: account.tokenStatus,
             },
           }),
       },
@@ -252,7 +259,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
         probeAccount: async ({ account, timeoutMs }) =>
           await (await loadZaloChannelRuntime()).probeZaloAccount({ account, timeoutMs }),
         resolveAccountSnapshot: ({ account }) => {
-          const configured = Boolean(account.token?.trim());
+          const configured = isZaloAccountConfigured(account);
           return {
             accountId: account.accountId,
             name: account.name,
@@ -260,6 +267,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
             configured,
             extra: {
               tokenSource: account.tokenSource,
+              tokenStatus: account.tokenStatus,
               mode: account.config.webhookUrl ? "webhook" : "polling",
               dmPolicy: account.config.dmPolicy ?? "pairing",
             },

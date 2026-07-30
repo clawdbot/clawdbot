@@ -34,7 +34,7 @@ export function registerCronStatusCommand(cron: Command) {
   addGatewayClientOptions(
     cron
       .command("status")
-      .description("Show cron scheduler status")
+      .description("Show automations scheduler status")
       .option("--json", "Output JSON", false)
       .action(async (opts) => {
         try {
@@ -51,7 +51,7 @@ export function registerCronListCommand(cron: Command) {
   addGatewayClientOptions(
     cron
       .command("list")
-      .description("List cron jobs")
+      .description("List automations")
       .option("--all", "Include disabled jobs", false)
       .option("--agent <id>", "Filter by agent id")
       .option("--json", "Output JSON", false)
@@ -84,7 +84,7 @@ export function registerCronAddCommand(cron: Command) {
     cron
       .command("add")
       .alias("create")
-      .description("Add a cron job")
+      .description("Add an automation")
       .argument("[scheduleOrName]", "Schedule string, or job name when using --at/--every/--cron")
       .argument("[message]", "Agent message when using a positional schedule")
       .option("--name <name>", "Job name")
@@ -224,7 +224,7 @@ export function registerCronAddCommand(cron: Command) {
               const toolsAllow = parseCronToolsAllow(opts.tools);
               if (optionMessage && positionalMessage && optionMessage !== positionalMessage) {
                 throw new Error(
-                  "Pass the cron job message either positionally or with --message, not both.",
+                  "Pass the automation message either positionally or with --message, not both.",
                 );
               }
               const message = optionMessage ?? positionalMessage ?? "";
@@ -435,7 +435,7 @@ export function registerCronAddCommand(cron: Command) {
             const positionalName = hasScheduleFlag ? normalizeOptionalString(nameArg) : undefined;
             if (optionName && positionalName && optionName !== positionalName) {
               throw new Error(
-                "Pass the cron job name either positionally or with --name, not both.",
+                "Pass the automation name either positionally or with --name, not both.",
               );
             }
             const name = optionName ?? positionalName ?? "";

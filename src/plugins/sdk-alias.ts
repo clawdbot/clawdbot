@@ -412,8 +412,12 @@ const cachedPluginSdkScopedAliasMaps = new PluginLruCache<Record<string, string>
 const cachedBundledPluginPublicSurfaceAliasMaps = new PluginLruCache<Record<string, string>>(
   MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
 );
+const cachedWorkspacePackageAliasMaps = new PluginLruCache<Record<string, string>>(
+  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
+);
 const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
 const CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH = "codex-mcp-projection";
+const CODEX_SESSION_TRANSCRIPT_PLUGIN_SDK_SUBPATH = "codex-session-transcript-runtime";
 const OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH = "ssrf-runtime-internal";
 const PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS = new Set([
   "agent-runtime-test-contracts",
@@ -451,7 +455,10 @@ const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS: readonly PrivatePluginSdkSubpathOwner[]
     bundledPluginId: "codex",
     officialInstalledPackageName: "@openclaw/codex",
     allowPrivateQaCli: true,
-    subpaths: [CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH],
+    subpaths: [
+      CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
+      CODEX_SESSION_TRANSCRIPT_PLUGIN_SDK_SUBPATH,
+    ],
   },
   {
     bundledPluginId: "ollama",
@@ -896,6 +903,13 @@ function resolveWorkspacePackageAliasMap(params: {
     isProduction: process.env.NODE_ENV === "production",
     pluginSdkResolution: params.pluginSdkResolution,
   });
+  // Raw modes with the same effective preference order resolve identical targets.
+  // Key the process-stable cache by that target-affecting order, not the caller spelling.
+  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}`;
+  const cached = cachedWorkspacePackageAliasMaps.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
   const aliasMap: Record<string, string> = {};
   const workspacePackageAliasEntries = [
     ...WORKSPACE_PACKAGE_ALIAS_ENTRIES,
@@ -933,6 +947,7 @@ function resolveWorkspacePackageAliasMap(params: {
       }
     }
   }
+  cachedWorkspacePackageAliasMaps.set(cacheKey, aliasMap);
   return aliasMap;
 }
 
@@ -1262,6 +1277,50 @@ const pluginLoaderModuleConfigCache = new PluginLruCache<{
   aliasMap: Record<string, string>;
   cacheKey: string;
 }>(MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES);
+const normalizedAliasTargetsByInput = new WeakMap<Record<string, string>, Record<string, string>>();
+const mergedAliasMapsByComponent = new WeakMap<
+  Record<string, string>,
+  WeakMap<Record<string, string>, WeakMap<Record<string, string>, Record<string, string>>>
+>();
+
+function normalizeAliasTargets(aliasMap: Record<string, string>): Record<string, string> {
+  if (process.platform !== "win32") {
+    return aliasMap;
+  }
+  const cached = normalizedAliasTargetsByInput.get(aliasMap);
+  if (cached) {
+    return cached;
+  }
+  const normalized = Object.fromEntries(
+    Object.entries(aliasMap).map(([key, value]) => [key, normalizeJitiAliasTargetPath(value)]),
+  );
+  normalizedAliasTargetsByInput.set(aliasMap, normalized);
+  return normalized;
+}
+
+function mergeAliasMaps(
+  bundled: Record<string, string>,
+  workspace: Record<string, string>,
+  pluginSdk: Record<string, string>,
+): Record<string, string> {
+  let byWorkspace = mergedAliasMapsByComponent.get(bundled);
+  if (!byWorkspace) {
+    byWorkspace = new WeakMap();
+    mergedAliasMapsByComponent.set(bundled, byWorkspace);
+  }
+  let byPluginSdk = byWorkspace.get(workspace);
+  if (!byPluginSdk) {
+    byPluginSdk = new WeakMap();
+    byWorkspace.set(workspace, byPluginSdk);
+  }
+  const cached = byPluginSdk.get(pluginSdk);
+  if (cached) {
+    return cached;
+  }
+  const merged = { ...bundled, ...workspace, ...pluginSdk };
+  byPluginSdk.set(pluginSdk, merged);
+  return merged;
+}
 
 function hasJitiNormalizedAliasMarker(aliasMap: Record<string, string>) {
   return Boolean((aliasMap as Record<symbol, unknown>)[JITI_NORMALIZED_ALIAS_SYMBOL]);
@@ -1423,33 +1482,32 @@ export function buildPluginLoaderAliasMap(
     return cached;
   }
 
-  const result: Record<string, string> = {
-    ...resolveBundledPluginPackagePublicSurfaceAliasMap({
+  const bundledAliases = resolveBundledPluginPackagePublicSurfaceAliasMap({
+    modulePath,
+    argv1,
+    moduleUrl,
+    pluginSdkResolution,
+    devSourceRoot,
+  });
+  const workspaceAliases = resolveWorkspacePackageAliasMap({
+    modulePath,
+    argv1,
+    moduleUrl,
+    pluginSdkResolution,
+    devSourceRoot,
+  });
+  const pluginSdkAliases = normalizeAliasTargets(
+    resolvePluginSdkScopedAliasMap({
       modulePath,
       argv1,
       moduleUrl,
       pluginSdkResolution,
       devSourceRoot,
     }),
-    ...resolveWorkspacePackageAliasMap({
-      modulePath,
-      argv1,
-      moduleUrl,
-      pluginSdkResolution,
-      devSourceRoot,
-    }),
-    ...Object.fromEntries(
-      Object.entries(
-        resolvePluginSdkScopedAliasMap({
-          modulePath,
-          argv1,
-          moduleUrl,
-          pluginSdkResolution,
-          devSourceRoot,
-        }),
-      ).map(([key, value]) => [key, normalizeJitiAliasTargetPath(value)]),
-    ),
-  };
+  );
+  // Different plugin entrypoints commonly resolve the same process-stable SDK surface.
+  // Reuse one merged map so plugin count does not multiply identical alias objects.
+  const result = mergeAliasMaps(bundledAliases, workspaceAliases, pluginSdkAliases);
   aliasMapCache.set(cacheKey, result);
   return result;
 }

@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
 
+import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { UiSettings } from "../../app/settings.ts";
+import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -32,6 +34,7 @@ import {
   resolveStoredChatOutboxScope,
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
+import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import { handleChatInputHistoryKey } from "./input-history.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import {
@@ -548,15 +551,13 @@ describe("refreshChat", () => {
     expect(requestUpdate).not.toHaveBeenCalled();
   });
 
-  it("starts startup metadata without waiting for the transcript response", async () => {
+  it("uses startup-shipped metadata without requesting chat.metadata", async () => {
     const startup = createDeferred<unknown>();
-    const metadata = createDeferred<unknown>();
     const host = makeHost({
       hello: {
         features: { methods: ["chat.metadata", "chat.startup"] },
       } as TestChatHost["hello"],
       requestHandlers: {
-        "chat.metadata": () => metadata.promise,
         "chat.startup": () => startup.promise,
       },
     });
@@ -567,39 +568,8 @@ describe("refreshChat", () => {
       startup: true,
     });
 
-    expect(host.request.mock.calls.map(([method]) => method)).toEqual([
-      "chat.startup",
-      "chat.metadata",
-    ]);
+    expect(host.request.mock.calls.map(([method]) => method)).toEqual(["chat.startup"]);
     expect(await raceWithMacrotask(refresh)).toBe("pending");
-
-    metadata.resolve({ commands: [], models: [] });
-    startup.resolve({ messages: [] });
-    await expect(refresh).resolves.toBeUndefined();
-  });
-
-  it("preserves startup metadata when parallel metadata needs fallbacks", async () => {
-    const startup = createDeferred<unknown>();
-    const metadata = createDeferred<unknown>();
-    const host = makeHost({
-      hello: {
-        features: { methods: ["chat.metadata", "chat.startup"] },
-      } as TestChatHost["hello"],
-      requestHandlers: {
-        "chat.metadata": () => metadata.promise,
-        "chat.startup": () => startup.promise,
-      },
-    });
-    const refresh = refreshPageChat(asChatPageHost(host), {
-      awaitHistory: true,
-      deferBranches: true,
-      startup: true,
-    });
-
-    metadata.resolve({});
-    await Promise.resolve();
-    expect(host.request).not.toHaveBeenCalledWith("models.list", expect.anything());
-    expect(host.request).not.toHaveBeenCalledWith("commands.list", expect.anything());
 
     startup.resolve({
       messages: [],
@@ -616,7 +586,7 @@ describe("refreshChat", () => {
       },
     });
     await expect(refresh).resolves.toBeUndefined();
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(host.chatModelCatalog).toEqual([
         {
           available: true,
@@ -626,8 +596,73 @@ describe("refreshChat", () => {
         },
       ]),
     );
+    expect(host.request).not.toHaveBeenCalledWith("chat.metadata", expect.anything());
     expect(host.request).not.toHaveBeenCalledWith("models.list", expect.anything());
     expect(host.request).not.toHaveBeenCalledWith("commands.list", expect.anything());
+  });
+
+  it("fills omitted startup metadata immediately and populates models and commands", async () => {
+    const startup = createDeferred<unknown>();
+    const host = makeHost({
+      hello: {
+        features: { methods: ["chat.metadata", "chat.startup"] },
+      } as TestChatHost["hello"],
+      requestHandlers: {
+        "chat.metadata": {},
+        "commands.list": {
+          commands: [
+            {
+              name: "startup-gap-command",
+              textAliases: ["/startup-gap-command"],
+              description: "Loaded from the startup metadata gap fill.",
+              source: "plugin",
+              scope: "text",
+              acceptsArgs: false,
+            },
+          ],
+        },
+        "chat.startup": () => startup.promise,
+        "models.list": {
+          models: [
+            {
+              available: true,
+              id: "gap-model",
+              name: "Gap Model",
+              provider: "openai",
+            },
+          ],
+        },
+      },
+    });
+    const refresh = refreshPageChat(asChatPageHost(host), {
+      awaitHistory: true,
+      deferBranches: true,
+      startup: true,
+    });
+
+    expect(host.request.mock.calls.map(([method]) => method)).toEqual(["chat.startup"]);
+    expect(host.request).not.toHaveBeenCalledWith("models.list", expect.anything());
+    expect(host.request).not.toHaveBeenCalledWith("commands.list", expect.anything());
+
+    startup.resolve({ messages: [] });
+    await expect(refresh).resolves.toBeUndefined();
+    await waitForFast(() =>
+      expect(host.chatModelCatalog).toEqual([
+        {
+          available: true,
+          id: "gap-model",
+          name: "Gap Model",
+          provider: "openai",
+        },
+      ]),
+    );
+    expect(SLASH_COMMANDS.some((command) => command.name === "startup-gap-command")).toBe(true);
+    expect(host.request).toHaveBeenCalledWith("models.list", { view: "configured" });
+    expect(host.request).toHaveBeenCalledWith(
+      "commands.list",
+      expect.objectContaining({ includeArgs: true, scope: "text" }),
+    );
+    expect(host.request).toHaveBeenCalledWith("chat.metadata", { agentId: "main" });
   });
 
   it.each([
@@ -1513,6 +1548,60 @@ describe("handleSendChat", () => {
     expect(host.lastError).toBe("Chat failed before the run started; try again.");
     expect(host.chatRunId).toBeNull();
   });
+
+  it.each(["error", "timeout"] as const)(
+    "removes only a reducer-owned optimistic turn after a terminal %s ACK",
+    async (status) => {
+      const persistedPeer = {
+        role: "user",
+        content: [{ type: "text", text: "same visible message" }],
+        __openclaw: { id: "peer-user", seq: 1, idempotencyKey: "peer-run:user" },
+      };
+      let rejectedRunId = "";
+      const host = makeHost({
+        requestHandlers: {
+          "chat.send": (params: unknown) => {
+            const payload = requireRecord(params, "terminal chat send payload");
+            rejectedRunId = String(payload.idempotencyKey);
+            const scope = { sessionKey: host.sessionKey };
+            const projection = reduceSessionProjection(
+              getChatSessionProjection(host, host.chatMessages, scope),
+              {
+                type: "sendPending",
+                runId: rejectedRunId,
+                message: {
+                  role: "user",
+                  content: [{ type: "text", text: "same visible message" }],
+                  __openclaw: { idempotencyKey: `${rejectedRunId}:user` },
+                },
+                scope,
+              },
+            );
+            setChatSessionProjection(host, projection);
+            host.chatMessages = [...projection.messages];
+            return { runId: rejectedRunId, status };
+          },
+        },
+        chatMessage: "same visible message",
+        chatMessages: [persistedPeer],
+        sessionKey: "agent:main",
+      });
+
+      await handleSendChat(host);
+
+      expect(host.chatMessages).toStrictEqual([persistedPeer]);
+      expect(host.chatMessage).toBe("same visible message");
+      expect(host.chatQueue).toHaveLength(1);
+      expect(host.chatQueue[0]).toMatchObject({
+        text: "same visible message",
+        sendRunId: rejectedRunId,
+        sendState: "failed",
+      });
+      expect(
+        getChatSessionProjection(host, host.chatMessages, { sessionKey: host.sessionKey }).entries,
+      ).not.toContainEqual(expect.objectContaining({ pendingRunId: rejectedRunId }));
+    },
+  );
 
   it("records visible send timing phases for a normal chat send", async () => {
     const host = makeHost({
@@ -4467,6 +4556,30 @@ describe("handleSendChat", () => {
       expect.objectContaining({ sendAttempts: 1, sendState: "waiting-reconnect" }),
     ]);
     expect(host.chatMessages).toStrictEqual([]);
+  });
+
+  it("coalesces duplicate queued local commands while the first command is running", async () => {
+    const command = createDeferred<{ content: string }>();
+    executeSlashCommandMock.mockImplementation(() => command.promise);
+    const host = makeHost({
+      requestHandlers: {
+        "chat.history": () => idleChatHistory(),
+      },
+    });
+
+    const first = handleSendChat(host, "/compact");
+    await waitForFast(() => expect(executeSlashCommandMock).toHaveBeenCalledOnce());
+    const duplicate = handleSendChat(host, "/compact");
+
+    try {
+      expect(host.chatQueue.filter((item) => item.localCommandName === "compact")).toHaveLength(1);
+      expect(executeSlashCommandMock).toHaveBeenCalledOnce();
+    } finally {
+      command.resolve({ content: "Compaction complete." });
+      await Promise.all([first, duplicate]);
+    }
+
+    expect(executeSlashCommandMock).toHaveBeenCalledOnce();
   });
 
   it("keeps normal prompt text visible as pending until chat.send is acknowledged", async () => {

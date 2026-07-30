@@ -209,7 +209,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const hasCompletedBootstrapTurnMock = vi.fn<() => Promise<boolean>>(async () => false);
   const resolveEmbeddedRunSkillEntriesMock = vi.fn(() => ({
     shouldLoadSkillEntries: false,
-    skillEntries: undefined,
+    skillEntries: [],
   }));
   const resolveSkillsPromptForRunMock = vi.fn(() => "");
   const supportsModelToolsMock = vi.fn<(model?: unknown) => boolean>(() => true);
@@ -605,6 +605,7 @@ vi.mock("../wait-for-idle-before-flush.js", () => ({
 vi.mock("../runs.js", () => ({
   setActiveEmbeddedRun: () => {},
   clearActiveEmbeddedRun: () => {},
+  markActiveEmbeddedRunAbandoned: () => {},
   updateActiveEmbeddedRunSnapshot: () => {},
 }));
 
@@ -617,8 +618,7 @@ vi.mock("../../system-prompt-params.js", () => ({
   buildSystemPromptParams: () => ({
     runtimeInfo: {},
     userTimezone: "UTC",
-    userTime: "00:00",
-    userTimeFormat: "24h",
+    userDate: "2026-01-05",
   }),
 }));
 
@@ -986,6 +986,7 @@ type MutableSession = {
     },
     options?: { deliverAs?: "nextTurn"; triggerTurn?: boolean },
   ) => Promise<void>;
+  getActiveToolNames: () => string[];
   setActiveToolsByName: (toolNames: string[]) => void;
   abort: () => Promise<void>;
   dispose: () => void;
@@ -1104,7 +1105,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.hasCompletedBootstrapTurnMock.mockReset().mockResolvedValue(false);
   hoisted.resolveEmbeddedRunSkillEntriesMock.mockReset().mockReturnValue({
     shouldLoadSkillEntries: false,
-    skillEntries: undefined,
+    skillEntries: [],
   });
   hoisted.resolveSkillsPromptForRunMock.mockReset().mockReturnValue("");
   hoisted.supportsModelToolsMock.mockReset().mockReturnValue(true);
@@ -1156,6 +1157,7 @@ export function createDefaultEmbeddedSession(params?: {
     options?: { images?: unknown[]; preflightResult?: (submitted: boolean) => void },
   ) => Promise<void>;
 }): MutableSession {
+  let activeToolNames: string[] = [];
   let pendingPrompt:
     | {
         prompt: string;
@@ -1199,7 +1201,10 @@ export function createDefaultEmbeddedSession(params?: {
         },
       },
     },
-    setActiveToolsByName: () => {},
+    getActiveToolNames: () => [...activeToolNames],
+    setActiveToolsByName: (toolNames) => {
+      activeToolNames = [...toolNames];
+    },
     setBaseSystemPrompt: (systemPrompt) => {
       session.agent.state.systemPrompt = systemPrompt;
     },

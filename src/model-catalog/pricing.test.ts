@@ -89,7 +89,7 @@ describe("hosted model pricing", () => {
     ).toEqual({ input: 2.5, output: 10, cacheRead: 1.25, cacheWrite: 0 });
   });
 
-  it("prefers merged catalog pricing over configured pricing", () => {
+  it("prefers configured pricing over merged catalog pricing", () => {
     const agentDir = tempDirs.make("openclaw-catalog-pricing-");
     const config = {
       models: {
@@ -109,7 +109,7 @@ describe("hosted model pricing", () => {
     } as unknown as OpenClawConfig;
     expect(
       resolveModelCostConfig({ config, agentDir, provider: "openai", model: "gpt-catalog" }),
-    ).toEqual({ input: 1, output: 2, cacheRead: 0, cacheWrite: 0 });
+    ).toEqual({ input: 99, output: 99, cacheRead: 0, cacheWrite: 0 });
   });
 
   it("does not apply hosted pricing to private endpoints or unknown models", () => {
@@ -230,5 +230,41 @@ describe("hosted model pricing", () => {
       models: { providers: { openai: { baseUrl: "https://api.openai.com/v1" } } },
     } as unknown as OpenClawConfig;
     expect(() => resolveModelCostConfigFingerprint(config)).not.toThrow();
+  });
+
+  it("bounds fingerprints for multi-megabyte hosted pricing catalogs", () => {
+    const pricing = Object.fromEntries(
+      Array.from({ length: 40_000 }, (_, index) => [
+        `openai/catalog-model-${index}`,
+        { input: index + 1, output: index + 2, cacheRead: index + 3 },
+      ]),
+    );
+    const bundle = {
+      schemaVersion: 1,
+      generatedAt: 200,
+      minVersion: "2026.7.0",
+      sourceCommit: "large-pricing-test",
+      providers: {
+        openai: { models: [{ id: "catalog-model-0", cost: { input: 1, output: 2 } }] },
+      },
+      pricing,
+    };
+    const bundleJson = JSON.stringify(bundle);
+    expect(Buffer.byteLength(bundleJson)).toBeGreaterThan(2 * 1024 * 1024);
+    readStoredCatalog.mockReturnValue({
+      source_url: "https://catalog.openclaw.ai/models/v1/catalog.json",
+      bundle_json: bundleJson,
+    });
+    resetRemoteModelCatalogOverlayForTest();
+
+    const fingerprint = resolveModelCostConfigFingerprint(configFor("https://api.openai.com/v1"));
+    const withoutHostedPricing = configFor("https://api.openai.com/v1");
+    withoutHostedPricing.models = {
+      ...withoutHostedPricing.models,
+      catalogRefresh: { enabled: false },
+    };
+
+    expect(fingerprint).toMatch(/^[0-9a-f]{64}$/u);
+    expect(fingerprint).not.toBe(resolveModelCostConfigFingerprint(withoutHostedPricing));
   });
 });

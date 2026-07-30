@@ -251,6 +251,7 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.sessionKey && { sessionKey: args.ctx.sessionKey }),
       ...(args.ctx?.sessionId && { sessionId: args.ctx.sessionId }),
       ...(args.ctx?.runId && { runId: args.ctx.runId }),
+      ...(args.signal ? { abortSignal: args.signal } : {}),
       ...(args.ctx?.trace && { trace: freezeDiagnosticTraceContext(args.ctx.trace) }),
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
       ...(args.ctx?.channelId && { channelId: args.ctx.channelId }),

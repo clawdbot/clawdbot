@@ -636,8 +636,15 @@ export function didCoreUpdateChangeInstall(result: UpdateRunResult): boolean {
 export function shouldResumePostCoreUpdateInFreshProcess(params: {
   result: UpdateRunResult;
   downgradeRisk: boolean;
+  installKindChanged?: boolean;
 }): boolean {
-  return !params.downgradeRisk && didCoreUpdateChangeInstall(params.result);
+  // A package-to-git switch can land on the same version already cloned at its
+  // target SHA. The package root still changed, so old hashed chunks are unsafe.
+  return (
+    params.result.status === "ok" &&
+    !params.downgradeRisk &&
+    (params.installKindChanged === true || didCoreUpdateChangeInstall(params.result))
+  );
 }
 
 export async function writeControlPlaneUpdateRestartSentinelBestEffort(params: {

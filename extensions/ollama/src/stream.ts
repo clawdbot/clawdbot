@@ -561,17 +561,24 @@ function buildUsageWithNoCost(params: {
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  cacheTelemetry?: Usage["cacheTelemetry"];
   totalTokens?: number;
 }): Usage {
   const input = params.input ?? 0;
   const output = params.output ?? 0;
   const cacheRead = params.cacheRead ?? 0;
   const cacheWrite = params.cacheWrite ?? 0;
+  const cacheTelemetry =
+    params.cacheTelemetry ??
+    (params.cacheRead !== undefined && params.cacheWrite !== undefined
+      ? { state: "available" as const }
+      : { state: "unavailable" as const });
   return {
     input,
     output,
     cacheRead,
     cacheWrite,
+    cacheTelemetry,
     totalTokens: params.totalTokens ?? input + output,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
@@ -1215,7 +1222,7 @@ function createRawOllamaStreamFn(
           headers.Authorization = `Bearer ${options.apiKey}`;
         }
 
-        const { response, release } = await fetchWithSsrFGuard({
+        const { response, release, refreshTimeout } = await fetchWithSsrFGuard({
           url: chatUrl,
           init: {
             method: "POST",
@@ -1374,6 +1381,9 @@ function createRawOllamaStreamFn(
 
           for await (const chunk of parseNdjsonStream(reader)) {
             throwIfOllamaStreamAborted(options?.signal);
+            // Keep guarded timeouts tied to stream progress so slow remote
+            // inference is not aborted while Ollama is still emitting tokens.
+            refreshTimeout?.();
             const thinkingDelta = chunk.message?.thinking ?? chunk.message?.reasoning;
             if (thinkingDelta && shouldEmitThinking) {
               if (!streamStarted) {

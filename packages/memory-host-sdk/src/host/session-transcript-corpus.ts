@@ -4,6 +4,7 @@ import path from "node:path";
 import { normalizeAgentId } from "./config-utils.js";
 import {
   isDreamingNarrativeSessionStoreKey,
+  extractAgentIdFromSessionPath,
   extractAgentIdFromSessionsDir,
   canonicalizeMainSessionAlias,
   getRuntimeConfig,
@@ -11,6 +12,7 @@ import {
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
   listSessionEntries,
+  listSessionTranscriptInstances,
   parseSqliteSessionFileMarker,
   parseUsageCountedSessionIdFromFileName,
   readTranscriptContentRevisionSync,
@@ -19,9 +21,19 @@ import {
   resolveSessionTranscriptsDirForAgent,
   resolveStorePath,
   type SessionEntry,
+  type SessionTranscriptInstance,
 } from "./openclaw-runtime-session.js";
+import type { MemorySessionKind } from "./types.js";
 
-type SessionTranscriptCorpusArtifactKind = "active-session" | "archive-artifact";
+type SessionTranscriptCorpusArtifactKind =
+  | "active-session"
+  | "retained-session"
+  | "archive-artifact";
+
+export type SessionTranscriptCorpusOptions = {
+  /** Include rotated SQLite transcript identities retained behind current logical sessions. */
+  includeRetainedSqlite?: boolean;
+};
 
 export type SessionTranscriptCorpusEntry = {
   agentId: string;
@@ -40,6 +52,7 @@ export type SessionTranscriptCorpusEntry = {
   generatedByDreamingNarrative?: boolean;
   /** True when this transcript belongs to an isolated cron run session. */
   generatedByCronRun?: boolean;
+  sessionKind?: MemorySessionKind;
 };
 
 function fileContentRevision(filePath: string): string | undefined {
@@ -97,15 +110,6 @@ function normalizeRealComparablePath(pathname: string): string {
 
 function rememberArtifactDir(dirs: Map<string, string>, dir: string): void {
   dirs.set(normalizeRealComparablePath(dir), dir);
-}
-
-function extractAgentIdFromSessionPath(absPath: string): string | null {
-  const parts = path.normalize(path.resolve(absPath)).split(path.sep).filter(Boolean);
-  const sessionsIndex = parts.lastIndexOf("sessions");
-  if (sessionsIndex < 2 || parts[sessionsIndex - 2] !== "agents") {
-    return null;
-  }
-  return parts[sessionsIndex - 1] || null;
 }
 
 type ResolvedSessionStoreCorpusSource = {
@@ -204,12 +208,25 @@ function classifySessionEntry(
 ): {
   generatedByDreamingNarrative: boolean;
   generatedByCronRun: boolean;
+  sessionKind: MemorySessionKind;
 } {
+  const generatedByDreamingNarrative =
+    isDreamingNarrativeSessionStoreKey(sessionKey) ||
+    isDreamingNarrativeSessionKeyLike(entry.spawnedBy);
+  const generatedByCronRun = cronGeneratedSessionKeys.has(sessionKey);
   return {
-    generatedByDreamingNarrative:
-      isDreamingNarrativeSessionStoreKey(sessionKey) ||
-      isDreamingNarrativeSessionKeyLike(entry.spawnedBy),
-    generatedByCronRun: cronGeneratedSessionKeys.has(sessionKey),
+    generatedByDreamingNarrative,
+    generatedByCronRun,
+    sessionKind: generatedByCronRun
+      ? "cron"
+      : typeof entry.heartbeatIsolatedBaseSessionKey === "string" &&
+          entry.heartbeatIsolatedBaseSessionKey.trim()
+        ? "heartbeat"
+        : generatedByDreamingNarrative || Boolean(entry.spawnedBy)
+          ? "subagent"
+          : sessionKey.includes(":subagent:")
+            ? "subagent"
+            : "interactive",
   };
 }
 
@@ -324,6 +341,47 @@ function toSessionStoreCorpusEntry(
     ...(sessionKey ? { sessionKey } : {}),
     ...(classification.generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
     ...(classification.generatedByCronRun ? { generatedByCronRun: true } : {}),
+    sessionKind: classification.sessionKind,
+  };
+}
+
+function toRetainedSessionCorpusEntry(
+  agentId: string,
+  instance: SessionTranscriptInstance,
+  sessionKey: string,
+  storePath: string,
+  cronGeneratedSessionKeys: ReadonlySet<string>,
+): SessionTranscriptCorpusEntry | null {
+  // Retained rows predate the current logical session entry. Only rows whose
+  // exclusion-sensitive ownership was captured may enter historical ingestion.
+  if (
+    !instance.provenanceKnown ||
+    instance.acpOwned ||
+    instance.entry.pluginOwnerId ||
+    instance.entry.hookExternalContentSource
+  ) {
+    return null;
+  }
+  const classification = classifySessionEntry(sessionKey, instance.entry, cronGeneratedSessionKeys);
+  const contentRevision = sqliteContentRevision({
+    agentId,
+    sessionId: instance.sessionId,
+    ...(sessionKey ? { sessionKey } : {}),
+    storePath,
+  });
+  return {
+    agentId,
+    artifactKind: "retained-session",
+    sessionFile: sessionKey,
+    sessionId: instance.sessionId,
+    ...(contentRevision ? { contentRevision } : {}),
+    storePath,
+    transcriptSource: "sqlite",
+    updatedAtMs: instance.updatedAtMs,
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(classification.generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
+    ...(classification.generatedByCronRun ? { generatedByCronRun: true } : {}),
+    sessionKind: classification.sessionKind,
   };
 }
 
@@ -348,12 +406,14 @@ function classifyTranscriptArtifact(
 ): {
   generatedByDreamingNarrative: boolean;
   generatedByCronRun: boolean;
+  sessionKind: MemorySessionKind;
 } {
   const directEntry = activeEntriesByPath.get(normalizeRealComparablePath(artifactPath));
   if (directEntry) {
     return {
       generatedByDreamingNarrative: directEntry.generatedByDreamingNarrative === true,
       generatedByCronRun: directEntry.generatedByCronRun === true,
+      sessionKind: directEntry.sessionKind ?? "unknown",
     };
   }
   const sessionsDir = path.dirname(artifactPath);
@@ -367,6 +427,7 @@ function classifyTranscriptArtifact(
   return {
     generatedByDreamingNarrative: primaryEntry?.generatedByDreamingNarrative === true,
     generatedByCronRun: primaryEntry?.generatedByCronRun === true,
+    sessionKind: primaryEntry?.sessionKind ?? "unknown",
   };
 }
 
@@ -397,11 +458,13 @@ function toArtifactCorpusEntry(
     ...(contentRevision ? { contentRevision } : {}),
     ...(classification.generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
     ...(classification.generatedByCronRun ? { generatedByCronRun: true } : {}),
+    sessionKind: classification.sessionKind,
   };
 }
 
 export function listSessionTranscriptCorpusEntriesForAgentSync(
   agentId: string,
+  options: SessionTranscriptCorpusOptions = {},
 ): SessionTranscriptCorpusEntry[] {
   const normalizedAgentId = normalizeAgentId(agentId);
   const cfg = getRuntimeConfig();
@@ -430,7 +493,18 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
     hydrateSkillPromptRefs: false,
     storePath,
   });
-  const cronGeneratedSessionKeys = collectCronGeneratedSessionKeys(sessionEntries);
+  const retainedInstances = options.includeRetainedSqlite
+    ? listSessionTranscriptInstances({
+        agentId: normalizedAgentId,
+        hydrateSkillPromptRefs: false,
+        readConsistency: "latest",
+        storePath,
+      })
+    : [];
+  const cronGeneratedSessionKeys = collectCronGeneratedSessionKeys([
+    ...retainedInstances.map(({ entry, sessionKey }) => ({ entry, sessionKey })),
+    ...sessionEntries,
+  ]);
   for (const summary of sessionEntries) {
     const sessionKey = isSharedFixedStore
       ? summary.sessionKey
@@ -471,6 +545,38 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
   const corpusEntries = [...activeEntriesBySessionId.values()].filter(
     (entry) => entry.transcriptSource === "sqlite",
   );
+  if (options.includeRetainedSqlite) {
+    for (const instance of retainedInstances) {
+      if (activeEntriesBySessionId.has(instance.sessionId)) {
+        continue;
+      }
+      const sessionKey = isSharedFixedStore
+        ? instance.sessionKey
+        : canonicalizeMainSessionAlias({
+            cfg,
+            agentId: normalizedAgentId,
+            sessionKey: instance.sessionKey,
+          });
+      const ownerAgentId = resolveSessionAgentId({
+        config: cfg,
+        sessionKey,
+        ...(isSharedFixedStore ? {} : { fallbackAgentId: normalizedAgentId }),
+      });
+      if (ownerAgentId !== normalizedAgentId) {
+        continue;
+      }
+      const entry = toRetainedSessionCorpusEntry(
+        ownerAgentId,
+        instance,
+        sessionKey,
+        storePath,
+        cronGeneratedSessionKeys,
+      );
+      if (entry?.transcriptSource === "sqlite") {
+        corpusEntries.push(entry);
+      }
+    }
+  }
   const scannedArtifactPaths = new Set<string>();
   for (const artifactDir of artifactDirsByPath.values()) {
     for (const artifactPath of listSessionTranscriptArtifactFiles(artifactDir)) {
@@ -524,6 +630,7 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
  */
 export async function listSessionTranscriptCorpusEntriesForAgent(
   agentId: string,
+  options: SessionTranscriptCorpusOptions = {},
 ): Promise<SessionTranscriptCorpusEntry[]> {
-  return listSessionTranscriptCorpusEntriesForAgentSync(agentId);
+  return listSessionTranscriptCorpusEntriesForAgentSync(agentId, options);
 }

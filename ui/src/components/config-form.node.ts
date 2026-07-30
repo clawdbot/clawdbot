@@ -1,10 +1,16 @@
 // Control UI view dispatches config form schema node rendering.
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
+import {
+  shouldStageStructuredDraft,
+  structuredDraftInitialValue,
+  type ConfigFormStructuredDraftProps,
+} from "./config-form-structured-draft.ts";
 import { renderArray, renderJsonTextarea, renderObject } from "./config-form.node.collection.ts";
 import { renderNumberInput, renderSelect, renderTextInput } from "./config-form.node.scalar.ts";
 import {
   renderFieldRow,
+  isAnySchema,
   renderSegmentedControl,
   renderTags,
   type ConfigNodeRenderParams,
@@ -14,7 +20,7 @@ import {
   matchesNodeSearch,
   resolveConfigFieldMeta as resolveFieldMeta,
 } from "./config-form.search.ts";
-import { pathKey, schemaType } from "./config-form.shared.ts";
+import { configFieldId, pathKey, schemaType } from "./config-form.shared.ts";
 import { renderSettingsToggle, renderSettingsToggleRow } from "./settings-ui.ts";
 
 export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typeof nothing {
@@ -40,6 +46,22 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
     !matchesNodeSearch({ schema, value, path, hints, criteria })
   ) {
     return nothing;
+  }
+  const structuredDraftValue = structuredDraftInitialValue(params);
+  if (shouldStageStructuredDraft(params, structuredDraftValue)) {
+    const props: ConfigFormStructuredDraftProps = {
+      identity: configFieldId(path, "structured-draft"),
+      sourceIdentity: params.sourceIdentity ?? value,
+      initialValue: structuredDraftValue,
+      params,
+      renderNode,
+    };
+    return html`
+      <openclaw-config-form-structured-draft
+        class="cfg-structured-draft"
+        .props=${props}
+      ></openclaw-config-form-structured-draft>
+    `;
   }
 
   // Handle anyOf/oneOf unions
@@ -206,6 +228,10 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
   // String
   if (type === "string") {
     return renderTextInput({ ...params, inputType: "text" });
+  }
+
+  if (isAnySchema(schema)) {
+    return renderJsonTextarea(params);
   }
 
   // Fallback

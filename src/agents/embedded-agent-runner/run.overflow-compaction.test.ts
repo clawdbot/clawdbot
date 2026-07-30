@@ -51,6 +51,7 @@ import {
   mockedIsLikelyContextOverflowError,
   mockedMarkAuthProfileSuccess,
   mockedPickFallbackThinkingLevel,
+  mockedPrepareProviderRuntimeAuth,
   mockedResolveAuthProfileOrder,
   mockedResolveContextWindowInfo,
   mockedResolveFailoverStatus,
@@ -70,6 +71,10 @@ import type { RunEmbeddedAgentParams } from "./run/params.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
+
+// Cold GitHub-hosted fork runners can spend more than two minutes loading and
+// warming this broad harness before the first test reports progress.
+const COLD_FORK_RUNNER_HOOK_TIMEOUT_MS = 420_000;
 type RuntimePlanAuthOverrides = Partial<Omit<AgentRuntimeAuthPlan, "modelRoute">> & {
   modelRoute?: AgentRuntimeAuthModelRoute;
 };
@@ -305,7 +310,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
     await warmRunOverflowCompactionHarness(runEmbeddedAgent);
-  });
+  }, COLD_FORK_RUNNER_HOOK_TIMEOUT_MS);
 
   beforeEach(() => {
     resetAgentEventsForTest();
@@ -876,7 +881,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     ).toBeUndefined();
   });
 
-  it("forwards unscoped tool auth profiles to Copilot plugin harnesses", async () => {
+  it("resolves stored Copilot auth and forwards its scoped tool auth store", async () => {
     const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
     const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
       makeAttemptResult({ assistantTexts: ["ok"] }),
@@ -903,7 +908,13 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       runAttempt: pluginRunAttempt,
     });
     mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
-    mockedGetApiKeyForModel.mockRejectedValueOnce(new Error("generic auth should be skipped"));
+    mockedGetApiKeyForModel.mockResolvedValueOnce({
+      apiKey: "github-source-token",
+      profileId: "github-copilot:work",
+      source: "test",
+      mode: "oauth",
+    });
+    mockedPrepareProviderRuntimeAuth.mockResolvedValueOnce({ apiKey: "github-runtime-token" });
     const copilotAuthStore = {
       version: 1 as const,
       profiles: {
@@ -947,9 +958,12 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       clearAgentHarnesses();
     }
 
-    expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
+    expect(mockedGetApiKeyForModel).toHaveBeenCalledTimes(1);
     expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
-    const harnessParams = mockCallArg(pluginRunAttempt) as {
+    const harnessParams = expectMockCallFields(pluginRunAttempt, {
+      authProfileId: "github-copilot:work",
+      resolvedApiKey: "github-source-token",
+    }) as {
       authProfileStore?: { profiles?: Record<string, unknown> };
       toolAuthProfileStore?: unknown;
     };
@@ -2306,6 +2320,11 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
         mode: "oauth",
       }),
     );
+    mockedPrepareProviderRuntimeAuth.mockImplementation(
+      async (params?: { context?: { apiKey?: string } }) => ({
+        apiKey: `runtime:${params?.context?.apiKey ?? "missing"}`,
+      }),
+    );
     mockedCoerceToFailoverError.mockImplementation((error) =>
       error === subscriptionLimit ? normalizedLimit : null,
     );
@@ -2335,8 +2354,16 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     }
 
     expect(mockedGetApiKeyForModel).toHaveBeenCalledTimes(2);
-    expect(codexAuthStorage.setRuntimeApiKey).toHaveBeenNthCalledWith(1, "openai", "sub-token");
-    expect(codexAuthStorage.setRuntimeApiKey).toHaveBeenNthCalledWith(2, "openai", "backup-token");
+    expect(codexAuthStorage.setRuntimeApiKey).toHaveBeenNthCalledWith(
+      1,
+      "openai",
+      expect.stringMatching(/^oc-sent-v2\./),
+    );
+    expect(codexAuthStorage.setRuntimeApiKey).toHaveBeenNthCalledWith(
+      2,
+      "openai",
+      expect.stringMatching(/^oc-sent-v2\./),
+    );
     expect(pluginRunAttempt).toHaveBeenCalledTimes(2);
     expectMockCallFields(pluginRunAttempt, {
       provider: "openai",

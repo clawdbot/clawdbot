@@ -7,8 +7,11 @@ import {
   configureMemorySqliteWalMaintenance,
   dropMemoryPathFtsTriggers,
   ensureDir,
+  ensureMemoryChunkProvenance,
+  ensureMemoryRecallMetadataSchema,
   ensureMemoryPathFtsTriggers,
   loadSqliteVecExtension,
+  MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
   MEMORY_INDEX_PATHS_FTS_TABLE,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
@@ -141,6 +144,10 @@ export async function publishMemoryDatabaseTables(params: {
   expectedRevision: number;
   vectorExtensionPath?: string;
 }): Promise<void> {
+  ensureMemoryRecallMetadataSchema(params.targetDb);
+  // Existing pre-provenance databases lack the provenance table the publish
+  // below writes to; ensure it (idempotent) alongside the recall columns.
+  ensureMemoryChunkProvenance(params.targetDb);
   params.targetDb.prepare(`ATTACH DATABASE ? AS ${MEMORY_REINDEX_SCHEMA}`).run(params.sourcePath);
   try {
     if (
@@ -197,6 +204,20 @@ export async function publishMemoryDatabaseTables(params: {
         SELECT
           id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
         FROM ${MEMORY_REINDEX_SCHEMA}.memory_index_chunks;
+
+        DELETE FROM main.${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE};
+        INSERT INTO main.${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE} (
+          chunk_id, importance, triggers, project_key
+        )
+        SELECT chunk_id, importance, triggers, project_key
+        FROM ${MEMORY_REINDEX_SCHEMA}.${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE};
+
+        DELETE FROM main.memory_index_chunk_provenance;
+        INSERT INTO main.memory_index_chunk_provenance (
+          chunk_id, origin_class, session_kind, observed_at, supersedes_key
+        )
+        SELECT chunk_id, origin_class, session_kind, observed_at, supersedes_key
+        FROM ${MEMORY_REINDEX_SCHEMA}.memory_index_chunk_provenance;
       `);
 
       if (tableExists(params.targetDb, MEMORY_REINDEX_SCHEMA, "memory_embedding_cache")) {

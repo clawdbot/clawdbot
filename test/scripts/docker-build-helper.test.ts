@@ -107,9 +107,13 @@ const UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH =
   "scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh";
 const GATEWAY_NETWORK_DOCKER_E2E_PATH = "scripts/e2e/gateway-network-docker.sh";
 const BROWSER_CDP_SNAPSHOT_DOCKER_E2E_PATH = "scripts/e2e/browser-cdp-snapshot-docker.sh";
+const SANDBOX_BROWSER_SIDECAR_DOCKER_E2E_PATH = "scripts/e2e/sandbox-browser-sidecar-docker.sh";
+const SANDBOX_BROWSER_SIDECAR_SCENARIO_PATH =
+  "scripts/e2e/lib/sandbox-browser-sidecar/scenario.mjs";
 const CENTRALIZED_BUILD_SCRIPTS = [
   "scripts/docker/setup.sh",
   BROWSER_CDP_SNAPSHOT_DOCKER_E2E_PATH,
+  SANDBOX_BROWSER_SIDECAR_DOCKER_E2E_PATH,
   "scripts/e2e/qr-import-docker.sh",
   "scripts/lib/docker-e2e-image.sh",
   "scripts/sandbox-browser-setup.sh",
@@ -323,6 +327,25 @@ fi
     );
     expect(installE2eSmoke).toContain("docker_e2e_docker_run_cmd run --rm \\");
     expect(installE2eSmoke).not.toContain("docker run --rm \\");
+  });
+
+  it("runs the sandbox browser sidecar proof from the package-installed image", () => {
+    const runner = readFileSync(SANDBOX_BROWSER_SIDECAR_DOCKER_E2E_PATH, "utf8");
+    const scenario = readFileSync(SANDBOX_BROWSER_SIDECAR_SCENARIO_PATH, "utf8");
+
+    expect(runner).toContain('source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"');
+    expect(runner).toContain("docker_e2e_build_or_reuse");
+    expect(runner).toContain("--network host");
+    expect(runner).toContain('--group-add "$SOCKET_GID"');
+    expect(runner).toContain('-v "$DOCKER_SOCKET:/var/run/docker.sock"');
+    expect(runner).toContain('-v "$SCENARIO_ROOT:$SCENARIO_ROOT"');
+    expect(runner).toContain("scripts/docker/sandbox/Dockerfile.browser");
+    expect(runner).toContain("remove_prefixed_containers");
+    expect(scenario).toContain('from "openclaw/plugin-sdk/agent-harness-runtime"');
+    expect(scenario).toContain("Promise.all([");
+    expect(scenario).toContain('"sandbox", "list", "--browser", "--json"');
+    expect(scenario).toContain('"sandbox", "recreate", "--browser", "--session"');
+    expect(scenario).not.toMatch(/from\s+["'][.]{1,2}\/.*src\//u);
   });
 
   it("gives cleanup-smoke builds enough Node heap while preserving explicit callers", () => {
@@ -2466,7 +2489,13 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
 
     expect(multiNode).toContain('timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash -lc');
     expect(upgradeSurvivor).toContain(
-      'timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash scripts/e2e/lib/upgrade-survivor/run.sh',
+      'ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$HARNESS_ROOT_DIR}" && pwd)"',
+    );
+    expect(upgradeSurvivor).toContain(
+      '-v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/run.sh:/tmp/openclaw-upgrade-survivor-run.sh:ro"',
+    );
+    expect(upgradeSurvivor).toContain(
+      'timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash /tmp/openclaw-upgrade-survivor-run.sh',
     );
     expect(upgradeSurvivor).toContain('timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash -lc');
     for (const script of [multiNode, upgradeSurvivor]) {
@@ -2564,7 +2593,7 @@ fi
     const updateRestartAuth = readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8");
 
     expectTextToIncludeAll(runner, [
-      'source "$ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh"',
+      'source "$HARNESS_ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh"',
       'START_BUDGET_SECONDS="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS 90)"',
       'STATUS_BUDGET_SECONDS="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS 30)"',
       '-e OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS="$START_BUDGET_SECONDS"',
@@ -4334,6 +4363,26 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(pluginsAssertions).toContain("expected modern installRecords in installed plugin index");
   });
 
+  it("keeps the doctor switch systemctl shim system scope empty", () => {
+    const home = tempDirs.make("openclaw-doctor-systemctl-shim-");
+    const env = { ...process.env, HOME: home };
+    const loadState = spawnSync(
+      DOCTOR_SWITCH_SYSTEMCTL_SHIM_PATH,
+      ["show", "--property=LoadState", "--value", "openclaw-gateway.service"],
+      { encoding: "utf8", env },
+    );
+    const unitPath = spawnSync(
+      DOCTOR_SWITCH_SYSTEMCTL_SHIM_PATH,
+      ["show", "--property=UnitPath", "--value"],
+      { encoding: "utf8", env },
+    );
+
+    expect(loadState.status).toBe(0);
+    expect(loadState.stdout.trim()).toBe("not-found");
+    expect(unitPath.status).toBe(0);
+    expect(unitPath.stdout).toContain("/etc/systemd/system");
+  });
+
   it("routes doctor install switch commands through the E2E timeout helper", () => {
     const runner = readFileSync(DOCTOR_SWITCH_DOCKER_E2E_PATH, "utf8");
     const scenario = readFileSync(DOCTOR_SWITCH_SCENARIO_PATH, "utf8");
@@ -4347,13 +4396,43 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
 
     expectTextToIncludeAll(scenario, [
       'command_timeout="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-900s}"',
+      "use_default_service_identity() {",
+      "local account_home",
+      'account_home="$(node -p \'require("node:os").userInfo().homedir\')"',
+      'export HOME="$account_home"',
+      'export USERPROFILE="$account_home"',
+      "unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH",
+      'openclaw_test_state_create "switch-${name}" empty\n  use_default_service_identity',
       'openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$install_cmd"',
       'openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$doctor_cmd"',
       'openclaw_e2e_maybe_timeout "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper" --force',
       'openclaw_e2e_maybe_timeout "$command_timeout" node "$git_cli" doctor --repair --force --yes',
     ]);
 
+    expect(
+      scenario.match(/unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH/gu),
+    ).toHaveLength(1);
+    expect(scenario.match(/export USERPROFILE="\$account_home"/gu)).toHaveLength(1);
+    expect(scenario.match(/^  use_default_service_identity$/gmu)).toHaveLength(3);
     expect(scenario).not.toMatch(/^\s*if ! timeout "\$command_timeout"/mu);
+  });
+
+  it("uses the account home for upgrade survivor auto-auth state", () => {
+    const runner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+
+    expectTextToIncludeAll(runner, [
+      'if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then',
+      'account_home="$(getent passwd "$(id -u)" | cut -d: -f6)"',
+      'if [ -z "$account_home" ]; then',
+      'export HOME="$account_home"',
+      'export USERPROFILE="$account_home"',
+      'export OPENCLAW_STATE_DIR="$account_home/.openclaw"',
+      'export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"',
+    ]);
+
+    expect(
+      runner.indexOf('export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"'),
+    ).toBeLessThan(runner.indexOf("node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed"));
   });
 
   it("bounds doctor install switch command log diagnostics", () => {

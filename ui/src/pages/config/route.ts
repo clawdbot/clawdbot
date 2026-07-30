@@ -1,9 +1,11 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
+import { definePage, redirect } from "@openclaw/uirouter";
+import { html, nothing } from "lit";
+import { pathForRoute, routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ConfigPageId } from "./config-sections.ts";
-import { configRouteData, type ConfigRouteData } from "./route-data.ts";
+import { configRouteData, configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
+import { SETTINGS_SEARCH_TARGETS } from "./settings-targets.ts";
 
 function loadConfigRoute(context: ApplicationContext, location: RouteLocation) {
   const primaryLoad = context.runtimeConfig.ensureLoaded();
@@ -11,13 +13,13 @@ function loadConfigRoute(context: ApplicationContext, location: RouteLocation) {
   return configRouteData(location);
 }
 
-function configPage(id: ConfigPageId, path: string, aliases: readonly string[]) {
+function configPage(id: ConfigPageId) {
   return definePage({
-    id,
-    path,
-    aliases,
-    loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
-      `${location.search}\u0000${location.hash}`,
+    ...routePageSpec(id),
+    loaderDeps: (_context: ApplicationContext, location: RouteLocation) => {
+      const route = configRouteData(location);
+      return `${route.pathname}\u0000${route.search}\u0000${route.hash}`;
+    },
     loader: (context: ApplicationContext, { location }) => loadConfigRoute(context, location),
     component: () =>
       import("./config-page.ts").then(() => ({
@@ -29,16 +31,36 @@ function configPage(id: ConfigPageId, path: string, aliases: readonly string[]) 
   });
 }
 
+const removedGeneralRedirectPage = definePage({
+  ...routePageSpec("config"),
+  loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
+    `${location.pathname}\u0000${location.search}\u0000${location.hash}`,
+  loader: (context: ApplicationContext, { location }) => {
+    const target =
+      configTargetIdFromHash(location.hash) === "settings-general-model"
+        ? SETTINGS_SEARCH_TARGETS.modelBehavior
+        : SETTINGS_SEARCH_TARGETS.appearanceLanguage;
+    return redirect({
+      pathname: pathForRoute(target.routeId, context.basePath),
+      search: "search" in target ? target.search : "",
+      hash: target.hash,
+    });
+  },
+  // Redirect routes still require a module by contract, but never render page content.
+  component: async () => ({ header: true, render: () => nothing }),
+});
+
 export const pages = [
-  configPage("config", "/settings/general", ["/config"]),
-  configPage("communications", "/settings/communications", ["/communications"]),
-  configPage("appearance", "/settings/appearance", ["/appearance"]),
-  configPage("notifications", "/settings/notifications", []),
-  configPage("security", "/settings/security", []),
-  configPage("automation", "/settings/automation", ["/automation"]),
-  configPage("mcp", "/settings/mcp", ["/mcp"]),
-  configPage("memory", "/settings/memory", []),
-  configPage("infrastructure", "/settings/infrastructure", ["/infrastructure"]),
-  configPage("ai-agents", "/settings/ai-agents", ["/ai-agents"]),
-  configPage("advanced", "/settings/advanced", []),
+  removedGeneralRedirectPage,
+  configPage("communications"),
+  configPage("appearance"),
+  configPage("notifications"),
+  configPage("security"),
+  configPage("automation"),
+  configPage("mcp"),
+  configPage("memory"),
+  configPage("talk"),
+  configPage("infrastructure"),
+  configPage("ai-agents"),
+  configPage("advanced"),
 ] as const;

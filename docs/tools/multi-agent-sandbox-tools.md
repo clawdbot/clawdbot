@@ -33,16 +33,14 @@ Auth is scoped by agent: each agent has its own `agentDir` auth store in `~/.ope
     ```json
     {
       "agents": {
-        "list": [
-          {
-            "id": "main",
+        "entries": {
+          "main": {
             "default": true,
             "name": "Personal Assistant",
             "workspace": "~/.openclaw/workspace",
             "sandbox": { "mode": "off" }
           },
-          {
-            "id": "family",
+          "family": {
             "name": "Family Bot",
             "workspace": "~/.openclaw/workspace-family",
             "sandbox": {
@@ -60,13 +58,13 @@ Auth is scoped by agent: each agent has its own `agentDir` auth store in `~/.ope
               }
             }
           }
-        ]
+        }
       },
       "bindings": [
         {
           "agentId": "family",
           "match": {
-            "provider": "whatsapp",
+            "channel": "whatsapp",
             "accountId": "*",
             "peer": {
               "kind": "group",
@@ -88,14 +86,13 @@ Auth is scoped by agent: each agent has its own `agentDir` auth store in `~/.ope
     ```json
     {
       "agents": {
-        "list": [
-          {
-            "id": "personal",
+        "entries": {
+          "personal": {
+            "default": true,
             "workspace": "~/.openclaw/workspace-personal",
             "sandbox": { "mode": "off" }
           },
-          {
-            "id": "work",
+          "work": {
             "workspace": "~/.openclaw/workspace-work",
             "sandbox": {
               "mode": "all",
@@ -107,7 +104,7 @@ Auth is scoped by agent: each agent has its own `agentDir` auth store in `~/.ope
               "deny": ["browser", "gateway", "discord"]
             }
           }
-        ]
+        }
       }
     }
     ```
@@ -117,12 +114,14 @@ Auth is scoped by agent: each agent has its own `agentDir` auth store in `~/.ope
     {
       "tools": { "profile": "coding" },
       "agents": {
-        "list": [
-          {
-            "id": "support",
+        "entries": {
+          "main": {
+            "default": true
+          },
+          "support": {
             "tools": { "profile": "messaging", "allow": ["slack"] }
           }
-        ]
+        }
       }
     }
     ```
@@ -143,16 +142,15 @@ Auth is scoped by agent: each agent has its own `agentDir` auth store in `~/.ope
             "scope": "session"
           }
         },
-        "list": [
-          {
-            "id": "main",
+        "entries": {
+          "main": {
+            "default": true,
             "workspace": "~/.openclaw/workspace",
             "sandbox": {
               "mode": "off"
             }
           },
-          {
-            "id": "public",
+          "public": {
             "workspace": "~/.openclaw/workspace-public",
             "sandbox": {
               "mode": "all",
@@ -163,7 +161,7 @@ Auth is scoped by agent: each agent has its own `agentDir` auth store in `~/.ope
               "deny": ["exec", "write", "edit", "apply_patch"]
             }
           }
-        ]
+        }
       }
     }
     ```
@@ -273,14 +271,13 @@ Per-agent elevated overrides (`agents.entries.*.tools.elevated`) can further res
     ```json
     {
       "agents": {
-        "list": [
-          {
-            "id": "main",
+        "entries": {
+          "main": {
             "default": true,
             "workspace": "~/.openclaw/workspace",
             "sandbox": { "mode": "off" }
           }
-        ]
+        }
       }
     }
     ```
@@ -288,7 +285,7 @@ Per-agent elevated overrides (`agents.entries.*.tools.elevated`) can further res
 </Tabs>
 
 <Note>
-Legacy `agents.defaults.*`/`agents.entries.*.*` config keys (such as `sandbox.perSession`, `agentRuntime`, `embeddedPi`) are migrated by `openclaw doctor`; prefer `agents.defaults` + `agents.entries` going forward.
+Legacy `agents.list` rosters and retired per-agent keys (such as `sandbox.perSession`, `agentRuntime`, and `embeddedPi`) are migrated by `openclaw doctor`; prefer `agents.defaults` + `agents.entries` going forward.
 </Note>
 
 ---

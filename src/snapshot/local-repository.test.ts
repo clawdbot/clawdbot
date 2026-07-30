@@ -1544,6 +1544,42 @@ describe("local SQLite snapshot repository", () => {
     }
   });
 
+  it("cleans an entry linked from a replaced staging pathname", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const repositoryPath = path.join(tempDir, "snapshots");
+    createGenericDatabase(sourcePath);
+    const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+    const originalLink = fs.link.bind(fs);
+    let raced = false;
+    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
+      if (
+        !raced &&
+        path.basename(String(target)) === SNAPSHOT_SQLITE_FILENAME &&
+        !path.basename(path.dirname(String(target))).startsWith(".tmp-")
+      ) {
+        await fs.unlink(source);
+        await fs.writeFile(source, "raced staging bytes");
+        raced = true;
+      }
+      await originalLink(source, target);
+    });
+
+    try {
+      await expect(
+        provider.create({
+          path: sourcePath,
+          identity: { role: "generic", id: "replaced-entry-staging" },
+        }),
+      ).rejects.toThrow(/publication|staging|target/u);
+      expect(raced).toBe(true);
+      await expect(provider.list()).resolves.toEqual([]);
+      await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
+    } finally {
+      linkSpy.mockRestore();
+    }
+  });
+
   it("never overwrites a file raced into the final snapshot directory", async () => {
     const tempDir = await createTempDir();
     const sourcePath = path.join(tempDir, "source.sqlite");

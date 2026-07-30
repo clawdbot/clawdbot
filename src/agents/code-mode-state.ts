@@ -36,7 +36,8 @@ type CodeModeRunState = {
   // True only when every future bridge call is enforced read-only before execution.
   replaySafe: boolean;
   output: unknown[];
-  createdAt: number;
+  // Retain all output for cumulative limits, but never replay blocks already returned to the model.
+  deliveredOutputCount: number;
   expiresAt: number;
   agentWaitRetainUntil?: number;
   runtime: ToolSearchRuntime;
@@ -50,6 +51,32 @@ export const activeRuns = new Map<string, CodeModeRunState>();
 export const resumingRunIds = new Set<string>();
 let activeRunReservations = 0;
 let nextPendingBridgeSettlementSequence = 0;
+let activeRunExpiryTimer: ReturnType<typeof setTimeout> | undefined;
+
+// One unreferenced timer owns parked snapshots even when no later exec or wait
+// arrives; otherwise expired runs keep their VM bytes and live tool calls.
+function scheduleActiveRunExpiry(): void {
+  if (activeRunExpiryTimer) {
+    clearTimeout(activeRunExpiryTimer);
+    activeRunExpiryTimer = undefined;
+  }
+  let nextExpiresAt = Number.POSITIVE_INFINITY;
+  for (const state of activeRuns.values()) {
+    nextExpiresAt = Math.min(nextExpiresAt, state.expiresAt);
+  }
+  if (!Number.isFinite(nextExpiresAt)) {
+    return;
+  }
+  activeRunExpiryTimer = setTimeout(
+    () => {
+      activeRunExpiryTimer = undefined;
+      removeExpiredRuns();
+      scheduleActiveRunExpiry();
+    },
+    Math.max(1, nextExpiresAt - Date.now()),
+  );
+  activeRunExpiryTimer.unref?.();
+}
 
 export function removeExpiredRuns(now = Date.now()): void {
   for (const [runId, state] of activeRuns) {
@@ -76,6 +103,22 @@ export function disposeCodeModeRun(runId: string): void {
   cancelPendingBridgeStates(state?.pending ?? []);
   activeRuns.delete(runId);
   resumingRunIds.delete(runId);
+  scheduleActiveRunExpiry();
+}
+
+/** Cancel suspended bridge work before its Gateway-owned runtimes disappear. */
+export function disposeAllCodeModeRuns(): void {
+  activeRuns.forEach((state) => cancelPendingBridgeStates(state.pending));
+  activeRuns.clear();
+  resumingRunIds.clear();
+  scheduleActiveRunExpiry();
+}
+
+/** Advance the snapshot frontier before exposing output to a wait observer. */
+export function takeUndeliveredCodeModeRunOutput(state: CodeModeRunState): unknown[] {
+  const output = state.output.slice(state.deliveredOutputCount);
+  state.deliveredOutputCount = state.output.length;
+  return output;
 }
 
 /** Abort each bridge call whose result has not already reached its guest. */
@@ -99,14 +142,36 @@ export function settledBridgeRequestsInCompletionOrder(
 
 /** Keep every dispatched bridge call required until its guest has received the result. */
 export function pendingBridgeStatesForSettlement(
-  pending: PendingBridgeState[],
+  pending: readonly PendingBridgeState[],
   settlementMode: CodeModeSettlementMode,
-): PendingBridgeState[] {
+): readonly PendingBridgeState[] {
   if (settlementMode.kind === "awaiting") {
     return pending;
   }
   const requiredRequestIds = new Set(settlementMode.requiredRequestIds);
   return pending.filter((entry) => requiredRequestIds.has(entry.id));
+}
+
+/** Await the shared guest frontier without guessing native Promise ownership. */
+export function waitForPendingBridgeSettlement(
+  pending: readonly PendingBridgeState[],
+  settlementMode: CodeModeSettlementMode,
+): Promise<void> {
+  const required = pendingBridgeStatesForSettlement(pending, settlementMode);
+  const outstanding = required.filter((entry) => !entry.settled);
+  // Workers reject hostless pending guests; headless execution also validates
+  // the frontier before reaching this shared settlement helper.
+  if (
+    outstanding.length === 0 ||
+    (settlementMode.kind === "awaiting" && outstanding.length !== required.length)
+  ) {
+    return Promise.resolve();
+  }
+  const settlement =
+    settlementMode.kind === "draining"
+      ? Promise.all(outstanding.map((entry) => entry.promise))
+      : Promise.race(outstanding.map((entry) => entry.promise));
+  return settlement.then(() => undefined);
 }
 
 function resolveCodeModeSnapshotExpiresAt(now: number, ttlSeconds: number): number | undefined {
@@ -120,8 +185,14 @@ function enforceActiveRunLimit(): void {
   }
 }
 
-export function reserveActiveRunSlot(): () => void {
-  enforceActiveRunLimit();
+export function reserveActiveRunSlot(ownedRunId?: string): () => void {
+  if (ownedRunId === undefined) {
+    enforceActiveRunLimit();
+  } else if (!activeRuns.delete(ownedRunId)) {
+    throw new ToolInputError("code mode run is unavailable or expired.");
+  }
+  // Resume transfers an existing slot without exposing a free capacity window
+  // to concurrent exec calls or rejecting its own run at the global limit.
   activeRunReservations += 1;
   let released = false;
   return () => {
@@ -143,6 +214,8 @@ export function snapshotState(params: {
   runtime: ToolSearchRuntime;
   namespaceRuntime: CodeModeNamespaceRuntime;
   output: unknown[];
+  deliveredOutputCount?: number;
+  reservedActiveRunSlot?: boolean;
   replaySafe: boolean;
   settlementMode: CodeModeSettlementMode;
   signal?: AbortSignal;
@@ -181,7 +254,9 @@ export function pendingBridgeRequestsReplaySafe(
       request.method === "describe" ||
       request.method === "yield" ||
       request.method === "agentSpawn" ||
-      request.method === "agentWait"
+      request.method === "agentWait" ||
+      request.method === "skillsList" ||
+      request.method === "skillsRead"
     ) {
       return true;
     }
@@ -197,8 +272,11 @@ function enforceSnapshotStateLimits(params: {
   snapshotBytes: Uint8Array;
   config: CodeModeConfig;
   output: unknown[];
+  reservedActiveRunSlot?: boolean;
 }) {
-  enforceActiveRunLimit();
+  if (!params.reservedActiveRunSlot) {
+    enforceActiveRunLimit();
+  }
   enforceSnapshotPayloadLimits(params);
 }
 
@@ -220,37 +298,37 @@ export function createPendingBridgeStates(params: {
     const signal = params.signal
       ? AbortSignal.any([params.signal, abortController.signal])
       : abortController.signal;
-    const promise = runBridgeRequest({
-      runtime: params.runtime,
-      namespaceRuntime: params.namespaceRuntime,
-      parentToolCallId: params.parentToolCallId,
-      codeModeRunId: params.codeModeRunId,
-      ctx: params.ctx,
-      request,
-      signal,
-      onUpdate: params.onUpdate,
-    });
     const state: PendingBridgeState = {
       ...request,
-      promise,
-      cancel: () => abortController.abort(),
-    };
-    void promise.then((settled) => {
-      state.settledSequence = ++nextPendingBridgeSettlementSequence;
-      state.settled = settled;
-      if (state.method === "agentWait" && params.activeRunId) {
-        const active = activeRuns.get(params.activeRunId);
-        if (active?.pending.includes(state)) {
-          const renewed = resolveCodeModeSnapshotExpiresAt(
-            Date.now(),
-            active.config.snapshotTtlSeconds,
-          );
-          if (renewed !== undefined) {
-            active.expiresAt = renewed;
+      promise: runBridgeRequest({
+        runtime: params.runtime,
+        namespaceRuntime: params.namespaceRuntime,
+        parentToolCallId: params.parentToolCallId,
+        codeModeRunId: params.codeModeRunId,
+        ctx: params.ctx,
+        request,
+        signal,
+        onUpdate: params.onUpdate,
+      }).then((settled) => {
+        state.settledSequence = ++nextPendingBridgeSettlementSequence;
+        state.settled = settled;
+        if (state.method === "agentWait" && params.activeRunId) {
+          const active = activeRuns.get(params.activeRunId);
+          if (active?.pending.includes(state)) {
+            const renewed = resolveCodeModeSnapshotExpiresAt(
+              Date.now(),
+              active.config.snapshotTtlSeconds,
+            );
+            if (renewed !== undefined) {
+              active.expiresAt = renewed;
+              scheduleActiveRunExpiry();
+            }
           }
         }
-      }
-    });
+        return settled;
+      }),
+      cancel: () => abortController.abort(),
+    };
     return state;
   });
 }
@@ -268,6 +346,7 @@ export function storeSnapshotState(params: {
   runtime: ToolSearchRuntime;
   namespaceRuntime: CodeModeNamespaceRuntime;
   output: unknown[];
+  deliveredOutputCount?: number;
 }) {
   const now = Date.now();
   const expiresAt = resolveCodeModeSnapshotExpiresAt(now, params.config.snapshotTtlSeconds);
@@ -294,19 +373,20 @@ export function storeSnapshotState(params: {
     settlementMode: params.settlementMode,
     replaySafe: params.replaySafe,
     output: params.output,
-    createdAt: now,
+    deliveredOutputCount: params.output.length,
     expiresAt,
     agentWaitRetainUntil,
     runtime: params.runtime,
     namespaceRuntime: params.namespaceRuntime,
   });
+  scheduleActiveRunExpiry();
   return {
     status: "waiting" as const,
     runId: params.runId,
     reason: codeModeWaitingReason(params.pending),
     pendingToolCalls: pendingToolCalls(params.pending),
     replaySafe: params.replaySafe,
-    output: params.output,
+    output: params.output.slice(params.deliveredOutputCount ?? 0),
     telemetry: telemetry(params.runtime),
   };
 }

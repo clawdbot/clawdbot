@@ -228,6 +228,25 @@ describe("prepareEmbeddedAttemptStreamRuntime", () => {
     expect(mocks.withOwnedSessionTranscriptWrites).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { label: "external cancellation", message: "run cancelled" },
+    { label: "run timeout", message: "run timed out" },
+  ])("does not start a prompt after $label", async ({ message }) => {
+    const fixture = createFixture();
+    const runtime = await prepareEmbeddedAttemptStreamRuntime(fixture.input);
+    const reason = new Error(message);
+    const abortError = new Error(message, { cause: reason });
+    abortError.name = "AbortError";
+    fixture.input.runAbortController.abort(reason);
+    mocks.abortable.mockImplementationOnce((_signal, _promise) => Promise.reject(abortError));
+
+    await expect(runtime.promptActiveSession("must not start")).rejects.toBe(abortError);
+
+    expect(fixture.activeSession.prompt).not.toHaveBeenCalled();
+    expect(fixture.trackPromptSettlePromise).not.toHaveBeenCalled();
+    expect(mocks.abortable).toHaveBeenCalledOnce();
+  });
+
   it("flushes pending tool results and disposes the session when history preparation fails", async () => {
     const fixture = createFixture({ aborted: true });
     const failure = new Error("history failed");

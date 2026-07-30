@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
     ok: true,
   })),
   emitReachableGatewayAuthDiagnostic: vi.fn(async (_params: unknown) => false),
+  formatHealthChannelLines: vi.fn(() => []),
   gatewayStatusCommand: vi.fn(async (_opts: unknown, _runtime: unknown) => {}),
   defaultRuntime: {
     log: vi.fn(),
@@ -65,7 +66,7 @@ vi.mock("../daemon-cli/register-service-commands.js", () => ({
 vi.mock("../../commands/health.js", () => ({
   emitReachableGatewayAuthDiagnostic: (params: unknown) =>
     mocks.emitReachableGatewayAuthDiagnostic(params),
-  formatHealthChannelLines: () => [],
+  formatHealthChannelLines: () => mocks.formatHealthChannelLines(),
 }));
 
 vi.mock("../../config/read-best-effort-config.runtime.js", () => ({
@@ -139,6 +140,7 @@ describe("gateway register option collisions", () => {
   beforeEach(() => {
     callGatewayCli.mockClear();
     emitReachableGatewayAuthDiagnostic.mockClear();
+    mocks.formatHealthChannelLines.mockClear();
     gatewayStatusCommand.mockClear();
     defaultRuntime.log.mockClear();
     defaultRuntime.error.mockClear();
@@ -268,5 +270,32 @@ describe("gateway register option collisions", () => {
       localPortOverride: 19081,
       json: true,
     });
+  });
+
+  it("defers health presentation imports for successful JSON output", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const loadGatewayHealthModule = vi.fn(async () => ({
+      emitReachableGatewayAuthDiagnostic: mocks.emitReachableGatewayAuthDiagnostic,
+      formatHealthChannelLines: mocks.formatHealthChannelLines,
+    }));
+    const loadHealthStyleModule = vi.fn(async () => ({
+      styleHealthChannelLine: (line: string) => line,
+    }));
+    registerGatewayCli(program, {
+      loadGatewayHealthModule: loadGatewayHealthModule as never,
+      loadHealthStyleModule: loadHealthStyleModule as never,
+    });
+
+    await program.parseAsync(["node", "openclaw", "gateway", "health", "--json"]);
+
+    expect(callGatewayCli).toHaveBeenCalledWith(
+      "health",
+      expect.objectContaining({ json: true }),
+      undefined,
+    );
+    expect(loadGatewayHealthModule).not.toHaveBeenCalled();
+    expect(loadHealthStyleModule).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ ok: true });
   });
 });

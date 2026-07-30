@@ -55,6 +55,7 @@ export const GATEWAY_EVENTS = [
    * Payload: { sessionKey: string, reason: string, ts: number, agentId?: string }
    */
   "socket.drain",
+  "controlUi.sessionPullRequests.changed",
   "presence",
   "tick",
   "talk.mode",
@@ -73,6 +74,7 @@ export const GATEWAY_EVENTS = [
   "node.invoke.request",
   "device.pair.requested",
   "device.pair.resolved",
+  "skills.changed",
   "voicewake.changed",
   "voicewake.routing.changed",
   "exec.approval.requested",

@@ -50,6 +50,7 @@ import { prepareTerminalWithSettledTurnFinalization } from "./run/settled-turn-f
 import { resolveEmbeddedRunTerminal } from "./run/terminal-resolution.js";
 import { createEmbeddedRunTerminalRetryState } from "./run/terminal-retry-state.js";
 import { resolveEmbeddedRunTerminalTimeout } from "./run/terminal-timeout.js";
+import { createAgentTurnTaintState } from "./run/turn-taint-state.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 import { createUsageAccumulator } from "./usage-accumulator.js";
 
@@ -205,6 +206,7 @@ export async function runPreparedEmbeddedLoop(
   const allocateToolOutcomeOrdinal = (): number => nextToolOutcomeOrdinal++;
   const readAttemptTerminalToolPresentation = (): string | undefined =>
     attemptTerminalToolPresentation.value;
+  const turnTaintState = createAgentTurnTaintState();
   const observeToolOutcome = (observation: ToolOutcomeObservation): void => {
     const observationOrdinal =
       observation.toolCallOrdinal ?? attemptTerminalToolPresentation.ordinal + 1;
@@ -212,6 +214,7 @@ export async function runPreparedEmbeddedLoop(
       attemptTerminalToolPresentation.ordinal = observationOrdinal;
       attemptTerminalToolPresentation.value = observation.terminalPresentation;
     }
+    turnTaintState.observe(observation);
     if (observation.presentationOnly) {
       return;
     }
@@ -330,6 +333,7 @@ export async function runPreparedEmbeddedLoop(
         bootstrapPromptWarningSignaturesSeen,
         resolveRuntimeFallbackReason,
         observeToolOutcome,
+        isTurnTainted: turnTaintState.isTainted,
         allocateToolOutcomeOrdinal,
         getPostCompactionAbortError: () => postCompactionAbortError,
         setPostCompactionAbortController: (controller) => {

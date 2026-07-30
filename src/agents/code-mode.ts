@@ -70,20 +70,26 @@ type CodeModeToolContext = ToolSearchToolContext;
 
 const MAX_CODE_MODE_CATALOG_INDEX_CHARS = 8_000;
 
+const CODE_MODE_CATALOG_INDEX_HEADING = [
+  "OpenClaw/plugin tool quick index (exact ids; descriptions are intentionally deferred):",
+  "Each line is `id input -> output`; `-> ?` means unknown.",
+  "OUTPUT DECLARED RULE: use declared fields for dependent calls in the first exec.",
+  "OUTPUT UNKNOWN RULE: return the raw tool value unchanged; inspect or map it only in a later exec.",
+].join("\n");
+
+function codeModeCatalogIndexFooter(included: number, total: number): string {
+  const omitted = total - included;
+  return omitted > 0
+    ? `${omitted} additional OpenClaw/plugin tools omitted from this prompt index. Use ALL_TOOLS or tools.search inside exec to find them.`
+    : "Use these exact ids with tools.callValue; use ALL_TOOLS or tools.search inside exec when lookup is ambiguous.";
+}
+
 function renderCodeModeCatalogIndex(lines: readonly string[], total: number): string {
-  const omitted = total - lines.length;
-  const footer =
-    omitted > 0
-      ? `${omitted} additional OpenClaw/plugin tools omitted from this prompt index. Use ALL_TOOLS or tools.search inside exec to find them.`
-      : "Use these exact ids with tools.callValue; use ALL_TOOLS or tools.search inside exec when lookup is ambiguous.";
   return [
-    "OpenClaw/plugin tool quick index (exact ids; descriptions are intentionally deferred):",
-    "Each line is `id input -> output`; `-> ?` means unknown.",
-    "OUTPUT DECLARED RULE: use declared fields for dependent calls in the first exec.",
-    "OUTPUT UNKNOWN RULE: return the raw tool value unchanged; inspect or map it only in a later exec.",
+    CODE_MODE_CATALOG_INDEX_HEADING,
     ...lines,
     "",
-    footer,
+    codeModeCatalogIndexFooter(lines.length, total),
   ].join("\n");
 }
 
@@ -115,12 +121,17 @@ function formatCodeModeCatalogIndex(catalog: readonly ToolSearchCatalogEntry[]):
   // entries stay discoverable through ALL_TOOLS, and the stable input order
   // keeps prompt bytes deterministic for provider caches.
   const included: string[] = [];
+  let includedLineLength = 0;
   for (const line of lines) {
-    if (
-      renderCodeModeCatalogIndex([...included, line], lines.length).length <=
-      MAX_CODE_MODE_CATALOG_INDEX_CHARS
-    ) {
+    const candidateLineLength = includedLineLength + 1 + line.length;
+    const candidateLength =
+      CODE_MODE_CATALOG_INDEX_HEADING.length +
+      candidateLineLength +
+      2 +
+      codeModeCatalogIndexFooter(included.length + 1, lines.length).length;
+    if (candidateLength <= MAX_CODE_MODE_CATALOG_INDEX_CHARS) {
       included.push(line);
+      includedLineLength = candidateLineLength;
     }
   }
   return renderCodeModeCatalogIndex(included, lines.length);
@@ -146,6 +157,9 @@ function createCodeModeExecDescription(
     : "";
   const nodesGuidance =
     "\n- nodes: paired Gateway nodes; nodes.list(), (await nodes.get(id)).invoke(command, params)\n";
+  const skillsGuidance = ctx.codeModeSkills?.length
+    ? " Skills are available through the async `skills` global: use `await skills.list()` and `await skills.read(name)`."
+    : "";
   const catalogIndex = catalog ? formatCodeModeCatalogIndex(catalog) : "";
   return (
     "Run JavaScript or TypeScript in OpenClaw code mode. Use `return` to pass the final value back; otherwise the result is `null`. Quick-index arrows show trusted declared output hints; `-> ?` means never guess result field names. For declared fields, process them in the first exec; do not spend another exec inspecting them. Perform dependent reads, checks, and follow-up calls in order; parallelize independent work only. For an unknown output, including a final dependent call after declared-output calls, return the raw tool value unchanged; do not wrap it in the requested answer shape or guess fields; filter or map it only in a later exec. Nested calls enforce normal tool policy and approvals. `ALL_TOOLS` is the complete compact catalog. Select exact ids directly or with `tools.search(query: string, options?)`; use `tools.describe(id: string)` only when needed. Never invent or transform a tool id. `tools.callValue(id: string, args?)` returns its JSON value directly; `tools.call(id: string, args?)` preserves `{ tool, result }`. Example: `const hit = ALL_TOOLS.find((entry) => entry.description.includes('weather')) ?? (await tools.search('weather'))[0]; return await tools.callValue(hit.id, {});`. Node.js modules and `require`/`import` are NOT available; use enabled catalog tools allowed by policy for shell, file, network, or external actions." +
@@ -153,8 +167,9 @@ function createCodeModeExecDescription(
     mcpGuidance +
     swarmGuidance +
     nodesGuidance +
+    skillsGuidance +
     ' The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.' +
-    " Both `code` and `command` contain JavaScript or TypeScript, never a shell command. " +
+    " The `code` field contains JavaScript or TypeScript, never a shell command. " +
     "For shell or file operations, call the exact catalog tool from guest JavaScript; do not retry failed shell source." +
     (namespacePrompt ? `\n\n${namespacePrompt}` : "") +
     (catalogIndex ? `\n\n${catalogIndex}` : "")
@@ -167,18 +182,12 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     label: "exec",
     description: createCodeModeExecDescription(ctx),
     parameters: Type.Object({
-      code: Type.Optional(
-        Type.String({
-          description:
-            "JavaScript or TypeScript for one complete workflow. Select exact ids from `ALL_TOOLS` or `tools.search`; never invent ids. `tools.search` takes a query string, not an object. Keep dependent calls in order; never put dependent calls in Promise.all. Return the final value. Node built-in modules are not available.",
-        }),
-      ),
-      command: Type.Optional(
-        Type.String({
-          description:
-            "Alias for JavaScript or TypeScript code, provided for exec-compatible hook policies. Not a shell command.",
-        }),
-      ),
+      // `command` stays runtime-only for hook compatibility. Requiring the sole
+      // model-facing field prevents schema-valid empty calls from constrained models.
+      code: Type.String({
+        description:
+          'Required JS/TS; no Python, shell, `require`, `import`. Use explicit `return value`; a trailing expression is discarded and yields `null`. Use `callValue`, not `call`, for data; `call` wraps it under `.result`. Core text reads: `{kind:"text",content:string}`; use `.content`. Unknown format: return it first, then parse it in a later exec; never guess separators. Example: `const file=await tools.callValue("openclaw:core:read", { path: "notes.txt" }); if(file.kind!=="text") return file; return file.content;`. Use exact ids from `ALL_TOOLS` or `tools.search(query)`; never invent ids or parallelize dependent calls.',
+      }),
       language: optionalStringEnum(["javascript", "typescript"] as const, {
         description:
           'Source language. Must be "javascript" or "typescript". Defaults to javascript.',
@@ -256,6 +265,7 @@ export function applyCodeModeCatalog(params: {
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
   directToolNames?: Iterable<string>;
+  codeModeSkills?: CodeModeToolContext["codeModeSkills"];
 }) {
   const config = resolveCodeModeConfig(params.config, params.agentId);
   // Engagement (including "auto" per-model resolution) is decided by the run
@@ -303,6 +313,7 @@ export function applyCodeModeCatalog(params: {
           sessionKey: params.sessionKey,
           runId: params.runId,
           catalogRef: params.catalogRef,
+          codeModeSkills: params.codeModeSkills,
         },
         visibleCatalog,
       );
@@ -327,8 +338,6 @@ export function addClientToolsToCodeModeCatalog(params: {
     enabled: resolveCodeModeConfig(params.config, params.agentId).enabled !== false,
   });
 }
-
-/** Test-only hooks and state accessors for Code Mode worker orchestration. */
 
 /** Test-only hooks and state accessors for Code Mode worker orchestration. */
 const testing = {

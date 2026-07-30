@@ -137,7 +137,7 @@ type SessionCatalogCreateParams = {
 export type SessionCatalogProvider = {
   id: string;
   label: string;
-  /** Resolves the current core new-session target for the requested agent. */
+  /** Config-derived target; the Gateway memoizes it for one runtime-config object identity. */
   resolveCreateSession?: (
     params: SessionCatalogCreateParams,
   ) => SessionCatalogCreateTarget | undefined;

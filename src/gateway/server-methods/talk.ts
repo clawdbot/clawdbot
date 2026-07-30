@@ -39,6 +39,7 @@ import type {
 import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
 import { resolveProviderRawConfig } from "../../plugin-sdk/provider-selection-runtime.js";
 import { canonicalizeRealtimeTranscriptionProviderId } from "../../realtime-transcription/provider-registry.js";
+import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
 import {
   canonicalizeRealtimeVoiceProviderId,
   listRealtimeVoiceProviders,
@@ -245,7 +246,14 @@ function buildTalkCatalog(config: OpenClawConfig) {
   const activeTranscriptionProvider = transcriptionSelection.activeProvider;
   const realtimeConfig = buildTalkRealtimeConfig(config);
   const realtimeSurface =
-    realtimeConfig.transport === "gateway-relay" ? "bridge" : "browser-session";
+    realtimeConfig.transport === "gateway-relay" ? "gateway-relay" : "browser-session";
+  // Mirror talk.client.create's resolution inputs (agent scope + top-level model
+  // override) so catalog readiness matches what session creation will actually do;
+  // diverging here previously reported GPT-Live over OAuth as unconfigured.
+  const realtimeAgentId = resolveTalkSessionAgentId(config);
+  const realtimeModelOverride = realtimeConfig.model
+    ? { providerConfigOverrides: { model: realtimeConfig.model } }
+    : {};
   const realtimeSelection = resolveCatalogProviderSelection(
     canonicalizeRealtimeVoiceProviderId(realtimeConfig.provider, config),
     () =>
@@ -253,6 +261,8 @@ function buildTalkCatalog(config: OpenClawConfig) {
         cfg: config,
         configuredProviderId: realtimeConfig.provider,
         providerConfigs: realtimeConfig.providers,
+        ...realtimeModelOverride,
+        agentId: realtimeAgentId,
         defaultModel: realtimeConfig.model,
         surface: realtimeSurface,
       }).provider.id,
@@ -344,10 +354,11 @@ function buildTalkCatalog(config: OpenClawConfig) {
           configuredProviderId:
             provider.id === activeRealtimeProvider ? realtimeConfig.provider : undefined,
         });
-        const rawConfigWithModel =
-          realtimeConfig.model && rawConfig.model === undefined
-            ? { ...rawConfig, model: realtimeConfig.model }
-            : rawConfig;
+        // Top-level talk.realtime.model overrides provider-level config, matching
+        // talk.client.create's providerConfigOverrides precedence at session time.
+        const rawConfigWithModel = realtimeConfig.model
+          ? { ...rawConfig, model: realtimeConfig.model }
+          : rawConfig;
         const providerConfig =
           provider.resolveConfig?.({ cfg: config, rawConfig: rawConfigWithModel }) ??
           rawConfigWithModel;
@@ -365,6 +376,7 @@ function buildTalkCatalog(config: OpenClawConfig) {
               provider,
               cfg: config,
               providerConfig,
+              agentId: realtimeAgentId,
               surface: realtimeSurface,
             }),
           ),
@@ -379,6 +391,12 @@ function buildTalkCatalog(config: OpenClawConfig) {
         };
         if (provider.defaultModel) {
           entry.defaultModel = provider.defaultModel;
+        }
+        if (provider.models?.length) {
+          entry.models = [...provider.models];
+        }
+        if (provider.voices?.length) {
+          entry.voices = [...provider.voices];
         }
         if (provider.aliases?.length) {
           entry.aliases = [...provider.aliases];

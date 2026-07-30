@@ -13,8 +13,11 @@ import { registerSubCliByName } from "./program/register.subclis.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-// Fork CI uses shared hosted runners where cold TSX startup can exceed 45 seconds.
-const CHILD_PROCESS_TIMEOUT_MS = 75_000;
+// This is a deadlock guard, not a startup SLO. Fork CI can take over a minute
+// to cold-load the CLI graph on shared hosted runners, while still exiting correctly.
+// It must stay below Vitest's 120s testTimeout so a hung child fails through
+// execFile with captured stdout/stderr instead of a blind vitest test timeout.
+const CHILD_PROCESS_TIMEOUT_MS = 100_000;
 const LAZY_GROUP_HELP_CASES = [
   { group: "backup", usageCommand: "backup", registry: "core" },
   { group: "capability", usageCommand: "infer|capability", registry: "subcli" },
@@ -175,6 +178,13 @@ async function runCliProcess(params: {
       env: {
         ...process.env,
         HOME: fixture.root,
+        // CI shard runners export NODE_COMPILE_CACHE; in a source checkout entry.ts
+        // then respawns a detached grandchild that shares this child's stdio pipes.
+        // If the deadlock guard SIGKILLs the parent, the orphan keeps the pipes open
+        // and execFile never settles, turning any slow child into a blind vitest
+        // timeout with no diagnostics. Keep these children single-process; the
+        // compile-cache respawn contract has dedicated entry.compile-cache coverage.
+        NODE_DISABLE_COMPILE_CACHE: "1",
         NODE_ENV: undefined,
         NODE_OPTIONS: undefined,
         NODE_USE_SYSTEM_CA: "1",
@@ -206,7 +216,9 @@ type CliProcessFailure = Error & {
 };
 describe("CLI help process exit", () => {
   it("exits promptly after root --help", async () => {
-    const result = await runCliProcess({ args: ["--help"], forbidTlsImport: true });
+    // Keep this precomputed-help case off plugin discovery; plugin-sensitive root help is covered
+    // separately, so the shared child timeout remains a deadlock guard rather than a startup SLO.
+    const result = await runCliProcess({ args: ["--help"], config: {}, forbidTlsImport: true });
 
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage: openclaw [options] [command]");
@@ -235,6 +247,19 @@ describe("CLI help process exit", () => {
         }),
       ]),
     );
+  });
+
+  it("treats --help as a required option value when Commander does", async () => {
+    let failure: CliProcessFailure | undefined;
+    try {
+      await runCliProcess({ args: ["secrets", "apply", "--from", "--help"], config: {} });
+    } catch (error) {
+      failure = error as CliProcessFailure;
+    }
+
+    expect(failure?.code).toBe(1);
+    expect(failure?.stdout ?? "").not.toContain("Usage:");
+    expect(failure?.stderr).toContain("plan file not found: --help");
   });
 
   it.each(LAZY_GROUP_HELP_CASES)(
@@ -344,6 +369,19 @@ describe("JSON console style process output", () => {
 
     expect(result.stderr).toBe("");
     expect(JSON.parse(result.stdout)).toEqual([]);
+  });
+
+  it("emits one JSON object for baseline setup", async () => {
+    const result = await runCliProcess({ args: ["setup", "--baseline", "--json"], config: {} });
+
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      configPath: expect.any(String),
+      configStatus: "updated",
+      workspaceDir: expect.any(String),
+      sessionsDir: expect.any(String),
+    });
   });
 
   it("structures invalid log-level environment warnings", async () => {
@@ -456,6 +494,9 @@ describe("JSON console style process output", () => {
         await runCliProcess({
           args: ["openclaw-json-console-missing-command", modifier],
           config: loggingConfig,
+          // The fake command cannot belong to a bundled plugin. Avoid cold plugin
+          // discovery so this subprocess measures structured validation, not fleet load.
+          env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
         });
       } catch (error) {
         failure = error as CliProcessFailure;
@@ -483,26 +524,12 @@ describe("JSON console style process output", () => {
     expect(() => parseJsonLines(result.stdout)).toThrow();
   });
 
-  it.each([
-    {
-      name: "missing container value",
-      args: ["--container"],
-      message: "--container requires a value",
-    },
-    {
-      name: "missing profile value",
-      args: ["--profile"],
-      message: "--profile requires a value",
-    },
-    {
-      name: "container/profile conflict",
-      args: ["--container", "demo", "--profile", "work", "status"],
-      message: "--container cannot be combined with --profile/--dev",
-    },
-  ])("structures entry validation for $name", async ({ args, message }) => {
+  it("structures entry validation errors", async () => {
     let failure: CliProcessFailure | undefined;
     try {
-      await runCliProcess({ args, config: loggingConfig });
+      // One cold process proves entry-level JSON formatting. Profile parsing and
+      // container/profile conflicts have dedicated unit and process coverage below.
+      await runCliProcess({ args: ["--container"], config: loggingConfig });
     } catch (error) {
       failure = error as CliProcessFailure;
     }
@@ -511,7 +538,10 @@ describe("JSON console style process output", () => {
     expect(failure?.stdout ?? "").toBe("");
     expect(parseJsonLines(failure?.stderr ?? "")).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ level: "error", message: expect.stringContaining(message) }),
+        expect.objectContaining({
+          level: "error",
+          message: expect.stringContaining("--container requires a value"),
+        }),
       ]),
     );
   });

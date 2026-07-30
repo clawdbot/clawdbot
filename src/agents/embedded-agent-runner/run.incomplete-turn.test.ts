@@ -50,6 +50,10 @@ const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 
+// Cold GitHub-hosted fork runners can spend more than five minutes loading and
+// warming this broad harness before the first test reports progress.
+const COLD_FORK_RUNNER_HOOK_TIMEOUT_MS = 420_000;
+
 function resolveIncompleteTurnPayloadText(
   params: Omit<Parameters<typeof resolveIncompleteTurnPayloadTextCore>[0], "externalAbort"> & {
     externalAbort?: boolean;
@@ -64,7 +68,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
     await warmRunOverflowCompactionHarness(runEmbeddedAgent);
-  }, 300_000);
+  }, COLD_FORK_RUNNER_HOOK_TIMEOUT_MS);
 
   beforeEach(() => {
     resetRunOverflowCompactionHarnessMocks();
@@ -521,7 +525,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         toolName: "cron",
         argsHash: "args",
         resultHash: "result",
-        terminalPresentation: "Cron scheduler status.\nEnabled: yes",
+        terminalPresentation: "Automations scheduler status.\nEnabled: yes",
       });
       return makeAttemptResult({
         assistantTexts: [],
@@ -550,7 +554,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads).toEqual([
       {
         text:
-          "Cron scheduler status.\nEnabled: yes\n\n" +
+          "Automations scheduler status.\nEnabled: yes\n\n" +
           "⚠️ Agent couldn't generate a response. Please try again.",
         isError: true,
       },

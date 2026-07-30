@@ -1709,7 +1709,7 @@ describe("exec approvals", () => {
       tool.execute("call-cron-denied", {
         command: "echo cron-denied",
       }),
-    ).rejects.toThrow("Cron runs cannot wait for interactive exec approval");
+    ).rejects.toThrow("Automation runs cannot wait for interactive exec approval");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

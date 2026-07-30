@@ -4,10 +4,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
-import {
-  resetSubagentRegistryForTests,
-  testing as subagentRegistryTesting,
-} from "../../agents/subagent-registry.test-helpers.js";
+import { setSubagentRegistryDepsForTest } from "../../agents/subagent-registry-deps.js";
+import { resetSubagentRegistryForTests } from "../../agents/subagent-registry.test-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionTranscriptStats } from "../../config/sessions/session-accessor.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
@@ -933,9 +931,9 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
  * between install and finalize, so the finalize spy is never called.
  */
 export function applyGatewaySubagentRegistryTestDeps(
-  overrides?: Parameters<typeof subagentRegistryTesting.setDepsForTest>[0],
+  overrides?: Parameters<typeof setSubagentRegistryDepsForTest>[0],
 ) {
-  subagentRegistryTesting.setDepsForTest({
+  setSubagentRegistryDepsForTest({
     ensureRuntimePluginsLoaded: () => {},
     ...overrides,
   });

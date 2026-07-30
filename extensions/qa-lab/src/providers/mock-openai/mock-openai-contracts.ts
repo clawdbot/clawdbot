@@ -8,7 +8,11 @@ export type ResponsesInputItem = Record<string, unknown>;
 
 export type StreamEvent =
   | { type: "response.created"; response: { id: string } }
-  | { type: "response.output_item.added"; item: Record<string, unknown> }
+  | {
+      type: "response.output_item.added";
+      output_index?: number;
+      item: Record<string, unknown>;
+    }
   | {
       type: "response.output_text.delta";
       item_id: string;
@@ -23,14 +27,23 @@ export type StreamEvent =
       content_index: number;
       text: string;
     }
-  | { type: "response.function_call_arguments.delta"; delta: string }
+  | {
+      type: "response.function_call_arguments.delta";
+      item_id?: string;
+      output_index?: number;
+      delta: string;
+    }
   | {
       type: "response.custom_tool_call_input.delta";
       item_id: string;
       call_id: string;
       delta: string;
     }
-  | { type: "response.output_item.done"; item: Record<string, unknown> }
+  | {
+      type: "response.output_item.done";
+      output_index?: number;
+      item: Record<string, unknown>;
+    }
   | {
       type: "response.completed";
       response: {
@@ -214,9 +227,10 @@ export const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback w
 
 export function buildStrandedFinalRecoveryText(): string {
   return [
-    "QA-STRANDED-85714 confirms this is a substantive private final reply that initially skipped the message tool.",
-    "The reply is intentionally long enough to exercise message_tool_only stranded-final recovery before the retry delivers it visibly.",
-  ].join(" ");
+    "QA-STRANDED-85714：近 7 日營收較前期增加 5.09%，已連續兩週回升。最大風險是集中：前五大站台占正營收 86.5%，已超過 85% 觀察門檻。",
+    "近 30 日最大單一產品占 44.2%，亦超過 40% 門檻。建議先維持成長節奏並優先降低集中風險，不建議只看總額就全面加碼。",
+    "成長主因仍待業務確認，我尚未取得該線的回覆。",
+  ].join("");
 }
 
 export function buildStrandedFinalRetryFailureText(): string {
@@ -265,7 +279,7 @@ const QA_MATRIX_VOICE_TRANSCRIPTION_TEXT =
 export const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa check/i;
 
 export type MockScenarioState = {
-  anthropicThinkingErrorPhase: number;
+  anthropicThinkingErrorScenarioKeys: Set<string>;
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;
   toolLoopReadAttempts: number;

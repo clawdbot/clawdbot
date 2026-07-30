@@ -282,6 +282,20 @@ type AgentRuntimeReplyPayload = {
   };
   mediaUrl?: string;
   mediaUrls?: string[];
+  attachments?: Array<{
+    type?: "image" | "audio" | "video" | "file";
+    path?: string;
+    url?: string;
+    mediaUrl?: string;
+    filePath?: string;
+    mimeType?: string;
+    name?: string;
+    sizeBytes?: number;
+    durationMs?: number;
+    width?: number;
+    height?: number;
+    trustedLocalMedia?: boolean;
+  }>;
   trustedLocalMedia?: boolean;
   sensitiveMedia?: boolean;
   presentation?: AgentRuntimeMessagePresentation;

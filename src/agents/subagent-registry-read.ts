@@ -9,6 +9,7 @@ import {
   buildLatestSubagentRunReadIndexFromRuns,
   buildSubagentRunReadIndexFromRuns,
   countActiveDescendantRunsFromRuns,
+  getLatestSubagentRunByChildSessionKeyFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
   listDescendantRunsForRequesterFromRuns,
   listRunsForControllerFromRuns,
@@ -16,11 +17,12 @@ import {
   type SubagentRunReadIndex,
 } from "./subagent-registry-queries.js";
 import {
+  getSubagentSessionListRunsSnapshotForRead,
   getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForController,
   getSubagentRunsSnapshotForRead,
 } from "./subagent-registry-state.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentRunReadRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 
 export {
@@ -29,10 +31,12 @@ export {
   resolveSubagentSessionStatus,
 } from "./subagent-session-metrics.js";
 
-/** Builds a reusable read index from the current persisted and in-memory run state. */
-export function buildSubagentRunReadIndex(now = Date.now()): SubagentRunReadIndex {
+/** Builds the session-list index without hydrating full retained registry payloads. */
+export function buildSubagentSessionListReadIndex(
+  now = Date.now(),
+): SubagentRunReadIndex<SubagentRunReadRecord> {
   return buildSubagentRunReadIndexFromRuns({
-    runs: getSubagentRunsSnapshotForRead(subagentRuns),
+    runs: getSubagentSessionListRunsSnapshotForRead(subagentRuns),
     inMemoryRuns: subagentRuns.values(),
     now,
   });
@@ -86,38 +90,22 @@ export function getSessionDisplaySubagentRunByChildSessionKey(
     return null;
   }
 
-  let latestInMemoryActive: SubagentRunRecord | null = null;
-  let latestInMemoryEnded: SubagentRunRecord | null = null;
+  let latestInMemory: SubagentRunRecord | null = null;
   for (const entry of subagentRuns.values()) {
     if (entry.childSessionKey !== key) {
       continue;
     }
-    if (typeof entry.endedAt === "number") {
-      if (!latestInMemoryEnded || compareSubagentRunGeneration(entry, latestInMemoryEnded) > 0) {
-        latestInMemoryEnded = entry;
-      }
-      continue;
-    }
-    if (!latestInMemoryActive || compareSubagentRunGeneration(entry, latestInMemoryActive) > 0) {
-      latestInMemoryActive = entry;
+    if (!latestInMemory || compareSubagentRunGeneration(entry, latestInMemory) > 0) {
+      latestInMemory = entry;
     }
   }
-
-  if (latestInMemoryEnded || latestInMemoryActive) {
-    // Fresh in-memory terminal state is more accurate than an older active snapshot row.
-    if (
-      latestInMemoryEnded &&
-      (!latestInMemoryActive ||
-        compareSubagentRunGeneration(latestInMemoryEnded, latestInMemoryActive) > 0)
-    ) {
-      return latestInMemoryEnded;
-    }
-    return latestInMemoryActive ?? latestInMemoryEnded;
-  }
-
-  return getSubagentRunByChildSessionKeyFromRuns(
-    getSubagentRunsSnapshotForChildSession(subagentRuns, key),
-    key,
+  // Fresh in-memory terminal state is more accurate than an older active snapshot row.
+  return (
+    latestInMemory ??
+    getSubagentRunByChildSessionKeyFromRuns(
+      getSubagentRunsSnapshotForChildSession(subagentRuns, key),
+      key,
+    )
   );
 }
 
@@ -130,15 +118,10 @@ export function getLatestSubagentRunByChildSessionKey(
     return null;
   }
 
-  let latest: SubagentRunRecord | null = null;
-  for (const entry of getSubagentRunsSnapshotForChildSession(subagentRuns, key).values()) {
-    if (entry.childSessionKey !== key) {
-      continue;
-    }
-    if (!latest || compareSubagentRunGeneration(entry, latest) > 0) {
-      latest = entry;
-    }
-  }
-
-  return latest;
+  return (
+    getLatestSubagentRunByChildSessionKeyFromRuns(
+      getSubagentRunsSnapshotForChildSession(subagentRuns, key),
+      key,
+    ) ?? null
+  );
 }

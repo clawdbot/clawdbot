@@ -24,11 +24,17 @@ openclaw agent exec --message-file task.md --cwd ./repo
 cat task.md | openclaw agent exec --message-file - --json
 ```
 
-By default, the command creates and later removes a temporary state directory. Its implicit config skips workspace bootstrap files, disables the agent sandbox, selects the `coding` tool profile, restricts filesystem tools to `--cwd`, and enables full Gateway-host execution policy for the embedded local tool runtime. `--cwd` defaults to the process working directory and is passed as both the agent workspace and tool working directory.
+By default, the command creates and later removes a temporary state directory, and it runs against your ordinary OpenClaw config, so configured providers, credentials, and `agentRuntime` harness selection apply exactly as they do elsewhere. `--cwd` defaults to the process working directory and is passed as both the agent workspace and tool working directory.
 
-Use `--state-dir <dir>` to retain sessions and other run state. The directory must already exist and is never created or deleted by the command. The command still uses its isolated implicit policy config; it does not read the ordinary OpenClaw config from that directory.
+Config is layered in three parts, entirely in memory: exec composes the run config and publishes it as this process's runtime config rather than writing a copy to disk. Exec defaults apply only where your config leaves a setting unset: workspace bootstrap files are skipped, the agent sandbox is off, the `coding` tool profile is selected, filesystem tools are restricted to `--cwd`, and exec runs under the full execution policy a headless turn needs. Anything your config sets wins over those defaults, so a configured sandbox, shell env, or tool profile is never downgraded, and exec host routing stays with the sandbox when your config enables one. The invocation itself always wins last: the run is scoped to `--cwd` and never bootstraps.
 
-`--auth-env-only` is enabled by default. In this mode, the run can use provider keys already present in the process environment, but it does not load OpenClaw auth profiles or external Codex, Claude, or other CLI credential stores. Provider auth variables remain available to model authentication but are omitted from agent-launched host commands. Use `--no-auth-env-only` only when the run intentionally relies on those stored credentials.
+Use `--state-dir <dir>` to retain sessions and other run state. The directory must already exist and is never created or deleted by the command.
+
+When exec uses the ambient or a pinned config, installed plugins continue to resolve from the operator's ordinary plugin roots while sessions and other run state use the ephemeral directory. In those modes, `--state-dir` controls run state only; it is not required for configured providers, channels, or harnesses supplied by installed plugins.
+
+For reproducible runs, pin the config instead of inheriting it. `--config <path>` runs against exactly that config file, read through the normal loader so JSON5 syntax and `$include` resolve relative to it; a missing or invalid file fails the run rather than falling back to defaults, as does an ambient config that exists but cannot be parsed. `--isolated` ignores the ambient config entirely and uses only the exec defaults above. Both are the right choice for CI, where inheriting operator state would make runs machine-dependent.
+
+Stored credentials are used by default, so a folder-scoped run reaches the same logins as the rest of the CLI. Pass `--auth-env-only` to restrict the run to provider keys already present in the process environment. That mode loads no config at all, and pairing it with `--config` is rejected rather than silently ignored, because a config supplies provider credentials through several surfaces at once: [inline keys and secret headers](/reference/secretref-credential-surface), an `env` block, and login-shell import. It also skips OpenClaw auth profiles and external Codex, Claude, or other CLI credential stores. Provider auth variables remain available to model authentication but are omitted from agent-launched host commands.
 
 Select a primary and ordered fallback chain with repeatable flags:
 
@@ -40,6 +46,18 @@ openclaw agent exec "Implement the change" \
 ```
 
 For this command only, explicit `--fallback` values remain active with explicit `--model`. Other agent entry points keep their existing rule that a user-selected model disables configured fallbacks.
+
+Select the one-shot tool surface explicitly when comparing local or smaller models:
+
+```bash
+openclaw agent exec "Inspect this repository" \
+  --model ollama/qwen3.5:9b \
+  --code-mode code \
+  --local-model-lean \
+  --json
+```
+
+`--code-mode direct` disables Code Mode, `auto` uses model capability metadata, and `code` forces the generic Code Mode surface for tool-capable runs. `--local-model-lean` removes high-latency and channel-dependent tools and enables the bounded Tool Search defaults for the isolated run.
 
 The timeout defaults to 600 seconds for `agent exec`; this does not change the existing embedded `agent --local` default. A successful run exits `0`, any model or result error exits `1`, and a timeout exits `2`. Failure includes `meta.error`, aborted runs, exhausted model fallbacks, an error stop reason, and any error payload.
 
@@ -56,6 +74,7 @@ Plain output writes only the final assistant text to stdout. Diagnostics use std
   "codeModeEngaged": false,
   "assistantTurns": 2,
   "bridgeCalls": { "search": 1, "describe": 0, "call": 3 },
+  "toolSummary": { "calls": 2, "tools": ["read", "write"], "totalToolTimeMs": 48 },
   "model": "gpt-5.6-sol",
   "provider": "openai",
   "sessionId": "019..."
@@ -67,11 +86,26 @@ Plain output writes only the final assistant text to stdout. Diagnostics use std
 Run-stat fields are additive and may be absent:
 
 - `costUsd`: estimated USD cost of the run's accumulated usage, including cache read/write pricing; omitted when the model has no cost data.
-- `codeModeEngaged`: `true` only when [code mode](/tools/code-mode) actually owned the model tool surface for the run. `tools.codeMode.enabled=true` alone does not guarantee engagement; models routed through a native harness surface can leave it `false`.
+- `codeModeEngaged`: `true` only when [code mode](/tools/code-mode) actually owned the model tool surface for the run. `tools.codeMode.enabled=true` alone does not guarantee engagement, and harnesses that own their native tool surface always read `false` because OpenClaw code mode never owns their tools.
 - `assistantTurns`: completed assistant/provider round trips in the run; omitted when none completed.
 - `bridgeCalls`: inner tool-search/code-mode bridge call counts (`search`/`describe`/`call`). These are invisible to the provider; outer tool calls stay in `meta.toolSummary.calls` of the full run metadata.
+- `toolSummary`: outer model-visible tool-call count, tool names, failures, and total tool time from the embedded run.
 
-The same fields appear on `meta.agentMeta` in the `openclaw agent --json` response.
+The agent run-stat fields appear on `meta.agentMeta` in the `openclaw agent --json` response; the outer tool summary remains at `meta.toolSummary`.
+
+### Code Mode model matrix
+
+From a source checkout, run the bounded evaluation matrix against any explicit model reference:
+
+```bash
+pnpm qa:code-mode-models -- --model ollama/qwen3.5:9b
+```
+
+Repeat `--model` to compare models, or use `--mode`, `--task`, and `--repetitions` to narrow the default direct/automatic/forced Code Mode matrix. Each cell runs an isolated `agent exec` task and records model/provider identity, timing, result status, failure class, outer tool calls, Code Mode bridge calls, and verified output/effects.
+
+The output directory contains canonical QA Lab `qa-evidence.json`. `summary.json` and `results.jsonl` are supporting aggregate and per-cell artifacts; `manifest.json` records the requested matrix and source identity.
+
+This is evaluation-only evidence, not a CI or release gate. Results do not change model capabilities, runtime routing, fallback, or repair policy.
 
 ### `agent exec` options
 
@@ -79,11 +113,15 @@ The same fields appear on `meta.agentMeta` in the `openclaw agent --json` respon
 - `--message-file <path>`: read a UTF-8 prompt from a file; `-` reads stdin
 - `--cwd <dir>`: set both the agent workspace and tool working directory
 - `--state-dir <dir>`: use an existing state directory without deleting it
+- `--config <path>`: run against this config file instead of the ambient config (JSON5 and `$include` supported)
+- `--isolated`: ignore the ambient config and use only exec defaults
 - `--model <provider/model>`: explicit primary model
+- `--code-mode <mode>`: select `direct`, `auto`, or forced `code` tool mode
+- `--local-model-lean`: use the reduced local-model tool surface
 - `--thinking <level>`: one-run thinking level
 - `--fallback <provider/model>`: ordered fallback model; repeatable and requires `--model`
-- `--auth-env-only`: ignore stored and external CLI credentials (default)
-- `--no-auth-env-only`: allow stored and external CLI credentials
+- `--auth-env-only`: use only environment provider keys; skips stored credentials, external CLI credentials, and config entirely
+- `--no-auth-env-only`: allow stored and external CLI credentials (default)
 - `--timeout <seconds>`: deadline in seconds (default `600`; `0` disables it)
 - `--json`: emit the stable JSON envelope
 

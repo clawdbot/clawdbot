@@ -1,8 +1,8 @@
 // Resolves filesystem paths for installed plugin index storage.
 import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 
 const LEGACY_INSTALLED_PLUGIN_INDEX_STORE_PATH = path.join("plugins", "installs.json");
 
@@ -14,9 +14,9 @@ export type InstalledPluginIndexStoreOptions = {
 };
 
 function resolveStoreEnv(options: InstalledPluginIndexStoreOptions): NodeJS.ProcessEnv {
-  return options.stateDir
-    ? { ...(options.env ?? process.env), OPENCLAW_STATE_DIR: options.stateDir }
-    : (options.env ?? process.env);
+  const env = options.env ?? process.env;
+  const stateDir = options.stateDir ?? resolveActivePluginInstallRoots(env).stateDir;
+  return { ...env, OPENCLAW_STATE_DIR: stateDir };
 }
 
 /** Resolves the canonical SQLite-backed installed plugin index path. */
@@ -55,6 +55,6 @@ export function resolveLegacyInstalledPluginIndexStorePath(
     return options.filePath;
   }
   const env = options.env ?? process.env;
-  const stateDir = options.stateDir ?? resolveStateDir(env);
+  const stateDir = options.stateDir ?? resolveActivePluginInstallRoots(env).stateDir;
   return path.join(stateDir, LEGACY_INSTALLED_PLUGIN_INDEX_STORE_PATH);
 }

@@ -228,7 +228,7 @@ export function createNodePluginTools(params: {
       }),
       parameters: descriptor.parameters as never,
       ...(mcpTool ? { executionMode: "sequential" as const } : {}),
-      execute: async (toolCallId, toolParams) => {
+      execute: async (toolCallId, toolParams, signal) => {
         const raw = await callGatewayTool(
           "node.invoke",
           mcpTool ? { timeoutMs: NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS } : {},
@@ -246,7 +246,7 @@ export function createNodePluginTools(params: {
             idempotencyKey: toolCallId,
             ...(params.agentSessionKey ? { sessionKey: params.agentSessionKey } : {}),
           },
-          { scopes: ["operator.write"] },
+          { scopes: ["operator.write"], ...(signal ? { signal } : {}) },
         );
         const payload = readNodeInvokePayload(raw);
         if (mcpTool) {

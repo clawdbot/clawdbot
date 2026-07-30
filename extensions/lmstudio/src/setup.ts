@@ -26,6 +26,7 @@ import {
   type ProviderPrepareDynamicModelContext,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/provider-setup";
+import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { WizardCancelledError, type WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -75,10 +76,6 @@ type LmstudioSetupDiscovery = {
   defaultModel: string | undefined;
   defaultModelId: string | undefined;
 };
-
-function isTruthyEnvValue(value: string | undefined): boolean {
-  return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
-}
 
 function resolveLmstudioSetupDefaultBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   return isTruthyEnvValue(env.OPENCLAW_DOCKER_SETUP)

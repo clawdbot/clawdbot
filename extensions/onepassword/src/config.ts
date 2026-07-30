@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 
 export const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const MAX_REGISTERED_ITEMS = 32;
@@ -23,10 +24,6 @@ export type OnePasswordConfig = {
   opTimeoutMs: number;
   items: Record<string, OnePasswordItemConfig>;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function requiredString(record: Record<string, unknown>, key: string): string {
   const value = record[key];

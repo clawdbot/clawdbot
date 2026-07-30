@@ -125,6 +125,9 @@
       "openclaw/plugin-sdk/codex-mcp-projection": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/codex-mcp-projection.d.ts"
       ],
+      "openclaw/plugin-sdk/codex-session-transcript-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/codex-session-transcript-runtime.d.ts"
+      ],
       "openclaw/plugin-sdk/agent-harness-task-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/agent-harness-task-runtime.d.ts"
       ],
@@ -292,9 +295,6 @@
       ],
       "openclaw/plugin-sdk/session-binding-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/session-binding-runtime.d.ts"
-      ],
-      "openclaw/plugin-sdk/session-catalog": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/session-catalog.d.ts"
       ],
       "openclaw/plugin-sdk/session-catalog-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/session-catalog-runtime.d.ts"
@@ -511,9 +511,6 @@
       ],
       "openclaw/plugin-sdk/tool-payload": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/tool-payload.d.ts"
-      ],
-      "openclaw/plugin-sdk/tool-results": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/tool-results.d.ts"
       ],
       "openclaw/plugin-sdk/webhook-targets": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/webhook-targets.d.ts"

@@ -644,6 +644,7 @@ export const testing = {
   resolveQaGatewayChildProviderMode,
   resolveQaGatewayChildCommand,
   createQaGatewayEmptyTransport,
+  waitForGatewayReady,
   assertQaLiveCodexAuthAvailable,
   stageQaLiveApiKeyProfiles,
   stageQaLiveAnthropicSetupToken,
@@ -957,14 +958,13 @@ async function waitForGatewayReady(params: {
         `gateway exited before becoming healthy (exitCode=${String(params.child.exitCode)}, signal=${String(params.child.signalCode)}):\n${params.logs()}`,
       );
     }
-    for (const healthPath of ["/readyz", "/healthz"] as const) {
-      try {
-        if (await fetchLocalGatewayHealth({ baseUrl: params.baseUrl, healthPath })) {
-          return;
-        }
-      } catch {
-        // retry until timeout
+    // Listener liveness can turn green before the Gateway can admit startup or restart work.
+    try {
+      if (await fetchLocalGatewayHealth({ baseUrl: params.baseUrl, healthPath: "/readyz" })) {
+        return;
       }
+    } catch {
+      // retry until timeout
     }
     await sleep(250);
   }

@@ -1,5 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Result } from "@openclaw/normalization-core/result";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { parse, tokenizer } from "acorn";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -7,11 +6,12 @@ import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { toCodeModeJsonSafe } from "./code-mode-json.js";
-import { createCodeModeApiVirtualFiles } from "./code-mode-namespaces.js";
+import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import {
   CODE_MODE_SHELL_SOURCE_ERROR,
   isShellLikeCodeModeSource,
 } from "./code-mode-shell-source.js";
+import type { CodeModeFailurePhase, CodeModeWorkerThreadResult } from "./code-mode-worker-types.js";
 import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
 
@@ -50,25 +50,11 @@ export type CodeModeConfig = {
   maxSearchLimit: number;
 };
 
-type CodeModeBridgeMethod =
-  | "search"
-  | "describe"
-  | "call"
-  | "callValue"
-  | "nodes"
-  | "yield"
-  | "namespace"
-  | "agentSpawn"
-  | "agentWait"
-  | "swarmNote";
-
-export type PendingBridgeRequest = {
-  id: string;
-  method: CodeModeBridgeMethod;
-  args: unknown[];
-};
-
-export type SettledBridgeRequest = { id: string } & Result<unknown, string>;
+export type {
+  CodeModeSettlementMode,
+  PendingBridgeRequest,
+  SettledBridgeRequest,
+} from "./code-mode-worker-types.js";
 
 export type CodeModeFailureCode =
   | "aborted"
@@ -94,34 +80,24 @@ export type CodeModeHeadlessResult =
       toolCallCount: number;
     };
 
-export type CodeModeSettlementMode =
-  | { kind: "awaiting" }
-  | { kind: "draining"; requiredRequestIds: string[] };
-
 export type CodeModeWorkerResult =
-  | {
-      status: "completed";
-      value: unknown;
-      output: unknown[];
-    }
-  | {
-      status: "waiting";
-      snapshotBytes: Uint8Array;
-      pendingRequests: PendingBridgeRequest[];
-      settlementMode: CodeModeSettlementMode;
-      output: unknown[];
-    }
+  | Extract<CodeModeWorkerThreadResult, { status: "completed" | "waiting" }>
   | {
       status: "failed";
       error: string;
       code: CodeModeFailureCode;
+      failurePhase: CodeModeFailurePhase;
+      bridgeDispatchStarted: boolean;
       output: unknown[];
     };
 
 const typescriptRuntimeLoader = createLazyPromiseLoader(() => import("typescript"), {
   cacheRejections: true,
 });
-let typescriptRuntimeForTest: typeof import("typescript") | null = null;
+let typescriptRuntimeForTest:
+  | typeof import("typescript")
+  | Promise<typeof import("typescript")>
+  | null = null;
 
 function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
   const codeMode = value;
@@ -148,7 +124,9 @@ function readCodeModeRawConfig(config?: OpenClawConfig, agentId?: string): Recor
 }
 
 function readEnabled(value: unknown): boolean | "auto" {
-  return typeof value === "boolean" || value === "auto" ? value : false;
+  // Shipped default is "auto": code mode engages only for catalog-preferred
+  // models, so unevaluated models keep normal tool exposure by construction.
+  return typeof value === "boolean" || value === "auto" ? value : "auto";
 }
 
 export function readPositiveInteger(value: unknown, fallback: number): number {
@@ -330,8 +308,15 @@ export function enforceResultLimit(params: {
   value?: unknown;
   config: CodeModeConfig;
 }): void {
-  enforceOutputLimit(params.output, params.config);
-  if (params.value !== undefined && jsonByteLength(params.value) > params.config.maxOutputBytes) {
+  const serializedOutputBytes = jsonByteLength(params.output);
+  if (serializedOutputBytes > params.config.maxOutputBytes) {
+    throw new CodeModeLimitError("output_limit_exceeded", "code mode output limit exceeded");
+  }
+  const outputBytes = params.output.length > 0 ? serializedOutputBytes : 0;
+  if (
+    params.value !== undefined &&
+    outputBytes + jsonByteLength(params.value) > params.config.maxOutputBytes
+  ) {
     throw new CodeModeLimitError("output_limit_exceeded", "code mode output limit exceeded");
   }
 }
@@ -583,7 +568,7 @@ function rejectsModuleAccess(
 
 async function loadTypeScriptRuntime(): Promise<typeof import("typescript")> {
   if (typescriptRuntimeForTest) {
-    return typescriptRuntimeForTest;
+    return await typescriptRuntimeForTest;
   }
   return await typescriptRuntimeLoader.load();
 }
@@ -646,10 +631,10 @@ export function errorMessage(error: unknown): string {
 }
 
 export function createCodeModeApiFilesForRun(
-  catalog: Parameters<typeof createCodeModeApiVirtualFiles>[0],
+  namespaceRuntime: CodeModeNamespaceRuntime,
   swarmEnabled: boolean,
 ) {
-  const files = createCodeModeApiVirtualFiles(catalog);
+  const { apiFiles: files } = namespaceRuntime;
   return swarmEnabled ? files : files.filter((file) => file.path !== "agents.d.ts");
 }
 
@@ -667,7 +652,9 @@ export function enforceSnapshotPayloadLimits(params: {
 export const codeModeRuntimeTesting = {
   getTypescriptRuntimePromise: (): Promise<typeof import("typescript")> | null =>
     typescriptRuntimeLoader.peek() ?? null,
-  setTypescriptRuntimeForTest: (runtime: typeof import("typescript") | null) => {
+  setTypescriptRuntimeForTest: (
+    runtime: typeof import("typescript") | Promise<typeof import("typescript")> | null,
+  ) => {
     typescriptRuntimeForTest = runtime;
   },
 };
