@@ -661,7 +661,7 @@ export type PluginHookToolContext = {
   sessionKey?: string;
   sessionId?: string;
   runId?: string;
-  /** Aborts when the owning tool call is cancelled. Hook timeout expiry does not abort this signal. */
+  /** Aborts when the owning tool call is cancelled or this handler's hook timeout expires. */
   abortSignal?: AbortSignal;
   trace?: DiagnosticTraceContext;
   toolName: string;
