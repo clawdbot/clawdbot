@@ -1,5 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { resolveToolDisplay } from "../agents/tool-display.js";
+import { isShellToolDisplayName, resolveToolDisplay } from "../agents/tool-display.js";
 /** Formats compact tool metadata labels for auto-reply progress/status messages. */
 import { formatInlineCodeSpan } from "../shared/markdown-code.js";
 import { shortenHomeInString } from "../utils.js";
@@ -16,9 +16,7 @@ export function formatToolAggregate(
 ): string {
   const filtered = (metas ?? []).filter(Boolean).map(shortenHomeInString);
   const display = resolveToolDisplay({ name: toolName });
-  const normalizedToolName = normalizeLowercaseStringOrEmpty(toolName);
-  const compactCommandSummary =
-    filtered.length > 0 && (normalizedToolName === "exec" || normalizedToolName === "bash");
+  const compactCommandSummary = filtered.length > 0 && isShellToolDisplayName(toolName);
   const prefix = compactCommandSummary ? display.emoji : `${display.emoji} ${display.label}`;
   if (!filtered.length) {
     return `${display.emoji} ${display.label}`;
