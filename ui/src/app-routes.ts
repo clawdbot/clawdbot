@@ -3,9 +3,9 @@ import type { PageDefinition, Router, RouterHistory } from "@openclaw/uirouter";
 import {
   agentRouteFromPath,
   INTERNAL_AGENT_PATH_PARAM,
-  INTERNAL_SESSION_PATH_PARAM,
   INTERNAL_MEMORY_PATH_PARAM,
   INTERNAL_PLUGINS_PATH_PARAM,
+  INTERNAL_SESSION_PATH_PARAM,
   memoryTabFromPath,
   pathForAgentPanel,
   pathForRoute,
@@ -193,12 +193,7 @@ export async function startApplicationRouter(
   if (initialDynamicRoute) {
     // Replace the synthetic exact-match location with the real browser path
     // before the shell renders; the matching loader data is already cached.
-    await router.navigate(
-      initialDynamicRoute[0],
-      context,
-      { history: "none", revalidate: true },
-      location,
-    );
+    await router.navigate(initialDynamicRoute[0], context, { history: "none" }, location);
   }
 }
 

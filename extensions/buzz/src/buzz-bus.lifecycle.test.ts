@@ -8,8 +8,10 @@ const relayMocks = vi.hoisted(() => ({
   connect: vi.fn<() => Promise<void>>(),
   auth: vi.fn<() => Promise<string>>(),
   publish: vi.fn<(event: Event) => Promise<string>>(),
+  send: vi.fn<(message: string) => Promise<void>>(),
   subscriptionClose: vi.fn(),
   close: vi.fn(),
+  connected: true,
   membershipEvents: [] as Event[],
   profileEvents: [] as Event[],
   subscriptions: [] as Array<{
@@ -28,9 +30,13 @@ vi.mock("nostr-tools", async (importOriginal) => {
     ...actual,
     Relay: class {
       onauth?: (template: unknown) => Promise<unknown>;
+      get connected() {
+        return relayMocks.connected;
+      }
       connect = relayMocks.connect;
       auth = relayMocks.auth;
       publish = relayMocks.publish;
+      send = relayMocks.send;
       close = relayMocks.close;
 
       subscribe(
@@ -108,6 +114,8 @@ describe("Buzz bus lifecycle", () => {
     relayMocks.connect.mockResolvedValue();
     relayMocks.auth.mockRejectedValue(new Error("auth rejected"));
     relayMocks.publish.mockResolvedValue("");
+    relayMocks.send.mockResolvedValue();
+    relayMocks.connected = true;
   });
 
   afterEach(() => {
@@ -161,6 +169,59 @@ describe("Buzz bus lifecycle", () => {
       ],
     });
     expect(relayMocks.close).toHaveBeenCalledOnce();
+  });
+
+  it("sends room and thread typing without waiting for a relay acknowledgement", async () => {
+    relayMocks.auth.mockResolvedValue("ok");
+    const bus = await startBuzzBus({
+      accountId: ACCOUNT_ID,
+      relayUrl: "wss://buzz.example.com",
+      privateKey: PRIVATE_KEY,
+      channelIds: [CHANNEL_ID],
+      onMessage: async () => {},
+    });
+
+    await bus.sendTyping({
+      channelId: CHANNEL_ID,
+      threadId: "root-id",
+      replyToId: "parent-id",
+    });
+
+    const frame = JSON.parse(relayMocks.send.mock.calls[0]?.[0] ?? "null") as [string, Event];
+    expect(frame[0]).toBe("EVENT");
+    expect(frame[1]).toMatchObject({
+      kind: 20_002,
+      content: "",
+      pubkey: BOT_PUBLIC_KEY,
+      tags: [
+        ["h", CHANNEL_ID],
+        ["e", "root-id", "", "root"],
+        ["e", "parent-id", "", "reply"],
+      ],
+    });
+    expect(relayMocks.publish).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 20_002 }));
+    await bus.close();
+
+    relayMocks.send.mockClear();
+    await bus.sendTyping({ channelId: CHANNEL_ID });
+    expect(relayMocks.send).not.toHaveBeenCalled();
+  });
+
+  it("drops typing while the active relay is disconnected", async () => {
+    relayMocks.auth.mockResolvedValue("ok");
+    const bus = await startBuzzBus({
+      accountId: ACCOUNT_ID,
+      relayUrl: "wss://buzz.example.com",
+      privateKey: PRIVATE_KEY,
+      channelIds: [CHANNEL_ID],
+      onMessage: async () => {},
+    });
+    relayMocks.connected = false;
+
+    await bus.sendTyping({ channelId: CHANNEL_ID });
+
+    expect(relayMocks.send).not.toHaveBeenCalled();
+    await bus.close();
   });
 
   it("closes a standalone relay when publishing fails", async () => {
