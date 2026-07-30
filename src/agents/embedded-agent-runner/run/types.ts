@@ -37,10 +37,7 @@ export type EmbeddedRunGeeRuntimePreparedFact = {
   envelope: unknown;
 };
 
-export type EmbeddedRunGeeRuntimePreparedFacts = Record<
-  string,
-  EmbeddedRunGeeRuntimePreparedFact
->;
+export type EmbeddedRunGeeRuntimePreparedFacts = Record<string, EmbeddedRunGeeRuntimePreparedFact>;
 
 type EmbeddedRunAttemptBase = Omit<
   RunEmbeddedAgentParams,
@@ -93,7 +90,7 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   agentHarnessId?: string;
   /** OpenClaw-owned runtime policy prepared by the orchestrator for this attempt. */
   runtimePlan?: AgentRuntimePlan;
-  /** Gee-owned prepared facts for a Gee-hosted OpenClaw turn. */
+  /** Host-owned prepared runtime facts for an externally hosted OpenClaw turn. */
   geeRuntimePreparedFacts?: EmbeddedRunGeeRuntimePreparedFacts;
   /** Host-issued scope for harnesses that mirror native child runs into task state. */
   agentHarnessTaskRuntimeScope?: AgentHarnessTaskRuntimeScope;

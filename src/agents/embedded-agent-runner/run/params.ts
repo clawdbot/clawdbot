@@ -149,7 +149,7 @@ export type RunEmbeddedAgentParams = {
   model?: string;
   /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
   modelFallbacksOverride?: string[];
-  /** Gee-owned prepared facts for a Gee-hosted OpenClaw turn. */
+  /** Host-owned prepared runtime facts for an externally hosted OpenClaw turn. */
   geeRuntimePreparedFacts?: EmbeddedRunGeeRuntimePreparedFacts;
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;

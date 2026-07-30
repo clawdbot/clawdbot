@@ -101,7 +101,7 @@ export function resolveGeeRuntimeCompactionPolicy(
 
   if (owners.size > 1) {
     throw new Error(
-      `Gee-hosted OpenClaw prepared runtime facts have conflicting compaction owners for endpoints "${endpointIds
+      `Hosted OpenClaw prepared runtime facts have conflicting compaction owners for endpoints "${endpointIds
         .toSorted((left, right) => left.localeCompare(right))
         .join('", "')}".`,
     );
@@ -174,7 +174,7 @@ export function resolveGeeRuntimeProviderAuthPolicy(
 
   if (authEligibilities.size > 1) {
     throw new Error(
-      `Gee-hosted OpenClaw prepared runtime facts have conflicting auth eligibility states for endpoints "${endpointIds
+      `Hosted OpenClaw prepared runtime facts have conflicting auth eligibility states for endpoints "${endpointIds
         .toSorted((left, right) => left.localeCompare(right))
         .join('", "')}".`,
     );
