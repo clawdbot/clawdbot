@@ -41,6 +41,7 @@ async function withManagedMediaRoot<T>(run: (ctx: { stateDir: string }) => Promi
   try {
     return await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       await fs.mkdir(path.join(stateDir, "media", "outbound"), { recursive: true });
+      await fs.mkdir(path.join(stateDir, "media", "file-transfer"), { recursive: true });
       await fs.mkdir(path.join(stateDir, "media", "tool-image-generation"), { recursive: true });
       return await run({ stateDir });
     });
@@ -241,6 +242,10 @@ describe("resolveSandboxedMediaSource", () => {
     {
       name: "managed outbound media",
       relative: path.join("media", "outbound", "reply.png"),
+    },
+    {
+      name: "managed file-transfer media",
+      relative: path.join("media", "file-transfer", "fetched.png"),
     },
     {
       name: "managed tool media",
