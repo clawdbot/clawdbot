@@ -202,9 +202,9 @@ describe("qa suite", () => {
   it("rejects a requested live driver whose channel has no matching factory instead of recording live", async () => {
     // A requested live run with a channelId and supplied factories that none
     // match must throw at adapter selection rather than fall back to the shared
-    // qa-channel transport while still reporting driver "live". This locks the
-    // realization invariant ClawSweeper flagged on #116192: the realized driver
-    // only becomes "live" when a matching factory actually creates the adapter.
+    // qa-channel transport while still reporting driver "live". The realized
+    // driver only becomes "live" when a matching factory actually creates the
+    // adapter.
     const create = vi.fn();
 
     await expect(
