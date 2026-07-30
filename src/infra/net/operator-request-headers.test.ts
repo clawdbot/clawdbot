@@ -96,6 +96,10 @@ describe("resolveOperatorRequestHeaders", () => {
       "X-Auth-Key": "auth-live",
       "X-RapidAPI-Key": "rapidapi-live",
       "X-Akamai-ACS-Auth-Sign": "akamai-live",
+      "X-Plivo-Signature-V2": "plivo-live",
+      "X-Plivo-Signature-V3": "plivo-live",
+      "Telnyx-Signature-Ed25519": "telnyx-live",
+      "X-HMAC-SHA256": "hmac-live",
       "X-Fine": "ok",
     });
     expect(Object.keys(headers ?? {})).toEqual(["X-Fine"]);
@@ -122,6 +126,10 @@ describe("resolveOperatorRequestHeaders", () => {
         "X-Auth-Key",
         "X-RapidAPI-Key",
         "X-Akamai-ACS-Auth-Sign",
+        "X-Plivo-Signature-V2",
+        "X-Plivo-Signature-V3",
+        "Telnyx-Signature-Ed25519",
+        "X-HMAC-SHA256",
       ]),
     );
   });
