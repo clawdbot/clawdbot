@@ -10611,6 +10611,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Per-agent vs shared skills
   - H2: Agent allowlists
   - H2: Plugins and skills
+  - H2: Reference a skill in a prompt
   - H2: Skill Workshop
   - H2: Installing from ClawHub
   - H2: Security

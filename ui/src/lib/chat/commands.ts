@@ -243,20 +243,25 @@ function toSlashCommand(
   if (!name) {
     return null;
   }
+  const resolvedSource = command.source ?? (source === "local" ? "native" : undefined);
   return {
     key: command.key,
     name,
     aliases: getSlashAliases(command).filter((alias) => alias !== name),
     description: COMMAND_DESCRIPTION_OVERRIDES[command.key] ?? command.description,
-    descriptionKey: COMMAND_DESCRIPTION_KEYS[command.key],
+    ...(COMMAND_DESCRIPTION_KEYS[command.key]
+      ? { descriptionKey: COMMAND_DESCRIPTION_KEYS[command.key] }
+      : {}),
     args: COMMAND_ARGS_OVERRIDES[command.key] ?? formatArgs(command),
     icon: mapIcon(command),
     category: mapCategory(command),
     executeLocal: source === "local" && LOCAL_COMMANDS.has(command.key),
     argOptions: getArgOptions(command),
     tier: source === "local" ? mapTier(command) : "standard",
-    source: command.source ?? (source === "local" ? "native" : undefined),
-    skillModelVisible: command.skillModelVisible,
+    ...(resolvedSource ? { source: resolvedSource } : {}),
+    ...(command.skillModelVisible !== undefined
+      ? { skillModelVisible: command.skillModelVisible }
+      : {}),
   };
 }
 
