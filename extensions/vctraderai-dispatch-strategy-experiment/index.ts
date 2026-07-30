@@ -33,6 +33,8 @@ export type DispatchStrategyExperimentParams = {
   strategy_version_id?: string;
   experiment_kind?: string;
   config?: Record<string, unknown>;
+  /** Project id OR name; the BFF resolves either. Omitted = the workspace primary. */
+  project_id?: string;
   bundle_id?: string;
   idempotency_key?: string;
   origin_signal_id?: string;
@@ -119,6 +121,13 @@ export default defineToolPlugin({
                 ],
               },
             ),
+          ),
+          project_id: Type.Optional(
+            Type.String({
+              description:
+                "The project this experiment belongs to. Accepts either the project id or its NAME (the BFF resolves both). Optional — omitted means the workspace's primary project — but PREFER naming one: an experiment's only list surface in the product is its project, so this decides where the human can find the run afterwards. An experiment with no project executes and succeeds but is invisible in Projects and Experiments.",
+              examples: ["Alpha Research"],
+            }),
           ),
           bundle_id: Type.Optional(Type.String({ description: "Optional bundle id." })),
           idempotency_key: Type.Optional(

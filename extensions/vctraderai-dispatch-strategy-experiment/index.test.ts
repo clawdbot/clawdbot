@@ -213,6 +213,27 @@ describe("vctraderai-dispatch-strategy-experiment", () => {
     expect(description).toMatch(/never promise the user metrics/);
   });
 
+  it("offers project_id, because an unprojected run is invisible", async () => {
+    // Every agent-dispatched experiment used to land with project_id NULL, and the
+    // only experiments list in the product is project-scoped — so the run executed,
+    // succeeded, stored its metrics, and could not be found anywhere in the UI.
+    // Until this param existed the model had no way to express where a run belongs.
+    const captured = createCapturedPluginRegistration({
+      id: "vctraderai-dispatch-strategy-experiment",
+    });
+    plugin.register(captured.api);
+    const tool = captured.tools[0] as {
+      parameters?: { properties?: Record<string, { description?: string }> };
+    };
+    const project = tool.parameters?.properties?.project_id;
+    expect(project, "project_id must be an accepted parameter").toBeDefined();
+    // Accepts a NAME as well as an id — the BFF resolver handles both, and a human
+    // talking to the agent says "put it in Alpha Research", not a UUID.
+    expect(project?.description ?? "").toMatch(/NAME/i);
+    // And the consequence of omitting it must be stated, not left implicit.
+    expect(project?.description ?? "").toMatch(/invisible/i);
+  });
+
   it("marks stage_b_bundle_run as V3-deferred rather than offering it", async () => {
     // It IS in the 8-kind catalogue, but V3_DEFERRED_KIND_VALUES makes it
     // non-dispatchable in V2: the BFF 422s before anything is staged
