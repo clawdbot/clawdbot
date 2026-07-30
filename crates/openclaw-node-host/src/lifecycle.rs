@@ -144,9 +144,12 @@ impl NodeLifecycle {
 
     /// Run until explicit shutdown or a terminal reconnect pause.
     ///
-    /// `connect` is called exactly once per attempt. `on_event` receives only
-    /// typed, secret-free state. A Gateway-issued device token is delivered
-    /// separately to `on_issued_device_token`; the embedding owns persistence.
+    /// `connect` is called exactly once per attempt, so each connection can
+    /// advertise a fresh command manifest. Retiring the current session cancels
+    /// its active handlers before a later attempt receives work. `on_event`
+    /// receives only typed, secret-free state. A Gateway-issued device token is
+    /// delivered separately to `on_issued_device_token`; the embedding owns
+    /// persistence.
     /// # Errors
     ///
     /// Returns a typed pause for authentication, pairing, protocol,

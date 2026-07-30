@@ -452,6 +452,10 @@ impl CommandRuntime {
 
     /// Consume invocation events until the node session closes.
     ///
+    /// The registered handlers may be a superset of the commands advertised by
+    /// this connection. Session-bound dispatch fails closed for any command
+    /// outside the connection manifest.
+    ///
     /// Disconnect cancels and aborts every handler still owned by this run.
     /// # Errors
     ///
@@ -651,11 +655,9 @@ impl CommandRuntime {
         tracking: ActiveInvocation,
         session: Option<NodeSession>,
     ) -> Evaluation {
-        let Some(registration) = self.inner.handlers.get(&invocation.command).cloned() else {
-            return Evaluation::tracked(
-                failure("COMMAND_NOT_FOUND", "no handler registered for command"),
-                tracking,
-            );
+        let registration = match self.resolve_session_handler(&invocation, session.as_ref()) {
+            Ok(registration) => registration,
+            Err(result) => return Evaluation::tracked(result, tracking),
         };
         let input_within_limit = invocation
             .input_bytes()
@@ -805,6 +807,24 @@ impl CommandRuntime {
                 None => Ok(None),
             },
         }
+    }
+
+    fn resolve_session_handler(
+        &self,
+        invocation: &NodeInvocation,
+        session: Option<&NodeSession>,
+    ) -> Result<RegisteredHandler, InvocationResult> {
+        if session.is_some_and(|session| !session.advertises_command(&invocation.command)) {
+            return Err(failure(
+                "COMMAND_NOT_ADVERTISED",
+                "command is outside the active connection manifest",
+            ));
+        }
+        self.inner
+            .handlers
+            .get(&invocation.command)
+            .cloned()
+            .ok_or_else(|| failure("COMMAND_NOT_FOUND", "no handler registered for command"))
     }
 
     fn resolve_timeout(&self, invocation: &NodeInvocation) -> Result<Option<Duration>, ()> {

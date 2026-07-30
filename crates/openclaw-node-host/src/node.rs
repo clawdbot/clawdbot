@@ -5,10 +5,10 @@ pub use openclaw_gateway_client::{Event, EventSubscription};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     error::Error,
     future::Future,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use thiserror::Error;
@@ -590,8 +590,8 @@ impl NodeClient {
                 .header(&name, &value)
                 .map_err(map_gateway_error)?;
         }
-        let activated = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let activated_for_connect = activated.clone();
+        let connection_surface = Arc::new(Mutex::new((false, BTreeSet::new())));
+        let surface_for_connect = Arc::clone(&connection_surface);
         let gateway = GatewayClient::connect(gateway_config, move |nonce| async move {
             let options = make_options(nonce.clone())
                 .await
@@ -599,15 +599,25 @@ impl NodeClient {
             let options = options
                 .finalize_identity(&nonce)
                 .map_err(|error| ConnectOptionsError(error.to_string()))?;
-            activated_for_connect.store(options.activated, std::sync::atomic::Ordering::Relaxed);
+            *surface_for_connect
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = (
+                options.activated,
+                options.advertised_commands.iter().cloned().collect(),
+            );
             serde_json::to_value(options).map_err(|error| ConnectOptionsError(error.to_string()))
         })
         .await
         .map_err(map_gateway_error)?;
 
+        let (activated, advertised_commands) = connection_surface
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         Ok(NodeSession {
             gateway,
-            activated: activated.load(std::sync::atomic::Ordering::Relaxed),
+            activated,
+            advertised_commands: Arc::new(advertised_commands),
             runtime_marker: Arc::new(()),
         })
     }
@@ -621,6 +631,7 @@ struct ConnectOptionsError(String);
 pub struct NodeSession {
     gateway: GatewaySession,
     activated: bool,
+    advertised_commands: Arc<BTreeSet<String>>,
     runtime_marker: Arc<()>,
 }
 
@@ -630,6 +641,10 @@ impl NodeSession {
             Arc::as_ptr(&self.runtime_marker) as usize,
             Arc::downgrade(&self.runtime_marker),
         )
+    }
+
+    pub(crate) fn advertises_command(&self, command: &str) -> bool {
+        self.advertised_commands.contains(command)
     }
 
     #[must_use]
