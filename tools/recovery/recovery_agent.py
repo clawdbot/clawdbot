@@ -1,4 +1,5 @@
 import json
+import os
 import socket
 import subprocess
 from datetime import datetime
@@ -7,17 +8,21 @@ import psycopg2
 import redis
 import requests
 
-REDIS_HOST = "127.0.0.1"
+REDIS_HOST = os.environ.get("OPENCLAW_REDIS_HOST", "127.0.0.1")
 POSTGRES_DB = {
-    "host": "127.0.0.1",
-    "port": 5432,
-    "dbname": "openclaw",
-    "user": "openclaw",
-    "password": "Krgabg99$",
+    "host": os.environ.get("OPENCLAW_DB_HOST", "127.0.0.1"),
+    "port": int(os.environ.get("OPENCLAW_DB_PORT", "5432")),
+    "dbname": os.environ.get("OPENCLAW_DB_NAME", "openclaw"),
+    "user": os.environ.get("OPENCLAW_DB_USER", "openclaw"),
 }
+if os.environ.get("OPENCLAW_DB_PASSWORD"):
+    POSTGRES_DB["password"] = os.environ["OPENCLAW_DB_PASSWORD"]
 
 DASHBOARD_URL = "http://127.0.0.1:5050"
-OLLAMA_URL = "http://192.168.50.117:11434"
+OLLAMA_URL = os.environ.get(
+    "OPENCLAW_OLLAMA_BASE_URL",
+    "http://192.168.50.117:11434",
+).rstrip("/")
 VOICE_HEALTH_URL = "http://192.168.50.117:6060/health"
 HOME_ASSISTANT_URL = "http://127.0.0.1:8123"
 SCRYPTED_CONTAINER = "scrypted"

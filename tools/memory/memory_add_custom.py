@@ -1,17 +1,22 @@
+import os
 import sys
 import requests
 import psycopg2
 
-OLLAMA_URL = "http://192.168.50.233:11434/api/embeddings"
-MODEL = "nomic-embed-text"
+OLLAMA_URL = os.environ.get(
+    "OPENCLAW_OLLAMA_EMBEDDINGS_URL",
+    f"{os.environ.get('OPENCLAW_OLLAMA_BASE_URL', 'http://192.168.50.117:11434').rstrip('/')}/api/embeddings",
+)
+MODEL = os.environ.get("OPENCLAW_MEMORY_EMBEDDING_MODEL", "nomic-embed-text")
 
 DB = {
-    "host": "127.0.0.1",
-    "port": 5432,
-    "dbname": "openclaw",
-    "user": "openclaw",
-    "password": "Krgabg99$",
+    "host": os.environ.get("OPENCLAW_DB_HOST", "127.0.0.1"),
+    "port": int(os.environ.get("OPENCLAW_DB_PORT", "5432")),
+    "dbname": os.environ.get("OPENCLAW_DB_NAME", "openclaw"),
+    "user": os.environ.get("OPENCLAW_DB_USER", "openclaw"),
 }
+if os.environ.get("OPENCLAW_DB_PASSWORD"):
+    DB["password"] = os.environ["OPENCLAW_DB_PASSWORD"]
 
 def embed(text):
     r = requests.post(OLLAMA_URL, json={
