@@ -14,6 +14,7 @@ import { captureEnv, deleteTestEnvValue, setTestEnvValue, withEnv } from "../tes
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { scheduleOrphanRecovery } from "./subagent-orphan-recovery.js";
 import {
+  canonicalSubagentRunFixtures,
   createSubagentRegistryTestDeps,
   removeSubagentSessionEntry,
   writeSubagentSessionEntry,
@@ -129,7 +130,7 @@ describe("subagent registry persistence", () => {
     const runs = new Map(
       Object.entries((persisted.runs ?? {}) as Record<string, SubagentRunRecord>),
     );
-    saveSubagentRegistryToSqlite(runs);
+    saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(runs));
     if (opts?.seedChildSessions !== false) {
       await seedChildSessionsForPersistedRuns(persisted);
     }
@@ -415,7 +416,9 @@ describe("subagent registry persistence", () => {
     });
 
     saveSubagentRegistryToSqlite(
-      new Map(Object.entries(persisted.runs as Record<string, SubagentRunRecord>)),
+      canonicalSubagentRunFixtures(
+        new Map(Object.entries(persisted.runs as Record<string, SubagentRunRecord>)),
+      ),
     );
 
     restartRegistry();
