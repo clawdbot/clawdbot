@@ -408,6 +408,18 @@ export function createSubagentRegistryLifecycleCompletion(
         } else if (didFreezeResult) {
           mutated = true;
         }
+        // The first freeze may have committed a null result when the agent's
+        // final text had not yet landed in the session transcript (e.g. after
+        // sessions_yield resume). Reset and try once more before we finalize
+        // with a blocked terminal outcome.
+        if (
+          entry.expectsCompletionMessage === true &&
+          ensureCompletionState(entry).resultText === null
+        ) {
+          ensureCompletionState(entry).resultText = undefined;
+          ensureCompletionState(entry).capturedAt = undefined;
+          await freezeRunResultAtCompletion(entry, outcome);
+        }
       }
       if (updateSwarmCollectorCompletion(entry, params.getRuntimeConfig())) {
         mutated = true;

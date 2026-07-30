@@ -2089,6 +2089,61 @@ describe("subagent registry lifecycle hardening", () => {
     expect(taskExecutorMocks.failTaskRunByRunId).not.toHaveBeenCalled();
   });
 
+  it("recovers from an empty first capture when the final text lands before the retry", async () => {
+    // Simulates the yield-resume race: the first capture returns nothing
+    // (the session transcript hasn't been written yet), but a second
+    // capture attempt succeeds because the write landed in between.
+    const entry = createRunEntry({ expectsCompletionMessage: true });
+    const captureSubagentCompletionReply = vi
+      .fn<() => Promise<string | undefined>>()
+      .mockResolvedValueOnce(undefined) // first: empty (transcript not yet written)
+      .mockResolvedValueOnce("Based on child results, the final conclusion is X."); // retry: landed
+
+    await createLifecycleController({
+      entry,
+      captureSubagentCompletionReply,
+    }).completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: false,
+    });
+
+    const finalArg = firstCallArg(taskExecutorMocks.completeTaskRunByRunId);
+    expect(finalArg.terminalOutcome).toBeUndefined();
+    expect(finalArg.terminalSummary).toBeNull();
+    expect(finalArg.progressSummary).toBe("Based on child results, the final conclusion is X.");
+    expect(taskExecutorMocks.failTaskRunByRunId).not.toHaveBeenCalled();
+  });
+
+  it("still blocks when both capture attempts return empty", async () => {
+    // Genuinely empty completion: both attempts return nothing →
+    // terminalOutcome stays blocked.
+    const entry = createRunEntry({ expectsCompletionMessage: true });
+    const captureSubagentCompletionReply = vi
+      .fn<() => Promise<string | undefined>>()
+      .mockResolvedValue(undefined); // always empty
+
+    await createLifecycleController({
+      entry,
+      captureSubagentCompletionReply,
+    }).completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: false,
+    });
+
+    const finalArg = firstCallArg(taskExecutorMocks.completeTaskRunByRunId);
+    expect(finalArg.terminalOutcome).toBe("blocked");
+    expect(finalArg.terminalSummary).toBe(
+      "Required completion did not produce a final deliverable.",
+    );
+    expect(taskExecutorMocks.failTaskRunByRunId).not.toHaveBeenCalled();
+  });
+
   it("does not reject cleanup give-up when task delivery status update throws", async () => {
     const persistOrThrow = vi.fn();
     const warn = vi.fn();
