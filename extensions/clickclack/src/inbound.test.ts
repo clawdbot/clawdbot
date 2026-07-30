@@ -138,6 +138,9 @@ function createAgentAccount(
     agentActivity: false,
     commandMenu: true,
     discussions: { enabled: false, workspace: "wsp_1", section: "Sessions" },
+    requireMention: false,
+    mentionPatterns: [],
+    groups: {},
     config: {
       allowFrom: ["*"],
     },
@@ -209,6 +212,9 @@ describe("handleClickClackInbound", () => {
       commandMenu: true,
       discussions: { enabled: false, workspace: "wsp_1", section: "Sessions" },
       config: {},
+      requireMention: false,
+      mentionPatterns: [],
+      groups: {},
     } satisfies ResolvedClickClackAccount;
 
     await handleClickClackInbound({

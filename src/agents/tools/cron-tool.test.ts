@@ -1414,7 +1414,7 @@ describe("cron tool", () => {
     const params = expectSingleGatewayCallMethod("cron.add") as
       | { payload?: { toolsAllow?: string[] } }
       | undefined;
-    expect(params?.payload?.toolsAllow).toEqual(["read", "cron"]);
+    expect(params?.payload?.toolsAllow).toEqual(["read", "automations"]);
   });
 
   it("caps trigger-script systemEvent adds to the creator tool surface", async () => {
@@ -1437,7 +1437,7 @@ describe("cron tool", () => {
     const params = expectSingleGatewayCallMethod("cron.add") as
       | { payload?: { toolsAllow?: string[] } }
       | undefined;
-    expect(params?.payload?.toolsAllow).toEqual(["read", "cron"]);
+    expect(params?.payload?.toolsAllow).toEqual(["read", "automations"]);
   });
 
   it("infers systemEvent for implicit text payloads with toolsAllow", async () => {
@@ -1492,7 +1492,7 @@ describe("cron tool", () => {
           trigger: { script: "return { fire: false }" },
           payload: {
             kind: "systemEvent",
-            toolsAllow: ["read", "cron"],
+            toolsAllow: ["read", "automations"],
             toolsAllowIsDefault: true,
           },
         },
@@ -1576,7 +1576,7 @@ describe("cron tool", () => {
     expect(params?.payload?.toolsAllow).toEqual([
       "active_memory_search",
       "active_memory_store",
-      "cron",
+      "automations",
     ]);
   });
 
@@ -2973,7 +2973,7 @@ describe("cron tool", () => {
       | undefined;
     expect(params?.patch?.payload).toEqual({
       kind: "agentTurn",
-      toolsAllow: ["read", "cron"],
+      toolsAllow: ["read", "automations"],
       toolsAllowIsDefault: true,
     });
   });
@@ -3188,7 +3188,7 @@ describe("cron tool", () => {
           payload: {
             kind: "agentTurn",
             message: "run later",
-            toolsAllow: ["read", "cron"],
+            toolsAllow: ["read", "automations"],
             toolsAllowIsDefault: true,
           },
         },

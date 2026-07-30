@@ -1,5 +1,6 @@
 // Shared tool-risk constants.
 // Keep these centralized so gateway HTTP restrictions and security audits don't drift.
+import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
 
 /**
  * Tools denied via Gateway HTTP `POST /tools/invoke` by default.
@@ -32,7 +33,7 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   "conversations_send",
   "conversations_turn",
   // Persistent automation control plane — can create/update/remove scheduled runs
-  "cron",
+  AUTOMATIONS_TOOL_NAME,
   // Gateway config can expose secrets and host topology
   "gateway",
   // Node command relay can reach system.run on paired hosts
@@ -45,10 +46,10 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
 ] as const;
 
 /**
- * Sensitive control-plane tools. `cron` can persist automation; `gateway`
+ * Sensitive control-plane tools. `automations` can persist scheduled runs; `gateway`
  * exposes configuration and schema details even though its agent actions are read-only.
  */
-export const GATEWAY_CONTROL_PLANE_TOOLS = ["cron", "gateway"] as const;
+export const GATEWAY_CONTROL_PLANE_TOOLS = [AUTOMATIONS_TOOL_NAME, "gateway"] as const;
 
 /**
  * Core tools that require sender owner identity on Gateway-scoped surfaces.

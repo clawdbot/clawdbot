@@ -25,5 +25,6 @@ export function canSkipGatewayConfigLoad(params: {
 
 /** Returns true for command families that intentionally bypass gateway config loading. */
 export function isGatewayConfigBypassCommandPath(commandPath: readonly string[]): boolean {
-  return commandPath[0] === "cron";
+  // Command paths come from raw argv, so the automations alias keeps its typed token.
+  return commandPath[0] === "cron" || commandPath[0] === "automations";
 }

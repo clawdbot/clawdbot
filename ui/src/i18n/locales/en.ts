@@ -663,6 +663,8 @@ export const en: TranslationMap = {
     loadError: "Could not load dashboards: {error}",
   },
   sessionsView: {
+    subagentPrefix: "Subagent:",
+    automationPrefix: "Automation:",
     deletePreservedWorktrees:
       "{count} thread worktree(s) with uncommitted or unpushed work were kept ({branches}). Manage them under Settings -> Worktrees.",
     deletePreservedWorktreeConfirm:
@@ -840,7 +842,7 @@ export const en: TranslationMap = {
     groupBy: "Group by",
     groupByNone: "None",
     groupByCategory: "Custom groups",
-    showCronSessions: "Show cron sessions",
+    showCronSessions: "Show automation sessions",
     groupByChannel: "Channel",
     groupByKind: "Kind",
     groupByAgent: "Agent",
@@ -1000,10 +1002,10 @@ export const en: TranslationMap = {
     },
     cronPanel: {
       schedulerTitle: "Scheduler",
-      schedulerSubtitle: "Gateway cron status.",
+      schedulerSubtitle: "Gateway automations status.",
       jobs: "Jobs",
       nextWake: "Next wake",
-      agentJobsTitle: "Agent Cron Jobs",
+      agentJobsTitle: "Agent Automations",
       agentJobsSubtitle: "Scheduled jobs targeting this agent.",
       noJobs: "No jobs assigned.",
       runNow: "Run Now",
@@ -1187,7 +1189,7 @@ export const en: TranslationMap = {
         description: "Session management and persistence",
       },
       cron: {
-        label: "Cron",
+        label: "Automations",
         description: "Scheduled tasks and automation",
       },
       discovery: {
@@ -1366,7 +1368,7 @@ export const en: TranslationMap = {
       commands: "Commands",
       hooks: "Hooks",
       bindings: "Bindings",
-      cron: "Cron",
+      cron: "Automations",
       approvals: "Approvals",
       security: "Security Policy",
       plugins: "Plugins",
@@ -1929,7 +1931,7 @@ export const en: TranslationMap = {
     sessions: "Active threads and defaults.",
     usage: "API usage and costs.",
     cron: "Scheduled tasks and recurring agent runs.",
-    tasks: "Background tasks: subagents, cron runs, CLI.",
+    tasks: "Background tasks: subagents, automation runs, CLI.",
     skills: "Skills and API keys.",
     plugins: "Install and manage optional capabilities.",
     skillWorkshop: "Review, refine, and apply proposals before they become live skills.",
@@ -1942,7 +1944,7 @@ export const en: TranslationMap = {
     communications: "Messages and text-to-speech settings.",
     appearance: "Theme, UI, and setup wizard settings.",
     lobsterdex: "Every lobster palette that has visited this browser.",
-    automation: "Commands, hooks, cron, and plugins.",
+    automation: "Commands, hooks, automations, and plugins.",
     mcp: "MCP servers, auth, tools, and diagnostics.",
     memory: "Memory engine, backend, search, and dreaming.",
     talk: "Realtime voice: provider, model, and speaker voice.",
@@ -2467,7 +2469,7 @@ export const en: TranslationMap = {
     },
     dreaming: {
       intro:
-        "Dreaming runs as one managed cron job across every agent workspace, so these settings are global. They are owned by the {plugin} plugin.",
+        "Dreaming runs as one managed automation across every agent workspace, so these settings are global. They are owned by the {plugin} plugin.",
       schedule: {
         title: "Schedule",
         description: "When the full sweep runs and which model narrates it.",
@@ -2886,7 +2888,7 @@ export const en: TranslationMap = {
     },
     runtime: {
       subagent: "Subagent",
-      cron: "Cron",
+      cron: "Automation",
       acp: "ACP",
       cli: "CLI",
       unknown: "Task",
@@ -3532,8 +3534,8 @@ export const en: TranslationMap = {
   },
   attention: {
     cronErrorUnknown: "Unknown error",
-    cronFailed: "{count} cron job(s) failed",
-    cronOverdue: "{count} cron job(s) overdue",
+    cronFailed: "{count} automation(s) failed",
+    cronOverdue: "{count} automation(s) overdue",
     modelAuthExpired: "Model auth expired: {providers}",
     pendingApproval: "{count} pending approval",
     pendingApprovals: "{count} pending approvals",
@@ -3596,7 +3598,7 @@ export const en: TranslationMap = {
     items: {
       apps: "Apps",
       sessions: "Threads",
-      scheduled: "Scheduled",
+      scheduled: "Automations",
       skills: "Skills",
       plugins: "Plugins",
       settings: "Settings",
