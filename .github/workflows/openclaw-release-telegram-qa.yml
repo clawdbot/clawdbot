@@ -2591,11 +2591,10 @@ jobs:
               (.candidateArtifact.version | length > 0)
             ' "$context_path" >/dev/null
 
-          candidate_telegram_cli="${CANDIDATE_ROOT}/extensions/qa-lab/src/live-transports/telegram/cli.runtime.ts"
-          candidate_boundary_controller="${CANDIDATE_ROOT}/extensions/qa-lab/src/gateway-process-boundary.ts"
-          if [[ ! -f "$candidate_boundary_controller" ]] ||
-            ! grep -Fq "resolveTelegramQaSutOpenClawCommand" "$candidate_telegram_cli"; then
-            # Frozen candidates before the boundary protocol have no runtime evidence to emit.
+          # This frozen extended-stable candidate predates the boundary protocol.
+          # Every other target fails closed until it emits the required evidence.
+          legacy_process_boundary_target_sha="2dbfe013e511d0c7e0720356f5af5c7bb210db19"
+          if [[ "$TARGET_SHA" == "$legacy_process_boundary_target_sha" ]]; then
             jq --arg executionMode "legacy-runner" \
               '. + {executionMode: $executionMode}' "$context_path" >"$aggregate_path"
             chmod 0600 "$aggregate_path"
