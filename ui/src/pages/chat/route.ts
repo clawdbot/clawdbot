@@ -1,11 +1,7 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html, nothing } from "lit";
-import {
-  INTERNAL_SESSION_PATH_PARAM,
-  pathForRoute,
-  routePageSpec,
-} from "../../app-route-paths.ts";
+import { INTERNAL_SESSION_PATH_PARAM, pathForRoute, routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";

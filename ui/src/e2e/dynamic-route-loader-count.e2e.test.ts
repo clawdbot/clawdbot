@@ -75,9 +75,7 @@ describeControlUiE2e("Control UI dynamic route startup loaders", () => {
 
       const socketCount = await gateway.getSocketCount();
       await gateway.closeLatest(1001, "route loader reconnect proof");
-      await expect
-        .poll(() => gateway.getSocketCount(), { timeout: 10_000 })
-        .toBe(socketCount + 1);
+      await expect.poll(() => gateway.getSocketCount(), { timeout: 10_000 }).toBe(socketCount + 1);
       await waitForControlUiRoute(page, { pathname, routeId: "plugins" });
       expect(await activeRouteFetchCount(page)).toBe(1);
     } finally {
