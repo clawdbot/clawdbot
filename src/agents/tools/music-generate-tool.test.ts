@@ -51,6 +51,9 @@ const configMocks = vi.hoisted(() => ({
 const mediaStoreMocks = vi.hoisted(() => ({
   saveMediaBuffer: vi.fn(),
 }));
+const probeMediaFilesWithinBudgetMock = vi.hoisted(() =>
+  vi.fn(async (inputs: readonly unknown[]) => inputs.map(() => ({}))),
+);
 
 const musicGenerationRuntimeMocks = vi.hoisted(() => ({
   generateMusic: vi.fn(),
@@ -139,6 +142,9 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
   ...configMocks,
 }));
 vi.mock("../../media/store.js", () => mediaStoreMocks);
+vi.mock("../../media/media-probe.js", () => ({
+  probeMediaFilesWithinBudget: probeMediaFilesWithinBudgetMock,
+}));
 vi.mock("../../media/web-media.js", async () => {
   const actual = await vi.importActual<typeof import("../../media/web-media.js")>(
     "../../media/web-media.js",
@@ -181,6 +187,10 @@ function resetMusicGenerateMocks() {
   vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([]);
   musicGenerationRuntimeMocks.generateMusic.mockReset();
   mediaStoreMocks.saveMediaBuffer.mockReset();
+  probeMediaFilesWithinBudgetMock.mockReset();
+  probeMediaFilesWithinBudgetMock.mockImplementation(async (inputs: readonly unknown[]) =>
+    inputs.map(() => ({})),
+  );
   taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
   taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
   taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
@@ -398,6 +408,7 @@ describe("createMusicGenerateTool", () => {
       size: 11,
       contentType: "audio/mpeg",
     });
+    probeMediaFilesWithinBudgetMock.mockResolvedValueOnce([{ durationMs: 12_000 }]);
 
     const tool = createMusicGenerateTool({
       config: asConfig({
@@ -448,8 +459,14 @@ describe("createMusicGenerateTool", () => {
         path: "/tmp/generated-night-drive.mp3",
         mimeType: "audio/mpeg",
         name: "night-drive.mp3",
+        sizeBytes: 11,
+        durationMs: 12_000,
       },
     ]);
+    expect(probeMediaFilesWithinBudgetMock).toHaveBeenCalledWith(
+      [{ filePath: "/tmp/generated-night-drive.mp3", kind: "audio" }],
+      { budgetMs: 3000, concurrency: 2, maxProbes: 8 },
+    );
     expect(details.paths).toEqual(["/tmp/generated-night-drive.mp3"]);
     expect(details.metadata).toEqual({ taskId: "music-task-1" });
     expect(taskExecutorMocks.createRunningTaskRun).not.toHaveBeenCalled();
@@ -675,6 +692,7 @@ describe("createMusicGenerateTool", () => {
         path: "/tmp/generated-night-drive.mp3",
         mimeType: "audio/mpeg",
         name: "night-drive.mp3",
+        sizeBytes: 11,
       },
     ]);
   });

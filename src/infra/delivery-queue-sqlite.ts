@@ -14,11 +14,18 @@ type QueueStatus = "pending" | "failed" | "completed";
 type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
 const COMPLETED_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const PERMANENT_COMPLETION_RECOVERY_STATE = "completed_permanent";
+const BOUNDED_COMPLETION_RECOVERY_STATE = "completed_bounded";
 
-export type DeliveryQueueCompletionRetention = "permanent";
+export type DeliveryQueueCompletionRetention =
+  | "permanent"
+  | Readonly<{
+      idPrefix: string;
+      maxAgeMs: number;
+      maxEntries: number;
+    }>;
 
 /** Indexed metadata extracted from queue payloads for diagnostics and recovery. */
-export type DeliveryQueueRowMetadata = {
+type DeliveryQueueRowMetadata = {
   entryKind?: string;
   sessionKey?: string;
   channel?: string;
@@ -31,12 +38,18 @@ export type DeliveryQueueEntryState = {
   id: string;
   enqueuedAt: number;
   retryCount: number;
+  availableAt?: number;
+  /** Only explicit reusable producers retain a platform-send ownership lease. */
+  requiresProducerClaim?: boolean;
+  producerClaimId?: string;
   /** Durable delivery-call count reserved before invoking the provider path. */
   attemptCount?: number;
   completionRetention?: DeliveryQueueCompletionRetention;
   acknowledgedAt?: number;
   lastAttemptAt?: number;
   lastError?: string;
+  /** UUID fencing one platform attempt even when clock timestamps collide. */
+  platformSendAttemptId?: string;
   platformSendStartedAt?: number;
   recoveryState?: string;
 };
@@ -101,7 +114,7 @@ function inflate(row: QueueRow): DeliveryQueueEntryState | null {
   };
 }
 
-function metadata(entry: DeliveryQueueEntryState): DeliveryQueueRowMetadata {
+function metadata(queueName: string, entry: DeliveryQueueEntryState): DeliveryQueueRowMetadata {
   const item = entry as DeliveryQueueEntryState & {
     kind?: string;
     sessionKey?: string;
@@ -113,7 +126,7 @@ function metadata(entry: DeliveryQueueEntryState): DeliveryQueueRowMetadata {
     deliveryContext?: { channel?: string; to?: string; accountId?: string };
   };
   return {
-    entryKind: item.kind,
+    entryKind: item.kind ?? queueName,
     sessionKey: item.sessionKey ?? item.session?.key,
     channel: item.channel ?? item.route?.channel ?? item.deliveryContext?.channel,
     target: item.to ?? item.route?.to ?? item.deliveryContext?.to,
@@ -127,7 +140,7 @@ function upsertDeliveryQueueEntryInDatabase(
 ): boolean {
   const now = Date.now();
   const status = params.status ?? "pending";
-  const meta = params.metadata ?? metadata(params.entry);
+  const meta = params.metadata ?? metadata(params.queueName, params.entry);
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
   const insert = queueDb.insertInto("delivery_queue_entries").values({
     queue_name: params.queueName,
@@ -386,10 +399,48 @@ export function getDeliveryQueueEntryStatus(
     database.db,
     queueDb
       .selectFrom("delivery_queue_entries")
-      .select("status")
+      .select(["status", "entry_json", "enqueued_at", "recovery_state"])
       .where("queue_name", "=", queueName)
       .where("id", "=", id),
-  ) as { status?: QueueStatus } | undefined;
+  ) as
+    | {
+        status?: QueueStatus;
+        entry_json: string;
+        enqueued_at: number | bigint;
+        recovery_state: string | null;
+      }
+    | undefined;
+  if (row?.status === "completed" && row.recovery_state === BOUNDED_COMPLETION_RECOVERY_STATE) {
+    let retention: DeliveryQueueCompletionRetention | undefined;
+    try {
+      retention = (JSON.parse(row.entry_json) as DeliveryQueueEntryState).completionRetention;
+    } catch {
+      // An unreadable terminal receipt stays fail-closed rather than authorizing
+      // a second recipient-visible send without producer ownership proof.
+      return row.status;
+    }
+    if (
+      typeof retention === "object" &&
+      id.startsWith(retention.idPrefix) &&
+      Number.isSafeInteger(retention.maxAgeMs) &&
+      retention.maxAgeMs > 0 &&
+      Number(row.enqueued_at) < Date.now() - retention.maxAgeMs
+    ) {
+      const expired = executeSqliteQuerySync(
+        database.db,
+        queueDb
+          .deleteFrom("delivery_queue_entries")
+          .where("queue_name", "=", queueName)
+          .where("id", "=", id)
+          .where("status", "=", "completed")
+          .where("recovery_state", "=", BOUNDED_COMPLETION_RECOVERY_STATE)
+          .where("enqueued_at", "<", Date.now() - retention.maxAgeMs),
+      );
+      if (expired.numAffectedRows === 1n) {
+        return undefined;
+      }
+    }
+  }
   return row?.status;
 }
 
@@ -441,6 +492,19 @@ export function completeDeliveryQueueEntry(queueName: string, id: string, stateD
   const now = Date.now();
   const current = loadDeliveryQueueEntry(queueName, id, stateDir);
   const retainPermanently = current?.completionRetention === "permanent";
+  const boundedRetention =
+    typeof current?.completionRetention === "object" ? current.completionRetention : undefined;
+  if (
+    boundedRetention &&
+    (!boundedRetention.idPrefix ||
+      !id.startsWith(boundedRetention.idPrefix) ||
+      !Number.isSafeInteger(boundedRetention.maxAgeMs) ||
+      boundedRetention.maxAgeMs <= 0 ||
+      !Number.isSafeInteger(boundedRetention.maxEntries) ||
+      boundedRetention.maxEntries <= 0)
+  ) {
+    throw new Error(`Invalid bounded delivery completion retention: ${queueName}/${id}`);
+  }
   const tombstone = {
     id,
     enqueuedAt: now,
@@ -450,6 +514,12 @@ export function completeDeliveryQueueEntry(queueName: string, id: string, stateD
       ? {
           completionRetention: "permanent" as const,
           recoveryState: PERMANENT_COMPLETION_RECOVERY_STATE,
+        }
+      : {}),
+    ...(boundedRetention
+      ? {
+          completionRetention: boundedRetention,
+          recoveryState: BOUNDED_COMPLETION_RECOVERY_STATE,
         }
       : {}),
   };
@@ -471,17 +541,64 @@ export function completeDeliveryQueueEntry(queueName: string, id: string, stateD
   // survive because their source intent can outlive any bounded retry window.
   const database = openStateDatabase(stateDir);
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  const lastRetained = boundedRetention
+    ? (executeSqliteQueryTakeFirstSync(
+        database.db,
+        queueDb
+          .selectFrom("delivery_queue_entries")
+          .select(["id", "enqueued_at"])
+          .where("queue_name", "=", queueName)
+          .where("status", "=", "completed")
+          .where("recovery_state", "=", BOUNDED_COMPLETION_RECOVERY_STATE)
+          .where("id", ">=", boundedRetention.idPrefix)
+          .where("id", "<", `${boundedRetention.idPrefix}\uffff`)
+          .orderBy("enqueued_at", "desc")
+          .orderBy("id", "desc")
+          .limit(1)
+          .offset(boundedRetention.maxEntries - 1),
+      ) as { id: string; enqueued_at: number | bigint } | undefined)
+    : undefined;
+  // One indexed sweep owns ordinary expiry and producer-local age/count
+  // limits; pending rows, sibling prefixes, and permanent receipts survive.
   executeSqliteQuerySync(
     database.db,
     queueDb
       .deleteFrom("delivery_queue_entries")
       .where("queue_name", "=", queueName)
       .where("status", "=", "completed")
-      .where("enqueued_at", "<", now - COMPLETED_TOMBSTONE_RETENTION_MS)
       .where((eb) =>
         eb.or([
-          eb("recovery_state", "is", null),
-          eb("recovery_state", "!=", PERMANENT_COMPLETION_RECOVERY_STATE),
+          eb.and([
+            eb("enqueued_at", "<", now - COMPLETED_TOMBSTONE_RETENTION_MS),
+            eb.or([
+              eb("recovery_state", "is", null),
+              eb("recovery_state", "not in", [
+                PERMANENT_COMPLETION_RECOVERY_STATE,
+                BOUNDED_COMPLETION_RECOVERY_STATE,
+              ]),
+            ]),
+          ]),
+          ...(boundedRetention
+            ? [
+                eb.and([
+                  eb("recovery_state", "=", BOUNDED_COMPLETION_RECOVERY_STATE),
+                  eb("id", ">=", boundedRetention.idPrefix),
+                  eb("id", "<", `${boundedRetention.idPrefix}\uffff`),
+                  eb.or([
+                    eb("enqueued_at", "<", now - boundedRetention.maxAgeMs),
+                    ...(lastRetained
+                      ? [
+                          eb("enqueued_at", "<", Number(lastRetained.enqueued_at)),
+                          eb.and([
+                            eb("enqueued_at", "=", Number(lastRetained.enqueued_at)),
+                            eb("id", "<", lastRetained.id),
+                          ]),
+                        ]
+                      : []),
+                  ]),
+                ]),
+              ]
+            : []),
         ]),
       ),
   );
@@ -511,6 +628,7 @@ export function reserveDeliveryQueueEntryAttempt(params: {
   id: string;
   maxAttempts: number;
   stateDir?: string;
+  expectedPlatformSendAttemptId?: string;
 }): ReserveDeliveryQueueAttemptResult {
   if (!Number.isInteger(params.maxAttempts) || params.maxAttempts <= 0) {
     throw new Error(`Invalid delivery attempt budget: ${params.maxAttempts}`);
@@ -522,6 +640,13 @@ export function reserveDeliveryQueueEntryAttempt(params: {
       const current = loadDeliveryQueueEntry(params.queueName, params.id, params.stateDir);
       if (!current) {
         throw enoent(params.queueName, params.id);
+      }
+      if (
+        params.expectedPlatformSendAttemptId &&
+        current.platformSendAttemptId !== params.expectedPlatformSendAttemptId &&
+        current.producerClaimId !== params.expectedPlatformSendAttemptId
+      ) {
+        throw new Error(`Stable delivery platform claim was lost: ${params.id}`);
       }
       const persistedAttemptCount =
         typeof current.attemptCount === "number" &&

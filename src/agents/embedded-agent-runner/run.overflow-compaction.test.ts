@@ -70,6 +70,10 @@ import type { RunEmbeddedAgentParams } from "./run/params.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
+
+// Cold GitHub-hosted fork runners can spend more than two minutes loading and
+// warming this broad harness before the first test reports progress.
+const COLD_FORK_RUNNER_HOOK_TIMEOUT_MS = 420_000;
 type RuntimePlanAuthOverrides = Partial<Omit<AgentRuntimeAuthPlan, "modelRoute">> & {
   modelRoute?: AgentRuntimeAuthModelRoute;
 };
@@ -305,7 +309,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
     await warmRunOverflowCompactionHarness(runEmbeddedAgent);
-  });
+  }, COLD_FORK_RUNNER_HOOK_TIMEOUT_MS);
 
   beforeEach(() => {
     resetAgentEventsForTest();
@@ -3788,7 +3792,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
 
     expectRecordFields(mockCallArg(mockedGlobalHookRunner.runBeforeCompaction), {
       messageCount: -1,
-      sessionFile: "/tmp/session.json",
+      sessionFile: "test-key",
     });
     expectRecordFields(mockCallArg(mockedGlobalHookRunner.runBeforeCompaction, 0, 1), {
       sessionKey: "test-key",
@@ -3797,7 +3801,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       messageCount: -1,
       compactedCount: -1,
       tokenCount: 50,
-      sessionFile: "/tmp/session.json",
+      sessionFile: "test-key",
     });
     expectRecordFields(mockCallArg(mockedGlobalHookRunner.runAfterCompaction, 0, 1), {
       sessionKey: "test-key",
@@ -3824,7 +3828,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       contextEngine: mockedContextEngine,
       sessionId: "test-session",
       sessionKey: "test-key",
-      sessionFile: "/tmp/session.json",
+      sessionFile: "test-key",
       reason: "compaction",
     });
     expectRecordFields(maintenanceParams.runtimeContext, {
@@ -3936,13 +3940,13 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       mockedRunEmbeddedAttempt,
       {
         sessionId: "rotated-session",
-        sessionFile: `sqlite:main:rotated-session:${rotatedStorePath}`,
+        sessionFile: "test-key",
       },
       1,
     );
     expectMockCallFields(mockedRunContextEngineMaintenance, {
       sessionId: "rotated-session",
-      sessionFile: `sqlite:main:rotated-session:${rotatedStorePath}`,
+      sessionFile: "test-key",
     });
   });
 

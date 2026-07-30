@@ -16,7 +16,7 @@ struct GeneralSettings: View {
 
     @Bindable var state: AppState
     @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
-    @AppStorage(computerControlEnabledKey) private var computerControlEnabled: Bool = false
+    @AppStorage(computerControlEnabledKey) private var computerControlEnabled: Bool = true
     let page: Page
     let isActive: Bool
     private let healthStore = HealthStore.shared
@@ -26,6 +26,7 @@ struct GeneralSettings: View {
     @State private var gatewayStatus: GatewayEnvironmentStatus = .checking
     @State private var remoteStatus: RemoteStatus = .idle
     @State private var showRemoteAdvanced = false
+    @State private var computerControlPermissions = ComputerControlPermissionSnapshot.probe()
     private let isPreview = ProcessInfo.processInfo.isPreview
     private var isNixMode: Bool {
         ProcessInfo.processInfo.isNixMode
@@ -66,6 +67,12 @@ struct GeneralSettings: View {
         .onChange(of: self.computerControlEnabled) { _, _ in
             // Turning Computer Control on/off must start or stop the gated PeekabooBridge host.
             self.state.applyPeekabooBridgeHostState()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            self.refreshComputerControlPermissions()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openclawPermissionsChanged)) { _ in
+            self.refreshComputerControlPermissions()
         }
         .onDisappear { self.gatewayDiscovery.stop() }
     }
@@ -128,10 +135,23 @@ struct GeneralSettings: View {
                 SettingsCardToggleRow(
                     title: "Allow Computer Control",
                     subtitle: """
-                    Let an authorized agent move the pointer, click, and type on this Mac. \
-                    Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.
+                    Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can \
+                    move the pointer, click, and type without per-action confirmation. High risk.
                     """,
                     binding: self.$computerControlEnabled)
+
+                SettingsCardRow(
+                    title: "Computer Control access",
+                    subtitle: .verbatim(self.computerControlPermissions.diagnostic.detailText))
+                {
+                    Label {
+                        Text(verbatim: self.computerControlPermissions.diagnostic.statusText)
+                    } icon: {
+                        Image(systemName: self.computerControlPermissionIcon)
+                    }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(self.computerControlPermissionColor)
+                }
 
                 SettingsCardToggleRow(
                     title: "Enable Peekaboo Bridge",
@@ -283,12 +303,33 @@ struct GeneralSettings: View {
     private func updateActiveWork(active: Bool) {
         guard !self.isPreview else { return }
         if active {
+            self.refreshComputerControlPermissions()
             self.refreshGatewayStatus()
             if self.page == .connection {
                 self.gatewayDiscovery.start()
             }
         } else {
             self.gatewayDiscovery.stop()
+        }
+    }
+
+    private func refreshComputerControlPermissions() {
+        guard self.page == .general, self.isActive, !self.isPreview else { return }
+        self.computerControlPermissions = .probe()
+    }
+
+    private var computerControlPermissionIcon: String {
+        switch self.computerControlPermissions.diagnostic {
+        case .granted: "checkmark.circle.fill"
+        case .missing: "exclamationmark.circle.fill"
+        case .accessibilityGrantMayBeStale: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var computerControlPermissionColor: Color {
+        switch self.computerControlPermissions.diagnostic {
+        case .granted: .green
+        case .missing, .accessibilityGrantMayBeStale: .orange
         }
     }
 
@@ -745,9 +786,7 @@ struct GeneralSettings: View {
 
     private func refreshGatewayStatus() {
         Task {
-            let status = await Task.detached(priority: .utility) {
-                GatewayEnvironment.check()
-            }.value
+            let status = await GatewayEnvironment.check()
             self.gatewayStatus = status
         }
     }

@@ -36,6 +36,9 @@ export type GatewayThinkingLevelOption = {
 
 export type GatewayAgentKind = "agent" | "system";
 
+/** Per-session Control UI face preference carried by session list rows. */
+export type SessionBoardFace = "chat" | "dashboard";
+
 /** Common agent row shape used by session list responses. */
 export type GatewayAgentRow = {
   id: string;
@@ -62,7 +65,7 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   nextOffset?: number | null;
   hasMore?: boolean;
   /** Complete creator facet for the filtered result, independent of pagination. */
-  creators?: Array<{ id: string; label?: string }>;
+  creators?: Array<{ id: string; label?: string; avatarUrl?: string }>;
   defaults: TDefaults;
   sessions: TRow[];
 };

@@ -223,9 +223,7 @@ function isRestartSafeChatSession(params: {
     entry.abortedLastRun !== true &&
     entry.archivedAt === undefined &&
     entry.initializationPending !== true &&
-    entry.pendingFinalDelivery !== true &&
-    entry.pendingFinalDeliveryText == null &&
-    entry.pendingFinalDeliveryContext === undefined &&
+    entry.pendingFinalDelivery === undefined &&
     entry.agentHarnessId === undefined &&
     entry.pluginOwnerId === undefined &&
     entry.spawnedBy === undefined &&

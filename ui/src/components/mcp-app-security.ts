@@ -1,4 +1,5 @@
 import type { AppBridge } from "@modelcontextprotocol/ext-apps/app-bridge";
+import { t } from "../i18n/index.ts";
 import { resolveSandboxHostUrl } from "./sandbox-host.ts";
 
 type McpAppHostCapabilities = ConstructorParameters<typeof AppBridge>[2];
@@ -125,6 +126,6 @@ export function resolveMcpAppSandboxUrl(
     sandboxOrigin,
     gatewayUrl,
     hostOrigin,
-    "MCP App sandbox URL is invalid",
+    t("mcpApp.errors.invalidSandboxUrl"),
   );
 }

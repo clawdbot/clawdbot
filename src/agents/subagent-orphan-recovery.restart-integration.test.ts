@@ -22,6 +22,7 @@ import { captureEnv } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { recoverOrphanedSubagentSessions as recoverOrphanedSubagentSessionsWithRuntime } from "./subagent-orphan-recovery.js";
 import {
+  createCanonicalSubagentRunFixture,
   createSubagentRegistryTestDeps,
   readSubagentSessionStore,
   writeSubagentSessionEntry,
@@ -58,7 +59,7 @@ vi.mock("../gateway/session-utils.fs.js", () => ({
 const TWO_HOURS_MS = 2 * 60 * 60 * 1_000;
 
 function makeRunRecord(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
-  return {
+  return createCanonicalSubagentRunFixture({
     runId: "run",
     childSessionKey: "agent:main:subagent:child",
     requesterSessionKey: "agent:main:main",
@@ -68,7 +69,7 @@ function makeRunRecord(overrides: Partial<SubagentRunRecord>): SubagentRunRecord
     createdAt: Date.now(),
     startedAt: Date.now(),
     ...overrides,
-  } as SubagentRunRecord;
+  } as SubagentRunRecord);
 }
 
 describe("subagent orphan recovery — faithful restart path", () => {

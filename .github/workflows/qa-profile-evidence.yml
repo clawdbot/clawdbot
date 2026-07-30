@@ -197,7 +197,7 @@ jobs:
     name: Generate QA profile evidence
     needs: validate_selected_ref
     runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
     outputs:
@@ -232,6 +232,7 @@ jobs:
           set -euo pipefail
           node --import tsx --input-type=module <<'NODE'
           import fs from "node:fs";
+          import { readQaScenarioPack } from "./extensions/qa-lab/src/scenario-catalog.ts";
           import { readQaScorecardTaxonomyReport } from "./extensions/qa-lab/src/scorecard-taxonomy.ts";
 
           const requested = process.env.QA_PROFILE?.trim() ?? "";
@@ -239,7 +240,7 @@ jobs:
             throw new Error(`qa_profile must use a taxonomy profile id, got ${JSON.stringify(process.env.QA_PROFILE)}`);
           }
 
-          const taxonomy = readQaScorecardTaxonomyReport([]);
+          const taxonomy = readQaScorecardTaxonomyReport(readQaScenarioPack().scenarios);
           const profile = taxonomy.profiles.find((entry) => entry.id === requested);
           if (!profile) {
             const available = taxonomy.profiles.map((entry) => entry.id).join(", ");

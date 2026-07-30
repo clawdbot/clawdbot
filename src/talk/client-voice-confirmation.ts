@@ -90,11 +90,12 @@ function requiresHighImpactVoiceConfirmation(toolName: string, params: unknown):
   return true;
 }
 
-function consumeApprovedFingerprint(
+function resolveApprovedFingerprint(
   voiceSessionId: string,
   runId: string | undefined,
   fingerprint: string,
   now: number,
+  consume: boolean,
 ): boolean {
   if (!runId) {
     return false;
@@ -106,7 +107,9 @@ function consumeApprovedFingerprint(
     approved?.delete(fingerprint);
     return false;
   }
-  approved?.delete(fingerprint);
+  if (consume) {
+    approved?.delete(fingerprint);
+  }
   return true;
 }
 
@@ -136,8 +139,7 @@ export function noteClientVoiceConfirmationUtterance(params: {
   }
 }
 
-/** Pause a high-impact action for one voice-bound run until its exact fingerprint is approved. */
-export function resolveClientVoiceToolConfirmationPolicy(params: {
+type ClientVoiceToolConfirmationPolicyParams = {
   agentId?: string;
   voiceSessionId?: string;
   runId?: string;
@@ -145,7 +147,16 @@ export function resolveClientVoiceToolConfirmationPolicy(params: {
   toolParams: unknown;
   isConfirmable?: () => boolean;
   now?: number;
-}): { allowed: true } | { allowed: false; reason: string } {
+};
+
+type ClientVoiceToolConfirmationPolicyResult =
+  | { allowed: true }
+  | { allowed: false; reason: string };
+
+function resolveClientVoiceToolConfirmationPolicy(
+  params: ClientVoiceToolConfirmationPolicyParams,
+  consume: boolean,
+): ClientVoiceToolConfirmationPolicyResult {
   if (!params.agentId || !params.voiceSessionId) {
     return { allowed: true };
   }
@@ -162,7 +173,7 @@ export function resolveClientVoiceToolConfirmationPolicy(params: {
   const now = params.now ?? Date.now();
   const fingerprint = stableToolFingerprint(params.toolName, params.toolParams);
   const scopeKey = confirmationScopeKey(params.agentId, params.voiceSessionId);
-  if (consumeApprovedFingerprint(scopeKey, params.runId, fingerprint, now)) {
+  if (resolveApprovedFingerprint(scopeKey, params.runId, fingerprint, now, consume)) {
     return { allowed: true };
   }
   const existing = [...pendingConfirmations.values()].find(
@@ -194,6 +205,20 @@ export function resolveClientVoiceToolConfirmationPolicy(params: {
       `The high-impact voice action "${params.toolName}" was not executed. ` +
       "Ask the user for explicit spoken confirmation, then call openclaw_agent_consult again with this confirmationId.",
   };
+}
+
+/** Check whether one exact high-impact action is approved without consuming its grant. */
+export function checkClientVoiceToolConfirmationPolicy(
+  params: ClientVoiceToolConfirmationPolicyParams,
+): ClientVoiceToolConfirmationPolicyResult {
+  return resolveClientVoiceToolConfirmationPolicy(params, false);
+}
+
+/** Authorize the canonical execution params and consume their one-shot grant. */
+export function consumeClientVoiceToolConfirmationPolicy(
+  params: ClientVoiceToolConfirmationPolicyParams,
+): ClientVoiceToolConfirmationPolicyResult {
+  return resolveClientVoiceToolConfirmationPolicy(params, true);
 }
 
 const REFUSAL_PATTERN = /\b(no|don't|do not|cancel|stop|never mind)\b/;

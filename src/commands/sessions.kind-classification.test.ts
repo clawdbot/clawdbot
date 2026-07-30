@@ -13,7 +13,7 @@ import {
  * Catalog #19 — `kind` misclassified as `"direct"` for ACP spawn-child sessions.
  *
  * Bug summary: `classifySessionKey` (defined twice — `src/commands/sessions.ts:136-152`
- * and `src/commands/status.summary.runtime.ts:129-145`) classifies a session
+ * and `src/status/summary.runtime.ts:129-145`) classifies a session
  * based ONLY on the key shape (`:group:` / `:channel:` substrings) plus
  * `entry.chatType`. It ignores `entry.spawnedBy` and `entry.deliveryContext`,
  * so ACP spawn-child sessions (e.g., `agent:copilot:acp:<uuid>` with
@@ -32,7 +32,7 @@ import {
  * NOTE ON DUPLICATION: the same logic lives in two places —
  *   - `src/commands/sessions.ts:136-152`        (called by `sessionsCommand`,
  *     the path under test here)
- *   - `src/commands/status.summary.runtime.ts:129-145`
+ *   - `src/status/summary.runtime.ts:129-145`
  * The eventual fix MUST update both, or extract a shared helper.
  *
  * NOTE ON SURFACE: `classifySessionKey` is private to each file (not exported),
@@ -177,7 +177,7 @@ describe("sessionsCommand kind classification (catalog #19)", () => {
       `ACP spawn-child session ${ACP_SPAWN_CHILD_KEY} should classify as "spawn-child" ` +
         `(or whichever non-direct label the fix author chooses). Got "${row?.kind}". ` +
         `Fix locations: src/commands/sessions.ts:136-152 AND ` +
-        `src/commands/status.summary.runtime.ts:129-145 (the same logic is duplicated; ` +
+        `src/status/summary.runtime.ts:129-145 (the same logic is duplicated; ` +
         `extract to a shared helper or update both).`,
     ).toBe("spawn-child");
   });

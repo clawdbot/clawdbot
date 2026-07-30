@@ -12,14 +12,14 @@ import {
   formatInvalidConfigDetails,
 } from "../config/io.invalid-config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
-import { createMergePatch } from "../config/io.write-prepare.js";
+import { createMergePatch } from "../config/merge-patch.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { readHookInstalls } from "../hooks/installs.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
-import { normalizeUpdateChannel } from "../infra/update-channels.js";
+import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import {
   containsConfigIncludeDirective,
   resolveCombinedPluginAndHookConfigMutationPreflight,
@@ -35,6 +35,7 @@ import {
   withoutPluginInstallRecords,
   withPluginInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
+import { configReferencesNpmInstallPath } from "../plugins/installs.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import {
@@ -222,6 +223,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
     sourceCfg,
     pluginInstallRecords,
   );
+  const configuredUpdateChannel = normalizeUpdateChannel(cfg.update?.channel) ?? undefined;
   const logger = {
     info: (msg: string) => defaultRuntime.log(msg),
     warn: (msg: string) => defaultRuntime.log(msg.includes("╭─") ? msg : theme.warn(msg)),
@@ -296,9 +298,15 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
           pluginConfigReferencesId(mutationSnapshot.snapshot.sourceConfig, pluginId))
       );
     });
+    const pluginLoadPathMayMutate = pluginSelection.pluginIds.some((pluginId) =>
+      configReferencesNpmInstallPath({
+        config: cfg,
+        install: pluginInstallRecords[pluginId],
+      }),
+    );
     // Manual update records stay in the index unless scoped-package compatibility
-    // migrates authored references from a legacy id.
-    const pluginConfigMayMutate = pluginIdMigrationMayMutate;
+    // migrates authored references or moves an explicit prior managed root.
+    const pluginConfigMayMutate = pluginIdMigrationMayMutate || pluginLoadPathMayMutate;
     const blockedReasons = new Set<string>();
     if (pluginConfigMayMutate && pluginMutation.mode === "blocked") {
       blockedReasons.add(pluginMutation.reason);
@@ -335,8 +343,12 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
           pluginIds: pluginSelection.pluginIds,
           specOverrides: pluginSelection.specOverrides,
           dryRun: params.opts.dryRun,
+          updateChannel: params.opts.all ? undefined : configuredUpdateChannel,
           officialPluginUpdateChannel: params.opts.all
-            ? (normalizeUpdateChannel(cfg.update?.channel) ?? undefined)
+            ? resolveRegistryUpdateChannel({
+                configChannel: normalizeUpdateChannel(cfg.update?.channel),
+                currentVersion: VERSION,
+              })
             : undefined,
           syncOfficialPluginInstalls: params.opts.all ? true : undefined,
           coreVersion: VERSION,

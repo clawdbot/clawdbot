@@ -1,5 +1,5 @@
 // QA Lab tests cover Matrix E2EE client behavior.
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { access, mkdtemp, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -81,7 +81,7 @@ describe("matrix qa e2ee client storage", () => {
     }
   });
 
-  it("keeps persisted crypto state private", async () => {
+  it("uses plugin state without creating a legacy IndexedDB snapshot", async () => {
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-e2ee-storage-"));
     try {
       const storage = await testing.prepareMatrixQaE2eeStorage({
@@ -91,7 +91,7 @@ describe("matrix qa e2ee client storage", () => {
       });
 
       expect((await stat(storage.accountDir)).mode & 0o777).toBe(0o700);
-      expect((await stat(storage.idbSnapshotPath)).mode & 0o777).toBe(0o600);
+      await expect(access(storage.idbSnapshotPath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await rm(outputDir, { force: true, recursive: true });
     }

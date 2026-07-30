@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveTeamsMeetingsConfig } from "./config.js";
-import {
-  testTeamsMeetingListening,
-  testTeamsMeetingSpeech,
-  type TeamsMeetingsProbeContext,
-} from "./runtime-probes.js";
+import { teamsMeetingsConfig } from "./config.js";
+import { testTeamsMeetingListening, testTeamsMeetingSpeech } from "./runtime-probes.js";
 import type { TeamsMeetingsSession } from "./transports/types.js";
+
+const resolveTeamsMeetingsConfig = teamsMeetingsConfig.resolveConfig;
+type TeamsMeetingsProbeContext = Parameters<typeof testTeamsMeetingSpeech>[0];
 
 const URL = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_probe%40thread.v2/0";
 
@@ -139,7 +138,7 @@ describe("Microsoft Teams meeting runtime probes", () => {
         session.chrome!.health = {
           ...session.chrome!.health,
           lastCaptionText: "Caption already waiting",
-          manualActionRequired: true,
+          manualAction: { reason: "teams-admission-required", message: "Waiting" },
           transcriptLines: 1,
         };
       },
@@ -162,7 +161,10 @@ describe("Microsoft Teams meeting runtime probes", () => {
     });
 
     expect(result.listenVerified).toBe(true);
-    expect(result.manualActionRequired).toBe(true);
+    expect(result.manualAction).toEqual({
+      reason: "teams-admission-required",
+      message: "Waiting",
+    });
     expect(refreshCaptionHealth).toHaveBeenCalledTimes(1);
     expect(Date.now()).toBe(0);
     expect(vi.getTimerCount()).toBe(0);

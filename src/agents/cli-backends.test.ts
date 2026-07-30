@@ -122,6 +122,16 @@ describe("resolveCliBackendConfig", () => {
     });
   });
 
+  it("preserves the plugin-owned JSONL parser through runtime resolution", () => {
+    const parseJsonlEvent = vi.fn();
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [runtimeEntry({ parseJsonlEvent })],
+      resolvePluginSetupCliBackend: () => undefined,
+    });
+
+    expect(requireBackend().parseJsonlEvent).toBe(parseJsonlEvent);
+  });
+
   it("normalizes the registered adapter with agent and runtime config context", () => {
     const normalizeConfig = vi.fn(
       (config: CliBackendConfig): CliBackendConfig => ({
@@ -167,7 +177,11 @@ describe("resolveCliBackendConfig", () => {
   });
 
   it("falls back to setup registration before runtime activation", () => {
-    const entry = setupEntry({ config: { command: "setup-acme", args: ["run"] } });
+    const parseJsonlEvent = vi.fn();
+    const entry = setupEntry({
+      config: { command: "setup-acme", args: ["run"] },
+      parseJsonlEvent,
+    });
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [],
       resolvePluginSetupCliBackend: ({ backend }) => (backend === "acme-cli" ? entry : undefined),
@@ -178,6 +192,7 @@ describe("resolveCliBackendConfig", () => {
     expect(resolved.pluginId).toBeUndefined();
     expect(resolved.config).toEqual({ command: "setup-acme", args: ["run"] });
     expect(resolved.runtimeArtifact).toEqual(runtimeArtifact);
+    expect(resolved.parseJsonlEvent).toBe(parseJsonlEvent);
   });
 
   it("returns null when no plugin owns the backend", () => {

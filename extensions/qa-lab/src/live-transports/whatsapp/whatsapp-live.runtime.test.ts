@@ -13,12 +13,18 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { fingerprintQaCredentialId } from "../../qa-credentials-fingerprint.runtime.js";
 import { readQaScenarioById } from "../../scenario-catalog.js";
+import { requireFlowScenario } from "../../scenario-catalog.test-utils.js";
 import { applyQaMergePatch, collectQaSuiteGatewayConfigPatch } from "../../suite-planning.js";
 import { createWhatsAppQaScenarioEnvironment } from "./scenario-environment.js";
 import { resolveWhatsAppQaScenarioIds } from "./scenario-selection.js";
 import { runWhatsAppApprovalScenario } from "./whatsapp-live.approvals.js";
 import { buildWhatsAppQaConfig, parseWhatsAppQaCredentialPayload } from "./whatsapp-live.config.js";
-import { resolveWhatsAppQaMessageTargets } from "./whatsapp-live.contracts.js";
+import {
+  resolveWhatsAppQaMessageTargets,
+  type WhatsAppQaScenarioImplementation,
+  type WhatsAppQaScenarioMetadata,
+  type WhatsAppQaScenarioRun,
+} from "./whatsapp-live.contracts.js";
 import {
   callWhatsAppGatewayMessageAction,
   callWhatsAppGatewayPoll,
@@ -27,7 +33,10 @@ import {
   runWhatsAppStructuredInboundChecks,
   waitForScenarioObservedMessage,
 } from "./whatsapp-live.operations.js";
-import { getWhatsAppQaScenarioDefinition } from "./whatsapp-live.scenarios.js";
+import * as whatsappCapabilityScenarios from "./whatsapp-live.scenario-implementations.capabilities.js";
+import * as whatsappConversationScenarios from "./whatsapp-live.scenario-implementations.conversation.js";
+import * as whatsappDeliveryScenarios from "./whatsapp-live.scenario-implementations.delivery.js";
+import * as whatsappUserPathScenarios from "./whatsapp-live.scenario-implementations.user-path.js";
 import { unpackWhatsAppAuthArchive } from "./whatsapp-live.setup.js";
 
 const runExecSpy = vi.hoisted(() =>
@@ -108,9 +117,8 @@ function createWhatsAppQaDriverMock(
   };
 }
 
-type WhatsAppScenarioDefinition = ReturnType<typeof getWhatsAppQaScenarioDefinition>;
-type WhatsAppScenarioRun = ReturnType<WhatsAppScenarioDefinition["buildRun"]>;
-type WhatsAppMessageScenarioRun = Exclude<WhatsAppScenarioRun, { kind: "approval" }>;
+type WhatsAppScenarioDefinition = WhatsAppQaScenarioMetadata & WhatsAppQaScenarioImplementation;
+type WhatsAppMessageScenarioRun = Exclude<WhatsAppQaScenarioRun, { kind: "approval" }>;
 type WhatsAppScenarioContext = Parameters<NonNullable<WhatsAppMessageScenarioRun["afterSend"]>>[0];
 type WhatsAppQaConfigBase = Parameters<typeof testing.buildWhatsAppQaConfig>[0];
 type WhatsAppQaConfigParams = Parameters<typeof testing.buildWhatsAppQaConfig>[1];
@@ -159,14 +167,44 @@ function buildWhatsAppQaConfigFixture(
   });
 }
 
-type WhatsAppScenarioIdFilter = Parameters<typeof getWhatsAppQaScenarioDefinition>[0];
+type WhatsAppScenarioIdFilter = string;
+
+const whatsappScenarioImplementations = {
+  ...whatsappCapabilityScenarios,
+  ...whatsappConversationScenarios,
+  ...whatsappDeliveryScenarios,
+  ...whatsappUserPathScenarios,
+} as Record<string, WhatsAppQaScenarioImplementation>;
+
+function toWhatsAppScenarioExportName(id: string) {
+  const suffix = id
+    .slice("whatsapp-".length)
+    .split("-")
+    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+    .join("");
+  return `whatsappQa${suffix}Scenario`;
+}
+
+function getWhatsAppScenario(id: string): WhatsAppScenarioDefinition {
+  const implementation = whatsappScenarioImplementations[toWhatsAppScenarioExportName(id)];
+  if (!implementation) {
+    throw new Error(`missing WhatsApp test implementation for ${id}`);
+  }
+  const scenario = requireFlowScenario(readQaScenarioById(id));
+  return {
+    ...implementation,
+    id,
+    timeoutMs: scenario.execution.timeoutMs ?? 60_000,
+    title: scenario.title,
+  };
+}
 
 function findScenarios(ids: readonly string[]) {
-  return ids.map((id) => getWhatsAppQaScenarioDefinition(id));
+  return ids.map(getWhatsAppScenario);
 }
 
 function findWhatsAppScenario(id: WhatsAppScenarioIdFilter) {
-  return getWhatsAppQaScenarioDefinition(id);
+  return getWhatsAppScenario(id);
 }
 
 function updateObservedMessage(
@@ -202,7 +240,7 @@ const WHATSAPP_GROUP_CAPABILITY_SCENARIO_IDS = [
 ] as const satisfies readonly WhatsAppScenarioIdFilter[];
 
 function findMockWhatsAppScenario(id: WhatsAppScenarioIdFilter) {
-  const scenario = getWhatsAppQaScenarioDefinition(id);
+  const scenario = getWhatsAppScenario(id);
   const mockScenarioIds = new Set(resolveWhatsAppQaScenarioIds({ providerMode: "mock-openai" }));
   if (!mockScenarioIds.has(id)) {
     throw new Error(`missing WhatsApp mock-openai scenario ${id}`);
@@ -1011,64 +1049,20 @@ describe("WhatsApp QA live runtime", () => {
     });
   });
 
-  it("keeps mock-backed and native approval scenarios out of default live-frontier selection", () => {
-    const expectedDefaultIds = [
-      "whatsapp-canary",
-      "whatsapp-mention-gating",
-      "whatsapp-top-level-reply-shape",
-      "whatsapp-reply-to-message",
-      "whatsapp-group-reply-to-message",
-      "whatsapp-status-reactions",
-      "whatsapp-group-allowlist-block",
-    ];
+  it("derives live-frontier selection from taxonomy and provider eligibility", () => {
+    const scenarioIds = testing.resolveWhatsAppQaScenarioIds({ providerMode: "live-frontier" });
 
-    expect(
-      testing.resolveWhatsAppQaScenarioIds({ providerMode: "live-frontier" }).slice(0, -1),
-    ).toEqual(expectedDefaultIds);
+    expect(scenarioIds).toContain("whatsapp-canary");
+    expect(scenarioIds).toContain("whatsapp-mention-gating");
+    expect(scenarioIds).not.toContain("whatsapp-native-new-command");
   });
 
-  it("adds deterministic audio preflight to the default mock-openai WhatsApp selection", () => {
-    expect(testing.resolveWhatsAppQaScenarioIds({ providerMode: "mock-openai" })).toEqual([
-      "whatsapp-canary",
-      "whatsapp-mention-gating",
-      "whatsapp-group-pending-history-context",
-      "whatsapp-broadcast-group-fanout",
-      "whatsapp-group-activation-always",
-      "whatsapp-group-reply-to-bot-triggers",
-      "whatsapp-top-level-reply-shape",
-      "whatsapp-reply-to-message",
-      "whatsapp-group-reply-to-message",
-      "whatsapp-reply-to-mode-batched",
-      "whatsapp-agent-message-action-react",
-      "whatsapp-agent-message-action-upload-file",
-      "whatsapp-group-agent-message-action-react",
-      "whatsapp-group-agent-message-action-upload-file",
-      "whatsapp-inbound-reaction-no-trigger",
-      "whatsapp-reply-context-isolation",
-      "whatsapp-inbound-image-caption",
-      "whatsapp-audio-preflight",
-      "whatsapp-outbound-media-matrix",
-      "whatsapp-outbound-document-preserves-filename",
-      "whatsapp-outbound-poll",
-      "whatsapp-group-outbound-media",
-      "whatsapp-group-outbound-audio",
-      "whatsapp-group-outbound-poll",
-      "whatsapp-message-actions",
-      "whatsapp-inbound-structured-messages",
-      "whatsapp-group-audio-gating",
-      "whatsapp-reply-delivery-shape",
-      "whatsapp-stream-final-message-accounting",
-      "whatsapp-status-reactions",
-      "whatsapp-status-reaction-lifecycle",
-      "whatsapp-group-allowlist-block",
-      "whatsapp-help-command",
-      "whatsapp-commands-command",
-      "whatsapp-tools-compact-command",
-      "whatsapp-whoami-command",
-      "whatsapp-context-command",
-      "whatsapp-tool-only-usage-footer",
-      "whatsapp-native-new-command",
-    ]);
+  it("includes mock-only scenarios when the provider lane supports them", () => {
+    const scenarioIds = testing.resolveWhatsAppQaScenarioIds({ providerMode: "mock-openai" });
+
+    expect(scenarioIds).toContain("whatsapp-audio-preflight");
+    expect(scenarioIds).toContain("whatsapp-native-new-command");
+    expect(scenarioIds).toContain("whatsapp-tool-only-usage-footer");
   });
 
   it("defines Phase 2 WhatsApp group scenarios as mock-backed user-path scenarios", () => {
@@ -1158,14 +1152,19 @@ describe("WhatsApp QA live runtime", () => {
       sutAuthDir: "/tmp/whatsapp-sut",
     });
 
-    await prepareFlow({
-      config: { whatsappScenarioId: "whatsapp-canary" },
+    const prepared = await prepareFlow({
+      config: {},
       gateway: { call: gatewayCall } as never,
       outputDir: "/tmp/whatsapp-output",
       primaryModel: "mock-openai/gpt-5.6-luna",
+      scenarioId: "whatsapp-canary",
+      scenarioTitle: "WhatsApp DM canary",
       timeoutMs: 60_000,
       waitForConfigRestartSettle: vi.fn(),
     });
+    await prepared.whatsappScenarioContext.configureScenario(
+      findWhatsAppScenario("whatsapp-canary"),
+    );
 
     const patchCall = gatewayCall.mock.calls.find(([method]) => method === "config.patch");
     if (!patchCall) {
@@ -1196,16 +1195,19 @@ describe("WhatsApp QA live runtime", () => {
       sutAuthDir: "/tmp/whatsapp-sut",
     });
 
-    await expect(
-      prepareFlow({
-        config: { policyKey: "dmPolicy", policyValue: "disabled" },
-        gateway: { call: gatewayCall } as never,
-        outputDir: "/tmp/whatsapp-output",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        timeoutMs: 60_000,
-        waitForConfigRestartSettle: vi.fn(),
-      }),
-    ).resolves.toBeUndefined();
+    const prepared = await prepareFlow({
+      config: { policyKey: "dmPolicy", policyValue: "disabled" },
+      gateway: { call: gatewayCall } as never,
+      outputDir: "/tmp/whatsapp-output",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      scenarioId: "whatsapp-access-control-dm-disabled",
+      scenarioTitle: "WhatsApp dmPolicy disabled stays quiet",
+      timeoutMs: 60_000,
+      waitForConfigRestartSettle: vi.fn(),
+    });
+    expect(prepared.whatsappScenarioContext.scenario.id).toBe(
+      "whatsapp-access-control-dm-disabled",
+    );
     expect(gatewayCall).not.toHaveBeenCalled();
   });
 
@@ -2128,7 +2130,7 @@ describe("WhatsApp QA live runtime", () => {
       throw new Error("whatsapp-audio-preflight unexpectedly built an approval scenario run");
     }
 
-    expect(scenario.requiredPluginIds).toEqual(["openai"]);
+    expect(readQaScenarioById(scenario.id).plugins).toEqual(["openai"]);
     expect(scenarioRun.expectReply).toBe(true);
     expect(scenarioRun.matchText).toBe("WHATSAPP_QA_AUDIO_TRANSCRIPT_OK");
     expect(scenarioRun.sendMode).toMatchObject({

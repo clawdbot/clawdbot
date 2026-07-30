@@ -7,9 +7,10 @@ import {
   resolveAgentDir,
   resolveUserPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import type {
-  MemorySyncParams,
-  MemorySyncProgressUpdate,
+import {
+  MEMORY_CHUNKING_VERSION,
+  type MemorySyncParams,
+  type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -33,6 +34,7 @@ import {
 } from "./manager-provider-state.js";
 import { acquireMemoryReindexLock, type MemoryReindexLockHandle } from "./manager-reindex-lock.js";
 import {
+  MEMORY_INDEX_PROVENANCE_VERSION,
   resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
   resolveMemoryIndexIdentityState,
@@ -73,7 +75,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   private fallbackProviderInitPromise: Promise<boolean> | null = null;
   protected syncProviderGeneration: MemorySyncProviderGeneration | null = null;
 
-  protected beginSyncProviderGeneration(): void {}
+  protected beginSyncProviderGeneration(_options?: { forceFtsOnly?: boolean }): void {}
   protected endSyncProviderGeneration(): void {}
 
   protected override shouldDeferSourceWideBatch(): boolean {
@@ -156,6 +158,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     // indexes can safely sync without an embedding provider.
     this.assertFtsOnlySyncAllowed();
 
+    const syncProvider = this.syncProviderGeneration
+      ? this.syncProviderGeneration.provider
+      : this.provider;
+
     const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
     if (progress) {
       progress.report({
@@ -164,7 +170,9 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         label: "Loading vector extension…",
       });
     }
-    const vectorReady = await this.ensureVectorReady();
+    // Keyword-only generations never write vectors, so they must not wait for
+    // the vector extension before text and FTS indexing can proceed.
+    const vectorReady = syncProvider ? await this.ensureVectorReady() : false;
     const meta = this.readMeta();
     const targetArchiveFiles = await this.combineTargetArchiveFiles({
       sessions: params?.sessions,
@@ -177,9 +185,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     if (params?.reason === "cli" && !params.force && !hasTargetArchiveFiles) {
       await this.markSessionStartupCatchupDirtyFiles();
     }
-    const syncProvider = this.syncProviderGeneration
-      ? this.syncProviderGeneration.provider
-      : this.provider;
     const syncProviderKey = this.syncProviderGeneration
       ? this.syncProviderGeneration.providerKey
       : this.providerKey;
@@ -232,6 +237,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       indexIdentity.status === "missing" && !hasTargetArchiveFiles && canRebuildMissingIdentity;
     const needsExplicitIdentityReindex =
       params?.reason === "cli" && indexIdentity.status !== "valid" && !hasTargetArchiveFiles;
+    // Source hashes do not reflect chunk boundaries, so an implementation
+    // upgrade must rebuild the shadow index instead of attempting dirty sync.
+    const needsChunkingVersionReindex =
+      meta !== null && meta.chunkingVersion !== MEMORY_CHUNKING_VERSION && !hasTargetArchiveFiles;
     const canRunRetryFullReindex =
       indexIdentity.status !== "missing" || needsInitialIndex || canRebuildMissingIdentity;
     const needsFullReindex =
@@ -239,6 +248,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       needsInitialIndex ||
       needsMissingIdentityReindex ||
       needsExplicitIdentityReindex ||
+      needsChunkingVersionReindex ||
       (this.memoryFullRetryDirty && canRunRetryFullReindex) ||
       (this.sessionsFullRetryDirty && indexIdentity.status !== "valid" && canRunRetryFullReindex);
     const needsFullSessionReindex = needsFullReindex || this.sessionsFullRetryDirty;
@@ -586,7 +596,9 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         }),
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
+        chunkingVersion: MEMORY_CHUNKING_VERSION,
         ftsTokenizer: this.settings.store.fts.tokenizer,
+        provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION,
       };
       if (this.vector.available && this.vector.dims) {
         nextMeta.vectorDims = this.vector.dims;

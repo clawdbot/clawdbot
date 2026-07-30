@@ -8,6 +8,7 @@ import {
 } from "./session-accessor.sqlite-normalize.js";
 import { bindSessionEntryProvenance } from "./session-accessor.sqlite-provenance.js";
 import { normalizeSqliteStatus } from "./session-accessor.sqlite-status.js";
+import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
 
 export function normalizeSqliteSessionEntryTimestamp(entry: SessionEntry): SessionEntry {
@@ -76,6 +77,9 @@ export function bindSqliteSessionNode(params: {
   sessionKey: string;
   updatedAt: number;
 }) {
+  const canonicalEntry = projectCanonicalSessionEntryShape(
+    params.entry as unknown as Record<string, unknown>,
+  );
   const actor = params.entry.createdActor;
   const legacyActorId = normalizeSqliteText(
     (params.entry as SessionEntry & { createdBy?: { id?: unknown } }).createdBy?.id,
@@ -83,7 +87,7 @@ export function bindSqliteSessionNode(params: {
   return {
     session_key: params.sessionKey,
     current_session_id: params.entry.sessionId,
-    entry_json: JSON.stringify(params.entry),
+    entry_json: JSON.stringify(canonicalEntry),
     updated_at: params.updatedAt,
     status: normalizeSqliteStatus(params.entry.status),
     created_at: finiteSqliteNumber(params.entry.createdAt),

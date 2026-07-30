@@ -162,6 +162,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     nativeModelOwned,
     authStorage,
     modelRegistry,
+    preparedModelRuntime: input.preparedModelRuntime,
     getAgentHarness: () => agentHarness,
     setAgentHarness: (nextHarness) => {
       agentHarness = nextHarness;

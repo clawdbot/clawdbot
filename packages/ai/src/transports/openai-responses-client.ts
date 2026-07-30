@@ -1,18 +1,16 @@
 import { randomUUID } from "node:crypto";
-import type { Context, Model, StreamFn } from "@openclaw/llm-core";
+import type { AssistantMessage, Context, Model, StreamFn } from "@openclaw/llm-core";
 import OpenAI, { AzureOpenAI } from "openai";
+import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
-import {
-  isOpenAICompatibleAzureResponsesBaseUrl,
-  resolveAzureDeploymentNameFromMap,
-} from "../internal/openai.js";
+import { resolveAzureDeploymentNameFromMap } from "../providers/azure-deployment-map.js";
+import { isOpenAICompatibleAzureResponsesBaseUrl } from "../providers/azure-openai-responses-client-compat.js";
+import { createAssistantMessageEventStream } from "../utils/event-stream.js";
 import {
   createFirstStreamEventAbortController,
-  getEnvApiKey,
   getFirstStreamEventTimeoutHandler,
   getFirstStreamEventTimeoutMs,
-} from "../internal/runtime.js";
-import { createAssistantMessageEventStream } from "../utils/event-stream.js";
+} from "../utils/stream-first-event-timeout.js";
 import { buildGuardedModelFetch } from "./host-policy.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugBaseUrl } from "./model-transport-url.js";
@@ -22,6 +20,7 @@ import {
 } from "./openai-responses-contracts.js";
 import {
   applyServiceTierPricing,
+  logResponsesFailedNoDetails,
   safeDebugValue,
   summarizeOpenAITransportError,
   summarizeResponsesPayload,
@@ -31,10 +30,15 @@ import {
   sanitizeOpenAICodexResponsesParams,
 } from "./openai-responses-params-internal.js";
 import {
+  buildOpenAIResponsesReasoningReplayMetadata,
   createResponsesStreamWithEncryptedContentRetry,
   resolveAzureOpenAIApiVersion,
 } from "./openai-responses-replay-internal.js";
-import { processResponsesStream } from "./openai-responses-stream-internal.js";
+import {
+  processResponsesStream,
+  ResponsesStreamFailure,
+} from "./openai-responses-stream-internal.js";
+import { observeResponsesStream } from "./openai-responses-stream-observer-internal.js";
 import {
   assertCodeModeResponsesToolSurface,
   buildOpenAIClientHeaders,
@@ -42,10 +46,15 @@ import {
   buildOpenAISdkRequestOptions,
   enforceCodeModeResponsesToolSurface,
   isOpenAICodexResponsesModel,
+  resolveCodeModeResponsesVisibleToolNames,
 } from "./openai-transport-params.js";
-import { log, type MutableAssistantOutput } from "./openai-transport-shared.js";
+import { log } from "./openai-transport-shared.js";
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
-import { assignTransportErrorDetails, mergeTransportMetadata } from "./transport-stream-shared.js";
+import {
+  assignTransportErrorDetails,
+  mergeTransportMetadata,
+  transportAbortError,
+} from "./transport-stream-shared.js";
 
 function resolveProviderTransportTurnState(
   model: Model,
@@ -95,16 +104,41 @@ export function createOpenAIResponsesClient(
   });
 }
 
-export function createOpenAIResponsesTransportStreamFn(): StreamFn {
+type ResponsesPricingOptions = Pick<
+  NonNullable<Parameters<typeof processResponsesStream>[4]>,
+  "serviceTier" | "applyServiceTierPricing"
+>;
+type ResponsesStreamParams = Parameters<
+  typeof createResponsesStreamWithEncryptedContentRetry
+>[0] & {
+  requestOptions: ReturnType<typeof buildOpenAISdkRequestOptions>;
+};
+
+type ResponsesTransportExecutorOptions = {
+  outputApi?: AssistantMessage["api"];
+  firstEventTimeoutMs?: number;
+  streamRequest?: boolean;
+  createClient: typeof createOpenAIResponsesClient;
+  buildRequest: (
+    model: Model,
+    context: Context,
+    options: OpenAIResponsesOptions | undefined,
+    metadata?: Record<string, string>,
+  ) => ReturnType<typeof buildOpenAIResponsesParams>;
+  createResponseStream: (params: ResponsesStreamParams) => Promise<AsyncIterable<unknown>>;
+  pricingOptions?: (options: OpenAIResponsesOptions | undefined) => ResponsesPricingOptions;
+};
+
+function createResponsesTransportExecutor(config: ResponsesTransportExecutorOptions): StreamFn {
   return (model, context, options) => {
     const responsesOptions = options as OpenAIResponsesOptions | undefined;
     const eventStream = createAssistantMessageEventStream();
     const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
     void (async () => {
-      const output: MutableAssistantOutput = {
+      const output: AssistantMessage = {
         role: "assistant" as const,
         content: [],
-        api: model.api,
+        api: config.outputApi ?? model.api,
         provider: model.provider,
         model: model.id,
         usage: {
@@ -127,7 +161,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           attempt: 1,
           transport: "stream",
         });
-        const client = createOpenAIResponsesClient(
+        const client = config.createClient(
           model,
           context,
           apiKey,
@@ -135,12 +169,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           turnState?.headers,
           options?.sessionId,
         );
-        let params = buildOpenAIResponsesParams(
-          model,
-          context,
-          responsesOptions,
-          turnState?.metadata,
-        );
+        let params = config.buildRequest(model, context, responsesOptions, turnState?.metadata);
         const nextParams = await options?.onPayload?.(params, model);
         if (nextParams !== undefined) {
           params = nextParams as typeof params;
@@ -157,13 +186,16 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           (options as { openclawCodeModeToolSurface?: unknown } | undefined)
             ?.openclawCodeModeToolSurface === true
         ) {
-          enforceCodeModeResponsesToolSurface(params);
-          assertCodeModeResponsesToolSurface(params);
+          const visibleToolNames = resolveCodeModeResponsesVisibleToolNames(context);
+          enforceCodeModeResponsesToolSurface(params, visibleToolNames);
+          assertCodeModeResponsesToolSurface(params, visibleToolNames);
         }
         const requestStartedAt = Date.now();
         firstEventAbort = createFirstStreamEventAbortController(options?.signal);
         const requestOptions = buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
-          stream: true,
+          stream: config.streamRequest,
+          timeoutMs: options?.timeoutMs,
+          maxRetries: options?.maxRetries,
         });
         emitModelTransportDebug(
           log,
@@ -171,7 +203,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
             `baseUrl=${formatModelTransportDebugBaseUrl(model.baseUrl)} timeoutMs=${safeDebugValue(requestOptions?.timeout)} ` +
             `apiKey=${apiKey ? "present" : "missing"} ${summarizeResponsesPayload(params)}`,
         );
-        const responseStream = await createResponsesStreamWithEncryptedContentRetry({
+        const responseStream = await config.createResponseStream({
           client,
           request: params,
           requestOptions,
@@ -183,18 +215,26 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
             `elapsedMs=${Date.now() - requestStartedAt}`,
         );
         stream.push({ type: "start", partial: output as never });
-        await processResponsesStream(responseStream, output, stream, model, {
-          serviceTier: responsesOptions?.serviceTier,
-          applyServiceTierPricing,
-          firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
-          abortFirstEventStream: firstEventAbort.abort,
-          onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
-          signal: options?.signal,
-          authProfileId: responsesOptions?.authProfileId,
-          sessionId: options?.sessionId,
-        });
+        await processResponsesStream(
+          observeResponsesStream(responseStream, model),
+          output,
+          stream,
+          model,
+          {
+            ...config.pricingOptions?.(responsesOptions),
+            firstEventTimeoutMs:
+              getFirstStreamEventTimeoutMs(options) ?? config.firstEventTimeoutMs,
+            abortFirstEventStream: firstEventAbort.abort,
+            onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
+            signal: options?.signal,
+            reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
+              authProfileId: responsesOptions?.authProfileId,
+              sessionId: options?.sessionId,
+            }),
+          },
+        );
         if (options?.signal?.aborted) {
-          throw new Error("Request was aborted");
+          throw transportAbortError(options.signal);
         }
         if (output.stopReason === "aborted" || output.stopReason === "error") {
           throw new Error("An unknown error occurred");
@@ -202,6 +242,9 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
         stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
         stream.end();
       } catch (error) {
+        if (error instanceof ResponsesStreamFailure && error.observation) {
+          logResponsesFailedNoDetails(error.observation);
+        }
         log.warn(
           `[responses] error provider=${model.provider} api=${model.api} model=${model.id} ` +
             summarizeOpenAITransportError(error),
@@ -217,122 +260,35 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
   };
 }
 
+export function createOpenAIResponsesTransportStreamFn(): StreamFn {
+  return createResponsesTransportExecutor({
+    streamRequest: true,
+    createClient: createOpenAIResponsesClient,
+    buildRequest: buildOpenAIResponsesParams,
+    createResponseStream: createResponsesStreamWithEncryptedContentRetry,
+    pricingOptions: (options) => ({ serviceTier: options?.serviceTier, applyServiceTierPricing }),
+  });
+}
+
 export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
-  return (model, context, options) => {
-    const responsesOptions = options as OpenAIResponsesOptions | undefined;
-    const eventStream = createAssistantMessageEventStream();
-    const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
-    void (async () => {
-      const output: MutableAssistantOutput = {
-        role: "assistant" as const,
-        content: [],
-        api: "azure-openai-responses",
-        provider: model.provider,
-        model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: Date.now(),
-      };
-      let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
-      try {
-        const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-        const turnState = resolveProviderTransportTurnState(model, {
-          sessionId: options?.sessionId,
-          turnId: randomUUID(),
-          attempt: 1,
-          transport: "stream",
-        });
-        const client = createAzureOpenAIClient(
-          model,
-          context,
-          apiKey,
-          options?.headers,
-          turnState?.headers,
-        );
-        const deploymentName = resolveAzureDeploymentName(model);
-        let params = buildAzureOpenAIResponsesParams(
-          model,
-          context,
-          responsesOptions,
-          deploymentName,
-          turnState?.metadata,
-        );
-        const nextParams = await options?.onPayload?.(params, model);
-        if (nextParams !== undefined) {
-          params = nextParams as typeof params;
-        }
-        if (!isOpenAICodexResponsesModel(model)) {
-          params = mergeTransportMetadata(params, turnState?.metadata);
-        }
-        params = sanitizeOpenAICodexResponsesParams(
-          model,
-          params as Record<string, unknown>,
-        ) as typeof params;
-        params = sanitizeResponsesImagePayload(params as Record<string, unknown>) as typeof params;
-        if (
-          (options as { openclawCodeModeToolSurface?: unknown } | undefined)
-            ?.openclawCodeModeToolSurface === true
-        ) {
-          enforceCodeModeResponsesToolSurface(params);
-          assertCodeModeResponsesToolSurface(params);
-        }
-        const requestStartedAt = Date.now();
-        firstEventAbort = createFirstStreamEventAbortController(options?.signal);
-        const requestOptions = buildOpenAISdkRequestOptions(model, firstEventAbort.signal);
-        emitModelTransportDebug(
-          log,
-          `[responses] start provider=${model.provider} api=${model.api} model=${model.id} ` +
-            `baseUrl=${formatModelTransportDebugBaseUrl(model.baseUrl)} timeoutMs=${safeDebugValue(requestOptions?.timeout)} ` +
-            `apiKey=${apiKey ? "present" : "missing"} ${summarizeResponsesPayload(params)}`,
-        );
-        const responseStream = (await client.responses.create(
-          params as never,
-          requestOptions,
-        )) as unknown as AsyncIterable<unknown>;
-        emitModelTransportDebug(
-          log,
-          `[responses] headers provider=${model.provider} api=${model.api} model=${model.id} ` +
-            `elapsedMs=${Date.now() - requestStartedAt}`,
-        );
-        stream.push({ type: "start", partial: output as never });
-        await processResponsesStream(responseStream, output, stream, model, {
-          firstEventTimeoutMs:
-            getFirstStreamEventTimeoutMs(options) ?? AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS,
-          abortFirstEventStream: firstEventAbort.abort,
-          onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
-          signal: options?.signal,
-          authProfileId: responsesOptions?.authProfileId,
-          sessionId: options?.sessionId,
-        });
-        if (options?.signal?.aborted) {
-          throw new Error("Request was aborted");
-        }
-        if (output.stopReason === "aborted" || output.stopReason === "error") {
-          throw new Error("An unknown error occurred");
-        }
-        stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
-        stream.end();
-      } catch (error) {
-        log.warn(
-          `[responses] error provider=${model.provider} api=${model.api} model=${model.id} ` +
-            summarizeOpenAITransportError(error),
-        );
-        assignTransportErrorDetails(output, error, options?.signal);
-        stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
-        stream.end();
-      } finally {
-        firstEventAbort?.dispose();
-      }
-    })();
-    return eventStream as unknown as ReturnType<StreamFn>;
-  };
+  return createResponsesTransportExecutor({
+    outputApi: "azure-openai-responses",
+    firstEventTimeoutMs: AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS,
+    createClient: createAzureOpenAIClient,
+    buildRequest: (model, context, options, metadata) =>
+      buildAzureOpenAIResponsesParams(
+        model,
+        context,
+        options,
+        resolveAzureDeploymentName(model),
+        metadata,
+      ),
+    createResponseStream: async ({ client, request, requestOptions }) =>
+      (await client.responses.create(
+        request as never,
+        requestOptions,
+      )) as unknown as AsyncIterable<unknown>,
+  });
 }
 
 function normalizeAzureBaseUrl(baseUrl: string): string {

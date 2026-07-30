@@ -47,7 +47,10 @@ import {
   UNGROUPED_ID,
 } from "../../lib/sessions/grouping.ts";
 import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
-import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
+import {
+  resolveSessionPreferredFace,
+  sessionNavigationTarget,
+} from "../../lib/sessions/route-navigation.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -1507,12 +1510,13 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const canLink = row.kind !== "global";
   const chatUrl = canLink
     ? sessionNavigationTarget({
-        face: "chat",
+        face: resolveSessionPreferredFace(row),
         sessionKey: row.key,
         fallbackAgentId: props.agentId,
         basePath: props.basePath,
         row,
         mainKey: props.mainKey,
+        preferenceDerivedFace: true,
       }).href
     : null;
   const displayKind = resolveSessionDisplayKind(row);

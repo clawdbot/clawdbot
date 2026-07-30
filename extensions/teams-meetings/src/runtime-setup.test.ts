@@ -1,7 +1,9 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { resolveTeamsMeetingsConfig } from "./config.js";
+import { teamsMeetingsConfig } from "./config.js";
 import { getTeamsMeetingsSetupStatus } from "./runtime-setup.js";
+
+const resolveTeamsMeetingsConfig = teamsMeetingsConfig.resolveConfig;
 
 function runtimeWithNode(invoke: (params: Record<string, unknown>) => Promise<unknown>) {
   return {

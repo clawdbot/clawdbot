@@ -20,9 +20,10 @@ import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtim
 import {
   DEFAULT_ACCOUNT_ID,
   getAccountConfig,
-  listAccountIds,
   resolveDefaultTwitchAccountId,
   resolveTwitchAccountContext,
+  twitchConfigAdapter,
+  type ResolvedTwitchAccount,
 } from "./config.js";
 import type { TwitchAccountConfig, TwitchRole } from "./types.js";
 import { isAccountConfigured } from "./utils/twitch.js";
@@ -143,43 +144,51 @@ export async function promptToken(
   ).trim();
 }
 
+async function promptRequiredTwitchAccountValue(
+  prompter: WizardPrompter,
+  message: string,
+  initialValue: string | undefined,
+): Promise<string> {
+  return (
+    await prompter.text({
+      message,
+      initialValue: initialValue ?? "",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    })
+  ).trim();
+}
+
 export async function promptUsername(
   prompter: WizardPrompter,
   account: TwitchAccountConfig | null,
 ): Promise<string> {
-  return (
-    await prompter.text({
-      message: t("wizard.twitch.botUsernamePrompt"),
-      initialValue: account?.username ?? "",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    })
-  ).trim();
+  return await promptRequiredTwitchAccountValue(
+    prompter,
+    t("wizard.twitch.botUsernamePrompt"),
+    account?.username,
+  );
 }
 
 export async function promptClientId(
   prompter: WizardPrompter,
   account: TwitchAccountConfig | null,
 ): Promise<string> {
-  return (
-    await prompter.text({
-      message: t("wizard.twitch.clientIdPrompt"),
-      initialValue: account?.clientId ?? "",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    })
-  ).trim();
+  return await promptRequiredTwitchAccountValue(
+    prompter,
+    t("wizard.twitch.clientIdPrompt"),
+    account?.clientId,
+  );
 }
 
 export async function promptChannelName(
   prompter: WizardPrompter,
   account: TwitchAccountConfig | null,
 ): Promise<string> {
-  return (
-    await prompter.text({
-      message: t("wizard.twitch.channelJoinPrompt"),
-      initialValue: account?.channel ?? "",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    })
-  ).trim();
+  return await promptRequiredTwitchAccountValue(
+    prompter,
+    t("wizard.twitch.channelJoinPrompt"),
+    account?.channel,
+  );
 }
 
 export async function promptRefreshTokenSetup(
@@ -196,22 +205,17 @@ export async function promptRefreshTokenSetup(
   }
 
   const clientSecret =
-    (
-      await prompter.text({
-        message: t("wizard.twitch.clientSecretPrompt"),
-        initialValue: account?.clientSecret ?? "",
-        validate: (value) => (value?.trim() ? undefined : "Required"),
-      })
-    ).trim() || undefined;
-
+    (await promptRequiredTwitchAccountValue(
+      prompter,
+      t("wizard.twitch.clientSecretPrompt"),
+      account?.clientSecret,
+    )) || undefined;
   const refreshToken =
-    (
-      await prompter.text({
-        message: t("wizard.twitch.refreshTokenInputPrompt"),
-        initialValue: account?.refreshToken ?? "",
-        validate: (value) => (value?.trim() ? undefined : "Required"),
-      })
-    ).trim() || undefined;
+    (await promptRequiredTwitchAccountValue(
+      prompter,
+      t("wizard.twitch.refreshTokenInputPrompt"),
+      account?.refreshToken,
+    )) || undefined;
 
   return { clientSecret, refreshToken };
 }
@@ -493,38 +497,13 @@ export const twitchSetupWizard: ChannelSetupWizard = {
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
 
-type ResolvedTwitchAccount = TwitchAccountConfig & { accountId?: string | null };
-
 export const twitchSetupPlugin: ChannelPlugin<ResolvedTwitchAccount> = {
   id: channel,
   meta: getChatChannelMeta(channel),
   capabilities: {
     chatTypes: ["group"],
   },
-  config: {
-    listAccountIds: (cfg) => listAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => {
-      const resolvedAccountId = normalizeAccountId(accountId ?? resolveDefaultTwitchAccountId(cfg));
-      const account = getAccountConfig(cfg, resolvedAccountId);
-      if (!account) {
-        return {
-          accountId: resolvedAccountId,
-          username: "",
-          accessToken: "",
-          clientId: "",
-          channel: "",
-          enabled: false,
-        };
-      }
-      return {
-        accountId: resolvedAccountId,
-        ...account,
-      };
-    },
-    defaultAccountId: (cfg) => resolveDefaultTwitchAccountId(cfg),
-    isConfigured: (account, cfg) => resolveTwitchAccountContext(cfg, account?.accountId).configured,
-    isEnabled: (account) => account.enabled !== false,
-  },
+  config: twitchConfigAdapter,
   setup: twitchSetupAdapter,
   setupContract: twitchSetupContract,
   setupWizard: twitchSetupWizard,

@@ -1,25 +1,36 @@
 // @vitest-environment node
 // Control UI tests cover format behavior.
 import { afterEach, describe, expect, it } from "vitest";
+import { i18n } from "../i18n/index.ts";
 import {
   clampText,
   formatDateTimeMs,
   formatDateMs,
   formatCompactTokenCount,
+  formatDurationCompact,
+  formatDurationHuman,
   formatMs,
   formatRelativeTimestamp,
+  formatTimeAgo,
   formatTimeMs,
   formatTokens,
   formatUnknownText,
   parseSessionKeyParts,
-  setUiTimeFormatPreference,
   truncateText,
 } from "./format.ts";
 import { stripThinkingTags } from "./strip-thinking-tags.ts";
 
 describe("formatAgo", () => {
-  it("returns 'in <1m' for timestamps less than 60s in the future", () => {
-    expect(formatRelativeTimestamp(Date.now() + 30_000)).toBe("in <1m");
+  afterEach(async () => {
+    await i18n.setLocale("en");
+  });
+
+  it("formats timestamps less than 60s in the future", () => {
+    expect(formatRelativeTimestamp(Date.now() + 30_000)).toMatch(/^in (29|30)s$/);
+  });
+
+  it("preserves past seconds without a suffix", () => {
+    expect(formatRelativeTimestamp(Date.now() - 30_000, { suffix: false })).toMatch(/^(29|30)s$/);
   });
 
   it("returns 'Xm from now' for future timestamps", () => {
@@ -34,7 +45,7 @@ describe("formatAgo", () => {
     expect(formatRelativeTimestamp(Date.now() + 3 * 24 * 60 * 60_000)).toBe("in 3d");
   });
 
-  it("returns 'Xs ago' for recent past timestamps", () => {
+  it("returns a localized current-time label for recent past timestamps", () => {
     expect(formatRelativeTimestamp(Date.now() - 10_000)).toBe("just now");
   });
 
@@ -45,6 +56,34 @@ describe("formatAgo", () => {
   it("returns 'n/a' for null/undefined", () => {
     expect(formatRelativeTimestamp(null)).toBe("n/a");
     expect(formatRelativeTimestamp(undefined)).toBe("n/a");
+  });
+
+  it("uses the active Control UI locale", async () => {
+    await i18n.setLocale("fr");
+    expect(formatRelativeTimestamp(Date.now() - 5 * 60_000)).toContain("5");
+    expect(formatRelativeTimestamp(Date.now() - 5 * 60_000)).not.toContain("ago");
+  });
+});
+
+describe("localized durations", () => {
+  it("preserves compact day and remainder-hour units", () => {
+    expect(formatDurationCompact(49 * 60 * 60 * 1000, { spaced: true })).toBe("2d 1h");
+  });
+
+  it("switches human durations to days at 24 hours", () => {
+    expect(formatDurationHuman(36 * 60 * 60 * 1000)).toBe("2d");
+  });
+});
+
+describe("formatTimeAgo", () => {
+  it("keeps sub-minute durations in seconds", () => {
+    expect(formatTimeAgo(30_000, { suffix: false })).toBe("30s");
+  });
+
+  it("localizes its invalid-duration fallback", async () => {
+    await i18n.setLocale("fr");
+    expect(formatTimeAgo(null)).not.toBe("unknown");
+    await i18n.setLocale("en");
   });
 });
 
@@ -64,44 +103,6 @@ describe("date/time millisecond formatters", () => {
     expect(formatDateMs(8_640_000_000_000_001, undefined, "")).toBe("");
     expect(formatDateTimeMs(Number.NEGATIVE_INFINITY, undefined, "")).toBe("");
     expect(formatTimeMs(Number.POSITIVE_INFINITY, undefined, "")).toBe("");
-  });
-});
-
-describe("agents.defaults.timeFormat preference", () => {
-  // 19:30 UTC: 24-hour renders "19:30", 12-hour renders "7:30 PM".
-  const ts = Date.UTC(2026, 0, 15, 19, 30);
-  const opts: Intl.DateTimeFormatOptions = {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: "UTC",
-  };
-
-  afterEach(() => {
-    setUiTimeFormatPreference("auto");
-  });
-
-  it("forces a 24-hour clock when preference is 24", () => {
-    setUiTimeFormatPreference("24");
-    expect(formatTimeMs(ts, opts, "")).toBe("19:30");
-  });
-
-  it("forces a 12-hour clock when preference is 12", () => {
-    setUiTimeFormatPreference("12");
-    const formatted = formatTimeMs(ts, opts, "");
-    expect(formatted).toContain("7:30");
-    expect(formatted).toMatch(/PM/i);
-  });
-
-  it("lets the caller override the resolved hour cycle", () => {
-    setUiTimeFormatPreference("24");
-    expect(formatTimeMs(ts, { ...opts, hour12: true }, "")).toMatch(/PM/i);
-  });
-
-  it("leaves rendering to the browser locale default for auto", () => {
-    setUiTimeFormatPreference("auto");
-    const auto = formatDateTimeMs(ts, opts, "");
-    const native = new Date(ts).toLocaleString([], opts);
-    expect(auto).toBe(native);
   });
 });
 

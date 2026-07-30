@@ -525,7 +525,7 @@ export function createApprovalReactionTargetStore<TTarget>(params: {
   readPersistedTarget?: (target: unknown) => TTarget | null;
   nowMs?: () => number;
 }): ApprovalReactionTargetStore<TTarget> {
-  const nowMs = params.nowMs ?? Date.now;
+  const nowMs = params.nowMs ?? (() => Date.now());
   const memory = new Map<string, InMemoryApprovalReactionTarget<TTarget>>();
   let persistentStore: KeyedStore<PersistedApprovalReactionTarget<TTarget>> | undefined;
   let persistentStoreDisabled = false;

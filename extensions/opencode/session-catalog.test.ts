@@ -425,6 +425,37 @@ describe("OpenCode session catalog", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "memoizes the CLI database query across cadence and invalidates by config identity",
+    async () => {
+      await installFakeOpenCode();
+      let now = 1_000;
+      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+      const configIdentity = {};
+      try {
+        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity });
+        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity });
+        expect(childProcessMocks.spawn).toHaveBeenCalledOnce();
+
+        now += 31_999;
+        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity });
+        expect(childProcessMocks.spawn).toHaveBeenCalledOnce();
+
+        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity, forceRefresh: true });
+        expect(childProcessMocks.spawn).toHaveBeenCalledTimes(2);
+
+        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity: {} });
+        expect(childProcessMocks.spawn).toHaveBeenCalledTimes(3);
+
+        now += 32_001;
+        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity });
+        expect(childProcessMocks.spawn).toHaveBeenCalledTimes(4);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "hides and rejects Continue when ACP cannot resume OpenCode",
     async () => {
       await installFakeOpenCode();
@@ -688,19 +719,20 @@ describe("OpenCode session catalog", () => {
       }),
     };
     const invoke = vi.fn().mockResolvedValue(page);
+    const nodes = [
+      {
+        nodeId: "node-1",
+        connected: true,
+        commands: [OPENCODE_SESSIONS_LIST_COMMAND, OPENCODE_TERMINAL_RESUME_COMMAND],
+      },
+    ];
+    const runtimeListNodes = vi.fn().mockResolvedValue({ nodes });
+    const requestListNodes = vi.fn().mockResolvedValue({ nodes });
     registerOpenCodeSessionCatalog({
       pluginConfig: {},
       runtime: {
         nodes: {
-          list: vi.fn().mockResolvedValue({
-            nodes: [
-              {
-                nodeId: "node-1",
-                connected: true,
-                commands: [OPENCODE_SESSIONS_LIST_COMMAND, OPENCODE_TERMINAL_RESUME_COMMAND],
-              },
-            ],
-          }),
+          list: runtimeListNodes,
           invoke,
         },
       },
@@ -711,7 +743,13 @@ describe("OpenCode session catalog", () => {
       registerNodeInvokePolicy: vi.fn(),
     } as unknown as OpenClawPluginApi);
 
-    await expect(provider!.list({ hostIds: ["node:node-1"], search: "remote" })).resolves.toEqual([
+    await expect(
+      provider!.list({
+        hostIds: ["node:node-1"],
+        search: "remote",
+        listNodes: requestListNodes,
+      }),
+    ).resolves.toEqual([
       expect.objectContaining({
         sessions: [
           expect.objectContaining({
@@ -722,6 +760,8 @@ describe("OpenCode session catalog", () => {
         ],
       }),
     ]);
+    expect(requestListNodes).toHaveBeenCalledOnce();
+    expect(runtimeListNodes).not.toHaveBeenCalled();
     expect(invoke).toHaveBeenNthCalledWith(1, {
       nodeId: "node-1",
       command: OPENCODE_SESSIONS_LIST_COMMAND,

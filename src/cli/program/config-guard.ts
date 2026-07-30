@@ -268,10 +268,12 @@ export async function ensureConfigReady(
     preflightSnapshot = await runStateMigrationPreflight();
   }
 
-  // Status performs a second non-observing read for its materialized/source pair;
-  // keep the startup guard from recording config health before the command begins.
+  // Status reads its materialized/source pair; remote Gateway calls must not
+  // record config health in the state owned by the Gateway being queried.
   const configSnapshotOptions =
-    commandName === "status" ? ({ observe: false } as const) : undefined;
+    commandName === "status" || (commandName === "gateway" && subcommandName === "call")
+      ? ({ observe: false } as const)
+      : undefined;
   let snapshot = preflightSnapshot ?? (await getConfigSnapshot(configSnapshotOptions));
   if (
     !preflightSnapshot &&

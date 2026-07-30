@@ -53,6 +53,7 @@ function getReservedCommands(): Set<string> {
     "activation",
     "skill",
     "learn",
+    "loop",
     "subagents",
     "kill",
     "steer",

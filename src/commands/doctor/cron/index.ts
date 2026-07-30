@@ -41,7 +41,7 @@ function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined {
 // The scheduler sets this while a run is active and clears it on completion, so a
 // leftover marker (gateway killed mid-run) makes `cron list` show the job as
 // `running` while nothing executes it. Startup marks exactly these runs interrupted
-// (`src/cron/service/ops.ts` `start`), so doctor only reports the count here.
+// (`src/cron/service/ops-lifecycle.ts` `start`), so doctor only reports the count here.
 function countInFlightCronJobs(jobs: Array<Record<string, unknown>>): number {
   return jobs.filter((job) => {
     const state = job.state;
@@ -60,7 +60,7 @@ const CHRONIC_FAILURE_MIN_CONSECUTIVE_ERRORS = 3;
 
 // Count enabled jobs stuck in repeated run failures. `state.consecutiveErrors`
 // resets to 0 on the next successful run and also increments for runs interrupted
-// by a gateway restart (startup marks in-flight runs failed, `src/cron/service/ops.ts`),
+// by a gateway restart (startup marks in-flight runs failed, `src/cron/service/ops-lifecycle.ts`),
 // so a streak can mean task failures, interrupted runs, or a mix — the note says so.
 // Failure alerts are opt-in, so by default nothing else surfaces the streak.
 // Disabled jobs no longer re-fire (e.g. the scheduler disables exhausted

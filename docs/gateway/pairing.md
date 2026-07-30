@@ -91,8 +91,8 @@ Notes:
   - commandless request: `operator.pairing`
   - ordinary command request: `operator.pairing` + `operator.write`
   - admin-sensitive request containing `system.run`, `system.run.prepare`,
-    `system.which`, `browser.proxy`, `fs.listDir`, or
-    `system.execApprovals.get/set`: `operator.pairing` + `operator.admin`
+    `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`,
+    or `system.execApprovals.get/set`: `operator.pairing` + `operator.admin`
 
 <Warning>
 Node pairing approval records the trusted capability surface. It does **not** pin the live node command surface per node.
@@ -139,6 +139,37 @@ Durable node presence updates follow the same identity boundary: the
 sessions, and updates pairing metadata only when the device/node identity is
 already paired. A self-declared `client.id` value is not enough to write
 last-seen state.
+
+## Silent local pairing
+
+The Gateway treats a loopback source address as local. This includes a client
+reaching a remote loopback-only Gateway through an SSH port forward: the SSH
+server terminates the connection on the Gateway host, so the Gateway sees the
+forwarded connection as loopback. This is intentional because ordinary SSH
+access already implies local trust, including the ability to read the shared
+Gateway token.
+
+By default, trusted local connections silently approve first-time device
+pairing plus role and scope upgrades. This keeps normal same-host and SSH
+tunnel reconnects convenient. Operators using shell-less, port-forward-only
+SSH keys or a multi-user Mac can require explicit approval for every device:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      pairing: {
+        autoApproveLocal: false,
+      },
+    },
+  },
+}
+```
+
+With this setting, new pairing requests, role upgrades, and scope upgrades use
+the normal approval flow even when the connection is local. Metadata-only
+reconnect refreshes remain automatic so routine client or OS metadata changes
+do not create approval churn.
 
 ## SSH-verified device auto-approval (default)
 

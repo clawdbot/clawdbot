@@ -1,5 +1,12 @@
-import { listAgentToolResultMiddlewares } from "../../plugins/agent-tool-result-middleware.js";
+import {
+  getAgentToolResultMiddlewareMatcherScope,
+  listAgentToolResultMiddlewares,
+} from "../../plugins/agent-tool-result-middleware.js";
+import { getGlobalHookRunnerRegistry } from "../../plugins/hook-runner-global-state.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
+import { getToolHookMatcherScope } from "../../plugins/hooks.js";
+import { mergePluginToolMatcherScopes } from "../../plugins/tool-hook-matcher.js";
+import { getTrustedToolPolicyMatcherScope } from "../../plugins/trusted-tool-policy.js";
 import {
   cancelDeferredPluginToolApproval,
   hasBeforeToolCallPolicy,
@@ -28,6 +35,11 @@ import type {
   NativeHookRelayRegistration,
 } from "./native-hook-relay-types.js";
 import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.js";
+
+function getGlobalToolHookMatcherScope(hookName: "before_tool_call" | "after_tool_call") {
+  const registry = getGlobalHookRunnerRegistry();
+  return registry ? getToolHookMatcherScope(registry, hookName) : undefined;
+}
 
 function nativePreToolUseMayRunLoopDetection(
   registration: ActiveNativeHookRelayRegistration,
@@ -58,6 +70,33 @@ export function nativeHookRelayEventHasLocalWork(
     return hasGlobalHooks("before_agent_finalize");
   }
   return true;
+}
+
+export function nativeHookRelayEventToolMatcher(
+  registration: ActiveNativeHookRelayRegistration,
+  event: NativeHookRelayEvent,
+): readonly string[] | undefined {
+  if (event === "pre_tool_use") {
+    if (nativePreToolUseMayRunLoopDetection(registration)) {
+      return undefined;
+    }
+    // Relay selection and policy execution must read the same composed registry
+    // so active, pinned, and isolated plugin sources cannot diverge.
+    const policyRegistry = getGlobalHookRunnerRegistry();
+    const scope = mergePluginToolMatcherScopes([
+      getGlobalToolHookMatcherScope("before_tool_call"),
+      getTrustedToolPolicyMatcherScope(policyRegistry),
+    ]);
+    return scope?.matchAll ? undefined : scope?.toolNames;
+  }
+  if (event === "post_tool_use") {
+    const scope = mergePluginToolMatcherScopes([
+      getGlobalToolHookMatcherScope("after_tool_call"),
+      getAgentToolResultMiddlewareMatcherScope("codex"),
+    ]);
+    return scope?.matchAll ? undefined : scope?.toolNames;
+  }
+  return undefined;
 }
 
 export async function processNativeHookRelayInvocation(params: {
@@ -100,6 +139,7 @@ async function runNativeHookRelayPreToolUse(params: {
       runId: params.registration.runId,
       ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
       ...(params.registration.requester ? { requester: params.registration.requester } : {}),
+      ...params.registration.approvalContext,
       ...(params.invocation.cwd
         ? { cwd: params.invocation.cwd, workspaceDir: params.invocation.cwd }
         : {}),

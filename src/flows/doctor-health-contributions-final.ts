@@ -27,6 +27,7 @@ import {
   runHooksModelHealth,
   runMemorySearchHealthContribution,
   runSkillsHealth,
+  runToolsMdMigrationHealth,
   runWorkspaceStatusHealth,
   runWorkspaceSuggestionsHealth,
 } from "./doctor-health-contribution-runners.workspace.js";
@@ -264,6 +265,20 @@ export function resolveFinalDoctorHealthContributions(params: {
       run: runHeartbeatScratchMigrationHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:tools-md-migration",
+      label: "TOOLS.md migration",
+      healthChecks: {
+        description: "Workspace TOOLS.md notes must migrate into the AGENTS.md Tools section.",
+        defaultEnabled: true,
+        async detect(ctx) {
+          const { collectToolsMdMigrationFindings } =
+            await import("../commands/doctor-tools-md-migration.js");
+          return collectToolsMdMigrationFindings(ctx.cfg);
+        },
+      },
+      run: runToolsMdMigrationHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:heartbeat-task-cron-migration",
       label: "Heartbeat task cron migration",
       healthChecks: {
@@ -299,7 +314,7 @@ export function resolveFinalDoctorHealthContributions(params: {
         async detect(ctx) {
           const { collectWhatsappResponsivenessHealthFindings } =
             await import("../commands/doctor-whatsapp-responsiveness.js");
-          let status: import("../commands/status.types.js").StatusSummary | undefined;
+          let status: import("../status/types.js").StatusSummary | undefined;
           if (
             !(
               (await hasActiveGatewayExecCredential({ cfg: ctx.cfg })) &&
@@ -307,7 +322,7 @@ export function resolveFinalDoctorHealthContributions(params: {
             )
           ) {
             const { callGateway } = await import("../gateway/call.js");
-            status = await callGateway<import("../commands/status.types.js").StatusSummary>({
+            status = await callGateway<import("../status/types.js").StatusSummary>({
               method: "status",
               params: { includeChannelSummary: false },
               timeoutMs: 3000,

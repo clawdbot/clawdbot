@@ -9,13 +9,93 @@ vi.mock("../substrate/config.js", () => ({ buildMatrixQaConfig }));
 vi.mock("./scenario-runtime-room.js", () => ({ runMatrixQaCanary: vi.fn() }));
 
 import { createMatrixQaScenarioEnvironment } from "./scenario-environment.js";
+import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
 afterEach(() => {
   vi.useRealTimers();
 });
 
 describe("matrix scenario environment", () => {
-  it("waits for config restart settle before accepting Matrix readiness", async () => {
+  it("drops actor sync cursors and observers at a scenario boundary", async () => {
+    let configReadCount = 0;
+    const gateway = {
+      baseUrl: "http://127.0.0.1:12345",
+      runtimeEnv: {},
+      tempRoot: "/tmp/matrix-qa",
+      workspaceDir: "/tmp/matrix-qa/workspace",
+      call: vi.fn(async (method: string) => {
+        if (method === "config.get") {
+          configReadCount += 1;
+          const phase = (configReadCount - 1) % 3;
+          if (phase === 0) {
+            return { config: {} };
+          }
+          if (phase === 1) {
+            return { hash: "config-hash" };
+          }
+          return {
+            appliedConfigHash: "config-hash",
+            configRevisionHash: "config-hash",
+            hash: "config-hash",
+          };
+        }
+        if (method === "config.patch") {
+          return { hash: "config-hash", noop: true, ok: true };
+        }
+        if (method === "channels.status") {
+          return {
+            channelAccounts: {
+              matrix: [
+                {
+                  accountId: "sut",
+                  connected: true,
+                  healthState: "healthy",
+                  lastStartAt: 100,
+                  restartPending: false,
+                  running: true,
+                },
+              ],
+            },
+          };
+        }
+        throw new Error(`unexpected gateway method ${method}`);
+      }),
+    };
+    const environment = createMatrixQaScenarioEnvironment({
+      accountId: "sut",
+      harness: { baseUrl: "http://127.0.0.1:8008", recording: {} } as never,
+      observedEvents: [],
+      provisioning: {
+        driver: { accessToken: "fixture", userId: "@driver:test" },
+        observer: { accessToken: "fixture", userId: "@observer:test" },
+        roomId: "!room:test",
+        sut: { accessToken: "fixture", userId: "@sut:test" },
+        topology: { rooms: [] },
+      } as never,
+    });
+    const input = {
+      config: {},
+      gateway,
+      outputDir: "/tmp/matrix-qa/output",
+      scenarioId: "matrix-observer-reset",
+      scenarioTitle: "Matrix observer reset",
+      timeoutMs: 1_000,
+      waitForConfigRestartSettle: vi.fn(),
+    };
+    const first = await environment.prepareFlow(input);
+    const syncState: MatrixQaScenarioContext["syncState"] = first.scenarioContext.syncState;
+    syncState.driver = "s1";
+    syncState.observer = "s2";
+    first.scenarioContext.syncStreams!.driver = { prime: vi.fn() } as never;
+    first.scenarioContext.syncStreams!.observer = { prime: vi.fn() } as never;
+
+    const second = await environment.prepareFlow(input);
+
+    expect(second.scenarioContext.syncState).toEqual({});
+    expect(second.scenarioContext.syncStreams).toEqual({});
+  });
+
+  it("waits for the changed Matrix account to restart before accepting readiness", async () => {
     vi.useFakeTimers();
     const callOrder: string[] = [];
     let configReadCount = 0;
@@ -45,7 +125,6 @@ describe("matrix scenario environment", () => {
           return {
             hash: "patched-config-hash",
             ok: true,
-            sentinel: { payload: { stats: { requiresRestart: true } } },
           };
         }
         if (method === "channels.status") {
@@ -91,6 +170,8 @@ describe("matrix scenario environment", () => {
       config: {},
       gateway,
       outputDir: "/tmp/matrix-qa/output",
+      scenarioId: "matrix-approval",
+      scenarioTitle: "Matrix approval",
       timeoutMs: 1_000,
       waitForConfigRestartSettle,
     });
@@ -123,7 +204,11 @@ describe("matrix scenario environment", () => {
     expect(gateway.call).toHaveBeenCalledWith(
       "config.patch",
       expect.objectContaining({
-        replacePaths: ["channels.matrix", "messages"],
+        replacePaths: [
+          "channels.matrix",
+          "channels.matrix.accounts.sut.groupAllowFrom",
+          "messages",
+        ],
       }),
       { timeoutMs: 60_000 },
     );
@@ -204,6 +289,8 @@ describe("matrix scenario environment", () => {
       config: {},
       gateway,
       outputDir: "/tmp/matrix-qa/output",
+      scenarioId: "matrix-restart",
+      scenarioTitle: "Matrix restart",
       timeoutMs: 1_000,
       waitForConfigRestartSettle,
     });

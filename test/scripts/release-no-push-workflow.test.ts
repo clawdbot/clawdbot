@@ -668,14 +668,16 @@ describe("release validation no-push transport", () => {
     const validatePackage = step(dockerProducer, "Validate OpenClaw Docker E2E package");
     expect(step(dockerProducer, "Setup artifact package validation environment")).toMatchObject({
       if: "steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''",
+      uses: "./.release-harness/.github/actions/setup-pnpm-store-cache",
       with: {
-        "install-deps": "false",
+        "package-manager-file": ".release-harness/package.json",
         "use-actions-cache": "false",
       },
     });
     expect(step(dockerProducer, "Install trusted package validation dependencies")).toMatchObject({
       if: "steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''",
-      run: "pnpm --dir .release-harness install --frozen-lockfile --prefer-offline --ignore-scripts",
+      "working-directory": ".release-harness",
+      run: "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
     });
     expect(validatePackage.env).toMatchObject({
       EXPECTED_PACKAGE_FILE_NAME: "${{ inputs.package_file_name }}",

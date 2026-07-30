@@ -655,7 +655,7 @@ export function buildEmbeddedRunPayloads(params: {
     }
   }
   const reasoningText =
-    suppressAssistantArtifacts || runAborted
+    suppressAssistantArtifacts || runAborted || lastAssistantNeedsErrorSurface
       ? ""
       : assistantForPayload && params.reasoningLevel === "on" && params.thinkingLevel !== "off"
         ? extractAssistantThinking(assistantForPayload)
@@ -747,7 +747,7 @@ export function buildEmbeddedRunPayloads(params: {
     normalizedFallbackAnswerSourceText.length > 0;
   const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
   const answerTexts =
-    suppressAssistantArtifacts || runAborted
+    suppressAssistantArtifacts || runAborted || lastAssistantNeedsErrorSurface
       ? []
       : (shouldUseCanonicalFinalAnswer
           ? [fallbackAnswerSourceText]
@@ -884,6 +884,7 @@ export function buildEmbeddedRunPayloads(params: {
           ...(params.assistantMessageIndex !== undefined
             ? { assistantMessageIndex: params.assistantMessageIndex }
             : {}),
+          ...(item.media?.length ? { assistantTranscriptMediaUrls: [...item.media] } : {}),
           ...(params.assistantTranscriptOwned === true ? { assistantTranscriptOwned: true } : {}),
           ...(params.assistantTranscriptIdempotencyKey
             ? {

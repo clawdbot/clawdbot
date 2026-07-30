@@ -1,9 +1,11 @@
+import { runInitialConfigWriteHealth } from "./doctor-health-contribution-runners.config.js";
 import {
   runClaudeCliHealth,
   runCommandOwnerHealth,
 } from "./doctor-health-contribution-runners.gateway.js";
 import {
   runChannelIngressDeadLettersHealth,
+  runAgentMemorySchemaHealth,
   runCodexSessionRouteHealth,
   runConfigAuditScrubHealth,
   runDatabaseBloatHealth,
@@ -15,9 +17,12 @@ import {
   runSandboxHealth,
   runSessionLocksHealth,
   runSessionSnapshotsHealth,
+  runSessionTranscriptHeadersHealth,
+  runSessionTranscriptLabelsHealth,
   runSessionTranscriptsHealth,
   runStateIntegrityHealth,
 } from "./doctor-health-contribution-runners.state.js";
+import { runActiveToolSchemaWarningsHealth } from "./doctor-health-contribution-runners.workspace.js";
 import type {
   DoctorHealthContribution,
   DoctorHealthFlowContext,
@@ -37,6 +42,13 @@ function legacyOwnedRepair(
   };
 }
 
+async function runTelegramGeneralTopicConversationHealth(
+  ctx: DoctorHealthFlowContext,
+): Promise<void> {
+  const { runCoreContributionHealth } = await import("./doctor-health-contribution-core.js");
+  await runCoreContributionHealth(ctx, ["core/doctor/telegram-general-topic-conversations"]);
+}
+
 export function resolveInitialDoctorHealthContributions(params: {
   runStructuredHealthRepairs: (ctx: DoctorHealthFlowContext) => Promise<void>;
   runGatewayConfigHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
@@ -45,6 +57,16 @@ export function resolveInitialDoctorHealthContributions(params: {
   runLegacyStateHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
 }): DoctorHealthContribution[] {
   return [
+    createDoctorHealthContribution({
+      id: "doctor:write-config-migrations",
+      label: "Write config migrations",
+      run: runInitialConfigWriteHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:active-tool-schema-warnings",
+      label: "Active tool schema warnings",
+      run: runActiveToolSchemaWarningsHealth,
+    }),
     createDoctorHealthContribution({
       id: "doctor:gateway-config",
       label: "Gateway config",
@@ -92,6 +114,11 @@ export function resolveInitialDoctorHealthContributions(params: {
       label: "Legacy state",
       healthCheckIds: ["core/doctor/legacy-state", "core/doctor/removed-workspaces-state"],
       run: params.runLegacyStateHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:agent-memory-schema",
+      label: "Agent memory schema",
+      run: runAgentMemorySchemaHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:legacy-plugin-manifests",
@@ -265,6 +292,12 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: runCodexSessionRouteHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:telegram-general-topic-conversations",
+      label: "Telegram General-topic conversations",
+      healthCheckIds: ["core/doctor/telegram-general-topic-conversations"],
+      run: runTelegramGeneralTopicConversationHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:session-locks",
       label: "Session locks",
       healthCheckIds: ["core/doctor/session-locks"],
@@ -292,6 +325,16 @@ export function resolveInitialDoctorHealthContributions(params: {
         }, "legacy doctor session transcript contribution owns transcript rewrites"),
       },
       run: runSessionTranscriptsHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:session-transcript-headers",
+      label: "Session transcript headers",
+      run: runSessionTranscriptHeadersHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:session-transcript-labels",
+      label: "Session transcript labels",
+      run: runSessionTranscriptLabelsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-snapshots",
