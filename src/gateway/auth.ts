@@ -10,11 +10,13 @@ import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infr
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+  buildRateLimitIdentityKey,
   type AuthRateLimiter,
   type RateLimitCheckResult,
 } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth-resolve.js";
 import {
+  hasForwardedRequestHeaders,
   isLocalDirectRequest,
   isLoopbackAddress,
   resolveLocalInterfaceAddressMatch,
@@ -110,17 +112,29 @@ function resolveGatewayAuthRequestContext(
 ): GatewayAuthRequestContext {
   const { req, trustedProxies } = params;
   const authSurface = params.authSurface ?? "http";
-  const ip =
+  const resolvedIp =
     params.clientIp ??
     resolveRequestClientIp(req, trustedProxies, params.allowRealIpFallback === true) ??
     req?.socket?.remoteAddress;
+  const localDirect = isLocalDirectRequest(
+    req,
+    trustedProxies,
+    params.allowRealIpFallback === true,
+  );
+  // Forwarded requests that collapse to a loopback socket are not local clients.
+  // Use an opaque key so a missing proxy trust configuration cannot inherit the
+  // limiter's exemption for genuinely direct local callers.
+  const ip =
+    !localDirect && hasForwardedRequestHeaders(req) && isLoopbackAddress(resolvedIp)
+      ? buildRateLimitIdentityKey("forwarded-loopback", resolvedIp)
+      : resolvedIp;
 
   return {
     authSurface,
     limiter: params.rateLimiter,
     ip,
     rateLimitScope: params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
-    localDirect: isLocalDirectRequest(req, trustedProxies, params.allowRealIpFallback === true),
+    localDirect,
   };
 }
 
