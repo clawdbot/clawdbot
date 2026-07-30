@@ -213,12 +213,19 @@ explicit subset, including portable scenarios with no channel restriction.
 Matrix live implementations live under
 `extensions/qa-lab/src/live-transports/matrix/scenarios/`.
 
-The adapter provisions a disposable Tuwunel homeserver in Docker (default
-image `ghcr.io/matrix-construct/tuwunel:v1.5.1`, server name `matrix-qa.test`,
-port `28008`), registers temporary driver, SUT, and observer users, seeds the
-required rooms, and records the redacted request/response boundary. It then
-runs the real Matrix plugin inside a child QA gateway scoped to that transport
-(no `qa-channel`) and tears the environment down.
+The adapter provisions a disposable Tuwunel homeserver in Docker (default image
+`ghcr.io/matrix-construct/tuwunel:v1.8.2`, pinned to its multi-architecture OCI
+index digest; server name `matrix-qa.test`, port `28008`), registers temporary
+driver, SUT, and observer users, seeds the required rooms, and records the
+redacted request/response boundary. It then runs the real Matrix plugin inside
+a child QA gateway scoped to that transport (no `qa-channel`) and tears the
+environment down.
+
+The v1.8.2 GHCR index resolves to
+`sha256:6f950bb139411a7964781e986321e395e045e4a6a52240a4dda9d23d04075f78`.
+`docker buildx imagetools inspect ghcr.io/matrix-construct/tuwunel:v1.8.2`
+reports manifests for `linux/arm64`, `linux/amd64`, `linux/amd64/v2`, and
+`linux/amd64/v3`.
 
 Common options:
 

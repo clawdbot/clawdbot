@@ -313,6 +313,8 @@ function appendRecentTalkEventMetadata(
 export class RealtimeCallHandler {
   private readonly toolHandlers = new Map<string, ToolHandlerFn>();
   private readonly pendingStreamTokens = new Map<string, PendingStreamToken>();
+  private readonly activeSockets = new Set<WebSocket>();
+  private readonly serverClosingSockets = new WeakSet<WebSocket>();
   private readonly activeBridgesByCallId = new Map<string, ActiveRealtimeVoiceBridge>();
   private readonly activeTelephonyClosersByCallId = new Map<
     string,
@@ -328,6 +330,8 @@ export class RealtimeCallHandler {
   >();
   private readonly forcedConsultsByCallId = new Map<string, ForcedConsultState>();
   private readonly nativeConsultsInFlightByCallId = new Map<string, NativeConsultState>();
+  private closePromise: Promise<void> | null = null;
+  private closing = false;
   private publicOrigin: string | null = null;
   private publicPathPrefix = "";
 
@@ -390,6 +394,12 @@ export class RealtimeCallHandler {
   }
 
   handleWebSocketUpgrade(request: http.IncomingMessage, socket: Duplex, head: Buffer): void {
+    if (this.closing) {
+      socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
     const url = new URL(request.url ?? "/", "wss://localhost");
     const token = url.pathname.split("/").pop() ?? null;
     const callerMeta = token ? this.consumeStreamToken(token) : null;
@@ -409,6 +419,7 @@ export class RealtimeCallHandler {
       maxPayload: MAX_REALTIME_MESSAGE_BYTES,
     });
     wss.handleUpgrade(request, socket, head, (ws) => {
+      this.activeSockets.add(ws);
       let bridge: ActiveRealtimeVoiceBridge | null = null;
       let initialized = false;
       let activeCallSid = "unknown";
@@ -483,14 +494,56 @@ export class RealtimeCallHandler {
       });
 
       ws.on("close", (code) => {
-        const reason = stopReceived || code === 1000 || code === 1005 ? "completed" : "error";
+        this.activeSockets.delete(ws);
+        const reason =
+          this.serverClosingSockets.has(ws) || stopReceived || code === 1000 || code === 1005
+            ? "completed"
+            : "error";
         this.closeTelephonyBridge(activeCallSid, bridge, reason);
       });
 
       ws.on("error", (error) => {
         console.error("[voice-call] realtime WS error:", error);
       });
+
+      if (this.closing) {
+        this.serverClosingSockets.add(ws);
+        ws.terminate();
+      }
     });
+  }
+
+  close(shutdownBarrier: Promise<unknown> = Promise.resolve()): Promise<void> {
+    if (this.closePromise) {
+      return this.closePromise;
+    }
+
+    this.closing = true;
+    this.pendingStreamTokens.clear();
+    const sockets = [...this.activeSockets];
+    this.closePromise = Promise.all([
+      shutdownBarrier,
+      ...sockets.map(
+        (ws) =>
+          new Promise<void>((resolve) => {
+            if (ws.readyState === WebSocket.CLOSED) {
+              resolve();
+              return;
+            }
+            this.serverClosingSockets.add(ws);
+            ws.once("close", () => resolve());
+            ws.terminate();
+          }),
+      ),
+    ])
+      .then(() => {
+        this.pendingStreamTokens.clear();
+      })
+      .finally(() => {
+        this.closing = false;
+        this.closePromise = null;
+      });
+    return this.closePromise;
   }
 
   registerToolHandler(name: string, fn: ToolHandlerFn): void {

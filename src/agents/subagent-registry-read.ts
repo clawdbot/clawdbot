@@ -17,11 +17,12 @@ import {
   type SubagentRunReadIndex,
 } from "./subagent-registry-queries.js";
 import {
+  getSubagentSessionListRunsSnapshotForRead,
   getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForController,
   getSubagentRunsSnapshotForRead,
 } from "./subagent-registry-state.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentRunReadRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 
 export {
@@ -30,10 +31,12 @@ export {
   resolveSubagentSessionStatus,
 } from "./subagent-session-metrics.js";
 
-/** Builds a reusable read index from the current persisted and in-memory run state. */
-export function buildSubagentRunReadIndex(now = Date.now()): SubagentRunReadIndex {
+/** Builds the session-list index without hydrating full retained registry payloads. */
+export function buildSubagentSessionListReadIndex(
+  now = Date.now(),
+): SubagentRunReadIndex<SubagentRunReadRecord> {
   return buildSubagentRunReadIndexFromRuns({
-    runs: getSubagentRunsSnapshotForRead(subagentRuns),
+    runs: getSubagentSessionListRunsSnapshotForRead(subagentRuns),
     inMemoryRuns: subagentRuns.values(),
     now,
   });
