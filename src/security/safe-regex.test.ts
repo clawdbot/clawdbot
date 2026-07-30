@@ -26,18 +26,22 @@ describe("safe regex", () => {
     ["(.|a)+$", null],
     ["(\\w|\\d)*$", null],
     ["([a-f]|[d-z])+$", null],
+    ["([é]|\\D)*$", null],
+    ["(é|É)*$", null, "i"],
+    ["((a|a)|(a|a))*$", null],
     ["(a|b)*$", RegExp],
     ["(ab|cd)*$", RegExp],
     ["(cat|dog)+$", RegExp],
     ["(\\d|\\s)*$", RegExp],
+    ["([a-f]|[g-z])*$", RegExp],
     ["(a|aa){2}$", RegExp],
     ["(a|a){2}$", RegExp],
-  ] as const)("compiles %s safely", (pattern, expected) => {
+  ] as const)("compiles %s safely", (pattern, expected, flags) => {
     if (expected === null) {
-      expect(compileSafeRegex(pattern)).toBeNull();
+      expect(compileSafeRegex(pattern, flags)).toBeNull();
       return;
     }
-    expect(compileSafeRegex(pattern)).toBeInstanceOf(expected);
+    expect(compileSafeRegex(pattern, flags)).toBeInstanceOf(expected);
   });
 
   it("compiles common safe filter regex", () => {

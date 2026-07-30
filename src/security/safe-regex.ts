@@ -17,6 +17,7 @@ type TokenState = {
 type ParseFrame = {
   lastToken: TokenState | null;
   containsRepetition: boolean;
+  hasAmbiguousAlternation: boolean;
   hasAlternation: boolean;
   branchMinLength: number;
   branchMaxLength: number;
@@ -57,6 +58,7 @@ function createParseFrame(): ParseFrame {
   return {
     lastToken: null,
     containsRepetition: false,
+    hasAmbiguousAlternation: false,
     hasAlternation: false,
     branchMinLength: 0,
     branchMaxLength: 0,
@@ -92,11 +94,139 @@ function recordAlternative(frame: ParseFrame): void {
   frame.altMaxLength = Math.max(frame.altMaxLength, frame.branchMaxLength);
 }
 
-const ALTERNATION_OVERLAP_SAMPLES = Array.from({ length: 128 }, (_, code) =>
-  String.fromCharCode(code),
-);
+const ASCII_ATOM_SAMPLES = Array.from({ length: 128 }, (_, code) => String.fromCharCode(code));
 
-function atomsOverlap(left: string, right: string, flags: string): boolean {
+function readEscapedLiteral(source: string, index: number): { value: string; next: number } | null {
+  const marker = source[index + 1];
+  if (!marker) {
+    return null;
+  }
+  if (marker === "x") {
+    const hex = source.slice(index + 2, index + 4);
+    return /^[\da-f]{2}$/i.test(hex)
+      ? { value: String.fromCodePoint(Number.parseInt(hex, 16)), next: index + 4 }
+      : null;
+  }
+  if (marker === "u") {
+    if (source[index + 2] === "{") {
+      const closing = source.indexOf("}", index + 3);
+      if (closing < 0) {
+        return null;
+      }
+      const hex = source.slice(index + 3, closing);
+      const codePoint = /^[\da-f]+$/i.test(hex) ? Number.parseInt(hex, 16) : Number.NaN;
+      return Number.isSafeInteger(codePoint) && codePoint <= 0x10ffff
+        ? { value: String.fromCodePoint(codePoint), next: closing + 1 }
+        : null;
+    }
+    const hex = source.slice(index + 2, index + 6);
+    return /^[\da-f]{4}$/i.test(hex)
+      ? { value: String.fromCodePoint(Number.parseInt(hex, 16)), next: index + 6 }
+      : null;
+  }
+  if (/^[\\^$.*+?()[\]{}|/-]$/.test(marker)) {
+    return { value: marker, next: index + 2 };
+  }
+  return null;
+}
+
+function finiteCharacterClassValues(source: string): string[] | null {
+  if (!source.startsWith("[") || !source.endsWith("]") || source.startsWith("[^")) {
+    return null;
+  }
+  const values = new Set<string>();
+  const elements: Array<{ value: string; escaped: boolean }> = [];
+  for (let index = 1; index < source.length - 1;) {
+    if (source[index] === "\\") {
+      const escaped = readEscapedLiteral(source, index);
+      if (!escaped) {
+        return null;
+      }
+      elements.push({ value: escaped.value, escaped: true });
+      index = escaped.next;
+      continue;
+    }
+    const codePoint = source.codePointAt(index);
+    if (codePoint === undefined) {
+      return null;
+    }
+    const value = String.fromCodePoint(codePoint);
+    elements.push({ value, escaped: false });
+    index += value.length;
+  }
+  for (let index = 0; index < elements.length; index += 1) {
+    const element = expectDefined(elements[index], "character class element");
+    const hyphen = elements[index + 1];
+    const rangeEnd = elements[index + 2];
+    if (hyphen?.value === "-" && !hyphen.escaped && rangeEnd) {
+      const startCodePoint = expectDefined(element.value.codePointAt(0), "range start");
+      const endCodePoint = expectDefined(rangeEnd.value.codePointAt(0), "range end");
+      if (endCodePoint < startCodePoint || endCodePoint - startCodePoint > 1024) {
+        return null;
+      }
+      for (let codePoint = startCodePoint; codePoint <= endCodePoint; codePoint += 1) {
+        values.add(String.fromCodePoint(codePoint));
+      }
+      index += 2;
+    } else {
+      values.add(element.value);
+    }
+    if (values.size > 2048) {
+      return null;
+    }
+  }
+  return [...values];
+}
+
+function finiteAtomValues(source: string): string[] | null {
+  const classValues = finiteCharacterClassValues(source);
+  if (classValues) {
+    return classValues;
+  }
+  if (source === "\\d") {
+    return Array.from({ length: 10 }, (_, index) => String(index));
+  }
+  if (source === "\\w") {
+    return [..."ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz0123456789"];
+  }
+  if (source === "\\s") {
+    return [
+      "\t",
+      "\n",
+      "\v",
+      "\f",
+      "\r",
+      " ",
+      "\u00a0",
+      "\u1680",
+      "\u2000",
+      "\u2001",
+      "\u2002",
+      "\u2003",
+      "\u2004",
+      "\u2005",
+      "\u2006",
+      "\u2007",
+      "\u2008",
+      "\u2009",
+      "\u200a",
+      "\u2028",
+      "\u2029",
+      "\u202f",
+      "\u205f",
+      "\u3000",
+      "\ufeff",
+    ];
+  }
+  if (source.startsWith("\\")) {
+    const escaped = readEscapedLiteral(source, 0);
+    return escaped?.next === source.length ? [escaped.value] : null;
+  }
+  const characters = [...source];
+  return characters.length === 1 && !/^[.^$*+?()[\]{}|]$/.test(source) ? characters : null;
+}
+
+function atomsMayOverlap(left: string, right: string, flags: string): boolean {
   if (left === right) {
     return true;
   }
@@ -104,11 +234,23 @@ function atomsOverlap(left: string, right: string, flags: string): boolean {
     const safeFlags = flags.replace(/[gy]/g, "");
     const leftRegex = new RegExp(`^(?:${left})$`, safeFlags);
     const rightRegex = new RegExp(`^(?:${right})$`, safeFlags);
-    return ALTERNATION_OVERLAP_SAMPLES.some(
-      (sample) => leftRegex.test(sample) && rightRegex.test(sample),
-    );
+    const leftValues = finiteAtomValues(left);
+    const rightValues = finiteAtomValues(right);
+    const candidates = new Set([
+      ...ASCII_ATOM_SAMPLES,
+      ...left,
+      ...right,
+      ...(leftValues ?? []),
+      ...(rightValues ?? []),
+    ]);
+    if ([...candidates].some((sample) => leftRegex.test(sample) && rightRegex.test(sample))) {
+      return true;
+    }
+    // A finite side proves disjointness once every value has been tested.
+    // Unknown atom languages fail closed so sampling can never declare them safe.
+    return flags.includes("i") || (leftValues === null && rightValues === null);
   } catch {
-    return false;
+    return true;
   }
 }
 
@@ -124,7 +266,11 @@ function alternativesOverlap(alternatives: Array<string[] | null>, flags: string
         right &&
         left.length === right.length &&
         left.every((atom, index) =>
-          atomsOverlap(atom, expectDefined(right[index], "equal-length alternative atom"), flags),
+          atomsMayOverlap(
+            atom,
+            expectDefined(right[index], "equal-length alternative atom"),
+            flags,
+          ),
         )
       ) {
         return true;
@@ -190,8 +336,20 @@ function tokenizePattern(source: string): PatternToken[] {
     const ch = source[i];
 
     if (ch === "\\") {
-      const atom = source.slice(i, i + 2);
-      i += 1;
+      let atomEnd = i + 2;
+      if (
+        (source[i + 1] === "p" || source[i + 1] === "P" || source[i + 1] === "u") &&
+        source[i + 2] === "{"
+      ) {
+        const closing = source.indexOf("}", i + 3);
+        atomEnd = closing < 0 ? atomEnd : closing + 1;
+      } else if (source[i + 1] === "u") {
+        atomEnd = Math.min(source.length, i + 6);
+      } else if (source[i + 1] === "x") {
+        atomEnd = Math.min(source.length, i + 4);
+      }
+      const atom = source.slice(i, atomEnd);
+      i = atomEnd - 1;
       tokens.push({ kind: "simple-token", source: atom });
       continue;
     }
@@ -234,7 +392,10 @@ function tokenizePattern(source: string): PatternToken[] {
       continue;
     }
 
-    tokens.push({ kind: "simple-token", source: ch });
+    const codePoint = source.codePointAt(i);
+    const atom = codePoint === undefined ? ch : String.fromCodePoint(codePoint);
+    tokens.push({ kind: "simple-token", source: atom });
+    i += atom.length - 1;
   }
 
   return tokens;
@@ -248,6 +409,9 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
     frame.lastToken = token;
     if (token.containsRepetition) {
       frame.containsRepetition = true;
+    }
+    if (token.hasAmbiguousAlternation) {
+      frame.hasAmbiguousAlternation = true;
     }
     frame.branchMinLength = addLength(frame.branchMinLength, token.minLength);
     frame.branchMaxLength = addLength(frame.branchMaxLength, token.maxLength);
@@ -294,11 +458,12 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
         emitToken({
           containsRepetition: frame.containsRepetition,
           hasAmbiguousAlternation:
-            frame.hasAlternation &&
-            frame.altMinLength !== null &&
-            frame.altMaxLength !== null &&
-            (frame.altMinLength !== frame.altMaxLength ||
-              alternativesOverlap(frame.alternativeAtoms, flags)),
+            frame.hasAmbiguousAlternation ||
+            (frame.hasAlternation &&
+              frame.altMinLength !== null &&
+              frame.altMaxLength !== null &&
+              (frame.altMinLength !== frame.altMaxLength ||
+                alternativesOverlap(frame.alternativeAtoms, flags))),
           minLength: groupMinLength,
           maxLength: groupMaxLength,
           atoms: frame.hasAlternation ? null : frame.branchAtoms,
