@@ -529,13 +529,20 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         if (params.reset) {
           const existing = sessions.get(sessionId);
           sessions.delete(sessionId);
-          if (existing?.pendingApproval) {
-            context.systemAgentApprovalManager?.expire(
-              existing.pendingApproval.id,
-              "session-reset",
-            );
+          try {
+            if (existing?.pendingApproval) {
+              context.systemAgentApprovalManager?.expire(
+                existing.pendingApproval.id,
+                "session-reset",
+              );
+            }
+            await existing?.engine.dispose();
+          } finally {
+            // Discarding the session is irreversible, so the boundary outlives a
+            // failed cleanup step and a replacement that fails to initialize.
+            // Later ordinary sessions seed only the turns after it.
+            appendTranscriptReset();
           }
-          await existing?.engine.dispose();
         }
         let session = sessions.get(sessionId);
         let greetingAuditSequence: number | undefined;
@@ -615,9 +622,6 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             }
             respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, error.message));
             return;
-          }
-          if (params.reset) {
-            appendTranscriptReset();
           }
           persistEngineHistory(engine, welcomeHistoryStart);
           await evictOldestSession(sessions, context);
