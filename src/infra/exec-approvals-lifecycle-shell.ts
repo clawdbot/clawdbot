@@ -1,6 +1,14 @@
 // Splits compound shell text without treating quoted separators as commands.
 export type LifecycleShellDialect = "cmd" | "posix" | "powershell";
 
+/** Strip leading POSIX assignment words and return the executable argv. */
+export function stripLifecyclePosixAssignments(argv: string[]): string[] | null {
+  const executableIndex = argv.findIndex(
+    (token) => !/^[A-Za-z_][A-Za-z0-9_]*(?:\+)?=.*/u.test(token),
+  );
+  return executableIndex === 0 ? null : executableIndex === -1 ? [] : argv.slice(executableIndex);
+}
+
 export function splitLifecycleCommandText(
   command: string,
   delimiters: ReadonlySet<string>,

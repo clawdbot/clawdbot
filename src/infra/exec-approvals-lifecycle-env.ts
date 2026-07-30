@@ -1,6 +1,10 @@
 // Expands known shell environment references used in lifecycle-sensitive argv.
 import { splitShellArgs } from "../utils/shell-argv.js";
-import { classifyOpenClawGatewayArgv } from "./exec-approvals-lifecycle-gateway.js";
+import { resolveCarrierCommandArgv } from "./command-carriers.js";
+import {
+  classifyOpenClawGatewayArgv,
+  unresolvedGatewayMethodMayHideLifecycle,
+} from "./exec-approvals-lifecycle-gateway.js";
 import { splitLifecycleInlineCommands } from "./exec-approvals-lifecycle-shell.js";
 import { extractShellWrapperInlineCommand } from "./shell-wrapper-resolution.js";
 const POSIX_VARIABLE_RE = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/gu;
@@ -123,7 +127,12 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
       OPENCLAW_GLOBAL_FLAGS,
     );
     if (["daemon", "gateway"].includes(tokens[commandIndex] ?? "")) {
-      return classifyOpenClawGatewayArgv(argv, commandIndex + 1);
+      return (
+        classifyOpenClawGatewayArgv(argv, commandIndex + 1) ||
+        unresolvedGatewayMethodMayHideLifecycle(argv, commandIndex + 1, (value) =>
+          VARIABLE_REFERENCE_RE.test(value ?? ""),
+        )
+      );
     }
     return !["--help", "health", "probe", "status", "update.status"].includes(
       tokens[commandIndex] ?? "",
@@ -146,11 +155,14 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
       argv.join(" "),
     );
   }
+  if (executable === "env") {
+    const carried = resolveCarrierCommandArgv([...argv], 0, { includeExec: true });
+    return carried ? unresolvedEnvironmentMayHideLifecycle(carried) : false;
+  }
   return [
     "",
     "kill",
     "killall",
-    "env",
     "pkill",
     "powershell",
     "pwsh",

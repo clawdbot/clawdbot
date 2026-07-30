@@ -21,6 +21,7 @@ import { resolveLifecyclePackageRunnerArgv } from "./exec-approvals-lifecycle-ru
 import {
   splitLifecycleCommandText,
   splitLifecycleInlineCommands,
+  stripLifecyclePosixAssignments,
 } from "./exec-approvals-lifecycle-shell.js";
 import {
   bindLifecyclePosixShellPositionals,
@@ -443,11 +444,18 @@ function classifyProcessMutation(
   return false;
 }
 
-function isPowerShellSelection(argv: readonly string[]): boolean {
+function isPowerShellSelection(argv: readonly string[], allowUnresolved: boolean): boolean {
   return (
     ["get-process", "get-service", "gps", "gsv", "ps"].includes(
       normalizeExecutableToken(argv[0] ?? ""),
-    ) && argv.slice(1).some(looksLikeOpenClaw)
+    ) &&
+    argv
+      .slice(1)
+      .some(
+        (token) =>
+          looksLikeOpenClaw(token) ||
+          (allowUnresolved && /\$env:[A-Za-z_][A-Za-z0-9_]*/iu.test(token)),
+      )
   );
 }
 
@@ -466,18 +474,19 @@ function isPowerShellPipelineMutation(argv: readonly string[]): boolean {
   ].includes(normalizeExecutableToken(argv[0] ?? ""));
 }
 
-function commandHasPowerShellLifecyclePipeline(command: string): boolean {
+function commandHasPowerShellLifecyclePipeline(command: string, allowUnresolved = false): boolean {
   const stages = splitLifecycleCommandText(command, new Set(["|"]), "powershell");
   if (stages.length < 2) {
     return false;
   }
   let selectedOpenClaw = false;
   for (const stage of stages) {
-    const argv = splitShellArgs(stage);
+    const normalizedStage = stage.trim().replace(/^[({\s]+|[)}\s]+$/gu, "");
+    const argv = splitShellArgs(normalizedStage);
     if (!argv) {
       return false;
     }
-    if (isPowerShellSelection(argv)) {
+    if (isPowerShellSelection(argv, allowUnresolved)) {
       selectedOpenClaw = true;
       continue;
     }
@@ -518,6 +527,15 @@ function classifyArgv(
 ): boolean {
   if (argv.length === 0) {
     return false;
+  }
+  if (shellContext !== "powershell") {
+    const commandArgv = stripLifecyclePosixAssignments(argv);
+    if (commandArgv?.length === 0) {
+      return false;
+    }
+    if (commandArgv) {
+      return classifyArgv(commandArgv, raw, depth, shellContext, cwd);
+    }
   }
   if (lifecycleSubstitutionResultMayHideLifecycle(argv)) {
     return true;
@@ -630,7 +648,7 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
   const shellContext: ShellContext =
     (params.platform ?? process.platform) === "win32" ? "powershell" : undefined;
   if (
-    commandHasPowerShellLifecyclePipeline(expandedCommand) ||
+    commandHasPowerShellLifecyclePipeline(expandedCommand, !envComplete) ||
     commandHasLifecycleSubstitution(expandedCommand, 0, shellContext, params.cwd)
   ) {
     return true;

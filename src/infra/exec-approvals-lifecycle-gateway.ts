@@ -96,3 +96,17 @@ export function classifyOpenClawGatewayArgv(argv: readonly string[], start: numb
   }
   return !GATEWAY_READ_ONLY.has(action);
 }
+
+/** Return true when an unresolved reference occupies the gateway RPC method position. */
+export function unresolvedGatewayMethodMayHideLifecycle(
+  argv: readonly string[],
+  start: number,
+  isUnresolved: (value: string | undefined) => boolean,
+): boolean {
+  const actionIndex = scanFirstPositional(argv, start, GATEWAY_OPTIONS_WITH_VALUE);
+  if (normalizedToken(argv[actionIndex]) !== "call") {
+    return false;
+  }
+  const methodIndex = scanFirstPositional(argv, actionIndex + 1, GATEWAY_CALL_OPTIONS_WITH_VALUE);
+  return isUnresolved(argv[methodIndex]);
+}

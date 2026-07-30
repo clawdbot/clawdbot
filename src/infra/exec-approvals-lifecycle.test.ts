@@ -136,6 +136,7 @@ const mutationCases: Array<[string, string[]]> = [
   ],
   ["env -S 'openclaw gateway restart'", ["env", "-S", "openclaw gateway restart"]],
   ['sh -c "openclaw gateway restart"', ["sh", "-c", "openclaw gateway restart"]],
+  ["sh -c 'X=1 openclaw gateway restart'", ["sh", "-c", "X=1 openclaw gateway restart"]],
   [
     "sh -c '(echo ok; openclaw gateway restart)'",
     ["sh", "-c", "(echo ok; openclaw gateway restart)"],
@@ -255,6 +256,7 @@ const mutationCases: Array<[string, string[]]> = [
     ["powershell", "-NoProfile", "-Command", "kill openclaw"],
   ],
   ["Get-Process OpenClaw | Stop-Process", ["Get-Process", "OpenClaw", "|", "Stop-Process"]],
+  ["(Get-Process OpenClaw) | Stop-Process", ["(Get-Process", "OpenClaw)", "|", "Stop-Process"]],
   ["Get-Service OpenClaw | Start-Service", ["Get-Service", "OpenClaw", "|", "Start-Service"]],
   ["Get-Service OpenClaw | Remove-Service", ["Get-Service", "OpenClaw", "|", "Remove-Service"]],
   [
@@ -756,6 +758,63 @@ describe("OpenClaw lifecycle exec approvals", () => {
         ],
       }),
     ).toBe(false);
+  });
+
+  it("fails closed for unresolved gateway RPC methods", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: "openclaw gateway call \"${METHOD:-update.run}\" --params '{}'",
+        env: {},
+        envComplete: false,
+        platform: "linux",
+        segments: [
+          {
+            raw: "openclaw gateway call \"${METHOD:-update.run}\" --params '{}'",
+            argv: ["openclaw", "gateway", "call", "${METHOD:-update.run}", "--params", "{}"],
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("fails closed for unresolved PowerShell lifecycle selectors", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: "Get-Process $env:NAME | Stop-Process",
+        env: {},
+        envComplete: false,
+        platform: "win32",
+        segments: [
+          {
+            raw: "Get-Process $env:NAME | Stop-Process",
+            argv: ["Get-Process", "$env:NAME", "|", "Stop-Process"],
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps benign unresolved env payload data non-blocking", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `env echo "$UNSET"`,
+        env: {},
+        envComplete: false,
+        platform: "linux",
+        segments: [{ raw: `env echo "$UNSET"`, argv: ["env", "echo", "$UNSET"] }],
+      }),
+    ).toBe(false);
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `env "$TOOL" gateway restart`,
+        env: {},
+        envComplete: false,
+        platform: "linux",
+        segments: [
+          { raw: `env "$TOOL" gateway restart`, argv: ["env", "$TOOL", "gateway", "restart"] },
+        ],
+      }),
+    ).toBe(true);
   });
 
   it("does not let a later status token clear an unresolved systemctl action", () => {
