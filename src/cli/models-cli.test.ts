@@ -203,20 +203,10 @@ describe("models cli", () => {
   it("declares --agent on every agent-aware auth leaf command", () => {
     const models = requireCommand(createProgram(), "models");
     const auth = requireCommand(models, "auth");
-    const authLeaves = [
-      "add",
-      "list",
-      "login",
-      "logout",
-      "setup-token",
-      "paste-token",
-      "paste-api-key",
-      "login-github-copilot",
-    ].map((name) => requireCommand(auth, name));
     const order = requireCommand(auth, "order");
-    const orderLeaves = ["get", "set", "clear"].map((name) => requireCommand(order, name));
+    const authLeaves = auth.commands.filter((command) => command !== order);
 
-    for (const command of [...authLeaves, ...orderLeaves]) {
+    for (const command of [...authLeaves, ...order.commands]) {
       expect(command.options.some((option) => option.long === "--agent")).toBe(true);
     }
   });
