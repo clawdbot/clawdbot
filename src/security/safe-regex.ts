@@ -31,8 +31,8 @@ type ParseFrame = {
 };
 
 type PatternToken =
-  | { kind: "simple-token"; source: string }
-  | { kind: "group-open" }
+  | { kind: "simple-token"; source: string; zeroWidth: boolean }
+  | { kind: "group-open"; zeroWidth: boolean }
   | { kind: "group-close" }
   | { kind: "alternation" }
   | { kind: "quantifier"; quantifier: QuantifierRead };
@@ -258,8 +258,13 @@ function atomsMayOverlap(left: string, right: string, flags: string): boolean {
       return true;
     }
     // A finite side proves disjointness once every value has been tested.
+    // Unicode ignore-case can add folds outside that finite source enumeration.
+    const hasNonExhaustiveCaseFold =
+      flags.includes("i") &&
+      (flags.includes("u") || flags.includes("v")) &&
+      (leftValues === null || rightValues === null);
     // Unknown atom languages fail closed so sampling can never declare them safe.
-    return leftValues === null && rightValues === null;
+    return hasNonExhaustiveCaseFold || (leftValues === null && rightValues === null);
   } catch {
     return true;
   }
@@ -376,7 +381,11 @@ function tokenizePattern(source: string): PatternToken[] {
       }
       const atom = source.slice(i, atomEnd);
       i = atomEnd - 1;
-      tokens.push({ kind: "simple-token", source: atom });
+      tokens.push({
+        kind: "simple-token",
+        source: atom,
+        zeroWidth: atom === "\\b" || atom === "\\B",
+      });
       continue;
     }
 
@@ -394,10 +403,24 @@ function tokenizePattern(source: string): PatternToken[] {
     }
 
     if (ch === "(") {
-      tokens.push({ kind: "group-open" });
-      if (source.slice(i + 1, i + 3) === "?:") {
+      let zeroWidth = false;
+      const shortPrefix = source.slice(i + 1, i + 3);
+      const longPrefix = source.slice(i + 1, i + 4);
+      if (longPrefix === "?<=" || longPrefix === "?<!") {
+        zeroWidth = true;
+        i += 3;
+      } else if (shortPrefix === "?=" || shortPrefix === "?!") {
+        zeroWidth = true;
         i += 2;
+      } else if (shortPrefix === "?:") {
+        i += 2;
+      } else if (shortPrefix === "?<") {
+        const closing = source.indexOf(">", i + 3);
+        if (closing >= 0) {
+          i = closing;
+        }
       }
+      tokens.push({ kind: "group-open", zeroWidth });
       continue;
     }
 
@@ -420,7 +443,11 @@ function tokenizePattern(source: string): PatternToken[] {
 
     const codePoint = expectDefined(source.codePointAt(i), "pattern code point");
     const atom = String.fromCodePoint(codePoint);
-    tokens.push({ kind: "simple-token", source: atom });
+    tokens.push({
+      kind: "simple-token",
+      source: atom,
+      zeroWidth: atom === "^" || atom === "$",
+    });
     i += atom.length - 1;
   }
 
@@ -449,25 +476,27 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
     frame.branchSignatures.push(token.signature);
   };
 
-  const emitSimpleToken = (source: string) => {
+  const emitSimpleToken = (source: string, zeroWidth: boolean) => {
     emitToken({
       containsRepetition: false,
-      hasAmbiguousAlternation: false,
-      minLength: 1,
-      maxLength: 1,
-      atoms: [source],
+      hasAmbiguousAlternation: zeroWidth,
+      minLength: zeroWidth ? 0 : 1,
+      maxLength: zeroWidth ? 0 : 1,
+      atoms: zeroWidth ? null : [source],
       signature: source,
     });
   };
 
   for (const token of tokens) {
     if (token.kind === "simple-token") {
-      emitSimpleToken(token.source);
+      emitSimpleToken(token.source, token.zeroWidth);
       continue;
     }
 
     if (token.kind === "group-open") {
-      frames.push(createParseFrame());
+      const frame = createParseFrame();
+      frame.hasAmbiguousAlternation = token.zeroWidth;
+      frames.push(frame);
       continue;
     }
 
