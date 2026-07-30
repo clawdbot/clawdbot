@@ -71,8 +71,6 @@ export type GuardedFetchOptions = {
     | {
         flowId?: string;
         meta?: Record<string, unknown>;
-        /** Request header values that debug capture must redact without changing the network request. */
-        sensitiveRequestHeaderNames?: readonly string[];
       };
   maxRedirects?: number;
   /**
@@ -348,7 +346,6 @@ async function captureGuardedFetchExchange(params: {
       ...(params.auditContext ? { auditContext: params.auditContext } : {}),
       ...params.capture?.meta,
     },
-    sensitiveRequestHeaderNames: params.capture?.sensitiveRequestHeaderNames,
   });
 }
 

@@ -16,6 +16,7 @@ import { sha256Hex, sha256HexPrefix } from "../../infra/crypto-digest.js";
 import { resolveOperatorRequestHeaders } from "../../infra/net/operator-request-headers.js";
 import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug, logWarn } from "../../logger.js";
+import { createSensitiveRequestHeaderCaptureMeta } from "../../proxy-capture/sensitive-request-header-meta.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
@@ -728,7 +729,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       useEnvProxy: useTrustedEnvProxy,
       policy: ssrfPolicy,
       capture: params.headers
-        ? { sensitiveRequestHeaderNames: Object.keys(params.headers) }
+        ? { meta: createSensitiveRequestHeaderCaptureMeta(Object.keys(params.headers)) }
         : undefined,
       init: {
         headers: buildWebFetchRequestHeaders({

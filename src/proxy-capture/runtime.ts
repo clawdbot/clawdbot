@@ -9,6 +9,7 @@ import {
 } from "../logging/secret-redaction-registry.js";
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
 import { redactedCaptureHeaders, REDACTED_CAPTURE_HEADER_VALUE } from "./header-redaction.js";
+import { readSensitiveRequestHeaderNamesFromCaptureMeta } from "./sensitive-request-header-meta.js";
 import {
   closeDebugProxyCaptureStore,
   getDebugProxyCaptureStore,
@@ -441,7 +442,6 @@ export function captureHttpExchange(
     transport?: "http" | "sse";
     flowId?: string;
     meta?: Record<string, unknown>;
-    sensitiveRequestHeaderNames?: Iterable<string>;
   },
   resolved?: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},
@@ -488,7 +488,10 @@ export function captureHttpExchange(
     }),
     contentType: requestContentType,
     headersJson: runtime.safeJsonString(
-      redactedCaptureHeaders(params.requestHeaders, params.sensitiveRequestHeaderNames),
+      redactedCaptureHeaders(
+        params.requestHeaders,
+        readSensitiveRequestHeaderNamesFromCaptureMeta(params.meta),
+      ),
     ),
     metaJson: redactedCaptureJson(params.meta, runtime.safeJsonString),
     ...requestPayload,

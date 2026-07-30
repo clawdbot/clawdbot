@@ -5,6 +5,7 @@ import { resolveConfigEnvVars } from "../../config/env-substitution.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { LookupFn } from "../../infra/net/ssrf.js";
 import * as logger from "../../logger.js";
+import { readSensitiveRequestHeaderNamesFromCaptureMeta } from "../../proxy-capture/sensitive-request-header-meta.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import "./web-fetch.test-mocks.js";
 import { createWebFetchTool } from "./web-fetch.js";
@@ -83,17 +84,12 @@ describe("web_fetch configured request headers", () => {
     );
     expect(getRequestHeaders(fetchSpy)["X-Tokenizer-Version"]).toBe("v2");
     expect(getRequestHeaders(fetchSpy)["X-Trace-Token"]).toBe("trace-context");
-    expect(guardedFetchSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        capture: {
-          sensitiveRequestHeaderNames: [
-            "ATL-SG-SERVICE-INJECTION-URL",
-            "X-Tokenizer-Version",
-            "X-Trace-Token",
-          ],
-        },
-      }),
-    );
+    const captureMeta = guardedFetchSpy.mock.calls[0]?.[0].capture;
+    expect(
+      captureMeta === false
+        ? undefined
+        : readSensitiveRequestHeaderNamesFromCaptureMeta(captureMeta?.meta),
+    ).toEqual(["ATL-SG-SERVICE-INJECTION-URL", "X-Tokenizer-Version", "X-Trace-Token"]);
   });
 
   it("keeps fetch-owned header names and casing when no headers are configured", async () => {
