@@ -389,27 +389,34 @@ export function installContextEngineLoopHook(params: {
         return lastAssembledView;
       }
       if (contextEngine) {
-        const assembled = await contextEngine.assemble({
-          sessionId,
-          sessionKey,
-          messages: providerMessages,
-          tokenBudget,
-          model: modelId,
-          runtimeSettings: params.runtimeSettings,
-        });
-        if (
-          assembled &&
-          Array.isArray(assembled.messages) &&
-          assembled.messages !== providerMessages
-        ) {
-          lastAssembledView = assembled.messages;
+        try {
+          const assembled = await contextEngine.assemble({
+            sessionId,
+            sessionKey,
+            messages: providerMessages,
+            tokenBudget,
+            model: modelId,
+            runtimeSettings: params.runtimeSettings,
+          });
+          if (
+            assembled &&
+            Array.isArray(assembled.messages) &&
+            assembled.messages !== providerMessages
+          ) {
+            lastAssembledView = assembled.messages;
+            log.warn(
+              `[context-engine] transformContext: no new messages, pre-warm assemble succeeded ` +
+                `sessionId=${sessionId} before=${providerMessages.length} after=${assembled.messages.length} ` +
+                `beforeToolResults=${providerMessages.filter((m: any) => m?.role === "toolResult").length} ` +
+                `afterToolResults=${assembled.messages.filter((m: any) => m?.role === "toolResult").length}`,
+            );
+            return assembled.messages;
+          }
+        } catch {
           log.warn(
-            `[context-engine] transformContext: no new messages, pre-warm assemble succeeded ` +
-              `sessionId=${sessionId} before=${providerMessages.length} after=${assembled.messages.length} ` +
-              `beforeToolResults=${providerMessages.filter((m: any) => m?.role === "toolResult").length} ` +
-              `afterToolResults=${assembled.messages.filter((m: any) => m?.role === "toolResult").length}`,
+            `[context-engine] transformContext: no new messages, pre-warm assemble failed — falling back to raw messages ` +
+              `sessionId=${sessionId} error=assemble threw`,
           );
-          return assembled.messages;
         }
       }
       return providerMessages;
