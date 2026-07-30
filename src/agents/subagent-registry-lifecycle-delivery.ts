@@ -300,6 +300,22 @@ export function createSubagentRegistryLifecycleDelivery(
         ...(sessionTarget ? { sessionTarget } : {}),
       });
       resultText = captured?.trim() ? capFrozenResultText(captured) : null;
+      // The agent's final text may not have landed in the session transcript
+      // when the lifecycle fires (e.g. after sessions_yield resume). Wait
+      // briefly and try once more before committing a null result.
+      if (resultText === null && entry.expectsCompletionMessage === true) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 200);
+        });
+        const retried = await params.captureSubagentCompletionReply(entry.childSessionKey, {
+          waitForReply: true,
+          outcome,
+          ...(sessionTarget ? { sessionTarget } : {}),
+        });
+        if (retried?.trim()) {
+          resultText = capFrozenResultText(retried);
+        }
+      }
     } catch {
       resultText = null;
     }
