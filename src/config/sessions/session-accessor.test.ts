@@ -72,7 +72,7 @@ import {
 } from "./session-accessor.sqlite.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 const cleanupArchivedSessionTranscriptsMock = vi.hoisted(() => vi.fn(async () => {}));
 
@@ -3171,12 +3171,13 @@ describe("session accessor seam", () => {
     if (!retryable) {
       throw new Error("expected retryable admission");
     }
+    const retryableMainRestartRecovery = (retryable as InternalSessionEntry).mainRestartRecovery;
     const deduplicated = await persistSessionTranscriptTurn(scope, {
       expectedSessionId: scope.sessionId,
       expectedSessionState: {
         abortedLastRun: retryable.abortedLastRun,
-        mainRestartRecoveryCycleId: retryable.mainRestartRecovery?.cycleId,
-        mainRestartRecoveryRevision: retryable.mainRestartRecovery?.revision,
+        mainRestartRecoveryCycleId: retryableMainRestartRecovery?.cycleId,
+        mainRestartRecoveryRevision: retryableMainRestartRecovery?.revision,
         restartRecoveryBeforeAgentReplyState: retryable.restartRecoveryBeforeAgentReplyState,
         restartRecoveryDeliveryReceiptState: retryable.restartRecoveryDeliveryReceiptState,
         restartRecoveryDeliveryToolCallId: retryable.restartRecoveryDeliveryToolCallId,
@@ -3402,6 +3403,8 @@ describe("session accessor seam", () => {
     }
     const expectedSessionState = {
       abortedLastRun: stored.abortedLastRun,
+      mainRestartRecoveryCycleId: undefined,
+      mainRestartRecoveryRevision: undefined,
       restartRecoveryBeforeAgentReplyState: stored.restartRecoveryBeforeAgentReplyState,
       restartRecoveryDeliveryReceiptState: stored.restartRecoveryDeliveryReceiptState,
       restartRecoveryDeliveryToolCallId: stored.restartRecoveryDeliveryToolCallId,

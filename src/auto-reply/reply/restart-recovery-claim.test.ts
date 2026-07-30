@@ -6,7 +6,7 @@ import {
   replaceSessionEntry,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type {
   UserTurnTranscriptRecorder,
@@ -191,13 +191,14 @@ describe("createReplyRestartRecoveryClaimController", () => {
       persistApproved: async (
         options?: Parameters<UserTurnTranscriptRecorder["persistApproved"]>[0],
       ) => {
-        await updateSessionEntry({ storePath, sessionKey }, () => ({
+        const recoveryPatch: Partial<InternalSessionEntry> = {
           mainRestartRecovery: {
             cycleId: "cycle-new",
             revision: 1,
             chargedAttempts: 0,
           },
-        }));
+        };
+        await updateSessionEntry({ storePath, sessionKey }, () => recoveryPatch);
         return await createUserTurnTranscriptRecorder({
           message: sourceMessage,
           target: {
