@@ -133,6 +133,7 @@ function createCapabilityPluginRecord(params: {
   source: string;
   rootDir?: string;
   workspaceDir?: string;
+  contracts?: PluginRecord["contracts"];
 }): PluginRecord {
   return {
     id: params.id,
@@ -143,6 +144,7 @@ function createCapabilityPluginRecord(params: {
     rootDir: params.rootDir,
     origin: "bundled",
     workspaceDir: params.workspaceDir,
+    contracts: params.contracts,
     enabled: true,
     status: "loaded",
     toolNames: [],
@@ -275,6 +277,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
           : candidate.source,
       rootDir: candidate.rootDir,
       workspaceDir: candidate.workspaceDir,
+      contracts: manifest.contracts,
     });
 
     const boundaryLabel = record.source === candidate.source ? "plugin root" : "repo root";
