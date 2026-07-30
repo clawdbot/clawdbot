@@ -51,8 +51,7 @@ async function expectWebhookTimeout(promise: Promise<unknown>): Promise<void> {
     name: "TimeoutError",
     message: "request timed out",
   });
-  await vi.advanceTimersByTimeAsync(DISCORD_REST_TIMEOUT_MS);
-  await rejection;
+  await Promise.all([vi.advanceTimersByTimeAsync(DISCORD_REST_TIMEOUT_MS), rejection]);
 }
 
 describe("sendWebhookMessageDiscord timeout", () => {

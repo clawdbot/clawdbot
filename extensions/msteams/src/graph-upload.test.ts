@@ -287,9 +287,7 @@ describe("graph upload request timeouts", () => {
     const signal = fetchSignal(fetchFn);
     const assertion = expectMSTeamsTimeout(upload, "MS Teams SharePoint upload", timeoutMs);
 
-    await vi.advanceTimersByTimeAsync(timeoutMs);
-
-    await assertion;
+    await Promise.all([assertion, vi.advanceTimersByTimeAsync(timeoutMs)]);
     expect(signal.aborted).toBe(true);
   });
 
