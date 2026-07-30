@@ -3375,7 +3375,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
           const abbreviated = await runSystemInvoke({
             preferMacAppExecHost: false,
-            command: [executablePath, '--so=BEGIN{system("id")}', "/dev/null"],
+            command: [executablePath, '--s=BEGIN{system("id")}', "/dev/null"],
             cwd: tempDir,
             security: "allowlist",
             ask: "on-miss",

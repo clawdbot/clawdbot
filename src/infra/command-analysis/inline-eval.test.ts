@@ -219,6 +219,10 @@ describe("exec inline eval detection", () => {
       expected: "gawk --source",
     },
     {
+      argv: ["gawk", "-f", "library.awk", '--s=BEGIN{system("id")}', "/dev/null"],
+      expected: "gawk --source",
+    },
+    {
       argv: ["gawk", "-f", "library.awk", '--so=BEGIN{system("id")}', "/dev/null"],
       expected: "gawk --source",
     },
@@ -301,7 +305,6 @@ describe("exec inline eval detection", () => {
     expect(detectInterpreterInlineEvalArgv(["expect", "script.exp"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["r2", "-e", "bin.cache=true", "program"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["awk", "-f", "script.awk", "data.csv"])).toBeNull();
-    expect(detectInterpreterInlineEvalArgv(["gawk", "--s=BEGIN{print 1}"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["find", ".", "-name", "*.ts"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["xargs", "-0"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["make", "test"])).toBeNull();
