@@ -33,6 +33,7 @@ const GATEWAY_READ_ONLY = new Set([
 const LIFECYCLE_RPC_METHODS = new Set([
   "config.apply",
   "config.patch",
+  "config.set",
   "gateway.restart.request",
   "update.run",
 ]);

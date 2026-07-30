@@ -36,6 +36,29 @@ const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "--version"]);
 const OPENCLAW_GLOBAL_FLAGS = new Set(["--dev", "--no-color"]);
 const OPENCLAW_GLOBAL_OPTIONS = new Set(["--container", "--log-level", "--profile"]);
 const UPDATE_OPTIONS_WITH_VALUE = new Set(["--channel", "--tag", "--timeout"]);
+const CONFIG_OPTIONS_WITH_VALUE = new Set([
+  "--batch-file",
+  "--batch-json",
+  "--file",
+  "--provider-allowlist",
+  "--provider-arg",
+  "--provider-command",
+  "--provider-env",
+  "--provider-max-bytes",
+  "--provider-max-output-bytes",
+  "--provider-mode",
+  "--provider-no-output-timeout-ms",
+  "--provider-pass-env",
+  "--provider-path",
+  "--provider-source",
+  "--provider-timeout-ms",
+  "--provider-trusted-dir",
+  "--ref-id",
+  "--ref-provider",
+  "--ref-source",
+  "--replace-path",
+  "--section",
+]);
 const LAUNCHCTL_MUTATIONS = new Set([
   "attach",
   "bootstrap",
@@ -207,6 +230,23 @@ function classifyUpdateArgv(argv: readonly string[], start: number): boolean {
   return true;
 }
 
+function classifyConfigArgv(argv: readonly string[], start: number): boolean {
+  if (hasEffectiveHelpOrVersion(argv, start, CONFIG_OPTIONS_WITH_VALUE)) {
+    return false;
+  }
+  for (let index = start; index < argv.length; index += 1) {
+    const token = argv[index]?.trim() ?? "";
+    const name = optionName(token);
+    if (CONFIG_OPTIONS_WITH_VALUE.has(name) && !token.includes("=")) {
+      index += 1;
+    } else if (name === "--dry-run") {
+      return false;
+    }
+  }
+  const actionIndex = scanFirstPositional(argv, start, new Set(["--section"]));
+  return !["file", "get", "schema", "validate"].includes(normalizedToken(argv[actionIndex]));
+}
+
 function classifyOpenClawArgv(argv: readonly string[]): boolean {
   let index = 1;
   for (; index < argv.length; index += 1) {
@@ -236,6 +276,8 @@ function classifyOpenClawArgv(argv: readonly string[]): boolean {
 
   const command = normalizedToken(argv[index]);
   switch (command) {
+    case "config":
+      return classifyConfigArgv(argv, index + 1);
     case "daemon":
     case "gateway":
       return classifyOpenClawGatewayArgv(argv, index + 1);
@@ -393,7 +435,19 @@ function classifyProcessMutation(
       .replace(/\[([a-z0-9])\]/giu, "$1")
       .replace(/''|""/gu, "")
       .replace(/\\([a-z0-9])/giu, "$1");
+    const substitutionSelectsOpenClaw = extractShellSubstitutionCommands(raw).commands.some(
+      (nested) =>
+        splitLifecycleInlineCommands(nested).some((part) => {
+          const nestedArgv = splitShellArgs(part);
+          return (
+            nestedArgv !== null &&
+            ["pgrep", "pidof"].includes(normalizeExecutableToken(nestedArgv[0] ?? "")) &&
+            nestedArgv.slice(1).some(matchesOpenClawProcessPattern)
+          );
+        }),
+    );
     return (
+      substitutionSelectsOpenClaw ||
       /\b(?:pgrep|pidof)\b[\s\S]{0,120}\bopenclaw\b/iu.test(normalizedRaw) ||
       /\$\([^)]*\bopenclaw\b[^)]*\)|`[^`]*\bopenclaw\b[^`]*`/iu.test(normalizedRaw)
     );
