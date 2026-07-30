@@ -619,23 +619,16 @@ function classifyAssistantMediaError(err: unknown): AssistantMediaAvailability {
 
 type OpenedAssistantMediaHandle = Awaited<ReturnType<typeof openLocalFileSafely>>["handle"];
 
-// Assistant media handles are opened with autoClose: false streams, so a rejected close leaks the
-// descriptor for the process lifetime. FileHandle.close() clears `fd` before the underlying close
-// settles, so capture the raw descriptor up front and retry it once (#116346).
+// A rejected FileHandle.close() still releases the underlying descriptor at the OS level
+// before or during the rejection (Node clears `handle.fd` first), so a numeric-fd retry can
+// end up closing an unrelated descriptor a different gateway operation acquired in the
+// meantime. Log the failure instead of retrying; it is a rare failure path and the leaked
+// slot cannot outlive the process here, unlike closing the wrong live descriptor (#116346).
 async function closeAssistantMediaHandle(handle: OpenedAssistantMediaHandle): Promise<void> {
-  const fd = handle.fd;
   try {
     await handle.close();
   } catch (err) {
     log.warn(`control-ui assistant media handle close failed: ${String(err)}`);
-    if (fd < 0) {
-      return;
-    }
-    fs.close(fd, (rawErr) => {
-      if (rawErr) {
-        log.warn(`control-ui assistant media descriptor close failed: ${String(rawErr)}`);
-      }
-    });
   }
 }
 
