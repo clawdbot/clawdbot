@@ -100,14 +100,17 @@ describe("models cli", () => {
   });
 
   function createProgram() {
-    const program = new Command();
+    const program = new Command().enablePositionalOptions();
     registerModelsCli(program);
     return program;
   }
 
   async function runModelsCommand(args: string[]) {
     await runRegisteredCli({
-      register: registerModelsCli as (program: Command) => void,
+      register: (program: Command) => {
+        program.enablePositionalOptions();
+        registerModelsCli(program);
+      },
       argv: args,
     });
   }
@@ -197,6 +200,27 @@ describe("models cli", () => {
     });
   });
 
+  it("declares --agent on every agent-aware auth leaf command", () => {
+    const models = requireCommand(createProgram(), "models");
+    const auth = requireCommand(models, "auth");
+    const authLeaves = [
+      "add",
+      "list",
+      "login",
+      "logout",
+      "setup-token",
+      "paste-token",
+      "paste-api-key",
+      "login-github-copilot",
+    ].map((name) => requireCommand(auth, name));
+    const order = requireCommand(auth, "order");
+    const orderLeaves = ["get", "set", "clear"].map((name) => requireCommand(order, name));
+
+    for (const command of [...authLeaves, ...orderLeaves]) {
+      expect(command.options.some((option) => option.long === "--agent")).toBe(true);
+    }
+  });
+
   it.each([
     { label: "status flag", args: ["models", "status", "--agent", "poe"] },
     { label: "parent flag", args: ["models", "--agent", "poe", "status"] },
@@ -266,6 +290,68 @@ describe("models cli", () => {
     await runModelsCommand(args);
 
     expectCommandOptions(command, expected);
+  });
+
+  it.each([
+    {
+      label: "add",
+      args: ["models", "auth", "add", "--agent", "poe"],
+      command: modelsAuthAddCommand,
+      expected: { agent: "poe" },
+    },
+    {
+      label: "login",
+      args: ["models", "auth", "login", "--provider", "openai", "--agent", "poe"],
+      command: modelsAuthLoginCommand,
+      expected: { agent: "poe", provider: "openai" },
+    },
+    {
+      label: "setup-token",
+      args: ["models", "auth", "setup-token", "--provider", "anthropic", "--agent", "poe"],
+      command: modelsAuthSetupTokenCommand,
+      expected: { agent: "poe", provider: "anthropic" },
+    },
+    {
+      label: "paste-token",
+      args: ["models", "auth", "paste-token", "--provider", "anthropic", "--agent", "poe"],
+      command: modelsAuthPasteTokenCommand,
+      expected: { agent: "poe", provider: "anthropic" },
+    },
+    {
+      label: "paste-api-key",
+      args: ["models", "auth", "paste-api-key", "--provider", "openai", "--agent", "poe"],
+      command: modelsAuthPasteApiKeyCommand,
+      expected: { agent: "poe", provider: "openai" },
+    },
+    {
+      label: "login-github-copilot",
+      args: ["models", "auth", "login-github-copilot", "--agent", "poe", "--yes"],
+      command: modelsAuthLoginCommand,
+      expected: { agent: "poe", provider: "github-copilot", method: "device", yes: true },
+    },
+  ])("passes leaf --agent to models auth $label", async ({ args, command, expected }) => {
+    await runModelsCommand(args);
+
+    expectCommandOptions(command, expected);
+  });
+
+  it("prefers leaf --agent when both models auth forms are present", async () => {
+    await runModelsCommand([
+      "models",
+      "auth",
+      "--agent",
+      "parent",
+      "login",
+      "--agent",
+      "leaf",
+      "--provider",
+      "openai",
+    ]);
+
+    expectCommandOptions(modelsAuthLoginCommand, {
+      agent: "leaf",
+      provider: "openai",
+    });
   });
 
   it("passes --method through models auth login", async () => {
