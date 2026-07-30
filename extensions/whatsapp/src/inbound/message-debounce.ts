@@ -168,6 +168,8 @@ export function createWhatsAppInboundMessageDebouncer(options: {
     const key = buildKey(message);
     if (key) {
       message.debounceKey = key;
+      // Only positive windows create pending timer work. Every message still
+      // enters the debouncer below, where zero flushes and serializes the key.
       if (resolveDebounceMs(message) > 0 && shouldDebounce(message)) {
         message.debounceKeyTracked = true;
         trackKey(key);
