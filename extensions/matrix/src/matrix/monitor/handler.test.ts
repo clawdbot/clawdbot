@@ -3636,6 +3636,43 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
+  it("redacts the draft and routes control-bearing finals through normal delivery", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({
+      blockStreamingEnabled: true,
+      streaming: "partial",
+    });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "Deployment ready." });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    await deliver(
+      {
+        text: "Deployment ready.",
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "approve" }] }],
+        },
+      },
+      { kind: "final" },
+    );
+
+    // An in-place finalize edit cannot carry controls, so the draft must be
+    // redacted and the final must go through normal delivery exactly once.
+    expect(editMessageMatrixMock).not.toHaveBeenCalled();
+    expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    const deliverParams = requireRecord(
+      callArg(deliverMatrixRepliesMock, 0, 0, "deliver replies params"),
+      "deliver replies params",
+    );
+    const replies = requireArray(deliverParams.replies, "delivered replies");
+    expect(replies).toHaveLength(1);
+    expect(requireRecord(replies[0], "delivered reply").presentation).toBeDefined();
+    await finish();
+  });
+
   it("redacts partial previews before normal final delivery for changed Matrix mentions", async () => {
     const { dispatch, redactEventMock } = createStreamingHarness({
       blockStreamingEnabled: true,

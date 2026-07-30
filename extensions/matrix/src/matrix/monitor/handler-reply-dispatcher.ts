@@ -413,6 +413,7 @@ export function createMatrixReplyDispatcher(config: {
         const shouldRedactDraft =
           Boolean(draftEventId) &&
           (payload.isError ||
+            carriesPresentationControls ||
             payloadReplyMismatch ||
             mustDeliverFinalNormally ||
             draftFinalTextNeedsNormalMentionDelivery);
