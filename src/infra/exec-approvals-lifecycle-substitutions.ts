@@ -1,5 +1,6 @@
 import { unresolvedOpenClawConfigActionMayMutate } from "./exec-approvals-lifecycle-config.js";
 import { unresolvedOpenClawDoctorArgvMayMutate } from "./exec-approvals-lifecycle-doctor.js";
+import { lifecycleDynamicArgvMayHideLifecycle } from "./exec-approvals-lifecycle-env.js";
 import {
   classifyOpenClawGatewayArgv,
   unresolvedGatewayMethodMayHideLifecycle,
@@ -11,6 +12,7 @@ import {
 } from "./exec-approvals-lifecycle-plugins.js";
 import { unresolvedOpenClawApprovalPolicyActionMayMutate } from "./exec-approvals-lifecycle-policy.js";
 import { unresolvedOpenClawResetArgvMayMutate } from "./exec-approvals-lifecycle-reset.js";
+import type { LifecycleShellDialect } from "./exec-approvals-lifecycle-shell.js";
 import { lifecycleBooleanOptionValueMayBeDynamic } from "./exec-approvals-lifecycle-tokens.js";
 // Extracts shell command/process substitutions without treating quoted text as executable.
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
@@ -45,9 +47,6 @@ const SUBSTITUTION_RESULT_SENSITIVE_EXECUTABLES = new Set([
   "yarn",
   "zsh",
 ]);
-const LIFECYCLE_MUTATION_HINT_RE =
-  /\b(?:daemon|gateway|install|kill|remove|restart|rm|start|stop|uninstall|update)\b/iu;
-const SUBSTITUTION_TOKEN_RE = /\$\(|`|[<>=]\(/u;
 const OPENCLAW_GLOBAL_FLAGS = new Set(["--dev", "--no-color"]);
 const OPENCLAW_GLOBAL_OPTIONS = new Set(["--container", "--log-level", "--profile"]);
 const UPDATE_OPTIONS_WITH_VALUE = new Set(["--channel", "--tag", "--timeout"]);
@@ -58,7 +57,11 @@ export type ShellSubstitutionScan = {
   uncertain: boolean;
 };
 
-function findClosingParen(command: string, start: number): number | null {
+function findClosingParen(
+  command: string,
+  start: number,
+  dialect: LifecycleShellDialect,
+): number | null {
   let depth = 1;
   let quote: "'" | '"' | null = null;
   let escaped = false;
@@ -74,7 +77,7 @@ function findClosingParen(command: string, start: number): number | null {
       escaped = false;
       continue;
     }
-    if (char === "\\") {
+    if ((dialect === "posix" && char === "\\") || (dialect === "powershell" && char === "`")) {
       escaped = true;
       continue;
     }
@@ -119,11 +122,16 @@ function findClosingBacktick(command: string, start: number): number | null {
   return null;
 }
 
-function extractAtDepth(command: string, depth: number): ShellSubstitutionScan {
+function extractAtDepth(
+  command: string,
+  depth: number,
+  dialect: LifecycleShellDialect,
+): ShellSubstitutionScan {
+  const allowBacktickSubstitution = dialect === "posix";
   if (depth >= MAX_SUBSTITUTION_DEPTH) {
     return {
       commands: [],
-      uncertain: /\$\(|[<>=]\(|`/u.test(command),
+      uncertain: (allowBacktickSubstitution ? /\$\(|[<>=]\(|`/u : /\$\(/u).test(command),
     };
   }
   const extracted: string[] = [];
@@ -142,7 +150,7 @@ function extractAtDepth(command: string, depth: number): ShellSubstitutionScan {
       escaped = false;
       continue;
     }
-    if (char === "\\") {
+    if ((dialect === "posix" && char === "\\") || (dialect === "powershell" && char === "`")) {
       escaped = true;
       continue;
     }
@@ -154,19 +162,19 @@ function extractAtDepth(command: string, depth: number): ShellSubstitutionScan {
       quote = quote === '"' ? null : '"';
       continue;
     }
-    // Double quotes still execute `$()` and backticks, so their content must
-    // intentionally fall through to the substitution scanner below.
+    // Double quotes still execute `$()` (and POSIX backticks), so their content
+    // intentionally falls through to the substitution scanner below.
 
     const next = command[index + 1] ?? "";
     const opensParenSubstitution =
       (char === "$" && next === "(" && command[index + 2] !== "(") ||
-      (quote === null && ["<", ">", "="].includes(char) && next === "(");
+      (dialect === "posix" && quote === null && ["<", ">", "="].includes(char) && next === "(");
     if (opensParenSubstitution) {
-      const end = findClosingParen(command, index + 2);
+      const end = findClosingParen(command, index + 2, dialect);
       if (end !== null) {
         const nested = command.slice(index + 2, end).trim();
         if (nested) {
-          const nestedScan = extractAtDepth(nested, depth + 1);
+          const nestedScan = extractAtDepth(nested, depth + 1, dialect);
           extracted.push(nested, ...nestedScan.commands);
           uncertain ||= nestedScan.uncertain;
         }
@@ -174,12 +182,12 @@ function extractAtDepth(command: string, depth: number): ShellSubstitutionScan {
       }
       continue;
     }
-    if (char === "`") {
+    if (allowBacktickSubstitution && char === "`") {
       const end = findClosingBacktick(command, index + 1);
       if (end !== null) {
         const nested = command.slice(index + 1, end).trim();
         if (nested) {
-          const nestedScan = extractAtDepth(nested, depth + 1);
+          const nestedScan = extractAtDepth(nested, depth + 1, dialect);
           extracted.push(nested, ...nestedScan.commands);
           uncertain ||= nestedScan.uncertain;
         }
@@ -190,9 +198,12 @@ function extractAtDepth(command: string, depth: number): ShellSubstitutionScan {
   return { commands: extracted, uncertain };
 }
 
-/** Return executable text nested in POSIX-style command or process substitutions. */
-export function extractShellSubstitutionCommands(command: string): ShellSubstitutionScan {
-  return extractAtDepth(command, 0);
+/** Return executable text nested in command or process substitutions for a shell dialect. */
+export function extractShellSubstitutionCommands(
+  command: string,
+  dialect: LifecycleShellDialect = "posix",
+): ShellSubstitutionScan {
+  return extractAtDepth(command, 0, dialect);
 }
 
 function optionName(token: string): string {
@@ -227,11 +238,12 @@ function scanFirstPositional(
   return argv.length;
 }
 
-function openClawSubstitutionMayHideLifecycle(argv: readonly string[]): boolean {
+function openClawSubstitutionMayHideLifecycle(
+  argv: readonly string[],
+  isSubstitution: (value: string | undefined) => boolean,
+): boolean {
   const commandIndex = scanFirstPositional(argv, 1, OPENCLAW_GLOBAL_OPTIONS, OPENCLAW_GLOBAL_FLAGS);
   const command = (argv[commandIndex] ?? "").trim().toLowerCase();
-  const isSubstitution = (value: string | undefined): boolean =>
-    SUBSTITUTION_TOKEN_RE.test(value ?? "");
   if (isSubstitution(argv[commandIndex])) {
     return true;
   }
@@ -292,9 +304,15 @@ function openClawSubstitutionMayHideLifecycle(argv: readonly string[]): boolean 
 }
 
 /** Return true when substitution output can occupy a lifecycle-sensitive argv position. */
-export function lifecycleSubstitutionResultMayHideLifecycle(argv: readonly string[]): boolean {
+export function lifecycleSubstitutionResultMayHideLifecycle(
+  argv: readonly string[],
+  dialect: LifecycleShellDialect = "posix",
+): boolean {
+  const substitutionTokenRe = dialect === "posix" ? /\$\(|`|[<>=]\(/u : /\$\(/u;
+  const isSubstitution = (value: string | undefined): boolean =>
+    substitutionTokenRe.test(value ?? "");
   const substitutionIndexes = argv.flatMap((token, index) =>
-    SUBSTITUTION_TOKEN_RE.test(token) ? [index] : [],
+    isSubstitution(token) ? [index] : [],
   );
   if (substitutionIndexes.length === 0) {
     return false;
@@ -304,13 +322,12 @@ export function lifecycleSubstitutionResultMayHideLifecycle(argv: readonly strin
   }
   const executable = normalizeExecutableToken(argv[0] ?? "");
   if (executable === "openclaw" || executable.startsWith("openclaw@")) {
-    return openClawSubstitutionMayHideLifecycle(argv);
+    return openClawSubstitutionMayHideLifecycle(argv, isSubstitution);
   }
-  if (!SUBSTITUTION_RESULT_SENSITIVE_EXECUTABLES.has(executable)) {
-    return false;
-  }
-  const text = argv.join(" ").replace(/\[([a-z0-9])\]/giu, "$1");
-  return /opencla(?:w|[?*])/iu.test(text) || LIFECYCLE_MUTATION_HINT_RE.test(text);
+  return (
+    SUBSTITUTION_RESULT_SENSITIVE_EXECUTABLES.has(executable) &&
+    lifecycleDynamicArgvMayHideLifecycle(argv, isSubstitution)
+  );
 }
 
 /** Return POSIX shell argv bound as $0, $1, ... after an inline command. */

@@ -35,8 +35,8 @@ function optionName(token: string): string {
 
 function resolveOptionName(token: string): string {
   const name = optionName(token);
-  const matches = [...START_PROCESS_OPTIONS_WITH_VALUE].filter((candidate) =>
-    candidate.startsWith(name),
+  const matches = [...START_PROCESS_OPTIONS_WITH_VALUE, ...START_PROCESS_FLAGS].filter(
+    (candidate) => candidate.startsWith(name),
   );
   return matches.length === 1 ? (matches[0] ?? name) : name;
 }
@@ -69,6 +69,21 @@ function collectArgumentList(
 function inlineOptionValue(token: string): string | undefined {
   const separatorIndex = token.search(/[=:]/u);
   return separatorIndex === -1 ? undefined : token.slice(separatorIndex + 1);
+}
+
+function powerShellSwitchValue(token: string): boolean | null {
+  const value = inlineOptionValue(token);
+  if (value === undefined) {
+    return true;
+  }
+  const normalized = value.trim().toLowerCase().replace(/^\$/u, "");
+  if (["1", "true"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false"].includes(normalized)) {
+    return false;
+  }
+  return null;
 }
 
 function looksLikeOpenClawSelector(token: string, allowUnresolved: boolean): boolean {
@@ -168,6 +183,7 @@ function parseStartProcessArgv(
   }
   let filePath: string | undefined;
   let argumentList: string[] = [];
+  let whatIf = false;
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index]?.trim() ?? "";
     const name = resolveOptionName(token);
@@ -184,6 +200,10 @@ function parseStartProcessArgv(
         argumentList = collected.argumentList;
         index = collected.lastIndex;
       }
+      continue;
+    }
+    if (name === "-whatif") {
+      whatIf = powerShellSwitchValue(token) === true;
       continue;
     }
     if (START_PROCESS_FLAGS.has(name)) {
@@ -203,7 +223,7 @@ function parseStartProcessArgv(
       index = collected.lastIndex;
     }
   }
-  return { argumentList, filePath };
+  return whatIf ? null : { argumentList, filePath };
 }
 
 /** Return OpenClaw-equivalent argv when PowerShell Start-Process launches it. */

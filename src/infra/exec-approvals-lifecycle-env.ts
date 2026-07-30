@@ -183,18 +183,21 @@ function scanFirstPositional(
   return argv.length;
 }
 
-/** Return true when a partial environment can fill a lifecycle-sensitive argv position. */
-export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): boolean {
-  if (!argv.some(isVariableReference)) {
+/** Return true when dynamic text can fill a lifecycle-sensitive argv position. */
+export function lifecycleDynamicArgvMayHideLifecycle(
+  argv: readonly string[],
+  isDynamic: (value: string | undefined) => boolean,
+): boolean {
+  if (!argv.some(isDynamic)) {
     return false;
   }
-  if (isVariableReference(argv[0])) {
+  if (isDynamic(argv[0])) {
     return true;
   }
   const executable = normalizedExecutable(argv[0]);
   const tokens = argv.map((token) => token.trim().toLowerCase());
   if (["&", "."].includes(executable)) {
-    return argv.length > 1 ? unresolvedEnvironmentMayHideLifecycle(argv.slice(1)) : false;
+    return argv.length > 1 ? lifecycleDynamicArgvMayHideLifecycle(argv.slice(1), isDynamic) : false;
   }
   if (executable === "launchctl") {
     const actionIndex = scanFirstPositional(argv, 1, new Set(["-d", "-s"]));
@@ -214,51 +217,47 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
       OPENCLAW_GLOBAL_FLAGS,
     );
     const command = tokens[commandIndex] ?? "";
-    if (isVariableReference(argv[commandIndex])) {
+    if (isDynamic(argv[commandIndex])) {
       return true;
     }
     if (["daemon", "gateway"].includes(command)) {
       return (
         classifyOpenClawGatewayArgv(argv, commandIndex + 1) ||
-        unresolvedGatewayMethodMayHideLifecycle(argv, commandIndex + 1, isVariableReference)
+        unresolvedGatewayMethodMayHideLifecycle(argv, commandIndex + 1, isDynamic)
       );
     }
     if (command === "config") {
-      return unresolvedOpenClawConfigActionMayMutate(argv, commandIndex + 1, isVariableReference);
+      return unresolvedOpenClawConfigActionMayMutate(argv, commandIndex + 1, isDynamic);
     }
     if (["approvals", "exec-approvals", "exec-policy"].includes(command)) {
       return unresolvedOpenClawApprovalPolicyActionMayMutate(
         command,
         argv,
         commandIndex + 1,
-        isVariableReference,
+        isDynamic,
       );
     }
     if (command === "node") {
-      return unresolvedOpenClawNodeServiceActionMayMutate(
-        argv,
-        commandIndex + 1,
-        isVariableReference,
-      );
+      return unresolvedOpenClawNodeServiceActionMayMutate(argv, commandIndex + 1, isDynamic);
     }
     if (command === "plugins") {
-      return unresolvedOpenClawPluginsActionMayMutate(argv, commandIndex + 1, isVariableReference);
+      return unresolvedOpenClawPluginsActionMayMutate(argv, commandIndex + 1, isDynamic);
     }
     if (command === "hooks") {
-      return unresolvedOpenClawHooksActionMayMutate(argv, commandIndex + 1, isVariableReference);
+      return unresolvedOpenClawHooksActionMayMutate(argv, commandIndex + 1, isDynamic);
     }
     if (command === "reset") {
-      return unresolvedOpenClawResetArgvMayMutate(argv, commandIndex + 1, isVariableReference);
+      return unresolvedOpenClawResetArgvMayMutate(argv, commandIndex + 1, isDynamic);
     }
     if (command === "update") {
       const actionIndex = scanFirstPositional(argv, commandIndex + 1, UPDATE_OPTIONS_WITH_VALUE);
       return (
-        isVariableReference(argv[actionIndex]) ||
+        isDynamic(argv[actionIndex]) ||
         lifecycleBooleanOptionValueMayBeDynamic(
           argv,
           commandIndex + 1,
           DRY_RUN_OPTION,
-          isVariableReference,
+          isDynamic,
           UPDATE_OPTIONS_WITH_VALUE,
         )
       );
@@ -268,7 +267,7 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
         argv,
         commandIndex + 1,
         DRY_RUN_OPTION,
-        isVariableReference,
+        isDynamic,
       );
     }
     return ["configure", "doctor", "onboard", "setup"].includes(command);
@@ -290,7 +289,7 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
           : "posix";
     return splitLifecycleInlineCommands(inline, dialect).some((part) => {
       const nestedArgv = splitShellArgs(part);
-      return nestedArgv ? unresolvedEnvironmentMayHideLifecycle(nestedArgv) : true;
+      return nestedArgv ? lifecycleDynamicArgvMayHideLifecycle(nestedArgv, isDynamic) : true;
     });
   }
   const packageRunner = resolveLifecyclePackageRunnerArgv(argv);
@@ -298,15 +297,15 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
     return true;
   }
   if (packageRunner.kind === "argv") {
-    return unresolvedEnvironmentMayHideLifecycle(packageRunner.argv);
+    return lifecycleDynamicArgvMayHideLifecycle(packageRunner.argv, isDynamic);
   }
-  if (unresolvedPackageMutationMayTargetOpenClaw(argv, isVariableReference)) {
+  if (unresolvedPackageMutationMayTargetOpenClaw(argv, isDynamic)) {
     return true;
   }
-  if (unresolvedNodeEntryMayHideLifecycle(argv, isVariableReference)) {
+  if (unresolvedNodeEntryMayHideLifecycle(argv, isDynamic)) {
     return true;
   }
-  if (unresolvedPowerShellStartProcessMayHideLifecycle(argv, isVariableReference)) {
+  if (unresolvedPowerShellStartProcessMayHideLifecycle(argv, isDynamic)) {
     return true;
   }
   if (executable === "xargs") {
@@ -314,11 +313,13 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
     if (xargs.kind === "approval-required") {
       return true;
     }
-    return xargs.kind === "argv" ? unresolvedEnvironmentMayHideLifecycle(xargs.argv) : false;
+    return xargs.kind === "argv"
+      ? lifecycleDynamicArgvMayHideLifecycle(xargs.argv, isDynamic)
+      : false;
   }
   if (executable === "env") {
     const carried = resolveCarrierCommandArgv([...argv], 0, { includeExec: true });
-    return carried ? unresolvedEnvironmentMayHideLifecycle(carried) : false;
+    return carried ? lifecycleDynamicArgvMayHideLifecycle(carried, isDynamic) : false;
   }
   return [
     "",
@@ -337,6 +338,11 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
     "suspend-service",
     "taskkill",
   ].includes(executable);
+}
+
+/** Return true when a partial environment can fill a lifecycle-sensitive argv position. */
+export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): boolean {
+  return lifecycleDynamicArgvMayHideLifecycle(argv, isVariableReference);
 }
 
 function readEnvironmentValue(env: NodeJS.ProcessEnv | undefined, key: string): string | undefined {

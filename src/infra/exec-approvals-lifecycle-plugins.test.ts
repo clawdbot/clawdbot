@@ -192,9 +192,62 @@ describe("OpenClaw lifecycle runner parsing edges", () => {
       requiresApproval(command, ["Start-Process", "openclaw", "-ArgumentList", "plugins,", "list"]),
     ).toBe(false);
   });
+
+  it("treats only effective Start-Process WhatIf as non-executing", () => {
+    const argv = ["Start-Process", "openclaw", "-ArgumentList", "gateway,", "restart"];
+    expect(
+      requiresApproval("Start-Process openclaw -ArgumentList 'gateway','restart' -WhatIf", [
+        ...argv,
+        "-WhatIf",
+      ]),
+    ).toBe(false);
+    expect(
+      requiresApproval("Start-Process openclaw -ArgumentList 'gateway','restart' -WhatIf:$false", [
+        ...argv,
+        "-WhatIf:$false",
+      ]),
+    ).toBe(true);
+  });
+
+  it("does not parse PowerShell backtick escapes as command substitutions", () => {
+    expect(
+      requiresApproval("Write-Output `openclaw gateway restart`x", [
+        "Write-Output",
+        "`openclaw",
+        "gateway",
+        "restart`x",
+      ]),
+    ).toBe(false);
+    expect(
+      requiresApproval("Write-Output `$(openclaw gateway restart)", [
+        "Write-Output",
+        "`$(openclaw gateway restart)",
+      ]),
+    ).toBe(false);
+    expect(
+      requiresApproval("Write-Output \\$(openclaw gateway restart)", [
+        "Write-Output",
+        "\\$(openclaw gateway restart)",
+      ]),
+    ).toBe(true);
+  });
 });
 
 describe("OpenClaw lifecycle substitution-controlled options", () => {
+  it("ignores substitutions confined to unrelated package-manager option values", () => {
+    expect(
+      requiresApproval('npm install lodash --registry="$(get-registry)"', [
+        "npm",
+        "install",
+        "lodash",
+        "--registry=$(get-registry)",
+      ]),
+    ).toBe(false);
+    expect(
+      requiresApproval('npm install "$(get-package)"', ["npm", "install", "$(get-package)"]),
+    ).toBe(true);
+  });
+
   it.each([
     [
       'openclaw update --dry-run="$(printf false)"',

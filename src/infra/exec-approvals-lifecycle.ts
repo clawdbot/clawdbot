@@ -484,7 +484,10 @@ function commandHasLifecycleSubstitution(
   shellContext?: ShellContext,
   cwd?: string,
 ): boolean {
-  const scan = extractShellSubstitutionCommands(command);
+  const scan = extractShellSubstitutionCommands(
+    command,
+    shellContext === "powershell" ? "powershell" : "posix",
+  );
   if (scan.uncertain) {
     return true;
   }
@@ -518,7 +521,12 @@ function classifyArgv(
       return classifyArgv(commandArgv, raw, depth, shellContext, cwd);
     }
   }
-  if (lifecycleSubstitutionResultMayHideLifecycle(argv)) {
+  if (
+    lifecycleSubstitutionResultMayHideLifecycle(
+      argv,
+      shellContext === "powershell" ? "powershell" : "posix",
+    )
+  ) {
     return true;
   }
   if (shellContext === "powershell" && ["&", "."].includes(argv[0]?.trim() ?? "")) {
