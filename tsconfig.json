@@ -127,6 +127,7 @@
         "./packages/media-understanding-common/src/*"
       ],
       "@openclaw/markdown-core": ["./packages/markdown-core/src/index.ts"],
+      "@openclaw/markdown-core/code-regions": ["./packages/markdown-core/src/code-regions.ts"],
       "@openclaw/markdown-core/code-spans": ["./packages/markdown-core/src/code-spans.ts"],
       "@openclaw/markdown-core/fences": ["./packages/markdown-core/src/fences.ts"],
       "@openclaw/markdown-core/frontmatter": ["./packages/markdown-core/src/frontmatter.ts"],

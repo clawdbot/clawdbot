@@ -7,6 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@openclaw/markdown-core": "workspace:*",
     "@openclaw/normalization-core": "workspace:*"
   }
 }

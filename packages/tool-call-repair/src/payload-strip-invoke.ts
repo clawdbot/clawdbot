@@ -1,5 +1,5 @@
 // Tool Call Repair module implements standalone invoke-dialect strip helpers.
-import { findCodeRegions, isInsideCode } from "@openclaw/normalization-core";
+import { findCodeRegions, isInsideCode } from "@openclaw/markdown-core/code-regions";
 import {
   consumeLineBreak,
   consumeStructuralLineBreakAfterHorizontalWhitespace,

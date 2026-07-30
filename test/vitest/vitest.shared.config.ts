@@ -525,6 +525,7 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "packages", "normalization-core", "src", "index.ts"),
       },
       sourcePackageAlias("markdown-core", "code-spans"),
+      sourcePackageAlias("markdown-core", "code-regions"),
       sourcePackageAlias("markdown-core", "fences"),
       sourcePackageAlias("media-core", "base64"),
       sourcePackageAlias("media-core", "constants"),

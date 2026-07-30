@@ -2331,6 +2331,9 @@ importers:
 
   packages/tool-call-repair:
     dependencies:
+      '@openclaw/markdown-core':
+        specifier: workspace:*
+        version: link:../markdown-core
       '@openclaw/normalization-core':
         specifier: workspace:*
         version: link:../normalization-core

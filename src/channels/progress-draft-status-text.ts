@@ -42,6 +42,16 @@ function readReasoningProgressTextOutsideCode(text: string): string | undefined 
     // fragment can flash as user-visible progress.
     return undefined;
   }
+  // Cheap tag-presence gate. This function is on the reasoning-progress
+  // streaming hot path and is called repeatedly on accumulated text. Running
+  // the mdast-backed findCodeRegions on every chunk (even those with zero
+  // reasoning tags) is wasted work; skip both the region scan and the tag
+  // walk when the input clearly cannot match a reasoning-progress tag.
+  REASONING_PROGRESS_TAG_RE.lastIndex = 0;
+  if (!REASONING_PROGRESS_TAG_RE.test(text)) {
+    return text;
+  }
+  REASONING_PROGRESS_TAG_RE.lastIndex = 0;
   const codeRegions = findCodeRegions(text);
   let hasTags = false;
   let inReasoning = false;
@@ -90,6 +100,14 @@ function isPartialReasoningProgressTagPrefix(text: string): boolean {
 }
 
 function stripReasoningProgressTagsOutsideCode(text: string): string {
+  // Cheap tag-presence gate first: reasoning progress lines usually contain
+  // no tags at all, so avoid mdast parsing on the streaming hot path when
+  // there is nothing to strip.
+  REASONING_PROGRESS_TAG_RE.lastIndex = 0;
+  if (!REASONING_PROGRESS_TAG_RE.test(text)) {
+    return text;
+  }
+  REASONING_PROGRESS_TAG_RE.lastIndex = 0;
   const codeRegions = findCodeRegions(text);
   return text.replace(REASONING_PROGRESS_TAG_RE, (match, _closing: string, offset: number) =>
     isInsideCode(offset, codeRegions) ? match : "",
@@ -210,6 +228,13 @@ function shouldAppendEmptyReasoningProgressDelta(current: string, incoming: stri
 }
 
 function hasReasoningProgressTagOutsideCode(text: string): boolean {
+  // Same cheap tag-presence gate as the other progress helpers: bail out
+  // before paying for mdast parsing when there is no candidate tag at all.
+  REASONING_PROGRESS_TAG_RE.lastIndex = 0;
+  if (!REASONING_PROGRESS_TAG_RE.test(text)) {
+    return false;
+  }
+  REASONING_PROGRESS_TAG_RE.lastIndex = 0;
   const codeRegions = findCodeRegions(text);
   for (const match of text.matchAll(REASONING_PROGRESS_TAG_RE)) {
     if (!isInsideCode(match.index ?? 0, codeRegions)) {

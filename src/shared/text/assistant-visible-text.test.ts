@@ -1,5 +1,6 @@
 // Assistant visible text tests cover extracting user-visible assistant output.
 import { describe, expect, it } from "vitest";
+import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import {
   sanitizeAssistantFinalAnswerText,
   sanitizeAssistantVisibleText,
@@ -28,6 +29,35 @@ function indentedQualifiedInvokeSample(): string {
     "",
     "That is the format.",
   ].join("\n");
+}
+
+const qualifiedInvokeTags = (ns: string) => ({
+  open: `${LT}${ns}invoke name="get_weather">`,
+  paramOpen: `${LT}${ns}parameter name="city">`,
+  paramClose: `${LT}/${ns}parameter>`,
+  close: `${LT}/${ns}invoke>`,
+});
+
+function qualifiedInvokeBlock(ns: string): string {
+  const tags = qualifiedInvokeTags(ns);
+  return [tags.open, `${tags.paramOpen}Paris${tags.paramClose}`, tags.close].join("\n");
+}
+
+function indentLines(value: string, pad: string): string {
+  return value
+    .split("\n")
+    .map((line) => pad + line)
+    .join("\n");
+}
+
+function expectToolScrubbersPreserve(raw: string): void {
+  expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
+  expect(stripToolCallXmlTags(raw, { stripFunctionCallsXmlPayloads: true })).toBe(raw);
+}
+
+function expectToolScrubbersScrub(raw: string, expectedPlain: string, expectedXml: string): void {
+  expect(stripPlainTextToolCallBlocks(raw)).toBe(expectedPlain);
+  expect(stripToolCallXmlTags(raw, { stripFunctionCallsXmlPayloads: true })).toBe(expectedXml);
 }
 
 describe("stripAssistantInternalScaffolding", () => {
@@ -850,6 +880,52 @@ describe("stripToolCallXmlTags", () => {
   it("does not strip non-namespaced invoke tags (unrelated XML)", () => {
     const input = 'keep <invoke name="something">content</invoke> keep';
     expect(stripToolCallXmlTags(input)).toBe(input);
+  });
+
+  it("preserves qualified invoke examples in indented code under a nested list", () => {
+    const input = [
+      "- outer",
+      "  - middle",
+      "    - inner",
+      "",
+      indentLines(qualifiedInvokeBlock("antml:"), "          "),
+    ].join("\n");
+    expectToolScrubbersPreserve(input);
+  });
+
+  it("preserves function_calls invoke examples in indented code under a blockquote list", () => {
+    const input = [
+      "> - quoted item",
+      ">",
+      ...indentLines(
+        `${LT}function_calls>\n${qualifiedInvokeBlock("mm:")}\n${LT}/function_calls>`,
+        ">       ",
+      ).split("\n"),
+    ].join("\n");
+    expectToolScrubbersPreserve(input);
+  });
+
+  it("preserves qualified invoke examples in single-level list indented code", () => {
+    const input = ["- item", "", indentLines(qualifiedInvokeBlock("antml:"), "      ")].join("\n");
+    expectToolScrubbersPreserve(input);
+  });
+
+  it("preserves blockquote-prefixed indented code examples", () => {
+    // The plain-text scrubber requires `<` at line start: skipLineIndentation in
+    // grammar.ts skips only spaces/tabs, not `>`. If a future scrubber starts
+    // consuming `>`, re-check blockquote code detection before changing this.
+    const input = indentLines(qualifiedInvokeBlock("antml:"), ">     ");
+    expectToolScrubbersPreserve(input);
+  });
+
+  it("scrubs qualified invoke continuations outside code", () => {
+    const paragraph = `Some prose paragraph.\n${indentLines(qualifiedInvokeBlock("antml:"), "    ")}`;
+    const tightList = ["- item", indentLines(qualifiedInvokeBlock("antml:"), "  ")].join("\n");
+    const looseList = ["- item", "", indentLines(qualifiedInvokeBlock("mm:"), "  ")].join("\n");
+
+    expectToolScrubbersScrub(paragraph, "Some prose paragraph.\n", "Some prose paragraph.\n    ");
+    expectToolScrubbersScrub(tightList, "- item\n", "- item\n  ");
+    expectToolScrubbersScrub(looseList, "- item\n\n", "- item\n\n  ");
   });
 });
 

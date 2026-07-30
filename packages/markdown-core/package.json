@@ -19,6 +19,11 @@
       "import": "./dist/code-spans.mjs",
       "default": "./dist/code-spans.mjs"
     },
+    "./code-regions": {
+      "types": "./dist/code-regions.d.mts",
+      "import": "./dist/code-regions.mjs",
+      "default": "./dist/code-regions.mjs"
+    },
     "./fences": {
       "types": "./dist/fences.d.mts",
       "import": "./dist/fences.mjs",

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { stripToolCallXmlTags } from "../../../src/shared/text/assistant-visible-text.js";
 import { scanXmlishToolCall } from "./grammar.js";
 import { scanPlainTextJsonToolCall, stripPlainTextToolCallBlocks } from "./payload.js";
 
@@ -257,19 +258,73 @@ describe("stripPlainTextToolCallBlocks: degraded invoke dialect (#97750)", () =>
       .split("\n")
       .map((line) => pad + line)
       .join("\n");
+  const expectPreservedByScrubbers = (raw: string) => {
+    expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
+    expect(stripToolCallXmlTags(raw, { stripFunctionCallsXmlPayloads: true })).toBe(raw);
+  };
+  const expectScrubbedByScrubbers = (raw: string, expectedPlain: string, expectedXml: string) => {
+    expect(stripPlainTextToolCallBlocks(raw)).toBe(expectedPlain);
+    expect(stripToolCallXmlTags(raw, { stripFunctionCallsXmlPayloads: true })).toBe(expectedXml);
+  };
 
   it("preserves an indented namespaced invoke example after a blank line (#97750)", () => {
     // A 4-space indented block after a blank line is a CommonMark indented code
     // block, so the qualified invoke example inside it is documentation, not a leak.
     const raw = `Here you go.\n\n${indentLines(block("antml:"), "    ")}`;
-    expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
+    expectPreservedByScrubbers(raw);
+  });
+
+  it("preserves a namespaced invoke example in indented code under a nested list (#97750)", () => {
+    const raw = [
+      "- outer",
+      "  - middle",
+      "    - inner",
+      "",
+      indentLines(block("antml:"), "          "),
+    ].join("\n");
+    expectPreservedByScrubbers(raw);
+  });
+
+  it("preserves a function_calls invoke example in indented code under a blockquote list (#97750)", () => {
+    const raw = [
+      "> - quoted item",
+      ">",
+      ...indentLines(
+        `${LT}function_calls>\n${block("mm:")}\n${LT}/function_calls>`,
+        ">       ",
+      ).split("\n"),
+    ].join("\n");
+    expectPreservedByScrubbers(raw);
+  });
+
+  it("preserves a namespaced invoke example in single-level list indented code (#97750)", () => {
+    const raw = ["- item", "", indentLines(block("antml:"), "      ")].join("\n");
+    expectPreservedByScrubbers(raw);
+  });
+
+  it("preserves blockquote-prefixed indented code examples (#97750)", () => {
+    // The plain-text scrubber requires `<` at line start: skipLineIndentation in
+    // grammar.ts skips only spaces/tabs, not `>`. If a future scrubber starts
+    // consuming `>`, re-check blockquote code detection before changing this.
+    const raw = indentLines(block("antml:"), ">     ");
+    expectPreservedByScrubbers(raw);
   });
 
   it("scrubs an indented namespaced invoke on a paragraph-continuation line (#97750)", () => {
     // A 4-space indented invoke directly under prose is a lazy paragraph
     // continuation, not indented code, so a genuine leak there is still removed.
     const raw = `Some prose paragraph.\n${indentLines(block("antml:"), "    ")}`;
-    expect(stripPlainTextToolCallBlocks(raw)).toBe("Some prose paragraph.\n");
+    expectScrubbedByScrubbers(raw, "Some prose paragraph.\n", "Some prose paragraph.\n    ");
+  });
+
+  it("scrubs a tight-list namespaced invoke continuation (#97750)", () => {
+    const raw = ["- item", indentLines(block("antml:"), "  ")].join("\n");
+    expectScrubbedByScrubbers(raw, "- item\n", "- item\n  ");
+  });
+
+  it("scrubs a loose-list non-code namespaced invoke continuation (#97750)", () => {
+    const raw = ["- item", "", indentLines(block("mm:"), "  ")].join("\n");
+    expectScrubbedByScrubbers(raw, "- item\n\n", "- item\n\n  ");
   });
 
   it("scrubs a fenced namespaced invoke when the predicate never preserves (strict)", () => {

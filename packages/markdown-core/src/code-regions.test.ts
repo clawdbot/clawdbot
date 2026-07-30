@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { findCodeRegions, type CodeRegion } from "./code-regions.js";
+import { findCodeRegions, isInsideCode, type CodeRegion } from "./code-regions.js";
 
 /** Slices each discovered region out of the source so tests assert exact spans. */
-function regionText(text: string, regions: CodeRegion[]): string[] {
+function regionText(text: string, regions: readonly CodeRegion[]): string[] {
   return regions.map((region) => text.slice(region.start, region.end));
 }
 
@@ -30,8 +30,6 @@ describe("findCodeRegions", () => {
   });
 
   it("does not treat a paragraph-continuation indented line as a region", () => {
-    // A 4-space line directly following prose is a lazy paragraph continuation,
-    // not an indented code block, so a leaked call there stays scrubbable.
     const text = ["paragraph text", "    still same paragraph"].join("\n");
     expect(findCodeRegions(text)).toEqual([]);
   });
@@ -54,9 +52,22 @@ describe("findCodeRegions", () => {
       ["```html", "<block>", "```"].join("\n"),
       "    <indented>",
     ]);
-    // Regions are non-overlapping and sorted by start.
     for (let index = 1; index < regions.length; index += 1) {
       expect(regions[index]!.start).toBeGreaterThanOrEqual(regions[index - 1]!.end);
     }
+  });
+
+  it("detects indented code nested under a list container", () => {
+    const text = ["- outer", "  - middle", "    - inner", "", "          literal"].join("\n");
+    expect(regionText(text, findCodeRegions(text))).toEqual(["    literal"]);
+  });
+
+  it("reports whether positions are inside discovered regions", () => {
+    const text = "plain `code` done";
+    const regions = findCodeRegions(text);
+
+    expect(isInsideCode(text.indexOf("code"), regions)).toBe(true);
+    expect(isInsideCode(text.indexOf("plain"), regions)).toBe(false);
+    expect(isInsideCode(regions[0]!.end, regions)).toBe(false);
   });
 });
