@@ -168,7 +168,10 @@ const LINE_RULES: LineRule[] = [
     ruleId: "dangerous-exec",
     severity: "critical",
     message: "Shell command execution detected (child_process)",
-    pattern: /\b(exec|execSync|spawn|spawnSync|execFile|execFileSync)\s*\(/,
+    // Group 1: bare call (exec(...)). Group 2: computed member (obj["exec"](...)),
+    // with quotes stripped so isBenignMemberExecMatch sees the bare command.
+    pattern:
+      /\b(exec|execSync|spawn|spawnSync|execFile|execFileSync)\s*\(|["'](exec|execSync|spawn|spawnSync|execFile|execFileSync)["']\s*\]\s*\(/,
     requiresContext: /child_process/,
   },
   {
@@ -277,17 +280,82 @@ const SKILL_CONTENT_RULES: SourceRule[] = [
 // ---------------------------------------------------------------------------
 
 function isBenignMemberExecMatch(line: string, match: RegExpExecArray): boolean {
-  const command = match[1];
+  // Group 1 is the bare-call command; group 2 is the computed-member command.
+  const command = match[1] ?? match[2];
   if (command !== "exec") {
     return false;
   }
 
-  const matchIndex = match.index;
-  if (matchIndex <= 0 || line[matchIndex - 1] !== ".") {
-    return false;
+  if (match[1] !== undefined) {
+    // Bare form: only `.exec(` (e.g. RegExp.exec) is benign, unless the object
+    // is a known child_process namespace.
+    const matchIndex = match.index;
+    if (matchIndex <= 0 || line[matchIndex - 1] !== ".") {
+      return false;
+    }
+    return !/\b(?:cp|childProcess|child_process)\s*\.\s*exec\s*\(/.test(line);
   }
 
-  return !/\b(?:cp|childProcess|child_process)\s*\.\s*exec\s*\(/.test(line);
+  // Computed form `["exec"](`: benign unless the object is a known
+  // child_process namespace. This preserves the RegExp.exec-style benign
+  // behavior for `someObj["exec"](` while still catching `cp["exec"](`.
+  return !/\b(?:cp|childProcess|child_process)\s*\[\s*["']exec["']\s*\]\s*\(/.test(line);
+}
+
+const DANGEROUS_EXEC_METHODS = new Set([
+  "exec",
+  "execSync",
+  "spawn",
+  "spawnSync",
+  "execFile",
+  "execFileSync",
+]);
+
+const EMPTY_ALIAS_MAP = new Map<string, string>();
+
+// Matches `import { ... } from "child_process"` (ESM) or
+// `{ ... } = require("child_process")` (CJS) and collects `original -> alias`
+// bindings for dangerous exec methods. Only bindings sourced from
+// child_process are tracked, so an unrelated `launch(` in a file that also
+// imports child_process for something else does not false-positive.
+const CHILD_PROCESS_IMPORT_PATTERN =
+  /import\s*\{([^}]*)\}\s*from\s*["'](?:node:)?child_process["']/;
+const CHILD_PROCESS_REQUIRE_PATTERN =
+  /\{\s*([^}]*)\s*\}\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/;
+const ESM_ALIAS_PATTERN = /\b(\w+)\s+as\s+(\w+)/g;
+const CJS_ALIAS_PATTERN = /\b(\w+)\s*:\s*(\w+)/g;
+
+function collectChildProcessAliases(lines: readonly string[]): Map<string, string> {
+  const aliases = new Map<string, string>();
+  for (const line of lines) {
+    const importMatch = CHILD_PROCESS_IMPORT_PATTERN.exec(line);
+    const requireMatch = !importMatch ? CHILD_PROCESS_REQUIRE_PATTERN.exec(line) : null;
+    const bindingList = importMatch?.[1] ?? requireMatch?.[1];
+    if (bindingList === undefined) {
+      continue;
+    }
+    const aliasPattern = importMatch ? ESM_ALIAS_PATTERN : CJS_ALIAS_PATTERN;
+    aliasPattern.lastIndex = 0;
+    let aliasMatch: RegExpExecArray | null;
+    while ((aliasMatch = aliasPattern.exec(bindingList)) !== null) {
+      // ESM: group1=original, group2=alias. CJS: group1=original, group2=alias.
+      const original = aliasMatch[1];
+      const alias = aliasMatch[2];
+      if (DANGEROUS_EXEC_METHODS.has(original)) {
+        aliases.set(alias, original);
+      }
+    }
+  }
+  return aliases;
+}
+
+function matchChildProcessAliasCall(line: string, aliases: Map<string, string>): boolean {
+  for (const alias of aliases.keys()) {
+    if (new RegExp(`\\b${alias}\\s*\\(`).test(line)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function stripCommentsForHeuristics(source: string): string {
@@ -401,6 +469,13 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       continue;
     }
 
+    // For dangerous-exec, track child_process import/require aliases so calls
+    // made through a renamed binding (e.g. `import { spawn as launch }`) are
+    // still flagged. Built once per rule; the requiresContext gate above
+    // guarantees child_process is present whenever aliases can exist.
+    const childProcessAliases =
+      rule.ruleId === "dangerous-exec" ? collectChildProcessAliases(lines) : EMPTY_ALIAS_MAP;
+
     let acceptedMatches = 0;
     let omittedMatches = 0;
     let lastOmittedLine: number | undefined;
@@ -411,6 +486,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
           rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`,
         ),
       );
+      let matchedOnLine = false;
       for (const match of matches) {
         if (rule.ruleId === "dangerous-exec" && isBenignMemberExecMatch(line, match)) {
           continue;
@@ -424,6 +500,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
           }
         }
 
+        matchedOnLine = true;
         if (acceptedMatches >= MAX_LINE_RULE_FINDINGS_PER_RULE) {
           omittedMatches += 1;
           lastOmittedLine = i + 1;
@@ -441,6 +518,31 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
           evidence: formatScanEvidence(line),
         });
         acceptedMatches += 1;
+      }
+
+      // No direct pattern match on this line: still catch child_process calls
+      // made through a renamed binding (alias) that the bare-name pattern
+      // cannot see. Only applies to dangerous-exec with collected aliases.
+      if (
+        !matchedOnLine &&
+        rule.ruleId === "dangerous-exec" &&
+        childProcessAliases.size > 0 &&
+        matchChildProcessAliasCall(line, childProcessAliases)
+      ) {
+        if (acceptedMatches >= MAX_LINE_RULE_FINDINGS_PER_RULE) {
+          omittedMatches += 1;
+          lastOmittedLine = i + 1;
+        } else {
+          findings.push({
+            ruleId: rule.ruleId,
+            severity: rule.severity,
+            file: filePath,
+            line: i + 1,
+            message: rule.message,
+            evidence: formatScanEvidence(line),
+          });
+          acceptedMatches += 1;
+        }
       }
     }
     if (lastOmittedLine !== undefined) {

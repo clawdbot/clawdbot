@@ -224,6 +224,30 @@ cp.exec("node server.js");
       expected: { ruleId: "dangerous-exec", severity: "critical" as const },
     },
     {
+      name: "detects child_process call through an ESM import alias",
+      source: `
+import { spawn as launch } from "node:child_process";
+launch("node", ["server.js"]);
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
+      name: "detects child_process call through a CJS destructured alias",
+      source: `
+const { exec: run } = require("child_process");
+run("node server.js");
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
+      name: "detects child_process call through a computed member",
+      source: `
+import cp from "node:child_process";
+cp["spawn"]("node", ["server.js"]);
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
       name: "detects eval usage",
       source: `
 const code = "1+1";
@@ -308,6 +332,28 @@ const options: ExecOptions = { timeout: 5000 };
 import type { ExecOptions } from "child_process";
 const options: ExecOptions = {};
 const match = /^keychain:(.+)$/.exec(value);
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expectRulePresence(findings, "dangerous-exec", false);
+  });
+
+  it("does not flag an alias call when the alias is not from child_process", () => {
+    // child_process appears via a type import (so the context gate passes),
+    // but the `launch` alias is bound from an unrelated module. The alias map's
+    // source scoping — not the gate — must suppress this finding.
+    const source = `
+import { spawn as launch } from "./other-module";
+import type { ExecOptions } from "child_process";
+launch("node", ["server.js"]);
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expectRulePresence(findings, "dangerous-exec", false);
+  });
+
+  it("does not flag a computed RegExp.exec-style call on a non-child_process object", () => {
+    const source = `
+const { exec } = require("child_process");
+const m = re["exec"](value);
 `;
     const findings = scanSource(source, "plugin.ts");
     expectRulePresence(findings, "dangerous-exec", false);
