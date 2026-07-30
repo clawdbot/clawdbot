@@ -298,7 +298,7 @@ impl CommandRuntimeBuilder {
             if command.is_empty() {
                 return Err(RuntimeBuildError::EmptyCommand);
             }
-            if command.starts_with("system.") {
+            if command == "system" || command.starts_with("system.") {
                 return Err(RuntimeBuildError::ReservedCommand(command));
             }
             if handlers
@@ -1824,13 +1824,15 @@ mod tests {
             .build();
         assert!(matches!(empty, Err(RuntimeBuildError::EmptyCommand)));
 
-        let reserved = CommandRuntime::builder()
-            .command("system.run", |_context| async { Ok(Value::Null) })
-            .build();
-        assert!(matches!(
-            reserved,
-            Err(RuntimeBuildError::ReservedCommand(_))
-        ));
+        for command in ["system", "system.run"] {
+            let reserved = CommandRuntime::builder()
+                .command(command, |_context| async { Ok(Value::Null) })
+                .build();
+            assert!(matches!(
+                reserved,
+                Err(RuntimeBuildError::ReservedCommand(_))
+            ));
+        }
 
         let duplicate = CommandRuntime::builder()
             .command("example.status", |_context| async { Ok(Value::Null) })
