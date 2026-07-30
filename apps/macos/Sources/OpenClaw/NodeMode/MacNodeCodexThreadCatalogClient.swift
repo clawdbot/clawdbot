@@ -158,6 +158,8 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
                         requestParamsData: requestParamsData,
                         maxLineBytes: max(1, maxLineBytes),
                         continuation: continuation)
+                    // Callers pass the operation's remaining wall-clock deadline.
+                    // Queue wait therefore counts, matching the former one-shot session.
                     request.timer = self.makeRequestTimer(
                         token: token,
                         timeoutSeconds: timeoutSeconds)

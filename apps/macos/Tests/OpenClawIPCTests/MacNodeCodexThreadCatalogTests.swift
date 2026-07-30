@@ -1268,6 +1268,44 @@ extension MacNodeCodexThreadCatalogTests {
         await client.shutdown()
     }
 
+    @Test func `queued request consumes its wall-clock deadline`() async throws {
+        let fake = try makeFakeCodex(#"""
+        #!/bin/sh
+        IFS= read -r initialize || exit 2
+        id=$(printf '%s\n' "$initialize" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+        printf '{"id":%s,"result":{}}\n' "$id"
+        IFS= read -r initialized || exit 3
+        IFS= read -r request || exit 4
+        touch "${0}.request-started"
+        sleep 5
+        """#)
+        defer { try? FileManager.default.removeItem(at: fake.directory) }
+        let client = CodexAppServerThreadClient(idleTimeoutSeconds: 10)
+
+        let first = Task {
+            try await self.requestEmptyList(
+                client: client,
+                executable: fake.executable,
+                timeoutSeconds: 0.5)
+        }
+        #expect(await self.waitForFile(
+            URL(fileURLWithPath: fake.executable.path + ".request-started")))
+        let second = Task {
+            try await self.requestEmptyList(
+                client: client,
+                executable: fake.executable,
+                timeoutSeconds: 0.05)
+        }
+
+        await #expect(throws: MacNodeCodexThreadCatalog.CatalogError.timedOut) {
+            try await second.value
+        }
+        await #expect(throws: MacNodeCodexThreadCatalog.CatalogError.timedOut) {
+            try await first.value
+        }
+        await client.shutdown()
+    }
+
     @Test func `cancellation restarts the client without dropping the next request`() async throws {
         let fake = try makeFakeCodex(#"""
         #!/bin/sh
