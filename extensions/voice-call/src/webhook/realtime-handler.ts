@@ -752,6 +752,8 @@ export class RealtimeCallHandler {
       typeof this.providerConfig.interruptResponseOnInputAudio === "boolean"
         ? this.providerConfig.interruptResponseOnInputAudio
         : undefined;
+    // Providers may close synchronously before createBridge returns; no consult can exist yet.
+    let nativeConsultOwner: ActiveRealtimeVoiceBridge | undefined;
     const session = harness.createBridge({
       provider: this.realtimeProvider,
       cfg: this.coreConfig,
@@ -935,7 +937,9 @@ export class RealtimeCallHandler {
         this.activeBridgesByCallId.delete(callSid);
         this.activeTelephonyClosersByCallId.delete(callId);
         this.activeTelephonyClosersByCallId.delete(callSid);
-        this.cancelNativeConsult(callId, session);
+        if (nativeConsultOwner) {
+          this.cancelNativeConsult(callId, nativeConsultOwner);
+        }
         this.clearUserTranscriptState(callId);
         harness.finishOutputAudio(reason);
         harness.emit({
@@ -961,6 +965,7 @@ export class RealtimeCallHandler {
           });
       },
     });
+    nativeConsultOwner = session;
     providerHandlesInputAudioBargeIn =
       session.bridge.handlesInputAudioBargeIn ?? providerHandlesInputAudioBargeIn;
     const closeTelephony = (reason: TelephonyCloseReason) => {
