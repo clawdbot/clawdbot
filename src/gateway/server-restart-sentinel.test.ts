@@ -3020,8 +3020,12 @@ describe("scheduleRestartSentinelWake", () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
     expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledWith(123);
+    // Targetless notes still carry a message, so they take the durable wake queue rather than the
+    // consume-only config path, and arrive with this tree's ack id plus trusted marker.
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
       sessionKey: "agent:main:main",
+      sessionDeliveryAckId: "session-delivery-1",
+      trusted: true,
     });
     expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
       source: "restart-sentinel",
