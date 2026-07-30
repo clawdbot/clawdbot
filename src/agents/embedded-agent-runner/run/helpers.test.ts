@@ -18,14 +18,14 @@ import {
 describe("resolveEmbeddedAttemptBasePrompt", () => {
   const refusalTrigger = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 
-  it("preserves prompts verbatim for native model-owned harnesses", () => {
+  it("scrubs the refusal marker for native Anthropic attempts", () => {
     expect(
       resolveEmbeddedAttemptBasePrompt({
         nativeModelOwned: true,
         provider: "anthropic",
         prompt: refusalTrigger,
       }),
-    ).toBe(refusalTrigger);
+    ).toBe("ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)");
   });
 
   it("keeps the outer Anthropic transport scrub for ordinary runs", () => {
@@ -36,6 +36,16 @@ describe("resolveEmbeddedAttemptBasePrompt", () => {
         prompt: refusalTrigger,
       }),
     ).not.toContain(refusalTrigger);
+  });
+
+  it("keeps native non-Anthropic prompts byte-for-byte", () => {
+    expect(
+      resolveEmbeddedAttemptBasePrompt({
+        nativeModelOwned: true,
+        provider: "openai",
+        prompt: refusalTrigger,
+      }),
+    ).toBe(refusalTrigger);
   });
 });
 
