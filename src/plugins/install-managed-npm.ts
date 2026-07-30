@@ -302,15 +302,15 @@ export async function installPluginFromManagedNpmRoot(
     let compatibility = classifyNpmManagedOverrideCompatibilityError(install);
     while (install.code !== 0 && compatibility) {
       const nextOverrideOmissions = {
-        npmAliases: Boolean(overrideOmissions.npmAliases || compatibility.npmAliases),
-        pnpmParentChildSelectors: Boolean(
-          overrideOmissions.pnpmParentChildSelectors || compatibility.pnpmParentChildSelectors,
-        ),
+        npmAliases: overrideOmissions.npmAliases === true || compatibility.npmAliases,
+        pnpmParentChildSelectors:
+          overrideOmissions.pnpmParentChildSelectors === true ||
+          compatibility.pnpmParentChildSelectors,
       };
       if (
-        nextOverrideOmissions.npmAliases === Boolean(overrideOmissions.npmAliases) &&
+        nextOverrideOmissions.npmAliases === (overrideOmissions.npmAliases === true) &&
         nextOverrideOmissions.pnpmParentChildSelectors ===
-          Boolean(overrideOmissions.pnpmParentChildSelectors)
+          (overrideOmissions.pnpmParentChildSelectors === true)
       ) {
         break;
       }
