@@ -244,10 +244,40 @@ describe("applyCustomApiConfig", () => {
     const model = provider?.models?.find((m) => m.id === "gpt-4.1");
     expect(model?.reasoning).toBe(false);
     expect(model?.input).toEqual(["text"]);
-    expect(model?.compat).toEqual({ supportsStore: false });
+    // Multi-model Foundry host + alias-derived display name: prompt-cache
+    // fields must stay opt-in (a non-OpenAI deployment aliased `gpt-*` would
+    // otherwise inherit them and strict endpoints reject the request).
+    expect(model?.compat).toEqual({ supportsStore: false, supportsPromptCacheKey: false });
 
     const modelRef = `${providerId}/gpt-4.1`;
     expect(result.config.agents?.defaults?.models?.[modelRef]?.params?.thinking).toBeUndefined();
+  });
+
+  it("preserves a caller-authored Foundry prompt-cache opt-in across re-onboarding", () => {
+    const first = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://my-resource.services.ai.azure.com",
+      modelId: "gpt-prod",
+      compatibility: "openai",
+      apiKey: "key123",
+    });
+    const providerId = first.providerId!;
+    const withOptIn = structuredClone(first.config);
+    const models = withOptIn.models!.providers![providerId]!.models!;
+    const target = models.find((m) => m.id === "gpt-prod")!;
+    target.compat = { ...target.compat, supportsPromptCacheKey: true };
+
+    const second = applyCustomApiConfig({
+      config: withOptIn,
+      baseUrl: "https://my-resource.services.ai.azure.com",
+      modelId: "gpt-prod",
+      compatibility: "openai",
+      apiKey: "key123",
+    });
+    const model = second.config.models?.providers?.[providerId]?.models?.find(
+      (m) => m.id === "gpt-prod",
+    );
+    expect(model?.compat).toEqual({ supportsStore: false, supportsPromptCacheKey: true });
   });
 
   it("strips pre-existing deployment path from Azure URL in stored config", () => {

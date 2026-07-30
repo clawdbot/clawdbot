@@ -628,7 +628,17 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
         input: generatedInput,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         reasoning: isLikelyReasoningModel,
-        compat: { supportsStore: false },
+        compat: {
+          supportsStore: false,
+          // Multi-model Foundry hosts can front non-OpenAI deployments and
+          // this synthesized display name is derived from the operator-chosen
+          // deployment alias, not canonical model metadata. Keep prompt-cache
+          // fields opt-in there so a non-OpenAI deployment aliased `gpt-*`
+          // never inherits them; strict endpoints reject the request
+          // otherwise. Dedicated Azure OpenAI hosts stay on transport
+          // defaults (every deployment speaks the OpenAI API).
+          ...(isAzureOpenAi ? {} : { supportsPromptCacheKey: false }),
+        },
       }
     : {
         id: modelId,
@@ -652,6 +662,13 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
               cost: model.cost ?? nextModel.cost,
               contextWindow: normalizeContextWindowForCustomModel(model.contextWindow),
               maxTokens: model.maxTokens ?? nextModel.maxTokens,
+              // Caller-authored compat overrides (e.g. a deliberate
+              // prompt-cache opt-in for a verified OpenAI deployment on a
+              // Foundry host) survive re-onboarding; synthesized defaults
+              // only fill the gaps.
+              ...(isAzure && "compat" in nextModel
+                ? { compat: { ...nextModel.compat, ...model.compat } }
+                : {}),
             }
           : model,
       )
