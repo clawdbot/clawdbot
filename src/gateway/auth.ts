@@ -125,7 +125,10 @@ function resolveGatewayAuthRequestContext(
   // Use an opaque key so a missing proxy trust configuration cannot inherit the
   // limiter's exemption for genuinely direct local callers.
   const ip =
-    !localDirect && hasForwardedRequestHeaders(req) && isLoopbackAddress(resolvedIp)
+    !localDirect &&
+    hasForwardedRequestHeaders(req) &&
+    resolvedIp !== undefined &&
+    isLoopbackAddress(resolvedIp)
       ? buildRateLimitIdentityKey("forwarded-loopback", resolvedIp)
       : resolvedIp;
 
