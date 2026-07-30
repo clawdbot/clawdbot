@@ -31,12 +31,17 @@ describe("feishu legacy config rules", () => {
   });
 
   it("matches custom domains with unsafe base URL components", () => {
-    const domainRule = legacyConfigRules.find((rule) => rule.message.includes("HTTPS API base URL"));
+    const domainRule = legacyConfigRules.find((rule) =>
+      rule.message.includes("HTTPS API base URL"),
+    );
     expect(domainRule?.match?.({ domain: "https://tenant.example/base#fragment" }, {})).toBe(true);
     expect(
-      domainRule?.match?.({
-        accounts: { work: { domain: "https://u:p@tenant.example/base?query=value" } },
-      }, {}),
+      domainRule?.match?.(
+        {
+          accounts: { work: { domain: "https://u:p@tenant.example/base?query=value" } },
+        },
+        {},
+      ),
     ).toBe(true);
   });
 });
