@@ -235,6 +235,12 @@ export type ModelCatalogModel = {
   cost?: ModelCatalogCost;
   compat?: ModelCatalogCompatConfig;
   /**
+   * Provider-interpreted model parameters. Opaque here: provider contracts read
+   * their own keys (e.g. Anthropic's `canonicalModelId`), so normalization must
+   * carry the record through rather than whitelist per-provider keys (#116120).
+   */
+  params?: Record<string, unknown>;
+  /**
    * Provider/model ref of the same upstream model in another bundled catalog,
    * for vendors reachable through several provider ids under different model
    * ids. Authoring metadata only: normalization drops it, and the shared-model
@@ -308,6 +314,7 @@ export type NormalizedModelCatalogRow = {
   thinkingLevelMap?: ModelCatalogThinkingLevelMap;
   cost?: ModelCatalogCost;
   compat?: ModelCatalogCompatConfig;
+  params?: Record<string, unknown>;
   mediaInput?: ModelCatalogMediaInputConfig;
   statusReason?: string;
   replaces?: string[];
