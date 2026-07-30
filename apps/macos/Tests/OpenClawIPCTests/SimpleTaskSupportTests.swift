@@ -1,12 +1,12 @@
-import Testing
 @testable import OpenClaw
+import Testing
 
 private actor SimpleTaskSignal {
     private var signaled = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
     func signal() {
-        self.signaled = true
+        signaled = true
         let waiters = self.waiters
         self.waiters.removeAll()
         for waiter in waiters {
@@ -15,7 +15,7 @@ private actor SimpleTaskSignal {
     }
 
     func wait() async {
-        if self.signaled {
+        if signaled {
             return
         }
         await withCheckedContinuation { continuation in
@@ -28,11 +28,11 @@ private actor SimpleTaskOperationProbe {
     private var recordedCalls: [String] = []
 
     func recordCall(_ value: String) {
-        self.recordedCalls.append(value)
+        recordedCalls.append(value)
     }
 
     func calls() -> [String] {
-        self.recordedCalls
+        recordedCalls
     }
 }
 
@@ -53,7 +53,8 @@ struct SimpleTaskSupportTests {
             },
             operation: {
                 await operation.recordCall("loop")
-            })
+            }
+        )
 
         await sleepStarted.wait()
         guard let runningTask = task else {
@@ -84,7 +85,8 @@ struct SimpleTaskSupportTests {
             },
             operation: {
                 await operation.recordCall("first")
-            })
+            }
+        )
 
         await firstSleepStarted.wait()
         guard let firstTask = task else {
@@ -98,7 +100,8 @@ struct SimpleTaskSupportTests {
             sleep: { _ in },
             operation: {
                 await operation.recordCall("second")
-            })
+            }
+        )
         guard let secondTask = task else {
             Issue.record("replacement task did not start")
             return
@@ -109,6 +112,38 @@ struct SimpleTaskSupportTests {
         SimpleTaskSupport.stop(task: &task)
 
         #expect(await operation.calls() == ["second"])
+        #expect(task == nil)
+    }
+
+    @Test
+    @MainActor
+    func `cancelling after sleep completes does not run the scheduled operation`() async {
+        let operation = SimpleTaskOperationProbe()
+        var task: Task<Void, Never>?
+
+        SimpleTaskSupport.schedule(
+            task: &task,
+            delay: 0,
+            sleep: { _ in },
+            beforeOperationCheck: {
+                withUnsafeCurrentTask { currentTask in
+                    currentTask?.cancel()
+                }
+            },
+            operation: {
+                await operation.recordCall("stale")
+            }
+        )
+
+        guard let runningTask = task else {
+            Issue.record("scheduled task did not start")
+            return
+        }
+
+        await runningTask.value
+        SimpleTaskSupport.stop(task: &task)
+
+        #expect(await operation.calls().isEmpty)
         #expect(task == nil)
     }
 }
