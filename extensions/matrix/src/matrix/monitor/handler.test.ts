@@ -3654,7 +3654,7 @@ describe("matrix monitor handler draft streaming", () => {
         presentation: {
           blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "approve" }] }],
         },
-      },
+      } as never,
       { kind: "final" },
     );
 

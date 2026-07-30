@@ -1,3 +1,4 @@
+import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 // Matrix tests cover replies plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime, RuntimeEnv } from "../../../runtime-api.js";
@@ -559,7 +560,7 @@ describe("deliverMatrixReplies presentation controls", () => {
     error: errorMock,
   } as unknown as RuntimeEnv;
 
-  const buttonPresentation = {
+  const buttonPresentation: MessagePresentation = {
     title: "FY25 outlook",
     blocks: [{ type: "buttons", buttons: [{ label: "Refresh", value: "refresh" }] }],
   };
@@ -580,6 +581,7 @@ describe("deliverMatrixReplies presentation controls", () => {
     client: {} as MatrixClient,
     runtime: runtimeEnv,
     textLimit: 4000,
+    replyToMode: "off" as const,
   };
 
   beforeEach(() => {
@@ -646,8 +648,10 @@ describe("deliverMatrixReplies presentation controls", () => {
       replies: [
         {
           text: "Ready to deploy?",
-          presentation: { blocks: [{ type: "text", text: "Ready to deploy?" }] },
-          presentationTextMode: "fallback",
+          presentation: {
+            blocks: [{ type: "text", text: "Ready to deploy?" }],
+          } satisfies MessagePresentation,
+          presentationTextMode: "fallback" as const,
         },
       ],
     });
