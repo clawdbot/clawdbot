@@ -1,7 +1,7 @@
-pub use openclaw_gateway_client::Event;
 use openclaw_gateway_client::{
     ClientError as GatewayClientError, GatewayClient, GatewayClientConfig, GatewaySession, TlsTrust,
 };
+pub use openclaw_gateway_client::{Event, EventSubscription};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -12,7 +12,6 @@ use std::{
     time::{Duration, Instant},
 };
 use thiserror::Error;
-use tokio::sync::broadcast;
 
 use crate::identity::{IdentityError, NodeIdentity};
 
@@ -611,7 +610,7 @@ impl NodeSession {
     }
 
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
+    pub fn subscribe(&self) -> EventSubscription {
         self.gateway.subscribe()
     }
 

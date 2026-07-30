@@ -2,7 +2,9 @@
 
 mod session;
 
-pub use session::{ClientError, Event, GatewayClient, GatewayClientConfig, GatewaySession};
+pub use session::{
+    ClientError, Event, EventSubscription, GatewayClient, GatewayClientConfig, GatewaySession,
+};
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{verify_tls12_signature, verify_tls13_signature, WebPkiSupportedAlgorithms};
