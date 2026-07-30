@@ -123,11 +123,14 @@ describe("web_fetch configured request headers", () => {
 
     const tool = createToolWithHeaders({
       Authorization: "Bearer operator-token",
+      "X-Authorization": "Bearer operator-token",
       Cookie: "session=abc",
       Cookie2: "legacy=abc",
       "Set-Cookie": "session=forged",
       "Proxy-Authorization": "Basic abc",
       "X-Api-Key": "live-key",
+      "X-Api-Token": "live-token",
+      "Api-Token": "live-token",
       apikey: "live-key",
       "x-goog-api-key": "google-live-key",
       "Ocp-Apim-Subscription-Key": "azure-live-key",
@@ -142,11 +145,14 @@ describe("web_fetch configured request headers", () => {
     const names = Object.keys(getRequestHeaders(fetchSpy));
     expect(names).toContain("X-Routing-Target");
     expect(names).not.toContain("Authorization");
+    expect(names).not.toContain("X-Authorization");
     expect(names).not.toContain("Cookie");
     expect(names).not.toContain("Cookie2");
     expect(names).not.toContain("Set-Cookie");
     expect(names).not.toContain("Proxy-Authorization");
     expect(names).not.toContain("X-Api-Key");
+    expect(names).not.toContain("X-Api-Token");
+    expect(names).not.toContain("Api-Token");
     expect(names).not.toContain("apikey");
     expect(names).not.toContain("x-goog-api-key");
     expect(names).not.toContain("Ocp-Apim-Subscription-Key");
