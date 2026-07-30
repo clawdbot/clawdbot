@@ -437,11 +437,9 @@ async function smokeOpenAIAudioRoundtrip(apiKey: string, cycleCount: number): Pr
       let lateAudioBytes = 0;
       let responseDone = false;
       let closed = false;
-      let resolveRoundtrip: (() => void) | undefined;
-      let rejectRoundtrip: ((error: Error) => void) | undefined;
-      const roundtrip = new Promise<void>((resolve, reject) => {
+      let resolveRoundtrip: ((error?: Error) => void) | undefined;
+      const roundtrip = new Promise<Error | undefined>((resolve) => {
         resolveRoundtrip = resolve;
-        rejectRoundtrip = reject;
       });
       const maybeResolveRoundtrip = () => {
         if (
@@ -494,10 +492,10 @@ async function smokeOpenAIAudioRoundtrip(apiKey: string, cycleCount: number): Pr
             maybeResolveRoundtrip();
           }
         },
-        onError: (error) => rejectRoundtrip?.(error),
+        onError: (error) => resolveRoundtrip?.(error),
         onClose: (reason) => {
           if (!closed && reason === "error") {
-            rejectRoundtrip?.(new Error("OpenAI audio roundtrip bridge closed with an error"));
+            resolveRoundtrip?.(new Error("OpenAI audio roundtrip bridge closed with an error"));
           }
         },
       });
@@ -514,9 +512,12 @@ async function smokeOpenAIAudioRoundtrip(apiKey: string, cycleCount: number): Pr
         // Observe failures immediately; the same promise is awaited after input streaming completes.
         void boundedRoundtrip.catch(() => undefined);
         chunksSent = await sendPcmAudioInChunks(bridge, inputAudio);
-        await boundedRoundtrip;
+        const roundtripError = await boundedRoundtrip;
+        if (roundtripError) {
+          throw roundtripError;
+        }
       } catch (error) {
-        rejectRoundtrip?.(error instanceof Error ? error : new Error(String(error)));
+        resolveRoundtrip?.(error instanceof Error ? error : new Error(String(error)));
         throw error;
       } finally {
         closed = true;
