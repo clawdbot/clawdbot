@@ -386,7 +386,7 @@ function shouldBypassModelScopedCooldown(
 ): boolean {
   return !!(
     forModel &&
-    stats.cooldownReason === "rate_limit" &&
+    (stats.cooldownReason === "rate_limit" || stats.cooldownReason === "model_not_found") &&
     stats.cooldownModel &&
     stats.cooldownModel !== forModel &&
     !isActiveUnusableWindow(stats.disabledUntil, now)
@@ -713,8 +713,8 @@ function computeNextProfileUsageStats(params: {
         // Unknown originating model during an active model-scoped cooldown:
         // widen scope conservatively so no model can bypass on stale metadata.
         updatedStats.cooldownModel = undefined;
-      } else if (params.reason !== "rate_limit") {
-        // Non-rate-limit failures are profile-wide — clear model scope even
+      } else if (params.reason !== "rate_limit" && params.reason !== "model_not_found") {
+        // Non-rate-limit, non-model_not_found failures are profile-wide — clear model scope even
         // when the same model fails, so that no model can bypass.
         updatedStats.cooldownModel = undefined;
       } else {
@@ -722,7 +722,7 @@ function computeNextProfileUsageStats(params: {
       }
     } else {
       updatedStats.cooldownReason = params.reason;
-      updatedStats.cooldownModel = params.reason === "rate_limit" ? params.modelId : undefined;
+      updatedStats.cooldownModel = (params.reason === "rate_limit" || params.reason === "model_not_found") ? params.modelId : undefined;
     }
   }
 
