@@ -305,7 +305,7 @@ async function finalizeCronCompletionAnnouncement(params: {
 
 // Heartbeat wakes may only force an execution session the caller actually asked for.
 // The main-session fallback used by cron targeting would otherwise pin every monitor
-// tick to `main` and shadow `agents.*.heartbeat.session` (#116205).
+// tick to `main` and shadow `agents.*.heartbeat.session`.
 function resolveHeartbeatWakeSessionKey(
   requestedSessionKey: string | null | undefined,
   resolvedSessionKey: string | undefined,
