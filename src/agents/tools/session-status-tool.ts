@@ -414,6 +414,7 @@ function withActiveStatusModelIdentity(
   delete next.providerOverride;
   delete next.modelOverride;
   delete next.modelOverrideSource;
+  delete next.modelOverrideRouteResolution;
   return next;
 }
 
@@ -743,7 +744,9 @@ export function createSessionStatusTool(opts?: {
             visibilitySessionKey: requestedKeyInput,
           });
           if (!visibleSession.ok) {
-            throw new Error("Session status visibility is restricted to the current session tree.");
+            // The resolver's copy already names the denying policy (including the
+            // watched-group carve-out); a local string here would drift from it.
+            throw new Error(visibleSession.error);
           }
           // If resolution points at another agent, enforce A2A policy before switching stores.
           ensureAgentAccess(

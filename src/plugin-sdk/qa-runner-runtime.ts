@@ -42,6 +42,8 @@ type QaRunnerMessageRecorder = {
 
 type QaRunnerTransportFlowPreparationInput = {
   config: Record<string, unknown>;
+  scenarioId: string;
+  scenarioTitle: string;
   gateway: {
     baseUrl: string;
     tempRoot: string;
@@ -134,6 +136,7 @@ type QaRunnerTransportAdapterDefinition = {
     isolatedWorkers?: boolean;
   }) => string[];
   cleanup?: () => Promise<void>;
+  cleanupAfterGatewayStop?: () => Promise<void>;
 };
 
 type QaRunnerTransportFactory = {

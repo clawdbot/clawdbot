@@ -1,7 +1,7 @@
 // Slack plugin module implements probe behavior.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { createSlackWebClient } from "./client.js";
+import { createSlackReadClient } from "./client.js";
 import { formatSlackError } from "./errors.js";
 import { formatSlackBotTokenIdentityWarning } from "./token.js";
 
@@ -19,7 +19,13 @@ export async function probeSlack(
   timeoutMs = 2500,
   opts?: { accountId?: string | null; identity?: "bot" | "user" },
 ): Promise<SlackProbe> {
-  const client = createSlackWebClient(token);
+  // The probe owns a single absolute deadline: abort its fetch and never let
+  // retries or Slack's 429 queue outlive the shared health-check result.
+  const client = createSlackReadClient(token, {
+    rejectRateLimitedCalls: true,
+    retryConfig: { retries: 0 },
+    timeout: timeoutMs,
+  });
   return await runChannelProbe(
     timeoutMs,
     async () => {

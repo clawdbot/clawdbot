@@ -229,6 +229,67 @@ export function readAcpSessionMetaForEntry(params: {
   return rowToAcpSessionMeta(row);
 }
 
+export function readAcpSessionMetaBatch(params: {
+  entries: ReadonlyArray<{
+    sessionKey: string;
+    entry: SessionEntry;
+  }>;
+  env?: NodeJS.ProcessEnv;
+  databasePath?: string;
+}): Map<SessionEntry, SessionAcpMeta | undefined> {
+  const result = new Map<SessionEntry, SessionAcpMeta | undefined>();
+  const entriesByKey = new Map<string, SessionEntry[]>();
+  for (const item of params.entries) {
+    const sessionKey = item.sessionKey.trim();
+    if (!sessionKey) {
+      continue;
+    }
+    if (item.entry?.acp) {
+      result.set(item.entry, item.entry.acp);
+      continue;
+    }
+    const entries = entriesByKey.get(sessionKey) ?? [];
+    entries.push(item.entry);
+    entriesByKey.set(sessionKey, entries);
+  }
+  if (entriesByKey.size === 0) {
+    return result;
+  }
+
+  const database = openOpenClawStateDatabase({
+    env: params.env,
+    path: params.databasePath,
+  });
+  // Chunked IN keeps each statement under SQLite's bind-variable cap, matching the
+  // sharing-store membership precedent; one statement per 500 keys instead of per row.
+  const db = getAcpSessionKysely(database.db);
+  const requestedKeys = [...entriesByKey.keys()];
+  const keyChunks: string[][] = [];
+  for (let index = 0; index < requestedKeys.length; index += 500) {
+    keyChunks.push(requestedKeys.slice(index, index + 500));
+  }
+  const rows = keyChunks.flatMap(
+    (chunk) =>
+      executeSqliteQuerySync(
+        database.db,
+        db.selectFrom("acp_sessions").selectAll().where("session_key", "in", chunk),
+      ).rows,
+  );
+  const rowsByKey = new Map(rows.map((row) => [row.session_key, row]));
+  for (const [sessionKey, entries] of entriesByKey) {
+    for (const entry of entries) {
+      const row = resolveReadableAcpSessionRow({
+        row: rowsByKey.get(sessionKey),
+        entry,
+        env: params.env,
+        databasePath: params.databasePath,
+      });
+      result.set(entry, row ? rowToAcpSessionMeta(row) : undefined);
+    }
+  }
+  return result;
+}
+
 function selectAcpSessionRows(options: OpenClawStateDatabaseOptions = {}): AcpSessionRow[] {
   const database = openOpenClawStateDatabase(options);
   return executeSqliteQuerySync(

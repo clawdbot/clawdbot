@@ -12,6 +12,7 @@ import {
   type SpeechProviderConfig,
   type SpeechProviderOverrides,
   type SpeechProviderPlugin,
+  type SpeechSynthesisRequest,
   type SpeechSynthesisTarget,
 } from "openclaw/plugin-sdk/speech";
 import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-core";
@@ -65,7 +66,7 @@ function normalizeXaiSpeechResponseFormat(value: unknown): XaiSpeechResponseForm
 }
 
 function resolveSpeechResponseFormat(
-  target: SpeechSynthesisTarget,
+  target: SpeechSynthesisTarget | undefined,
   configuredFormat?: XaiSpeechResponseFormat,
 ): XaiSpeechResponseFormat {
   // Voice-note consumers may transcode without raw codec/rate metadata.
@@ -139,6 +140,29 @@ function readXaiOverrides(overrides: SpeechProviderOverrides | undefined): XaiTt
 
 function resolveDirectXaiAudioApiKey(configApiKey?: string): string | undefined {
   return resolveSpeechProviderApiKey(configApiKey, process.env.XAI_API_KEY);
+}
+
+async function resolveXaiSpeechSynthesisRequest(
+  req: Pick<
+    SpeechSynthesisRequest,
+    "cfg" | "providerConfig" | "providerOverrides" | "text" | "timeoutMs"
+  > & { target?: SpeechSynthesisTarget },
+  forcedResponseFormat?: XaiSpeechResponseFormat,
+) {
+  const config = readXaiProviderConfig(req.providerConfig);
+  const overrides = readXaiOverrides(req.providerOverrides);
+  return {
+    text: req.text,
+    apiKey: await resolveXaiAudioApiKey(config.apiKey, req.cfg),
+    baseUrl: config.baseUrl,
+    voiceId: overrides.voiceId ?? config.voiceId,
+    language: overrides.language ?? config.language,
+    speed: overrides.speed ?? config.speed,
+    responseFormat:
+      forcedResponseFormat ?? resolveSpeechResponseFormat(req.target, config.responseFormat),
+    timeoutMs: req.timeoutMs,
+    maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
+  };
 }
 
 function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
@@ -238,70 +262,28 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
       Boolean(resolveDirectXaiAudioApiKey(readXaiProviderConfig(providerConfig).apiKey)) ||
       isProviderAuthProfileConfigured({ provider: "xai", cfg }),
     synthesize: async (req) => {
-      const config = readXaiProviderConfig(req.providerConfig);
-      const overrides = readXaiOverrides(req.providerOverrides);
-      const apiKey = await resolveXaiAudioApiKey(config.apiKey, req.cfg);
-      const responseFormat = resolveSpeechResponseFormat(req.target, config.responseFormat);
-      const audioBuffer = await xaiTTS({
-        text: req.text,
-        apiKey,
-        baseUrl: config.baseUrl,
-        voiceId: overrides.voiceId ?? config.voiceId,
-        language: overrides.language ?? config.language,
-        speed: overrides.speed ?? config.speed,
-        responseFormat,
-        timeoutMs: req.timeoutMs,
-        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
-      });
+      const params = await resolveXaiSpeechSynthesisRequest(req);
       return {
-        audioBuffer,
-        outputFormat: responseFormat,
-        fileExtension: responseFormatToFileExtension(responseFormat),
+        audioBuffer: await xaiTTS(params),
+        outputFormat: params.responseFormat,
+        fileExtension: responseFormatToFileExtension(params.responseFormat),
         voiceCompatible: false,
       };
     },
     streamSynthesize: async (req) => {
-      const config = readXaiProviderConfig(req.providerConfig);
-      const overrides = readXaiOverrides(req.providerOverrides);
-      const responseFormat = resolveSpeechResponseFormat(req.target, config.responseFormat);
-      const apiKey = await resolveXaiAudioApiKey(config.apiKey, req.cfg);
-      const stream = await xaiTTSStream({
-        text: req.text,
-        apiKey,
-        baseUrl: config.baseUrl,
-        voiceId: overrides.voiceId ?? config.voiceId,
-        language: overrides.language ?? config.language,
-        speed: overrides.speed ?? config.speed,
-        responseFormat,
-        timeoutMs: req.timeoutMs,
-        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
-      });
+      const params = await resolveXaiSpeechSynthesisRequest(req);
+      const stream = await xaiTTSStream(params);
       return {
         audioStream: stream.audioStream,
-        outputFormat: responseFormat,
-        fileExtension: responseFormatToFileExtension(responseFormat),
+        outputFormat: params.responseFormat,
+        fileExtension: responseFormatToFileExtension(params.responseFormat),
         voiceCompatible: false,
         release: stream.release,
       };
     },
     synthesizeTelephony: async (req) => {
-      const config = readXaiProviderConfig(req.providerConfig);
-      const overrides = readXaiOverrides(req.providerOverrides);
-      const apiKey = await resolveXaiAudioApiKey(config.apiKey, req.cfg);
-      const outputFormat = "pcm" as const;
-      const sampleRate = 24000;
-      const audioBuffer = await xaiTTS({
-        text: req.text,
-        apiKey,
-        baseUrl: config.baseUrl,
-        voiceId: overrides.voiceId ?? config.voiceId,
-        language: overrides.language ?? config.language,
-        speed: overrides.speed ?? config.speed,
-        responseFormat: outputFormat,
-        timeoutMs: req.timeoutMs,
-        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
-      });
-      return { audioBuffer, outputFormat, sampleRate };
+      const params = await resolveXaiSpeechSynthesisRequest(req, "pcm");
+      return { audioBuffer: await xaiTTS(params), outputFormat: "pcm", sampleRate: 24000 };
     },
   };
 }

@@ -6,6 +6,7 @@
  */
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createCronTool } from "../agents/tools/cron-tool.js";
 import { createSystemAgentTool } from "../agents/tools/system-agent-tool.js";
@@ -57,7 +58,10 @@ export function resolveOpenClawToolsForMcp(
     if (!agentSessionKey) {
       throw new Error(`${OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV} is required`);
     }
-    return createCronTool({ agentSessionKey, creatorToolAllowlist: [{ name: "cron" }] });
+    return createCronTool({
+      agentSessionKey,
+      creatorToolAllowlist: [{ name: AUTOMATIONS_TOOL_NAME }],
+    });
   });
 }
 

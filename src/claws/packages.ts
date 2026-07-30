@@ -2,12 +2,14 @@ import { runPluginInstallCommand } from "../cli/plugins-install-command.js";
 import { runPluginUninstallCommand } from "../cli/plugins-uninstall-command.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub.js";
 import { installPluginFromClawHub } from "../plugins/clawhub.js";
+import type { PluginManifestSetup } from "../plugins/manifest.js";
 import {
   preflightPluginInstall,
   resolveInstalledClawHubPlugin,
 } from "../plugins/plugin-install-preflight.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { resolveLocalProviderAuthEvidence } from "../secrets/provider-auth-evidence.js";
 import { installSkillFromClawHub, preflightSkillFromClawHub } from "../skills/lifecycle/clawhub.js";
 import {
   acquireClawPackageLifecycleLease,
@@ -21,7 +23,13 @@ import {
   updateClawPackageRefStatus,
   type PersistedClawPackageRef,
 } from "./provenance.js";
-import type { ClawAddPlan, ClawAddPlanAction, ClawPackage, ResolvedClawPackage } from "./types.js";
+import type {
+  ClawAddPlan,
+  ClawAddPlanAction,
+  ClawLocalPrerequisite,
+  ClawPackage,
+  ResolvedClawPackage,
+} from "./types.js";
 
 export class ClawPackageInstallError extends Error {
   constructor(
@@ -122,6 +130,7 @@ type ClawPackagePreflightResult =
       integrity: string;
       installId?: string;
       warning?: string;
+      requirements?: ClawLocalPrerequisite[];
     }
   | {
       ok: false;
@@ -133,9 +142,49 @@ type ClawPackagePreflightResult =
       warning?: string;
     };
 
+function resolveClawPluginSetupRequirements(params: {
+  pluginId: string;
+  setup?: PluginManifestSetup;
+  env: NodeJS.ProcessEnv;
+}): ClawLocalPrerequisite[] {
+  const providers = params.setup?.providers ?? [];
+  // Providers are alternative setup routes for one plugin. Any configured
+  // route satisfies readiness; otherwise expose every route to the operator.
+  const hasConfiguredProvider = providers.some(
+    (provider) =>
+      (provider.envVars ?? []).some((name) => Boolean(params.env[name]?.trim())) ||
+      resolveLocalProviderAuthEvidence(provider.authEvidence, params.env),
+  );
+  if (hasConfiguredProvider) {
+    return [];
+  }
+  return providers.flatMap((provider) => {
+    const envVars = provider.envVars ?? [];
+    const authEvidence = provider.authEvidence ?? [];
+    // Dry-run has no persisted setup state, so only gate on credential evidence
+    // it can actually observe. Auth methods remain descriptive metadata.
+    if (envVars.length === 0 && authEvidence.length === 0) {
+      return [];
+    }
+    return [
+      {
+        kind: "plugin-setup" as const,
+        plugin: params.pluginId,
+        provider: provider.id,
+        envVars,
+        authMethods: provider.authMethods ?? [],
+      },
+    ];
+  });
+}
+
 export async function preflightClawPackage(
   pkg: ClawPackage,
   workspaceDir: string,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    deps?: Pick<PackageInstallerDeps, "preflightPlugin" | "probePlugin">;
+  } = {},
 ): Promise<ClawPackagePreflightResult> {
   if (pkg.kind === "skill") {
     const result = await preflightSkillFromClawHub({
@@ -146,7 +195,7 @@ export async function preflightClawPackage(
     });
     return result.ok ? result : { ok: false, code: result.code, message: result.error };
   }
-  const result = await preflightPluginInstall({
+  const result = await (options.deps?.preflightPlugin ?? preflightPluginInstall)({
     clawhubPackage: pkg.ref,
     rawSpec: `clawhub:${pkg.ref}@${pkg.version}`,
     expectedVersion: pkg.version,
@@ -158,7 +207,7 @@ export async function preflightClawPackage(
       message: result.error,
     };
   }
-  const probe = await installPluginFromClawHub({
+  const probe = await (options.deps?.probePlugin ?? installPluginFromClawHub)({
     spec: `clawhub:${pkg.ref}@${pkg.version}`,
     dryRun: true,
     acknowledgeClawHubRisk: true,
@@ -199,11 +248,17 @@ export async function preflightClawPackage(
       message: `Plugin ${pkg.ref}@${pkg.version} is installed as ${result.installedId} with integrity ${result.installedIntegrity ?? "unknown"}, expected ${probe.pluginId} with ${integrity}.`,
     };
   }
+  const requirements = resolveClawPluginSetupRequirements({
+    pluginId: probe.pluginId,
+    setup: probe.setup,
+    env: options.env ?? process.env,
+  });
   return {
     ok: true,
     action: result.action,
     integrity,
     installId: probe.pluginId,
+    ...(requirements.length > 0 ? { requirements } : {}),
     ...(probe.warning ? { warning: probe.warning } : {}),
   };
 }

@@ -506,6 +506,61 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(self.app?.keyboards.firstMatch.waitForNonExistence(timeout: 3) == true)
     }
 
+    func testVoiceNoteDraftKeepsStopAvailableDuringActiveResponse() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone voice-note composer proof only")
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "chat-voice-note-stop-active-response"),
+            additionalArguments: ["--openclaw-hold-initial-chat-run"])
+
+        let app = try XCTUnwrap(self.app)
+        let input = app.textFields["chat-message-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Keep this response running while I record a voice note.")
+
+        let send = app.buttons["chat-send-message"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5))
+        XCTAssertTrue(send.isEnabled)
+        send.tap()
+
+        let stop = app.buttons["Stop response"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 8))
+        XCTAssertTrue(stop.isEnabled)
+
+        let microphone = app.buttons["chat-dictation-control"]
+        XCTAssertTrue(microphone.waitForExistence(timeout: 5))
+        microphone.press(forDuration: 0.8)
+
+        let recordVoiceNote = app.buttons["Record Voice Note"]
+        XCTAssertTrue(recordVoiceNote.waitForExistence(timeout: 5))
+        recordVoiceNote.tap()
+
+        let finishVoiceNote = app.buttons["Finish voice note"]
+        XCTAssertTrue(finishVoiceNote.waitForExistence(timeout: 8))
+        finishVoiceNote.tap()
+
+        let voiceNote = app.staticTexts["Voice note"]
+        XCTAssertTrue(voiceNote.waitForExistence(timeout: 8))
+        XCTAssertTrue(stop.waitForExistence(timeout: 5))
+        XCTAssertTrue(stop.isEnabled)
+        self.attachScreenshot(named: "voice-note-stop-active-response")
+
+        stop.tap()
+        XCTAssertTrue(send.waitForExistence(timeout: 8))
+        self.waitForEnabled(send)
+        XCTAssertTrue(voiceNote.exists)
+        send.tap()
+
+        XCTAssertTrue(voiceNote.waitForNonExistence(timeout: 8))
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "I can help with"))
+                .firstMatch.waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "voice-note-sent-after-stopping-response")
+    }
+
     func testKeyboardOpenSendFollowsLiveEdge() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone keyboard proof only")
         self.launchApp(for: ScreenshotTarget(

@@ -1,41 +1,32 @@
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
-  appendSqliteTranscriptEvent,
-  appendSqliteTranscriptEventSync,
-  appendSqliteTranscriptMessage,
-  appendSqliteTranscriptMessageSync,
+  appendSqliteTranscriptEvent as appendTranscriptEvent,
+  appendSqliteTranscriptEventSync as appendTranscriptEventSync,
+  appendSqliteTranscriptMessage as appendTranscriptMessage,
+  appendSqliteTranscriptMessageSync as appendTranscriptMessageSync,
   findSqliteTranscriptEvent,
-  loadLatestSqliteAssistantText,
-  loadSqliteTranscriptEventRowsAfterSeqSync,
-  loadSqliteTranscriptEvents,
-  loadSqliteTranscriptEventsSync,
-  readSqliteTranscriptStatsSync,
-  readSqliteTranscriptEventAtSeqSync,
-  readSqliteTranscriptRawDelta,
-  publishSqliteTranscriptUpdate,
-  replaceSqliteTranscriptEvents,
-  replaceSqliteTranscriptEventsSync,
-  resolveSqliteSessionKeyBySessionId,
+  loadLatestSqliteAssistantText as readLatestTranscriptAssistantText,
+  loadSqliteTranscriptEventRowsAfterSeqSync as loadTranscriptEventRowsAfterSeqSync,
+  loadSqliteTranscriptEvents as loadTranscriptEvents,
+  loadSqliteTranscriptEventsSync as loadTranscriptEventsSync,
+  loadSqliteTranscriptHeaderSync as loadTranscriptHeaderSync,
+  loadSqliteTranscriptTailEventsSync as loadTranscriptTailEventsSync,
+  readSqliteTranscriptStatsSync as readTranscriptStatsSync,
+  readSqliteTranscriptEventAtSeqSync as readTranscriptEventAtSeqSync,
+  readSqliteTranscriptRawDelta as readTranscriptRawDelta,
+  publishSqliteTranscriptUpdate as publishTranscriptUpdate,
+  replaceSqliteTranscriptEvents as replaceTranscriptEvents,
+  replaceSqliteTranscriptEventsSync as replaceTranscriptEventsSync,
+  rewriteSqliteTranscriptEventRowsExact as rewriteTranscriptEventRowsExact,
+  resolveSqliteSessionKeyBySessionId as resolveTranscriptSessionKeyBySessionId,
   trimSqliteTranscriptForManualCompact,
-  withSqliteTranscriptWriteLock,
-  withSqliteTranscriptWriteTransaction,
+  withSqliteTranscriptWriteLock as withTranscriptWriteLock,
+  withSqliteTranscriptWriteTransaction as withTranscriptWriteTransaction,
 } from "./session-accessor.sqlite.js";
 import type {
-  SessionTranscriptAccessScope,
   SessionTranscriptRuntimeScope,
   SessionTranscriptReadScope,
-  SessionTranscriptWriteScope,
   TranscriptEvent,
-  SessionTranscriptStats,
-  SessionTranscriptEventRow,
-  SessionTranscriptRawDeltaLimits,
-  SessionTranscriptRawDeltaResult,
-  TranscriptMessageAppendOptions,
-  TranscriptMessageAppendResult,
-  TranscriptUpdatePayload,
-  LatestTranscriptAssistantText,
-  SessionTranscriptWriteLockAccessorContext,
-  SessionTranscriptWriteTransactionContext,
   SessionTranscriptManualTrimResult,
   SessionTranscriptManualTrimPreflightResult,
 } from "./session-accessor.types.js";
@@ -44,133 +35,36 @@ import {
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
 
+// Persisted transcripts have one SQLite owner. Preserve public operation names
+// as direct exports so append, idempotency, locks, and events cannot drift.
+export {
+  appendTranscriptEvent,
+  appendTranscriptEventSync,
+  appendTranscriptMessage,
+  appendTranscriptMessageSync,
+  loadTranscriptEventRowsAfterSeqSync,
+  loadTranscriptEvents,
+  loadTranscriptEventsSync,
+  loadTranscriptHeaderSync,
+  loadTranscriptTailEventsSync,
+  publishTranscriptUpdate,
+  readLatestTranscriptAssistantText,
+  readTranscriptEventAtSeqSync,
+  readTranscriptRawDelta,
+  readTranscriptStatsSync,
+  replaceTranscriptEvents,
+  replaceTranscriptEventsSync,
+  rewriteTranscriptEventRowsExact,
+  resolveTranscriptSessionKeyBySessionId,
+  withTranscriptWriteLock,
+  withTranscriptWriteTransaction,
+};
+
 /** Keeps transcript event delivery behind the transcript owner boundary. */
 export function emitTranscriptUpdate(
   update: Parameters<typeof emitSessionTranscriptUpdate>[0],
 ): void {
   emitSessionTranscriptUpdate(update);
-}
-
-/**
- * Appends a non-message transcript record such as session or metadata events.
- * Message records must use appendTranscriptMessage so parent links, idempotency,
- * and redaction are preserved.
- */
-export async function appendTranscriptEvent(
-  scope: SessionTranscriptAccessScope,
-  event: TranscriptEvent,
-): Promise<void> {
-  await appendSqliteTranscriptEvent(scope, event);
-}
-
-/** Appends a non-message transcript record synchronously for sync session runtimes. */
-export function appendTranscriptEventSync(
-  scope: SessionTranscriptAccessScope,
-  event: TranscriptEvent,
-): boolean {
-  return appendSqliteTranscriptEventSync(scope, event);
-}
-
-/** Reads parsed transcript records from an explicit or derived transcript target. */
-export async function loadTranscriptEvents(
-  scope: SessionTranscriptReadScope,
-): Promise<TranscriptEvent[]> {
-  return await loadSqliteTranscriptEvents(scope);
-}
-
-/** Reads one bounded raw transcript page using an opaque generation-aware cursor. */
-export function readTranscriptRawDelta(
-  scope: SessionTranscriptReadScope,
-  limits: SessionTranscriptRawDeltaLimits = {},
-): SessionTranscriptRawDeltaResult {
-  return readSqliteTranscriptRawDelta(scope, limits);
-}
-
-/** Replaces all transcript records for one SQLite-backed transcript. */
-export async function replaceTranscriptEvents(
-  scope: SessionTranscriptAccessScope,
-  events: TranscriptEvent[],
-): Promise<void> {
-  await replaceSqliteTranscriptEvents(scope, events);
-}
-
-/** Replaces all transcript records synchronously for sync session runtimes. */
-export function replaceTranscriptEventsSync(
-  scope: SessionTranscriptAccessScope,
-  events: TranscriptEvent[],
-): boolean {
-  return replaceSqliteTranscriptEventsSync(scope, events);
-}
-
-/** Reads parsed transcript records synchronously from the SQLite transcript store. */
-export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): TranscriptEvent[] {
-  return loadSqliteTranscriptEventsSync(scope);
-}
-
-/** Reads only rows appended after a previously observed SQLite sequence. */
-export function loadTranscriptEventRowsAfterSeqSync(
-  scope: SessionTranscriptReadScope,
-  afterSeq: number,
-  throughSeq?: number,
-): SessionTranscriptEventRow[] {
-  return loadSqliteTranscriptEventRowsAfterSeqSync(scope, afterSeq, throughSeq);
-}
-
-/** Reads one durable SQLite transcript row for incremental checkpoint validation. */
-export function readTranscriptEventAtSeqSync(
-  scope: SessionTranscriptReadScope,
-  seq: number,
-): SessionTranscriptEventRow | undefined {
-  return readSqliteTranscriptEventAtSeqSync(scope, seq);
-}
-
-/** Reads transcript freshness and byte size without materializing event rows. */
-export function readTranscriptStatsSync(scope: SessionTranscriptReadScope): SessionTranscriptStats {
-  return readSqliteTranscriptStatsSync(scope);
-}
-
-/** Reads the latest visible assistant text without materializing the whole transcript. */
-export function readLatestTranscriptAssistantText(
-  scope: SessionTranscriptReadScope,
-  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
-): LatestTranscriptAssistantText | undefined {
-  return loadLatestSqliteAssistantText(scope, options);
-}
-
-/**
- * Appends one transcript message with message-id generation and optional
- * idempotency lookup. The returned message is the redacted persisted value.
- */
-export async function appendTranscriptMessage<TMessage>(
-  scope: SessionTranscriptWriteScope,
-  options: TranscriptMessageAppendOptions<TMessage> & {
-    prepareMessageAfterIdempotencyCheck: (message: TMessage) => TMessage | undefined;
-  },
-): Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
-export async function appendTranscriptMessage<TMessage>(
-  scope: SessionTranscriptWriteScope,
-  options: TranscriptMessageAppendOptions<TMessage>,
-): Promise<TranscriptMessageAppendResult<TMessage>>;
-export async function appendTranscriptMessage<TMessage>(
-  scope: SessionTranscriptWriteScope,
-  options: TranscriptMessageAppendOptions<TMessage>,
-): Promise<TranscriptMessageAppendResult<TMessage> | undefined> {
-  return await appendSqliteTranscriptMessage(scope, options);
-}
-
-/** Appends one transcript message synchronously for sync session runtimes. */
-export function appendTranscriptMessageSync<TMessage>(
-  scope: SessionTranscriptWriteScope,
-  options: TranscriptMessageAppendOptions<TMessage>,
-): TranscriptMessageAppendResult<TMessage> | undefined {
-  return appendSqliteTranscriptMessageSync(scope, options);
-}
-
-/** Resolves the persisted key for a SQLite transcript session id. */
-export function resolveTranscriptSessionKeyBySessionId(
-  scope: Pick<SessionTranscriptReadScope, "agentId" | "env" | "sessionId" | "storePath">,
-): string | undefined {
-  return resolveSqliteSessionKeyBySessionId(scope);
 }
 
 /**
@@ -184,30 +78,6 @@ export async function findTranscriptEvent(
   match: (event: TranscriptEvent) => boolean,
 ): Promise<{ event: TranscriptEvent } | undefined> {
   return findSqliteTranscriptEvent(scope, match);
-}
-
-/** Emits a transcript update after resolving the current transcript target. */
-export async function publishTranscriptUpdate(
-  scope: SessionTranscriptWriteScope,
-  update: TranscriptUpdatePayload = {},
-): Promise<void> {
-  await publishSqliteTranscriptUpdate(scope, update);
-}
-
-/** Runs transcript read/append work under the backing store writer lock. */
-export async function withTranscriptWriteLock<T>(
-  scope: SessionTranscriptWriteScope,
-  run: (context: SessionTranscriptWriteLockAccessorContext) => Promise<T> | T,
-): Promise<T> {
-  return await withSqliteTranscriptWriteLock(scope, run);
-}
-
-/** Runs a synchronous DAG batch under one transcript writer queue and transaction. */
-export async function withTranscriptWriteTransaction<T>(
-  scope: SessionTranscriptWriteScope,
-  run: (context: SessionTranscriptWriteTransactionContext) => T,
-): Promise<T> {
-  return await withSqliteTranscriptWriteTransaction(scope, run);
 }
 
 /**

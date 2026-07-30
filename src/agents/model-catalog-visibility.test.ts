@@ -9,6 +9,7 @@ import {
   resolveLogicalVisibleModelCatalog,
 } from "./model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 import { openAIModelCatalogRoutePolicy } from "./openai-model-routes.js";
 
 describe("resolveLogicalVisibleModelCatalog", () => {
@@ -86,6 +87,40 @@ describe("resolveLogicalVisibleModelCatalog", () => {
     expect(result.map((entry) => entry.id)).toEqual(["off", "old"]);
   });
 
+  it("preserves provider-owned strongest-first order through route projection", async () => {
+    const catalog: ModelCatalogEntry[] = [
+      { provider: "openai", id: "gpt-5.4", name: "GPT-5.4", providerOrder: 3 },
+      { provider: "openai", id: "gpt-5.6-luna", name: "GPT-5.6 Luna", providerOrder: 2 },
+      { provider: "openai", id: "gpt-5.6-sol", name: "GPT-5.6 Sol", providerOrder: 0 },
+      { provider: "openai", id: "gpt-5.6-terra", name: "GPT-5.6 Terra", providerOrder: 1 },
+    ];
+
+    const result = await resolveLogicalVisibleModelCatalog({
+      cfg: {} as OpenClawConfig,
+      catalog,
+      defaultProvider: "openai",
+      view: "all",
+      routePolicy: openAIModelCatalogRoutePolicy,
+      evaluateEntry: async (entry) =>
+        resolveLogicalModelCatalogEntryState({
+          entry,
+          evaluation: {
+            availability: true,
+            routeResolution: { kind: "routes", routes: [selectedRoute] },
+            selectedRoute,
+          },
+          routePolicy: openAIModelCatalogRoutePolicy,
+        }),
+    });
+
+    expect(result.map((entry) => entry.id)).toEqual([
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.4",
+    ]);
+  });
+
   it("keeps deprecated configured primary and alias-key rows visible", async () => {
     const catalog: ModelCatalogEntry[] = [
       { provider: "demo", id: "primary", name: "Primary", status: "deprecated" },
@@ -100,6 +135,16 @@ describe("resolveLogicalVisibleModelCatalog", () => {
         },
       },
     } as OpenClawConfig;
+    // This unit test covers configured-row retention, not runtime plugin
+    // discovery. Keep fake provider refs on the deterministic static path.
+    const policy = createModelVisibilityPolicy({
+      cfg,
+      catalog,
+      defaultProvider: "demo",
+      defaultModel: "primary",
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
+    });
 
     const result = await resolveLogicalVisibleModelCatalog({
       cfg,
@@ -107,6 +152,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       defaultProvider: "demo",
       defaultModel: "primary",
       view: "configured",
+      policy,
       routePolicy: openAIModelCatalogRoutePolicy,
       evaluateEntry: evaluateAvailableEntry,
     });

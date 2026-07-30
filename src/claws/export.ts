@@ -16,7 +16,7 @@ import { readClawStatus } from "./lifecycle-state.js";
 import type { PackageRemovalDeps } from "./package-remove.js";
 import { isPortableClawAvatar } from "./schema-portability.js";
 import { parseClawManifest, parseClawOpenClawProfile } from "./schema.js";
-import { MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
+import { MAX_CLAW_MANIFEST_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
 import {
   CLAW_BOOTSTRAP_FILE_NAMES,
   CLAW_OUTPUT_STABILITY,
@@ -31,6 +31,14 @@ const MAX_EXPORT_FILE_BYTES = 1024 * 1024;
 
 type AgentConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 type ClawBootstrapFileName = (typeof CLAW_BOOTSTRAP_FILE_NAMES)[number];
+
+function decodeUtf8(content: Buffer): string | undefined {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(content);
+  } catch {
+    return undefined;
+  }
+}
 
 type ClawExportResult = {
   schemaVersion: typeof CLAW_EXPORT_RESULT_SCHEMA_VERSION;
@@ -329,12 +337,17 @@ export async function exportClawAgent(
     maxBytes: MAX_EXPORT_FILE_BYTES,
     symlinks: "reject",
   });
-  const contents: ExportContent[] = await Promise.all(
+  const allContents: ExportContent[] = await Promise.all(
     record.workspaceFiles.map(async (file) => ({
       path: normalizedRelativePath(file.path),
       content: await workspace.readBytes(file.path, { maxBytes: MAX_EXPORT_FILE_BYTES }),
     })),
   );
+  const soul = allContents.find((file) => file.path === "SOUL.md");
+  const decodedSoul = soul ? decodeUtf8(soul.content) : undefined;
+  let clawMarkdownBody =
+    soul && decodedSoul !== undefined && decodedSoul.trim().length > 0 ? soul.content : undefined;
+  const contents = allContents.filter((file) => file !== soul || !clawMarkdownBody);
   const avatar = readPortableAvatar({
     config: options.config,
     agent,
@@ -343,13 +356,6 @@ export async function exportClawAgent(
   const managedPaths = new Set(contents.map((file) => file.path));
   if (avatar.sidecar && !managedPaths.has(avatar.sidecar.path)) {
     contents.push(avatar.sidecar);
-  }
-  const aggregateBytes = contents.reduce((total, file) => total + file.content.byteLength, 0);
-  if (aggregateBytes > MAX_MANAGED_WORKSPACE_BYTES) {
-    throw new ClawExportError(
-      "workspace_files_oversized",
-      `Exported workspace content exceeds ${MAX_MANAGED_WORKSPACE_BYTES} aggregate bytes.`,
-    );
   }
   const bootstrapFiles: ClawManifest["workspace"]["bootstrapFiles"] = {};
   const files: ClawManifest["workspace"]["files"] = [];
@@ -396,6 +402,30 @@ export async function exportClawAgent(
       .map((cron) => cron.job)
       .toSorted((left, right) => left.id.localeCompare(right.id)),
   };
+  const serializeClawMarkdown = (body: Buffer | undefined) =>
+    Buffer.concat([Buffer.from(`---\n${stringifyYaml(manifest)}---\n`), ...(body ? [body] : [])]);
+  let clawMarkdownRaw = serializeClawMarkdown(clawMarkdownBody);
+  if (clawMarkdownBody && clawMarkdownRaw.byteLength > MAX_CLAW_MANIFEST_BYTES) {
+    clawMarkdownBody = undefined;
+    contents.push(soul!);
+    bootstrapFiles["SOUL.md"] = { source: "workspace/SOUL.md" };
+    clawMarkdownRaw = serializeClawMarkdown(undefined);
+  }
+  if (clawMarkdownRaw.byteLength > MAX_CLAW_MANIFEST_BYTES) {
+    throw new ClawExportError(
+      "claw_manifest_oversized",
+      `Exported CLAW.md exceeds ${MAX_CLAW_MANIFEST_BYTES} bytes.`,
+    );
+  }
+  const aggregateBytes =
+    contents.reduce((total, file) => total + file.content.byteLength, 0) +
+    (clawMarkdownBody?.byteLength ?? 0);
+  if (aggregateBytes > MAX_MANAGED_WORKSPACE_BYTES) {
+    throw new ClawExportError(
+      "workspace_files_oversized",
+      `Exported workspace content exceeds ${MAX_MANAGED_WORKSPACE_BYTES} aggregate bytes.`,
+    );
+  }
   const parsed = parseClawManifest(manifest);
   if (!parsed.ok) {
     throw new ClawExportError(
@@ -412,7 +442,6 @@ export async function exportClawAgent(
       );
     }
   }
-
   const target = resolve(resolveUserPath(outputDirectory));
   await mkdir(dirname(target), { recursive: true });
   try {
@@ -446,6 +475,7 @@ export async function exportClawAgent(
       name: `openclaw-claw-${record.install.agentId}`,
       version: derivativePackageVersion(manifest, [
         ...contents,
+        ...(clawMarkdownBody ? [{ path: "CLAW.md#body", content: clawMarkdownBody }] : []),
         ...(openClawProfileRaw ? [{ path: openClawProfilePath, content: openClawProfileRaw }] : []),
       ]),
       type: "module",
@@ -455,14 +485,7 @@ export async function exportClawAgent(
       overwrite: false,
     });
     filesWritten.push("package.json");
-    await output.write(
-      "CLAW.md",
-      Buffer.from(
-        `---\n${stringifyYaml(manifest)}---\n\n# ${manifest.agent.name ?? manifest.agent.id}\n\n` +
-          "This Claw creates one configured OpenClaw agent and workspace.\n",
-      ),
-      { overwrite: false },
-    );
+    await output.write("CLAW.md", clawMarkdownRaw, { overwrite: false });
     filesWritten.push("CLAW.md");
   } catch (error) {
     await rm(target, { recursive: true, force: true }).catch(() => undefined);

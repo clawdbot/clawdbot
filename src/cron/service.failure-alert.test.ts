@@ -134,7 +134,7 @@ describe("CronService failure alerts", () => {
       to: "19098680",
     });
     expect((firstAlert.job as { id?: string } | undefined)?.id).toBe(job.id);
-    expectAlertTextContaining(sendCronFailureAlert, 'Cron job "daily report" failed 2 times');
+    expectAlertTextContaining(sendCronFailureAlert, 'Automation "daily report" failed 2 times');
 
     await cron.run(job.id, "force");
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
@@ -142,7 +142,7 @@ describe("CronService failure alerts", () => {
     vi.advanceTimersByTime(60_000);
     await cron.run(job.id, "force");
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
-    expectAlertTextContaining(sendCronFailureAlert, 'Cron job "daily report" failed 4 times');
+    expectAlertTextContaining(sendCronFailureAlert, 'Automation "daily report" failed 4 times');
 
     cron.stop();
     await store.cleanup();
@@ -289,7 +289,7 @@ describe("CronService failure alerts", () => {
     });
     expectAlertTextContaining(
       sendCronFailureAlert,
-      'Cron job "updated skipped alert job" skipped 1 times',
+      'Automation "updated skipped alert job" skipped 1 times',
     );
 
     cron.stop();
@@ -381,12 +381,34 @@ describe("CronService failure alerts", () => {
         mode: "announce" as const,
         channel: "slack",
         to: "slack:cron-alerts",
+        accountId: "slack-bot",
       },
       jobAlert: undefined,
       expected: {
         mode: "announce",
         channel: "slack",
         to: "slack:cron-alerts",
+        accountId: "slack-bot",
+      },
+    },
+    {
+      name: "preserves a global route when a job explicitly repeats its alert mode",
+      globalAlert: {
+        enabled: true,
+        after: 1,
+        mode: "announce" as const,
+        channel: "slack",
+        to: "slack:cron-alerts",
+        accountId: "slack-bot",
+      },
+      jobAlert: {
+        mode: "announce" as const,
+      },
+      expected: {
+        mode: "announce",
+        channel: "slack",
+        to: "slack:cron-alerts",
+        accountId: "slack-bot",
       },
     },
     {
@@ -431,6 +453,7 @@ describe("CronService failure alerts", () => {
         mode: "announce" as const,
         channel: "slack",
         to: "slack:cron-alerts",
+        accountId: "slack-bot",
       },
       jobAlert: {
         mode: "announce" as const,
@@ -440,6 +463,28 @@ describe("CronService failure alerts", () => {
         mode: "announce",
         channel: "telegram",
         to: "telegram:19098680",
+        accountId: undefined,
+      },
+    },
+    {
+      name: "never reuses a global chat target or account for the last failure channel",
+      globalAlert: {
+        enabled: true,
+        after: 1,
+        mode: "announce" as const,
+        channel: "slack",
+        to: "slack:cron-alerts",
+        accountId: "slack-bot",
+      },
+      jobAlert: {
+        mode: "announce" as const,
+        channel: "last",
+      },
+      expected: {
+        mode: "announce",
+        channel: "last",
+        to: undefined,
+        accountId: undefined,
       },
     },
     {
@@ -526,7 +571,7 @@ describe("CronService failure alerts", () => {
     expectAlertFields(sendCronFailureAlert, expected);
     expectAlertTextContaining(
       sendCronFailureAlert,
-      'Cron job "globally routed failure alert" failed 1 times',
+      'Automation "globally routed failure alert" failed 1 times',
     );
 
     cron.stop();
@@ -644,7 +689,7 @@ describe("CronService failure alerts", () => {
     });
     expectAlertTextContaining(
       sendCronFailureAlert,
-      'Cron job "explicit job alert with a failure destination" failed 1 times',
+      'Automation "explicit job alert with a failure destination" failed 1 times',
     );
 
     cron.stop();
@@ -697,7 +742,7 @@ describe("CronService failure alerts", () => {
     });
     expectAlertTextContaining(
       sendCronFailureAlert,
-      'Cron job "skipped job with a failure destination" skipped 1 times',
+      'Automation "skipped job with a failure destination" skipped 1 times',
     );
 
     cron.stop();
@@ -751,7 +796,9 @@ describe("CronService failure alerts", () => {
     if (typeof alertText !== "string") {
       throw new Error("expected failure alert text");
     }
-    expect(alertText).toMatch(/Cron job "gateway restart" skipped 2 times\nSkip reason: disabled/);
+    expect(alertText).toMatch(
+      /Automation "gateway restart" skipped 2 times\nSkip reason: disabled/,
+    );
 
     const skippedJob = cron.getJob(job.id);
     expect(skippedJob?.state.consecutiveSkipped).toBe(2);
@@ -796,7 +843,7 @@ describe("CronService failure alerts", () => {
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
     const alertText = alertCallArg(sendCronFailureAlert).text;
     expect(alertText).toBe(
-      'Cron job "timeout cause alert" failed 1 times\n' +
+      'Automation "timeout cause alert" failed 1 times\n' +
         "Cause: timeout\n" +
         "Last error: cron: job execution timed out",
     );
@@ -841,7 +888,7 @@ describe("CronService failure alerts", () => {
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
     const alertText = alertCallArg(sendCronFailureAlert).text;
     expect(alertText).toBe(
-      'Cron job "provider limit alert" failed 1 times\n' +
+      'Automation "provider limit alert" failed 1 times\n' +
         "Cause: billing\n" +
         "Last error: 403 Key limit exceeded (monthly limit)",
     );
@@ -885,7 +932,7 @@ describe("CronService failure alerts", () => {
     await cron.run(job.id, "force");
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
     expect(alertCallArg(sendCronFailureAlert).text).toBe(
-      'Cron job "permanent script alert" failed 1 times\n' +
+      'Automation "permanent script alert" failed 1 times\n' +
         "Last error: cron script failed after a tool side effect: request timed out",
     );
 
@@ -929,7 +976,7 @@ describe("CronService failure alerts", () => {
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
     const alertText = alertCallArg(sendCronFailureAlert).text;
     expect(alertText).toBe(
-      'Cron job "skipped timeout" skipped 1 times\nSkip reason: cron: job execution timed out',
+      'Automation "skipped timeout" skipped 1 times\nSkip reason: cron: job execution timed out',
     );
 
     cron.stop();

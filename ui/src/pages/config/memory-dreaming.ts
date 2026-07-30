@@ -232,6 +232,7 @@ const DEFAULT_STORAGE_MODE: StorageMode = "separate";
 type DreamingSettingsProps = {
   /** `plugins.entries.<slot owner>.config.dreaming`, or null when unset. */
   dreaming: Record<string, unknown> | null;
+  disabled: boolean;
   onPatch: (path: readonly string[], value: unknown) => void;
 };
 
@@ -273,6 +274,7 @@ function renderField(props: DreamingSettingsProps, spec: DreamingFieldSpec) {
       title: t(spec.labelKey),
       description: t(spec.helpKey),
       checked: typeof value === "boolean" ? value : spec.fallback,
+      disabled: props.disabled,
       onChange: (checked) => props.onPatch(spec.path, checked),
     });
   }
@@ -297,6 +299,7 @@ function renderField(props: DreamingSettingsProps, spec: DreamingFieldSpec) {
         step=${bounds ? (bounds.integer ? "1" : "any") : nothing}
         spellcheck="false"
         aria-label=${t(spec.labelKey)}
+        ?disabled=${props.disabled}
         .value=${text}
         placeholder=${spec.kind === "text" && spec.placeholderKey ? t(spec.placeholderKey) : ""}
         @change=${(event: Event) => {
@@ -352,6 +355,7 @@ export function renderDreamingSettings(props: DreamingSettingsProps): TemplateRe
               label: t(`memoryPage.dreaming.storage.modes.${mode}`),
             })),
             ariaLabel: t("memoryPage.dreaming.storage.modeLabel"),
+            disabled: props.disabled,
             onChange: (mode) => props.onPatch(["storage", "mode"], mode),
           }),
         })}

@@ -9,6 +9,7 @@ import "./onboarding-memory-import.ts";
 type OnboardingMemoryImportElement = HTMLElement & {
   active: boolean;
   context: ApplicationContext<RouteId>;
+  requestUpdate: () => void;
   updateComplete: Promise<boolean>;
 };
 
@@ -166,12 +167,18 @@ describe("OnboardingMemoryImport", () => {
   it("waits for the agents list and triggers loading it", async () => {
     const request = vi.fn();
     const context = createContext(request, { agentsLoaded: false });
-    await mount(context);
+    const element = await mount(context);
 
     await waitForOnboardingMemoryImport(() =>
       expect(context.agents.ensureList).toHaveBeenCalledTimes(1),
     );
     expect(request).not.toHaveBeenCalled();
+
+    await Promise.resolve();
+    element.requestUpdate();
+    await waitForOnboardingMemoryImport(() =>
+      expect(context.agents.ensureList).toHaveBeenCalledTimes(2),
+    );
   });
 
   it("sets the guard after a successful plan with no offers", async () => {
@@ -181,10 +188,11 @@ describe("OnboardingMemoryImport", () => {
     await waitForOnboardingMemoryImport(() =>
       expect(sessionStorage.getItem(guardKey)).toBe("done"),
     );
-    expect(request).toHaveBeenCalledWith("migrations.memory.plan", {
-      agentId: "research",
-      overwrite: false,
-    });
+    expect(request).toHaveBeenCalledWith(
+      "migrations.memory.plan",
+      { agentId: "research", overwrite: false },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     expect(element.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 

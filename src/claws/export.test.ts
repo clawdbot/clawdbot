@@ -10,6 +10,7 @@ import { exportClawAgent } from "./export.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { installClawMcpServers } from "./mcp.js";
 import { persistClawPackageRef, updateClawInstallRecordStatus } from "./provenance.js";
+import { readClawManifestFile } from "./reader.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawOpenClawProfile, ClawSourceIdentity } from "./types.js";
 
@@ -24,13 +25,14 @@ async function installedFixture(
   options: {
     avatar?: string;
     extraWorkspaceFiles?: string[];
+    soulContent?: string | Buffer;
     withPackage?: boolean;
   } = {},
 ) {
   const root = tempDirs.make("openclaw-claw-export-");
   await mkdir(join(root, "source", "reference"), { recursive: true });
   const content = (label: string) => `managed ${label}\n`;
-  await writeFile(join(root, "source", "SOUL.md"), content("soul"));
+  await writeFile(join(root, "source", "SOUL.md"), options.soulContent ?? content("soul"));
   await writeFile(join(root, "source", "reference", "policy.md"), content("policy"));
   for (const path of options.extraWorkspaceFiles ?? []) {
     await mkdir(join(root, "source", dirname(path)), { recursive: true });
@@ -199,7 +201,7 @@ describe("exportClawAgent", () => {
         agent: { id: "worker", name: "Worker" },
         metadata: { "openclaw.config": "profiles/openclaw.yml" },
         workspace: {
-          bootstrapFiles: { "SOUL.md": { source: "workspace/SOUL.md" } },
+          bootstrapFiles: {},
           files: [{ source: "workspace/reference/policy.md", path: "reference/policy.md" }],
         },
         packages: [
@@ -256,15 +258,20 @@ describe("exportClawAgent", () => {
       openclaw: { claw: "CLAW.md" },
     });
     expect(packageJson.version).toMatch(/^0\.0\.0-export\.[0-9a-f]{64}$/);
-    await expect(readFile(join(out, "CLAW.md"), "utf8")).resolves.not.toContain(
-      "resolved-secret-must-not-be-exported",
-    );
+    const clawMarkdown = await readFile(join(out, "CLAW.md"), "utf8");
+    expect(clawMarkdown).not.toContain("resolved-secret-must-not-be-exported");
+    expect(clawMarkdown).toMatch(/---\nmanaged soul\n$/);
+    const exported = await readClawManifestFile(out);
+    expect(exported.ok).toBe(true);
+    if (!exported.ok) {
+      throw new Error(JSON.stringify(exported.diagnostics));
+    }
+    expect(exported.clawMarkdownBody?.toString("utf8")).toBe("managed soul\n");
+    expect(exported.manifest.workspace.bootstrapFiles).not.toHaveProperty("SOUL.md");
     await expect(readFile(join(out, "profiles", "openclaw.yml"), "utf8")).resolves.toContain(
       "profile: coding",
     );
-    await expect(readFile(join(out, "workspace", "SOUL.md"), "utf8")).resolves.toBe(
-      "managed soul\n",
-    );
+    await expect(readFile(join(out, "workspace", "SOUL.md"), "utf8")).rejects.toThrow();
   });
 
   it("rejects modified managed content instead of silently creating a snapshot", async () => {
@@ -280,6 +287,71 @@ describe("exportClawAgent", () => {
         sourceMcpServers: fixture.sourceMcpServers,
       }),
     ).rejects.toMatchObject({ code: "workspace_files_drifted" });
+  });
+
+  it("exports a whitespace-only SOUL.md as an explicit workspace file", async () => {
+    const fixture = await installedFixture({ soulContent: " \n" });
+    const out = join(fixture.root, "exported-empty-soul");
+
+    await exportClawAgent("worker", out, {
+      env: fixture.env,
+      config: fixture.config,
+      sourceMcpServers: fixture.sourceMcpServers,
+    });
+
+    const exported = await readClawManifestFile(out);
+    expect(exported.ok).toBe(true);
+    if (!exported.ok) {
+      throw new Error(JSON.stringify(exported.diagnostics));
+    }
+    expect(exported.clawMarkdownBody).toBeUndefined();
+    expect(exported.manifest.workspace.bootstrapFiles["SOUL.md"]).toEqual({
+      source: "workspace/SOUL.md",
+    });
+    await expect(readFile(join(out, "workspace", "SOUL.md"), "utf8")).resolves.toBe(" \n");
+  });
+
+  it("exports non-UTF-8 SOUL.md bytes as an explicit workspace file", async () => {
+    const fixture = await installedFixture({ soulContent: Buffer.from([0xff]) });
+    const out = join(fixture.root, "exported-binary-soul");
+
+    await exportClawAgent("worker", out, {
+      env: fixture.env,
+      config: fixture.config,
+      sourceMcpServers: fixture.sourceMcpServers,
+    });
+
+    const exported = await readClawManifestFile(out);
+    expect(exported.ok).toBe(true);
+    if (!exported.ok) {
+      throw new Error(JSON.stringify(exported.diagnostics));
+    }
+    expect(exported.clawMarkdownBody).toBeUndefined();
+    expect(exported.manifest.workspace.bootstrapFiles["SOUL.md"]).toEqual({
+      source: "workspace/SOUL.md",
+    });
+    await expect(readFile(join(out, "workspace", "SOUL.md"))).resolves.toEqual(Buffer.from([0xff]));
+  });
+
+  it("keeps SOUL.md as a sidecar when embedding would exceed the CLAW.md limit", async () => {
+    const fixture = await installedFixture({ soulContent: Buffer.alloc(1024 * 1024, 0x61) });
+    const out = join(fixture.root, "exported-large-soul");
+
+    await exportClawAgent("worker", out, {
+      env: fixture.env,
+      config: fixture.config,
+      sourceMcpServers: fixture.sourceMcpServers,
+    });
+
+    const exported = await readClawManifestFile(out);
+    expect(exported.ok).toBe(true);
+    if (!exported.ok) {
+      throw new Error(JSON.stringify(exported.diagnostics));
+    }
+    expect(exported.clawMarkdownBody).toBeUndefined();
+    expect(exported.manifest.workspace.bootstrapFiles["SOUL.md"]).toEqual({
+      source: "workspace/SOUL.md",
+    });
   });
 
   it("rejects a partial install rather than exporting an incomplete snapshot", async () => {

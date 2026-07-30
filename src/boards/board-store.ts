@@ -25,6 +25,7 @@ export type BoardWidgetHtmlDocument = {
   grantState: "none" | "pending" | "granted" | "rejected";
   declared?: BoardWidgetDeclared;
 };
+export type BoardWidgetHtmlViewMetadata = Omit<BoardWidgetHtmlDocument, "html">;
 export type BoardWidgetMcpAppDocument = {
   descriptor: BoardMcpAppDescriptor;
   revision: number;
@@ -34,9 +35,14 @@ export type BoardWidgetMcpAppDocument = {
   interactive: boolean;
 };
 export type BoardWidgetDocument = BoardWidgetHtmlDocument | BoardWidgetMcpAppDocument;
+export type BoardSnapshotWithHtmlViewMetadata = {
+  snapshot: BoardSnapshot;
+  htmlViewMetadata: ReadonlyMap<string, BoardWidgetHtmlViewMetadata>;
+};
 
 export interface BoardStore {
   getSnapshot(sessionKey: string): BoardSnapshot;
+  getSnapshotWithHtmlViewMetadata(sessionKey: string): BoardSnapshotWithHtmlViewMetadata;
   applyOps(sessionKey: string, ops: readonly BoardOp[]): BoardSnapshot;
   putWidget(params: BoardWidgetMaterializedPutParams): BoardSnapshot;
   grant(
@@ -87,6 +93,29 @@ export function cloneBoardSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
         : {}),
     })),
   };
+}
+
+function cloneBoardWidgetHtmlDocument(document: BoardWidgetHtmlDocument): BoardWidgetHtmlDocument {
+  return {
+    ...document,
+    ...(document.declared
+      ? {
+          declared: {
+            ...(document.declared.netOrigins
+              ? { netOrigins: [...document.declared.netOrigins] }
+              : {}),
+            ...(document.declared.tools ? { tools: [...document.declared.tools] } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function cloneBoardWidgetHtmlViewMetadata(
+  document: BoardWidgetHtmlDocument,
+): BoardWidgetHtmlViewMetadata {
+  const { html: _html, ...metadata } = cloneBoardWidgetHtmlDocument(document);
+  return metadata;
 }
 
 function createBoardWidgetDocument(
@@ -333,6 +362,20 @@ export class InMemoryBoardStore implements BoardStore {
     );
   }
 
+  getSnapshotWithHtmlViewMetadata(sessionKey: string): BoardSnapshotWithHtmlViewMetadata {
+    const stored = this.boards.get(sessionKey);
+    const htmlViewMetadata = new Map<string, BoardWidgetHtmlViewMetadata>();
+    for (const [name, document] of stored?.documents ?? []) {
+      if ("html" in document) {
+        htmlViewMetadata.set(name, cloneBoardWidgetHtmlViewMetadata(document));
+      }
+    }
+    return {
+      snapshot: cloneBoardSnapshot(stored?.snapshot ?? emptyBoardSnapshot(sessionKey)),
+      htmlViewMetadata,
+    };
+  }
+
   applyOps(sessionKey: string, ops: readonly BoardOp[]): BoardSnapshot {
     const current = this.boards.get(sessionKey);
     const snapshot = current?.snapshot ?? emptyBoardSnapshot(sessionKey);
@@ -430,21 +473,7 @@ export class InMemoryBoardStore implements BoardStore {
     if (!document) {
       return undefined;
     }
-    return "html" in document
-      ? {
-          ...document,
-          ...(document.declared
-            ? {
-                declared: {
-                  ...(document.declared.netOrigins
-                    ? { netOrigins: [...document.declared.netOrigins] }
-                    : {}),
-                  ...(document.declared.tools ? { tools: [...document.declared.tools] } : {}),
-                },
-              }
-            : {}),
-        }
-      : undefined;
+    return "html" in document ? cloneBoardWidgetHtmlDocument(document) : undefined;
   }
 
   readWidgetMcpApp(sessionKey: string, name: string): BoardWidgetMcpAppDocument | undefined {

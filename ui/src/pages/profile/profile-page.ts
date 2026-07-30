@@ -8,8 +8,7 @@ import type {
   UsersSetDisplayNameResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
-import { titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -19,53 +18,23 @@ import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { resolveCurrentSelfUser, userProfileAvatarUrl } from "../../app/user-profile.ts";
 import { icons } from "../../components/icons.ts";
 import {
+  renderDocsLink,
   renderSettingsEmpty,
   renderSettingsGroup,
+  renderSettingsNavRow,
   renderSettingsPage,
   renderSettingsSection,
 } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../../lib/avatar.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isMissingOperatorReadScopeError,
-} from "../../lib/gateway-errors.ts";
-import { buildSessionUsageDateParams, requestSessionsUsage } from "../../lib/sessions/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
-import {
-  decideUsageRefresh,
-  USAGE_PAYLOAD_TTL_MS,
-  type UsageRefreshReason,
-} from "../usage/refresh-policy.ts";
 import "../../styles/profile.css";
 import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
 import { renderIdentitySection } from "./identity-section.ts";
-import {
-  renderProfileHeatmap,
-  renderProfileInsights,
-  renderProfileStats,
-} from "./profile-stat-sections.ts";
-import { buildInsights, firstActiveDate, formatTokenScale, type ProfileInsights } from "./stats.ts";
 
-function formatMonthYear(date: string): string {
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(`${date}T12:00:00Z`));
-}
-
-function toErrorMessage(error: unknown): string {
-  if (isMissingOperatorReadScopeError(error)) {
-    return formatMissingOperatorReadScopeMessage("usage");
-  }
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-  return typeof error === "string" ? error : "request failed";
-}
+const PROFILE_DOCS_URL = "https://docs.openclaw.ai/concepts/user-model";
 
 function toIdentityErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim()) {
@@ -80,32 +49,18 @@ export class ProfilePage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: false })
   private context!: ApplicationContext;
 
-  @state() private loading = false;
-  @state() private error: string | null = null;
-  @state() private costSummary: CostUsageSummary | null = null;
-  @state() private sessionsResult: SessionsUsageResult | null = null;
   @state() private selfUser: AuthenticatedUser | null = null;
   @state() private ownProfile: UserProfile | null = null;
   @state() private displayName = "";
   @state() private identityLoading = false;
   @state() private identityBusy: "display-name" | "avatar" | null = null;
   @state() private identityError: string | null = null;
+  @state() private failedHeroAvatarUrl: string | null = null;
 
   private client: GatewayBrowserClient | null = null;
   private connected = false;
-  private requestId = 0;
   private identityRequestId = 0;
-  private refreshTimer: number | null = null;
-  private lastProfileLoadedAtMs: number | null = null;
-  private pendingAutomaticProfileRefresh = false;
-  // Set only when a disconnect invalidates active work. The shared refresh
-  // policy decides when the retry is allowed to run.
-  private profileReloadPending = false;
   private subscriptions: Array<() => void> = [];
-
-  private readonly handlePageActivation = () => {
-    this.requestProfileRefresh("focus");
-  };
 
   override connectedCallback() {
     super.connectedCallback();
@@ -114,8 +69,6 @@ export class ProfilePage extends OpenClawLightDomElement {
       this.context.agents.subscribe(() => this.requestUpdate()),
       this.context.agentIdentity.subscribe(() => this.requestUpdate()),
     ];
-    document.addEventListener("visibilitychange", this.handlePageActivation);
-    globalThis.addEventListener("focus", this.handlePageActivation);
     this.applyGatewaySnapshot(this.context.gateway.snapshot);
   }
 
@@ -124,13 +77,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       unsubscribe();
     }
     this.subscriptions = [];
-    document.removeEventListener("visibilitychange", this.handlePageActivation);
-    globalThis.removeEventListener("focus", this.handlePageActivation);
-    this.requestId += 1;
     this.identityRequestId += 1;
-    this.clearRefreshTimer();
-    this.pendingAutomaticProfileRefresh = false;
-    this.profileReloadPending = false;
     this.client = null;
     this.connected = false;
     super.disconnectedCallback();
@@ -138,7 +85,6 @@ export class ProfilePage extends OpenClawLightDomElement {
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
     const clientChanged = snapshot.client !== this.client;
-    const becameConnected = snapshot.phase === "connected" && !this.connected;
     const nextSelfUser =
       snapshot.phase === "connected"
         ? resolveCurrentSelfUser({ snapshotUser: snapshot.selfUser })
@@ -147,19 +93,10 @@ export class ProfilePage extends OpenClawLightDomElement {
     this.client = snapshot.client;
     this.connected = snapshot.phase === "connected";
     this.selfUser = nextSelfUser;
-    if (clientChanged) {
-      // Never keep one gateway's stats on screen while another gateway loads
-      // (or fails to load); the render branches key off costSummary presence.
-      this.clearRefreshTimer();
-      this.requestId += 1;
-      this.loading = false;
-      this.lastProfileLoadedAtMs = null;
-      this.pendingAutomaticProfileRefresh = false;
-      this.profileReloadPending = false;
-      this.costSummary = null;
-      this.sessionsResult = null;
-      this.error = null;
-    }
+    // connected/client are plain fields; an unidentified (token-auth) connect or
+    // disconnect changes no @state, so the render branch must be invalidated
+    // explicitly or the page sticks on the stale offline/connected view.
+    this.requestUpdate();
     if (clientChanged || selfProfileChanged) {
       this.identityRequestId += 1;
       this.ownProfile = null;
@@ -169,10 +106,6 @@ export class ProfilePage extends OpenClawLightDomElement {
       this.identityError = null;
     }
     if (snapshot.phase !== "connected" || !snapshot.client) {
-      this.profileReloadPending ||= this.loading;
-      this.requestId += 1;
-      this.clearRefreshTimer();
-      this.loading = false;
       return;
     }
     if (nextSelfUser && (clientChanged || selfProfileChanged)) {
@@ -183,119 +116,6 @@ export class ProfilePage extends OpenClawLightDomElement {
         void this.context.agentIdentity.ensure([list.defaultId]);
       }
     });
-    if (clientChanged || becameConnected || (!this.costSummary && !this.loading && !this.error)) {
-      this.requestProfileRefresh("reconnect");
-    }
-  }
-
-  private async loadProfile() {
-    const client = this.client;
-    if (!client || !this.connected) {
-      this.profileReloadPending = true;
-      return;
-    }
-    this.profileReloadPending = false;
-    const requestId = ++this.requestId;
-    this.loading = true;
-    this.error = null;
-    const dateParams = buildSessionUsageDateParams("local");
-    try {
-      const [costSummary, sessionsResult] = await Promise.all([
-        // agentScope "all" keeps token stats consistent with the all-agent insights.
-        client.request<CostUsageSummary>("usage.cost", {
-          range: "all",
-          agentScope: "all",
-          ...dateParams,
-        }),
-        requestSessionsUsage(client, {
-          range: "all",
-          agentScope: "all",
-          // Instance rows keep durations per transcript; family rollups would
-          // merge resets and inflate "Longest thread" to the family lifespan.
-          groupBy: "instance",
-          limit: 1000,
-          ...dateParams,
-        }).catch(() => null),
-      ]);
-      if (requestId !== this.requestId) {
-        return;
-      }
-      this.costSummary = costSummary;
-      this.sessionsResult = sessionsResult;
-      this.lastProfileLoadedAtMs = Date.now();
-      this.scheduleCacheSettleRefresh();
-    } catch (error) {
-      if (requestId !== this.requestId) {
-        return;
-      }
-      this.error = toErrorMessage(error);
-    } finally {
-      if (requestId === this.requestId) {
-        this.loading = false;
-        this.flushPendingAutomaticProfileRefresh();
-      }
-    }
-  }
-
-  /**
-   * usage.cost/sessions.usage answer immediately from the persisted cache and
-   * rebuild in the background ("refreshing"/"partial"). Poll until the cache
-   * settles so a cold start converges instead of freezing first-load numbers.
-   */
-  private isCacheSettling(): boolean {
-    return [this.costSummary?.cacheStatus?.status, this.sessionsResult?.cacheStatus?.status].some(
-      (status) => status === "refreshing" || status === "partial",
-    );
-  }
-
-  private scheduleCacheSettleRefresh() {
-    this.clearRefreshTimer();
-    if (!this.isCacheSettling()) {
-      return;
-    }
-    const loadedAtMs = this.lastProfileLoadedAtMs ?? Date.now();
-    const ageMs = Math.max(0, Date.now() - loadedAtMs);
-    const interval = Math.max(0, USAGE_PAYLOAD_TTL_MS - ageMs);
-    this.refreshTimer = window.setTimeout(() => {
-      this.refreshTimer = null;
-      this.requestProfileRefresh("poll");
-    }, interval);
-  }
-
-  private clearRefreshTimer() {
-    if (this.refreshTimer !== null) {
-      window.clearTimeout(this.refreshTimer);
-      this.refreshTimer = null;
-    }
-  }
-
-  private requestProfileRefresh(reason: UsageRefreshReason) {
-    if (this.loading && reason !== "manual") {
-      this.pendingAutomaticProfileRefresh = true;
-      return;
-    }
-    this.pendingAutomaticProfileRefresh = false;
-    const decision = decideUsageRefresh({
-      reason,
-      visible: document.visibilityState === "visible" && document.hasFocus(),
-      interrupted: this.profileReloadPending,
-      nowMs: Date.now(),
-      lastLoadedAtMs: this.lastProfileLoadedAtMs,
-    });
-    if (decision === "fetch") {
-      this.clearRefreshTimer();
-      void this.loadProfile();
-    } else if (decision === "skip" && this.isCacheSettling()) {
-      this.scheduleCacheSettleRefresh();
-    }
-  }
-
-  private flushPendingAutomaticProfileRefresh() {
-    if (!this.pendingAutomaticProfileRefresh) {
-      return;
-    }
-    this.pendingAutomaticProfileRefresh = false;
-    this.requestProfileRefresh("focus");
   }
 
   private async loadIdentity() {
@@ -480,7 +300,6 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   private refreshManually() {
-    this.requestProfileRefresh("manual");
     if (this.selfUser && !this.identityBusy) {
       void this.loadIdentity();
     }
@@ -502,8 +321,15 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   private renderAvatar(avatarUrl: string | null, textAvatar: string | null, name: string) {
-    if (avatarUrl) {
-      return html`<img class="profile-hero__avatar-image" src=${avatarUrl} alt=${name} />`;
+    if (avatarUrl && avatarUrl !== this.failedHeroAvatarUrl) {
+      return html`<img
+        class="profile-hero__avatar-image"
+        src=${avatarUrl}
+        alt=${name}
+        @error=${() => {
+          this.failedHeroAvatarUrl = avatarUrl;
+        }}
+      />`;
     }
     if (textAvatar) {
       return html`<span class="profile-hero__avatar-text">${textAvatar}</span>`;
@@ -513,10 +339,8 @@ export class ProfilePage extends OpenClawLightDomElement {
     >`;
   }
 
-  private renderHero(insights: ProfileInsights | null) {
+  private renderHero() {
     const { agentId, name, avatarUrl, textAvatar } = this.featuredAgent();
-    const since = this.costSummary ? firstActiveDate(this.costSummary.daily) : null;
-    const channels = insights?.topChannels ?? [];
     return renderSettingsGroup(html`
       <section class="profile-hero">
         <div class="profile-hero__avatar">${this.renderAvatar(avatarUrl, textAvatar, name)}</div>
@@ -524,25 +348,6 @@ export class ProfilePage extends OpenClawLightDomElement {
         <div class="profile-hero__handle">
           <span>@${agentId}</span>
           <span class="profile-hero__badge">OpenClaw</span>
-        </div>
-        <div class="profile-hero__chips">
-          ${since
-            ? html`<span class="profile-hero__chip">
-                ${t("profilePage.sinceChip", { date: formatMonthYear(since) })}
-              </span>`
-            : nothing}
-          ${channels.map(
-            (entry) => html`
-              <span
-                class="profile-hero__chip profile-hero__chip--channel"
-                title=${t("profilePage.channelChipTitle", {
-                  tokens: formatTokenScale(entry.tokens),
-                })}
-              >
-                ${entry.channel}
-              </span>
-            `,
-          )}
         </div>
       </section>
     `);
@@ -552,37 +357,16 @@ export class ProfilePage extends OpenClawLightDomElement {
     if (!this.connected || !this.client) {
       return renderSettingsPage(renderSettingsGroup(renderSettingsEmpty(t("profilePage.offline"))));
     }
-    const renderIdentityAwareState = (content: unknown) =>
-      renderSettingsPage(this.selfUser ? html`${this.renderIdentity()} ${content}` : content);
-    if (this.loading && !this.costSummary) {
-      return renderIdentityAwareState(
-        renderSettingsGroup(renderSettingsEmpty(t("profilePage.loading"))),
-      );
-    }
-    if (this.error && !this.costSummary) {
-      return renderIdentityAwareState(
-        renderSettingsGroup(renderSettingsEmpty(this.error), { danger: true }),
-      );
-    }
-    const insights = this.sessionsResult ? buildInsights(this.sessionsResult) : null;
-    const hasActivity = (this.costSummary?.totals.totalTokens ?? 0) > 0;
-    // A cold usage cache legitimately reports zero while it rebuilds; the
-    // settle poll keeps retrying, so the loading note stays truthful until
-    // real data or a genuinely fresh shell arrives.
-    const emptyState = this.isCacheSettling()
-      ? renderSettingsGroup(renderSettingsEmpty(t("profilePage.loading")))
-      : renderSettingsGroup(
-          renderSettingsEmpty(
-            html`<strong>${t("profilePage.emptyTitle")}</strong><br />${t("profilePage.emptyBody")}`,
-          ),
-        );
-    return renderSettingsPage(
-      hasActivity
-        ? html`${this.renderHero(insights)} ${renderProfileStats(this.costSummary, insights)}
-          ${this.renderIdentity()} ${renderProfileHeatmap(this.costSummary)}
-          ${renderProfileInsights(insights)}`
-        : html`${this.renderHero(insights)} ${this.renderIdentity()} ${emptyState}`,
-    );
+    return renderSettingsPage(html`
+      ${this.renderHero()} ${this.renderIdentity()}
+      ${renderSettingsGroup(
+        renderSettingsNavRow({
+          title: t("profilePage.usageStatistics"),
+          description: t("profilePage.usageStatisticsDescription"),
+          onClick: () => this.context.navigate("usage"),
+        }),
+      )}
+    `);
   }
 
   override render() {
@@ -590,10 +374,16 @@ export class ProfilePage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("profile")}</div>
+          <div class="page-subtitle">
+            ${subtitleForRoute("profile")}
+            ${renderDocsLink(PROFILE_DOCS_URL, t("common.learnMore"))}
+          </div>
         </div>
-        <button class="btn profile-refresh" @click=${() => this.refreshManually()}>
-          ${this.loading ? t("common.refreshing") : t("common.refresh")}
-        </button>
+        ${this.selfUser
+          ? html`<button class="btn profile-refresh" @click=${() => this.refreshManually()}>
+              ${this.identityLoading ? t("common.refreshing") : t("common.refresh")}
+            </button>`
+          : nothing}
       </section>
       ${renderSettingsWorkspace(this.renderBody())}
     `;

@@ -111,6 +111,7 @@ export type MatrixQaRecordingProxy = MatrixQaFaultProxyObserver & {
   }): MatrixQaRouteStateManifest;
   records(): MatrixQaRecordedExchange[];
   setScenarioId(scenarioId: string): void;
+  setTargetBaseUrl(targetBaseUrl: string): void;
   stop(): Promise<void>;
 };
 
@@ -626,6 +627,7 @@ export async function startMatrixQaRecordingProxy(params: {
     setScenarioId(nextScenarioId) {
       scenarioId = nextScenarioId;
     },
+    setTargetBaseUrl: (targetBaseUrl) => proxy.setTargetBaseUrl(targetBaseUrl),
     stop: () => proxy.stop(),
   };
 }

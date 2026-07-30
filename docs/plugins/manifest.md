@@ -619,6 +619,13 @@ Each field hint can include:
 | `placeholder`  | `string`         | Placeholder text for form inputs.                                                                                 |
 | `presentation` | `"phone-number"` | Display-only localized phone formatting for parseable international (`+...`) values; raw values remain unchanged. |
 
+Channel config sections inherit `help` for the leaves every channel shares
+(`enabled`, `allowFrom`, `dmPolicy`, `groupPolicy`, `streaming`, and similar) at
+the channel root and under `accounts.<id>`. A channel that declares its own
+`help` for one of those keys always wins, so override it whenever the shared
+wording is wrong for your provider. Provider-specific keys such as credentials,
+hosts, and webhooks still need their own hints.
+
 ## contracts reference
 
 Use `contracts` only for static capability ownership metadata that OpenClaw can read without importing the plugin runtime.
@@ -974,27 +981,28 @@ Provider fields:
 
 Model fields:
 
-| Field              | Type                                                           | What it means                                                               |
-| ------------------ | -------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `id`               | `string`                                                       | Provider-local model id, without the `provider/` prefix.                    |
-| `name`             | `string`                                                       | Optional display name.                                                      |
-| `api`              | `ModelApi`                                                     | Optional per-model API override.                                            |
-| `baseUrl`          | `string`                                                       | Optional per-model base URL override.                                       |
-| `headers`          | `Record<string, string>`                                       | Optional per-model static headers.                                          |
-| `input`            | `Array<"text" \| "image" \| "document">`                       | Modalities the model accepts. Other values are silently dropped.            |
-| `reasoning`        | `boolean`                                                      | Whether the model exposes reasoning behavior.                               |
-| `contextWindow`    | `number`                                                       | Native provider context window.                                             |
-| `contextTokens`    | `number`                                                       | Optional effective runtime context cap when different from `contextWindow`. |
-| `maxTokens`        | `number`                                                       | Maximum output tokens when known.                                           |
-| `thinkingLevelMap` | `Record<string, string \| null>`                               | Optional per-thinking-level model-id or param overrides.                    |
-| `cost`             | `object`                                                       | Optional USD per million token pricing, including optional `tieredPricing`. |
-| `compat`           | `object`                                                       | Optional compatibility flags matching OpenClaw model config compatibility.  |
-| `mediaInput`       | `object`                                                       | Optional per-modality input config, currently image-only.                   |
-| `status`           | `"available"` \| `"preview"` \| `"deprecated"` \| `"disabled"` | Listing status. Suppress only when the row must not appear at all.          |
-| `statusReason`     | `string`                                                       | Optional reason shown with non-available status.                            |
-| `replaces`         | `string[]`                                                     | Older provider-local model ids this model supersedes.                       |
-| `replacedBy`       | `string`                                                       | Replacement provider-local model id for deprecated rows.                    |
-| `tags`             | `string[]`                                                     | Stable tags used by pickers and filters.                                    |
+| Field              | Type                                                           | What it means                                                                        |
+| ------------------ | -------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `id`               | `string`                                                       | Provider-local model id, without the `provider/` prefix.                             |
+| `name`             | `string`                                                       | Optional display name.                                                               |
+| `api`              | `ModelApi`                                                     | Optional per-model API override.                                                     |
+| `baseUrl`          | `string`                                                       | Optional per-model base URL override.                                                |
+| `headers`          | `Record<string, string>`                                       | Optional per-model static headers.                                                   |
+| `input`            | `Array<"text" \| "image" \| "document">`                       | Modalities the model accepts. Other values are silently dropped.                     |
+| `reasoning`        | `boolean`                                                      | Whether the model exposes reasoning behavior.                                        |
+| `contextWindow`    | `number`                                                       | Native provider context window.                                                      |
+| `contextTokens`    | `number`                                                       | Optional effective runtime context cap when different from `contextWindow`.          |
+| `maxTokens`        | `number`                                                       | Maximum output tokens when known.                                                    |
+| `thinkingLevelMap` | `Record<string, string \| null>`                               | Optional per-thinking-level model-id or param overrides.                             |
+| `cost`             | `object`                                                       | Optional USD per million token pricing, including optional `tieredPricing`.          |
+| `compat`           | `object`                                                       | Optional compatibility flags matching OpenClaw model config compatibility.           |
+| `upstreamModel`    | `string`                                                       | Optional `provider/model` ref of the same upstream model in another bundled catalog. |
+| `mediaInput`       | `object`                                                       | Optional per-modality input config, currently image-only.                            |
+| `status`           | `"available"` \| `"preview"` \| `"deprecated"` \| `"disabled"` | Listing status. Suppress only when the row must not appear at all.                   |
+| `statusReason`     | `string`                                                       | Optional reason shown with non-available status.                                     |
+| `replaces`         | `string[]`                                                     | Older provider-local model ids this model supersedes.                                |
+| `replacedBy`       | `string`                                                       | Replacement provider-local model id for deprecated rows.                             |
+| `tags`             | `string[]`                                                     | Stable tags used by pickers and filters.                                             |
 
 Suppression fields:
 
@@ -1005,6 +1013,8 @@ Suppression fields:
 | `reason`                   | `string`   | Optional message shown when the suppressed row is requested directly.                                     |
 | `when.baseUrlHosts`        | `string[]` | Optional list of effective provider base URL hosts required before the suppression applies.               |
 | `when.providerConfigApiIn` | `string[]` | Optional list of exact provider-config `api` values required before the suppression applies.              |
+
+`upstreamModel` marks a row that serves the same upstream model as a row in another bundled catalog under a different name, for example a subscription endpoint next to the vendor's API endpoint. It is authoring metadata: normalization drops it, and a contract test uses it to keep capability flags such as `compat.codeMode` from drifting between catalogs that ship the same model. Most rows need no marker, because matching ignores a leading vendor namespace and casing: `moonshotai/kimi-k3` and `zai-org/GLM-5.2` already match the first-party `kimi-k3` and `glm-5.2` rows. Reach for `upstreamModel` only when the vendor's own names genuinely differ. See [Code mode](/tools/code-mode#models-shipped-by-more-than-one-provider).
 
 Do not put runtime-only data in `modelCatalog`. Use `static` only when manifest rows are complete enough for provider-filtered list and picker surfaces to skip registry/runtime discovery. Use `refreshable` when manifest rows are useful listable seeds or supplements but a refresh/cache can add more rows later; refreshable rows are not authoritative by themselves. Use `runtime` when OpenClaw must load provider runtime to know the list.
 

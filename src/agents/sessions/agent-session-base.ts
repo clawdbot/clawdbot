@@ -1,5 +1,6 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import type { AssistantMessage, Model } from "../../llm/types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
   Agent,
   AgentEvent,
@@ -43,6 +44,8 @@ import type { SessionManager } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
 import type { SourceInfo } from "./source-info.js";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.js";
+
+const log = createSubsystemLogger("agents/session");
 
 interface ToolDefinitionEntry {
   definition: ToolDefinition;
@@ -277,7 +280,21 @@ export abstract class AgentSessionBase {
   /** Emit an event to all listeners */
   protected emit(event: AgentSessionEvent): void {
     for (const l of this.eventListeners) {
-      l(event);
+      void l(event);
+    }
+  }
+
+  /** Terminal listeners form a barrier before retry, compaction, or queue draining. */
+  private async emitTerminal(
+    event: Extract<AgentSessionEvent, { type: "agent_end" }>,
+  ): Promise<void> {
+    const listeners = this.eventListeners.slice();
+    for (const listener of listeners) {
+      try {
+        await listener(event);
+      } catch (error) {
+        log.warn(`agent_end listener failed: ${String(error)}`);
+      }
     }
   }
 
@@ -291,6 +308,7 @@ export abstract class AgentSessionBase {
 
   // Track last assistant message for auto-compaction check
   protected lastAssistantMessage: AssistantMessage | undefined = undefined;
+  private lastAssistantEntryId: string | undefined;
   protected lastRunEndedForTurnHandoff = false;
 
   /** Internal handler for agent events - shared by subscribe and reconnect */
@@ -311,6 +329,10 @@ export abstract class AgentSessionBase {
   };
 
   private async handleAgentEventUnlocked(event: AgentEvent): Promise<void> {
+    if (event.type === "agent_start") {
+      this.lastAssistantEntryId = undefined;
+    }
+
     // When a user message starts, check if it's from either queue and remove it BEFORE emitting
     // This ensures the UI sees the updated queue state
     if (event.type === "message_start" && event.message.role === "user") {
@@ -337,11 +359,15 @@ export abstract class AgentSessionBase {
     const messageChangedByExtension = await this.emitExtensionEvent(event);
 
     // Notify all listeners
-    this.emit(
-      event.type === "agent_end"
-        ? { ...event, willRetry: this.willRetryAfterAgentEnd(event) }
-        : event,
-    );
+    if (event.type === "agent_end") {
+      await this.emitTerminal({
+        ...event,
+        willRetry: this.willRetryAfterAgentEnd(event),
+        ...(this.lastAssistantEntryId ? { assistantEntryId: this.lastAssistantEntryId } : {}),
+      });
+    } else {
+      this.emit(event);
+    }
 
     // Handle session persistence
     if (event.type === "message_end") {
@@ -363,10 +389,13 @@ export abstract class AgentSessionBase {
         const toolResultChangedByExtension =
           event.message.role === "toolResult" &&
           this.extensionModifiedToolResultIds.delete(event.message.toolCallId);
-        this.sessionManager.appendMessage(event.message, {
+        const entryId = this.sessionManager.appendMessage(event.message, {
           invalidateSerializedPrefixCache:
             messageChangedByExtension || toolResultChangedByExtension,
         });
+        if (event.message.role === "assistant") {
+          this.lastAssistantEntryId = entryId;
+        }
       }
       // Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
@@ -702,9 +731,19 @@ export abstract class AgentSessionBase {
     return this.agent.followUpMode;
   }
 
-  /** Current session file path, or undefined if sessions are disabled */
+  /** Current persisted transcript target, or undefined for in-memory sessions. */
+  get sessionTarget() {
+    return this.sessionManager.getSessionTarget();
+  }
+
+  /** Current persisted session key, or undefined for in-memory sessions. */
+  get sessionKey(): string | undefined {
+    return this.sessionTarget?.sessionKey;
+  }
+
+  /** @deprecated Compatibility token; returns the session key, not a file path. */
   get sessionFile(): string | undefined {
-    return this.sessionManager.getSessionFile();
+    return this.sessionKey;
   }
 
   /** Current session ID */

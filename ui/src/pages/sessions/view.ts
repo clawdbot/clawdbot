@@ -47,7 +47,10 @@ import {
   UNGROUPED_ID,
 } from "../../lib/sessions/grouping.ts";
 import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
-import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
+import {
+  resolveSessionPreferredFace,
+  sessionNavigationTarget,
+} from "../../lib/sessions/route-navigation.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -1453,13 +1456,16 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
             <div class="data-table-pagination__controls">
               <select
                 class="data-table-pagination__size"
+                aria-label=${t("sessionsView.pageSize")}
                 .value=${String(props.pageSize)}
                 @change=${(e: Event) =>
                   props.onPageSizeChange(Number((e.target as HTMLSelectElement).value))}
               >
                 ${PAGE_SIZES.map(
+                  // The matching option owns initial selection because the select's value
+                  // property binds before these dynamic children exist on first render.
                   (s) =>
-                    html`<option value=${s}>
+                    html`<option value=${s} ?selected=${s === props.pageSize}>
                       ${t("sessionsView.rowsPerPage", { count: String(s) })}
                     </option>`,
                 )}
@@ -1507,12 +1513,13 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const canLink = row.kind !== "global";
   const chatUrl = canLink
     ? sessionNavigationTarget({
-        face: "chat",
+        face: resolveSessionPreferredFace(row),
         sessionKey: row.key,
         fallbackAgentId: props.agentId,
         basePath: props.basePath,
         row,
         mainKey: props.mainKey,
+        preferenceDerivedFace: true,
       }).href
     : null;
   const displayKind = resolveSessionDisplayKind(row);

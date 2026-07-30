@@ -7,10 +7,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getDefaultLocalRoots } from "../../media/local-media-access.js";
-import {
-  buildWebchatAssistantMessageFromReplyPayloads,
-  buildWebchatAudioContentBlocksFromReplyPayloads,
-} from "./chat-webchat-media.js";
+import { __testing, buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
+
+const { buildWebchatAudioContentBlocksFromReplyPayloads } = __testing;
 
 describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
   let tmpDir: string | undefined;

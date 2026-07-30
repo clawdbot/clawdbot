@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { hostname as readHostName } from "node:os";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import type {
   CodexAppServerConnectionClass,
   CodexAppServerDefaultPolicy,
@@ -227,14 +228,7 @@ function isLoopbackWebSocketUrl(value: string): boolean {
   if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
     return false;
   }
-  const host = parsed.hostname.toLowerCase();
-  return (
-    host === "localhost" ||
-    host === "127.0.0.1" ||
-    host === "::1" ||
-    host === "[::1]" ||
-    host.startsWith("127.")
-  );
+  return isLoopbackHost(parsed.hostname);
 }
 
 function hasIdentityBearingWebSocketAuth(params: {

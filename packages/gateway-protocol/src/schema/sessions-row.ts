@@ -4,11 +4,22 @@ import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
+export const SessionToolOverridesSchema = closedObject({
+  mcpServers: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.Boolean())),
+  mcpToolsDeny: Type.Optional(
+    Type.Record(Type.String({ minLength: 1 }), Type.Array(NonEmptyString)),
+  ),
+  skills: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.Boolean())),
+  webSearch: Type.Optional(Type.Boolean()),
+});
+
 /** Projected actor that caused a session node to be created. */
 export const SessionCreatedActorSchema = closedObject({
   type: Type.Union([Type.Literal("human"), Type.Literal("agent"), Type.Literal("system")]),
   id: Type.Optional(NonEmptyString),
   label: Type.Optional(NonEmptyString),
+  /** Durable profile avatar route; absent for actors without a stored profile avatar. */
+  avatarUrl: Type.Optional(NonEmptyString),
 });
 
 /** Stable Gateway session row fields; mutation envelopes may add null tombstones. */
@@ -24,6 +35,7 @@ export const SessionRowSchema = Type.Object(
       Type.Literal("unknown"),
     ]),
     label: Type.Optional(Type.String()),
+    boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
     displayName: Type.Optional(Type.String()),
     derivedTitle: Type.Optional(Type.String()),
     lastMessagePreview: Type.Optional(Type.String()),
@@ -107,9 +119,11 @@ export const SessionRowSchema = Type.Object(
     estimatedCostUsd: Type.Optional(Type.Number()),
     model: Type.Optional(Type.String()),
     modelProvider: Type.Optional(Type.String()),
+    toolOverrides: Type.Optional(SessionToolOverridesSchema),
   },
   { additionalProperties: true },
 );
 
 export type SessionCreatedActor = Static<typeof SessionCreatedActorSchema>;
+export type SessionToolOverrides = Static<typeof SessionToolOverridesSchema>;
 export type SessionRow = Static<typeof SessionRowSchema>;

@@ -79,6 +79,7 @@ const {
   dispatchInboundMessage,
   dispatchInboundMessageWithDispatcher,
   dispatchInboundMessageWithBufferedDispatcher,
+  dispatchInboundMessageWithProjectedDispatcher,
   withReplyDispatcher,
 } = await import("./dispatch.js");
 const { recordReplyUsageState } = await import("./reply/reply-usage-state.js");
@@ -114,6 +115,24 @@ function requireReplyDispatcherOptions(index = 0): Parameters<CreateReplyDispatc
     throw new Error(`expected createReplyDispatcher call ${index}`);
   }
   return call[0] as Parameters<CreateReplyDispatcherFn>[0];
+}
+
+async function installProjectedBeforeDeliver(
+  overrides: Partial<Parameters<typeof dispatchInboundMessageWithProjectedDispatcher>[0]> = {},
+): Promise<ReplyDispatchBeforeDeliver> {
+  hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
+  hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
+  await dispatchInboundMessageWithProjectedDispatcher({
+    ctx: buildTestCtx({ Surface: "webchat", SessionKey: "agent:test:main" }),
+    cfg: {} as OpenClawConfig,
+    dispatcherOptions: { deliver: async () => undefined },
+    ...overrides,
+  });
+  const beforeDeliver = requireReplyDispatcherOptions().beforeDeliver;
+  if (!beforeDeliver) {
+    throw new Error("expected projected beforeDeliver hook");
+  }
+  return beforeDeliver;
 }
 
 describe("withReplyDispatcher", () => {
@@ -573,6 +592,156 @@ describe("withReplyDispatcher", () => {
     );
   });
 
+  it("runs media-aware projected modifiers once in order", async () => {
+    const order: string[] = [];
+    const runReplyPayloadSending = vi.fn(async ({ payload }: { payload: { text?: string } }) => {
+      order.push("reply_payload_sending");
+      return {
+        payload: {
+          ...payload,
+          text: "reply rewrite",
+          mediaUrls: ["media://reply.png"],
+        },
+      };
+    });
+    const runMessageSending = vi.fn(async () => {
+      order.push("message_sending");
+      return { content: "message rewrite" };
+    });
+    hoisted.deriveInboundMessageHookContextMock.mockReturnValue({
+      channelId: "webchat",
+      accountId: "acct-web",
+      conversationId: "main",
+      isGroup: false,
+      from: "main",
+    });
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn(
+        (hookName?: string) =>
+          hookName === "reply_payload_sending" || hookName === "message_sending",
+      ),
+      runMessageSending,
+      runReplyPayloadSending,
+    });
+    const onSessionMetadataChanges = vi.fn();
+    const beforeDeliver = await installProjectedBeforeDeliver({
+      ctx: buildTestCtx({
+        Surface: "webchat",
+        SessionKey: "agent:test:main",
+        OriginatingTo: "main",
+      }),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: { deliver: async () => undefined },
+      onSessionMetadataChanges,
+      replyOptions: { runId: "run-web" },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+    const payload = await beforeDeliver(
+      setReplyPayloadMetadata({ text: "original" }, { assistantMessageIndex: 7 }),
+      { kind: "final" },
+    );
+
+    expect(order).toEqual(["reply_payload_sending", "message_sending"]);
+    expect(runReplyPayloadSending).toHaveBeenCalledOnce();
+    expect(runMessageSending).toHaveBeenCalledOnce();
+    expect(runMessageSending).toHaveBeenCalledWith(
+      {
+        to: "main",
+        content: "reply rewrite",
+        replyToId: undefined,
+        threadId: undefined,
+        metadata: {
+          channel: "webchat",
+          accountId: "acct-web",
+          mediaUrls: ["media://reply.png"],
+        },
+      },
+      {
+        channelId: "webchat",
+        accountId: "acct-web",
+        conversationId: "main",
+        sessionKey: "agent:test:main",
+      },
+    );
+    expect(payload).toEqual({
+      text: "message rewrite",
+      mediaUrls: ["media://reply.png"],
+    });
+    expect(payload ? getReplyPayloadMetadata(payload) : undefined).toEqual({
+      assistantMessageIndex: 7,
+    });
+    expect(hoisted.dispatchReplyFromConfigMock.mock.calls[0]?.[0]?.onSessionMetadataChanges).toBe(
+      onSessionMetadataChanges,
+    );
+  });
+
+  it("cancels media-only projected payloads before delivery", async () => {
+    const runMessageSending = vi.fn(async () => ({ cancel: true }));
+    hoisted.deriveInboundMessageHookContextMock.mockReturnValue({
+      channelId: "webchat",
+      conversationId: "main",
+      isGroup: false,
+      from: "main",
+    });
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn(
+        (hookName?: string) =>
+          hookName === "reply_payload_sending" || hookName === "message_sending",
+      ),
+      runMessageSending,
+      runReplyPayloadSending: vi.fn(async ({ payload }: { payload: { text?: string } }) => ({
+        payload: { ...payload, text: undefined, mediaUrls: ["media://only.png"] },
+      })),
+    });
+    const beforeDeliver = await installProjectedBeforeDeliver();
+    await expect(beforeDeliver({ text: "original" }, { kind: "final" })).resolves.toBeNull();
+    expect(runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "",
+        metadata: expect.objectContaining({ mediaUrls: ["media://only.png"] }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("keeps projected delivery best-effort when message hooks fail", async () => {
+    const runMessageSending = vi.fn(async () => {
+      throw new Error("hook failed");
+    });
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName?: string) => hookName === "message_sending"),
+      runMessageSending,
+      runReplyPayloadSending: vi.fn(async () => undefined),
+    });
+    const beforeDeliver = await installProjectedBeforeDeliver();
+    await expect(beforeDeliver({ text: "original" }, { kind: "block" })).resolves.toEqual({
+      text: "original",
+    });
+    expect(runMessageSending).toHaveBeenCalledOnce();
+  });
+
+  it("suppresses projected payloads emptied by message hooks", async () => {
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName?: string) => hookName === "message_sending"),
+      runMessageSending: vi.fn(async () => ({ content: "  " })),
+      runReplyPayloadSending: vi.fn(async () => undefined),
+    });
+    const beforeDeliver = await installProjectedBeforeDeliver();
+    await expect(beforeDeliver({ text: "original" }, { kind: "final" })).resolves.toBeNull();
+  });
+
+  it("stops projected delivery before message hooks when reply hooks cancel", async () => {
+    const runMessageSending = vi.fn(async () => ({ content: "unreachable" }));
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn(() => true),
+      runMessageSending,
+      runReplyPayloadSending: vi.fn(async () => ({ cancel: true })),
+    });
+    const beforeDeliver = await installProjectedBeforeDeliver();
+    await expect(beforeDeliver({ text: "original" }, { kind: "final" })).resolves.toBeNull();
+    expect(runMessageSending).not.toHaveBeenCalled();
+  });
+
   it("suppresses inbound dispatcher delivery when reply_payload_sending empties the payload", async () => {
     const runReplyPayloadSending = vi.fn(async ({ payload }: { payload: { text?: string } }) => ({
       payload: {
@@ -580,9 +749,13 @@ describe("withReplyDispatcher", () => {
         text: "",
       },
     }));
+    const runMessageSending = vi.fn(async () => ({ content: "must not run" }));
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
-      hasHooks: vi.fn((hookName?: string) => hookName === "reply_payload_sending"),
-      runMessageSending: vi.fn(async () => undefined),
+      hasHooks: vi.fn(
+        (hookName?: string) =>
+          hookName === "reply_payload_sending" || hookName === "message_sending",
+      ),
+      runMessageSending,
       runReplyPayloadSending,
     });
     hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
@@ -608,6 +781,7 @@ describe("withReplyDispatcher", () => {
     );
 
     expect(payload).toBeNull();
+    expect(runMessageSending).not.toHaveBeenCalled();
   });
 
   it("installs reply_payload_sending hooks on prebuilt dispatchers", async () => {

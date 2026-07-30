@@ -10,19 +10,19 @@ import {
   countActiveDescendantRunsFromRuns,
   countActiveRunsForSessionFromRuns,
   countPendingDescendantRunsFromRuns,
+  getLatestSubagentRunByChildSessionKeyFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
   listDescendantRunsForRequesterFromRuns,
   listRunsForControllerFromRuns,
 } from "./subagent-registry-queries.js";
 import { markRequesterTurnYieldedInRuns } from "./subagent-registry-requester-yield.js";
 import type { SubagentRunRecord, SwarmStructuredOutputState } from "./subagent-registry.types.js";
-import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 
 export function createSubagentRegistryPublicApi(config: {
   runs: Map<string, SubagentRunRecord>;
   deps: () => SubagentRegistryDeps;
-  persist: () => void;
-  persistOrThrow: () => void;
+  persist: (...runIds: string[]) => void;
+  persistOrThrow: (...runIds: string[]) => void;
   restoreOnce: () => void;
   startAnnounceCleanup: (runId: string, entry: SubagentRunRecord) => boolean;
   settleRequesterTurn: ReturnType<
@@ -52,7 +52,7 @@ export function createSubagentRegistryPublicApi(config: {
       now: params.now,
     });
     if (leased) {
-      persist();
+      persist(...leased.runIds);
     }
     return leased;
   }
@@ -69,7 +69,7 @@ export function createSubagentRegistryPublicApi(config: {
       now: params.now,
     });
     if (updated > 0) {
-      persist();
+      persist(...params.runIds);
       for (const runId of params.runIds) {
         const entry = runs.get(runId);
         if (!entry || typeof entry.cleanupCompletedAt === "number") {
@@ -94,7 +94,7 @@ export function createSubagentRegistryPublicApi(config: {
       error: params.error,
     });
     if (updated > 0) {
-      persist();
+      persist(...params.runIds);
     }
     return updated;
   }
@@ -143,7 +143,7 @@ export function createSubagentRegistryPublicApi(config: {
     entry.collectorLaunchCleanupPending = false;
     entry.cleanupCompletedAt = Date.now();
     entry.contextEngineCleanupCompletedAt ??= entry.cleanupCompletedAt;
-    persist();
+    persist(entry.runId);
   }
 
   function recordSwarmStructuredOutput(
@@ -168,7 +168,7 @@ export function createSubagentRegistryPublicApi(config: {
     const previous = entry.structuredOutput;
     entry.structuredOutput = structuredClone(state);
     try {
-      persistOrThrow();
+      persistOrThrow(entry.runId);
     } catch (error) {
       entry.structuredOutput = previous;
       throw error;
@@ -256,17 +256,12 @@ export function createSubagentRegistryPublicApi(config: {
       return null;
     }
 
-    let latest: SubagentRunRecord | null = null;
-    for (const entry of deps().getSubagentRunsSnapshotForChildSession(runs, key).values()) {
-      if (entry.childSessionKey !== key) {
-        continue;
-      }
-      if (!latest || compareSubagentRunGeneration(entry, latest) > 0) {
-        latest = entry;
-      }
-    }
-
-    return latest;
+    return (
+      getLatestSubagentRunByChildSessionKeyFromRuns(
+        deps().getSubagentRunsSnapshotForChildSession(runs, key),
+        key,
+      ) ?? null
+    );
   }
 
   /** Re-admits a delivered child batch after its requester explicitly yields. */

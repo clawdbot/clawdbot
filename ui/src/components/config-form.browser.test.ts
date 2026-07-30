@@ -718,4 +718,71 @@ describe("config form renderer", () => {
     removeButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["accounts"], {});
   });
+
+  it("shows field help once instead of repeating it on every array item", () => {
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema(rootSchema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        // Item paths collapse their numeric segment, so the item rows resolve
+        // this same hint; only the array header should render it.
+        uiHints: { allowFrom: { help: "Sender ids allowed to reach the agent." } },
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { allowFrom: ["+15550001111", "+15550002222"] },
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+
+    const help = Array.from(container.querySelectorAll(".settings-row__desc")).filter(
+      (node) => node.textContent?.trim() === "Sender ids allowed to reach the agent.",
+    );
+    expect(help).toHaveLength(1);
+  });
+
+  it("renders section help when the top-level hint has a docs URL", () => {
+    const container = document.createElement("div");
+    render(
+      renderConfigForm({
+        schema: rootAnalysis.schema,
+        uiHints: { gateway: { docsUrl: "https://docs.openclaw.ai/gateway/configuration" } },
+        unsupportedPaths: rootAnalysis.unsupportedPaths,
+        value: {},
+        activeSection: "gateway",
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+
+    const button = expectElement(
+      container.querySelector<HTMLButtonElement>(".settings-section__help-button"),
+      "section help button",
+    );
+    expect(button.getAttribute("aria-label")).toBe("Help for Gateway");
+    const link = expectElement(
+      container.querySelector<HTMLAnchorElement>(".settings-section__help-popover a"),
+      "section guide link",
+    );
+    expect(link.getAttribute("href")).toBe("https://docs.openclaw.ai/gateway/configuration");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  });
+
+  it("omits section help when the top-level hint has no docs URL", () => {
+    const container = document.createElement("div");
+    render(
+      renderConfigForm({
+        schema: rootAnalysis.schema,
+        uiHints: {},
+        unsupportedPaths: rootAnalysis.unsupportedPaths,
+        value: {},
+        activeSection: "gateway",
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".settings-section__help-button")).toBeNull();
+  });
 });

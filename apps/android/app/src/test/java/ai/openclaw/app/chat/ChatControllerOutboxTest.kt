@@ -107,7 +107,7 @@ class ChatControllerOutboxTest {
       enqueueGate?.await()
       if (gatewayIds.values.count { it == gatewayId } >= capacity) return ChatOutboxEnqueueResult.QueueFull
       val commandBytes = attachments.sumOf { it.bytes.size.toLong() }
-      if (commandBytes > OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES) return ChatOutboxEnqueueResult.AttachmentsTooLarge
+      if (!outboxCommandAttachmentsWithinByteLimits(attachments)) return ChatOutboxEnqueueResult.AttachmentsTooLarge
       val queuedBytes = attachmentBytes.values.sumOf { list -> list.sumOf { it.size.toLong() } }
       if (commandBytes > 0 && queuedBytes + commandBytes > OUTBOX_MAX_GATEWAY_ATTACHMENT_BYTES) {
         return ChatOutboxEnqueueResult.StorageFull

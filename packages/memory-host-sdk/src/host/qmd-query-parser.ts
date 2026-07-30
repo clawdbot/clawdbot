@@ -21,9 +21,8 @@ export type QmdQueryResult = {
 export function parseQmdQueryJson(stdout: string, stderr: string): QmdQueryResult[] {
   const trimmedStdout = stdout.trim();
   const trimmedStderr = stderr.trim();
-  const stdoutIsMarker = trimmedStdout.length > 0 && isQmdNoResultsOutput(trimmedStdout);
   const stderrIsMarker = trimmedStderr.length > 0 && isQmdNoResultsOutput(trimmedStderr);
-  if (stdoutIsMarker || (!trimmedStdout && stderrIsMarker)) {
+  if (!trimmedStdout && stderrIsMarker) {
     return [];
   }
   if (!trimmedStdout) {
@@ -39,6 +38,9 @@ export function parseQmdQueryJson(stdout: string, stderr: string): QmdQueryResul
     }
     const noisyPayload = extractFirstJsonArray(trimmedStdout);
     if (!noisyPayload) {
+      if (isQmdNoResultsOutput(trimmedStdout)) {
+        return [];
+      }
       throw new Error("qmd query JSON response was not an array");
     }
     const fallback = parseQmdQueryResultArray(noisyPayload);
@@ -58,7 +60,7 @@ function warnQmdQueryParseError(message: string): void {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return;
   }
-  process.stderr.write(`qmd query returned invalid JSON: ${message}\n`);
+  console.warn(`qmd query returned invalid JSON: ${message}`);
 }
 
 /** Detect qmd no-result marker output on stdout or stderr. */
@@ -89,13 +91,13 @@ function summarizeQmdStderr(raw: string): string {
 function parseQmdQueryResultArray(raw: string): QmdQueryResult[] | null {
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) {
+    if (
+      !Array.isArray(parsed) ||
+      parsed.some((item) => typeof item !== "object" || item === null || Array.isArray(item))
+    ) {
       return null;
     }
     return parsed.map((item) => {
-      if (typeof item !== "object" || item === null) {
-        return item as QmdQueryResult;
-      }
       const record = item as Record<string, unknown>;
       const docid = typeof record.docid === "string" ? record.docid : undefined;
       const score =
@@ -127,26 +129,43 @@ function parseQmdLineNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
-/** Extract the first complete JSON array from noisy stdout. */
+/** Extract the first complete, standalone JSON result array from noisy stdout. */
 function extractFirstJsonArray(raw: string): string | null {
-  const start = raw.indexOf("[");
-  if (start < 0) {
-    return null;
-  }
+  let start = -1;
   let depth = 0;
   let inString = false;
   let escaped = false;
-  for (let i = start; i < raw.length; i += 1) {
+  let atLineStart = true;
+
+  for (let i = 0; i < raw.length; i += 1) {
     const char = raw[i];
     if (char === undefined) {
       break;
     }
+
+    if (start < 0) {
+      if (char === "\n") {
+        atLineStart = true;
+        continue;
+      }
+      if (atLineStart && (char === " " || char === "\t" || char === "\r")) {
+        continue;
+      }
+      // QMD emits result arrays on their own line; log fields can contain arrays too.
+      if (!atLineStart || char !== "[") {
+        atLineStart = false;
+        continue;
+      }
+      start = i;
+      depth = 1;
+      atLineStart = false;
+      continue;
+    }
+
     if (inString) {
       if (escaped) {
         escaped = false;
-        continue;
-      }
-      if (char === "\\") {
+      } else if (char === "\\") {
         escaped = true;
       } else if (char === '"') {
         inString = false;
@@ -159,12 +178,17 @@ function extractFirstJsonArray(raw: string): string | null {
     }
     if (char === "[") {
       depth += 1;
-    } else if (char === "]") {
-      depth -= 1;
-      if (depth === 0) {
-        return raw.slice(start, i + 1);
-      }
+      continue;
     }
+    if (char !== "]" || --depth !== 0) {
+      continue;
+    }
+
+    const candidate = raw.slice(start, i + 1);
+    if (parseQmdQueryResultArray(candidate) !== null) {
+      return candidate;
+    }
+    start = -1;
   }
   return null;
 }

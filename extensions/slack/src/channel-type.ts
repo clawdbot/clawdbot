@@ -6,7 +6,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
-import { createSlackWebClient } from "./client.js";
+import { createSlackReadClient, createSlackWebClient } from "./client.js";
 import { normalizeAllowListLower } from "./monitor/allow-list.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
@@ -98,10 +98,10 @@ export async function resolveSlackConversationInfo(params: {
   const configuredInfo = resolveConfiguredSlackConversationInfo({ account, channelId });
   if (token) {
     try {
-      const client = createSlackWebClient(token);
       // Read-only classification stays on conversations.info. conversations.open is
       // write-scoped and must only run when the caller explicitly requests a write.
       if (isNativeImChannel && operation === "write") {
+        const client = createSlackWebClient(token);
         const opened = await client.conversations.open({
           channel: channelId,
           prevent_creation: true,
@@ -117,6 +117,7 @@ export async function resolveSlackConversationInfo(params: {
         }
         return result;
       }
+      const client = createSlackReadClient(token);
       const info = await client.conversations.info({ channel: channelId });
       const channel = info.channel as
         | { is_im?: boolean; is_mpim?: boolean; name?: string; user?: string }

@@ -41,7 +41,7 @@ function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined {
 // The scheduler sets this while a run is active and clears it on completion, so a
 // leftover marker (gateway killed mid-run) makes `cron list` show the job as
 // `running` while nothing executes it. Startup marks exactly these runs interrupted
-// (`src/cron/service/ops.ts` `start`), so doctor only reports the count here.
+// (`src/cron/service/ops-lifecycle.ts` `start`), so doctor only reports the count here.
 function countInFlightCronJobs(jobs: Array<Record<string, unknown>>): number {
   return jobs.filter((job) => {
     const state = job.state;
@@ -60,7 +60,7 @@ const CHRONIC_FAILURE_MIN_CONSECUTIVE_ERRORS = 3;
 
 // Count enabled jobs stuck in repeated run failures. `state.consecutiveErrors`
 // resets to 0 on the next successful run and also increments for runs interrupted
-// by a gateway restart (startup marks in-flight runs failed, `src/cron/service/ops.ts`),
+// by a gateway restart (startup marks in-flight runs failed, `src/cron/service/ops-lifecycle.ts`),
 // so a streak can mean task failures, interrupted runs, or a mix — the note says so.
 // Failure alerts are opt-in, so by default nothing else surfaces the streak.
 // Disabled jobs no longer re-fire (e.g. the scheduler disables exhausted
@@ -214,10 +214,10 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     if (names.length > 0) {
       findings.push(
         legacyCronStoreFinding({
-          message: `${pluralize(names.length, "tool-bearing cron job")} ${description}.`,
+          message: `${pluralize(names.length, "tool-bearing automation")} ${description}.`,
           path: storePath,
           requirement,
-          fixHint: `Review with ${formatCliCommand("openclaw cron list")} and reauthorize with ${formatCliCommand("openclaw cron edit <id> --tools <tool,...>")}.`,
+          fixHint: `Review with ${formatCliCommand("openclaw automations list")} and reauthorize with ${formatCliCommand("openclaw automations edit <id> --tools <tool,...>")}.`,
         }),
       );
     }
@@ -360,9 +360,9 @@ export async function maybeRepairLegacyCronStore(params: {
     const subject = inFlightCount === 1 ? "it" : "them";
     note(
       [
-        `${pluralize(inFlightCount, "cron job")} ${inFlightCount === 1 ? "is" : "are"} still marked in-flight (\`state.runningAtMs\` is set), so ${formatCliCommand("openclaw cron list")} shows ${subject} as \`running\`.`,
+        `${pluralize(inFlightCount, "automation")} ${inFlightCount === 1 ? "is" : "are"} still marked in-flight (\`state.runningAtMs\` is set), so ${formatCliCommand("openclaw automations list")} shows ${subject} as \`running\`.`,
         `- If no gateway is currently executing ${subject}, the marker is left over from an interrupted run; the gateway marks such runs interrupted the next time it starts.`,
-        `- Review with ${formatCliCommand("openclaw cron list")} or ${formatCliCommand("openclaw cron show <id>")}.`,
+        `- Review with ${formatCliCommand("openclaw automations list")} or ${formatCliCommand("openclaw automations show <id>")}.`,
       ].join("\n"),
       "Cron",
     );
@@ -372,9 +372,9 @@ export async function maybeRepairLegacyCronStore(params: {
   if (chronicFailureCount > 0) {
     note(
       [
-        `${pluralize(chronicFailureCount, "cron job")} ${chronicFailureCount === 1 ? "has" : "have"} failed ${CHRONIC_FAILURE_MIN_CONSECUTIVE_ERRORS}+ runs in a row (\`state.consecutiveErrors\`), so the scheduler only re-fires ${chronicFailureCount === 1 ? "it" : "them"} on error backoff.`,
+        `${pluralize(chronicFailureCount, "automation")} ${chronicFailureCount === 1 ? "has" : "have"} failed ${CHRONIC_FAILURE_MIN_CONSECUTIVE_ERRORS}+ runs in a row (\`state.consecutiveErrors\`), so the scheduler only re-fires ${chronicFailureCount === 1 ? "it" : "them"} on error backoff.`,
         `- The count resets on the next successful run and also counts runs interrupted by a gateway restart, so a lasting streak means repeated task failures, repeatedly interrupted runs, or a mix. Failure alerts are opt-in, so this may be the only notice.`,
-        `- Review with ${formatCliCommand("openclaw cron list")} or ${formatCliCommand("openclaw cron show <id>")}.`,
+        `- Review with ${formatCliCommand("openclaw automations list")} or ${formatCliCommand("openclaw automations show <id>")}.`,
       ].join("\n"),
       "Cron",
     );

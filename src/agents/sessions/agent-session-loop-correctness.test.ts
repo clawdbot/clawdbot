@@ -208,6 +208,59 @@ afterEach(() => {
 });
 
 describe("AgentSession loop correctness", () => {
+  it("carries the canonical assistant entry id through ordered terminal listeners", async () => {
+    const assistant = createAssistant(testModel, [{ type: "text", text: "same answer" }]);
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
+    sessionManager.appendMessage({ ...assistant });
+    streamMocks.streamSimple.mockImplementation(() => createAssistantResultStream(assistant));
+    const appendMessage = vi.spyOn(sessionManager, "appendMessage");
+    const { session } = await createTestSession({ sessionManager });
+    const order: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    let promptSettled = false;
+    let terminalEntryId: string | undefined;
+
+    session.subscribe(async (event) => {
+      if (event.type !== "agent_end") {
+        return;
+      }
+      terminalEntryId = event.assistantEntryId;
+      order.push("first:start");
+      session.subscribe((lateEvent) => {
+        if (lateEvent.type === "agent_end") {
+          order.push("late");
+        }
+      });
+      unsubscribeSecond();
+      await new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      order.push("first:end");
+      throw new Error("listener rejected");
+    });
+    const unsubscribeSecond = session.subscribe(async (event) => {
+      if (event.type === "agent_end") {
+        order.push("second");
+      }
+    });
+
+    const prompt = session.prompt("new prompt").then(() => {
+      promptSettled = true;
+    });
+    await vi.waitFor(() => expect(order).toEqual(["first:start"]));
+    expect(promptSettled).toBe(false);
+
+    releaseFirst?.();
+    await prompt;
+
+    const persistedAssistantCall = appendMessage.mock.results.findLast(
+      (result) => result.type === "return",
+    );
+    expect(terminalEntryId).toBe(persistedAssistantCall?.value);
+    expect(order).toEqual(["first:start", "first:end", "second"]);
+  });
+
   it("emits agent_settled once after a normal run", async () => {
     const lifecycleEvents: string[] = [];
     const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
@@ -284,6 +337,33 @@ describe("AgentSession loop correctness", () => {
     expect(compactionEvents).toContainEqual(
       expect.objectContaining({ type: "compaction_end", reason: "threshold", willRetry: false }),
     );
+  });
+
+  it("skips threshold maintenance when embedded auto-compaction is disabled", async () => {
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: false, reserveTokens: 0, keepRecentTokens: 1 },
+      retry: { enabled: false },
+    });
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+      ),
+    );
+    const { session } = await createTestSession({
+      settingsManager,
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+    });
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    await session.prompt("new prompt");
+
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    expect(compactionEvents).toEqual([]);
   });
 
   it("does not retry a high-usage turn terminated by a tool result", async () => {

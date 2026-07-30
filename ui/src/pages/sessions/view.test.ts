@@ -103,6 +103,28 @@ function sessionTableHeaders(container: HTMLElement): Array<string | undefined> 
 const SESSION_TABLE_HEADERS = ["", "Key", "Kind", "Status", "Updated", "Tokens", "Actions"];
 
 describe("sessions view", () => {
+  it("uses the stored face for generic session links", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+            kind: "direct",
+            boardFace: "dashboard",
+            updatedAt: 1,
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector<HTMLAnchorElement>(".session-link")?.getAttribute("href")).toBe(
+      "/dashboard/main/12345678",
+    );
+  });
+
   it("keeps transcript search distinct from the loaded-roster filter", async () => {
     const container = document.createElement("div");
     const onTranscriptSearchChange = vi.fn();
@@ -294,6 +316,28 @@ describe("sessions view", () => {
     );
     expect(counts).toEqual(["2 threads", "1 thread"]);
     expect(container.querySelector(".data-table-pagination")).toBeNull();
+  });
+
+  it("selects and names the current page size on first render", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            { key: "one", kind: "direct", updatedAt: 2 },
+            { key: "two", kind: "direct", updatedAt: 1 },
+          ]),
+        ),
+        pageSize: 25,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const pageSize = container.querySelector<HTMLSelectElement>(".data-table-pagination__size");
+    expect(pageSize?.getAttribute("aria-label")).toBe("Rows per page");
+    expect(pageSize?.value).toBe("25");
+    expect(pageSize?.selectedOptions[0]?.textContent?.trim()).toBe("25 per page");
   });
 
   it("keeps the filtered empty state when grouping is active", async () => {

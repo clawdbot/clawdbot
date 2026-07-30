@@ -410,7 +410,7 @@ describe("resolveTuiCtrlCAction", () => {
   it("exits immediately after a gateway disconnect", () => {
     expect(
       resolveTuiCtrlCAction({
-        hasInput: true,
+        hasInput: false,
         now: 2000,
         lastCtrlCAt: 0,
         wasDisconnected: true,
@@ -421,10 +421,24 @@ describe("resolveTuiCtrlCAction", () => {
     });
   });
 
+  it("clears a nonempty draft before exiting after a gateway disconnect", () => {
+    expect(
+      resolveTuiCtrlCAction({
+        hasInput: true,
+        now: 2000,
+        lastCtrlCAt: 0,
+        wasDisconnected: true,
+      }),
+    ).toEqual({
+      action: "clear",
+      nextLastCtrlCAt: 2000,
+    });
+  });
+
   it("forces exit when shutdown is already in progress", () => {
     expect(
       resolveTuiCtrlCAction({
-        hasInput: false,
+        hasInput: true,
         now: 2000,
         lastCtrlCAt: 1000,
         exitRequested: true,
@@ -441,7 +455,7 @@ describe("TUI shutdown safety", () => {
     beginTuiShutdown({
       stopClient: vi.fn(),
       stopTui: vi.fn(),
-      stopStatusTimeout: vi.fn(),
+      disposeStatus: vi.fn(),
       requestFinish: vi.fn(),
       forceExit: vi.fn(),
       hardExitMs: 2000,
@@ -453,6 +467,37 @@ describe("TUI shutdown safety", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("disposes every status animation before teardown and after it settles", async () => {
+    vi.useFakeTimers();
+    const tick = vi.fn();
+    const statusTimer = setInterval(tick, 1000);
+    const waitingTimer = setInterval(tick, 120);
+    const loaderTimer = setInterval(tick, 80);
+    const statusTimeout = setTimeout(tick, 5000);
+    const loader = { stop: vi.fn(() => clearInterval(loaderTimer)) };
+    const disposeStatus = vi.fn(() => {
+      clearInterval(statusTimer);
+      clearInterval(waitingTimer);
+      clearTimeout(statusTimeout);
+      loader.stop();
+    });
+
+    beginTestShutdown({ disposeStatus, keepHardExitArmed: false });
+
+    expect(disposeStatus).toHaveBeenCalledOnce();
+    expect(loader.stop).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(disposeStatus).toHaveBeenCalledTimes(2);
+    expect(loader.stop).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(tick).not.toHaveBeenCalled();
   });
 
   it("drains terminal input before stopping the TUI", async () => {
@@ -637,7 +682,7 @@ describe("TUI shutdown safety", () => {
       stopTui: async () => {
         calls.push("tui");
       },
-      stopStatusTimeout: () => {
+      disposeStatus: () => {
         calls.push("status");
       },
       requestFinish: () => {
@@ -647,7 +692,7 @@ describe("TUI shutdown safety", () => {
     });
 
     await vi.advanceTimersByTimeAsync(0);
-    expect(calls).toEqual(["client", "tui", "status", "finish"]);
+    expect(calls).toEqual(["status", "client", "tui", "status", "finish"]);
     expect(forceExit).not.toHaveBeenCalled();
   });
 

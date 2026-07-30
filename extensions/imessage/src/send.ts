@@ -107,6 +107,10 @@ type IMessageSendResult = {
    * outbound key matches what the inbound tapback will surface.
    */
   guid?: string;
+  /** Transport confirmed by the bridge for the message that was sent. */
+  service?: Exclude<IMessageService, "auto">;
+  /** Conversation confirmed by the bridge for the message that was sent. */
+  chatGuid?: string;
   sentText: string;
   echoText?: string;
   echoMedia?: MediaPlaceholderTextFact;
@@ -482,9 +486,17 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function resultService(value: unknown): IMessageService | undefined {
+function resultService(value: unknown): Exclude<IMessageService, "auto"> | undefined {
   const normalized = stringValue(value)?.toLowerCase();
   return normalized === "imessage" || normalized === "sms" ? normalized : undefined;
+}
+
+function resultChatGuidService(value: unknown): Exclude<IMessageService, "auto"> | undefined {
+  const chatGuid = stringValue(value);
+  if (/^imessage;/iu.test(chatGuid ?? "")) {
+    return "imessage";
+  }
+  return /^sms;/iu.test(chatGuid ?? "") ? "sms" : undefined;
 }
 
 function resolvePendingPersistedEchoTtlMs(timeoutMs: number): number {
@@ -956,12 +968,13 @@ export async function sendMessageIMessage(
     // edit/unsend actions can verify the agent actually sent the message
     // before dispatching. Inbound recording (in monitor/inbound-processing)
     // sets isFromMe=false, so the cache distinguishes own-sent from received.
+    const providerChatGuid = stringValue(result.chat_guid) ?? stringValue(result.chatGuid);
+    const confirmedService =
+      resultService(result.service) ??
+      resultChatGuidService(providerChatGuid) ??
+      (service === "imessage" || service === "sms" ? service : undefined);
     if (resolvedId) {
-      const chatContext = chatContextFromIMessageTarget(
-        target,
-        resultService(result.service) ?? service,
-      );
-      const providerChatGuid = stringValue(result.chat_guid) ?? stringValue(result.chatGuid);
+      const chatContext = chatContextFromIMessageTarget(target, confirmedService ?? service);
       rememberIMessageReplyCache({
         accountId: account.accountId,
         messageId: resolvedId,
@@ -991,6 +1004,8 @@ export async function sendMessageIMessage(
     return {
       messageId,
       ...(approvalBindingMessageId ? { guid: approvalBindingMessageId } : {}),
+      ...(confirmedService ? { service: confirmedService } : {}),
+      ...(providerChatGuid ? { chatGuid: providerChatGuid } : {}),
       sentText: message,
       ...(echoText ? { echoText } : {}),
       ...(echoMedia ? { echoMedia } : {}),

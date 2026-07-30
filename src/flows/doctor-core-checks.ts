@@ -29,6 +29,7 @@ import {
   uiProtocolFreshnessIssueToRepairEffects,
 } from "../commands/doctor-ui.js";
 import { collectDisabledCodexPluginRouteIssues } from "../commands/doctor/shared/codex-route-warnings.js";
+import { isDefaultInstallIdentity } from "../config/paths.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import type { CronListPageResult } from "../cron/service/list-page-types.js";
@@ -57,6 +58,8 @@ const GATEWAY_DAEMON_CHECK_ID = "core/doctor/gateway-daemon";
 const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 const SESSION_LOCKS_CHECK_ID = "core/doctor/session-locks";
+const TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID =
+  "core/doctor/telegram-general-topic-conversations";
 const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
 type CoreHealthCheckContext = HealthCheckContext & {
   readonly deep?: boolean;
@@ -309,7 +312,7 @@ const skillWorkshopToolPolicyCheck: HealthCheck = {
   async detect(ctx) {
     const diagnostic = detectSkillWorkshopToolPolicyDiagnostic({
       config: ctx.cfg,
-      workshopEnabled: resolveSkillWorkshopConfig(ctx.cfg).autonomous.enabled,
+      workshopEnabled: resolveSkillWorkshopConfig(ctx.cfg).autonomous.mode !== "off",
     });
     if (!diagnostic) {
       return [];
@@ -845,6 +848,53 @@ const codexSessionRoutesCheck: HealthCheck = {
   },
 };
 
+const telegramGeneralTopicConversationsCheck: HealthCheck = {
+  id: TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID,
+  kind: "core",
+  description: "Telegram General-topic conversation bindings use the canonical chat target.",
+  source: "doctor",
+  async detect(ctx) {
+    const { detectTelegramGeneralTopicConversationRepairs } =
+      await import("../commands/doctor-telegram-general-topic-conversations.js");
+    const repairs = detectTelegramGeneralTopicConversationRepairs({
+      cfg: ctx.cfg,
+      ...(ctx.env ? { env: ctx.env } : {}),
+    });
+    return repairs.map((repair) => ({
+      checkId: TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID,
+      severity: "warning" as const,
+      message: `Agent ${repair.agentId} has a stale Telegram General-topic conversation identity.`,
+      target: repair.agentId,
+      requirement: "One canonical chat-scoped conversation binding for Telegram General topic.",
+      fixHint: "Run `openclaw doctor --fix` to merge the stale topic-qualified identity.",
+    }));
+  },
+  async repair(ctx) {
+    const { repairTelegramGeneralTopicConversations } =
+      await import("../commands/doctor-telegram-general-topic-conversations.js");
+    const effect = {
+      kind: "state" as const,
+      action: ctx.dryRun ? "would-merge-stale-bindings" : "merge-stale-bindings",
+      target: "Telegram General topic conversations",
+      dryRunSafe: false,
+    };
+    if (ctx.dryRun) {
+      return {
+        changes: ["Would merge stale Telegram General-topic identities."],
+        effects: [effect],
+      };
+    }
+    const repaired = await repairTelegramGeneralTopicConversations({
+      cfg: ctx.cfg,
+      ...(ctx.env ? { env: ctx.env } : {}),
+    });
+    return {
+      changes: [`Merged ${repaired} stale Telegram General-topic conversation identity row(s).`],
+      effects: repaired > 0 ? [effect] : [],
+    };
+  },
+};
+
 const gatewayServicesExtraCheck: HealthCheck = {
   id: GATEWAY_SERVICES_EXTRA_CHECK_ID,
   kind: "core",
@@ -883,6 +933,9 @@ const gatewayPlatformNotesCheck: HealthCheck = {
   description: "Gateway platform notes are captured as structured findings.",
   source: "doctor",
   async detect(ctx) {
+    if (!isDefaultInstallIdentity(process.env)) {
+      return [];
+    }
     const { collectMacGatewayPlatformWarnings } =
       await import("../commands/doctor-platform-notes.js");
     const warnings = await collectMacGatewayPlatformWarnings(ctx.cfg);
@@ -1211,6 +1264,7 @@ function createConvertedWorkflowChecks(
     legacyWhatsAppCrontabCheck,
     legacyCronStoreCheck,
     codexSessionRoutesCheck,
+    telegramGeneralTopicConversationsCheck,
     sessionLocksCheck,
     shellCompletionCheck,
     uiProtocolFreshnessCheck,

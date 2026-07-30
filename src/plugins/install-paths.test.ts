@@ -2,9 +2,54 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  resolveDefaultPluginExtensionsDir,
+  resolveDefaultPluginGitDir,
+  resolveDefaultPluginNpmDir,
   resolvePluginNpmGenerationProjectDir,
   resolvePluginNpmGenerationProjectDirPrefix,
 } from "./install-paths.js";
+import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-root-context.js";
+import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
+
+describe("plugin install root context", () => {
+  it("keeps discovery roots on the operator install while runtime state is redirected", async () => {
+    const operatorRoots = resolvePluginInstallRoots(
+      { OPENCLAW_STATE_DIR: "/operator/openclaw" },
+      () => "/unused-home",
+    );
+    const redirectedEnv = { OPENCLAW_STATE_DIR: "/tmp/ephemeral-run" };
+
+    await withPluginInstallRoots(operatorRoots, async () => {
+      await Promise.resolve();
+      expect(resolveDefaultPluginExtensionsDir(redirectedEnv)).toBe(
+        "/operator/openclaw/extensions",
+      );
+      expect(resolveDefaultPluginNpmDir(redirectedEnv)).toBe("/operator/openclaw/npm");
+      expect(resolveDefaultPluginGitDir(redirectedEnv)).toBe("/operator/openclaw/git");
+      expect(resolveInstalledPluginIndexStorePath({ env: redirectedEnv })).toBe(
+        "/operator/openclaw/state/openclaw.sqlite",
+      );
+    });
+
+    expect(resolveDefaultPluginExtensionsDir(redirectedEnv)).toBe("/tmp/ephemeral-run/extensions");
+  });
+
+  it("isolates concurrent install-root scopes", async () => {
+    const resolveScopedRoot = async (stateDir: string) => {
+      const roots = resolvePluginInstallRoots({ OPENCLAW_STATE_DIR: stateDir });
+      return await withPluginInstallRoots(roots, async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+        return resolveDefaultPluginExtensionsDir({ OPENCLAW_STATE_DIR: "/redirected" });
+      });
+    };
+
+    await expect(
+      Promise.all([resolveScopedRoot("/operator/one"), resolveScopedRoot("/operator/two")]),
+    ).resolves.toEqual(["/operator/one/extensions", "/operator/two/extensions"]);
+  });
+});
 
 describe("managed npm plugin install paths", () => {
   it("keeps generation project names compact for nested Windows runtime binaries", () => {

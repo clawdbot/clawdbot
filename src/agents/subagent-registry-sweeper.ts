@@ -69,7 +69,7 @@ export async function retireSupersededSubagentRun(params: {
 export function createSubagentRegistrySweeper(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
-  persist: () => void;
+  persist: (...runIds: string[]) => void;
   clearPendingLifecycleError: (runId: string) => void;
   clearPendingLifecycleTimeout: (runId: string) => void;
   sweepPendingLifecycle: (now: number) => void;
@@ -233,6 +233,7 @@ export function createSubagentRegistrySweeper(params: {
       const now = Date.now();
       const storeCache: SubagentSessionStoreCache = new Map();
       let mutated = false;
+      const mutatedRunIds = new Set<string>();
       const archivedCollectorGroups = new Set<string>();
       const suspendedEntries = [...runs.entries()].filter(([, entry]) =>
         isSuspendedPendingFinalDelivery(entry),
@@ -272,6 +273,7 @@ export function createSubagentRegistrySweeper(params: {
               expired ? "expired" : "pressure-pruned",
             );
             mutated = true;
+            mutatedRunIds.add(runId);
           }
           continue;
         }
@@ -292,6 +294,7 @@ export function createSubagentRegistrySweeper(params: {
                 })
               ) {
                 mutated = true;
+                mutatedRunIds.add(runId);
               }
               continue;
             }
@@ -345,18 +348,21 @@ export function createSubagentRegistrySweeper(params: {
         }
 
         if (entry.killReconciliation) {
-          mutated =
-            (await reconcileProvisionalSubagentKill({
-              runId,
-              entry,
-              now,
-              runs,
-              storeCache,
-              completeSubagentRunWithRecovery: params.completeSubagentRunWithRecovery,
-              retireSupersededRun: params.retireSupersededRun,
-              startSubagentAnnounceCleanupFlow: params.startSubagentAnnounceCleanupFlow,
-              warn: params.warn,
-            })) || mutated;
+          const reconciled = await reconcileProvisionalSubagentKill({
+            runId,
+            entry,
+            now,
+            runs,
+            storeCache,
+            completeSubagentRunWithRecovery: params.completeSubagentRunWithRecovery,
+            retireSupersededRun: params.retireSupersededRun,
+            startSubagentAnnounceCleanupFlow: params.startSubagentAnnounceCleanupFlow,
+            warn: params.warn,
+          });
+          if (reconciled) {
+            mutated = true;
+            mutatedRunIds.add(runId);
+          }
           continue;
         }
         if (entry.collect && entry.collectorCompletion) {
@@ -382,6 +388,7 @@ export function createSubagentRegistrySweeper(params: {
             entry.collectorLaunchCleanupPending = false;
             entry.cleanupCompletedAt = now;
             mutated = true;
+            mutatedRunIds.add(runId);
           }
           const groupId = entry.groupId?.trim();
           const swarmRequesterSessionKey =
@@ -455,7 +462,7 @@ export function createSubagentRegistrySweeper(params: {
             try {
               await params.runContextEngineSubagentEnded(sweptContext(candidate));
               candidate.contextEngineCleanupCompletedAt = Date.now();
-              params.persist();
+              params.persist(candidateRunId);
             } catch (error) {
               params.warn(
                 "context-engine cleanup failed during collector group sweep; keeping group",
@@ -476,6 +483,7 @@ export function createSubagentRegistrySweeper(params: {
           for (const [candidateRunId] of groupEntries) {
             params.clearPendingLifecycleError(candidateRunId);
             runs.delete(candidateRunId);
+            mutatedRunIds.add(candidateRunId);
           }
           archivedCollectorGroups.add(groupKey);
           mutated = true;
@@ -495,6 +503,7 @@ export function createSubagentRegistrySweeper(params: {
             });
             runs.delete(runId);
             mutated = true;
+            mutatedRunIds.add(runId);
             if (!entry.retainAttachmentsOnKeep) {
               await safeRemoveAttachmentsDir(entry);
             }
@@ -517,6 +526,7 @@ export function createSubagentRegistrySweeper(params: {
         }
         runs.delete(runId);
         mutated = true;
+        mutatedRunIds.add(runId);
         await safeRemoveAttachmentsDir(entry);
         runCleanupTail(runId, "context-engine cleanup", async () => {
           await params.notifyContextEngineSubagentEnded(sweptContext(entry));
@@ -525,7 +535,7 @@ export function createSubagentRegistrySweeper(params: {
       params.sweepPendingLifecycle(now);
 
       if (mutated) {
-        params.persist();
+        params.persist(...mutatedRunIds);
       }
       if (runs.size === 0) {
         stop();

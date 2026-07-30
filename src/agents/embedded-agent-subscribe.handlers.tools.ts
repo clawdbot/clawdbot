@@ -106,6 +106,7 @@ import {
   settleAskUserPromptDelivery,
   waitForAskUserPromptReady,
 } from "./tools/ask-user-tool.js";
+import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
@@ -596,7 +597,8 @@ function isOpenClawCronAddShellCommand(args: unknown): boolean {
   return (
     (isOpenClawExecutable(tokens[commandIndex]) ||
       (packageRunner.acceptsPackageSpec && isOpenClawPackageSpec(tokens[commandIndex]))) &&
-    normalizeOptionalLowercaseString(tokens[cliArgIndex]) === "cron" &&
+    (normalizeOptionalLowercaseString(tokens[cliArgIndex]) === "cron" ||
+      normalizeOptionalLowercaseString(tokens[cliArgIndex]) === "automations") &&
     (action === "add" || action === "create") &&
     !actionArgs.some((token) => token === "-h" || token === "--help")
   );
@@ -738,19 +740,25 @@ function queuePendingToolMedia(
   ctx: ToolHandlerContext,
   mediaReply: { mediaUrls: string[]; audioAsVoice?: boolean; trustedLocalMedia?: boolean },
 ) {
-  const seen = new Set(ctx.state.pendingToolMediaUrls);
+  const seen = new Set(ctx.state.pendingToolMediaUrls.map((url) => url.trim()));
   for (const mediaUrl of mediaReply.mediaUrls) {
-    if (seen.has(mediaUrl)) {
+    const normalized = mediaUrl.trim();
+    if (!normalized) {
       continue;
     }
-    seen.add(mediaUrl);
-    ctx.state.pendingToolMediaUrls.push(mediaUrl);
+    if (mediaReply.trustedLocalMedia) {
+      ctx.state.pendingToolMediaTrustByUrl.set(normalized, true);
+    } else if (!ctx.state.pendingToolMediaTrustByUrl.has(normalized)) {
+      ctx.state.pendingToolMediaTrustByUrl.set(normalized, false);
+    }
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    ctx.state.pendingToolMediaUrls.push(normalized);
   }
   if (mediaReply.audioAsVoice) {
     ctx.state.pendingToolAudioAsVoice = true;
-  }
-  if (mediaReply.trustedLocalMedia) {
-    ctx.state.pendingToolTrustedLocalMedia = true;
   }
 }
 
@@ -1574,7 +1582,7 @@ export async function handleToolExecutionEnd(
   // Track committed reminders only when cron.add completed successfully.
   if (
     !isToolError &&
-    ((toolName === "cron" && isCronAddAction(startArgs)) ||
+    ((isAutomationsToolName(toolName) && isCronAddAction(startArgs)) ||
       (isExecToolName(toolName) && didShellCronAddSucceed(startArgs, result)))
   ) {
     ctx.state.successfulCronAdds += 1;

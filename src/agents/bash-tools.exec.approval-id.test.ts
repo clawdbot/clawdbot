@@ -17,7 +17,7 @@ import { sendMessage } from "../infra/outbound/message.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
-import { createExecTool as createExecToolImpl } from "./bash-tools.exec.js";
+import { createExecTool as createExecToolImpl } from "./bash-tools.exec-run.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const createExecTool = (
@@ -1709,7 +1709,7 @@ describe("exec approvals", () => {
       tool.execute("call-cron-denied", {
         command: "echo cron-denied",
       }),
-    ).rejects.toThrow("Cron runs cannot wait for interactive exec approval");
+    ).rejects.toThrow("Automation runs cannot wait for interactive exec approval");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

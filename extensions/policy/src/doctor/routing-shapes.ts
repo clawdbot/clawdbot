@@ -1,5 +1,8 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  hasNonEmptyString as nonEmptyString,
+  isRecord,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ROUTING_MATCH_KINDS } from "../policy-routing.js";
 import { policyShapeFinding, unsupportedPolicyKey } from "./shape-helpers.js";
 import { ocPathSegment } from "./utils.js";
@@ -223,10 +226,6 @@ function expectShapeFinding(
     }
   }
   return undefined;
-}
-
-function nonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim() !== "";
 }
 
 function invalid(ctx: ShapeContext, target: string, message: string): HealthFinding {

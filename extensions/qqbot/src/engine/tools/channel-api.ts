@@ -339,8 +339,12 @@ export async function executeChannelApi(
       debugLog(`[qqbot-channel-api] <<< Status: ${res.status} ${res.statusText}`);
 
       const rawBody = res.ok
-        ? await readProviderTextResponse(res, "QQ channel API response")
-        : await readResponseTextLimited(res, CHANNEL_API_ERROR_BODY_LIMIT_BYTES);
+        ? await readProviderTextResponse(res, "QQ channel API response", {
+            chunkTimeoutMs: DEFAULT_TIMEOUT_MS,
+          })
+        : await readResponseTextLimited(res, CHANNEL_API_ERROR_BODY_LIMIT_BYTES, {
+            chunkTimeoutMs: DEFAULT_TIMEOUT_MS,
+          });
       if (!rawBody || rawBody.trim() === "") {
         if (res.ok) {
           return json({ success: true, status: res.status, path: params.path });
