@@ -2,6 +2,11 @@
 
 const HTTP_TOKEN_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
 const HTTP_QVALUE_PATTERN = /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/u;
+const HTTP_OPTIONAL_WHITESPACE_PATTERN = /^[\t ]+|[\t ]+$/gu;
+
+function trimHttpOptionalWhitespace(value: string): string {
+  return value.replace(HTTP_OPTIONAL_WHITESPACE_PATTERN, "");
+}
 
 function splitOutsideQuotedStrings(value: string, delimiter: string): string[] | null {
   const parts: string[] = [];
@@ -86,7 +91,7 @@ function parseMediaType(value: string, allowQuality: boolean): ParsedMediaType |
   if (!segments) {
     return null;
   }
-  const mediaType = segments.shift()?.trim().toLowerCase() ?? "";
+  const mediaType = trimHttpOptionalWhitespace(segments.shift() ?? "").toLowerCase();
   const [type, subtype, ...extra] = mediaType.split("/");
   if (
     extra.length > 0 ||
@@ -102,9 +107,13 @@ function parseMediaType(value: string, allowQuality: boolean): ParsedMediaType |
   let qualitySeen = false;
   const parameters = new Map<string, string>();
   for (const rawParameter of segments) {
-    const parameter = rawParameter.trim();
+    const parameter = trimHttpOptionalWhitespace(rawParameter);
+    // RFC 9110 permits a semicolon whose optional parameter is omitted.
+    if (!parameter) {
+      continue;
+    }
     const separator = parameter.indexOf("=");
-    const name = (separator < 0 ? parameter : parameter.slice(0, separator)).trim().toLowerCase();
+    const name = (separator < 0 ? parameter : parameter.slice(0, separator)).toLowerCase();
     if (!HTTP_TOKEN_PATTERN.test(name)) {
       return null;
     }
@@ -117,7 +126,7 @@ function parseMediaType(value: string, allowQuality: boolean): ParsedMediaType |
       if (separator < 0) {
         continue;
       }
-      const extensionValue = parameter.slice(separator + 1).trim();
+      const extensionValue = parameter.slice(separator + 1);
       if (!extensionValue || parseParameterValue(extensionValue) === null) {
         return null;
       }
@@ -126,7 +135,9 @@ function parseMediaType(value: string, allowQuality: boolean): ParsedMediaType |
     if (separator <= 0) {
       return null;
     }
-    const rawValue = parameter.slice(separator + 1).trim();
+    // Parameter grammar has no whitespace around `=`; accepting it can route
+    // a malformed negotiation request into a persistent SSE response.
+    const rawValue = parameter.slice(separator + 1);
     if (!rawValue) {
       return null;
     }
@@ -182,7 +193,7 @@ export function hasExplicitAcceptableMediaRange(
   let bestSpecificity = -1;
   let bestExplicitQuality = 0;
   for (const range of ranges) {
-    if (!range.trim()) {
+    if (!trimHttpOptionalWhitespace(range)) {
       continue;
     }
     const parsedRange = parseMediaType(range, true);

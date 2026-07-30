@@ -460,6 +460,12 @@ describe("session history Accept parsing", () => {
     { accept: "text/event-stream", expected: true, name: "exact media type" },
     { accept: "TEXT/EVENT-STREAM", expected: true, name: "case-insensitive media type" },
     { accept: "  text/event-stream  ", expected: true, name: "optional whitespace" },
+    { accept: "text/event-stream;", expected: true, name: "omitted trailing parameter" },
+    {
+      accept: "text/event-stream; ; q=0.5;",
+      expected: true,
+      name: "omitted parameter slots",
+    },
     {
       accept: "text/event-stream; charset=utf-8",
       expected: true,
@@ -531,6 +537,13 @@ describe("session history Accept parsing", () => {
       name: "explicit rejection overriding wildcard",
     },
     { accept: "text/event-stream;q=.5", expected: false, name: "missing leading zero" },
+    { accept: "text/event-stream;q =0.5", expected: false, name: "whitespace before equals" },
+    { accept: "text/event-stream;q= 0.5", expected: false, name: "whitespace after equals" },
+    {
+      accept: "text/event-stream;\u00a0q=0.5",
+      expected: false,
+      name: "non-HTTP parameter whitespace",
+    },
     { accept: "text/event-stream;q=0.1234", expected: false, name: "too many q digits" },
     { accept: "text/event-stream;q=1.001", expected: false, name: "qvalue above one" },
     { accept: "text/event-stream;q=1e0", expected: false, name: "exponent qvalue" },
@@ -562,6 +575,8 @@ describe("session history HTTP endpoints", () => {
         { accept: "text/event-stream", expected: "sse" },
         { accept: "TEXT/EVENT-STREAM", expected: "sse" },
         { accept: "  text/event-stream  ", expected: "sse" },
+        { accept: "text/event-stream;", expected: "sse" },
+        { accept: "text/event-stream; ; q=0.5;", expected: "sse" },
         { accept: "text/event-stream; charset=utf-8", expected: "sse" },
         {
           accept: 'text/event-stream; note="quoted,comma;semicolon\\\"quote"; q=0.5',
@@ -587,6 +602,9 @@ describe("session history HTTP endpoints", () => {
         { accept: "text/event-stream;q=0", expected: "json" },
         { accept: "text/event-stream;q=0, */*;q=1", expected: "json" },
         { accept: "text/event-stream;q=0.1234", expected: "json" },
+        { accept: "text/event-stream;q =0.5", expected: "json" },
+        { accept: "text/event-stream;q= 0.5", expected: "json" },
+        { accept: "text/event-stream;\u00a0q=0.5", expected: "json" },
         {
           accept: 'text/event-stream;q=0.5;legacy;note="quoted,comma;semicolon"',
           expected: "sse",
