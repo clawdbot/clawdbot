@@ -79,10 +79,14 @@ export function isSqliteCorruptionError(error: unknown): boolean {
 }
 
 function slowBusyWaitThresholdMs(options: SqliteTransactionOptions | undefined): number {
-  if (options?.busyTimeoutMs === undefined) {
+  const busyTimeoutMs = options?.busyTimeoutMs;
+  // A non-positive busy timeout never waits, so scaling the threshold down to it
+  // would flag every successful commit that crosses a millisecond tick.
+  // Genuine contention there still surfaces as "SQLite transaction lock wait failed".
+  if (busyTimeoutMs === undefined || busyTimeoutMs <= 0) {
     return DEFAULT_SLOW_BUSY_WAIT_MS;
   }
-  return Math.min(DEFAULT_SLOW_BUSY_WAIT_MS, Math.max(1, options.busyTimeoutMs));
+  return Math.min(DEFAULT_SLOW_BUSY_WAIT_MS, busyTimeoutMs);
 }
 
 function slowTransactionHoldThresholdMs(options: SqliteTransactionOptions | undefined): number {
