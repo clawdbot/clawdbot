@@ -770,9 +770,6 @@ export async function writePluginSdkApiBaselineArtifacts(params?: {
   const changed = currentHashContent !== nextHashContent;
 
   if (params?.check) {
-    if (changed) {
-      console.error(nextHashContent);
-    }
     return {
       changed,
       wrote: false,
