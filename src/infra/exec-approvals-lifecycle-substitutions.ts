@@ -195,7 +195,7 @@ export function lifecycleSubstitutionResultMayHideLifecycle(argv: readonly strin
   if (!SUBSTITUTION_RESULT_SENSITIVE_EXECUTABLES.has(executable)) {
     return false;
   }
-  const text = argv.join(" ");
+  const text = argv.join(" ").replace(/\[([a-z0-9])\]/giu, "$1");
   return /opencla(?:w|[?*])/iu.test(text) || LIFECYCLE_MUTATION_HINT_RE.test(text);
 }
 

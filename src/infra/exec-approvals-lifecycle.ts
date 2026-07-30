@@ -145,6 +145,15 @@ function isOpenClawExecutable(value: string | undefined): boolean {
   return isOpenClawExecutablePattern(value);
 }
 
+function unresolvedDepthMayHideLifecycle(argv: readonly string[]): boolean {
+  return (
+    argv.some(looksLikeOpenClaw) &&
+    /\b(?:daemon|gateway|install|kill|remove|restart|start|stop|uninstall|update)\b/iu.test(
+      argv.join(" "),
+    )
+  );
+}
+
 function hasHelpOrVersion(argv: readonly string[]): boolean {
   return argv.some((token) => HELP_OR_VERSION_FLAGS.has(token.trim()));
 }
@@ -396,9 +405,10 @@ function classifyProcessMutation(
     ) {
       return false;
     }
+    const normalizedRaw = raw.replace(/\[([a-z0-9])\]/giu, "$1");
     return (
-      /\b(?:pgrep|pidof)\b[\s\S]{0,120}\bopenclaw\b/iu.test(raw) ||
-      /\$\([^)]*\bopenclaw\b[^)]*\)|`[^`]*\bopenclaw\b[^`]*`/iu.test(raw)
+      /\b(?:pgrep|pidof)\b[\s\S]{0,120}\bopenclaw\b/iu.test(normalizedRaw) ||
+      /\$\([^)]*\bopenclaw\b[^)]*\)|`[^`]*\bopenclaw\b[^`]*`/iu.test(normalizedRaw)
     );
   }
   if (POWERSHELL_SERVICE_MUTATIONS.has(executable)) {
@@ -540,14 +550,14 @@ function classifyArgv(
   if (argv.length === 0) {
     return false;
   }
-  if (depth >= MAX_NESTED_COMMAND_DEPTH) {
-    return true;
-  }
   if (lifecycleSubstitutionResultMayHideLifecycle(argv)) {
     return true;
   }
   if (isOpenClawExecutable(argv[0])) {
     return classifyOpenClawArgv(["openclaw", ...argv.slice(1)]);
+  }
+  if (depth >= MAX_NESTED_COMMAND_DEPTH) {
+    return unresolvedDepthMayHideLifecycle(argv);
   }
 
   const carried = resolveCarrierCommandArgv(argv, depth, { includeExec: true });

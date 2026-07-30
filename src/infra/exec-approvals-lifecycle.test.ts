@@ -83,6 +83,7 @@ const mutationCases: Array<[string, string[]]> = [
   ['schtasks /Run /TN "OpenClaw Gateway"', ["schtasks", "/Run", "/TN", "OpenClaw Gateway"]],
   ["pkill -TERM openclaw", ["pkill", "-TERM", "openclaw"]],
   ["kill -TERM $(pidof openclaw)", ["kill", "-TERM", "$(pidof openclaw)"]],
+  ["kill -TERM $(pgrep -f '[o]penclaw')", ["kill", "-TERM", "$(pgrep -f '[o]penclaw')"]],
   [
     "kill $(systemctl show --property MainPID --value openclaw-gateway.service)",
     ["kill", "$(systemctl show --property MainPID --value openclaw-gateway.service)"],
@@ -240,6 +241,10 @@ const nonMutationCases: Array<[string, string[]]> = [
   [`echo '$(openclaw gateway restart)'`, ["echo", "$(openclaw gateway restart)"]],
   ["echo $(date)", ["echo", "$(date)"]],
   ["systemctl status $(hostname)", ["systemctl", "status", "$(hostname)"]],
+  [
+    "env env env env env env env env echo ok",
+    ["env", "env", "env", "env", "env", "env", "env", "env", "echo", "ok"],
+  ],
   ["npm install --prefix openclaw lodash", ["npm", "install", "--prefix", "openclaw", "lodash"]],
 ];
 
