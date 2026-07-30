@@ -370,9 +370,7 @@ export function resolveSpawnAdmission(params: {
     requesterAgentId: params.requesterAgentId,
     targetAgentId: params.targetAgentId,
     requestedAgentId: params.requestedAgentId,
-    allowAgents: authorizedTargetAgentId
-      ? [...(configuredAllowAgents ?? []), authorizedTargetAgentId]
-      : configuredAllowAgents,
+    allowAgents: configuredAllowAgents,
     configuredAgentIds: params.configuredAgentIds,
   });
   if (!targetPolicy.ok) {

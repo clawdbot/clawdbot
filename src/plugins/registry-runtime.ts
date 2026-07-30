@@ -33,6 +33,7 @@ import type { PluginRecord } from "./registry-types.js";
 import {
   withPluginRuntimePluginIdScope,
   withPluginRuntimePluginScope,
+  withReservedSubagentRequesterOwnershipScope,
 } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
@@ -235,7 +236,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       assertSessionEntryOwned({ action: params.action, entry, sessionKey: params.sessionKey });
       return entry;
     };
-    const assertReservedSpawnRequesterOwned = (sessionKey: string): void => {
+    const assertReservedSpawnRequesterOwned = (sessionKey: string): SessionEntry => {
       const entry = registryParams.runtime.agent.session.getSessionEntry({
         sessionKey,
         readConsistency: "latest",
@@ -252,7 +253,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             `Requester session "${sessionKey}" is owned by plugin "${explicitOwnerPluginId}", not "${pluginId}".`,
           );
         }
-        return;
+        return entry;
       }
       const locked = resolveLockedSessionHarnessRegistration(
         sessionKey,
@@ -260,7 +261,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         "spawn a reserved child from",
       );
       if (locked?.ownerPluginId === pluginId) {
-        return;
+        return entry;
       }
       if (locked) {
         throw new Error(
@@ -893,8 +894,19 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         return {
           spawnReserved: async (params) =>
             await withPluginRuntimePluginIdScope(pluginId, async () => {
-              assertReservedSpawnRequesterOwned(params.requesterSessionKey);
-              return await subagent.spawnReserved(params);
+              const entry = assertReservedSpawnRequesterOwned(params.requesterSessionKey);
+              return await withReservedSubagentRequesterOwnershipScope(
+                {
+                  ownerPluginId: pluginId,
+                  sessionKey: params.requesterSessionKey,
+                  ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
+                  ...(typeof entry.lifecycleRevision === "string"
+                    ? { lifecycleRevision: entry.lifecycleRevision }
+                    : {}),
+                  ...(typeof entry.createdAt === "number" ? { createdAt: entry.createdAt } : {}),
+                },
+                async () => await subagent.spawnReserved(params),
+              );
             }),
           run: async (params) =>
             await withPluginRuntimePluginIdScope(pluginId, async () => {

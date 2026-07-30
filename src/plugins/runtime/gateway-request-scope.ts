@@ -7,6 +7,14 @@ import type {
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
 
+export type ReservedSubagentRequesterOwnershipEvidence = {
+  ownerPluginId: string;
+  sessionKey: string;
+  sessionId?: string;
+  lifecycleRevision?: string;
+  createdAt?: number;
+};
+
 type PluginRuntimeGatewayRequestScope = {
   context?: GatewayRequestContext;
   client?: GatewayRequestOptions["client"];
@@ -16,6 +24,7 @@ type PluginRuntimeGatewayRequestScope = {
   pluginOrigin?: PluginOrigin;
   pluginTrustedOfficialInstall?: boolean;
   gatewayMethodDispatchAllowed?: boolean;
+  reservedSubagentRequesterOwnership?: ReservedSubagentRequesterOwnershipEvidence;
 };
 
 type PluginRuntimePluginScope = {
@@ -89,4 +98,18 @@ export function getPluginRuntimeGatewayRequestScope():
   | PluginRuntimeGatewayRequestScope
   | undefined {
   return pluginRuntimeGatewayRequestScope.getStore();
+}
+
+export function withReservedSubagentRequesterOwnershipScope<T>(
+  evidence: ReservedSubagentRequesterOwnershipEvidence,
+  run: () => T,
+): T {
+  const current = pluginRuntimeGatewayRequestScope.getStore();
+  const scoped: PluginRuntimeGatewayRequestScope = current
+    ? { ...current, reservedSubagentRequesterOwnership: evidence }
+    : {
+        isWebchatConnect: () => false,
+        reservedSubagentRequesterOwnership: evidence,
+      };
+  return pluginRuntimeGatewayRequestScope.run(scoped, run);
 }

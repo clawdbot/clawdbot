@@ -51,6 +51,7 @@ import { buildSubagentLaunchRequest } from "./subagent-spawn-launch-request.js";
 import { createSubagentSpawnLifecycleEmitter } from "./subagent-spawn-lifecycle.js";
 import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
 import {
+  claimReservedDirectSpawnInFlight,
   createInitialSubagentSession,
   persistInitialChildSessionRuntimeModel,
 } from "./subagent-spawn-session-patch.js";
@@ -95,6 +96,7 @@ export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
 ): Promise<SpawnSubagentResult> {
+  let releaseReservedDirectSpawnInFlight: (() => void) | undefined;
   const task = params.task;
   const label = params.label?.trim() || "";
   const requestThreadBinding = params.thread === true;
@@ -138,6 +140,17 @@ export async function spawnSubagentDirect(
   let hasBoundThreadDeliveryOrigin = false;
   let childRunId: string = childIdem;
   let swarmReservationPending = reservationPending;
+  try {
+    releaseReservedDirectSpawnInFlight = claimReservedDirectSpawnInFlight({
+      preallocatedRunId: ctx.preallocatedRunId,
+      preallocatedChildSessionKey: ctx.preallocatedChildSessionKey,
+    });
+  } catch (error) {
+    return {
+      status: "error",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
   try {
     const childPlan = await resolveSubagentChildPlan({
       request: params,
@@ -217,6 +230,13 @@ export async function spawnSubagentDirect(
       inheritedToolAllowlist: ctx.inheritedToolAllowlist,
       inheritedToolDenylist: ctx.inheritedToolDenylist,
       modelPatch: plan.initialSessionPatch,
+      ...(ctx.preallocatedRunId ? { reservedSubagentRunId: ctx.preallocatedRunId } : {}),
+      ...(ctx.requesterSessionId
+        ? { reservedSubagentRequesterSessionId: ctx.requesterSessionId }
+        : {}),
+      ...(ctx.reservedSubagentClaimToken
+        ? { reservedSubagentClaimToken: ctx.reservedSubagentClaimToken }
+        : {}),
       swarmGroupId,
       collect: params.collect === true,
       outputSchema: params.outputSchema,
@@ -401,8 +421,8 @@ export async function spawnSubagentDirect(
       requesterSessionKey: requesterInternalKey,
       agentId: targetAgentId,
     });
-    const launchChildRun = async () =>
-      await callSubagentGateway(
+    const launchChildRun = async () => {
+      return await callSubagentGateway(
         {
           method: "agent",
           params: childLaunch.request,
@@ -416,6 +436,7 @@ export async function spawnSubagentDirect(
             : {}),
         },
       );
+    };
 
     const emitSpawnLifecycleHooks = createSubagentSpawnLifecycleEmitter({
       hookRunner,
@@ -683,6 +704,7 @@ export async function spawnSubagentDirect(
       attachments: attachmentsReceipt,
     };
   } finally {
+    releaseReservedDirectSpawnInFlight?.();
     if (swarmReservationPending) {
       removeQueuedSwarmRun(childRunId);
     }

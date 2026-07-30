@@ -1,5 +1,6 @@
 // Plugin-managed reserved spawn adapter. Service-specific lease state stays in plugins.
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
+import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { parseExecApprovalFollowupApprovalId } from "../agents/bash-tools.exec-approval-followup-state.js";
 import {
   getLatestSubagentRunByChildSessionKey,
@@ -7,15 +8,23 @@ import {
 } from "../agents/subagent-registry.js";
 import { cleanupProvisionalSession } from "../agents/subagent-spawn-cleanup.js";
 import type { SpawnSubagentResult } from "../agents/subagent-spawn-contract.js";
+import { resolveSubagentTargetPolicy } from "../agents/subagent-target-policy.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
-import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  type ReservedSubagentRequesterOwnershipEvidence,
+} from "../plugins/runtime/gateway-request-scope.js";
+import { createRuntimeAgent } from "../plugins/runtime/runtime-agent.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { isValidAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { reserveReservedSubagentDedupeEntry } from "./server-methods/agent-dedupe.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
+import { loadSessionEntryReadOnly } from "./session-utils-store.js";
 
 type ReservedSubagentIdentityClaims = {
   runIds: Set<string>;
@@ -23,6 +32,7 @@ type ReservedSubagentIdentityClaims = {
 };
 
 type ReservedSubagentCleanupHolder = {
+  attempts: number;
   timer?: ReturnType<typeof setTimeout>;
   release: () => void;
 };
@@ -56,7 +66,10 @@ function retainReservedSubagentCleanupHolder(params: {
     return;
   }
   let released = false;
+  const maxAttempts = isFastTestRuntimeEnv() ? 3 : 30;
+  const retryDelayMs = isFastTestRuntimeEnv() ? 1 : 1_000;
   const holder: ReservedSubagentCleanupHolder = {
+    attempts: 0,
     release: () => {
       if (released) {
         return;
@@ -70,16 +83,20 @@ function retainReservedSubagentCleanupHolder(params: {
       params.releaseIdentityClaim();
     },
   };
-  const retryDelayMs = isFastTestRuntimeEnv() ? 1 : 1_000;
   const retryDeletion = async () => {
     if (released) {
       return;
     }
+    holder.attempts += 1;
     const deleted = await cleanupProvisionalSession(params.childSessionKey, {
       emitLifecycleHooks: false,
       deleteTranscript: true,
     });
     if (deleted) {
+      holder.release();
+      return;
+    }
+    if (holder.attempts >= maxAttempts) {
       holder.release();
       return;
     }
@@ -99,7 +116,55 @@ function hasIndeterminateReservedCleanup(result: SpawnSubagentResult): boolean {
   return result.reservedCleanup?.sessionDeletion === "indeterminate";
 }
 
-function claimReservedSubagentIdentities(params: { runId: string; childSessionKey: string }): {
+function buildReservedSubagentClaimToken(params: {
+  pluginId: string;
+  requesterSessionKey: string;
+  requesterSessionId?: string;
+  targetAgentId: string;
+  childSessionKey: string;
+  runId: string;
+  task: string;
+  taskName?: string;
+  label?: string;
+  cleanup?: "delete" | "keep";
+  context?: string;
+  lightContext?: boolean;
+}): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        version: 1,
+        pluginId: params.pluginId,
+        requesterSessionKey: params.requesterSessionKey,
+        requesterSessionId: params.requesterSessionId ?? null,
+        targetAgentId: params.targetAgentId,
+        childSessionKey: params.childSessionKey,
+        runId: params.runId,
+        task: params.task,
+        taskName: params.taskName ?? null,
+        label: params.label ?? null,
+        cleanup: params.cleanup ?? null,
+        context: params.context ?? null,
+        lightContext: params.lightContext ?? null,
+      }),
+    )
+    .digest("hex");
+}
+
+function claimReservedSubagentIdentities(params: {
+  pluginId: string;
+  requesterSessionKey: string;
+  requesterSessionId?: string;
+  targetAgentId: string;
+  childSessionKey: string;
+  runId: string;
+  task: string;
+  taskName?: string;
+  label?: string;
+  cleanup?: "delete" | "keep";
+  context?: string;
+  lightContext?: boolean;
+}): {
   claimToken: string;
   release: () => void;
 } {
@@ -118,7 +183,7 @@ function claimReservedSubagentIdentities(params: { runId: string; childSessionKe
   }
   claims.runIds.add(params.runId);
   claims.childSessionKeys.add(params.childSessionKey);
-  const claimToken = randomUUID();
+  const claimToken = buildReservedSubagentClaimToken(params);
   let released = false;
   return {
     claimToken,
@@ -146,6 +211,82 @@ function assertReservedSubagentIdentitiesAvailable(params: {
   if (getLatestSubagentRunByChildSessionKey(params.childSessionKey)) {
     throw new Error("reserved subagent childSessionKey already exists.");
   }
+}
+
+function assertReservedSubagentRequesterOwned(params: {
+  pluginId: string;
+  requesterSessionKey: string;
+  targetAgentId: string;
+  requesterOwnership?: ReservedSubagentRequesterOwnershipEvidence;
+}): {
+  requesterAgentId: string;
+  requesterSessionId?: string;
+  requesterStorePath: string;
+} {
+  const parsedRequester = parseAgentSessionKey(params.requesterSessionKey);
+  if (!parsedRequester) {
+    throw new Error("spawnReserved requesterSessionKey must be a canonical agent session key.");
+  }
+  const loaded = loadSessionEntryReadOnly(params.requesterSessionKey, {
+    agentId: parsedRequester.agentId,
+  });
+  const entry = loaded.entry;
+  if (!entry) {
+    throw new Error(`spawnReserved missing requester session "${params.requesterSessionKey}".`);
+  }
+  const requesterOwnership = params.requesterOwnership;
+  if (requesterOwnership) {
+    if (
+      requesterOwnership.ownerPluginId !== params.pluginId ||
+      requesterOwnership.sessionKey !== params.requesterSessionKey
+    ) {
+      throw new Error(
+        `Plugin "${params.pluginId}" cannot spawn a reserved child from unvalidated requester session "${params.requesterSessionKey}".`,
+      );
+    }
+    const identityChanged =
+      (requesterOwnership.sessionId !== undefined &&
+        entry.sessionId !== requesterOwnership.sessionId) ||
+      (requesterOwnership.lifecycleRevision !== undefined &&
+        entry.lifecycleRevision !== requesterOwnership.lifecycleRevision) ||
+      (requesterOwnership.createdAt !== undefined &&
+        entry.createdAt !== requesterOwnership.createdAt);
+    if (identityChanged) {
+      throw new Error(
+        `Requester session "${params.requesterSessionKey}" changed while starting reserved subagent work. Retry.`,
+      );
+    }
+  } else if (entry.pluginOwnerId !== params.pluginId) {
+    throw new Error(
+      `Requester session "${params.requesterSessionKey}" is owned by plugin "${
+        entry.pluginOwnerId ?? "<none>"
+      }", not "${params.pluginId}".`,
+    );
+  }
+  const requesterSubagentConfig = resolveAgentConfig(
+    loaded.cfg,
+    parsedRequester.agentId,
+  )?.subagents;
+  const configuredAllowAgents =
+    requesterSubagentConfig?.allowAgents ?? loaded.cfg.agents?.defaults?.subagents?.allowAgents;
+  const configuredAgentIds = Object.keys(loaded.cfg.agents?.entries ?? {});
+  const targetPolicy = resolveSubagentTargetPolicy({
+    requesterAgentId: parsedRequester.agentId,
+    targetAgentId: params.targetAgentId,
+    requestedAgentId: params.targetAgentId,
+    allowAgents: configuredAllowAgents,
+    configuredAgentIds,
+  });
+  if (!targetPolicy.ok) {
+    throw new Error(targetPolicy.error);
+  }
+  return {
+    requesterAgentId: parsedRequester.agentId,
+    ...(entry.sessionId ? { requesterSessionId: entry.sessionId } : {}),
+    requesterStorePath: resolveStorePath(loaded.cfg.session?.store, {
+      agentId: parsedRequester.agentId,
+    }),
+  };
 }
 
 export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] = async (params) => {
@@ -191,51 +332,113 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
   if (!gatewayContext) {
     throw new Error("spawnReserved requires a live Gateway context.");
   }
+  const requesterAdmission = assertReservedSubagentRequesterOwned({
+    pluginId,
+    requesterSessionKey,
+    targetAgentId,
+    requesterOwnership: scope?.reservedSubagentRequesterOwnership,
+  });
+  return await createRuntimeAgent().session.runWithWorkAdmission(
+    {
+      storePath: requesterAdmission.requesterStorePath,
+      sessionKey: requesterSessionKey,
+    },
+    async () => {
+      const admittedRequester = assertReservedSubagentRequesterOwned({
+        pluginId,
+        requesterSessionKey,
+        targetAgentId,
+        requesterOwnership: scope?.reservedSubagentRequesterOwnership,
+      });
+      return await spawnReservedSubagentWithRequesterAdmission({
+        params,
+        pluginId,
+        requesterSessionKey,
+        targetAgentId,
+        childSessionKey,
+        runId,
+        task,
+        gatewayContext,
+        requesterSessionId: admittedRequester.requesterSessionId,
+      });
+    },
+  );
+};
+
+async function spawnReservedSubagentWithRequesterAdmission(params: {
+  params: Parameters<PluginRuntime["subagent"]["spawnReserved"]>[0];
+  pluginId: string;
+  requesterSessionKey: string;
+  targetAgentId: string;
+  childSessionKey: string;
+  runId: string;
+  task: string;
+  gatewayContext: GatewayRequestContext;
+  requesterSessionId?: string;
+}): ReturnType<PluginRuntime["subagent"]["spawnReserved"]> {
+  const reservationParams = params.params;
   const identityClaim = claimReservedSubagentIdentities({
-    runId,
-    childSessionKey,
+    pluginId: params.pluginId,
+    requesterSessionKey: params.requesterSessionKey,
+    requesterSessionId: params.requesterSessionId,
+    targetAgentId: params.targetAgentId,
+    runId: params.runId,
+    childSessionKey: params.childSessionKey,
+    task: params.task,
+    ...(reservationParams.taskName !== undefined ? { taskName: reservationParams.taskName } : {}),
+    ...(reservationParams.label !== undefined ? { label: reservationParams.label } : {}),
+    ...(reservationParams.cleanup !== undefined ? { cleanup: reservationParams.cleanup } : {}),
+    ...(reservationParams.context !== undefined ? { context: reservationParams.context } : {}),
+    ...(reservationParams.lightContext !== undefined
+      ? { lightContext: reservationParams.lightContext }
+      : {}),
   });
   let releaseGatewayDedupeReservation = () => {};
   let releaseClaimsOnReturn = true;
   try {
     assertReservedSubagentIdentitiesAvailable({
-      runId,
-      childSessionKey,
+      runId: params.runId,
+      childSessionKey: params.childSessionKey,
     });
     releaseGatewayDedupeReservation = reserveReservedSubagentDedupeEntry({
-      dedupe: gatewayContext.dedupe,
-      runId,
-      sessionKey: childSessionKey,
-      pluginRuntimeOwnerId: pluginId,
+      dedupe: params.gatewayContext.dedupe,
+      runId: params.runId,
+      sessionKey: params.childSessionKey,
+      pluginRuntimeOwnerId: params.pluginId,
       claimToken: identityClaim.claimToken,
     });
     const { spawnSubagentDirect } = await import("../agents/subagent-spawn.js");
     const result = await spawnSubagentDirect(
       {
-        task,
-        agentId: targetAgentId,
-        ...(params.taskName !== undefined ? { taskName: params.taskName } : {}),
-        ...(params.label !== undefined ? { label: params.label } : {}),
+        task: params.task,
+        agentId: params.targetAgentId,
+        ...(reservationParams.taskName !== undefined
+          ? { taskName: reservationParams.taskName }
+          : {}),
+        ...(reservationParams.label !== undefined ? { label: reservationParams.label } : {}),
         mode: "run",
-        ...(params.cleanup !== undefined ? { cleanup: params.cleanup } : {}),
-        ...(params.context !== undefined ? { context: params.context } : {}),
-        ...(params.lightContext !== undefined ? { lightContext: params.lightContext } : {}),
+        ...(reservationParams.cleanup !== undefined ? { cleanup: reservationParams.cleanup } : {}),
+        ...(reservationParams.context !== undefined ? { context: reservationParams.context } : {}),
+        ...(reservationParams.lightContext !== undefined
+          ? { lightContext: reservationParams.lightContext }
+          : {}),
         expectsCompletionMessage: false,
       },
       {
-        agentSessionKey: requesterSessionKey,
-        authorizedTargetAgentId: targetAgentId,
-        preallocatedChildSessionKey: childSessionKey,
-        preallocatedRunId: runId,
-        pluginOwnerId: pluginId,
+        agentSessionKey: params.requesterSessionKey,
+        authorizedTargetAgentId: params.targetAgentId,
+        preallocatedChildSessionKey: params.childSessionKey,
+        preallocatedRunId: params.runId,
+        pluginOwnerId: params.pluginId,
+        requesterSessionId: params.requesterSessionId,
         reservedSubagentClaimToken: identityClaim.claimToken,
       },
     );
     if (result.status !== "accepted") {
       if (hasIndeterminateReservedCleanup(result)) {
         retainReservedSubagentCleanupHolder({
-          runId,
-          childSessionKey,
+          runId: params.runId,
+          childSessionKey: params.childSessionKey,
           releaseGatewayDedupeReservation,
           releaseIdentityClaim: identityClaim.release,
         });
@@ -243,7 +446,7 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
       }
       throw new Error(result.error?.trim() || `reserved subagent spawn ${result.status}`);
     }
-    if (result.childSessionKey !== childSessionKey || result.runId !== runId) {
+    if (result.childSessionKey !== params.childSessionKey || result.runId !== params.runId) {
       throw new Error("reserved subagent spawn returned different child or run identities.");
     }
     return {
@@ -257,4 +460,4 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
       identityClaim.release();
     }
   }
-};
+}

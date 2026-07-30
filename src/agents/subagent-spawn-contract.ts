@@ -63,6 +63,8 @@ export type SpawnSubagentContext = {
   preallocatedRunId?: string;
   /** Plugin that owns the reserved child session. */
   pluginOwnerId?: string;
+  /** Immutable requester session identity bound to the reserved replay token. */
+  requesterSessionId?: string;
   /** Process-local token binding a reserved run to its Gateway dedupe reservation. */
   reservedSubagentClaimToken?: string;
   /** Explicit workspace directory for subagent to inherit (optional). */

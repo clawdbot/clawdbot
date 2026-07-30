@@ -18,6 +18,52 @@ import {
   upsertSessionEntry,
 } from "./subagent-spawn.runtime.js";
 
+const RESERVED_DIRECT_SPAWN_IN_FLIGHT_KEY: unique symbol = Symbol.for(
+  "openclaw.subagentSpawn.reservedDirectInFlight",
+);
+
+type ReservedSubagentReplayMarker = {
+  runId: string;
+  requesterSessionId: string;
+  claimToken: string;
+};
+
+function isReservedSubagentReplayMarker(value: unknown): value is ReservedSubagentReplayMarker {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as Partial<ReservedSubagentReplayMarker>).runId === "string" &&
+    typeof (value as Partial<ReservedSubagentReplayMarker>).requesterSessionId === "string" &&
+    typeof (value as Partial<ReservedSubagentReplayMarker>).claimToken === "string"
+  );
+}
+
+export function claimReservedDirectSpawnInFlight(params: {
+  preallocatedRunId?: string;
+  preallocatedChildSessionKey?: string;
+}): (() => void) | undefined {
+  if (!params.preallocatedRunId || !params.preallocatedChildSessionKey) {
+    return undefined;
+  }
+  const globalRecord = globalThis as Record<PropertyKey, unknown>;
+  const claims = (globalRecord[RESERVED_DIRECT_SPAWN_IN_FLIGHT_KEY] ??=
+    new Set<string>()) as Set<string>;
+  const key = `${params.preallocatedRunId}\0${params.preallocatedChildSessionKey}`;
+  if (claims.has(key)) {
+    throw new Error("reserved childSessionKey already exists");
+  }
+  claims.add(key);
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    claims.delete(key);
+  };
+}
+
 function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<SessionEntry> {
   const entry: Partial<SessionEntry> = {};
   const spawnDepth = patch.spawnDepth;
@@ -64,6 +110,30 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   const inheritedToolAllow = normalizeInheritedToolAllowlist(patch.inheritedToolAllow);
   if (inheritedToolAllow.length > 0) {
     entry.inheritedToolAllow = inheritedToolAllow;
+  }
+  const reservedSubagentRunId = normalizeOptionalString(patch.reservedSubagentRunId);
+  const reservedSubagentRequesterSessionId = normalizeOptionalString(
+    patch.reservedSubagentRequesterSessionId,
+  );
+  const reservedSubagentClaimToken = normalizeOptionalString(patch.reservedSubagentClaimToken);
+  const pluginOwnerId = normalizeOptionalString(patch.pluginOwnerId);
+  if (
+    (reservedSubagentRunId || reservedSubagentRequesterSessionId || reservedSubagentClaimToken) &&
+    pluginOwnerId
+  ) {
+    entry.pluginExtensions = {
+      ...entry.pluginExtensions,
+      [pluginOwnerId]: {
+        ...entry.pluginExtensions?.[pluginOwnerId],
+        openclawReservedSubagent: {
+          ...(reservedSubagentRunId ? { runId: reservedSubagentRunId } : {}),
+          ...(reservedSubagentRequesterSessionId
+            ? { requesterSessionId: reservedSubagentRequesterSessionId }
+            : {}),
+          ...(reservedSubagentClaimToken ? { claimToken: reservedSubagentClaimToken } : {}),
+        },
+      },
+    };
   }
   if (typeof patch.thinkingLevel === "string" && patch.thinkingLevel.trim()) {
     entry.thinkingLevel = patch.thinkingLevel.trim();
@@ -123,6 +193,9 @@ export async function createInitialSubagentSession(params: {
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
   modelPatch: Record<string, unknown>;
+  reservedSubagentRunId?: string;
+  reservedSubagentRequesterSessionId?: string;
+  reservedSubagentClaimToken?: string;
   swarmGroupId?: string;
   collect: boolean;
   outputSchema?: Record<string, unknown>;
@@ -141,6 +214,15 @@ export async function createInitialSubagentSession(params: {
     ...inheritedToolAllowPatch(params.inheritedToolAllowlist),
     ...inheritedToolDenyPatch(params.inheritedToolDenylist),
     ...params.modelPatch,
+    ...(params.reservedSubagentRunId
+      ? { reservedSubagentRunId: params.reservedSubagentRunId }
+      : {}),
+    ...(params.reservedSubagentRequesterSessionId
+      ? { reservedSubagentRequesterSessionId: params.reservedSubagentRequesterSessionId }
+      : {}),
+    ...(params.reservedSubagentClaimToken
+      ? { reservedSubagentClaimToken: params.reservedSubagentClaimToken }
+      : {}),
     ...(params.swarmGroupId ? { swarmGroupId: params.swarmGroupId } : {}),
     ...(params.collect ? { swarmCollector: true } : {}),
     ...(params.outputSchema ? { swarmOutputSchema: params.outputSchema } : {}),
@@ -184,6 +266,23 @@ export async function createInitialSubagentSession(params: {
               sessionKey: target.canonicalKey,
             });
             if (existing) {
+              const reserved = params.pluginOwnerId
+                ? existing.pluginExtensions?.[params.pluginOwnerId]?.openclawReservedSubagent
+                : undefined;
+              const exactReplay =
+                params.reservedSubagentRunId &&
+                params.reservedSubagentRequesterSessionId &&
+                params.reservedSubagentClaimToken &&
+                isReservedSubagentReplayMarker(reserved) &&
+                reserved?.runId === params.reservedSubagentRunId &&
+                reserved?.requesterSessionId === params.reservedSubagentRequesterSessionId &&
+                reserved?.claimToken === params.reservedSubagentClaimToken &&
+                existing.pluginOwnerId === params.pluginOwnerId &&
+                existing.spawnedBy === params.requesterInternalKey &&
+                existing.parentSessionKey === params.requesterInternalKey;
+              if (exactReplay) {
+                return existing;
+              }
               throw new Error("reserved childSessionKey already exists");
             }
             return await createEntry();

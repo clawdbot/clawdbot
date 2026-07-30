@@ -11,6 +11,7 @@ const cleanupProvisionalSession = vi.hoisted(() => vi.fn());
 const getAgentRunContext = vi.hoisted(() => vi.fn());
 const hasSubagentRunIdentity = vi.hoisted(() => vi.fn());
 const getLatestSubagentRunByChildSessionKey = vi.hoisted(() => vi.fn());
+const loadSessionEntryReadOnly = vi.hoisted(() => vi.fn());
 
 vi.mock("../agents/subagent-spawn.js", () => ({
   spawnSubagentDirect,
@@ -26,8 +27,19 @@ vi.mock("../infra/agent-events.js", () => ({
   getAgentRunContext,
   onAgentEvent: vi.fn(),
 }));
+vi.mock("./session-utils-store.js", () => ({
+  loadSessionEntryReadOnly,
+}));
 
 import { createGatewaySubagentRuntime } from "./server-plugins.js";
+
+type RequesterOwnershipEvidence = {
+  ownerPluginId: string;
+  sessionKey: string;
+  sessionId?: string;
+  lifecycleRevision?: string;
+  createdAt?: number;
+};
 
 const reservation = {
   requesterSessionKey: "agent:main:main",
@@ -40,11 +52,13 @@ const reservation = {
 function withReservedPluginScope<T>(
   run: () => T,
   dedupe: GatewayRequestContext["dedupe"] = new Map(),
+  requesterOwnership?: RequesterOwnershipEvidence,
 ): T {
   return withPluginRuntimeGatewayRequestScope(
     {
       context: { dedupe } as GatewayRequestContext,
       isWebchatConnect: () => false,
+      ...(requesterOwnership ? { reservedSubagentRequesterOwnership: requesterOwnership } : {}),
     },
     () => withPluginRuntimePluginIdScope("agentic-os", run),
   );
@@ -57,6 +71,20 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
     getAgentRunContext.mockReset().mockReturnValue(undefined);
     hasSubagentRunIdentity.mockReset().mockReturnValue(false);
     getLatestSubagentRunByChildSessionKey.mockReset().mockReturnValue(undefined);
+    loadSessionEntryReadOnly.mockReset().mockReturnValue({
+      cfg: {
+        agents: {
+          defaults: { subagents: { allowAgents: ["worker"] } },
+          entries: { main: {}, worker: {} },
+        },
+      },
+      entry: {
+        pluginOwnerId: "agentic-os",
+        sessionId: "requester-session",
+        lifecycleRevision: "1",
+        createdAt: 1,
+      },
+    });
     spawnSubagentDirect.mockResolvedValue({
       status: "accepted",
       childSessionKey: reservation.childSessionKey,
@@ -174,6 +202,7 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
         preallocatedChildSessionKey: reservation.childSessionKey,
         preallocatedRunId: reservation.runId,
         pluginOwnerId: "agentic-os",
+        requesterSessionId: "requester-session",
         reservedSubagentClaimToken: expect.any(String),
       },
     );
@@ -323,5 +352,227 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
       runId: reservation.runId,
     });
     expect(spawnSubagentDirect).toHaveBeenCalledTimes(2);
+  });
+
+  it("bounds indeterminate cleanup retries without retaining permanent process claims", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.useFakeTimers();
+    const runtime = createGatewaySubagentRuntime();
+    const dedupe: GatewayRequestContext["dedupe"] = new Map();
+    const boundedReservation = {
+      ...reservation,
+      childSessionKey: "agent:worker:subagent:plugin-reserved-bounded-child",
+      runId: "plugin-reserved-bounded-run",
+    };
+    spawnSubagentDirect.mockResolvedValueOnce({
+      status: "error",
+      error: "gateway request timeout for agent",
+      childSessionKey: boundedReservation.childSessionKey,
+      runId: boundedReservation.runId,
+      reservedCleanup: { sessionDeletion: "indeterminate" },
+    });
+    spawnSubagentDirect.mockResolvedValueOnce({
+      status: "accepted",
+      childSessionKey: boundedReservation.childSessionKey,
+      runId: boundedReservation.runId,
+      mode: "run",
+    });
+
+    await expect(
+      withReservedPluginScope(() => runtime.spawnReserved(boundedReservation), dedupe),
+    ).rejects.toThrow("gateway request timeout for agent");
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(cleanupProvisionalSession).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(dedupe.has(`agent:${boundedReservation.runId}`)).toBe(false);
+    await expect(
+      withReservedPluginScope(() => runtime.spawnReserved(boundedReservation), dedupe),
+    ).resolves.toMatchObject({
+      childSessionKey: boundedReservation.childSessionKey,
+      runId: boundedReservation.runId,
+    });
+    expect(spawnSubagentDirect).toHaveBeenCalledTimes(2);
+  });
+
+  it("rechecks requester ownership inside the admitted reserved spawn", async () => {
+    const revalidatedReservation = {
+      ...reservation,
+      childSessionKey: "agent:worker:subagent:plugin-reserved-revalidated-child",
+      runId: "plugin-reserved-revalidated-run",
+    };
+    spawnSubagentDirect.mockResolvedValueOnce({
+      status: "accepted",
+      childSessionKey: revalidatedReservation.childSessionKey,
+      runId: revalidatedReservation.runId,
+      mode: "run",
+    });
+
+    await expect(
+      withReservedPluginScope(() =>
+        createGatewaySubagentRuntime().spawnReserved({
+          ...revalidatedReservation,
+        }),
+      ),
+    ).resolves.toMatchObject({
+      childSessionKey: revalidatedReservation.childSessionKey,
+      runId: revalidatedReservation.runId,
+    });
+
+    expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
+    expect(spawnSubagentDirect.mock.calls[0]?.[1]).not.toHaveProperty(
+      "revalidateReservedRequesterOwnership",
+    );
+    expect(loadSessionEntryReadOnly).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects when requester ownership changes before the admitted spawn body", async () => {
+    const revalidatedReservation = {
+      ...reservation,
+      childSessionKey: "agent:worker:subagent:plugin-reserved-revalidate-fail-child",
+      runId: "plugin-reserved-revalidate-fail-run",
+    };
+    spawnSubagentDirect.mockResolvedValueOnce({
+      status: "accepted",
+      childSessionKey: revalidatedReservation.childSessionKey,
+      runId: revalidatedReservation.runId,
+      mode: "run",
+    });
+    loadSessionEntryReadOnly
+      .mockReturnValueOnce({
+        cfg: {
+          agents: {
+            defaults: { subagents: { allowAgents: ["worker"] } },
+            entries: { main: {}, worker: {} },
+          },
+        },
+        entry: {
+          pluginOwnerId: "agentic-os",
+          sessionId: "requester-session",
+          lifecycleRevision: "1",
+          createdAt: 1,
+        },
+      })
+      .mockReturnValueOnce({
+        cfg: {
+          agents: {
+            defaults: { subagents: { allowAgents: ["worker"] } },
+            entries: { main: {}, worker: {} },
+          },
+        },
+        entry: {
+          pluginOwnerId: "foreign-plugin",
+          sessionId: "requester-session",
+          lifecycleRevision: "2",
+          createdAt: 1,
+        },
+      });
+
+    await expect(
+      withReservedPluginScope(() =>
+        createGatewaySubagentRuntime().spawnReserved({
+          ...revalidatedReservation,
+        }),
+      ),
+    ).rejects.toThrow('is owned by plugin "foreign-plugin", not "agentic-os"');
+
+    expect(spawnSubagentDirect).not.toHaveBeenCalled();
+  });
+
+  it("accepts a wrapper-validated locked-harness requester without explicit pluginOwnerId", async () => {
+    const lockedReservation = {
+      ...reservation,
+      requesterSessionKey: "agent:main:harness:codex:thread-1",
+      childSessionKey: "agent:worker:subagent:locked-harness-reserved-child",
+      runId: "locked-harness-reserved-run",
+    };
+    loadSessionEntryReadOnly.mockReturnValue({
+      cfg: {
+        agents: {
+          defaults: { subagents: { allowAgents: ["worker"] } },
+          entries: { main: {}, worker: {} },
+        },
+      },
+      entry: {
+        sessionId: "locked-harness-session",
+        lifecycleRevision: "7",
+        createdAt: 3,
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      },
+    });
+    spawnSubagentDirect.mockResolvedValueOnce({
+      status: "accepted",
+      childSessionKey: lockedReservation.childSessionKey,
+      runId: lockedReservation.runId,
+      mode: "run",
+    });
+
+    await expect(
+      withReservedPluginScope(
+        () => createGatewaySubagentRuntime().spawnReserved(lockedReservation),
+        new Map(),
+        {
+          ownerPluginId: "agentic-os",
+          sessionKey: lockedReservation.requesterSessionKey,
+          sessionId: "locked-harness-session",
+          lifecycleRevision: "7",
+          createdAt: 3,
+        },
+      ),
+    ).resolves.toMatchObject({
+      childSessionKey: lockedReservation.childSessionKey,
+      runId: lockedReservation.runId,
+    });
+
+    expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a wrapper-validated requester when the same key is replaced before admission", async () => {
+    const lockedReservation = {
+      ...reservation,
+      requesterSessionKey: "agent:main:harness:codex:thread-1",
+      childSessionKey: "agent:worker:subagent:locked-harness-replaced-child",
+      runId: "locked-harness-replaced-run",
+    };
+    const loaded = {
+      cfg: {
+        agents: {
+          defaults: { subagents: { allowAgents: ["worker"] } },
+          entries: { main: {}, worker: {} },
+        },
+      },
+      entry: {
+        sessionId: "locked-harness-session",
+        lifecycleRevision: "7",
+        createdAt: 3,
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      },
+    };
+    loadSessionEntryReadOnly.mockReturnValueOnce(loaded).mockReturnValueOnce({
+      ...loaded,
+      entry: {
+        ...loaded.entry,
+        sessionId: "replacement-session",
+      },
+    });
+
+    await expect(
+      withReservedPluginScope(
+        () => createGatewaySubagentRuntime().spawnReserved(lockedReservation),
+        new Map(),
+        {
+          ownerPluginId: "agentic-os",
+          sessionKey: lockedReservation.requesterSessionKey,
+          sessionId: "locked-harness-session",
+          lifecycleRevision: "7",
+          createdAt: 3,
+        },
+      ),
+    ).rejects.toThrow("changed while starting reserved subagent work");
+
+    expect(spawnSubagentDirect).not.toHaveBeenCalled();
   });
 });

@@ -306,6 +306,44 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(gatewayRequestRecords().some((request) => request.method === "agent")).toBe(false);
   });
 
+  it("keeps reserved target authorization inside the configured allowlist", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
+        list: [
+          {
+            id: "main",
+            workspace: "/tmp/workspace-main",
+            subagents: { allowAgents: ["planner"] },
+          },
+          { id: "planner", workspace: "/tmp/workspace-planner" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "must respect configured allowlist",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: "agent:worker:subagent:reserved-disallowed-worker",
+        preallocatedRunId: "reserved-disallowed-worker-run",
+        pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "reserved-disallowed-worker-claim",
+      },
+    );
+
+    expect(result.status).not.toBe("accepted");
+    expect(result.error).toContain("not allowed");
+    expect(gatewayRequestRecords()).toEqual([]);
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
   it("allows omitted agentId to default to requester even when allowAgents excludes requester", async () => {
     hoisted.configOverride = createConfigOverride({
       agents: {
@@ -355,7 +393,7 @@ describe("spawnSubagentDirect seam flow", () => {
             id: "main",
             workspace: "/tmp/workspace-main",
             subagents: {
-              allowAgents: ["planner"],
+              allowAgents: ["worker"],
             },
           },
           {
@@ -392,6 +430,7 @@ describe("spawnSubagentDirect seam flow", () => {
         preallocatedChildSessionKey,
         preallocatedRunId,
         pluginOwnerId: "agentic-os",
+        requesterSessionId: "requester-session",
         reservedSubagentClaimToken: "plugin-reserved-claim",
       },
     );
@@ -419,7 +458,227 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(persistedStore?.[preallocatedChildSessionKey]).toMatchObject({
       pluginOwnerId: "agentic-os",
       spawnedBy: "agent:main:main",
+      pluginExtensions: {
+        "agentic-os": {
+          openclawReservedSubagent: {
+            runId: preallocatedRunId,
+            requesterSessionId: "requester-session",
+            claimToken: "plugin-reserved-claim",
+          },
+        },
+      },
     });
+  });
+
+  it("replays an exact plugin-reserved provisional child row after a crash", async () => {
+    const childSessionKey = "agent:worker:subagent:reserved-crash-replay-child";
+    const runId = "reserved-crash-replay-run";
+    const claimToken = "reserved-crash-replay-fingerprint";
+    const existingEntry = {
+      sessionId: "reserved-crash-replay-session",
+      createdAt: 1,
+      updatedAt: 1,
+      pluginOwnerId: "agentic-os",
+      spawnedBy: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      pluginExtensions: {
+        "agentic-os": {
+          openclawReservedSubagent: {
+            runId,
+            requesterSessionId: "requester-session",
+            claimToken,
+          },
+        },
+      },
+    };
+    const store: Record<string, Record<string, unknown>> = {
+      [childSessionKey]: { ...existingEntry },
+    };
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    hoisted.loadSessionStoreMock.mockImplementation(() => store);
+    hoisted.updateSessionStoreMock.mockImplementation(async (_storePath, mutator) => {
+      await mutator(store);
+      return store;
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(
+      async (method: string, params: Record<string, unknown>) =>
+        method === "agent" ? { runId: params.idempotencyKey } : { ok: true },
+    );
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "resume the exact reserved child after a crash",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: childSessionKey,
+        preallocatedRunId: runId,
+        pluginOwnerId: "agentic-os",
+        requesterSessionId: "requester-session",
+        reservedSubagentClaimToken: claimToken,
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      childSessionKey,
+      runId,
+    });
+    expect(store[childSessionKey]).toMatchObject({
+      ...existingEntry,
+      pluginExtensions: existingEntry.pluginExtensions,
+    });
+    expect(
+      hoisted.dispatchGatewayMethodInProcessMock.mock.calls.filter(
+        ([method]) => method === "agent",
+      ),
+    ).toHaveLength(1);
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an altered plugin-reserved crash replay without mutation or dispatch", async () => {
+    const childSessionKey = "agent:worker:subagent:reserved-crash-replay-altered-child";
+    const runId = "reserved-crash-replay-altered-run";
+    const existingEntry = {
+      sessionId: "reserved-crash-replay-altered-session",
+      createdAt: 1,
+      updatedAt: 1,
+      pluginOwnerId: "agentic-os",
+      spawnedBy: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      pluginExtensions: {
+        "agentic-os": {
+          openclawReservedSubagent: {
+            runId,
+            requesterSessionId: "requester-session",
+            claimToken: "reserved-crash-replay-original-fingerprint",
+          },
+        },
+      },
+    };
+    const store: Record<string, Record<string, unknown>> = {
+      [childSessionKey]: { ...existingEntry },
+    };
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    hoisted.loadSessionStoreMock.mockImplementation(() => store);
+    hoisted.updateSessionStoreMock.mockImplementation(async (_storePath, mutator) => {
+      await mutator(store);
+      return store;
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "altered replay must fail closed",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: childSessionKey,
+        preallocatedRunId: runId,
+        pluginOwnerId: "agentic-os",
+        requesterSessionId: "requester-session",
+        reservedSubagentClaimToken: "reserved-crash-replay-changed-fingerprint",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("reserved childSessionKey already exists"),
+      childSessionKey,
+    });
+    expect(store[childSessionKey]).toEqual(existingEntry);
+    expect(gatewayRequestRecords().some((request) => request.method === "agent")).toBe(false);
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a plugin-reserved replay from the same key after requester recreation", async () => {
+    const childSessionKey = "agent:worker:subagent:reserved-recreated-requester-child";
+    const runId = "reserved-recreated-requester-run";
+    const claimToken = "reserved-recreated-requester-fingerprint";
+    const existingEntry = {
+      sessionId: "reserved-recreated-requester-child-session",
+      createdAt: 1,
+      updatedAt: 1,
+      pluginOwnerId: "agentic-os",
+      spawnedBy: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      pluginExtensions: {
+        "agentic-os": {
+          openclawReservedSubagent: {
+            runId,
+            requesterSessionId: "original-requester-session",
+            claimToken,
+          },
+        },
+      },
+    };
+    const store: Record<string, Record<string, unknown>> = {
+      [childSessionKey]: { ...existingEntry },
+    };
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    hoisted.loadSessionStoreMock.mockImplementation(() => store);
+    hoisted.updateSessionStoreMock.mockImplementation(async (_storePath, mutator) => {
+      await mutator(store);
+      return store;
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "same key and task must not reclaim after requester recreation",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: childSessionKey,
+        preallocatedRunId: runId,
+        pluginOwnerId: "agentic-os",
+        requesterSessionId: "replacement-requester-session",
+        reservedSubagentClaimToken: claimToken,
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("reserved childSessionKey already exists"),
+      childSessionKey,
+    });
+    expect(store[childSessionKey]).toEqual(existingEntry);
+    expect(gatewayRequestRecords().some((request) => request.method === "agent")).toBe(false);
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   });
 
   it("rejects an existing reserved child session without mutating or dispatching it", async () => {
@@ -435,7 +694,7 @@ describe("spawnSubagentDirect seam flow", () => {
     };
     hoisted.configOverride = createConfigOverride({
       agents: {
-        defaults: { workspace: os.tmpdir() },
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
         list: [
           { id: "main", workspace: "/tmp/workspace-main" },
           { id: "worker", workspace: "/tmp/workspace-worker" },
@@ -479,7 +738,7 @@ describe("spawnSubagentDirect seam flow", () => {
     const store: Record<string, Record<string, unknown>> = {};
     hoisted.configOverride = createConfigOverride({
       agents: {
-        defaults: { workspace: os.tmpdir() },
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
         list: [
           { id: "main", workspace: "/tmp/workspace-main" },
           { id: "worker", workspace: "/tmp/workspace-worker" },
@@ -591,7 +850,7 @@ describe("spawnSubagentDirect seam flow", () => {
       "agentSessionKey" in testCase ? testCase.agentSessionKey : "agent:main:main";
     hoisted.configOverride = createConfigOverride({
       agents: {
-        defaults: { workspace: os.tmpdir() },
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
         list: [
           { id: "main", workspace: "/tmp/workspace-main" },
           { id: "planner", workspace: "/tmp/workspace-planner" },
@@ -962,7 +1221,7 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.configOverride = createConfigOverride({
       tools: { swarm: { enabled: true, defaultAgentId: "worker" } },
       agents: {
-        defaults: { workspace: os.tmpdir() },
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
         list: [
           {
             id: "main",
@@ -1427,7 +1686,7 @@ describe("spawnSubagentDirect seam flow", () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     hoisted.configOverride = createConfigOverride({
       agents: {
-        defaults: { workspace: os.tmpdir() },
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
         list: [
           { id: "main", workspace: "/tmp/workspace-main" },
           { id: "worker", workspace: "/tmp/workspace-worker" },
@@ -1477,7 +1736,7 @@ describe("spawnSubagentDirect seam flow", () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     hoisted.configOverride = createConfigOverride({
       agents: {
-        defaults: { workspace: os.tmpdir() },
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
         list: [
           { id: "main", workspace: "/tmp/workspace-main" },
           { id: "worker", workspace: "/tmp/workspace-worker" },
@@ -1544,7 +1803,7 @@ describe("spawnSubagentDirect seam flow", () => {
     const store: Record<string, Record<string, unknown>> = {};
     hoisted.configOverride = createConfigOverride({
       agents: {
-        defaults: { workspace: os.tmpdir() },
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
         list: [
           { id: "main", workspace: "/tmp/workspace-main" },
           { id: "worker", workspace: "/tmp/workspace-worker" },
@@ -1578,8 +1837,8 @@ describe("spawnSubagentDirect seam flow", () => {
       {
         agentSessionKey: "agent:main:main",
         authorizedTargetAgentId: "worker",
-        preallocatedChildSessionKey: "agent:worker:subagent:ambiguous-reserved-child",
-        preallocatedRunId: "ambiguous-reserved-run",
+        preallocatedChildSessionKey: "agent:worker:subagent:ambiguous-reserved-child-held",
+        preallocatedRunId: "ambiguous-reserved-run-held",
         pluginOwnerId: "agentic-os",
         reservedSubagentClaimToken: "ambiguous-reserved-claim",
       },
@@ -1599,8 +1858,8 @@ describe("spawnSubagentDirect seam flow", () => {
       {
         agentSessionKey: "agent:main:main",
         authorizedTargetAgentId: "worker",
-        preallocatedChildSessionKey: "agent:worker:subagent:ambiguous-reserved-child",
-        preallocatedRunId: "ambiguous-reserved-run",
+        preallocatedChildSessionKey: "agent:worker:subagent:ambiguous-reserved-child-held",
+        preallocatedRunId: "ambiguous-reserved-run-held",
         pluginOwnerId: "agentic-os",
         reservedSubagentClaimToken: "ambiguous-reserved-claim-2",
       },
