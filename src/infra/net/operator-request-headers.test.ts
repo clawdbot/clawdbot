@@ -102,6 +102,8 @@ describe("resolveOperatorRequestHeaders", () => {
       "X-HMAC-SHA256": "hmac-live",
       "X-Custom-Auth": "custom-live",
       "X-XAI-Token-Auth": "xai-live",
+      "X-MBX-APIKEY": "binance-live",
+      "X-Provider-AccessToken": "provider-live",
       "X-Fine": "ok",
     });
     expect(Object.keys(headers ?? {})).toEqual(["X-Fine"]);
@@ -134,6 +136,8 @@ describe("resolveOperatorRequestHeaders", () => {
         "X-HMAC-SHA256",
         "X-Custom-Auth",
         "X-XAI-Token-Auth",
+        "X-MBX-APIKEY",
+        "X-Provider-AccessToken",
       ]),
     );
   });
