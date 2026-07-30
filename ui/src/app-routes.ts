@@ -1,5 +1,5 @@
 import { createRouter } from "@openclaw/uirouter";
-import type { PageDefinition, Router, RouterHistory } from "@openclaw/uirouter";
+import type { PageDefinition, RouteLocation, Router, RouterHistory } from "@openclaw/uirouter";
 import {
   agentRouteFromPath,
   INTERNAL_AGENT_PATH_PARAM,
