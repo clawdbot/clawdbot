@@ -583,6 +583,40 @@ describe("msteams graph helpers", () => {
       expect(globalThis.fetch).toHaveBeenCalledTimes(3);
     });
 
+    it("forwards deadline to each paginated request", async () => {
+      const deadline = {
+        label: "MS Teams inbound preprocessing",
+        timeoutMs: 10_000,
+        deadlineAtMs: Date.now() + 10_000,
+      };
+      let callCount = 0;
+
+      mockFetch(async () => {
+        callCount++;
+        if (callCount === 1) {
+          return jsonResponse(
+            pagedResponse(
+              [{ id: "1", name: "a" }],
+              "https://graph.microsoft.com/v1.0/items?$skiptoken=page2",
+            ),
+          );
+        }
+        return jsonResponse(pagedResponse([{ id: "2", name: "b" }]));
+      });
+
+      await fetchAllGraphPages<Item>({
+        token: graphToken,
+        path: "/items",
+        deadline,
+      });
+
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+      expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.timeoutMs).toBeGreaterThan(0);
+      expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.timeoutMs).toBeLessThanOrEqual(10_000);
+      expect(fetchWithSsrFGuardMock.mock.calls[1]?.[0]?.timeoutMs).toBeGreaterThan(0);
+      expect(fetchWithSsrFGuardMock.mock.calls[1]?.[0]?.timeoutMs).toBeLessThanOrEqual(10_000);
+    });
+
     it("truncation at maxPages", async () => {
       mockFetch(async () =>
         jsonResponse(

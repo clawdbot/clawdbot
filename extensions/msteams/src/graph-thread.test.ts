@@ -7,19 +7,12 @@ import {
   formatThreadContext,
   stripHtmlFromTeamsMessage,
 } from "./graph-thread.js";
-import { fetchGraphJson } from "./graph.js";
+import { fetchAllGraphPages, fetchGraphJson } from "./graph.js";
 
 vi.mock("./graph.js", () => ({
+  fetchAllGraphPages: vi.fn(),
   fetchGraphJson: vi.fn(),
 }));
-
-const firstGraphPath = () => {
-  const [call] = vi.mocked(fetchGraphJson).mock.calls;
-  if (!call) {
-    throw new Error("expected Graph fetch call");
-  }
-  return call[0].path;
-};
 
 describe("stripHtmlFromTeamsMessage", () => {
   it("preserves @mention display names from <at> tags", () => {
@@ -163,44 +156,94 @@ describe("fetchChatMessageText", () => {
 
 describe("fetchThreadReplies", () => {
   beforeEach(() => {
+    vi.mocked(fetchAllGraphPages).mockReset();
     vi.mocked(fetchGraphJson).mockReset();
   });
 
   it("fetches replies with correct path and default limit", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({
-      value: [{ id: "reply-1" }, { id: "reply-2" }],
+    vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({
+      items: [{ id: "reply-1" }, { id: "reply-2" }],
+      truncated: false,
     } as never);
 
     const result = await fetchThreadReplies("tok", "group-1", "channel-1", "msg-1");
 
     expect(result).toHaveLength(2);
-    expect(fetchGraphJson).toHaveBeenCalledWith({
+    expect(fetchAllGraphPages).toHaveBeenCalledWith({
       token: "tok",
       path: "/teams/group-1/channels/channel-1/messages/msg-1/replies?$top=50&$select=id,from,body,createdDateTime",
+      maxPages: 50,
     });
   });
 
-  it("clamps limit to 50 maximum", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({ value: [] } as never);
+  it("clamps returned replies to 50 maximum", async () => {
+    vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({
+      items: Array.from({ length: 60 }, (_, index) => ({ id: `reply-${index + 1}` })),
+      truncated: false,
+    } as never);
 
-    await fetchThreadReplies("tok", "g", "c", "m", 200);
+    const result = await fetchThreadReplies("tok", "g", "c", "m", 200);
 
-    expect(firstGraphPath()).toContain("$top=50");
+    expect(result).toHaveLength(50);
+    expect(result[0]?.id).toBe("reply-11");
+    expect(result[result.length - 1]?.id).toBe("reply-60");
   });
 
-  it("clamps limit to 1 minimum", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({ value: [] } as never);
+  it("clamps returned replies to 1 minimum", async () => {
+    vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({
+      items: [{ id: "reply-1" }, { id: "reply-2" }],
+      truncated: false,
+    } as never);
 
-    await fetchThreadReplies("tok", "g", "c", "m", 0);
+    const result = await fetchThreadReplies("tok", "g", "c", "m", 0);
 
-    expect(firstGraphPath()).toContain("$top=1");
+    expect(result).toStrictEqual([{ id: "reply-2" }]);
   });
 
-  it("returns empty array when value is missing", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({} as never);
+  it("returns empty array when no replies are returned", async () => {
+    vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({ items: [], truncated: false } as never);
 
     const result = await fetchThreadReplies("tok", "g", "c", "m");
     expect(result).toStrictEqual([]);
+  });
+
+  it("uses paginated replies and returns the newest limit chronologically", async () => {
+    vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({
+      items: [
+        { id: "reply-4", createdDateTime: "2026-07-01T00:03:00Z" },
+        { id: "reply-2", createdDateTime: "2026-07-01T00:01:00Z" },
+        { id: "reply-3", createdDateTime: "2026-07-01T00:02:00Z" },
+        { id: "reply-1", createdDateTime: "2026-07-01T00:00:00Z" },
+      ],
+      truncated: false,
+    } as never);
+
+    const result = await fetchThreadReplies("tok", "g", "c", "m", 2);
+
+    expect(result.map((reply) => reply.id)).toStrictEqual(["reply-3", "reply-4"]);
+    expect(fetchAllGraphPages).toHaveBeenCalledWith({
+      token: "tok",
+      path: "/teams/g/channels/c/messages/m/replies?$top=50&$select=id,from,body,createdDateTime",
+      maxPages: 50,
+    });
+  });
+
+  it("forwards a shared deadline to paginated reply fetches", async () => {
+    vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({ items: [], truncated: false } as never);
+    const deadline = {
+      label: "MS Teams inbound preprocessing",
+      timeoutMs: 10_000,
+      deadlineAtMs: Date.now() + 10_000,
+    };
+
+    await fetchThreadReplies("tok", "g", "c", "m", 50, deadline);
+
+    expect(fetchAllGraphPages).toHaveBeenCalledWith({
+      token: "tok",
+      path: "/teams/g/channels/c/messages/m/replies?$top=50&$select=id,from,body,createdDateTime",
+      maxPages: 50,
+      deadline,
+    });
   });
 });
 

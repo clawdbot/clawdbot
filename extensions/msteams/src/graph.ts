@@ -172,6 +172,8 @@ export async function fetchAllGraphPages<T>(params: {
   token: string;
   path: string;
   headers?: Record<string, string>;
+  /** Optional shared operation deadline; actively aborts each guarded fetch when spent. */
+  deadline?: MSTeamsRequestDeadline;
   /** Max pages to fetch before stopping. Default: 50. */
   maxPages?: number;
   /** Stop pagination early when this predicate returns true. */
@@ -186,6 +188,7 @@ export async function fetchAllGraphPages<T>(params: {
       token: params.token,
       path: nextPath,
       headers: params.headers,
+      deadline: params.deadline,
     });
 
     const pageItems = res.value ?? [];
