@@ -161,7 +161,23 @@ export async function handleBuzzInbound(params: {
         throw error instanceof Error ? error : new Error(String(error));
       },
     },
-    replyPipeline: {},
+    replyPipeline: {
+      typing: {
+        start: async () => {
+          await bus.sendTyping({
+            channelId,
+            threadId: message.threadId,
+            replyToId: message.id,
+          });
+        },
+        keepaliveIntervalMs: 3_000,
+        onStartError: (error: unknown) => {
+          runtime.error(
+            `[${account.accountId}] Buzz typing failed for ${channelId}: ${String(error)}`,
+          );
+        },
+      },
+    },
     record: {
       onRecordError: (error) => {
         throw error instanceof Error

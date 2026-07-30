@@ -58,6 +58,7 @@ function createBus(): BuzzBus {
   return {
     publicKey: BOT_PUBLIC_KEY,
     sendText: vi.fn(async () => "reply-event-1"),
+    sendTyping: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
   };
 }
@@ -216,6 +217,15 @@ describe("handleBuzzInbound", () => {
     expect(bus.sendText).toHaveBeenCalledWith({
       channelId: ROOM_ID,
       text: "threaded reply",
+      threadId: "event-root",
+      replyToId: "event-reply",
+    });
+
+    const typing = dispatch.replyPipeline?.typing;
+    expect(typing?.keepaliveIntervalMs).toBe(3_000);
+    await typing?.start();
+    expect(bus.sendTyping).toHaveBeenCalledWith({
+      channelId: ROOM_ID,
       threadId: "event-root",
       replyToId: "event-reply",
     });

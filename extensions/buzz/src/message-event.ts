@@ -3,6 +3,7 @@ import type { Event } from "nostr-tools";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export const BUZZ_NORMAL_MESSAGE_KIND = 9;
+export const BUZZ_TYPING_INDICATOR_KIND = 20_002;
 const BUZZ_RICH_MESSAGE_KIND = 40_002;
 export const BUZZ_DIFF_MESSAGE_KIND = 40_008;
 export const BUZZ_INBOUND_MESSAGE_KINDS = [

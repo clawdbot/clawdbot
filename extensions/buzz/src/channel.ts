@@ -10,7 +10,7 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { BuzzConfigSchema } from "./config-schema.js";
-import { buzzOutboundAdapter, startBuzzGatewayAccount } from "./gateway.js";
+import { buzzOutboundAdapter, sendBuzzTyping, startBuzzGatewayAccount } from "./gateway.js";
 import { discoverBuzzRooms } from "./room-discovery.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { buzzSetupAdapter, buzzSetupContract } from "./setup-core.js";
@@ -165,6 +165,9 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
     },
     gateway: {
       startAccount: startBuzzGatewayAccount,
+    },
+    heartbeat: {
+      sendTyping: sendBuzzTyping,
     },
     message: buzzMessageAdapter,
   },

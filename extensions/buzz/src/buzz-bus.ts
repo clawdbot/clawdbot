@@ -3,6 +3,7 @@ import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe"
 import {
   BUZZ_INBOUND_MESSAGE_KINDS,
   BUZZ_NORMAL_MESSAGE_KIND,
+  BUZZ_TYPING_INDICATOR_KIND,
   buildBuzzMessageTags,
   parseBuzzMessageEvent,
   type BuzzInboundMessage,
@@ -38,6 +39,11 @@ export interface BuzzBus {
     threadId?: string;
     replyToId?: string;
   }) => Promise<string>;
+  sendTyping: (params: {
+    channelId: string;
+    threadId?: string;
+    replyToId?: string;
+  }) => Promise<void>;
   close: () => Promise<void>;
 }
 
@@ -52,6 +58,23 @@ function buildBuzzTextEvent(params: {
     {
       kind: BUZZ_NORMAL_MESSAGE_KIND,
       content: params.text,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: buildBuzzMessageTags(params),
+    },
+    params.secretKey,
+  );
+}
+
+function buildBuzzTypingEvent(params: {
+  secretKey: Uint8Array;
+  channelId: string;
+  threadId?: string;
+  replyToId?: string;
+}): Event {
+  return finalizeEvent(
+    {
+      kind: BUZZ_TYPING_INDICATOR_KIND,
+      content: "",
       created_at: Math.floor(Date.now() / 1000),
       tags: buildBuzzMessageTags(params),
     },
@@ -587,6 +610,20 @@ export async function startBuzzBus(options: {
       const event = buildBuzzTextEvent({ secretKey, channelId, text, threadId, replyToId });
       await relay.publish(event);
       return event.id;
+    },
+    sendTyping: async ({ channelId, threadId, replyToId }) => {
+      if (signal.aborted || !relay.connected) {
+        return;
+      }
+      const event = buildBuzzTypingEvent({
+        secretKey,
+        channelId,
+        threadId,
+        replyToId,
+      });
+      // Typing is ephemeral. Write the frame on the existing socket without
+      // waiting for relay acknowledgement or replaying it after reconnect.
+      await relay.send(JSON.stringify(["EVENT", event]));
     },
     close: async () => {
       lifecycleAbort.abort(new Error("Buzz bus closed"));
