@@ -39,6 +39,29 @@ const GATEWAY_STARTUP_HEALTH_RUNTIME_ENV = {
 const AGENTS_EMBEDDED_AGENT_ENV = {
   OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000",
 };
+const COMPACT_GROUP_SPLITS = new Map([
+  [
+    "agentic-agents-embedded",
+    [
+      {
+        config: agentVitestProjectOwners.embedded.config,
+        shardName: "agentic-agents-embedded-base",
+      },
+      {
+        config: agentVitestProjectOwners.embeddedIncompleteTurn.config,
+        shardName: "agentic-agents-embedded-incomplete-turn",
+      },
+      {
+        config: agentVitestProjectOwners.embeddedOverflowCompaction.config,
+        shardName: "agentic-agents-embedded-overflow-compaction",
+      },
+      {
+        config: agentVitestProjectOwners.embeddedRun.config,
+        shardName: "agentic-agents-embedded-run",
+      },
+    ],
+  ],
+]);
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // PR-only bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
@@ -82,9 +105,15 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map([
   ["agentic-agents-core-runtime", 79],
   ["agentic-agents-core-subagents", 32],
   ["agentic-agents-core-tools", 52],
-  // A cold fork run is about 430s and emits no file result for most of its
-  // first five minutes. Keep this whole-config whale in its own compact job.
+  // Keep the composite hint for the baseline registration count. Compact
+  // packing then splits its independent configs and redistributes them across
+  // those existing jobs. Split hints are medians from four recent 2-core runs
+  // (30532132189, 30532967046, 30534273298, 30536274496).
   ["agentic-agents-embedded", 430],
+  ["agentic-agents-embedded-base", 363],
+  ["agentic-agents-embedded-incomplete-turn", 146],
+  ["agentic-agents-embedded-overflow-compaction", 150],
+  ["agentic-agents-embedded-run", 30],
   ["agentic-agents-support", 105],
   ["agentic-agents-tools", 42],
   ["agentic-cli", 72],
@@ -233,6 +262,28 @@ function estimateCompactGroupSeconds(group) {
     return Math.max(3, Math.round(group.includePatterns.length * DEFAULT_SECONDS_PER_TEST_FILE));
   }
   return DEFAULT_WHOLE_GROUP_SECONDS;
+}
+
+function expandCompactGroup(group) {
+  const splits = COMPACT_GROUP_SPLITS.get(group.shard_name);
+  if (!splits) {
+    return [group];
+  }
+
+  const actualConfigs = group.configs.toSorted((a, b) => a.localeCompare(b));
+  const splitConfigs = splits.map((split) => split.config).toSorted((a, b) => a.localeCompare(b));
+  if (
+    actualConfigs.length !== splitConfigs.length ||
+    actualConfigs.some((config, index) => config !== splitConfigs[index])
+  ) {
+    throw new Error(`compact split for ${group.shard_name} does not cover its configs exactly`);
+  }
+
+  return splits.map((split) => ({
+    ...group,
+    configs: [split.config],
+    shard_name: split.shardName,
+  }));
 }
 const TOOLING_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const TOOLING_DOCKER_TEST_FILE = "test/scripts/docker-build-helper.test.ts";
@@ -1478,6 +1529,86 @@ export function assignVitestFsCacheWriter(shards) {
   }));
 }
 
+function packCompactGroupsWithinSecondsCap(groups) {
+  const bins = [];
+  const sortedGroups = groups.toSorted(
+    (a, b) =>
+      estimateCompactGroupSeconds(b) - estimateCompactGroupSeconds(a) ||
+      a.shard_name.localeCompare(b.shard_name),
+  );
+  for (const group of sortedGroups) {
+    const weight = estimateCompactGroupSeconds(group);
+    const exclusive = isExclusiveCompactGroup(group);
+    const secondsCap = exclusive ? COMPACT_EXCLUSIVE_JOB_SECONDS : COMPACT_NODE_TEST_JOB_SECONDS;
+    const bin = bins.find(
+      (candidate) =>
+        candidate.exclusive === exclusive &&
+        candidate.groups.length < COMPACT_NODE_TEST_JOB_GROUPS &&
+        candidate.weight + weight <= secondsCap,
+    );
+    if (bin) {
+      bin.groups.push(group);
+      bin.weight += weight;
+      bin.hasWholeConfigGroup ||= !group.includePatterns;
+    } else {
+      bins.push({
+        exclusive,
+        groups: [group],
+        hasWholeConfigGroup: !group.includePatterns,
+        weight,
+      });
+    }
+  }
+  return bins;
+}
+
+function repackCompactGroupsIntoExistingBins(groups, baselineBins) {
+  const bins = [];
+  for (const exclusive of [false, true]) {
+    const classGroups = groups.filter((group) => isExclusiveCompactGroup(group) === exclusive);
+    if (classGroups.length === 0) {
+      continue;
+    }
+
+    const binCount = baselineBins.filter((bin) => bin.exclusive === exclusive).length;
+    if (binCount === 0 || classGroups.length > binCount * COMPACT_NODE_TEST_JOB_GROUPS) {
+      throw new Error(
+        `compact split cannot fit into existing ${exclusive ? "exclusive" : "regular"} bins`,
+      );
+    }
+
+    const classBins = Array.from({ length: binCount }, (_, index) => ({
+      exclusive,
+      groups: [],
+      hasWholeConfigGroup: false,
+      index,
+      weight: 0,
+    }));
+    const sortedGroups = classGroups.toSorted(
+      (a, b) =>
+        estimateCompactGroupSeconds(b) - estimateCompactGroupSeconds(a) ||
+        a.shard_name.localeCompare(b.shard_name),
+    );
+    for (const group of sortedGroups) {
+      const weight = estimateCompactGroupSeconds(group);
+      const bin = classBins
+        .filter((candidate) => candidate.groups.length < COMPACT_NODE_TEST_JOB_GROUPS)
+        .toSorted((a, b) => a.weight - b.weight || a.index - b.index)[0];
+      if (!bin) {
+        throw new Error("compact split exhausted existing bin capacity");
+      }
+      bin.groups.push(group);
+      bin.weight += weight;
+      bin.hasWholeConfigGroup ||= !group.includePatterns;
+    }
+    if (classBins.some((bin) => bin.groups.length === 0)) {
+      throw new Error("compact split left an existing bin empty");
+    }
+    bins.push(...classBins);
+  }
+  return bins;
+}
+
 function createCompactNodeTestShardBundles(options = {}) {
   const shards = createNodeTestShards(options);
   const groupsByRunner = new Map();
@@ -1500,38 +1631,15 @@ function createCompactNodeTestShardBundles(options = {}) {
 
   const compactJobs = [];
   for (const groups of groupsByRunner.values()) {
-    // First-fit decreasing on estimated serial seconds keeps every job near
-    // the same runtime; the old per-file weights let one 3-minute group land
-    // next to nine trivial ones and own the PR wall clock.
-    const bins = [];
-    const sortedGroups = groups.toSorted(
-      (a, b) =>
-        estimateCompactGroupSeconds(b) - estimateCompactGroupSeconds(a) ||
-        a.shard_name.localeCompare(b.shard_name),
-    );
-    for (const group of sortedGroups) {
-      const weight = estimateCompactGroupSeconds(group);
-      const exclusive = isExclusiveCompactGroup(group);
-      const secondsCap = exclusive ? COMPACT_EXCLUSIVE_JOB_SECONDS : COMPACT_NODE_TEST_JOB_SECONDS;
-      const bin = bins.find(
-        (candidate) =>
-          candidate.exclusive === exclusive &&
-          candidate.groups.length < COMPACT_NODE_TEST_JOB_GROUPS &&
-          candidate.weight + weight <= secondsCap,
-      );
-      if (bin) {
-        bin.groups.push(group);
-        bin.weight += weight;
-        bin.hasWholeConfigGroup ||= !group.includePatterns;
-      } else {
-        bins.push({
-          exclusive,
-          groups: [group],
-          hasWholeConfigGroup: !group.includePatterns,
-          weight,
-        });
-      }
-    }
+    // The seconds cap chooses the existing registration count. Independent
+    // configs inside a composite whale are then balanced across that fixed
+    // number of jobs, avoiding both a serial straggler and extra fanout.
+    const baselineBins = packCompactGroupsWithinSecondsCap(groups);
+    const expandedGroups = groups.flatMap(expandCompactGroup);
+    const bins =
+      expandedGroups.length === groups.length
+        ? baselineBins
+        : repackCompactGroupsIntoExistingBins(expandedGroups, baselineBins);
 
     for (const [index, bin] of bins.entries()) {
       const runnerClass = bin.groups[0].runner.includes("-8vcpu-") ? "large" : "small";
