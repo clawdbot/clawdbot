@@ -35,6 +35,49 @@ struct ChatMessageMediaAttachmentTests {
         #expect(image.isInlineAttachment)
     }
 
+    @Test func `decodes url-only managed video as fetchable inline media`() throws {
+        let message = try JSONDecoder().decode(
+            OpenClawChatMessage.self,
+            from: Data(
+                """
+                {
+                  "role": "assistant",
+                  "content": [{
+                    "type": "video",
+                    "url": "/api/chat/media/outgoing/agent%3Amain%3Amain/22222222-2222-4222-8222-222222222222/full",
+                    "mimeType": "video/mp4",
+                    "fileName": "demo.mp4",
+                    "durationMs": 1250,
+                    "playback": "transcode",
+                    "width": 1920,
+                    "height": 1080
+                  }]
+                }
+                """.utf8))
+
+        let video = try #require(message.content.first)
+        #expect(video.artifactId == "artifact_managed_media_22222222-2222-4222-8222-222222222222")
+        #expect(video.mediaKind == .video)
+        #expect(video.durationSeconds == 1.25)
+        #expect(video.playback == .transcode)
+        #expect(video.isInlineAttachment)
+    }
+
+    @Test(arguments: [
+        (OpenClawChatMediaKind.image, "artifact_managed_image_11111111-1111-4111-8111-111111111111", true),
+        (OpenClawChatMediaKind.image, "artifact_managed_media_11111111-1111-4111-8111-111111111111", false),
+        (OpenClawChatMediaKind.audio, "artifact_managed_media_11111111-1111-4111-8111-111111111111", true),
+        (OpenClawChatMediaKind.video, "artifact_managed_media_11111111-1111-4111-8111-111111111111", true),
+        (OpenClawChatMediaKind.video, "artifact_managed_image_11111111-1111-4111-8111-111111111111", false),
+    ])
+    func `routes managed artifact ids only to their media family`(
+        kind: OpenClawChatMediaKind,
+        artifactID: String,
+        expected: Bool)
+    {
+        #expect(kind.acceptsManagedArtifactID(artifactID) == expected)
+    }
+
     @Test @MainActor func `distinct images never reconcile as the same final message`() {
         let first = Self.message(artifactId: "artifact_managed_image_11111111-1111-4111-8111-111111111111")
         let second = Self.message(artifactId: "artifact_managed_image_22222222-2222-4222-8222-222222222222")

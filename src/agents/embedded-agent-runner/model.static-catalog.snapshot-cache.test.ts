@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 
 const manifestMocks = vi.hoisted(() => ({
   getCurrentPluginMetadataSnapshot: vi.fn(),
@@ -172,6 +173,35 @@ describe("bundled static model catalog snapshot cache", () => {
     expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-next" })?.name).toBe(
       "Mistral Medium Next",
     );
+    expect(manifestMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
+    expect(manifestMocks.loadPluginManifest).not.toHaveBeenCalled();
+  });
+
+  it("pins lifecycle lookups to the supplied plugin generation", () => {
+    const cfg = {};
+    const capturedPlugin = createMistralManifestPlugin();
+    const capturedSnapshot = {
+      plugins: [capturedPlugin],
+      manifestRegistry: { plugins: [capturedPlugin] },
+    } as unknown as PluginMetadataSnapshot;
+    const resolveModel = createBundledStaticCatalogModelResolver({
+      cfg,
+      metadataSnapshot: capturedSnapshot,
+    });
+
+    const replacementPlugin = createMistralManifestPlugin();
+    replacementPlugin.modelCatalog.providers.mistral.models =
+      replacementPlugin.modelCatalog.providers.mistral.models.map((model) => ({
+        ...model,
+        id: "mistral-medium-next",
+        name: "Mistral Medium Next",
+      }));
+    setCurrentManifestPlugins([replacementPlugin]);
+
+    expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-3-5" })?.id).toBe(
+      "mistral-medium-3-5",
+    );
+    expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-next" })).toBeUndefined();
     expect(manifestMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
     expect(manifestMocks.loadPluginManifest).not.toHaveBeenCalled();
   });

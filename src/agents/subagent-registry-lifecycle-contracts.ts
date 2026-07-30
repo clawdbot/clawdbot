@@ -15,8 +15,8 @@ export type SubagentRegistryLifecycleParams = {
   resumedRuns: Set<string>;
   subagentAnnounceTimeoutMs: number;
   getRuntimeConfig(): OpenClawConfig;
-  persist(): void;
-  persistOrThrow(): void;
+  persist(...runIds: string[]): void;
+  persistOrThrow(...runIds: string[]): void;
   clearPendingLifecycleError(runId: string): void;
   countPendingDescendantRuns(rootSessionKey: string): number;
   suppressAnnounceForSteerRestart(entry?: SubagentRunRecord): boolean;

@@ -27,7 +27,8 @@ describe("live transport suite runtime", () => {
         credentialRole: " ci ",
         sutAccountId: "slack-sut",
       },
-      selectScenarioIds: ({ providerMode, scenarioIds }) => {
+      selectScenarioIds: ({ primaryModel, providerMode, scenarioIds }) => {
+        expect(primaryModel).toBe("openai/gpt-5.5");
         expect(providerMode).toBe("live-frontier");
         expect(scenarioIds).toBeUndefined();
         return ["slack-canary"];

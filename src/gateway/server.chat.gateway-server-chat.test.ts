@@ -970,6 +970,77 @@ describe("gateway server chat", () => {
     });
   });
 
+  test.each([
+    {
+      name: "structured context-overflow code",
+      fields: {
+        errorCode: "context_overflow",
+        errorMessage: "private upstream body: 203557 tokens sent",
+      },
+      overflow: true,
+    },
+    {
+      name: "provider request-too-large code",
+      fields: {
+        errorCode: "request_too_large",
+        errorMessage: "private upstream body: 196607 tokens sent",
+      },
+      overflow: true,
+    },
+    {
+      name: "provider context-window message",
+      fields: {
+        errorType: "invalid_request_error",
+        errorMessage: "Request size exceeds model context window: 203557 tokens",
+      },
+      overflow: true,
+    },
+    {
+      name: "embedded context-overflow message",
+      fields: { errorMessage: "Unhandled stop reason: context_overflow" },
+      overflow: true,
+    },
+    {
+      name: "token-per-minute rate limit",
+      fields: {
+        errorCode: "rate_limit_exceeded",
+        errorMessage: "413 request too large: 203557 tokens per minute (TPM)",
+      },
+      overflow: false,
+    },
+    {
+      name: "private upstream failure",
+      fields: { errorMessage: "private upstream at secret.internal.example failed" },
+      overflow: false,
+    },
+  ])(
+    "chat.history safely displays $name over authenticated WebSocket",
+    async ({ fields, overflow }) => {
+      const historyMessages = await loadChatHistoryWithMessages([
+        {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          ...fields,
+          timestamp: 1,
+        },
+      ]);
+
+      expect(collectHistoryTextValues(historyMessages)).toEqual([
+        overflow
+          ? "Context overflow: this conversation is too large for the model. Try /compact, use /new to start a fresh session, or retry the command with a tighter output limit."
+          : "The agent run failed before producing a reply.",
+      ]);
+      const wirePayload = JSON.stringify(historyMessages);
+      expect(wirePayload).not.toContain("203557");
+      expect(wirePayload).not.toContain("196607");
+      expect(wirePayload).not.toContain("secret.internal.example");
+      expect(historyMessages[0]).not.toHaveProperty("errorCode");
+      expect(historyMessages[0]).not.toHaveProperty("errorType");
+      expect(historyMessages[0]).not.toHaveProperty("errorMessage");
+    },
+  );
+
   test("chat.history hides assistant NO_REPLY-only entries", async () => {
     const historyMessages = await loadChatHistoryWithMessages(buildNoReplyHistoryFixture());
     const textValues = collectHistoryTextValues(historyMessages);

@@ -1,12 +1,11 @@
-import { listQaScenariosForExecutionProfile } from "../../scenario-catalog.js";
+import type { QaProviderModeInput } from "../../model-selection.js";
+import { resolveLiveTransportQaScenarioIds } from "../shared/scenario-selection.js";
 
 export function resolveWhatsAppQaScenarioIds(params: {
-  providerMode: string;
+  profile?: string;
+  primaryModel?: string;
+  providerMode: QaProviderModeInput;
   scenarioIds?: readonly string[];
 }) {
-  if (params.scenarioIds?.length) {
-    return [...params.scenarioIds];
-  }
-  const profile = params.providerMode === "mock-openai" ? "mock-default" : "default";
-  return listQaScenariosForExecutionProfile(`whatsapp:${profile}`).map((scenario) => scenario.id);
+  return resolveLiveTransportQaScenarioIds({ channelId: "whatsapp", ...params });
 }

@@ -1,5 +1,7 @@
 // Qa Lab tests cover slack live plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readQaScenarioById } from "../../scenario-catalog.js";
+import { requireFlowScenario } from "../../scenario-catalog.test-utils.js";
 import { testing as adapterTesting } from "./adapter.runtime.js";
 import { resolveSlackQaScenarioIds } from "./scenario-selection.js";
 import { resolveApprovalDecision } from "./slack-live.approvals.js";
@@ -13,7 +15,10 @@ import {
   parseSlackQaCredentialPayload,
   resolveSlackQaRuntimeEnv,
 } from "./slack-live.config.js";
-import { assertSlackCodexApprovalModelSupported } from "./slack-live.contracts.js";
+import {
+  assertSlackCodexApprovalModelSupported,
+  type SlackQaScenarioImplementation,
+} from "./slack-live.contracts.js";
 import { buildSlackInvalidBlocksTableProbe } from "./slack-live.invalid-blocks.js";
 import {
   observeSlackScenarioMessages,
@@ -25,16 +30,32 @@ import {
   extractSlackNativeApprovalId,
   runSlackTableInvalidBlocksFallbackScenario,
 } from "./slack-live.observations.js";
-import {
-  getSlackQaScenarioDefinition,
-  listSlackQaScenarioCatalog,
-} from "./slack-live.scenarios.js";
+import * as slackScenarioImplementations from "./slack-live.scenario-implementations.js";
+
+function toSlackScenarioExportName(id: string): string {
+  const suffix = id
+    .replace(/^slack-/, "")
+    .split("-")
+    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+    .join("");
+  return `slackQa${suffix}Scenario`;
+}
 
 function findScenario(ids?: string[]) {
-  const requestedIds = new Set(ids?.length ? ids : resolveSlackQaScenarioIds({}));
-  return listSlackQaScenarioCatalog()
-    .filter(({ id }) => requestedIds.has(id))
-    .map(({ id }) => getSlackQaScenarioDefinition(id));
+  return resolveSlackQaScenarioIds({ scenarioIds: ids }).map((id) => {
+    const implementation = (
+      slackScenarioImplementations as unknown as Record<string, SlackQaScenarioImplementation>
+    )[toSlackScenarioExportName(id)];
+    if (!implementation) {
+      throw new Error(`missing Slack test implementation for ${id}`);
+    }
+    const scenario = requireFlowScenario(readQaScenarioById(id));
+    return Object.assign({}, implementation, {
+      id,
+      timeoutMs: scenario.execution.timeoutMs ?? 60_000,
+      title: scenario.title,
+    });
+  });
 }
 
 const testing = {
@@ -139,53 +160,97 @@ describe("Slack live QA runtime helpers", () => {
     ]);
   });
 
-  it("selects opt-in native scenarios by id without changing standard scenario coverage", () => {
+  it("selects the MPIM app-mention dedupe scenario", () => {
     expect(
-      testing
-        .findScenario([
-          "slack-chart-presentation-native",
-          "slack-table-presentation-native",
-          "slack-table-invalid-blocks-fallback",
-          "slack-progress-commentary-true",
-          "slack-progress-commentary-false",
-          "slack-progress-commentary-omitted",
-          "slack-progress-commentary-verbose-dedupe",
-          "slack-reaction-glyph-native",
-          "slack-approval-exec-native",
-          "slack-approval-plugin-native",
-          "slack-codex-approval-exec-native",
-          "slack-codex-approval-plugin-native",
-          "slack-channel-disabled-warning",
-        ])
-        .map((scenario) => scenario.id),
-    ).toEqual([
-      "slack-channel-disabled-warning",
+      testing.findScenario(["slack-mpim-app-mention-dedupe"]).map((scenario) => scenario.id),
+    ).toEqual(["slack-mpim-app-mention-dedupe"]);
+  });
+
+  it("enables group DMs for the MPIM app-mention scenario", () => {
+    const cfg = testing.buildSlackQaConfig(
+      {},
+      {
+        channelId: "C123456789",
+        driverBotUserId: "U999999999",
+        overrides: { groupDmEnabled: true },
+        sutAccountId: "sut",
+        sutAppToken: "xapp-sut",
+        sutBotToken: "xoxb-sut",
+      },
+    );
+
+    expect(cfg.channels?.slack?.accounts?.sut?.dm).toEqual({
+      enabled: true,
+      groupEnabled: true,
+    });
+  });
+
+  it("surfaces MPIM cleanup failures and retains ownership for a retry", async () => {
+    const run = testing.findScenario(["slack-mpim-app-mention-dedupe"])[0]?.buildRun("U_SUT");
+    if (
+      !run ||
+      run.kind === "approval" ||
+      run.kind === "codex-approval" ||
+      run.kind === "direct-transport"
+    ) {
+      throw new Error("expected Slack MPIM message scenario");
+    }
+    const close = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("close failed"))
+      .mockRejectedValueOnce(new Error("close failed again"))
+      .mockResolvedValueOnce({});
+    const context = {
+      channelId: "C_QA",
+      driverClient: { auth: { test: vi.fn(async () => ({ user_id: "U_DRIVER" })) } },
+      sutIdentity: { userId: "U_SUT" },
+      sutReadClient: {
+        conversations: {
+          close,
+          info: vi.fn(async () => {
+            throw new Error("metadata unavailable");
+          }),
+          members: vi.fn(async () => ({ members: ["U_DRIVER", "U_SUT", "U_HUMAN"] })),
+          open: vi.fn(async () => ({ channel: { id: "C_MPIM" } })),
+        },
+        users: { info: vi.fn(async () => ({ user: { id: "U_HUMAN" } })) },
+      },
+    } as never;
+
+    await expect(run.beforeRun?.(context)).rejects.toThrow("metadata unavailable");
+    await expect(run.cleanup?.(context)).rejects.toThrow("close failed again");
+    await expect(run.cleanup?.(context)).resolves.toBeUndefined();
+
+    expect(close).toHaveBeenCalledTimes(3);
+    expect(close).toHaveBeenNthCalledWith(1, { channel: "C_MPIM" });
+    expect(close).toHaveBeenNthCalledWith(2, { channel: "C_MPIM" });
+    expect(close).toHaveBeenNthCalledWith(3, { channel: "C_MPIM" });
+  });
+
+  it("selects native scenarios by explicit id", () => {
+    const scenarioIds = [
+      "slack-chart-presentation-native",
+      "slack-table-presentation-native",
+      "slack-table-invalid-blocks-fallback",
       "slack-progress-commentary-true",
       "slack-progress-commentary-false",
       "slack-progress-commentary-omitted",
       "slack-progress-commentary-verbose-dedupe",
-      "slack-chart-presentation-native",
-      "slack-table-presentation-native",
-      "slack-table-invalid-blocks-fallback",
       "slack-reaction-glyph-native",
       "slack-approval-exec-native",
       "slack-approval-plugin-native",
       "slack-codex-approval-exec-native",
       "slack-codex-approval-plugin-native",
-    ]);
-    expect(testing.findScenario().map((scenario) => scenario.id)).not.toContain(
-      "slack-table-invalid-blocks-fallback",
-    );
-    expect(testing.findScenario().map((scenario) => scenario.id)).not.toContain(
-      "slack-progress-commentary-true",
-    );
-    expect(testing.findScenario().map((scenario) => scenario.id)).not.toContain(
       "slack-channel-disabled-warning",
-    );
-    expect(testing.findScenario(["slack-codex-approval-exec-native"])[0]?.forcedRuntime).toBe(
-      "codex",
-    );
-    expect(testing.findScenario(["slack-canary"])[0]?.forcedRuntime).toBeUndefined();
+    ];
+    const selectedIds = testing.findScenario(scenarioIds).map((scenario) => scenario.id);
+    expect(new Set(selectedIds)).toEqual(new Set(scenarioIds));
+    expect(
+      requireFlowScenario(readQaScenarioById("slack-codex-approval-exec-native")).execution.runtime,
+    ).toBe("codex");
+    expect(
+      requireFlowScenario(readQaScenarioById("slack-canary")).execution.runtime,
+    ).toBeUndefined();
   });
 
   it("accepts only Codex harness providers for Codex approval scenarios", () => {

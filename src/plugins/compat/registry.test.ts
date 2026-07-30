@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
-import { listPluginCompatRecords } from "./registry.js";
+import { listPluginCompatRecords, type PluginCompatCode } from "./registry.js";
 
 const datePattern = /^\d{4}-\d{2}-\d{2}$/u;
 const sourceRootsForDeprecatedCallGuard = [
@@ -21,7 +21,10 @@ const deprecatedTargetParserCompatFiles = new Set([
   "src/infra/outbound/outbound-session.test-helpers.ts",
   "src/plugins/compat/registry.test.ts",
 ]);
-const removalDatePendingCompatCodes = new Set<string>();
+const removalDatePendingCompatCodes = new Set<PluginCompatCode>([
+  "plugin-sdk-tool-plugin-public-demotion",
+  "agent-harness-sdk-alias",
+]);
 const deprecationMarkingCodes = [
   "plugin-sdk-channel-setup-input-fields",
   "plugin-sdk-broad-runtime-barrels",
@@ -91,25 +94,37 @@ describe("plugin compatibility registry", () => {
     }
   });
 
-  it("keeps shipped public contracts pending until their runtime blockers clear", () => {
-    const records = listPluginCompatRecords().filter(
+  it("keeps blocked public SDK removals aligned with their actual gates", () => {
+    const records = new Map(listPluginCompatRecords().map((record) => [record.code, record]));
+    const staleRemovalWindows = [...records.values()].filter(
       (record) =>
         record.status === "removal-pending" &&
         record.removeAfter !== undefined &&
         record.removeAfter <= "2026-07-30",
     );
 
-    expect(records.map((record) => record.code)).toEqual([
-      "plugin-sdk-media-understanding-public-demotion",
-      "plugin-sdk-memory-host-core-public-demotion",
-      "plugin-sdk-plugin-config-runtime-public-demotion",
-      "plugin-sdk-tool-plugin-public-demotion",
-      "agent-harness-sdk-alias",
-    ]);
-    for (const record of records) {
-      expect(record.replacement).toMatch(/retain the public/u);
-      expect(record.releaseNote).toBeUndefined();
+    expect(staleRemovalWindows).toEqual([]);
+    expect(records.get("plugin-sdk-media-understanding-public-demotion")).toMatchObject({
+      status: "removal-pending",
+      removeAfter: "2026-09-30",
+    });
+    expect(records.get("plugin-sdk-memory-host-core-public-demotion")).toMatchObject({
+      status: "removal-pending",
+      removeAfter: "2026-09-30",
+    });
+    expect(records.get("plugin-sdk-plugin-config-runtime-public-demotion")).toMatchObject({
+      status: "removal-pending",
+      removeAfter: "2026-12-01",
+    });
+    for (const code of removalDatePendingCompatCodes) {
+      expect(records.get(code)).toMatchObject({ status: "deprecated" });
+      expect(records.get(code)?.removeAfter).toBeUndefined();
+      expect(records.get(code)?.replacement).toMatch(/retain/u);
     }
+    expect(records.get("agent-harness-sdk-alias")?.surfaces).toEqual([
+      "openclaw/plugin-sdk/agent-harness",
+      "openclaw/plugin-sdk/agent-harness-runtime",
+    ]);
   });
 
   it("tracks the deprecation-marking families through the approved window", () => {
@@ -149,6 +164,19 @@ describe("plugin compatibility registry", () => {
         "openclaw package root saveSessionStore",
       ]),
     );
+  });
+
+  it("tracks the context-engine legacy host-param default through its two-week window", () => {
+    const record = listPluginCompatRecords().find(
+      (candidate) => candidate.code === "context-engine-legacy-host-param-default",
+    );
+
+    expect(record).toMatchObject({
+      status: "deprecated",
+      deprecated: "2026-07-29",
+      warningStarts: "2026-07-29",
+      removeAfter: "2026-08-12",
+    });
   });
 
   it("keeps deprecated explicit target parser calls inside compatibility shims", () => {

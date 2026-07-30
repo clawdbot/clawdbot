@@ -1199,6 +1199,11 @@
       "translated": "กำลังค้นหา…"
     },
     {
+      "id": "native.android.60062377f4798a11",
+      "source": "Accept",
+      "translated": "ยอมรับ"
+    },
+    {
       "id": "native.android.1cbaba9cbffb2f97",
       "source": "Connecting…",
       "translated": "กำลังเชื่อมต่อ…"
@@ -7624,6 +7629,11 @@
       "translated": "วิดเจ็ตไม่พร้อมใช้งาน"
     },
     {
+      "id": "native.android.64997e4b7298eb49",
+      "source": "Details",
+      "translated": "รายละเอียด"
+    },
+    {
       "id": "native.android.cd2033b0a82a72dd",
       "source": "$index.",
       "translated": "$index."
@@ -7637,6 +7647,51 @@
       "id": "native.android.bef360f847488651",
       "source": "Image unavailable",
       "translated": "ไม่มีรูปภาพ"
+    },
+    {
+      "id": "native.android.79f6e294d51ce785",
+      "source": "Media unavailable",
+      "translated": "สื่อไม่พร้อมใช้งาน"
+    },
+    {
+      "id": "native.android.0c040b06732ac890",
+      "source": "Audio playback is unavailable",
+      "translated": "ไม่สามารถเล่นเสียงได้"
+    },
+    {
+      "id": "native.android.d97ffcf227dd6ec2",
+      "source": "Pause audio",
+      "translated": "หยุดเสียงชั่วคราว"
+    },
+    {
+      "id": "native.android.1432c818b0debb7e",
+      "source": "Play audio",
+      "translated": "เล่นเสียง"
+    },
+    {
+      "id": "native.android.66c5c40e10d36cbb",
+      "source": "Play video",
+      "translated": "เล่นวิดีโอ"
+    },
+    {
+      "id": "native.android.8665d9ac83473ac9",
+      "source": "Preparing playback…",
+      "translated": "กำลังเตรียมการเล่น…"
+    },
+    {
+      "id": "native.android.906333fd4cf311e0",
+      "source": "Paused for voice playback",
+      "translated": "หยุดชั่วคราวเพื่อเล่นเสียง"
+    },
+    {
+      "id": "native.android.a14c4b937c7b0438",
+      "source": "Video",
+      "translated": "วิดีโอ"
+    },
+    {
+      "id": "native.android.c955f473fb3475a6",
+      "source": "Voice note",
+      "translated": "ข้อความเสียง"
     },
     {
       "id": "native.android.e64a6673728dadcb",
@@ -7717,6 +7772,11 @@
       "id": "native.android.0ee4d153c4e592d3",
       "source": "Speaking…",
       "translated": "กำลังพูด…"
+    },
+    {
+      "id": "native.android.010f1a1fdd158ba0",
+      "source": "Image",
+      "translated": "รูปภาพ"
     },
     {
       "id": "native.android.71ef7f8dbe2b0dbe",
@@ -7849,6 +7909,21 @@
       "translated": "ไฟล์แนบ"
     },
     {
+      "id": "native.android.09720189ba712747",
+      "source": "Unsupported attachment",
+      "translated": "ไฟล์แนบที่ไม่รองรับ"
+    },
+    {
+      "id": "native.android.df7c0abff7557f23",
+      "source": "Image unavailable · Tap to retry",
+      "translated": "รูปภาพไม่พร้อมใช้งาน · แตะเพื่อลองอีกครั้ง"
+    },
+    {
+      "id": "native.android.3fdc2798b6eada4a",
+      "source": "Loading image…",
+      "translated": "กำลังโหลดรูปภาพ…"
+    },
+    {
       "id": "native.android.316927b46135a7ab",
       "source": "Open image preview",
       "translated": "เปิดตัวอย่างรูปภาพ"
@@ -7862,11 +7937,6 @@
       "id": "native.android.7f8cf7bee5cc491f",
       "source": "Close image preview",
       "translated": "ปิดตัวอย่างรูปภาพ"
-    },
-    {
-      "id": "native.android.09720189ba712747",
-      "source": "Unsupported attachment",
-      "translated": "ไฟล์แนบที่ไม่รองรับ"
     },
     {
       "id": "native.android.bf40f9f9a508155d",
@@ -8089,6 +8159,16 @@
       "translated": "OpenClaw"
     },
     {
+      "id": "native.android.b18964167dbb3c02",
+      "source": "Image",
+      "translated": "รูปภาพ"
+    },
+    {
+      "id": "native.android.952a88e71b4aaee4",
+      "source": "Additional images hidden: ${omittedImageCount}",
+      "translated": "ซ่อนรูปภาพเพิ่มเติม: ${omittedImageCount}"
+    },
+    {
       "id": "native.android.5aafbef3744d86f3",
       "source": "Preparing audio…",
       "translated": "กำลังเตรียมเสียง…"
@@ -8222,6 +8302,11 @@
       "id": "native.android.e695e7b72d13e9e5",
       "source": "Attachment",
       "translated": "ไฟล์แนบ"
+    },
+    {
+      "id": "native.android.1bf18cef7a720c58",
+      "source": "Attach video",
+      "translated": "แนบวิดีโอ"
     },
     {
       "id": "native.android.f1d69eb66c5dfa39",
@@ -8369,6 +8454,11 @@
       "translated": "worker อีก $count รายการ"
     },
     {
+      "id": "native.android.c32ff602fa622e4b",
+      "source": "Done in $duration",
+      "translated": "เสร็จใน $duration"
+    },
+    {
       "id": "native.android.c2dc3a65302976c0",
       "source": "1 token",
       "translated": "1 โทเค็น"
@@ -8377,11 +8467,6 @@
       "id": "native.android.e7059e3a756908c4",
       "source": "$count tokens",
       "translated": "$count โทเค็น"
-    },
-    {
-      "id": "native.android.c32ff602fa622e4b",
-      "source": "Done in $duration",
-      "translated": "เสร็จใน $duration"
     },
     {
       "id": "native.android.d2797e7488fe5021",
@@ -8729,11 +8814,6 @@
       "translated": "กำลังฟัง"
     },
     {
-      "id": "native.android.1f198e7aceb8411f",
-      "source": "Speech recognizer unavailable",
-      "translated": "ไม่สามารถใช้ตัวจดจำเสียงพูดได้"
-    },
-    {
       "id": "native.android.8532cc9537b69224",
       "source": "Start failed: $message",
       "translated": "เริ่มไม่สำเร็จ: $message"
@@ -8742,6 +8822,11 @@
       "id": "native.android.a9216e087452b75b",
       "source": "Connecting…",
       "translated": "กำลังเชื่อมต่อ…"
+    },
+    {
+      "id": "native.android.1f198e7aceb8411f",
+      "source": "Speech recognizer unavailable",
+      "translated": "ไม่สามารถใช้ตัวจดจำเสียงพูดได้"
     },
     {
       "id": "native.android.24bc808758b925ca",
@@ -9284,6 +9369,11 @@
       "translated": "เธรด"
     },
     {
+      "id": "native.android.fc73a8c21e6a7b16",
+      "source": "Open thread",
+      "translated": "เปิดเธรด"
+    },
+    {
       "id": "native.android.4863e4958bf9a886",
       "source": "← Swipe →",
       "translated": "← ปัด →"
@@ -9302,6 +9392,11 @@
       "id": "native.android.9f7fe0147a0b571a",
       "source": "Double tap",
       "translated": "แตะสองครั้ง"
+    },
+    {
+      "id": "native.android.75a41b3ed302ff41",
+      "source": "Show new messages",
+      "translated": "แสดงข้อความใหม่"
     },
     {
       "id": "native.android.65caac394b5e4871",
@@ -19149,6 +19244,31 @@
       "translated": "ผู้เผยแพร่"
     },
     {
+      "id": "native.apple.c43101e53076ff01",
+      "source": "Granted",
+      "translated": "อนุญาตแล้ว"
+    },
+    {
+      "id": "native.apple.1312a2f2fcfa9685",
+      "source": "Missing permission",
+      "translated": "ไม่มีสิทธิ์อนุญาต"
+    },
+    {
+      "id": "native.apple.a7f2febd7dbf8978",
+      "source": "Accessibility grant may be stale",
+      "translated": "สิทธิ์การช่วยการเข้าถึงอาจไม่เป็นปัจจุบัน"
+    },
+    {
+      "id": "native.apple.7d37e7dfcd4b37c1",
+      "source": "Accessibility, Event Posting, and Screen Recording are granted.",
+      "translated": "อนุญาตสิทธิ์การช่วยการเข้าถึง การโพสต์เหตุการณ์ และการบันทึกหน้าจอแล้ว"
+    },
+    {
+      "id": "native.apple.055a88d0f9d3d2fe",
+      "source": "Missing: \\(buckets.map(\\.displayName).joined(separator: \", \")). Grant access in System Settings → Privacy & Security, then reopen OpenClaw.",
+      "translated": "ไม่มี: \\(buckets.map(\\.displayName).joined(separator: \", \")) ให้สิทธิ์เข้าถึงในการตั้งค่าระบบ → ความเป็นส่วนตัวและความปลอดภัย จากนั้นเปิด OpenClaw อีกครั้ง"
+    },
+    {
       "id": "native.apple.0a65101d40a6704c",
       "source": "No config sections available.",
       "translated": "ไม่มีส่วนการกำหนดค่าที่พร้อมใช้งาน"
@@ -19779,6 +19899,21 @@
       "translated": "OpenClaw ทำงานอยู่ — \\(primaryName)"
     },
     {
+      "id": "native.apple.179c8c2ce733969f",
+      "source": "This configuration lives on your gateway and is managed in the Dashboard.",
+      "translated": "การกำหนดค่านี้อยู่บน gateway ของคุณ และจัดการได้ใน Dashboard"
+    },
+    {
+      "id": "native.apple.d5271d97a623ac24",
+      "source": "Open in Dashboard",
+      "translated": "เปิดใน Dashboard"
+    },
+    {
+      "id": "native.apple.40bf972bb1164409",
+      "source": "The legacy native pane can be re-enabled in Settings > Debug.",
+      "translated": "สามารถเปิดใช้งานแผงเนทีฟรุ่นเก่าอีกครั้งได้ใน Settings > Debug"
+    },
+    {
       "id": "native.apple.5eea57b14cab3876",
       "source": "Dashboard reconnecting",
       "translated": "กำลังเชื่อมต่อแดชบอร์ดใหม่"
@@ -19902,6 +20037,21 @@
       "id": "native.apple.a1b7117088ad315f",
       "source": "\\(ProcessInfo.processInfo.processIdentifier)",
       "translated": "\\(ProcessInfo.processInfo.processIdentifier)"
+    },
+    {
+      "id": "native.apple.b6368b2fc209fa07",
+      "source": "Settings",
+      "translated": "การตั้งค่า"
+    },
+    {
+      "id": "native.apple.388a46bbd1d3df81",
+      "source": "Show native settings panes",
+      "translated": "แสดงแผงการตั้งค่าเนทีฟ"
+    },
+    {
+      "id": "native.apple.bac23cf85e38c7cc",
+      "source": "These panes are being retired in favor of the Dashboard.",
+      "translated": "แผงเหล่านี้กำลังจะถูกยกเลิกเพื่อใช้ Dashboard แทน"
     },
     {
       "id": "native.apple.6ae192c6a5942a53",
@@ -20309,6 +20459,16 @@
       "translated": "ไม่สามารถบันทึกการอนุมัติ exec ได้ กำลังแสดงการตั้งค่าที่ทราบล่าสุด โปรดลองเปลี่ยนแปลงอีกครั้ง"
     },
     {
+      "id": "native.apple.b28538e2e444510f",
+      "source": "Exec approvals need migration — run openclaw doctor --fix with OPENCLAW_STATE_DIR set to \\(error.stateDirectoryURL.path).",
+      "translated": "การอนุมัติ Exec จำเป็นต้องย้ายข้อมูล — เรียกใช้ openclaw doctor --fix โดยตั้งค่า OPENCLAW_STATE_DIR เป็น \\(error.stateDirectoryURL.path)"
+    },
+    {
+      "id": "native.apple.49e886ab7a093e63",
+      "source": "Exec approvals unavailable. Retry to refresh.",
+      "translated": "การอนุมัติ Exec ไม่พร้อมใช้งาน โปรดลองอีกครั้งเพื่อรีเฟรช"
+    },
+    {
       "id": "native.apple.1b8ba1cf6f9dfdc9",
       "source": "missing:\\(hash)",
       "translated": "missing:\\(hash)"
@@ -20589,9 +20749,14 @@
       "translated": "อนุญาตการควบคุมคอมพิวเตอร์"
     },
     {
-      "id": "native.apple.124d07cfaa03f5e5",
-      "source": "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.",
-      "translated": "อนุญาตให้เอเจนต์ที่ได้รับอนุญาตเลื่อนตัวชี้ คลิก และพิมพ์บน Mac นี้ ต้องมีสิทธิ์การเข้าถึง (Accessibility), การบันทึกหน้าจอ (Screen Recording) และการอนุญาตคำสั่ง gateway ด้วย มีความเสี่ยงสูง"
+      "id": "native.apple.a3d78847eaebbbd9",
+      "source": "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.",
+      "translated": "เปิดใช้งานตั้งแต่เริ่มต้น หลังจากจับคู่ Mac เครื่องนี้และอนุญาตสิทธิ์เข้าถึง macOS แล้ว Gateway ที่จับคู่จะสามารถเลื่อนตัวชี้ คลิก และพิมพ์ได้โดยไม่ต้องยืนยันแต่ละการดำเนินการ มีความเสี่ยงสูง"
+    },
+    {
+      "id": "native.apple.96eed7824b1f1ed6",
+      "source": "Computer Control access",
+      "translated": "สิทธิ์เข้าถึงการควบคุมคอมพิวเตอร์"
     },
     {
       "id": "native.apple.35cdb39a1214e0d8",
@@ -23559,6 +23724,16 @@
       "translated": "สถานะ:  \\(stateDir)"
     },
     {
+      "id": "native.apple.82152767dcda7601",
+      "source": "Legacy pane — this now lives in the Dashboard",
+      "translated": "แผงรุ่นเก่า — ตอนนี้ย้ายไปอยู่ใน Dashboard แล้ว"
+    },
+    {
+      "id": "native.apple.07f054b73f23bcb1",
+      "source": "Open in Dashboard",
+      "translated": "เปิดใน Dashboard"
+    },
+    {
       "id": "native.apple.d59e05a8305df17c",
       "source": "General",
       "translated": "ทั่วไป"
@@ -24839,9 +25014,9 @@
       "translated": "^[ข้อความ \\(count) รายการ](inflect: true)"
     },
     {
-      "id": "native.apple.284b2b94c272591d",
-      "source": "Add Image",
-      "translated": "เพิ่มรูปภาพ"
+      "id": "native.apple.df155ec0b9675faf",
+      "source": "Add Attachment",
+      "translated": "เพิ่มไฟล์แนบ"
     },
     {
       "id": "native.apple.1963dfa3285cb715",
@@ -25054,9 +25229,114 @@
       "translated": "รายการ"
     },
     {
+      "id": "native.apple.15a9bdea318fdc21",
+      "source": "Details",
+      "translated": "รายละเอียด"
+    },
+    {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
       "translated": "Image"
+    },
+    {
+      "id": "native.apple.fc0c718121094798",
+      "source": "Loading audio…",
+      "translated": "กำลังโหลดเสียง…"
+    },
+    {
+      "id": "native.apple.47263d32bdb27d92",
+      "source": "Preparing playback…",
+      "translated": "กำลังเตรียมการเล่น…"
+    },
+    {
+      "id": "native.apple.a43c05c1f87c96ec",
+      "source": "Voice note",
+      "translated": "บันทึกเสียง"
+    },
+    {
+      "id": "native.apple.4b62790fe9e79a5b",
+      "source": "Pause",
+      "translated": "หยุดชั่วคราว"
+    },
+    {
+      "id": "native.apple.d38d34ee3f9829d8",
+      "source": "Play",
+      "translated": "เล่น"
+    },
+    {
+      "id": "native.apple.1591e4df0f7c1593",
+      "source": "Audio position",
+      "translated": "ตำแหน่งเสียง"
+    },
+    {
+      "id": "native.apple.f679dd436bcdab82",
+      "source": "Pause Talk mode before playing this attachment.",
+      "translated": "หยุด Talk mode ชั่วคราวก่อนเล่นไฟล์แนบนี้"
+    },
+    {
+      "id": "native.apple.0c86d3b8ddd1667b",
+      "source": "Audio unavailable",
+      "translated": "ไม่สามารถใช้เสียงได้"
+    },
+    {
+      "id": "native.apple.72c0a6d39b33147f",
+      "source": "Retry",
+      "translated": "ลองใหม่"
+    },
+    {
+      "id": "native.apple.8b0faa2f4f38e339",
+      "source": "Loading image…",
+      "translated": "กำลังโหลดรูปภาพ…"
+    },
+    {
+      "id": "native.apple.e776a9e0e3ef1ae7",
+      "source": "Opens image preview",
+      "translated": "เปิดตัวอย่างรูปภาพ"
+    },
+    {
+      "id": "native.apple.cc336983da1cd070",
+      "source": "Close image preview",
+      "translated": "ปิดตัวอย่างรูปภาพ"
+    },
+    {
+      "id": "native.apple.4f97faec43e8e366",
+      "source": "Image unavailable",
+      "translated": "รูปภาพไม่พร้อมใช้งาน"
+    },
+    {
+      "id": "native.apple.2c50b099878d7c96",
+      "source": "Retry",
+      "translated": "ลองอีกครั้ง"
+    },
+    {
+      "id": "native.apple.1f90092d20ef6580",
+      "source": "Loading video…",
+      "translated": "กำลังโหลดวิดีโอ…"
+    },
+    {
+      "id": "native.apple.51e26ae62841c35a",
+      "source": "Preparing playback…",
+      "translated": "กำลังเตรียมการเล่น…"
+    },
+    {
+      "id": "native.apple.cc9b3b11a07f11c0",
+      "source": "Play video",
+      "translated": "เล่นวิดีโอ"
+    },
+    {
+      "id": "native.apple.7310d14ae833f906",
+      "source": "Pause Talk mode before playing this attachment.",
+      "translated": "หยุด Talk mode ชั่วคราวก่อนเล่นไฟล์แนบนี้"
+    },
+    {
+      "id": "native.apple.c6c281461cdce468",
+      "source": "Video unavailable",
+      "translated": "ไม่สามารถใช้วิดีโอได้"
+    },
+    {
+      "id": "native.apple.0863fee2119140f8",
+      "source": "Retry",
+      "translated": "ลองใหม่"
     },
     {
       "id": "native.apple.14da4c958ae30949",
@@ -25067,6 +25347,11 @@
       "id": "native.apple.fccc8a9ba3da1426",
       "source": "Agent avatar",
       "translated": "อวตารของเอเจนต์"
+    },
+    {
+      "id": "native.apple.2bf58bad40fc4ae6",
+      "source": "Additional images hidden: %lld",
+      "translated": "ซ่อนรูปภาพเพิ่มเติม: %lld"
     },
     {
       "id": "native.apple.9d4cffc5588d8730",
@@ -25097,6 +25382,11 @@
       "id": "native.apple.3c8c3679fd99c074",
       "source": "Voice note",
       "translated": "Voice note"
+    },
+    {
+      "id": "native.apple.eca473edeb132a44",
+      "source": "Attachment",
+      "translated": "ไฟล์แนบ"
     },
     {
       "id": "native.apple.e9914cfc93a514cb",
@@ -25969,6 +26259,16 @@
       "translated": "\\(baseName).jpg"
     },
     {
+      "id": "native.apple.d769d9386f26178e",
+      "source": "Attachment %@ exceeds the 20 MB video limit",
+      "translated": "ไฟล์แนบ %@ เกินขีดจำกัดวิดีโอ 20 MB"
+    },
+    {
+      "id": "native.apple.88cfaa4909638e15",
+      "source": "Only image and video attachments are supported right now",
+      "translated": "ขณะนี้รองรับเฉพาะไฟล์แนบรูปภาพและวิดีโอเท่านั้น"
+    },
+    {
       "id": "native.apple.61b7d1ecf7fdae3e",
       "source": "\\(invocation) ",
       "translated": "\\(invocation) "
@@ -26319,6 +26619,11 @@
       "translated": "กำลังโผล่ขึ้นสู่ผิวน้ำ"
     },
     {
+      "id": "native.apple.286932b5ea17b3f8",
+      "source": "1 second",
+      "translated": "1 วินาที"
+    },
+    {
       "id": "native.apple.578503dfeef25502",
       "source": "Done in %@",
       "translated": "เสร็จสิ้นใน %@"
@@ -26349,9 +26654,9 @@
       "translated": "กล้อง"
     },
     {
-      "id": "native.apple.333682684163ba6b",
-      "source": "Choose Image File",
-      "translated": "เลือกรูปภาพ"
+      "id": "native.apple.958a3ae7ad425e67",
+      "source": "Choose Media File",
+      "translated": "เลือกไฟล์สื่อ"
     },
     {
       "id": "native.apple.534246792690968d",
@@ -26564,9 +26869,29 @@
       "translated": "ไม่ได้ใช้งาน"
     },
     {
+      "id": "native.apple.a2fc153a4aa36cda",
+      "source": "Stopped",
+      "translated": "หยุดแล้ว"
+    },
+    {
+      "id": "native.apple.ba2d6adb6ce70b40",
+      "source": "Failed",
+      "translated": "ล้มเหลว"
+    },
+    {
+      "id": "native.apple.f343c1f83109a369",
+      "source": "Waiting",
+      "translated": "กำลังรอ"
+    },
+    {
       "id": "native.apple.0cb1206714c2bf4d",
       "source": "Setup",
       "translated": "ตั้งค่า"
+    },
+    {
+      "id": "native.apple.e6c1304a30abf56e",
+      "source": "Searching…",
+      "translated": "กำลังค้นหา…"
     },
     {
       "id": "native.apple.081a07c7306b223e",

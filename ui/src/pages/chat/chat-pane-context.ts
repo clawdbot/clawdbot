@@ -1,38 +1,44 @@
+import { invalidateAssistantIdentityCache } from "../../app/assistant-identity.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
-  applyChatAgentsList,
-  applySelectedSessionProjection,
+  refreshPendingQuestionsWithRetry,
+  setQuestionPromptClient,
+} from "../../app/question-prompt.ts";
+import { loadSettings } from "../../app/settings.ts";
+import { readPresenceEntries } from "../../app/user-profile.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { resolveSessionKey } from "../../lib/sessions/index.ts";
+import {
   buildAgentMainSessionKey,
   canonicalUiSessionKeyForPersistence,
-  clearChatMessagesFromCache,
-  hasOperatorAdminAccess,
-  invalidateChatAvatarCache,
-  invalidateAssistantIdentityCache,
-  invalidateChatMetadataCache,
-  isGatewayMethodAdvertised,
-  loadSettings,
-  markQueuedChatSendsWaitingForReconnect,
-  normalizeSidebarLayout,
   parseAgentSessionKey,
-  parseCatalogSessionKey,
-  readPresenceEntries,
-  reconcileStaleChatRunAfterSessionStatePublication,
-  reconcileWaitingApprovalsFromSnapshot,
-  replayPendingChatAbort,
-  refreshChatModelAuthStatus,
-  refreshPendingQuestionsWithRetry,
-  refreshPageChat,
-  resolveChatAgentId,
-  resolveSessionKey,
   resolveUiConfiguredMainKey,
-  retryReconnectableQueuedChatSends,
-  selectedChatSessionRow,
-  setQuestionPromptClient,
-  syncSelectedSessionMessageSubscription,
   uiSessionEventMatches,
-  type ApplicationContext,
-  type ApplicationGatewaySnapshot,
-} from "./chat-pane-deps.ts";
+} from "../../lib/sessions/session-key.ts";
+import { invalidateChatAvatarCache } from "./chat-avatar.ts";
+import { applyChatAgentsList, syncSelectedSessionMessageSubscription } from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
+import { applySelectedSessionProjection } from "./chat-pane-state.ts";
+import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
+import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
+import { stopChatRealtimeTalk } from "./chat-realtime.ts";
+import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
+import {
+  invalidateChatMetadataCache,
+  refreshChatModelAuthStatus,
+  refreshPageChat,
+} from "./chat-state-refresh.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
+import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
+import {
+  reconcileStaleChatRunAfterSessionStatePublication,
+  replayPendingChatAbort,
+} from "./run-lifecycle.ts";
+import { clearChatMessagesFromCache } from "./session-message-cache.ts";
+import { normalizeSidebarLayout } from "./sidebar-layout.ts";
+import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream.ts";
 
 export abstract class ChatPaneContext extends ChatPaneLifecycle {
   protected applySessionsState(stateValue: ApplicationContext["sessions"]["state"]) {
@@ -137,6 +143,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     ) {
       return;
     }
+    if (rootsChanged) {
+      releaseChatMediaResourceSubscriber(state.requestUpdate);
+    }
     state.localMediaPreviewRoots = config.localMediaPreviewRoots;
     state.embedSandboxMode = config.embedSandboxMode;
     state.allowExternalEmbedUrls = config.allowExternalEmbedUrls;
@@ -148,6 +157,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (!state) {
       return;
     }
+    const previousMediaAuthToken = resolveAssistantAttachmentAuthToken(state);
     const wasConnected = state.connected;
     const previousSidebarSessionKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
     const sourceChanged =
@@ -160,6 +170,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.presencePayload = presence ? { presence } : undefined;
     }
     if (sourceChanged) {
+      releaseChatMediaResourceSubscriber(state.requestUpdate);
       // A reconnect can retain the browser client. Keep async ownership tied
       // to the logical connection, not only the transport object identity.
       this.connectionGeneration += 1;
@@ -193,6 +204,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.connected = snapshot.phase === "connected";
     state.connectionEpoch = this.connectionGeneration;
     state.hello = snapshot.hello;
+    if (!sourceChanged && previousMediaAuthToken !== resolveAssistantAttachmentAuthToken(state)) {
+      releaseChatMediaResourceSubscriber(state.requestUpdate);
+    }
     state.canvasPluginSurfaceUrl = snapshot.canvasPluginSurfaceUrl;
     const sidebarSessionKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
     const sidebarKeyChanged = sidebarSessionKey !== previousSidebarSessionKey;
@@ -265,16 +279,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       }
       this.connectedClient = null;
       setQuestionPromptClient(this.questionPromptState, null);
-      state.realtimeTalkSession?.stop();
-      state.realtimeTalkSession = null;
-      state.realtimeTalkActive = false;
-      state.realtimeTalkVideoStream = null;
-      state.realtimeTalkCameraDevices = [];
-      state.realtimeTalkVideoCapable = false;
-      state.realtimeTalkVideoPending = false;
-      state.realtimeTalkCameraError = false;
-      state.realtimeTalkStatus = "idle";
-      state.realtimeTalkInputLevel.set(0);
+      stopChatRealtimeTalk(state);
       state.resetToolStream();
       state.requestUpdate?.();
       return;

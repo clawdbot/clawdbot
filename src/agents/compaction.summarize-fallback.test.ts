@@ -48,7 +48,7 @@ describe("summarizeWithFallback", () => {
     agentSessionMocks.estimateTokens.mockImplementation(() => 100);
   });
 
-  it("does not duplicate summarization when no messages were oversized", async () => {
+  it("throws CompactionError when all summarization attempts fail", async () => {
     const messages: AgentMessage[] = [
       {
         role: "user",
@@ -57,18 +57,17 @@ describe("summarizeWithFallback", () => {
       } satisfies UserMessage,
     ];
 
-    const result = await summarizeWithFallback({
-      messages,
-      model: testModel,
-      apiKey: "test-key", // pragma: allowlist secret
-      signal: new AbortController().signal,
-      reserveTokens: 1000,
-      maxChunkTokens: 50_000,
-      contextWindow: 200_000,
-    });
-
-    expect(result).toContain("Context contained 1 messages");
-    expect(result).toContain("0 oversized");
+    await expect(
+      summarizeWithFallback({
+        messages,
+        model: testModel,
+        apiKey: "test-key", // pragma: allowlist secret
+        signal: new AbortController().signal,
+        reserveTokens: 1000,
+        maxChunkTokens: 50_000,
+        contextWindow: 200_000,
+      }),
+    ).rejects.toThrow("All summarization attempts failed for 1 messages");
     // "fetch failed" is timeout-classed now, so summarizeChunks does not retry it.
     expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
   });
@@ -171,7 +170,7 @@ describe("summarizeWithFallback", () => {
     expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
   });
 
-  it("still attempts partial summarization when oversized messages were excluded", async () => {
+  it("throws CompactionError when both full and partial summarization fail", async () => {
     // Oversized-message fallback tries the safe subset so a huge attachment or
     // tool output does not prevent summarizing the rest of the transcript.
     agentSessionMocks.estimateTokens.mockImplementation((message: unknown) => {
@@ -195,18 +194,27 @@ describe("summarizeWithFallback", () => {
       } satisfies UserMessage,
     ];
 
-    const result = await summarizeWithFallback({
-      messages,
-      model: testModel,
-      apiKey: "test-key", // pragma: allowlist secret
-      signal: new AbortController().signal,
-      reserveTokens: 1000,
-      maxChunkTokens: 50_000,
-      contextWindow: 200_000,
+    let callCount = 0;
+    agentSessionMocks.generateSummary.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        return Promise.reject(new Error("full summarization error"));
+      }
+      return Promise.reject(new Error("partial retry error"));
     });
 
-    expect(result).toContain("2 messages (1 oversized)");
-    // Full attempt plus distinct partial transcript; timeout-classed failures do not retry.
-    expect(agentSessionMocks.generateSummary.mock.calls.length).toBe(2);
+    await expect(
+      summarizeWithFallback({
+        messages,
+        model: testModel,
+        apiKey: "test-key", // pragma: allowlist secret
+        signal: new AbortController().signal,
+        reserveTokens: 1000,
+        maxChunkTokens: 50_000,
+        contextWindow: 200_000,
+      }),
+    ).rejects.toThrow(
+      "All summarization attempts failed for 2 messages. Last error: partial retry error",
+    );
   });
 });

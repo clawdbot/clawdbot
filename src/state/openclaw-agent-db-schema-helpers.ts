@@ -1,10 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
+import { MEMORY_INDEX_CHUNK_PROVENANCE_TABLE } from "../../packages/memory-host-sdk/src/host/memory-schema-provenance.js";
+import { MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE } from "../../packages/memory-host-sdk/src/host/memory-schema-recall.js";
 import {
-  MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
-  MEMORY_INDEX_CHUNK_PROVENANCE_TRIGGER_DEFINITIONS,
-} from "../../packages/memory-host-sdk/src/host/memory-schema-provenance.js";
-import {
-  MEMORY_INDEX_CHUNKS_TABLE,
   MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
@@ -25,6 +22,7 @@ import {
   ensureOpenClawAgentBoardSchemaInTransaction,
 } from "./openclaw-agent-board-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
 import {
   AGENT_V14_ADDITIVE_SCHEMA_SQL,
@@ -46,27 +44,16 @@ type ExistingAgentSchemaMeta = {
 const AGENT_SCHEMA_COMPATIBILITY = {
   allowedMissingTables: [
     MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
+    MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
     STANDING_INTENTS_TABLE,
     STANDING_INTENTS_FTS_TABLE,
     ...STANDING_INTENTS_FTS_SHADOW_TABLES,
   ],
-  // Pre-provenance agent DBs lack the importance/triggers columns; memory-core's
-  // lazy ensure ALTERs them in on first memory use, so accept their absence here
-  // or every existing deployment fails doctor and rolls back its update.
-  allowedMissingColumns: [
-    "standing_intents.creator_sender",
-    "memory_index_chunks.importance",
-    "memory_index_chunks.triggers",
-  ],
+  allowedMissingColumns: ["standing_intents.creator_sender"],
   allowedColumnDefinitions: {
     "conversations.delivery_target": ["delivery_target TEXT NOT NULL DEFAULT ''"],
   },
   optionalCanonicalTriggerGroups: [
-    {
-      optionalWhenTableMissing: MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
-      tableName: MEMORY_INDEX_CHUNKS_TABLE,
-      triggers: MEMORY_INDEX_CHUNK_PROVENANCE_TRIGGER_DEFINITIONS,
-    },
     {
       tableName: MEMORY_INDEX_SOURCES_TABLE,
       triggers: MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
@@ -195,9 +182,7 @@ export function assertCanonicalAgentMediaPersistenceVersion(
   const isNewUnownedDatabase =
     userVersion === 0 && readExistingAgentSchemaMeta(db) === null && !hasApplicationSchema;
   if (userVersion < OPENCLAW_AGENT_SCHEMA_VERSION && !isNewUnownedDatabase) {
-    throw new Error(
-      `OpenClaw agent database ${pathname} uses schema version ${userVersion}; run openclaw doctor --fix to migrate persisted media before using it.`,
-    );
+    throw new OpenClawAgentDatabaseMediaMigrationRequiredError(pathname, userVersion);
   }
 }
 

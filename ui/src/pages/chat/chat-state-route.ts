@@ -19,7 +19,7 @@ import {
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
 import { syncVisibleChatQueueProjection } from "./chat-queue.ts";
-import { resetChatRealtimeConversation } from "./chat-realtime.ts";
+import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatComposerMemoryFallback, ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
@@ -253,6 +253,7 @@ export function resetChatStateForRouteSession(
   } = {},
 ): ChatComposerRouteResetResult {
   cancelChatStreamRenderFrame(state);
+  stopChatRealtimeTalk(state);
   const previousSessionKey = state.sessionKey;
   const previousComposerScopeKey = storedChatOutboxScopeKey(
     options.previousComposerScope ?? resolveStoredChatOutboxScope(state, previousSessionKey),
@@ -321,7 +322,6 @@ export function resetChatStateForRouteSession(
   state.chatAvatarStatus = null;
   state.chatAvatarReason = null;
   clearAuthoritativeTerminal(state);
-  resetChatRealtimeConversation(state);
   state.chatQueue = restoreChatQueueForSession(state, sessionKey);
   restoreChatComposerState(state);
   // Composer hydration reads crash-safe queue states. Reapply the process-live

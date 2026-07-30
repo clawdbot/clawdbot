@@ -45,6 +45,25 @@ export function createSandboxFsBridgeFromResolver(
       const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
       await fs.writeFile(target.hostPath, buffer);
     },
+    createFileExclusive: async ({ filePath, cwd, data, mkdir = true }) => {
+      const target = resolvePath(filePath, cwd);
+      if (!target.hostPath) {
+        throw new Error(`Expected hostPath for ${target.containerPath}`);
+      }
+      if (mkdir) {
+        await fs.mkdir(path.dirname(target.hostPath), { recursive: true });
+      }
+      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      try {
+        await fs.writeFile(target.hostPath, buffer, { flag: "wx" });
+        return "created";
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          return "exists";
+        }
+        throw error;
+      }
+    },
     mkdirp: async ({ filePath, cwd }) => {
       const target = resolvePath(filePath, cwd);
       if (!target.hostPath) {

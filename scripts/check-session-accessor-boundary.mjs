@@ -122,7 +122,7 @@ export const migratedSessionAccessorFiles = new Set([
   "src/commands/sessions-tail.ts",
   "src/commands/sessions.ts",
   "src/commands/status.agent-local.ts",
-  "src/commands/status.summary.ts",
+  "src/status/summary.ts",
   "src/commands/tasks.ts",
   "src/config/sessions/combined-store-gateway.ts",
   "src/config/sessions/delivery-info.ts",

@@ -50,19 +50,15 @@ export async function searchVisibleSessionTranscripts(params: {
       offset: nextOffset,
     });
     if (!page) {
-      break;
+      throw new Error("Unable to load all sessions for transcript search.");
     }
     sessions.push(...page.sessions);
-    const followingOffset =
-      page.hasMore === true
-        ? (page.nextOffset ?? (page.offset ?? nextOffset) + page.sessions.length)
-        : null;
-    if (
-      followingOffset === null ||
-      followingOffset === undefined ||
-      followingOffset <= nextOffset
-    ) {
+    if (page.hasMore !== true) {
       break;
+    }
+    const followingOffset = page.nextOffset ?? (page.offset ?? nextOffset) + page.sessions.length;
+    if (followingOffset <= nextOffset) {
+      throw new Error("Session pagination did not advance during transcript search.");
     }
     nextOffset = followingOffset;
   }

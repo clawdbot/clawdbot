@@ -451,6 +451,21 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessions_send");
   });
 
+  it("describes the actual Code Mode control surface", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec", "wait"],
+      codeModeActive: true,
+    });
+
+    expect(prompt).toContain(
+      "- exec: Run JavaScript/TypeScript Code Mode; call exact catalog tools from code, never shell/Python/imports",
+    );
+    expect(prompt).toContain("- wait: Resume a suspended Code Mode exec");
+    expect(prompt).not.toContain("- exec: Run shell");
+    expect(prompt).not.toContain("Use exec yieldMs");
+  });
+
   it("uses provider-neutral web_search prompt metadata", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -700,76 +715,72 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("bootstrapMaxChars");
   });
 
-  it("shows timezone section for 12h, 24h, and timezone-only modes", () => {
-    const cases = [
-      {
-        name: "12-hour",
-        params: {
-          workspaceDir: "/tmp/openclaw",
-          userTimezone: "America/Chicago",
-          userTime: "Monday, January 5th, 2026 — 3:26 PM",
-          userTimeFormat: "12" as const,
-        },
-      },
-      {
-        name: "24-hour",
-        params: {
-          workspaceDir: "/tmp/openclaw",
-          userTimezone: "America/Chicago",
-          userTime: "Monday, January 5th, 2026 — 15:26",
-          userTimeFormat: "24" as const,
-        },
-      },
-      {
-        name: "timezone-only",
-        params: {
-          workspaceDir: "/tmp/openclaw",
-          userTimezone: "America/Chicago",
-          userTimeFormat: "24" as const,
-        },
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const prompt = buildAgentSystemPrompt(testCase.params);
-      expect(prompt, testCase.name).toContain("## Current Date & Time");
-      expect(prompt, testCase.name).toContain("Time zone: America/Chicago");
-    }
-  });
-
-  it("hints to use session_status for current date/time", () => {
+  it("shows the current local date and timezone", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/clawd",
+      workspaceDir: "/tmp/openclaw",
+      userDate: "2026-01-05",
       userTimezone: "America/Chicago",
     });
 
-    expect(prompt).toContain("session_status");
-    expect(prompt).toContain("Need date/time/day");
-  });
-
-  // The system prompt intentionally does NOT include the current date/time.
-  // Only the timezone is included, to keep the prompt stable for caching.
-  // See: https://github.com/moltbot/moltbot/commit/66eec295b894bce8333886cfbca3b960c57c4946
-  // Agents should use session_status or message timestamps to determine the date/time.
-  // Related: https://github.com/moltbot/moltbot/issues/1897
-  //          https://github.com/moltbot/moltbot/issues/3658
-  it("does NOT include a date or time in the system prompt (cache stability)", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/clawd",
-      userTimezone: "America/Chicago",
-      userTime: "Monday, January 5th, 2026 — 3:26 PM",
-      userTimeFormat: "12",
-    });
-
-    // The prompt should contain the timezone but NOT the formatted date/time string.
-    // This is intentional for prompt cache stability — the date/time was removed in
-    // commit 66eec295b. If you're here because you want to add it back, please see
-    // https://github.com/moltbot/moltbot/issues/3658 for the preferred approach:
-    // gateway-level timestamp injection into messages, not the system prompt.
+    expect(prompt).toContain("## Temporal Context");
+    expect(prompt).toContain("Current date: 2026-01-05");
     expect(prompt).toContain("Time zone: America/Chicago");
-    expect(prompt).not.toContain("Monday, January 5th, 2026");
+  });
+
+  it("points to session_status for exact time only when the tool is available", () => {
+    const withStatus = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      toolNames: ["session_status"],
+      userDate: "2026-01-05",
+      userTimezone: "America/Chicago",
+    });
+    const withoutStatus = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      toolNames: ["exec"],
+      userDate: "2026-01-05",
+      userTimezone: "America/Chicago",
+    });
+
+    expect(withStatus).toContain("For the exact current time, use `session_status`.");
+    expect(withoutStatus).not.toContain("session_status");
+  });
+
+  it("does not inject a live clock into temporal context", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      userDate: "2026-01-05",
+      userTimezone: "America/Chicago",
+    });
+
+    expect(prompt).toContain("Current date: 2026-01-05");
+    expect(prompt).toContain("Time zone: America/Chicago");
     expect(prompt).not.toContain("3:26 PM");
     expect(prompt).not.toContain("15:26");
+  });
+
+  it("keeps date rollover and timezone changes below the prompt-cache boundary", () => {
+    const buildPrompt = (userDate: string, userTimezone: string) =>
+      buildAgentSystemPrompt({
+        workspaceDir: "/tmp/clawd",
+        toolNames: ["session_status"],
+        userDate,
+        userTimezone,
+      });
+    const first = buildPrompt("2026-01-05", "America/Chicago");
+    const nextDay = buildPrompt("2026-01-06", "America/Chicago");
+    const nextZone = buildPrompt("2026-01-06", "Asia/Tokyo");
+    const stablePrefix = (prompt: string) =>
+      prompt.slice(0, prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY));
+    const volatileSuffix = (prompt: string) =>
+      prompt.slice(prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY));
+
+    expect(stablePrefix(first)).toBe(stablePrefix(nextDay));
+    expect(stablePrefix(first)).toBe(stablePrefix(nextZone));
+    expect(stablePrefix(first)).not.toContain("2026-01-05");
+    expect(stablePrefix(first)).not.toContain("America/Chicago");
+    expect(volatileSuffix(first)).toContain("Current date: 2026-01-05");
+    expect(volatileSuffix(nextDay)).toContain("Current date: 2026-01-06");
+    expect(volatileSuffix(nextZone)).toContain("Time zone: Asia/Tokyo");
   });
 
   it("includes model alias guidance when aliases are provided", () => {
@@ -1838,6 +1849,63 @@ describe("buildSubagentSystemPrompt", () => {
         expect(prompt, testCase.name).toContain("spawned by main agent");
       }
     }
+  });
+});
+
+describe("watched sessions prompt surfaces", () => {
+  it("renders prepared watched sessions with titles, overflow, and recall guidance", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_list", "sessions_history", "sessions_search"],
+      preparedWatchedSessions: {
+        sessions: [
+          { key: "agent:main:telegram:group:alpha", title: "Family group" },
+          { key: "agent:main:telegram:group:beta" },
+        ],
+        hiddenCount: 1,
+        readToolNames: ["sessions_history", "sessions_search"],
+        listToolAvailable: true,
+      },
+    });
+
+    expect(prompt).toContain("## Watched Sessions");
+    expect(prompt).toContain(
+      "Readable now (read-only) via sessions_history/sessions_search; rows appear in sessions_list.",
+    );
+    expect(prompt).toContain("- agent:main:telegram:group:alpha — Family group");
+    expect(prompt).toContain("- agent:main:telegram:group:beta");
+    expect(prompt).toContain('(+1 more: sessions_list kinds=["group"].)');
+    expect(prompt).toContain(
+      "Asked about another chat/group/session not in context: check `sessions_list`/`sessions_search` before claiming no access.",
+    );
+  });
+
+  it("names only granted read tools and skips the sessions_list overflow hint without it", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_history"],
+      preparedWatchedSessions: {
+        sessions: [{ key: "agent:main:telegram:group:alpha" }],
+        hiddenCount: 2,
+        readToolNames: ["sessions_history"],
+        listToolAvailable: false,
+      },
+    });
+
+    expect(prompt).toContain("Readable now (read-only) via sessions_history.");
+    expect(prompt).not.toContain("rows appear in sessions_list");
+    expect(prompt).toContain("(+2 more.)");
+    expect(prompt).not.toContain('sessions_list kinds=["group"]');
+  });
+
+  it("omits the watched section and recall line without prepared data or session tools", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["read", "exec"],
+    });
+
+    expect(prompt).not.toContain("## Watched Sessions");
+    expect(prompt).not.toContain("before claiming no access");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

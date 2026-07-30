@@ -230,6 +230,20 @@ describe("createMatrixDraftStream", () => {
     expect(stream.eventId()).toBe("$evt1");
   });
 
+  it("tracks the provider-visible prepared draft content", async () => {
+    convertMarkdownTablesMock.mockImplementation((text: string) => `prepared:${text}`);
+    const stream = createMatrixDraftStream({
+      roomId: "!room:test",
+      client,
+      cfg: {} as import("../types.js").CoreConfig,
+    });
+
+    stream.update("raw table");
+    await stream.flush();
+
+    expect(stream.content()).toBe("prepared:raw table");
+  });
+
   it("sends quiet preview notices when quiet mode is enabled", async () => {
     const stream = createMatrixDraftStream({
       roomId: "!room:test",

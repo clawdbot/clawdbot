@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -437,12 +438,14 @@ function requireBuiltChannelSourceTurnId(
 
 describe("runReplyAgent active steering", () => {
   it("dispatches a declined steer once with its source-turn identity", async () => {
+    const runState: ReplyOperationRunState = {};
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
     );
     state.beforeAgentReplyRunMock.mockResolvedValue(undefined);
     state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
     const { run, sourceTurnId } = createMinimalRun({
+      opts: { [REPLY_OPERATION_RUN_STATE]: runState },
       isActive: true,
       isStreaming: true,
       shouldSteer: true,
@@ -464,6 +467,7 @@ describe("runReplyAgent active steering", () => {
 
     await expect(run()).resolves.toBeUndefined();
 
+    expect(runState.admission).toEqual({ status: "accepted", mode: "steer" });
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledWith(
       { cleanedBody: "hello" },
@@ -1077,6 +1081,109 @@ describe("runReplyAgent heartbeat followup guard", () => {
 });
 
 describe("runReplyAgent pending final delivery capture", () => {
+  it("delivers an authenticated channel reply through the configured default agent", async () => {
+    const config = {
+      agents: {
+        list: [{ id: "ops", default: true }, { id: "worker" }],
+        defaults: { compaction: { memoryFlush: {} } },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = join(
+      tempDirs.make("openclaw-custom-default-agent-"),
+      "agents",
+      "ops",
+      "sessions",
+      "sessions.json",
+    );
+    await replaceSessionEntry(
+      { agentId: "ops", defaultAgentId: "ops", sessionKey: "main", storePath },
+      sessionEntry,
+    );
+    const sessionCtx = {
+      Provider: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:24680",
+      MessageSid: "custom-default-source-message",
+      SenderId: "sender-42",
+      SenderName: "Ada",
+    } as const;
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "custom default agent reply" }],
+      meta: {},
+    });
+    const { followupRun, run, sourceTurnId } = createMinimalRun({
+      sessionCtx,
+      runOverrides: {
+        agentId: undefined,
+        config,
+        messageProvider: "discord",
+      },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+    if (!sourceTurnId) {
+      throw new Error("test channel source turn id required");
+    }
+    followupRun.userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+      input: {
+        text: "custom default agent request",
+        idempotencyKey: sourceTurnId,
+        sender: { id: "sender-42", name: "Ada" },
+      },
+      target: {
+        agentId: "ops",
+        config,
+        cwd: "/tmp",
+        sessionEntry,
+        sessionId: "session",
+        sessionKey: "main",
+        sessionStore,
+        storePath,
+      },
+    });
+
+    setRuntimeConfigSnapshot(config, config);
+    try {
+      await expect(run()).resolves.toEqual(
+        expect.objectContaining({ text: "custom default agent reply" }),
+      );
+
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(
+        await loadTranscriptEvents({
+          agentId: "ops",
+          sessionId: "session",
+          sessionKey: "main",
+          storePath,
+        }),
+      ).toContainEqual(
+        expect.objectContaining({
+          message: expect.objectContaining({
+            role: "user",
+            content: "custom default agent request",
+          }),
+        }),
+      );
+      expect(await readStoredMainSession(storePath)).toMatchObject({
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "custom default agent reply",
+          context: { channel: "discord", to: "channel:24680" },
+        },
+        restartRecoveryTerminalRunIds: [sourceTurnId],
+      });
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
   it("does not persist message-tool-only final replies for heartbeat replay", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -1101,7 +1208,6 @@ describe("runReplyAgent pending final delivery capture", () => {
 
     const stored = await readStoredMainSession(storePath);
     expect(stored.pendingFinalDelivery).toBeUndefined();
-    expect(stored.pendingFinalDeliveryText).toBeUndefined();
   });
 
   it("does not persist sendPolicy-denied final replies for heartbeat replay", async () => {
@@ -1128,7 +1234,6 @@ describe("runReplyAgent pending final delivery capture", () => {
 
     const stored = await readStoredMainSession(storePath);
     expect(stored.pendingFinalDelivery).toBeUndefined();
-    expect(stored.pendingFinalDeliveryText).toBeUndefined();
   });
 
   it("persists only visible non-reasoning final reply text", async () => {
@@ -1153,14 +1258,16 @@ describe("runReplyAgent pending final delivery capture", () => {
     const result = await run();
 
     const stored = await readStoredMainSession(storePath);
-    expect(stored.pendingFinalDelivery).toBe(true);
-    expect(stored.pendingFinalDeliveryText).toBe("visible final");
-    expect(stored.pendingFinalDeliveryIntentId).toEqual(expect.any(String));
+    expect(stored.pendingFinalDelivery).toMatchObject({
+      kind: "replayable",
+      text: "visible final",
+      intentId: expect.any(String),
+    });
     const visiblePayload = (Array.isArray(result) ? result : [result]).find(
       (payload) => payload?.text === "visible final",
     );
     expect(getReplyPayloadMetadata(visiblePayload ?? {})).toMatchObject({
-      pendingFinalDeliveryIntentId: stored.pendingFinalDeliveryIntentId,
+      pendingFinalDeliveryIntentId: stored.pendingFinalDelivery?.intentId,
       pendingFinalDeliveryRetryText: "visible final",
     });
   });
@@ -1188,14 +1295,16 @@ describe("runReplyAgent pending final delivery capture", () => {
     const result = await run();
     const stored = loadSessionEntry({ sessionKey, storePath });
     expect(stored).toMatchObject({
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryIntentId: expect.any(String),
-      pendingFinalDeliveryText: "visible canonical final",
+      pendingFinalDelivery: {
+        kind: "replayable",
+        intentId: expect.any(String),
+        text: "visible canonical final",
+      },
       sessionId: "session",
     });
     const visiblePayload = Array.isArray(result) ? result[0] : result;
     expect(getReplyPayloadMetadata(visiblePayload ?? {})).toMatchObject({
-      pendingFinalDeliveryIntentId: stored?.pendingFinalDeliveryIntentId,
+      pendingFinalDeliveryIntentId: stored?.pendingFinalDelivery?.intentId,
       pendingFinalDeliveryRetryText: "visible canonical final",
     });
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
@@ -1323,13 +1432,15 @@ describe("runReplyAgent pending final delivery capture", () => {
     await run();
 
     const stored = await readStoredMainSession(storePath);
-    expect(stored.pendingFinalDelivery).toBe(true);
-    expect(stored.pendingFinalDeliveryText).toBe("visible final");
-    expect(stored.pendingFinalDeliveryContext).toEqual({
-      channel: "discord",
-      to: "channel:24680",
-      accountId: "work",
-      threadId: "1503645939964055592",
+    expect(stored.pendingFinalDelivery).toMatchObject({
+      kind: "replayable",
+      text: "visible final",
+      context: {
+        channel: "discord",
+        to: "channel:24680",
+        accountId: "work",
+        threadId: "1503645939964055592",
+      },
     });
     expect(stored.restartRecoverySourceIngress).toBe("channel");
     expect(stored.restartRecoveryDeliveryContext).toBeUndefined();
@@ -1397,7 +1508,6 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
     const stored = await readStoredMainSession(storePath);
     expect(stored.pendingFinalDelivery).toBeUndefined();
-    expect(stored.pendingFinalDeliveryText).toBeUndefined();
     expect(stored.restartRecoveryDeliveryReceiptState).toBeUndefined();
     expect(stored.restartRecoveryDeliveryToolCallId).toBeUndefined();
     expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
@@ -2320,8 +2430,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expect(await readStoredMainSession(storePath)).toMatchObject({
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: "hook reply",
+      pendingFinalDelivery: { kind: "replayable", text: "hook reply" },
       restartRecoveryBeforeAgentReplyState: "handled-reply",
       restartRecoveryForceSafeTools: true,
       restartRecoverySourceIngress: "channel",
@@ -2420,7 +2529,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expect(await readStoredMainSession(storePath)).toMatchObject({
-      pendingFinalDelivery: true,
+      pendingFinalDelivery: { kind: "transport-only" },
       restartRecoveryBeforeAgentReplyState: "continue",
       restartRecoverySourceIngress: "channel",
     });
@@ -2498,8 +2607,10 @@ describe("runReplyAgent pending final delivery capture", () => {
     await run();
 
     const stored = await readStoredMainSession(storePath);
-    expect(stored.pendingFinalDelivery).toBe(true);
-    expect(stored.pendingFinalDeliveryText).toBe("Sent daily summary to channel.");
+    expect(stored.pendingFinalDelivery).toMatchObject({
+      kind: "replayable",
+      text: "Sent daily summary to channel.",
+    });
   });
 
   it("persists heartbeat reply remainder as pending delivery when remainder exceeds ackMaxChars", async () => {
@@ -2529,11 +2640,13 @@ describe("runReplyAgent pending final delivery capture", () => {
     const result = await run();
 
     const stored = await readStoredMainSession(storePath);
-    expect(stored.pendingFinalDelivery).toBe(true);
-    expect(stored.pendingFinalDeliveryText).toBe(longRemainder);
+    expect(stored.pendingFinalDelivery).toMatchObject({
+      kind: "replayable",
+      text: longRemainder,
+    });
     const payload = Array.isArray(result) ? result[0] : result;
     expect(getReplyPayloadMetadata(payload ?? {})).toMatchObject({
-      pendingFinalDeliveryIntentId: stored.pendingFinalDeliveryIntentId,
+      pendingFinalDeliveryIntentId: stored.pendingFinalDelivery?.intentId,
       pendingFinalDeliveryRetryText: longRemainder,
     });
   });
@@ -2597,7 +2710,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
       const stored = requireStoredSessionEntry(storePath);
       expect(stored.pendingFinalDelivery).toBeUndefined();
-      expect(stored.pendingFinalDeliveryText).toBeUndefined();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -3087,11 +3199,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(stored.modelOverrideSource, testCase.name).toBe("user");
       expect(stored.modelProvider, testCase.name).toBe("deepinfra");
       expect(stored.model, testCase.name).toBe("moonshotai/Kimi-K2.5");
-      expect(stored.fallbackNoticeSelectedModel, testCase.name).toBe("openai/gpt-5.6-luna");
-      expect(stored.fallbackNoticeActiveModel, testCase.name).toBe(
+      expect(stored.fallbackNotice?.selectedModel, testCase.name).toBe("openai/gpt-5.6-luna");
+      expect(stored.fallbackNotice?.activeModel, testCase.name).toBe(
         "deepinfra/moonshotai/Kimi-K2.5",
       );
-      expect(stored.fallbackNoticeReason, testCase.name).toBe("rate limit");
+      expect(stored.fallbackNotice?.reason, testCase.name).toBe("rate limit");
       expect(
         phases.filter((phase) => phase === "fallback"),
         testCase.name,
@@ -3477,17 +3589,14 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(sessionEntry.providerOverride).toBeUndefined();
       expect(sessionEntry.modelOverride).toBeUndefined();
       expect(sessionEntry.modelOverrideSource).toBeUndefined();
-      expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
-      expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
-      expect(sessionEntry.fallbackNoticeReason).toBeUndefined();
+      expect(sessionEntry.fallbackNotice).toBeUndefined();
       const persistedSession = requireStoredSessionEntry(storePath);
       expect(persistedSession.modelProvider).toBe("openai");
       expect(persistedSession.model).toBe("gpt-5.5");
       expect(persistedSession.providerOverride).toBeUndefined();
       expect(persistedSession.modelOverride).toBeUndefined();
       expect(persistedSession.modelOverrideSource).toBeUndefined();
-      expect(persistedSession.fallbackNoticeSelectedModel).toBeUndefined();
-      expect(persistedSession.fallbackNoticeActiveModel).toBeUndefined();
+      expect(persistedSession.fallbackNotice).toBeUndefined();
       const payloads = Array.isArray(res) ? res : res ? [res] : [];
       expect(payloads.some((payload) => payload.text?.includes("Model Fallback:"))).toBe(false);
       expect(payloads.some((payload) => payload.text?.includes("Usage:"))).toBe(false);
@@ -3556,9 +3665,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(sessionEntry.providerOverride).toBeUndefined();
     expect(sessionEntry.modelOverride).toBeUndefined();
     expect(sessionEntry.modelOverrideSource).toBeUndefined();
-    expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
-    expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
-    expect(sessionEntry.fallbackNoticeReason).toBeUndefined();
+    expect(sessionEntry.fallbackNotice).toBeUndefined();
   });
 
   it("keeps fallback transition notices when block streaming has no final text", async () => {
@@ -4504,9 +4611,12 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const sessionEntry: SessionEntry = {
         sessionId: "session",
         updatedAt: Date.now(),
-        fallbackNoticeSelectedModel: "anthropic/claude",
-        fallbackNoticeActiveModel: "deepinfra/moonshotai/Kimi-K2.5",
-        ...(testCase.existingReason ? { fallbackNoticeReason: testCase.existingReason } : {}),
+        fallbackNotice: {
+          kind: "active" as const,
+          selectedModel: "anthropic/claude",
+          activeModel: "deepinfra/moonshotai/Kimi-K2.5",
+          ...(testCase.existingReason ? { reason: testCase.existingReason } : {}),
+        },
         modelProvider: "deepinfra",
         model: "moonshotai/Kimi-K2.5",
       };
@@ -4544,7 +4654,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         const res = await run();
         const firstText = Array.isArray(res) ? res[0]?.text : res?.text;
         expect(firstText).not.toContain("Model Fallback:");
-        expect(sessionEntry.fallbackNoticeReason).toBe(testCase.expectedReason);
+        expect(sessionEntry.fallbackNotice?.reason).toBe(testCase.expectedReason);
       } finally {
         fallbackSpy.mockRestore();
       }
@@ -4555,9 +4665,12 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
-      fallbackNoticeSelectedModel: "anthropic/claude-opus-4-7",
-      fallbackNoticeActiveModel: "claude-cli/claude-opus-4-7",
-      fallbackNoticeReason: "selected model unavailable",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "anthropic/claude-opus-4-7",
+        activeModel: "claude-cli/claude-opus-4-7",
+        reason: "selected model unavailable",
+      },
     };
     const sessionStore = { main: sessionEntry };
     const dir = await mkdtemp(join(tmpdir(), "openclaw-agent-runner-cli-alias-"));
@@ -4589,10 +4702,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
     await run();
 
     const stored = requireStoredSessionEntry(storePath);
-    expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
-    expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
-    expect(stored.fallbackNoticeSelectedModel).toBeUndefined();
-    expect(stored.fallbackNoticeActiveModel).toBeUndefined();
+    expect(sessionEntry.fallbackNotice).toBeUndefined();
+    expect(stored.fallbackNotice).toBeUndefined();
     expect(stored.modelProvider).toBe("claude-cli");
     expect(stored.model).toBe("claude-opus-4-7");
     expect(stored.totalTokens).toBe(36_000);

@@ -23,8 +23,6 @@ describe("config view", () => {
     saving: false,
     applying: false,
     updating: false,
-    autoSaveStatus: "idle" as const,
-    needsApply: false,
     connected: true,
     schema: {
       type: "object",
@@ -45,12 +43,13 @@ describe("config view", () => {
     onFormPatch: vi.fn(),
     onSectionChange: vi.fn(),
     onSave: vi.fn(),
-    onApply: vi.fn(),
     onRawDiscard: vi.fn(),
     onSubsectionChange: vi.fn(),
     version: "2026.3.11",
     theme: "claw" as ThemeName,
     themeMode: "system" as ThemeMode,
+    locale: "en" as const,
+    onLocaleChange: vi.fn(),
     setTheme: vi.fn(),
     setThemeMode: vi.fn(),
     hasCustomTheme: false,
@@ -102,6 +101,31 @@ describe("config view", () => {
     } finally {
       container.remove();
     }
+  });
+
+  it("renders Language first on Appearance with its synced description", () => {
+    const onLocaleChange = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      locale: "pt-BR",
+      onLocaleChange,
+    });
+
+    const sections = [...container.querySelectorAll<HTMLElement>(".settings-section")];
+    expect(sections[0]?.id).toBe("settings-language");
+    expect(sections[0]?.textContent).toContain("Language");
+    expect(sections[0]?.textContent).toContain("Synced across your devices through the gateway");
+
+    const select = sections[0]?.querySelector("wa-select") as
+      | (HTMLElement & { value: string })
+      | null;
+    expect(select?.getAttribute("value")).toBe("pt-BR");
+    if (select) {
+      Object.defineProperty(select, "value", { configurable: true, value: "fr" });
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    expect(onLocaleChange).toHaveBeenCalledWith("fr");
   });
 
   function findOptionalButtonByText(
@@ -170,7 +194,8 @@ describe("config view", () => {
     );
     ghost.click();
     expect(setShowAdvancedSettings).toHaveBeenCalledWith(true);
-    expect(collapsed.container.querySelector(".config-show-advanced")).toBeNull();
+    expect(ghost.classList.contains("config-show-advanced")).toBe(true);
+    expect(ghost.getAttribute("aria-pressed")).toBe("false");
 
     const global = renderConfigView({
       schema,
@@ -183,6 +208,8 @@ describe("config view", () => {
     const divider = queryRequired(global.container, ".config-advanced-divider", HTMLElement);
     expect(divider.textContent?.replace(/\s+/g, " ").trim()).toBe("Advanced Hide Advanced");
     const hide = queryRequired(divider, ".config-advanced-divider__toggle", HTMLButtonElement);
+    expect(hide.classList.contains("config-show-advanced")).toBe(true);
+    expect(hide.getAttribute("aria-pressed")).toBe("true");
     hide.click();
     expect(global.props.setShowAdvancedSettings).toHaveBeenCalledWith(false);
     expect(normalizedText(global.container)).toContain("Reload mode");
@@ -404,80 +431,6 @@ describe("config view", () => {
     for (const label of ["Reload", "Clear", "Save", "Apply", "Update"]) {
       expect(findOptionalButtonByText(container, label)).toBeUndefined();
     }
-    // Idle autosave renders no status row beyond the mode toggle.
-    expect(container.querySelector(".config-toolbar__status .settings-status")).toBeNull();
-  });
-
-  it("renders active and failed autosave status while keeping success quiet", () => {
-    const onSave = vi.fn();
-    const { container } = renderConfigView({ autoSaveStatus: "saving", onSave });
-    const status = queryRequired(container, ".config-toolbar__status", HTMLElement);
-    expect(status.textContent?.trim()).toBe("Saving…");
-    expect(
-      status.querySelector(".settings-status")?.classList.contains("settings-status--accent"),
-    ).toBe(true);
-
-    const saved = renderConfigView({ autoSaveStatus: "saved" });
-    expect(saved.container.querySelector(".config-toolbar__status .settings-status")).toBeNull();
-    expect(saved.container.textContent).not.toContain("Saved");
-
-    const failed = renderConfigView({ autoSaveStatus: "error", onSave });
-    const failedStatus = queryRequired(failed.container, ".config-toolbar__status", HTMLElement);
-    expect(failedStatus.textContent).toContain("Save failed");
-    expect(
-      failedStatus.querySelector(".settings-status")?.classList.contains("settings-status--danger"),
-    ).toBe(true);
-    findButtonByText(failed.container, "Retry").click();
-    expect(onSave).toHaveBeenCalledTimes(1);
-  });
-
-  it("offers only a reload on base-hash conflicts instead of a retry", () => {
-    const onSave = vi.fn();
-    const onRawDiscard = vi.fn();
-    const { container } = renderConfigView({ autoSaveStatus: "conflict", onSave, onRawDiscard });
-
-    const status = queryRequired(container, ".config-toolbar__status", HTMLElement);
-    expect(status.textContent).toContain("Settings changed elsewhere");
-    expect(
-      status.querySelector(".settings-status")?.classList.contains("settings-status--danger"),
-    ).toBe(true);
-    expect(findOptionalButtonByText(container, "Retry")).toBeUndefined();
-    findButtonByText(container, "Reload").click();
-    expect(onRawDiscard).toHaveBeenCalledTimes(1);
-    expect(onSave).not.toHaveBeenCalled();
-  });
-
-  it("shows the restart banner after a save and wires it to apply", () => {
-    const onApply = vi.fn();
-    const { container } = renderConfigView({ needsApply: true, onApply });
-
-    const banner = queryRequired(container, ".config-apply-banner", HTMLElement);
-    expect(banner.textContent).toContain("Saved to openclaw.json — restart the gateway to apply.");
-    const applyButton = findButtonByText(container, "Restart & apply");
-    expect(applyButton.disabled).toBe(false);
-    applyButton.click();
-    expect(onApply).toHaveBeenCalledTimes(1);
-
-    const busy = renderConfigView({ needsApply: true, applying: true, onApply });
-    const busyButton = findButtonContainingText(busy.container, "Applying…");
-    expect(busyButton.disabled).toBe(true);
-    expect(busyButton.getAttribute("aria-busy")).toBe("true");
-    expect(busyButton.querySelectorAll(".config-action-spinner")).toHaveLength(1);
-
-    // Any in-flight write, pending load, or dirty raw draft gates the action.
-    for (const overrides of [
-      { saving: true },
-      { loading: true },
-      { updating: true },
-      { autoSaveStatus: "saving" as const },
-      { formMode: "raw" as const, raw: '{\n  "a": 1\n}\n', originalRaw: "{\n}\n" },
-    ]) {
-      const gated = renderConfigView({ needsApply: true, ...overrides });
-      expect(findButtonByText(gated.container, "Restart & apply").disabled).toBe(true);
-    }
-
-    const cleared = renderConfigView({ needsApply: false });
-    expect(cleared.container.querySelector(".config-apply-banner")).toBeNull();
   });
 
   it("keeps explicit open/save/discard controls in raw mode", () => {
@@ -511,15 +464,12 @@ describe("config view", () => {
       rawDraftPending: true,
       raw: '{\n  "a": 1\n}\n',
       originalRaw: "{\n}\n",
-      needsApply: true,
     });
 
-    // The capability refuses form submissions and apply until the raw draft
-    // is saved or discarded — so the raw actions must stay on screen and the
-    // Form toggle + restart action are gated instead of failing generically.
+    // The capability refuses form submissions until the raw draft is saved or
+    // discarded, so the raw actions stay on screen and Form remains gated.
     expect(container.querySelector(".config-raw-actions")).not.toBeNull();
     expect(findButtonByText(container, "Form").disabled).toBe(true);
-    expect(findButtonByText(container, "Restart & apply").disabled).toBe(true);
   });
 
   it("disables raw save/discard without changes and locks the editor while busy", () => {
@@ -706,7 +656,6 @@ describe("config view", () => {
     const onWebPushSubscribe = vi.fn();
     const { container } = renderConfigView({
       activeSection: "__notifications__",
-      autoSaveStatus: "saved",
       includeSections: ["__notifications__"],
       includeVirtualSections: true,
       showModeToggle: false,
@@ -1427,6 +1376,31 @@ describe("config view", () => {
     expect(onOpenCustomThemeImport).toHaveBeenCalledTimes(1);
   });
 
+  it("exposes theme and text-size selection to assistive technology", () => {
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      theme: "knot",
+      textScale: 110,
+    });
+
+    expect(findButtonByText(container, "Knot").getAttribute("aria-pressed")).toBe("true");
+    expect(findButtonByText(container, "Claw").getAttribute("aria-pressed")).toBe("false");
+    const textScaleButtons = [
+      ...container.querySelectorAll<HTMLButtonElement>(".settings-text-scale__btn"),
+    ];
+    expect(
+      textScaleButtons
+        .find((button) => button.textContent?.includes("110%"))
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      textScaleButtons
+        .find((button) => button.textContent?.includes("100%"))
+        ?.getAttribute("aria-pressed"),
+    ).toBe("false");
+  });
+
   it("shows the tweakcn importer once the custom slot is opened", () => {
     const { container } = renderConfigView({
       activeSection: "__appearance__",
@@ -1774,11 +1748,11 @@ describe("config view", () => {
         new Date(firstSeenAt).toLocaleDateString(),
       );
 
-      const unseen = container.querySelector(".lobster-pet--palette-coral");
-      expect(unseen?.getAttribute("aria-label")).toContain("Blends in at the beach.");
+      const unseen = container.querySelector(".lobster-pet--palette-watermelon");
+      expect(unseen?.getAttribute("aria-label")).toContain("Ripe when thumped.");
       expect(
         unseen?.closest("openclaw-tooltip")?.querySelector('[slot="content"]')?.textContent,
-      ).toContain("Blends in at the beach.");
+      ).toContain("Ripe when thumped.");
 
       container.querySelector<HTMLAnchorElement>(".lobsterdex__open")?.click();
       expect(onOpenLobsterdex).toHaveBeenCalledOnce();

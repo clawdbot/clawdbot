@@ -25,6 +25,7 @@ import {
 } from "./app-sidebar-session-catalogs.ts";
 import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.ts";
 import { icons } from "./icons.ts";
+import { hasProviderBrandIcon, renderProviderBrandIcon } from "./provider-icon.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 
 type SessionCatalogGroupsParams = {
@@ -147,7 +148,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
       return nothing;
     }
     const errorMessage = errorMessages.join("; ");
-    const errorHelp = `${errorMessage}. Configure native thread discovery in Settings > Automation > Plugins.`;
+    const errorHelp = t("chat.sidebar.catalogDiscoveryHelp", { error: errorMessage });
     const sectionClass = [
       "sidebar-recent-sessions__group",
       "sidebar-recent-sessions__group--zone-coding",
@@ -180,6 +181,11 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
               title=${hasError ? errorHelp : nothing}
               @click=${() => params.onToggleSection(sectionId)}
             >
+              ${hasProviderBrandIcon(catalog.id)
+                ? renderProviderBrandIcon(catalog.id, {
+                    className: "sidebar-session-catalog-provider-icon",
+                  })
+                : nothing}
               <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
               <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
                 >${collapsed ? icons.chevronRight : icons.chevronDown}</span

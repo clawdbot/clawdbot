@@ -60,6 +60,22 @@ type SharedCodexAppServerClientStartup = {
 type SharedCodexAppServerClientState = {
   clients: Map<string, SharedCodexAppServerClientEntry>;
   leasedReleases: WeakMap<CodexAppServerClient, Array<() => void>>;
+  warmClientsByConfig?: WeakMap<
+    object,
+    WeakMap<CodexAppServerStartOptions, Map<string, WarmSharedCodexAppServerClient>>
+  >;
+};
+
+type WarmSharedCodexAppServerClient = {
+  key: string;
+  entry: SharedCodexAppServerClientEntry;
+  client: CodexAppServerClient;
+};
+
+type WarmSharedCodexAppServerClientIdentity = {
+  config: object;
+  startOptions: CodexAppServerStartOptions;
+  selectorKey: string;
 };
 
 type CodexAppServerClientStartMetadata = {
@@ -393,6 +409,82 @@ async function resolveCodexAppServerClientStartContext(
   };
 }
 
+function resolveWarmSharedCodexAppServerClientIdentity(
+  options?: CodexAppServerClientOptions,
+): WarmSharedCodexAppServerClientIdentity | undefined {
+  if (
+    !options?.config ||
+    typeof options.config !== "object" ||
+    !options.startOptions ||
+    options.pluginConfig !== undefined ||
+    options.authProfileStore !== undefined ||
+    options.preparedAuth !== undefined ||
+    options.runtimeArtifactMode !== undefined ||
+    options.expectedRuntimeArtifact !== undefined
+  ) {
+    return undefined;
+  }
+  const authProfileSelector =
+    options.authProfileId === null
+      ? ["native"]
+      : options.authProfileId === undefined
+        ? ["implicit"]
+        : ["profile", options.authProfileId];
+  return {
+    config: options.config,
+    startOptions: options.startOptions,
+    selectorKey: JSON.stringify([
+      options.agentDir ?? resolveDefaultAgentDir(options.config),
+      authProfileSelector,
+      options.authBindingFingerprint ?? null,
+      options.authRequirement ?? null,
+    ]),
+  };
+}
+
+function readWarmSharedCodexAppServerClient(
+  state: SharedCodexAppServerClientState,
+  identity: WarmSharedCodexAppServerClientIdentity,
+): WarmSharedCodexAppServerClient | undefined {
+  const aliases = state.warmClientsByConfig?.get(identity.config)?.get(identity.startOptions);
+  const warm = aliases?.get(identity.selectorKey);
+  if (!warm) {
+    return undefined;
+  }
+  // Config/start options are immutable runtime snapshots. The alias is valid only while the
+  // canonical keyed entry still owns this physical client; close, retirement, and auth-profile
+  // invalidation remove that entry, forcing the next acquire through full start-context resolution.
+  if (
+    state.clients.get(warm.key) !== warm.entry ||
+    warm.entry.client !== warm.client ||
+    warm.entry.closeWhenIdle ||
+    warm.entry.closeError
+  ) {
+    aliases?.delete(identity.selectorKey);
+    return undefined;
+  }
+  return warm;
+}
+
+function rememberWarmSharedCodexAppServerClient(
+  state: SharedCodexAppServerClientState,
+  identity: WarmSharedCodexAppServerClientIdentity,
+  warm: WarmSharedCodexAppServerClient,
+): void {
+  state.warmClientsByConfig ??= new WeakMap();
+  let byStartOptions = state.warmClientsByConfig.get(identity.config);
+  if (!byStartOptions) {
+    byStartOptions = new WeakMap();
+    state.warmClientsByConfig.set(identity.config, byStartOptions);
+  }
+  let aliases = byStartOptions.get(identity.startOptions);
+  if (!aliases) {
+    aliases = new Map();
+    byStartOptions.set(identity.startOptions, aliases);
+  }
+  aliases.set(identity.selectorKey, warm);
+}
+
 /** Gets or starts a shared Codex app-server client without retaining a lease. */
 export async function getSharedCodexAppServerClient(
   options?: CodexAppServerClientOptions,
@@ -518,6 +610,16 @@ async function acquireSharedCodexAppServerClient(
   if (options?.abandonSignal?.aborted) {
     throw new CodexAppServerStartupError("aborted", "codex app-server initialize aborted");
   }
+  const state = getSharedCodexAppServerClientState();
+  const warmIdentity = resolveWarmSharedCodexAppServerClientIdentity(options);
+  const warmClient = warmIdentity
+    ? readWarmSharedCodexAppServerClient(state, warmIdentity)
+    : undefined;
+  if (warmClient) {
+    options?.onStartedClient?.(warmClient.client);
+    const release = leaseOptions?.leased ? retainSharedClientEntry(warmClient.entry) : undefined;
+    return release ? { client: warmClient.client, release } : { client: warmClient.client };
+  }
   const acquireStartedAt = Date.now();
   const timeoutMs = options?.timeoutMs ?? 0;
   const context = await withCodexAppServerAcquireDeadline(
@@ -563,7 +665,6 @@ async function acquireSharedCodexAppServerClient(
   const key = runtimeArtifactMode
     ? `${baseKey}\0runtime-artifact:capture-v1:${expectedRuntimeArtifactKey}`
     : baseKey;
-  const state = getSharedCodexAppServerClientState();
   const entry = getOrCreateSharedClientEntry(state, key);
   if (runtimeArtifactMode) {
     entry.runtimeArtifactStartupAbort ??= new AbortController();
@@ -643,6 +744,9 @@ async function acquireSharedCodexAppServerClient(
       config: options?.config,
     });
     const release = leaseOptions?.leased ? retainSharedClientEntry(entry) : undefined;
+    if (warmIdentity) {
+      rememberWarmSharedCodexAppServerClient(state, warmIdentity, { key, entry, client });
+    }
     return release ? { client, release } : { client };
   } catch (error) {
     // This deadline belongs to one waiter, not the shared physical client.
@@ -1002,6 +1106,7 @@ export function resetSharedCodexAppServerClientForTests(): void {
   const clients = collectSharedClients(state);
   state.clients.clear();
   state.leasedReleases = new WeakMap();
+  state.warmClientsByConfig = new WeakMap();
   for (const client of clients) {
     client.close();
   }
@@ -1012,6 +1117,7 @@ export function clearSharedCodexAppServerClient(): void {
   const state = getSharedCodexAppServerClientState();
   const clients = collectSharedClients(state);
   state.clients.clear();
+  state.warmClientsByConfig = new WeakMap();
   for (const client of clients) {
     client.close();
   }
@@ -1064,6 +1170,24 @@ export function retainSharedCodexAppServerClientIfCurrent(
     if (entry.client === client) {
       return retainSharedClientEntry(entry);
     }
+  }
+  return undefined;
+}
+
+/** Retains the live shared client whose initialized instance id matches a thread binding. */
+export function retainSharedCodexAppServerClientByInstanceId(
+  clientId: string | undefined,
+): { client: CodexAppServerClient; release: () => void } | undefined {
+  const normalizedClientId = clientId?.trim();
+  if (!normalizedClientId) {
+    return undefined;
+  }
+  for (const entry of getSharedCodexAppServerClientState().clients.values()) {
+    const client = entry.client;
+    if (client?.getInstanceId() !== normalizedClientId || entry.closeWhenIdle || entry.closeError) {
+      continue;
+    }
+    return { client, release: retainSharedClientEntry(entry) };
   }
   return undefined;
 }
@@ -1146,6 +1270,7 @@ export async function clearSharedCodexAppServerClientAndWait(options?: {
   const state = getSharedCodexAppServerClientState();
   const clients = collectSharedClients(state);
   state.clients.clear();
+  state.warmClientsByConfig = new WeakMap();
   await Promise.all(clients.map((client) => client.closeAndWait(options)));
 }
 

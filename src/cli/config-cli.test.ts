@@ -855,6 +855,31 @@ describe("config cli", () => {
       ]);
     });
 
+    it("normalizes explicit per-agent model-map paths before writing config mutations", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          entries: {
+            ops: { models: { "google/gemini-3-pro-preview": {} } },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "agents.entries.ops.models.google/gemini-3-pro-preview.alias",
+        "gemini",
+      ]);
+
+      expect(firstWrittenConfig().agents?.entries?.ops?.models).toEqual({
+        "google/gemini-3.1-pro-preview": { alias: "gemini" },
+      });
+      expect(requireWriteOptions().explicitSetPaths).toEqual([
+        ["agents", "entries", "ops", "models", "google/gemini-3.1-pro-preview", "alias"],
+      ]);
+    });
+
     it("normalizes agent-list model refs before writing config mutations", async () => {
       const resolved: OpenClawConfig = {
         agents: {
@@ -910,6 +935,52 @@ describe("config cli", () => {
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       expect(firstWrittenConfig().models?.providers?.google?.models?.[0]?.id).toBe(
         "google/gemini-3.1-pro-preview",
+      );
+    });
+
+    it("normalizes manifest-backed provider catalog refs before writing config mutations", async () => {
+      mockLoadPluginMetadataSnapshot.mockReturnValue(
+        createPluginMetadataSnapshot({
+          diagnostics: [],
+          plugins: [
+            createPluginManifestRecord({
+              id: "myproxy-plugin",
+              providers: ["myproxy"],
+              modelIdNormalization: {
+                providers: {
+                  myproxy: { aliases: { latest: "modern-model" }, prefixWhenBare: "vendor" },
+                },
+              },
+            }),
+          ],
+        }),
+      );
+      const resolved: OpenClawConfig = {
+        models: {
+          providers: {
+            myproxy: {
+              baseUrl: "https://proxy.example/v1",
+              models: [
+                {
+                  id: "latest",
+                  name: "Custom latest",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 200_000,
+                  maxTokens: 8192,
+                },
+              ],
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "gateway.port", "18790"]);
+
+      expect(firstWrittenConfig().models?.providers?.myproxy?.models?.[0]?.id).toBe(
+        "vendor/modern-model",
       );
     });
 

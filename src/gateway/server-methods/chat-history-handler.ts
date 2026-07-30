@@ -43,7 +43,7 @@ import {
   resolveSessionModelRef,
   resolveSessionStoreKey,
 } from "../session-utils.js";
-import { scheduleChatHistoryManagedImageCleanup } from "./chat-assistant-content.js";
+import { scheduleChatHistoryManagedMediaCleanup } from "./chat-assistant-content.js";
 import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   enforceChatHistoryFinalBudget,
@@ -437,7 +437,7 @@ async function handleChatHistoryRequest({
     messages: normalized,
     maxSingleMessageBytes: perMessageHardCap,
   });
-  scheduleChatHistoryManagedImageCleanup({
+  scheduleChatHistoryManagedMediaCleanup({
     sessionKey,
     ...(selectedAgent.agentId ? { agentId: selectedAgent.agentId } : {}),
     context,
@@ -622,6 +622,7 @@ async function handleChatHistoryRequest({
     sessionInfo,
     thinkingLevel,
     fastMode: entry?.fastMode,
+    toolOverrides: entry?.toolOverrides,
     verboseLevel,
     ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
     ...(includeAgentsList && startupAgentsList ? { agentsList: startupAgentsList } : {}),

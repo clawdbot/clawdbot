@@ -7,9 +7,17 @@
 // pane width and overlapping the bubbles in the dashboard chat dock.
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BoardProvider } from "../../../lib/board/provider.ts";
+import { resolveAssistantAttachmentAuthToken } from "../chat-pane-state.ts";
+import { createTestChatPane } from "../chat-pane.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import { buildCachedChatItems, resetChatThreadState } from "../chat-thread.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import {
+  isChatMediaResourceCurrent,
+  observeChatMediaResource,
+  releaseChatMediaResourceSubscriber,
+} from "./chat-message-media.ts";
 import {
   renderChatThread,
   resetChatThreadPresentationState,
@@ -318,5 +326,301 @@ describe("chat transcript row measurement", () => {
     expect(hostA?.measureRowRefs.size).toBe(0);
     transcript.hostDisconnected();
     expect(observedElements.size).toBe(0);
+  });
+
+  it("rebinds guarded transcript images when the gateway rotates its auth token", async () => {
+    const NativeUrl = URL;
+    const blobUrl = `blob:transcript-media-${crypto.randomUUID()}`;
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = vi.fn(() => blobUrl);
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+
+    let previousSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_source: string, init?: RequestInit) => {
+      if (fetchMock.mock.calls.length === 1) {
+        return new Promise<Response>((_resolve, reject) => {
+          previousSignal = init?.signal ?? undefined;
+          previousSignal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("media scope changed", "AbortError")),
+            { once: true },
+          );
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        blob: async () => new Blob(["png"], { type: "image/png" }),
+      } as Response);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const client = {
+      request: vi.fn(async () => null),
+    } as unknown as Parameters<typeof createTestChatPane>[0]["client"];
+    const sessions = {} as Parameters<typeof createTestChatPane>[0]["sessions"];
+    const { pane, state } = createTestChatPane({ client, sessions });
+    state.hello = {
+      auth: { deviceToken: "old-token" },
+    } as typeof state.hello;
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "image", url: source }],
+        timestamp: 1_000,
+      },
+    ];
+    const renderPane = () => {
+      render(
+        renderChatThread(
+          {
+            ...threadProps("pane-gateway-media-auth", state.sessionKey, messages),
+            assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state),
+            onRequestUpdate: renderPane,
+          },
+          transcript,
+        ),
+        container,
+      );
+      transcript.hostUpdated();
+    };
+    state.requestUpdate = renderPane;
+
+    renderPane();
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    const previousResource = observeChatMediaResource<string | null>(
+      "managed-image",
+      `${source}::old-token::`,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(previousResource.subscribers.size).toBe(1);
+
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      client,
+      phase: "connected",
+      hello: {
+        ...pane.context.gateway.snapshot.hello,
+        auth: { deviceToken: "next-token" },
+      } as typeof pane.context.gateway.snapshot.hello,
+    });
+    expect(previousSignal?.aborted).toBe(true);
+    expect(isChatMediaResourceCurrent(previousResource)).toBe(false);
+    await flushDeferredRowPrune();
+
+    const nextResource = observeChatMediaResource<string | null>(
+      "managed-image",
+      `${source}::next-token::`,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("Authorization")).toBe(
+      "Bearer next-token",
+    );
+    expect(isChatMediaResourceCurrent(nextResource)).toBe(true);
+    expect(nextResource.subscribers.size).toBe(1);
+    expect(container.querySelector<HTMLImageElement>(".chat-message-image")?.src).toBe(blobUrl);
+
+    releaseChatMediaResourceSubscriber(renderPane);
+    transcript.hostDisconnected();
+  });
+
+  it("reconciles guarded local attachments when pane preview roots change", async () => {
+    let previousSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_source: string, init?: RequestInit) => {
+      if (fetchMock.mock.calls.length === 1) {
+        return new Promise<Response>((_resolve, reject) => {
+          previousSignal = init?.signal ?? undefined;
+          previousSignal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("preview roots changed", "AbortError")),
+            { once: true },
+          );
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          available: true,
+          mediaTicket: "root-restored-ticket",
+          mediaTicketExpiresAt: new Date(Date.now() + 90_000).toISOString(),
+        }),
+      } as Response);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = {
+      request: vi.fn(async () => null),
+    } as unknown as Parameters<typeof createTestChatPane>[0]["client"];
+    const sessions = {} as Parameters<typeof createTestChatPane>[0]["sessions"];
+    const { pane, state } = createTestChatPane({ client, sessions });
+    const configPane = pane as typeof pane & {
+      applyApplicationConfig: (config: typeof pane.context.config.current) => void;
+    };
+    state.hello = {
+      auth: { deviceToken: "old-token" },
+    } as typeof state.hello;
+    state.localMediaPreviewRoots = ["/tmp/openclaw"];
+    state.embedSandboxMode = "scripts";
+    state.allowExternalEmbedUrls = false;
+
+    const source = `/tmp/openclaw/${crypto.randomUUID()}.pdf`;
+    const messages = [
+      {
+        role: "assistant",
+        content: `Local document\nMEDIA:${source}`,
+        timestamp: 1_000,
+      },
+    ];
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const renderPane = () => {
+      render(
+        renderChatThread(
+          {
+            ...threadProps("pane-local-media-roots", state.sessionKey, messages),
+            assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state),
+            localMediaPreviewRoots: state.localMediaPreviewRoots,
+            onRequestUpdate: renderPane,
+          },
+          transcript,
+        ),
+        container,
+      );
+      transcript.hostUpdated();
+    };
+    state.requestUpdate = renderPane;
+
+    renderPane();
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    const previousResource = observeChatMediaResource(
+      "assistant-attachment",
+      `::old-token::${source}`,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(previousResource.subscribers.size).toBe(1);
+
+    const config = {
+      ...pane.context.config.current,
+      localMediaPreviewRoots: ["/tmp/elsewhere"],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+    };
+    configPane.applyApplicationConfig(config);
+    await flushDeferredRowPrune();
+
+    expect(previousSignal?.aborted).toBe(true);
+    expect(isChatMediaResourceCurrent(previousResource)).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(
+      container.querySelector(".chat-assistant-attachment-card__reason")?.textContent,
+    ).toContain("Outside allowed folders");
+
+    configPane.applyApplicationConfig({
+      ...config,
+      localMediaPreviewRoots: ["/tmp/openclaw"],
+    });
+    await flushDeferredRowPrune();
+
+    const restoredResource = observeChatMediaResource(
+      "assistant-attachment",
+      `::old-token::${source}`,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("Authorization")).toBe(
+      "Bearer old-token",
+    );
+    expect(isChatMediaResourceCurrent(restoredResource)).toBe(true);
+    expect(restoredResource.subscribers.size).toBe(1);
+    expect(
+      container.querySelector(".chat-assistant-attachment-card__link")?.getAttribute("href"),
+    ).toContain("mediaTicket=root-restored-ticket");
+
+    releaseChatMediaResourceSubscriber(renderPane);
+    transcript.hostDisconnected();
+  });
+
+  it("updates MCP App pinning when the same provider's capability changes", async () => {
+    const provider = {
+      sessionKey: "agent:main:main",
+      canPinWidgets: true,
+      canPinMcpApps: false,
+      pinMcpApp: vi.fn(async () => undefined),
+      snapshot$: {
+        value: {
+          sessionKey: "agent:main:main",
+          revision: 1,
+          tabs: [],
+          widgets: [],
+        },
+        subscribe: () => () => undefined,
+      },
+    };
+    const props = {
+      ...threadProps("pane-mcp-capability"),
+      boardProvider: provider as unknown as BoardProvider,
+      messages: [
+        {
+          role: "assistant",
+          timestamp: 1_000,
+          content: [
+            { type: "text", text: "Here is the dashboard app." },
+            {
+              type: "canvas",
+              preview: {
+                kind: "canvas",
+                surface: "assistant_message",
+                render: "url",
+                title: "Dashboard app",
+                viewId: "outer-view-must-not-be-pinned",
+                mcpApp: {
+                  viewId: "view-dashboard-app",
+                  serverName: "dashboard",
+                  toolName: "show",
+                  uiResourceUri: "ui://dashboard/app.html",
+                  toolCallId: "call-dashboard-app",
+                  originSessionKey: "agent:main:main",
+                },
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    expect(container.querySelector('[data-content-kind="mcp-app"]')).not.toBeNull();
+    expect(container.querySelector("[data-pin-widget]")).toBeNull();
+
+    provider.canPinMcpApps = true;
+    render(renderChatThread(props, transcript), container);
+    transcript.hostUpdated();
+
+    expect(container.querySelector("[data-pin-widget]")).not.toBeNull();
+    expect(provider.snapshot$.value.revision).toBe(1);
+
+    provider.canPinMcpApps = false;
+    render(renderChatThread(props, transcript), container);
+    transcript.hostUpdated();
+
+    expect(container.querySelector("[data-pin-widget]")).toBeNull();
+    expect(provider.snapshot$.value.revision).toBe(1);
   });
 });

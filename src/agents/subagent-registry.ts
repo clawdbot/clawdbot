@@ -76,12 +76,20 @@ let lastOrphanRecoveryScheduleAt = 0;
 const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 const GATEWAY_ADMISSION_RETRY_DELAY_MS = 1_000;
 
-function persistSubagentRuns() {
-  subagentRegistryDeps.persistSubagentRunsToDisk(subagentRuns);
+// Hot lifecycle callers name every changed or removed row. Zero ids is reserved
+// for explicit full-registry replacement at restore/reset boundaries.
+function persistSubagentRuns(...runIds: string[]) {
+  subagentRegistryDeps.persistSubagentRunsToDisk(
+    subagentRuns,
+    runIds.length > 0 ? runIds : undefined,
+  );
 }
 
-function persistSubagentRunsOrThrow() {
-  subagentRegistryDeps.persistSubagentRunsToDiskOrThrow(subagentRuns);
+function persistSubagentRunsOrThrow(...runIds: string[]) {
+  subagentRegistryDeps.persistSubagentRunsToDiskOrThrow(
+    subagentRuns,
+    runIds.length > 0 ? runIds : undefined,
+  );
 }
 
 function findSubagentTaskForRun(entry: SubagentRunRecord) {
@@ -317,7 +325,7 @@ function resumeSubagentRun(runId: string) {
           resumedRuns,
         })
       ) {
-        persistSubagentRuns();
+        persistSubagentRuns(runId);
       }
       return;
     }
@@ -468,7 +476,7 @@ configureSubagentRegistrySteerRuntime({
     entry.swarmLaunchIdempotencyKey = idempotencyKey;
     entry.swarmLaunchPending = true;
     try {
-      persistSubagentRunsOrThrow();
+      persistSubagentRunsOrThrow(entry.runId);
     } catch (error) {
       entry.swarmLaunchIdempotencyKey = previousIdempotencyKey;
       entry.swarmLaunchPending = previousPending;

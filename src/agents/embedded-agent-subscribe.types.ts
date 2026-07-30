@@ -91,6 +91,7 @@ export type SubscribeEmbeddedAgentSessionParams = {
   onBeforeTerminalDelivery?: (event: {
     messages: AgentMessage[];
     willRetry: boolean;
+    assistantEntryId?: string;
     lastAssistant?: AgentMessage;
     assistantTexts: readonly string[];
     hasAssistantVisibleText: boolean;

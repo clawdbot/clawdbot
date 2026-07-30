@@ -27,9 +27,7 @@ type InternalRunParams = RunEmbeddedAgentParams & {
 type AttemptRuntime = {
   sessionId: string;
   sessionFile: string;
-  sessionTarget?: ContextEngineSessionTarget;
   sessionKey?: string;
-  trajectorySessionFile: string;
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder;
   workspaceDir: string;
   isCanonicalWorkspace: boolean;
@@ -69,6 +67,16 @@ type AttemptRuntime = {
   captureRuntimeArtifact: boolean;
 };
 
+type AttemptTranscriptOwnership =
+  | {
+      kind: "caller-owned";
+      sessionManager: NonNullable<RunEmbeddedAgentParams["sessionManager"]>;
+    }
+  | {
+      kind: "runtime-target";
+      sessionTarget?: ContextEngineSessionTarget;
+    };
+
 type AttemptControl = {
   lifecycleGeneration: string;
   pluginHarnessOwnsTransport: boolean;
@@ -76,6 +84,7 @@ type AttemptControl = {
   laneTaskReleaseController: AbortController;
   noteLaneTaskProgress: () => void;
   onToolOutcome: ToolOutcomeObserver;
+  isTurnTainted: () => boolean;
   allocateToolOutcomeOrdinal: (toolCallId?: string) => number;
   onToolStreamBoundary: NonNullable<EmbeddedRunAttemptParams["onToolStreamBoundary"]>;
   onRunProgress: NonNullable<EmbeddedRunAttemptParams["onRunProgress"]>;
@@ -93,6 +102,7 @@ type AttemptControl = {
 export async function dispatchEmbeddedRunAttempt(input: {
   params: InternalRunParams;
   runtime: AttemptRuntime;
+  transcriptOwnership: AttemptTranscriptOwnership;
   control: AttemptControl;
   bootstrapPromptWarningSignaturesSeen: string[];
   suppressNextUserMessagePersistence: boolean;
@@ -207,14 +217,16 @@ export async function dispatchEmbeddedRunAttempt(input: {
     replyToMode: params.replyToMode,
     hasRepliedRef: params.hasRepliedRef,
     sessionFile: runtime.sessionFile,
-    sessionTarget: runtime.sessionTarget,
-    trajectorySessionFile: runtime.trajectorySessionFile,
+    ...(input.transcriptOwnership.kind === "caller-owned"
+      ? { sessionManager: input.transcriptOwnership.sessionManager }
+      : { sessionTarget: input.transcriptOwnership.sessionTarget }),
     trajectoryRecorder: runtime.trajectoryRecorder,
     workspaceDir: runtime.workspaceDir,
     cwd: params.cwd,
     agentDir: runtime.agentDir,
     preparedModelRuntime: runtime.preparedModelRuntime,
     config: params.config,
+    toolOverrides: params.toolOverrides,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     ...(runtime.contextEngine
       ? {
@@ -277,6 +289,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     agentId: runtime.agentId,
     thinkLevel: runtime.thinkLevel,
     onToolOutcome: control.onToolOutcome,
+    isTurnTainted: control.isTurnTainted,
     allocateToolOutcomeOrdinal: control.allocateToolOutcomeOrdinal,
     onToolStreamBoundary: control.onToolStreamBoundary,
     onRunProgress: control.onRunProgress,

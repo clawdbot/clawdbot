@@ -18,6 +18,7 @@ import {
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
 } from "../infra/plugin-approvals.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { cloneHookIsolationValue } from "../plugins/hook-isolation.js";
 import {
   PluginApprovalResolutions,
   type PluginApprovalResolution,
@@ -149,6 +150,34 @@ function buildPluginApprovalFailureReason(params: {
   return `${params.fallbackReason}\n\n${setupText}`;
 }
 
+function resolveUnavailablePluginApprovalSurfaceReason(ctx?: HookContext): string | undefined {
+  const trigger = ctx?.trigger?.trim();
+  // Legacy/internal callers without run provenance still rely on the Gateway's
+  // live-client check. Embedded agent runs always carry an explicit trigger.
+  if (!trigger) {
+    return undefined;
+  }
+  const initiatingSurface = resolveApprovalInitiatingSurfaceState({
+    channel: ctx?.turnSourceChannel,
+    accountId: ctx?.turnSourceAccountId,
+    cfg: ctx?.config,
+    approvalKind: "plugin",
+  });
+  if (trigger !== "user") {
+    return `Plugin approval unavailable: ${trigger} runs have no approval-capable initiating surface.`;
+  }
+  if (!ctx?.turnSourceChannel?.trim() && !ctx?.approvalReviewerDeviceId?.trim()) {
+    return "Plugin approval unavailable: non-interactive CLI runs have no approval-capable initiating surface.";
+  }
+  if (initiatingSurface.kind === "disabled") {
+    return `Plugin approval unavailable: the ${initiatingSurface.channelLabel} initiating surface is disabled.`;
+  }
+  if (initiatingSurface.kind === "unsupported") {
+    return `Plugin approval unavailable: the ${initiatingSurface.channelLabel} initiating surface does not support approvals.`;
+  }
+  return undefined;
+}
+
 async function requestPluginToolApproval(params: {
   approval: PluginApprovalRequest;
   toolName: string;
@@ -226,6 +255,19 @@ async function requestPluginToolApproval(params: {
             reason: "Approval timed out",
             params: params.baseParams,
           };
+    }
+
+    const unavailableSurfaceReason = resolveUnavailablePluginApprovalSurfaceReason(params.ctx);
+    if (unavailableSurfaceReason) {
+      notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
+      return {
+        blocked: true,
+        kind: "failure",
+        disposition: "failed",
+        deniedReason: "plugin-approval-unavailable",
+        reason: unavailableSurfaceReason,
+        params: params.baseParams,
+      };
     }
 
     gatewayApprovalPhase = "request";
@@ -446,18 +488,25 @@ export async function resolveBeforeToolCallApprovalOutcome(params: {
   if (!approval) {
     return undefined;
   }
+  // Detach the approval payload from plugin- and caller-owned objects before
+  // the request can outlive this policy pass.
+  const baseParamsSnapshot = cloneHookIsolationValue("before_tool_call", params.baseParams);
+  const overrideParamsSnapshot =
+    params.result?.params === undefined
+      ? undefined
+      : cloneHookIsolationValue("before_tool_call", params.result.params);
   warnDeprecatedApprovalTimeoutBehavior(approval);
   if (params.approvalMode === "defer") {
     return {
       blocked: false,
-      params: params.baseParams,
+      params: cloneHookIsolationValue("before_tool_call", baseParamsSnapshot),
       deferredApproval: {
         approval,
         toolName: params.toolName,
         ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
         ...(params.ctx ? { ctx: params.ctx } : {}),
-        baseParams: params.baseParams,
-        overrideParams: params.result?.params,
+        baseParams: baseParamsSnapshot,
+        overrideParams: overrideParamsSnapshot,
       },
     };
   }
@@ -469,7 +518,7 @@ export async function resolveBeforeToolCallApprovalOutcome(params: {
       disposition: "blocked",
       deniedReason: "plugin-approval",
       reason: approval.description || approval.title || "Plugin approval required",
-      params: params.baseParams,
+      params: baseParamsSnapshot,
     };
   }
   if (params.approvalMode === "deny") {
@@ -479,7 +528,7 @@ export async function resolveBeforeToolCallApprovalOutcome(params: {
       kind: "veto",
       deniedReason: "plugin-approval",
       reason: "approval_required",
-      params: params.baseParams,
+      params: baseParamsSnapshot,
     };
   }
   return await requestPluginToolApproval({
@@ -488,8 +537,8 @@ export async function resolveBeforeToolCallApprovalOutcome(params: {
     ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
     ...(params.ctx ? { ctx: params.ctx } : {}),
     signal: params.signal,
-    baseParams: params.baseParams,
-    overrideParams: params.result?.params,
+    baseParams: baseParamsSnapshot,
+    overrideParams: overrideParamsSnapshot,
   });
 }
 

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import net from "node:net";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 
 // A2UI may stop a load, wait up to 6 seconds for the renderer, then evaluate.
 // Keep the outer IPC deadline above the app's complete 22-second phase budget.
@@ -40,10 +41,6 @@ function parseFrame(line: string): unknown {
   } catch {
     return undefined;
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 export class LinuxCanvasIpcClient implements LinuxCanvasIpcTransport {

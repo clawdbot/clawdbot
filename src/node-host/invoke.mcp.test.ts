@@ -132,6 +132,7 @@ describe("mcp.tools.call.v1", () => {
       { signal: controller.signal },
     );
     await vi.waitFor(() => expect(callMcpTool).toHaveBeenCalledOnce());
+    expect(callMcpTool.mock.calls[0]?.[0].signal).toBe(controller.signal);
 
     controller.abort();
     resolveTool?.({ content: [{ type: "text", text: "stale MCP result" }] });

@@ -582,6 +582,10 @@ export function shouldMigrateStateFromPath(path: string[]): boolean {
   if (primary === "health" || primary === "sessions") {
     return false;
   }
+  // Remote RPC clients must not migrate state owned by the running gateway.
+  if (primary === "gateway" && secondary === "call") {
+    return false;
+  }
   if (primary === "update" && secondary === "status") {
     return false;
   }

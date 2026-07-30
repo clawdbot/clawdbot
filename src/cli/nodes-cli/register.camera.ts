@@ -73,7 +73,12 @@ export function registerNodesCameraCommands(nodes: Command) {
             typeof res.payload === "object" && res.payload !== null
               ? (res.payload as { devices?: unknown })
               : {};
-          const devices = Array.isArray(payload.devices) ? payload.devices : [];
+          const devices = Array.isArray(payload.devices)
+            ? payload.devices.filter(
+                (device): device is Record<string, unknown> =>
+                  typeof device === "object" && device !== null && !Array.isArray(device),
+              )
+            : [];
 
           if (opts.json) {
             defaultRuntime.writeJson(devices);

@@ -2,6 +2,7 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { defaultSlotIdForKey, resolveSlotSelection } from "../../../../../src/plugins/slots.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../../api/types.ts";
+import { t } from "../../../i18n/index.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import type { RuntimeConfigCapability } from "../../../lib/config/index.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
@@ -126,7 +127,7 @@ export type WikiImportInsights = {
   clusters: WikiImportInsightCluster[];
 };
 
-type WikiMemoryPalaceItem = {
+type WikiOverviewItem = {
   pagePath: string;
   title: string;
   kind: "entity" | "concept" | "source" | "synthesis" | "report";
@@ -142,27 +143,27 @@ type WikiMemoryPalaceItem = {
   snippet?: string;
 };
 
-type WikiMemoryPalaceCluster = {
-  key: WikiMemoryPalaceItem["kind"];
+type WikiOverviewCluster = {
+  key: WikiOverviewItem["kind"];
   label: string;
   itemCount: number;
   claimCount: number;
   questionCount: number;
   contradictionCount: number;
   updatedAt?: string;
-  items: WikiMemoryPalaceItem[];
+  items: WikiOverviewItem[];
 };
 
-type WikiMemoryPalacePageCounts = Record<WikiMemoryPalaceItem["kind"], number>;
+type WikiOverviewPageCounts = Record<WikiOverviewItem["kind"], number>;
 
-export type WikiMemoryPalace = {
+export type WikiOverview = {
   totalItems: number;
   totalPages: number;
-  pageCounts: WikiMemoryPalacePageCounts;
+  pageCounts: WikiOverviewPageCounts;
   totalClaims: number;
   totalQuestions: number;
   totalContradictions: number;
-  clusters: WikiMemoryPalaceCluster[];
+  clusters: WikiOverviewCluster[];
 };
 
 type DoctorMemoryStatusPayload = {
@@ -198,7 +199,7 @@ type WikiImportInsightsPayload = {
   clusters?: unknown;
 };
 
-type WikiMemoryPalacePayload = {
+type WikiOverviewPayload = {
   totalItems?: unknown;
   totalPages?: unknown;
   pageCounts?: unknown;
@@ -243,13 +244,13 @@ export type DreamingState = {
   wikiImportInsightsLoading: boolean;
   wikiImportInsightsError: string | null;
   wikiImportInsights: WikiImportInsights | null;
-  wikiMemoryPalaceRequestAgentId?: string | null;
-  wikiMemoryPalaceRequestGeneration?: number;
-  wikiMemoryPalaceActiveRequestGeneration?: number | null;
-  wikiMemoryPalaceAgentId?: string | null;
-  wikiMemoryPalaceLoading: boolean;
-  wikiMemoryPalaceError: string | null;
-  wikiMemoryPalace: WikiMemoryPalace | null;
+  wikiOverviewRequestAgentId?: string | null;
+  wikiOverviewRequestGeneration?: number;
+  wikiOverviewActiveRequestGeneration?: number | null;
+  wikiOverviewAgentId?: string | null;
+  wikiOverviewLoading: boolean;
+  wikiOverviewError: string | null;
+  wikiOverview: WikiOverview | null;
   lastError: string | null;
 };
 
@@ -282,9 +283,9 @@ export function createDreamingState(
     wikiImportInsightsLoading: false,
     wikiImportInsightsError: null,
     wikiImportInsights: null,
-    wikiMemoryPalaceLoading: false,
-    wikiMemoryPalaceError: null,
-    wikiMemoryPalace: null,
+    wikiOverviewLoading: false,
+    wikiOverviewError: null,
+    wikiOverview: null,
     lastError: null,
   };
 }
@@ -333,37 +334,61 @@ function buildDreamDiaryActionSuccessMessage(
             ? payload.removedEntries
             : 0;
       const kept = typeof payload?.keptEntries === "number" ? payload.keptEntries : undefined;
-      return kept !== undefined
-        ? `Removed ${removed} duplicate dream ${removed === 1 ? "entry" : "entries"} and kept ${kept}.`
-        : `Removed ${removed} duplicate dream ${removed === 1 ? "entry" : "entries"}.`;
+      if (kept !== undefined) {
+        return removed === 1
+          ? t("dreaming.actions.dedupeRemovedOneAndKept", {
+              removed: String(removed),
+              kept: String(kept),
+            })
+          : t("dreaming.actions.dedupeRemovedManyAndKept", {
+              removed: String(removed),
+              kept: String(kept),
+            });
+      }
+      return removed === 1
+        ? t("dreaming.actions.dedupeRemovedOne", { removed: String(removed) })
+        : t("dreaming.actions.dedupeRemovedMany", { removed: String(removed) });
     }
     case "doctor.memory.repairDreamingArtifacts": {
       const actions: string[] = [];
       const archiveDir = normalizeTrimmedString(payload?.archiveDir);
       if (payload?.archivedSessionCorpus === true) {
-        actions.push("archived thread corpus");
+        actions.push(t("dreaming.actions.repairArchivedThreadCorpus"));
       }
       if (payload?.archivedSessionIngestion === true) {
-        actions.push("archived ingestion state");
+        actions.push(t("dreaming.actions.repairArchivedIngestionState"));
       }
       if (payload?.archivedDreamsDiary === true) {
-        actions.push("archived dream diary");
+        actions.push(t("dreaming.actions.repairArchivedDreamDiary"));
       }
       if (actions.length === 0) {
-        return "Dream cache repair finished with no changes.";
+        return t("dreaming.actions.repairNoChanges");
       }
       return archiveDir
-        ? `Dream cache repair complete: ${actions.join(", ")}. Archive: ${archiveDir}`
-        : `Dream cache repair complete: ${actions.join(", ")}.`;
+        ? t("dreaming.actions.repairCompleteWithArchive", {
+            actions: actions.join(", "),
+            archiveDir,
+          })
+        : t("dreaming.actions.repairComplete", { actions: actions.join(", ") });
     }
     case "doctor.memory.backfillDreamDiary":
-      return `Backfilled ${typeof payload?.written === "number" ? payload.written : 0} dream diary entries.`;
+      return t("dreaming.actions.backfillComplete", {
+        count: String(typeof payload?.written === "number" ? payload.written : 0),
+      });
     case "doctor.memory.resetDreamDiary":
-      return `Removed ${typeof payload?.removedEntries === "number" ? payload.removedEntries : 0} backfilled dream diary entries.`;
+      return t("dreaming.actions.resetDiaryComplete", {
+        count: String(typeof payload?.removedEntries === "number" ? payload.removedEntries : 0),
+      });
     case "doctor.memory.resetGroundedShortTerm":
-      return `Cleared ${typeof payload?.removedShortTermEntries === "number" ? payload.removedShortTermEntries : 0} replayed short-term entries.`;
+      return t("dreaming.actions.clearReplayedComplete", {
+        count: String(
+          typeof payload?.removedShortTermEntries === "number"
+            ? payload.removedShortTermEntries
+            : 0,
+        ),
+      });
   }
-  return "Dream diary action complete.";
+  return t("dreaming.actions.complete");
 }
 
 function normalizeTrimmedString(value: unknown): string | undefined {
@@ -611,7 +636,7 @@ function normalizeWikiImportInsights(raw: unknown): WikiImportInsights {
   };
 }
 
-function normalizeWikiPageKind(value: unknown): WikiMemoryPalaceItem["kind"] | undefined {
+function normalizeWikiPageKind(value: unknown): WikiOverviewItem["kind"] | undefined {
   return value === "entity" ||
     value === "concept" ||
     value === "source" ||
@@ -621,7 +646,7 @@ function normalizeWikiPageKind(value: unknown): WikiMemoryPalaceItem["kind"] | u
     : undefined;
 }
 
-function createEmptyWikiMemoryPalacePageCounts(): WikiMemoryPalacePageCounts {
+function createEmptyWikiOverviewPageCounts(): WikiOverviewPageCounts {
   return {
     synthesis: 0,
     entity: 0,
@@ -631,10 +656,10 @@ function createEmptyWikiMemoryPalacePageCounts(): WikiMemoryPalacePageCounts {
   };
 }
 
-function normalizeWikiMemoryPalacePageCounts(
+function normalizeWikiOverviewPageCounts(
   raw: unknown,
-  fallback: WikiMemoryPalacePageCounts,
-): WikiMemoryPalacePageCounts {
+  fallback: WikiOverviewPageCounts,
+): WikiOverviewPageCounts {
   const record = asRecord(raw);
   return {
     synthesis: normalizeFiniteInt(record?.synthesis, fallback.synthesis),
@@ -645,7 +670,7 @@ function normalizeWikiMemoryPalacePageCounts(
   };
 }
 
-function sumWikiMemoryPalacePageCounts(pageCounts: WikiMemoryPalacePageCounts): number {
+function sumWikiOverviewPageCounts(pageCounts: WikiOverviewPageCounts): number {
   return (
     pageCounts.synthesis +
     pageCounts.entity +
@@ -655,7 +680,7 @@ function sumWikiMemoryPalacePageCounts(pageCounts: WikiMemoryPalacePageCounts): 
   );
 }
 
-function normalizeWikiMemoryPalaceItem(raw: unknown): WikiMemoryPalaceItem | null {
+function normalizeWikiOverviewItem(raw: unknown): WikiOverviewItem | null {
   const record = asRecord(raw);
   const pagePath = normalizeTrimmedString(record?.pagePath);
   const title = normalizeTrimmedString(record?.title);
@@ -686,7 +711,7 @@ function normalizeWikiMemoryPalaceItem(raw: unknown): WikiMemoryPalaceItem | nul
   };
 }
 
-function normalizeWikiMemoryPalaceCluster(raw: unknown): WikiMemoryPalaceCluster | null {
+function normalizeWikiOverviewCluster(raw: unknown): WikiOverviewCluster | null {
   const record = asRecord(raw);
   const key = normalizeWikiPageKind(record?.key);
   const label = normalizeTrimmedString(record?.label);
@@ -695,8 +720,8 @@ function normalizeWikiMemoryPalaceCluster(raw: unknown): WikiMemoryPalaceCluster
   }
   const items = Array.isArray(record?.items)
     ? record.items
-        .map((entry) => normalizeWikiMemoryPalaceItem(entry))
-        .filter((entry): entry is WikiMemoryPalaceItem => entry !== null)
+        .map((entry) => normalizeWikiOverviewItem(entry))
+        .filter((entry): entry is WikiOverviewItem => entry !== null)
     : [];
   return {
     key,
@@ -721,23 +746,23 @@ function normalizeWikiMemoryPalaceCluster(raw: unknown): WikiMemoryPalaceCluster
   };
 }
 
-function normalizeWikiMemoryPalace(raw: unknown): WikiMemoryPalace {
+function normalizeWikiOverview(raw: unknown): WikiOverview {
   const record = asRecord(raw);
   const clusters = Array.isArray(record?.clusters)
     ? record.clusters
-        .map((entry) => normalizeWikiMemoryPalaceCluster(entry))
-        .filter((entry): entry is WikiMemoryPalaceCluster => entry !== null)
+        .map((entry) => normalizeWikiOverviewCluster(entry))
+        .filter((entry): entry is WikiOverviewCluster => entry !== null)
     : [];
   const totalItems = normalizeFiniteInt(
     record?.totalItems,
     clusters.reduce((sum, cluster) => sum + cluster.itemCount, 0),
   );
-  const fallbackPageCounts = createEmptyWikiMemoryPalacePageCounts();
+  const fallbackPageCounts = createEmptyWikiOverviewPageCounts();
   for (const cluster of clusters) {
     fallbackPageCounts[cluster.key] += cluster.itemCount;
   }
-  const pageCounts = normalizeWikiMemoryPalacePageCounts(record?.pageCounts, fallbackPageCounts);
-  const fallbackTotalPages = sumWikiMemoryPalacePageCounts(pageCounts) || totalItems;
+  const pageCounts = normalizeWikiOverviewPageCounts(record?.pageCounts, fallbackPageCounts);
+  const fallbackTotalPages = sumWikiOverviewPageCounts(pageCounts) || totalItems;
   return {
     totalItems,
     totalPages: normalizeFiniteInt(record?.totalPages, fallbackTotalPages),
@@ -997,58 +1022,58 @@ export async function loadWikiImportInsights(state: DreamingState): Promise<void
   }
 }
 
-export async function loadWikiMemoryPalace(state: DreamingState): Promise<void> {
+export async function loadWikiOverview(state: DreamingState): Promise<void> {
   if (!state.client || !state.connected) {
     return;
   }
   const agentId = resolveSelectedAgentId(state);
-  if (state.wikiMemoryPalaceLoading && state.wikiMemoryPalaceRequestAgentId === agentId) {
+  if (state.wikiOverviewLoading && state.wikiOverviewRequestAgentId === agentId) {
     return;
   }
-  if (state.wikiMemoryPalaceAgentId !== agentId) {
-    state.wikiMemoryPalace = null;
+  if (state.wikiOverviewAgentId !== agentId) {
+    state.wikiOverview = null;
   }
-  if (!canCallMemoryWikiMethod(state, "wiki.palace")) {
-    state.wikiMemoryPalaceActiveRequestGeneration = null;
-    state.wikiMemoryPalaceRequestAgentId = null;
-    state.wikiMemoryPalaceLoading = false;
-    state.wikiMemoryPalace = null;
-    state.wikiMemoryPalaceError = null;
+  if (!canCallMemoryWikiMethod(state, "wiki.overview")) {
+    state.wikiOverviewActiveRequestGeneration = null;
+    state.wikiOverviewRequestAgentId = null;
+    state.wikiOverviewLoading = false;
+    state.wikiOverview = null;
+    state.wikiOverviewError = null;
     return;
   }
-  const requestGeneration = (state.wikiMemoryPalaceRequestGeneration ?? 0) + 1;
-  state.wikiMemoryPalaceRequestGeneration = requestGeneration;
-  state.wikiMemoryPalaceActiveRequestGeneration = requestGeneration;
-  state.wikiMemoryPalaceRequestAgentId = agentId;
-  state.wikiMemoryPalaceLoading = true;
-  state.wikiMemoryPalaceError = null;
+  const requestGeneration = (state.wikiOverviewRequestGeneration ?? 0) + 1;
+  state.wikiOverviewRequestGeneration = requestGeneration;
+  state.wikiOverviewActiveRequestGeneration = requestGeneration;
+  state.wikiOverviewRequestAgentId = agentId;
+  state.wikiOverviewLoading = true;
+  state.wikiOverviewError = null;
   try {
-    const payload = await state.client.request<WikiMemoryPalacePayload>(
-      "wiki.palace",
+    const payload = await state.client.request<WikiOverviewPayload>(
+      "wiki.overview",
       buildSelectedAgentPayloadForAgentId(agentId),
     );
     if (
-      state.wikiMemoryPalaceActiveRequestGeneration !== requestGeneration ||
-      state.wikiMemoryPalaceRequestAgentId !== agentId ||
+      state.wikiOverviewActiveRequestGeneration !== requestGeneration ||
+      state.wikiOverviewRequestAgentId !== agentId ||
       resolveSelectedAgentId(state) !== agentId
     ) {
       return;
     }
-    state.wikiMemoryPalace = normalizeWikiMemoryPalace(payload);
-    state.wikiMemoryPalaceAgentId = agentId;
+    state.wikiOverview = normalizeWikiOverview(payload);
+    state.wikiOverviewAgentId = agentId;
   } catch (err) {
     if (
-      state.wikiMemoryPalaceActiveRequestGeneration === requestGeneration &&
-      state.wikiMemoryPalaceRequestAgentId === agentId &&
+      state.wikiOverviewActiveRequestGeneration === requestGeneration &&
+      state.wikiOverviewRequestAgentId === agentId &&
       resolveSelectedAgentId(state) === agentId
     ) {
-      state.wikiMemoryPalaceError = String(err);
+      state.wikiOverviewError = String(err);
     }
   } finally {
-    if (state.wikiMemoryPalaceActiveRequestGeneration === requestGeneration) {
-      state.wikiMemoryPalaceLoading = false;
-      state.wikiMemoryPalaceRequestAgentId = null;
-      state.wikiMemoryPalaceActiveRequestGeneration = null;
+    if (state.wikiOverviewActiveRequestGeneration === requestGeneration) {
+      state.wikiOverviewLoading = false;
+      state.wikiOverviewRequestAgentId = null;
+      state.wikiOverviewActiveRequestGeneration = null;
     }
   }
 }
@@ -1070,17 +1095,13 @@ async function runDreamDiaryAction(
   }
   if (
     method === "doctor.memory.repairDreamingArtifacts" &&
-    !confirmDreamingAction(
-      "Repair Dream Cache? This archives derived dream cache files and rebuilds them from clean inputs. Your dream diary stays untouched.",
-    )
+    !confirmDreamingAction(t("dreaming.actions.confirmRepair"))
   ) {
     return false;
   }
   if (
     method === "doctor.memory.dedupeDreamDiary" &&
-    !confirmDreamingAction(
-      "Dedupe Dream Diary? This rewrites DREAMS.md and removes only exact duplicate diary entries.",
-    )
+    !confirmDreamingAction(t("dreaming.actions.confirmDedupe"))
   ) {
     return false;
   }
@@ -1147,13 +1168,13 @@ export async function copyDreamingArchivePath(state: DreamingState): Promise<boo
   if (await copyToClipboard(path)) {
     state.dreamDiaryActionMessage = {
       kind: "success",
-      text: "Archive path copied.",
+      text: t("dreaming.actions.archivePathCopied"),
     };
     return true;
   }
   state.dreamDiaryActionMessage = {
     kind: "error",
-    text: "Could not copy archive path.",
+    text: t("dreaming.actions.archivePathCopyFailed"),
   };
   return false;
 }
@@ -1180,7 +1201,7 @@ async function writeDreamingPatch(
     });
     if (!updated) {
       state.dreamingStatusError =
-        config.state.lastError ?? state.lastError ?? "Could not update dreaming settings.";
+        config.state.lastError ?? state.lastError ?? t("dreaming.actions.updateFailed");
     }
     return updated;
   } finally {
@@ -1243,7 +1264,7 @@ async function ensureDreamingPathSupported(
   if ((await resolveDreamingConfigPathSupport(config, pluginId)) !== "unsupported") {
     return true;
   }
-  const message = `Selected memory plugin "${pluginId}" does not support dreaming settings.`;
+  const message = t("dreaming.actions.unsupportedPlugin", { pluginId });
   state.dreamingStatusError = message;
   state.lastError = message;
   return false;
@@ -1258,7 +1279,7 @@ export async function updateDreamingEnabled(
     return false;
   }
   if (!config.state.configSnapshot?.hash) {
-    state.dreamingStatusError = "Config hash missing; refresh and retry.";
+    state.dreamingStatusError = t("dreaming.actions.configHashMissing");
     return false;
   }
   const { pluginId } = resolveConfiguredDreaming(

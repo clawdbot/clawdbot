@@ -25,6 +25,31 @@ export function formatBuildChipText(info: ControlUiBuildInfo): string | null {
   return `${branch}${commit}`;
 }
 
+export function formatSettingsBuildLabel(
+  info: ControlUiBuildInfo,
+  gatewayVersion: string | null,
+): string | null {
+  const version = info.version ?? gatewayVersion;
+  const commit = info.commit;
+  if (!commit) {
+    return version;
+  }
+  const compactBuild = formatBuildChipText(info);
+  if (!compactBuild) {
+    return version;
+  }
+
+  if (info.release) {
+    return version;
+  }
+
+  const gitIdentity =
+    info.branch && info.branch !== "main"
+      ? compactBuild
+      : `git@${commit.slice(0, 7)}${info.dirty === true ? "*" : ""}`;
+  return [version, gitIdentity].filter((value): value is string => Boolean(value)).join(" · ");
+}
+
 function formatBuildCardDetails(info: ControlUiBuildInfo, gatewayVersion: string | null) {
   return {
     summary: [

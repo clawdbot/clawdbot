@@ -372,6 +372,28 @@ export const OpenClawSchemaShape = {
       gmail: HooksGmailSchema,
       internal: InternalHooksSchema,
     })
+    .superRefine((hooks, ctx) => {
+      const hasDefaultSessionKey = hooks.defaultSessionKey?.trim();
+      for (const [index, mapping] of (hooks.mappings ?? []).entries()) {
+        if (!mapping) {
+          continue;
+        }
+        if (
+          (mapping.action ?? "agent") === "agent" &&
+          mapping.sessionMode === "persistent" &&
+          !mapping.sessionKey?.trim() &&
+          !hasDefaultSessionKey &&
+          !mapping.transform
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["mappings", index, "sessionKey"],
+            message:
+              "persistent hook mappings require sessionKey, hooks.defaultSessionKey, or a transform",
+          });
+        }
+      }
+    })
     .optional(),
   channels: ChannelsSchema,
   discovery: z
@@ -425,7 +447,7 @@ export const OpenClawSchemaShape = {
         .strictObject({
           autonomous: z
             .strictObject({
-              enabled: z.boolean().optional(),
+              mode: z.union([z.literal("off"), z.literal("propose"), z.literal("auto")]).optional(),
             })
             .optional(),
           approvalPolicy: z.union([z.literal("pending"), z.literal("auto")]).optional(),

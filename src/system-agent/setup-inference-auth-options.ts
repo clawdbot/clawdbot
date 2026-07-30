@@ -6,6 +6,8 @@ export type SetupInferenceManualProvider = {
   id: string;
   /** Canonical provider identity for clients with bundled brand artwork. */
   brandId?: string;
+  /** Provider family shown above the specific credential method. */
+  groupLabel?: string;
   label: string;
   hint?: string;
   icon?: string;
@@ -48,6 +50,7 @@ export function listSetupInferenceManualProviders(
     choices.set(id, {
       id,
       brandId: choice.providerId,
+      ...(choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {}),
       label: choice.choiceLabel,
       ...(choice.choiceHint?.trim() ? { hint: choice.choiceHint.trim() } : {}),
       ...(choice.icon ? { icon: choice.icon } : {}),
@@ -55,7 +58,13 @@ export function listSetupInferenceManualProviders(
     });
   }
   return [...choices.values()].toSorted(
-    (a, b) => a.label.localeCompare(b.label, "en") || a.id.localeCompare(b.id, "en"),
+    (a, b) =>
+      compareProviderAuthChoiceGroups(
+        { id: a.brandId ?? a.id, label: a.groupLabel ?? a.label },
+        { id: b.brandId ?? b.id, label: b.groupLabel ?? b.label },
+      ) ||
+      a.label.localeCompare(b.label, "en") ||
+      a.id.localeCompare(b.id, "en"),
   );
 }
 

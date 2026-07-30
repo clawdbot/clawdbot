@@ -285,6 +285,51 @@ describe("resolveTelegramToken", () => {
     expect(res.source).toBe("tokenFile");
   });
 
+  it("applies account file, account config, channel file, channel config, then env precedence", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "env-token");
+    const accountTokenFile = createTokenFile("account-token.txt", "account-file-token\n");
+    const channelTokenFile = createTokenFile("channel-token.txt", "channel-file-token\n");
+    const baseTelegramConfig = {
+      botToken: "channel-config-token",
+      tokenFile: channelTokenFile,
+      accounts: {
+        default: {
+          botToken: "account-config-token",
+          tokenFile: accountTokenFile,
+        },
+      },
+    };
+
+    const resolve = (telegram: Record<string, unknown>) =>
+      resolveTelegramToken({ channels: { telegram } } as OpenClawConfig);
+
+    expect(resolve(baseTelegramConfig)).toEqual({
+      token: "account-file-token",
+      source: "tokenFile",
+    });
+    expect(
+      resolve({
+        ...baseTelegramConfig,
+        accounts: { default: { botToken: "account-config-token" } },
+      }),
+    ).toEqual({ token: "account-config-token", source: "config" });
+    expect(resolve({ ...baseTelegramConfig, accounts: { default: {} } })).toEqual({
+      token: "channel-file-token",
+      source: "tokenFile",
+    });
+    expect(
+      resolve({
+        ...baseTelegramConfig,
+        tokenFile: undefined,
+        accounts: { default: {} },
+      }),
+    ).toEqual({ token: "channel-config-token", source: "config" });
+    expect(resolve({ accounts: { default: {} } })).toEqual({
+      token: "env-token",
+      source: "env",
+    });
+  });
+
   it("falls back to top-level tokenFile for non-default accounts", () => {
     const cfg = {
       channels: {
