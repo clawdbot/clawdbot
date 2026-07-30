@@ -36,7 +36,6 @@ const FeishuCustomDomainSchema = z
   .transform((value) => {
     const normalized = new URL(value);
     normalized.protocol = "https:";
-    normalized.hash = "";
     // resolveDomain() already strips trailing slashes, but normalize here too
     // so the persisted config and downstream base URL stay consistent.
     return normalized.toString().replace(/\/+$/, "");

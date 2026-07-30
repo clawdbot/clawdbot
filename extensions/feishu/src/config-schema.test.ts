@@ -55,6 +55,12 @@ describe("FeishuConfigSchema custom domain", () => {
     );
   });
 
+  it("preserves fragments on a lowercase https custom domain", () => {
+    expect(
+      FeishuConfigSchema.parse({ domain: "https://tenant.example/base#fragment" }).domain,
+    ).toBe("https://tenant.example/base#fragment");
+  });
+
   it("rejects a custom HTTP domain", () => {
     expectSchemaIssue(FeishuConfigSchema.safeParse({ domain: "http://tenant.example" }), "domain");
     expectSchemaIssue(
