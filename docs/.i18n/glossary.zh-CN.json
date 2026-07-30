@@ -4,6 +4,26 @@
     "target": "OpenClaw"
   },
   {
+    "source": "FIPS runtime wiring",
+    "target": "FIPS 运行时接入"
+  },
+  {
+    "source": "Docker",
+    "target": "Docker"
+  },
+  {
+    "source": "Gateway TLS configuration",
+    "target": "Gateway TLS 配置"
+  },
+  {
+    "source": "Security",
+    "target": "安全"
+  },
+  {
+    "source": "OpenTelemetry",
+    "target": "OpenTelemetry"
+  },
+  {
     "source": "macOS platform notes",
     "target": "macOS 平台说明"
   },

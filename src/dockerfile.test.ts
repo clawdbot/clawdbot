@@ -82,6 +82,70 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain('ENTRYPOINT ["tini", "-s", "--"]');
   });
 
+  it("provides vendor-neutral FIPS runtime wiring", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const collapsed = collapseDockerContinuations(dockerfile);
+    const fipsRuntimeStart = collapsed.indexOf(
+      "FROM ${OPENCLAW_FIPS_NODE_RUNTIME_IMAGE} AS fips-runtime",
+    );
+    const defaultRuntimeStart = collapsed.indexOf(
+      "FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime",
+    );
+    const fipsRuntime = collapsed.slice(fipsRuntimeStart, defaultRuntimeStart);
+
+    expect(dockerfile).toMatch(
+      /ARG OPENCLAW_FIPS_NODE_BUILD_IMAGE="docker\.io\/library\/node:24-bookworm@sha256:[a-f0-9]{64}"/u,
+    );
+    expect(dockerfile).toMatch(
+      /ARG OPENCLAW_FIPS_NODE_RUNTIME_IMAGE="docker\.io\/library\/node:24-bookworm-slim@sha256:[a-f0-9]{64}"/u,
+    );
+    expect(dockerfile).toContain('ARG OPENCLAW_FIPS_RUNTIME_USER="node"');
+    expect(fipsRuntimeStart).toBeGreaterThan(-1);
+    expect(defaultRuntimeStart).toBeGreaterThan(fipsRuntimeStart);
+    expect(dockerfile).toContain("FROM ${OPENCLAW_FIPS_NODE_BUILD_IMAGE} AS fips-runtime-assets");
+    expect(dockerfile).toContain(
+      "FROM ${OPENCLAW_FIPS_NODE_BUILD_IMAGE} AS fips-runtime-assets\nARG OPENCLAW_BUNDLED_PLUGIN_DIR\nUSER 0",
+    );
+    expect(dockerfile).toContain("corepack enable");
+    expect(dockerfile).toContain(
+      "NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile",
+    );
+    expect(fipsRuntime).not.toContain("supportedArchitectures.libc=glibc");
+    expect(fipsRuntime).toContain("COPY --from=runtime-assets /app/dist ./dist");
+    expect(fipsRuntime).toContain(
+      "COPY --from=fips-runtime-assets /app/node_modules ./node_modules",
+    );
+    expect(fipsRuntime).toContain(
+      "COPY --from=fips-runtime-assets /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}",
+    );
+    expect(fipsRuntime).not.toContain(
+      "COPY --from=runtime-assets /app/node_modules ./node_modules",
+    );
+    expect(fipsRuntime).not.toContain(
+      "COPY --from=runtime-assets /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}",
+    );
+    expect(fipsRuntime).toContain(
+      "COPY --from=build /app/scripts/security/fips-check.mjs ./scripts/security/fips-check.mjs",
+    );
+    expect(fipsRuntime).toContain(
+      "COPY --from=runtime-assets /app/openclaw.mjs /usr/local/bin/openclaw",
+    );
+    expect(fipsRuntime).toContain(
+      "ARG OPENCLAW_BUNDLED_PLUGIN_DIR\nARG OPENCLAW_FIPS_RUNTIME_USER",
+    );
+    expect(fipsRuntime).toContain("USER ${OPENCLAW_FIPS_RUNTIME_USER}");
+    expect(fipsRuntime.indexOf("USER ${OPENCLAW_FIPS_RUNTIME_USER}")).toBeLessThan(
+      fipsRuntime.indexOf('CMD ["node", "openclaw.mjs", "gateway"]'),
+    );
+    expect(fipsRuntime).toContain("HEALTHCHECK NONE");
+    expect(fipsRuntime).not.toContain("CMD node -e");
+    expect(fipsRuntime).toContain("ENTRYPOINT []");
+    expect(fipsRuntime).toContain('CMD ["node", "openclaw.mjs", "gateway"]');
+    expect(fipsRuntime).not.toContain("apt-get");
+    expect(fipsRuntime).not.toContain("microdnf");
+    expect(dockerfile).not.toContain("OPENCLAW_UBI");
+  });
+
   it("installs optional browser dependencies after pnpm install", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
@@ -109,11 +173,11 @@ describe("Dockerfile", () => {
     expect(storeSeedIndex).toBeLessThan(pruneIndex);
     expect(pruneIndex).toBeGreaterThan(-1);
     expect(dockerfile).toContain("--config.offline=true");
-    expect(dockerfile.split("--config.supportedArchitectures.os=linux").length - 1).toBe(2);
+    expect(dockerfile.split("--config.supportedArchitectures.os=linux").length - 1).toBe(4);
     expect(
       dockerfile.split("--config.supportedArchitectures.cpu=\"$(node -p 'process.arch')\"").length -
         1,
-    ).toBe(2);
+    ).toBe(4);
     expect(dockerfile.split("--config.supportedArchitectures.libc=glibc").length - 1).toBe(2);
   });
 

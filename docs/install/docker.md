@@ -180,6 +180,23 @@ Optional variables accepted by `scripts/docker/setup.sh` (and, for the gateway c
 
 The official image ships no Homebrew. During onboarding, OpenClaw hides brew-only skill dependency installers in a Linux container without `brew`; provide those dependencies through a custom image or install manually. Use `OPENCLAW_IMAGE_APT_PACKAGES` for Debian-packaged dependencies and `OPENCLAW_IMAGE_PIP_PACKAGES` for Python dependencies (runs `python3 -m pip install --break-system-packages` at build time, so pin versions and use only indexes you trust).
 
+### FIPS-capable runtime images
+
+The default image does not claim a FIPS cryptographic boundary. Operators with
+an approved Node.js/OpenSSL image pair can use the opt-in `fips-runtime` target
+without changing the default build:
+
+```bash
+docker build \
+  --target fips-runtime \
+  --build-arg OPENCLAW_FIPS_NODE_BUILD_IMAGE=<approved-build-image@sha256:digest> \
+  --build-arg OPENCLAW_FIPS_NODE_RUNTIME_IMAGE=<approved-runtime-image@sha256:digest> \
+  -t openclaw:fips .
+```
+
+See [FIPS runtime wiring](/install/fips) for the image contract, provider
+activation, runtime verification, TLS ownership, and crypto-inventory limits.
+
 If Docker reports `ResourceExhausted`, `cannot allocate memory`, or aborts during `tsdown`, increase the Docker builder memory limit or retry with smaller explicit heaps:
 
 ```bash

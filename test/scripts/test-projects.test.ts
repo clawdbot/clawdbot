@@ -228,8 +228,8 @@ describe("scripts/test-projects changed-target routing", () => {
     "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
   ])(
     "routes setup inference transcript ownership changes through both regressions for %s",
-    (path) => {
-      expect(resolveChangedTestTargetPlan([path])).toEqual({
+    (sourcePath) => {
+      expect(resolveChangedTestTargetPlan([sourcePath])).toEqual({
         mode: "targets",
         targets: [
           "src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts",
@@ -1277,6 +1277,18 @@ describe("scripts/test-projects changed-target routing", () => {
       mode: "targets",
       targets: ["test/scripts/k8s-manifests.test.ts"],
     });
+  });
+
+  it("routes FIPS runtime check changes to their focused tests", () => {
+    for (const changedPath of [
+      "scripts/security/fips-check.mjs",
+      "scripts/security/fips-check.d.mts",
+    ]) {
+      expect(resolveChangedTestTargetPlan([changedPath]), changedPath).toEqual({
+        mode: "targets",
+        targets: ["test/scripts/fips-check.test.ts"],
+      });
+    }
   });
 
   it("keeps Crabbox runner script edits on their regression tests", () => {

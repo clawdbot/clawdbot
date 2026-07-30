@@ -1118,6 +1118,7 @@
                   "install/hetzner",
                   "install/hostinger",
                   "install/kubernetes",
+                  "install/fips",
                   "vps",
                   "install/macos-vm",
                   "install/northflank",

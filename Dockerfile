@@ -16,6 +16,9 @@ ARG OPENCLAW_DOCKER_BUILD_SKIP_DTS=1
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="docker.io/library/node:24-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="docker.io/library/node:24-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d"
+ARG OPENCLAW_FIPS_NODE_BUILD_IMAGE="docker.io/library/node:24-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059"
+ARG OPENCLAW_FIPS_NODE_RUNTIME_IMAGE="docker.io/library/node:24-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d"
+ARG OPENCLAW_FIPS_RUNTIME_USER="node"
 # Keep in sync with .github/actions/setup-node-env/action.yml bun-version.
 # To update: docker buildx imagetools inspect docker.io/oven/bun:<version> and use the manifest-list digest.
 ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4"
@@ -192,6 +195,109 @@ RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/sto
       /app/node_modules/.bin/openclaw \
       /app/node_modules/.pnpm/openclaw@*/node_modules/openclaw && \
     node scripts/check-package-dist-imports.mjs /app
+
+# Reinstall production dependencies under the operator-supplied FIPS build
+# image. The build and runtime images must share a compatible libc/native ABI.
+FROM ${OPENCLAW_FIPS_NODE_BUILD_IMAGE} AS fips-runtime-assets
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+USER 0
+WORKDIR /app
+
+# The supplied build image owns Node, OpenSSL, the native toolchain, and
+# Corepack. This stage deliberately avoids distro-specific package commands.
+RUN corepack enable
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY openclaw.mjs ./
+COPY ui/package.json ./ui/package.json
+COPY patches ./patches
+COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/npm-runner.mjs scripts/windows-cmd-helpers.mjs scripts/prepare-git-hooks.mjs ./scripts/
+COPY scripts/lib/guard-inventory-utils.mjs ./scripts/lib/guard-inventory-utils.mjs
+COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
+COPY --from=workspace-deps /out/packages/ ./packages/
+COPY --from=workspace-deps /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/
+COPY --from=workspace-deps /out/openclaw-selected-plugin-dirs /tmp/openclaw-selected-plugin-dirs
+
+RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile \
+      --config.supportedArchitectures.os=linux \
+      --config.supportedArchitectures.cpu="$(node -p 'process.arch')"
+
+# Application build output is portable JavaScript. Dependency install scripts
+# above own the native ABI and cryptographic runtime linkage.
+COPY --from=build /app/dist ./dist
+COPY --from=build /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
+COPY --from=build /app/packages/ai/dist ./packages/ai/dist
+COPY --from=build /app/scripts ./scripts
+
+RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    node scripts/list-prod-store-packages.mjs | xargs -r pnpm store add && \
+    CI=true pnpm prune --prod \
+      --config.offline=true \
+      --config.supportedArchitectures.os=linux \
+      --config.supportedArchitectures.cpu="$(node -p 'process.arch')" && \
+    OPENCLAW_EXTENSIONS="$(cat /tmp/openclaw-selected-plugin-dirs)" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs && \
+    node scripts/postinstall-bundled-plugins.mjs && \
+    if [ -L /app/node_modules/@openclaw/ai ]; then \
+      ai_runtime_target="$(readlink -f /app/node_modules/@openclaw/ai)" && \
+      ai_runtime_tmp="$(mktemp -d)" && \
+      cp -a "$ai_runtime_target" "$ai_runtime_tmp/ai" && \
+      rm /app/node_modules/@openclaw/ai && \
+      mv "$ai_runtime_tmp/ai" /app/node_modules/@openclaw/ai && \
+      rmdir "$ai_runtime_tmp"; \
+    fi && \
+    rm -rf \
+      /app/node_modules/openclaw \
+      /app/node_modules/.bin/openclaw \
+      /app/node_modules/.pnpm/openclaw@*/node_modules/openclaw && \
+    node scripts/check-package-dist-imports.mjs /app
+
+# ── Optional FIPS runtime wiring target ────────────────────────
+# Supply approved, digest-pinned build and runtime images:
+# docker build --target fips-runtime \
+#   --build-arg OPENCLAW_FIPS_NODE_BUILD_IMAGE=... \
+#   --build-arg OPENCLAW_FIPS_NODE_RUNTIME_IMAGE=... \
+#   --build-arg OPENCLAW_FIPS_RUNTIME_USER=... .
+# The default OpenClaw image remains unchanged below.
+FROM ${OPENCLAW_FIPS_NODE_RUNTIME_IMAGE} AS fips-runtime
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+ARG OPENCLAW_FIPS_RUNTIME_USER
+
+LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
+  org.opencontainers.image.url="https://openclaw.ai" \
+  org.opencontainers.image.documentation="https://docs.openclaw.ai/install/fips" \
+  org.opencontainers.image.licenses="MIT" \
+  org.opencontainers.image.title="OpenClaw FIPS runtime wiring" \
+  org.opencontainers.image.description="OpenClaw runtime assembled on operator-supplied FIPS-capable Node.js images"
+
+WORKDIR /app
+
+COPY --from=runtime-assets /app/dist ./dist
+COPY --from=fips-runtime-assets /app/node_modules ./node_modules
+COPY --from=runtime-assets /app/package.json .
+COPY --from=runtime-assets /app/pnpm-workspace.yaml .
+COPY --from=runtime-assets /app/patches ./patches
+COPY --from=runtime-assets /app/openclaw.mjs .
+COPY --from=runtime-assets /app/openclaw.mjs /usr/local/bin/openclaw
+COPY --from=runtime-assets /app/src/agents/templates ./src/agents/templates
+COPY --from=fips-runtime-assets /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
+COPY --from=runtime-assets /app/skills ./skills
+COPY --from=runtime-assets /app/docs ./docs
+COPY --from=runtime-assets /app/qa ./qa
+COPY --from=build /app/scripts/security/fips-check.mjs ./scripts/security/fips-check.mjs
+
+ENV NODE_ENV=production
+
+# Keep the Gateway's privilege boundary explicit. Custom runtime images must
+# provide the selected non-root account; the official Node image uses `node`.
+USER ${OPENCLAW_FIPS_RUNTIME_USER}
+
+STOPSIGNAL SIGTERM
+# The supplied runtime may be shell-free, and the final health endpoint may use
+# operator-owned TLS. Configure the protocol-aware probe at the deployment layer.
+HEALTHCHECK NONE
+ENTRYPOINT []
+CMD ["node", "openclaw.mjs", "gateway"]
 
 # ── Runtime base image ──────────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime

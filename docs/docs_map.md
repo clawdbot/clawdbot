@@ -4587,6 +4587,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Manual flow
   - H3: Upgrading container images
   - H3: Environment variables
+  - H3: FIPS-capable runtime images
   - H3: Source-built images with selected plugins
   - H3: Observability
   - H3: Health checks
@@ -4613,6 +4614,21 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Remote channel setup
   - H2: Remote access
   - H2: Updating
+  - H2: Related
+
+## install/fips.md
+
+- Route: /install/fips
+- Headings:
+  - H1: FIPS runtime wiring
+  - H2: Support and attestation boundary
+  - H2: Runtime contract
+  - H2: Docker build target
+  - H2: Activate and verify
+  - H2: Managed services
+  - H2: TLS ownership
+  - H2: Cryptographic inventory
+  - H2: PQC
   - H2: Related
 
 ## install/fly.md

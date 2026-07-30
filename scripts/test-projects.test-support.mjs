@@ -837,6 +837,8 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/check-env-var-count.mjs", ["test/scripts/check-env-var-count.test.ts"]],
   ["scripts/check-env-var-count.d.mts", ["test/scripts/check-env-var-count.test.ts"]],
+  ["scripts/security/fips-check.mjs", ["test/scripts/fips-check.test.ts"]],
+  ["scripts/security/fips-check.d.mts", ["test/scripts/fips-check.test.ts"]],
   ["config/env-var-count-budget.txt", ["test/scripts/check-env-var-count.test.ts"]],
   ["scripts/check-max-lines-ratchet.mjs", ["test/scripts/check-max-lines-ratchet.test.ts"]],
   [

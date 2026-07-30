@@ -1436,6 +1436,7 @@
     "android:version:pin": "node --import tsx scripts/android-pin-version.ts",
     "android:version:sync": "node --import tsx scripts/android-sync-versioning.ts --write",
     "audit:seams": "node scripts/audit-seams.mjs",
+    "security:fips-check": "node scripts/security/fips-check.mjs",
     "build": "node scripts/build-all.mjs",
     "build:ci-artifacts": "node scripts/build-all.mjs ciArtifacts",
     "build:docker": "node scripts/tsdown-build.mjs && node scripts/check-cli-bootstrap-imports.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && node scripts/runtime-postbuild-stamp.mjs && pnpm plugins:assets:build && pnpm plugins:assets:copy && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts",
