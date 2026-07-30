@@ -15,7 +15,7 @@ function inherited(entry: Record<string, unknown>, parent: Record<string, unknow
   return Object.hasOwn(entry, key) ? entry[key] : parent[key];
 }
 
-export function resolveLegacyManagedBindPort(
+function resolveLegacyManagedBindPort(
   entry: Record<string, unknown>,
   parent: Record<string, unknown>,
 ): number {
@@ -38,7 +38,7 @@ export function resolveLegacyManagedBindPort(
   return DEFAULT_SIGNAL_MANAGED_NATIVE_PORT;
 }
 
-export function resolveManagedConnectionUrl(
+function resolveManagedConnectionUrl(
   entry: Record<string, unknown>,
   parent: Record<string, unknown>,
 ): string | undefined {
