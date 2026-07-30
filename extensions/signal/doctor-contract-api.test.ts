@@ -458,7 +458,8 @@ describe("signal transport compatibility", () => {
       kind: "managed-native",
       url: "http://signal:8080",
     });
-    expect(result.config.channels?.signal?.transport?.httpPort).toBeUndefined();
+    const transport = result.config.channels?.signal?.transport;
+    expect(transport?.kind === "managed-native" ? transport.httpPort : "no-port").toBeUndefined();
   });
 
   it("reserves managed bind and local connection ports during migration", () => {
