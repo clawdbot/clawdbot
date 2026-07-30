@@ -11,10 +11,24 @@ import { normalizeToLF } from "../../line-endings.js";
 import {
   applyReplacements,
   applyReplacementsPreservingLineEndings,
-  applyReplacementsPreservingUnchangedLines,
   type TextReplacement,
 } from "./edit-replacements.js";
 import { resolveToCwd } from "./path-utils.js";
+
+/**
+ * Result of normalizeForFuzzyMatchWithMap — the normalized text plus a position
+ * map that translates every normalized position back to the original text.
+ */
+interface FuzzyNormalizedFile {
+  text: string;
+  /**
+   * For each position i in the normalized text, offsetMap[i] is the position
+   * in the original text that normalized[i] originates from.  A sentinel at
+   * offsetMap[text.length] holds original.length so that span lengths can be
+   * computed as `offsetMap[end] - offsetMap[start]`.
+   */
+  offsetMap: number[];
+}
 
 /**
  * Normalize text for fuzzy matching. Applies progressive transformations:
@@ -22,42 +36,133 @@ import { resolveToCwd } from "./path-utils.js";
  * - Normalize smart quotes to ASCII equivalents
  * - Normalize Unicode dashes/hyphens to ASCII hyphen
  * - Normalize special Unicode spaces to regular space
+ *
+ * Also returns an offset map that translates each position in the normalized
+ * output back to its corresponding position in the input text.  The map uses
+ * the sentinel convention: offsetMap[normalized.length] = original.length.
  */
-function normalizeForFuzzyMatch(text: string): string {
-  return (
-    text
-      .normalize("NFKC")
-      // Strip trailing whitespace per line
-      .split("\n")
-      .map((line) => line.trimEnd())
-      .join("\n")
-      // Smart single quotes → '
-      .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
-      // Smart double quotes → "
-      .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
-      // Various dashes/hyphens → -
-      // U+2010 hyphen, U+2011 non-breaking hyphen, U+2012 figure dash,
-      // U+2013 en-dash, U+2014 em-dash, U+2015 horizontal bar, U+2212 minus
-      .replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, "-")
-      // Special spaces → regular space
-      // U+00A0 NBSP, U+2002-U+200A various spaces, U+202F narrow NBSP,
-      // U+205F medium math space, U+3000 ideographic space
-      .replace(/[\u00A0\u2002-\u200A\u202F\u205F\u3000]/g, " ")
+function normalizeForFuzzyMatch(text: string): string;
+function normalizeForFuzzyMatch(
+  text: string,
+  withMap: true,
+): FuzzyNormalizedFile;
+function normalizeForFuzzyMatch(
+  text: string,
+  withMap?: true,
+): string | FuzzyNormalizedFile {
+  // Step 1: NFKC — character-level folding. We track offsets by normalizing
+  // one code point at a time so we know which original position each
+  // normalized character corresponds to.
+  const nfkcBuilder: string[] = [];
+  const nfkcMap: number[] = []; // maps normalized position → original position
+  let origPos = 0;
+  while (origPos < text.length) {
+    const origCP = text.codePointAt(origPos)!;
+    const origCharLen = String.fromCodePoint(origCP).length;
+    const normChars = String.fromCodePoint(origCP).normalize("NFKC");
+    const startNormPos = nfkcBuilder.length;
+    nfkcBuilder.push(normChars);
+    for (let j = 0; j < normChars.length; j++) {
+      nfkcMap[startNormPos + j] = origPos;
+    }
+    origPos += origCharLen;
+  }
+
+  // Step 2: line-wise trimEnd and quote/dash/space replacements
+  const nfkcText = nfkcBuilder.join("");
+  const lines = nfkcText.split("\n");
+  const trimmed: string[] = [];
+  let normPos = 0;
+  for (const line of lines) {
+    const trimmedLine = line.trimEnd();
+    trimmed.push(trimmedLine);
+    // Advance normPos past the line (including the trailing newline if any)
+    normPos += line.length + 1;
+  }
+  const trimmedText = trimmed.join("\n");
+
+  // Build the trimmed → nfkc offset map
+  const trimmedMap: number[] = [];
+  let trimmedPos = 0;
+  let nfkcPos = 0;
+  for (let li = 0; li < trimmed.length; li++) {
+    const trimmedLine = trimmed[li];
+    const origLine = lines[li];
+    // Map each character of the trimmed line (they're the same up to the end
+    // of the trimmed content)
+    for (let ci = 0; ci < trimmedLine.length; ci++) {
+      trimmedMap[trimmedPos] = nfkcPos;
+      trimmedPos++;
+      nfkcPos++;
+    }
+    // After the trimmed line, there may be trailing whitespace in the original.
+    // Skip it in nfkcPos, then add a newline to trimmedPos.
+    nfkcPos += origLine.length - trimmedLine.length;
+    if (li < trimmed.length - 1) {
+      trimmedMap[trimmedPos] = nfkcPos;
+      trimmedPos++;
+      nfkcPos++; // newline
+    }
+  }
+
+  // Step 3: quote, dash, space replacement (all 1→1, so offset map is
+  // identity at this stage).
+  let finalText = trimmedText;
+  finalText = finalText.replace(/[\u2018\u2019\u201A\u201B]/g, "'");
+  finalText = finalText.replace(/[\u201C\u201D\u201E\u201F]/g, '"');
+  finalText = finalText.replace(
+    /[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g,
+    "-",
   );
+  finalText = finalText.replace(
+    /[\u00A0\u2002-\u200A\u202F\u205F\u3000]/g,
+    " ",
+  );
+
+  // Compose maps: nfkcMap(orig←nfkc) ∘ trimmedMap(nfkc←trimmed) ∘ replace(identity)
+  // → direct mapping from final normalized position to original position
+  const combinedMap: number[] = [];
+  for (let fi = 0; fi < finalText.length; fi++) {
+    const trimmedPosFromFinal = fi; // identity — replacements are 1→1
+    const nfkcPos = trimmedMap[trimmedPosFromFinal];
+    combinedMap[fi] = nfkcMap[nfkcPos];
+  }
+  // sentinel
+  combinedMap[finalText.length] = text.length;
+
+  if (withMap) {
+    return { text: finalText, offsetMap: combinedMap };
+  }
+  return finalText;
+}
+
+/**
+ * Given a span in fuzzy-normalized coordinates, translate it to original-text
+ * coordinates using the offset map produced by normalizeForFuzzyMatch(_, true).
+ */
+function translateFuzzySpan(
+  offsetMap: number[],
+  fuzzyStart: number,
+  fuzzyLength: number,
+): { originalStart: number; originalLength: number } {
+  return {
+    originalStart: offsetMap[fuzzyStart],
+    originalLength: offsetMap[fuzzyStart + fuzzyLength] - offsetMap[fuzzyStart],
+  };
 }
 
 interface FuzzyMatchResult {
   /** Whether a match was found */
   found: boolean;
-  /** The index where the match starts (in the content that should be used for replacement) */
+  /** The index where the match starts (in original-content coordinates) */
   index: number;
-  /** Length of the matched text */
+  /** Length of the matched text (in original-content coordinates) */
   matchLength: number;
   /** Whether fuzzy matching was used (false = exact match) */
   usedFuzzyMatch: boolean;
   /**
    * The content to use for replacement operations.
-   * When exact match: original content. When fuzzy match: normalized content.
+   * Always the original (un-normalized) content.
    */
   contentForReplacement: string;
 }
@@ -87,11 +192,15 @@ interface AppliedEdits {
 
 /**
  * Find oldText in content, trying exact match first, then fuzzy match.
- * When fuzzy matching is used, the returned contentForReplacement is the
- * fuzzy-normalized version of the content (trailing whitespace stripped,
- * Unicode quotes/dashes normalized to ASCII).
+ * When fuzzy matching is used and an offsetMap is provided, the returned
+ * index and matchLength are translated back to original-content coordinates
+ * so the caller can apply replacements against the un-normalized content.
  */
-function fuzzyFindText(content: string, oldText: string): FuzzyMatchResult {
+function fuzzyFindText(
+  content: string,
+  oldText: string,
+  offsetMap?: number[],
+): FuzzyMatchResult {
   // Try exact match first
   const exactIndex = content.indexOf(oldText);
   if (exactIndex !== -1) {
@@ -105,8 +214,8 @@ function fuzzyFindText(content: string, oldText: string): FuzzyMatchResult {
   }
 
   // Try fuzzy match - work entirely in normalized space
-  const fuzzyContent = normalizeForFuzzyMatch(content);
-  const fuzzyOldText = normalizeForFuzzyMatch(oldText);
+  const fuzzyContent = normalizeForFuzzyMatch(content) as string;
+  const fuzzyOldText = normalizeForFuzzyMatch(oldText) as string;
   const fuzzyIndex = fuzzyContent.indexOf(fuzzyOldText);
 
   if (fuzzyIndex === -1) {
@@ -119,9 +228,24 @@ function fuzzyFindText(content: string, oldText: string): FuzzyMatchResult {
     };
   }
 
-  // When fuzzy matching, we work in the normalized space for replacement.
-  // This means the output will have normalized whitespace/quotes/dashes,
-  // which is acceptable since we're fixing minor formatting differences anyway.
+  // Translate fuzzy-match span back to original-content coordinates
+  // when an offset map is available.
+  if (offsetMap) {
+    const { originalStart, originalLength } = translateFuzzySpan(
+      offsetMap,
+      fuzzyIndex,
+      fuzzyOldText.length,
+    );
+    return {
+      found: true,
+      index: originalStart,
+      matchLength: originalLength,
+      usedFuzzyMatch: true,
+      contentForReplacement: content,
+    };
+  }
+
+  // Legacy path (no map) — keep the fuzzy-normalized content as the base.
   return {
     found: true,
     index: fuzzyIndex,
@@ -355,26 +479,38 @@ function applyEdits(normalizedContent: string, edits: Edit[], path: string): App
     }
   }
 
+  // Check if any edit needs fuzzy matching.  When fuzzy matching is required
+  // we build an offset map so that match positions can be translated back to
+  // original-content coordinates, preserving bytes outside the edited span.
   const initialMatches = normalizedEdits.map((edit) =>
     fuzzyFindText(normalizedContent, edit.oldText),
   );
   const usedFuzzyMatch = initialMatches.some((match) => match.usedFuzzyMatch);
-  const replacementBaseContent = usedFuzzyMatch
-    ? normalizeForFuzzyMatch(normalizedContent)
-    : normalizedContent;
+
+  let offsetMap: number[] | undefined;
+  let replacementBaseContent = normalizedContent;
+  if (usedFuzzyMatch) {
+    // Build the offset map and use the original content as the replacement
+    // base, so untouched bytes are never rebuilt from a normalized copy.
+    const fuzzyFile = normalizeForFuzzyMatch(normalizedContent, true);
+    offsetMap = fuzzyFile.offsetMap;
+    // replacementBaseContent stays as normalizedContent (original)
+  }
 
   const matchedEdits: MatchedEdit[] = [];
   for (const [i, edit] of normalizedEdits.entries()) {
-    const matchResult = fuzzyFindText(replacementBaseContent, edit.oldText);
+    const matchResult = fuzzyFindText(
+      normalizedContent,
+      edit.oldText,
+      offsetMap,
+    );
     if (!matchResult.found) {
       throw getNotFoundError(path, i, normalizedEdits.length, normalizedContent, edit.oldText);
     }
 
-    // Count in the same space the match was found in. Fuzzy counting collapses
-    // distinctions the exact match relied on, which would reject a genuinely
-    // unique edit as ambiguous.
+    // Count occurrences in the same space the match was found in.
     const occurrences = matchResult.usedFuzzyMatch
-      ? countOccurrences(replacementBaseContent, edit.oldText)
+      ? countOccurrences(normalizedContent, edit.oldText)
       : countExactOccurrences(replacementBaseContent, edit.oldText);
     if (occurrences > 1) {
       throw getDuplicateError(path, i, normalizedEdits.length, occurrences);
@@ -403,13 +539,7 @@ function applyEdits(normalizedContent: string, edits: Edit[], path: string): App
   }
 
   const baseContent = normalizedContent;
-  const newContent = usedFuzzyMatch
-    ? applyReplacementsPreservingUnchangedLines(
-        normalizedContent,
-        replacementBaseContent,
-        matchedEdits,
-      )
-    : applyReplacements(replacementBaseContent, matchedEdits);
+  const newContent = applyReplacements(replacementBaseContent, matchedEdits);
 
   if (baseContent === newContent) {
     throw getNoChangeError(path, normalizedEdits.length);

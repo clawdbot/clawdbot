@@ -151,6 +151,57 @@ describe("applyEditsToNormalizedContent uniqueness", () => {
   });
 });
 
+describe("fuzzy edit — byte preservation on matched line", () => {
+  it("preserves unicode bytes outside the edited span when fuzzy matching", () => {
+    // Line has NBSP (U+00A0 between RETRY and MAX), fullwidth parens,
+    // fullwidth digit, halfwidth katakana, and em-dash — all outside
+    // the span being replaced.
+    const content =
+      'export const RETRY MAX = 3; // 再試行（最大３回）ｱｲｳ — 設定\nexport const OTHER = 1;\n';
+
+    // oldText uses plain space instead of NBSP → triggers fuzzy match
+    const edits = [
+      { oldText: "export const RETRY MAX = 3;", newText: "export const RETRY_MAX = 5;" },
+    ];
+
+    const result = applyEditsPreservingLineEndings(content, edits, "config.ts");
+
+    // The replacement itself must be applied
+    expect(result.finalContent).toContain("RETRY_MAX = 5;");
+
+    // The comment must remain byte-identical (no NFKC normalization)
+    const originalComment = content.slice(content.indexOf("//"));
+    const afterComment = result.finalContent.slice(result.finalContent.indexOf("//"));
+    expect(afterComment).toBe(originalComment);
+
+    // The exact-match path on the same file must produce the same result
+    const exactContent =
+      'export const RETRY MAX = 3; // 再試行（最大３回）ｱｲｳ — 設定\nexport const OTHER = 1;\n';
+    const exactEdits = [
+      {
+        oldText: "export const RETRY MAX = 3;",
+        newText: "export const RETRY_MAX = 5;",
+      },
+    ];
+    const exactResult = applyEditsPreservingLineEndings(
+      exactContent,
+      exactEdits,
+      "config.ts",
+    );
+    expect(result.finalContent).toBe(exactResult.finalContent);
+  });
+
+  it("preserves smart quotes in comments during fuzzy edit", () => {
+    const content = 'let x = "hello"; // says "hello world" — nice\nlet y = 2;\n';
+    // Use straight quotes in oldText while the file has smart quotes
+    const edits = [{ oldText: 'let x = "hello";', newText: "let x = 'hi';" }];
+    const result = applyEditsPreservingLineEndings(content, edits, "test.ts");
+
+    expect(result.finalContent).toContain("let x = 'hi';");
+    expect(result.finalContent).toContain('// says "hello world" — nice');
+  });
+});
+
 describe("applyEditsToNormalizedContent fuzzy uniqueness", () => {
   it("still rejects a fuzzy match that is ambiguous once normalization is applied", () => {
     const content = "foo();  \nfoo();\t\nbar();\n";
