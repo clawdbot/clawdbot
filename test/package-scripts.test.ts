@@ -140,6 +140,12 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs browser copilot E2E against real Chromium", () => {
+    expect(readPackageJson().scripts["test:e2e:browser-copilot"]).toBe(
+      "node scripts/run-with-env.mjs PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node scripts/ensure-playwright-chromium.mjs --require-playwright-chromium && node scripts/run-with-env.mjs PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_COPILOT_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts extensions/browser/chrome-extension/page-share.e2e.test.ts extensions/browser/chrome-extension/sidepanel.e2e.test.ts",
+    );
+  });
+
   it("gives the plugin SDK usage scan enough heap for repository-wide analysis", () => {
     expect(readPackageJson().scripts["plugin-sdk:usage"]).toBe(
       "node --max-old-space-size=8192 --import tsx scripts/analyze-plugin-sdk-usage.ts",
