@@ -182,7 +182,10 @@ describe("createEmbeddedAttemptRunAbort", () => {
 
     abortRun(false, SESSIONS_YIELD_ABORT_REASON);
     await vi.waitFor(() => {
-      expect(releaseHeldLockForAbort).toHaveBeenCalledWith({ terminal: false });
+      expect(releaseHeldLockForAbort).toHaveBeenCalledWith({
+        reason: SESSIONS_YIELD_ABORT_REASON,
+        terminal: false,
+      });
     });
   });
 
@@ -233,6 +236,10 @@ describe("createEmbeddedAttemptRunAbort", () => {
       reason: "timeout",
     });
     expect(releaseHeldLockForAbort).toHaveBeenCalledTimes(1);
+    expect(releaseHeldLockForAbort).toHaveBeenCalledWith({
+      reason: timeoutReason,
+      terminal: true,
+    });
   });
 
   it("logs lock release failures without replacing the manual abort reason", async () => {

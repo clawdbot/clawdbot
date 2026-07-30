@@ -24,6 +24,15 @@ type LockOptions = Omit<SessionKeyLockOptions, "targetKind"> & {
 };
 const PROMPT_DISPOSE_SETTLE_TIMEOUT_MS = 5_000;
 
+function createPromptSubmissionAbortError(reason: unknown): Error {
+  if (reason instanceof Error) {
+    return reason;
+  }
+  return new Error("attempt aborted before prompt submission", {
+    ...(reason !== undefined ? { cause: reason } : {}),
+  });
+}
+
 export type EmbeddedAttemptSessionFileOwner = {
   sessionFileKey: string;
   release(): void;
@@ -54,7 +63,7 @@ export type EmbeddedAttemptSessionLockController = {
   publishValidatedSessionFileSnapshot(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean;
   readTrustedCurrentSessionFileSnapshot(): Promise<undefined>;
   releaseForPrompt(): Promise<void>;
-  releaseHeldLockForAbort(options?: { terminal?: boolean }): Promise<void>;
+  releaseHeldLockForAbort(options?: { reason?: unknown; terminal?: boolean }): Promise<void>;
   refreshAfterOwnedSessionWrite(): void;
   reacquireAfterPrompt(): Promise<void>;
   withSessionWriteLock<T>(
@@ -102,6 +111,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let disposed = false;
   let promptAborted = false;
   let promptSubmissionBlocked = false;
+  let promptSubmissionBlockedReason: unknown;
   let takeoverDetected = false;
   const assertInitialLockOwned = (): void => {
     try {
@@ -278,7 +288,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
           throw new Error("attempt disposed before prompt submission");
         }
         if (promptSubmissionBlocked) {
-          throw new Error("attempt aborted before prompt submission");
+          throw createPromptSubmissionAbortError(promptSubmissionBlockedReason);
         }
         if (cleanupStarted) {
           throw new Error("attempt cleanup started before prompt submission");
@@ -295,7 +305,10 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     },
     releaseHeldLockForAbort: async (options) => {
       promptAborted = true;
-      promptSubmissionBlocked ||= options?.terminal !== false;
+      if (options?.terminal !== false && !promptSubmissionBlocked) {
+        promptSubmissionBlocked = true;
+        promptSubmissionBlockedReason = options?.reason;
+      }
     },
     refreshAfterOwnedSessionWrite: () => {},
     reacquireAfterPrompt: async () => {
