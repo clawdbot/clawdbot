@@ -425,4 +425,49 @@ describe("sandbox browser binds config", () => {
     });
     expect(res.ok).toBe(true);
   });
+
+  it("accepts absolute allowedBindSources roots", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: { docker: { allowedBindSources: ["/srv/shared/team"] } },
+        },
+        entries: {
+          main: { sandbox: { docker: { allowedBindSources: ["/srv/shared/handoff"] } } },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.agents?.defaults?.sandbox?.docker?.allowedBindSources).toEqual([
+        "/srv/shared/team",
+      ]);
+      expect(res.config.agents?.entries?.main?.sandbox?.docker?.allowedBindSources).toEqual([
+        "/srv/shared/handoff",
+      ]);
+    }
+  });
+
+  it("rejects a relative allowedBindSources root", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: { sandbox: { docker: { allowedBindSources: ["shared/team"] } } },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("unions global and agent allowedBindSources roots", () => {
+    const cfg = resolveSandboxDockerConfig({
+      scope: "agent",
+      globalDocker: { allowedBindSources: ["/srv/shared/team"] },
+      agentDocker: { allowedBindSources: ["/srv/shared/handoff"] },
+    });
+    expect(cfg.allowedBindSources).toEqual(["/srv/shared/team", "/srv/shared/handoff"]);
+  });
+
+  it("omits allowedBindSources when neither scope declares roots", () => {
+    const cfg = resolveSandboxDockerConfig({ scope: "agent" });
+    expect(cfg.allowedBindSources).toBeUndefined();
+  });
 });
