@@ -6,6 +6,7 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { isRecord } from "../../../lib/record-shared.mjs";
 import { resolveWindowsTaskkillPath } from "../../../lib/windows-taskkill.mjs";
 import { readBoundedResponseText } from "../bounded-response-text.mjs";
 
@@ -991,10 +992,6 @@ function hasOwnPayloadField(raw, field) {
     ((typeof raw === "object" && raw !== null) || typeof raw === "function") &&
     Object.hasOwn(raw, field)
   );
-}
-
-function isRecord(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 export function unwrapRpcPayload(raw) {

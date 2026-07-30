@@ -656,6 +656,7 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
     ".github/workflows/openclaw-npm-release.yml",
     [
       "test/openclaw-npm-postpublish-verify.test.ts",
+      "test/scripts/openclaw-npm-extended-stable-workflow.test.ts",
       "test/scripts/package-acceptance-workflow.test.ts",
     ],
   ],

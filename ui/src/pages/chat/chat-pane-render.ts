@@ -155,28 +155,29 @@ export class ChatPane extends ChatPaneHeader {
       sessionKey: `${currentAgentId ?? ""}\0${state.sessionKey}`,
       session: selectedSession,
     });
+    const gatewaySnapshot = this.context.gateway.snapshot;
     const multiIdentity = this.hasMultipleIdentities();
     const suggestionViewer =
       multiIdentity &&
       !selectedSessionArchived &&
-      hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
+      hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null) &&
       selectedSession?.visibility === "suggest" &&
       selectedSession.sharingRole === "viewer" &&
-      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.suggestions.add") ===
-        true &&
-      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.suggestions.list") === true;
+      isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.add") === true &&
+      isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.list") === true;
     const disabledReason =
       sessionParticipationBlocked && !suggestionViewer
         ? t("chat.sessionSharing.readOnlyNotice")
         : null;
     const typingEnabled =
       multiIdentity &&
-      hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
+      hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null) &&
       !catalogKey &&
-      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.typing") === true &&
+      isGatewayMethodAdvertised(gatewaySnapshot, "session.typing") === true &&
       hasSessionPresenceViewers(
         this.presencePayload,
-        this.context.gateway.snapshot.client?.instanceId,
+        gatewaySnapshot.selfUser?.id,
+        gatewaySnapshot.client?.instanceId,
         state.sessionKey,
       );
     // Never flash "view-only" while metadata loads; after loading, anything short
@@ -217,7 +218,6 @@ export class ChatPane extends ChatPaneHeader {
     const chatMainWidth = chatLayoutWidth - sideRailCount * WORKSPACE_RAIL_MAX_WIDTH;
     const selectedSessionRailMode =
       this.sessionRailModeSessionKey === state.sessionKey ? this.sessionRailMode : "hidden";
-    const gatewaySnapshot = this.context.gateway.snapshot;
     const selfUser = resolveCurrentSelfUser({
       snapshotUser: gatewaySnapshot.selfUser,
       presenceEntries: readPresenceEntries(gatewaySnapshot.hello?.snapshot),

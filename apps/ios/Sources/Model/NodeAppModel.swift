@@ -3267,7 +3267,8 @@ extension NodeAppModel {
 
         func register(
             _ commands: [String],
-            handler: @escaping (NodeAppModel, BridgeInvokeRequest) async throws -> BridgeInvokeResponse)
+            handler: @escaping @MainActor @Sendable (NodeAppModel, BridgeInvokeRequest) async throws
+                -> BridgeInvokeResponse)
         {
             let invoke: NodeCapabilityRouter.Handler = { [weak self] request in
                 guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }

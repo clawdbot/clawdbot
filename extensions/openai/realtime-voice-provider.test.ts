@@ -1517,6 +1517,75 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(bridge.isConnected()).toBe(true);
   });
 
+  it("bounds queued audio by aggregate bytes before session readiness", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    await Promise.resolve();
+
+    bridge.sendAudio(Buffer.alloc(512 * 1024, 0x01));
+    bridge.sendAudio(Buffer.alloc(512 * 1024, 0x02));
+    bridge.sendAudio(Buffer.from("overflow"));
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    const audioEvents = parseSent(socket).filter(
+      (event) => event.type === "input_audio_buffer.append",
+    );
+    expect(audioEvents).toHaveLength(2);
+    expect(
+      audioEvents.map((event) => Buffer.from(String(event.audio), "base64").byteLength),
+    ).toEqual([512 * 1024, 512 * 1024]);
+    bridge.close();
+  });
+
+  it("does not carry queued audio across terminal close and explicit reconnect", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const firstConnect = bridge.connect();
+    const firstSocket = FakeWebSocket.instances[0];
+    if (!firstSocket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+    firstSocket.readyState = FakeWebSocket.OPEN;
+    firstSocket.emit("open");
+    await Promise.resolve();
+
+    bridge.sendAudio(Buffer.from("queued-before-close"));
+    bridge.close();
+    await firstConnect;
+    bridge.sendAudio(Buffer.from("sent-after-close"));
+
+    const reconnecting = bridge.connect();
+    const secondSocket = FakeWebSocket.instances[1];
+    if (!secondSocket) {
+      throw new Error("expected bridge to reconnect");
+    }
+    secondSocket.readyState = FakeWebSocket.OPEN;
+    secondSocket.emit("open");
+    secondSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await reconnecting;
+
+    expect(
+      parseSent(secondSocket).filter((event) => event.type === "input_audio_buffer.append"),
+    ).toHaveLength(0);
+    bridge.close();
+  });
+
   it("shares an in-flight connection until session readiness", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const onReady = vi.fn();
@@ -2420,6 +2489,133 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
         audio_end_ms: 300,
       },
     ]);
+  });
+
+  it("preserves FIFO playback acknowledgements after sustained output", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onClearAudio = vi.fn();
+    const onMark = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio,
+      onMark,
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    bridge.setMediaTimestamp(1000);
+    for (let index = 0; index < 300; index += 1) {
+      socket.emit(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "response.audio.delta",
+            item_id: "item_1",
+            delta: Buffer.from("assistant audio").toString("base64"),
+          }),
+        ),
+      );
+    }
+
+    const marks = onMark.mock.calls.map(([markName]) => String(markName));
+    expect(marks).toHaveLength(300);
+    for (let index = 0; index < 299; index += 1) {
+      bridge.acknowledgeMark();
+    }
+    bridge.setMediaTimestamp(1300);
+    bridge.handleBargeIn?.();
+
+    expect(parseSent(socket).slice(-1)).toEqual([
+      {
+        type: "conversation.item.truncate",
+        item_id: "item_1",
+        content_index: 0,
+        audio_end_ms: 300,
+      },
+    ]);
+    expect(onClearAudio).toHaveBeenCalledWith("barge-in");
+
+    for (let index = 0; index < 300; index += 1) {
+      socket.emit(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "response.audio.delta",
+            item_id: "item_1",
+            delta: Buffer.from("assistant audio").toString("base64"),
+          }),
+        ),
+      );
+    }
+    const latestMark = onMark.mock.calls.at(-1)?.[0];
+    if (typeof latestMark !== "string") {
+      throw new Error("expected a playback mark");
+    }
+    bridge.acknowledgeMark(latestMark);
+    bridge.setMediaTimestamp(1600);
+    bridge.handleBargeIn?.();
+
+    expect(
+      parseSent(socket).filter((event) => event.type === "conversation.item.truncate"),
+    ).toHaveLength(1);
+    bridge.close();
+  });
+
+  it("treats a later named mark as cumulative playback progress", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onMark = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onMark,
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    bridge.setMediaTimestamp(1000);
+    for (let index = 0; index < 3; index += 1) {
+      socket.emit(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "response.audio.delta",
+            item_id: "item_1",
+            delta: Buffer.from("assistant audio").toString("base64"),
+          }),
+        ),
+      );
+    }
+    const marks = onMark.mock.calls.map(([markName]) => String(markName));
+    expect(marks).toHaveLength(3);
+
+    bridge.acknowledgeMark(marks[2]);
+    bridge.acknowledgeMark(marks[0]);
+    bridge.acknowledgeMark(marks[1]);
+    bridge.setMediaTimestamp(1300);
+    bridge.handleBargeIn?.();
+
+    expect(
+      parseSent(socket).filter((event) => event.type === "conversation.item.truncate"),
+    ).toHaveLength(0);
+    bridge.close();
   });
 
   it("forwards current realtime output audio events", async () => {

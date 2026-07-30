@@ -102,7 +102,7 @@ afterEach(() => {
 });
 
 describe("Gateway prepared model runtime startup", () => {
-  it("keeps health probes responsive without executing live provider catalogs", async () => {
+  it("keeps health probes responsive without executing unnecessary provider catalogs", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "openclaw-model-runtime-startup-"));
     const stateDir = path.join(root, "state");
     const workspaceDir = path.join(root, "workspace");
@@ -132,14 +132,15 @@ describe("Gateway prepared model runtime startup", () => {
       },
       agentDir,
     );
-    providerMocks.staticCatalog.mockResolvedValue(providerConfig);
-    providerMocks.liveCatalog.mockImplementation(async () => {
+    const blockEventLoop = async () => {
       const stopAt = performance.now() + 1_500;
       while (performance.now() < stopAt) {
         // Deliberately model synchronous provider/plugin catalog work that starves timers.
       }
       return providerConfig;
-    });
+    };
+    providerMocks.staticCatalog.mockImplementation(blockEventLoop);
+    providerMocks.liveCatalog.mockImplementation(blockEventLoop);
     const healthServer = await listenHealthz();
 
     try {
@@ -164,10 +165,10 @@ describe("Gateway prepared model runtime startup", () => {
 
           const [{ elapsedMs, response }] = await Promise.all([probe, sidecars]);
           expect(response.status).toBe(200);
-          // Allow loaded CI hosts to finish static startup work while keeping the
-          // deliberately blocking live-catalog path well outside the guard.
+          // The configured model is already resolved from manifest facts. Either provider hook
+          // would deliberately block the event loop well beyond this responsiveness guard.
           expect(elapsedMs).toBeLessThan(1_000);
-          expect(providerMocks.staticCatalog).toHaveBeenCalled();
+          expect(providerMocks.staticCatalog).not.toHaveBeenCalled();
           expect(providerMocks.liveCatalog).not.toHaveBeenCalled();
         },
       );

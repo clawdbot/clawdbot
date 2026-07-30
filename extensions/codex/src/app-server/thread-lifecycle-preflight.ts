@@ -66,6 +66,7 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
           agentId: params.agentId ?? params.params.agentId,
           agentDir: params.params.agentDir,
           allowLiteralOAuthProjection: params.appServer.connectionClass !== "remote",
+          toolOverrides: params.params.toolOverrides,
           onServerUnavailable: (serverName, error) =>
             embeddedAgentLog.warn("skipping unavailable MCP OAuth server", {
               serverName,

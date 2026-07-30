@@ -352,9 +352,9 @@ export class GatewayProtocolClient<TPlan> {
       return;
     }
     const generation = this.generation + 1;
+    this.lastSeq = null; // Outer event sequences belong to one WebSocket generation.
     this.connectNonce = null;
-    this.connectSent = false;
-    this.connectRequestSent = false;
+    this.connectSent = this.connectRequestSent = false;
     this.socketOpened = false;
     this.helloReceived = false;
     this.connectFailure = undefined;

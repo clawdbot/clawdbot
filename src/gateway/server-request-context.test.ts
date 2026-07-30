@@ -129,12 +129,16 @@ function makeGatewayClient(params: {
 }
 
 describe("createGatewayRequestContext", () => {
-  it("cleans connection-scoped PR watches with the other session subscriptions", () => {
+  it("cleans connection-scoped replace-sets with the other session subscriptions", () => {
     const unsubscribeAllSessionEvents = vi.fn();
     const unsubscribePullRequests = vi.fn();
+    const unsubscribeViewerPresence = vi.fn();
     const params = makeContextParams({ unsubscribeAllSessionEvents });
     params.runtimeState.controlUiSessionPullRequests = {
       unsubscribe: unsubscribePullRequests,
+    } as never;
+    params.runtimeState.sessionViewerPresence = {
+      unsubscribe: unsubscribeViewerPresence,
     } as never;
     const context = createGatewayRequestContext(params);
 
@@ -142,6 +146,7 @@ describe("createGatewayRequestContext", () => {
 
     expect(unsubscribeAllSessionEvents).toHaveBeenCalledWith("conn-control-ui");
     expect(unsubscribePullRequests).toHaveBeenCalledWith("conn-control-ui");
+    expect(unsubscribeViewerPresence).toHaveBeenCalledWith("conn-control-ui");
   });
 
   it("reads cron state live from runtime state", () => {

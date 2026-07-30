@@ -36,7 +36,7 @@ async function selectCreator(sidebar: SidebarLifecycleState, creatorId: string |
 }
 
 describe("AppSidebar session ownership", () => {
-  it("renders self and presence avatars while unmatched actors keep initials", async () => {
+  it("renders durable actor avatars identically regardless of live presence", async () => {
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
     gateway.publish({
       selfUser: {
@@ -61,8 +61,18 @@ describe("AppSidebar session ownership", () => {
     if (!ada || !bob || !carol) {
       throw new Error("expected creator rows");
     }
-    ada.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
-    bob.createdActor = { type: "human", id: "profile-bob", label: "Bob" };
+    ada.createdActor = {
+      type: "human",
+      id: "profile-ada",
+      label: "Ada",
+      avatarUrl: "/api/users/profile-ada/avatar?v=1",
+    };
+    bob.createdActor = {
+      type: "human",
+      id: "profile-bob",
+      label: "Bob",
+      avatarUrl: "/api/users/profile-bob/avatar?v=2",
+    };
     carol.createdActor = { type: "human", id: "profile-carol", label: "Carol" };
     result.creators = [
       { id: "profile-ada", label: "Ada" },
@@ -71,18 +81,6 @@ describe("AppSidebar session ownership", () => {
     ];
 
     const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
-    gateway.publishEvent("presence", {
-      presence: [
-        {
-          instanceId: "bob-browser",
-          user: {
-            id: "profile-bob",
-            name: "Bob",
-            avatarUrl: "/api/users/profile-bob/avatar?v=2",
-          },
-        },
-      ],
-    });
     harness.publishList({ result, agentId: "main" });
 
     await waitForFast(() => {
@@ -93,6 +91,28 @@ describe("AppSidebar session ownership", () => {
         sidebar.querySelector('[data-session-key="agent:main:bob"] openclaw-viewer-avatar img'),
       ).not.toBeNull();
     });
+    const bobAvatarBefore = sidebar
+      .querySelector('[data-session-key="agent:main:bob"] openclaw-viewer-avatar img')
+      ?.getAttribute("src");
+
+    gateway.publishEvent("presence", {
+      presence: [
+        {
+          instanceId: "bob-browser",
+          user: {
+            id: "profile-bob",
+            name: "Bob",
+            avatarUrl: "/api/users/profile-bob/avatar?v=99",
+          },
+        },
+      ],
+    });
+    await sidebar.updateComplete;
+    expect(
+      sidebar
+        .querySelector('[data-session-key="agent:main:bob"] openclaw-viewer-avatar img')
+        ?.getAttribute("src"),
+    ).toBe(bobAvatarBefore);
 
     const adaChip = sidebar.querySelector(
       '[data-session-key="agent:main:ada"] .session-owner-chip',

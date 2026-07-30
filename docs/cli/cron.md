@@ -110,6 +110,8 @@ Failure notifications resolve in this order:
 Main-session jobs may only use `delivery.failureDestination` when primary delivery mode is `webhook`. Isolated jobs accept it in all modes.
 </Note>
 
+Chat failure notifications include the run start time in the agent's configured user timezone. Webhook message text stays stable and exposes the instant as `runAtMs`.
+
 Isolated cron runs treat run-level agent failures as job errors even when no reply payload is produced, so model/provider failures still increment error counters and trigger failure notifications.
 
 Command cron jobs do not start an isolated agent turn. A zero exit code records `ok`; non-zero exit, signal, timeout, or no-output timeout records `error` and can trigger the same failure notification path.

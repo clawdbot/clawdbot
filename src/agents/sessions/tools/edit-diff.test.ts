@@ -1,13 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { normalizeToLF } from "../../line-endings.js";
-import { applyEditsToNormalizedContent, generateDiffString } from "./edit-diff.js";
+import { applyEditsPreservingLineEndings, generateDiffString } from "./edit-diff.js";
 
 function getMismatchMessage(
   content: string,
   edits: Array<{ oldText: string; newText: string }>,
 ): string {
   try {
-    applyEditsToNormalizedContent(normalizeToLF(content), edits, "test.ts");
+    applyEditsPreservingLineEndings(content, edits, "test.ts");
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
@@ -142,8 +141,8 @@ describe("applyEditsToNormalizedContent uniqueness", () => {
   it("replaces an exactly unique match when trailing whitespace makes a sibling line fuzzy-identical", () => {
     const content = "foo();  \nfoo();\nbar();\n";
 
-    const result = applyEditsToNormalizedContent(
-      normalizeToLF(content),
+    const result = applyEditsPreservingLineEndings(
+      content,
       [{ oldText: "foo();\n", newText: "baz();\n" }],
       "test.ts",
     );
@@ -157,8 +156,8 @@ describe("applyEditsToNormalizedContent fuzzy uniqueness", () => {
     const content = "foo();  \nfoo();\t\nbar();\n";
 
     expect(() =>
-      applyEditsToNormalizedContent(
-        normalizeToLF(content),
+      applyEditsPreservingLineEndings(
+        content,
         [{ oldText: "foo();\n", newText: "baz();\n" }],
         "test.ts",
       ),

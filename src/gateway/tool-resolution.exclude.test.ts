@@ -194,6 +194,64 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(hoisted.createLazyExecToolMock).not.toHaveBeenCalled();
   });
 
+  it("denies loopback tools after the scheduled owner account is removed", () => {
+    const resolveToolPolicy = vi.fn(() => ({ allow: ["read"] }));
+    hoisted.getLoadedChannelPluginMock.mockReturnValue({
+      config: {
+        listAccountIds: (cfg: OpenClawConfig) => Object.keys(cfg.channels?.discord?.accounts ?? {}),
+      },
+      groups: { resolveToolPolicy },
+    });
+    const scheduledToolPolicy = {
+      version: 1 as const,
+      mode: "account" as const,
+      ownerSessionKey: "agent:main:discord:group:ops",
+      ownerAccountId: "creator",
+    };
+    const configured = resolveGatewayScopedTools({
+      cfg: {
+        channels: {
+          discord: {
+            accounts: {
+              creator: {},
+              delivery: {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:cron:run-1",
+      runtimePolicySessionKey: "agent:main:cron:run-1",
+      accountId: "delivery",
+      surface: "loopback",
+      scheduledToolPolicy,
+    });
+    const removed = resolveGatewayScopedTools({
+      cfg: {
+        channels: {
+          discord: {
+            accounts: {
+              delivery: {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:cron:run-1",
+      runtimePolicySessionKey: "agent:main:cron:run-1",
+      accountId: "delivery",
+      surface: "loopback",
+      scheduledToolPolicy,
+    });
+
+    expect(configured.tools.map((tool) => tool.name)).toEqual(["read"]);
+    expect(removed.tools).toEqual([]);
+    expect(resolveToolPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "creator",
+        groupId: "ops",
+      }),
+    );
+  });
+
   it("does not fall back when policy removes a mediated coding tool", () => {
     hoisted.createOpenClawToolsMock.mockReturnValueOnce([
       hoisted.makeTool("write"),

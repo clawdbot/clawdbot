@@ -498,26 +498,12 @@ describe("JSON console style process output", () => {
     expect(() => parseJsonLines(result.stdout)).toThrow();
   });
 
-  it.each([
-    {
-      name: "missing container value",
-      args: ["--container"],
-      message: "--container requires a value",
-    },
-    {
-      name: "missing profile value",
-      args: ["--profile"],
-      message: "--profile requires a value",
-    },
-    {
-      name: "container/profile conflict",
-      args: ["--container", "demo", "--profile", "work", "status"],
-      message: "--container cannot be combined with --profile/--dev",
-    },
-  ])("structures entry validation for $name", async ({ args, message }) => {
+  it("structures entry validation errors", async () => {
     let failure: CliProcessFailure | undefined;
     try {
-      await runCliProcess({ args, config: loggingConfig });
+      // One cold process proves entry-level JSON formatting. Profile parsing and
+      // container/profile conflicts have dedicated unit and process coverage below.
+      await runCliProcess({ args: ["--container"], config: loggingConfig });
     } catch (error) {
       failure = error as CliProcessFailure;
     }
@@ -526,7 +512,10 @@ describe("JSON console style process output", () => {
     expect(failure?.stdout ?? "").toBe("");
     expect(parseJsonLines(failure?.stderr ?? "")).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ level: "error", message: expect.stringContaining(message) }),
+        expect.objectContaining({
+          level: "error",
+          message: expect.stringContaining("--container requires a value"),
+        }),
       ]),
     );
   });

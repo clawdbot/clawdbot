@@ -7,6 +7,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { findGitCheckoutRoot } from "../agents/worktrees/git.js";
 import {
   findLiveRegistryWorktreeByOwner,
   listRegistryWorktrees,
@@ -60,6 +61,21 @@ const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
   setupGatewaySessionsTestHarness();
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+async function makeNonGitTempDir(prefix: string): Promise<string> {
+  let root = await fs.realpath(os.tmpdir());
+  for (;;) {
+    const checkoutRoot = findGitCheckoutRoot(root);
+    if (!checkoutRoot) {
+      return tempDirs.make(prefix, root);
+    }
+    const parent = path.dirname(checkoutRoot);
+    if (parent === checkoutRoot) {
+      throw new Error("could not find a temp root outside a git checkout");
+    }
+    root = parent;
+  }
+}
 
 test("sessions.create and sessions.delete preserve every concurrent session lifecycle", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -1147,7 +1163,7 @@ test("sessions.create persists a Gateway cwd without a managed worktree", async 
 });
 
 test("sessions.create uses a non-git Gateway cwd directly but not as a worktree source", async () => {
-  const cwd = tempDirs.make("openclaw-session-direct-cwd-", await fs.realpath(os.tmpdir()));
+  const cwd = await makeNonGitTempDir("openclaw-session-direct-cwd-");
   const client = { client: { connect: { scopes: ["operator.admin"] } } as never };
   const direct = await directSessionReq("sessions.create", { cwd }, client);
   expect(direct.ok).toBe(true);
@@ -1369,9 +1385,7 @@ test("sessions.create reset-in-place persists the returned worktree cwd", async 
 });
 
 test("sessions.create rejects worktrees for non-git agent workspaces", async () => {
-  const workspace = await fs.mkdtemp(
-    path.join(await fs.realpath(os.tmpdir()), "openclaw-session-plain-workspace-"),
-  );
+  const workspace = await makeNonGitTempDir("openclaw-session-plain-workspace-");
   testState.agentConfig = { workspace };
   await createSessionStoreDir();
   try {
@@ -1388,7 +1402,6 @@ test("sessions.create rejects worktrees for non-git agent workspaces", async () 
     });
   } finally {
     testState.agentConfig = undefined;
-    await fs.rm(workspace, { recursive: true, force: true });
   }
 });
 

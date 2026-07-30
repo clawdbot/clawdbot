@@ -381,6 +381,44 @@ function subagentRunRecordToSqliteUpdate(values: SubagentRunSqliteInsert): Subag
   return update;
 }
 
+function writeSubagentRunValues(
+  values: readonly SubagentRunSqliteInsert[],
+  deleteRunIds?: readonly string[],
+  retainedRunIds?: readonly string[],
+): void {
+  if (values.length === 0 && deleteRunIds?.length === 0 && retainedRunIds === undefined) {
+    return;
+  }
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
+    for (const row of values) {
+      executeSqliteQuerySync(
+        db,
+        stateDb
+          .insertInto("subagent_runs")
+          .values(row)
+          .onConflict((conflict) =>
+            conflict.column("run_id").doUpdateSet(subagentRunRecordToSqliteUpdate(row)),
+          ),
+      );
+    }
+    if (retainedRunIds !== undefined) {
+      const deleteQuery =
+        retainedRunIds.length === 0
+          ? stateDb.deleteFrom("subagent_runs")
+          : stateDb.deleteFrom("subagent_runs").where("run_id", "not in", retainedRunIds);
+      executeSqliteQuerySync(db, deleteQuery);
+      return;
+    }
+    if (deleteRunIds && deleteRunIds.length > 0) {
+      executeSqliteQuerySync(
+        db,
+        stateDb.deleteFrom("subagent_runs").where("run_id", "in", deleteRunIds),
+      );
+    }
+  });
+}
+
 function readSubagentRegistryRows(): SubagentRunSqliteRow[] {
   const { db } = openOpenClawStateDatabase();
   const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
@@ -472,26 +510,29 @@ export function loadSubagentRegistryFromSqlite(): Map<string, SubagentRunRecord>
 
 /** Saves the complete subagent run snapshot to sqlite and prunes rows not in the snapshot. */
 export function saveSubagentRegistryToSqlite(runs: Map<string, SubagentRunRecord>): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
-    const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
-    const runIds: string[] = [];
-    for (const entry of runs.values()) {
-      const values = subagentRunRecordToSqliteInsert(entry);
-      runIds.push(values.run_id);
-      executeSqliteQuerySync(
-        db,
-        stateDb
-          .insertInto("subagent_runs")
-          .values(values)
-          .onConflict((conflict) =>
-            conflict.column("run_id").doUpdateSet(subagentRunRecordToSqliteUpdate(values)),
-          ),
-      );
+  const values = [...runs.values()].map(subagentRunRecordToSqliteInsert);
+  writeSubagentRunValues(
+    values,
+    undefined,
+    values.map((row) => row.run_id),
+  );
+}
+
+/** Persists only named run mutations, deleting names absent from the current registry. */
+export function saveSubagentRegistryChangesToSqlite(
+  runs: Map<string, SubagentRunRecord>,
+  changedRunIds: readonly string[],
+): void {
+  const runIds = [...new Set(changedRunIds.map((runId) => runId.trim()).filter(Boolean))];
+  const values: SubagentRunSqliteInsert[] = [];
+  const deleteRunIds: string[] = [];
+  for (const runId of runIds) {
+    const entry = runs.get(runId);
+    if (entry) {
+      values.push(subagentRunRecordToSqliteInsert(entry));
+    } else {
+      deleteRunIds.push(runId);
     }
-    const deleteQuery =
-      runIds.length === 0
-        ? stateDb.deleteFrom("subagent_runs")
-        : stateDb.deleteFrom("subagent_runs").where("run_id", "not in", runIds);
-    executeSqliteQuerySync(db, deleteQuery);
-  });
+  }
+  writeSubagentRunValues(values, deleteRunIds);
 }

@@ -4398,13 +4398,15 @@ describe("subagent registry seam flow", () => {
       "agent.wait": { status: "pending" },
     });
 
+    const runId = `run-single-persist-${queued ? "queued" : "running"}`;
     mod.registerSubagentRun({
-      runId: `run-single-persist-${queued ? "queued" : "running"}`,
+      runId,
       task: "persist one registry snapshot",
       queued,
     });
 
     expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledOnce();
+    expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledWith(expect.any(Map), [runId]);
     expect(mocks.persistSubagentRunsToDisk).not.toHaveBeenCalled();
   });
 

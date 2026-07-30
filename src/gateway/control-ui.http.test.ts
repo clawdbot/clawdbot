@@ -139,7 +139,6 @@ describe("handleControlUiHttpRequest", () => {
       devGitBranch?: string;
       localMediaPreviewRoots?: string[];
       seamColor?: string;
-      timeFormat?: "auto" | "12" | "24";
       terminalEnabled: boolean;
       pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
     };
@@ -1303,7 +1302,6 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAvatarReason).toBe("missing");
         expect(parsed.assistantAgentId).toBe("roboclaw");
         expect(parsed.seamColor).toBe("#1A2b3C");
-        expect(parsed.timeFormat).toBe("auto");
         expect(parsed.terminalEnabled).toBe(true);
         expect(parsed.devGitBranch).toBeUndefined();
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);

@@ -26,7 +26,7 @@ import "../components/sidebar-update-card.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
 import { isSessionRouteId, workboardBoardIdFromPath } from "../app-route-paths.ts";
-import { APP_ROUTE_IDS, isRouteId, type RouteId } from "../app-routes.ts";
+import { APP_ROUTE_IDS, isRouteId, routeIdFromPath, type RouteId } from "../app-routes.ts";
 import {
   EMPTY_SIDEBAR_WORKBOARD_SNAPSHOT,
   type SidebarWorkboardRenderers,
@@ -731,6 +731,20 @@ class OpenClawShell extends OpenClawLightDomElement {
     });
   }
 
+  private reconcileCommittedServerUiPrefs(
+    runtimeConfig: ApplicationContext["runtimeConfig"],
+    needsRefresh: boolean,
+  ) {
+    if (this.context?.runtimeConfig !== runtimeConfig) {
+      return;
+    }
+    if (needsRefresh) {
+      void runtimeConfig.refresh();
+      return;
+    }
+    this.reconcileServerUiPrefs(runtimeConfig);
+  }
+
   override connectedCallback() {
     super.connectedCallback();
     if (this.outboxStoreRuntime) {
@@ -753,6 +767,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     window.addEventListener("openclaw:native-open-search", this.handleNativeOpenSearch);
     window.addEventListener("openclaw:native-toggle-search", this.handleNativeToggleSearch);
     window.addEventListener("openclaw:native-new-session", this.handleNativeNewSession);
+    window.addEventListener("openclaw:native-navigate", this.handleNativeNavigate);
     window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
     window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
@@ -763,15 +778,11 @@ class OpenClawShell extends OpenClawLightDomElement {
         return;
       }
       const prefs = changedServerUiPrefs(previous, next);
-      const snapshot = this.context?.gateway.snapshot;
-      if (prefs && snapshot?.client) {
-        pushServerUiPrefs(snapshot.client, prefs, {
-          afterCommit: () => {
-            const runtimeConfig = this.context?.runtimeConfig;
-            if (runtimeConfig) {
-              void runtimeConfig.refresh();
-            }
-          },
+      const runtimeConfig = this.context?.runtimeConfig;
+      if (prefs && runtimeConfig) {
+        pushServerUiPrefs(runtimeConfig, prefs, {
+          afterCommit: ({ needsRefresh }) =>
+            this.reconcileCommittedServerUiPrefs(runtimeConfig, needsRefresh),
         });
       }
     });
@@ -790,6 +801,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     window.removeEventListener("openclaw:native-open-search", this.handleNativeOpenSearch);
     window.removeEventListener("openclaw:native-toggle-search", this.handleNativeToggleSearch);
     window.removeEventListener("openclaw:native-new-session", this.handleNativeNewSession);
+    window.removeEventListener("openclaw:native-navigate", this.handleNativeNavigate);
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
     window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
@@ -1271,6 +1283,26 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.openNewSession(agentId);
   };
 
+  private readonly handleNativeNavigate = (event: Event) => {
+    const path = (event as CustomEvent<{ path?: unknown }>).detail?.path;
+    const schemeCandidate = typeof path === "string" ? path.slice(1) : "";
+    if (
+      typeof path !== "string" ||
+      !path.startsWith("/") ||
+      path.startsWith("//") ||
+      /^[a-z][a-z\d+.-]*:/i.test(schemeCandidate)
+    ) {
+      return;
+    }
+    const routeId = routeIdFromPath(path);
+    if (!routeId || !this.context) {
+      // Leave invalid or unavailable destinations unhandled so the native host can load its URL fallback.
+      return;
+    }
+    event.preventDefault();
+    this.navigate(routeId);
+  };
+
   private readonly handleNativeHistoryState = (event: Event) => {
     const detail = (event as CustomEvent<NativeHistoryState>).detail;
     if (typeof detail?.canGoBack !== "boolean" || typeof detail.canGoForward !== "boolean") {
@@ -1718,13 +1750,9 @@ class OpenClawShell extends OpenClawLightDomElement {
     }
     this.runtimeConfigClient = snapshot.client;
     this.runtimeConfigSource = runtimeConfig;
-    flushServerUiPrefs(snapshot.client, {
-      afterCommit: () => {
-        const currentRuntimeConfig = this.context?.runtimeConfig;
-        if (currentRuntimeConfig) {
-          void currentRuntimeConfig.refresh();
-        }
-      },
+    flushServerUiPrefs(runtimeConfig, {
+      afterCommit: ({ needsRefresh }) =>
+        this.reconcileCommittedServerUiPrefs(runtimeConfig, needsRefresh),
     });
     void runtimeConfig.ensureLoaded();
   }
@@ -2005,7 +2033,7 @@ class OpenClawShell extends OpenClawLightDomElement {
           offline: gatewaySnapshot.offlineStable,
           queuedOutboxCount: storedOutboxes?.total ?? 0,
           lastError: gatewaySnapshot.lastError,
-          version:
+          gatewayVersion:
             context.config.current.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
           updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
           updateRunning: overlaySnapshot.updateRunning,

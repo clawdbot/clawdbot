@@ -50,11 +50,13 @@ struct IOSMediaArtifactLoader: Sendable {
     func load(
         response: ArtifactsDownloadResult,
         kind: OpenClawChatMediaKind,
+        playback: OpenClawChatPlaybackMode? = nil,
         expectedGatewayID: String) async throws -> OpenClawChatLoadedMedia
     {
         let maximumBytes = Self.maximumBytes(for: kind)
         let declaredMIME = response.artifact.mimetype?.lowercased()
-        if let encoded = response.data?.trimmingCharacters(in: .whitespacesAndNewlines),
+        if playback != .transcode,
+           let encoded = response.data?.trimmingCharacters(in: .whitespacesAndNewlines),
            !encoded.isEmpty
         {
             guard response.encoding == "base64",
@@ -69,7 +71,8 @@ struct IOSMediaArtifactLoader: Sendable {
         let path = response.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard let connection = await self.connectionProvider(),
               connection.gatewayID == expectedGatewayID,
-              let url = Self.managedMediaURL(config: connection.config, path: path)
+              let sourceURL = Self.managedMediaURL(config: connection.config, path: path),
+              let url = Self.playbackURL(sourceURL, mode: playback)
         else { throw LoadError.invalidSource }
 
         let headers = url.scheme?.lowercased() == "https"
@@ -82,7 +85,7 @@ struct IOSMediaArtifactLoader: Sendable {
             connection.config.tls == nil &&
             headers.isEmpty &&
             declaredMIME?.hasPrefix(kind.mimeTypePrefix) == true
-        if canStreamDirectly, let declaredMIME {
+        if canStreamDirectly, playback != .transcode, let declaredMIME {
             return .stream(OpenClawChatMediaStream(
                 url: url,
                 mimeType: declaredMIME,
@@ -92,6 +95,9 @@ struct IOSMediaArtifactLoader: Sendable {
         var request = URLRequest(url: url)
         request.timeoutInterval = kind == .video ? 60 : 20
         request.setValue("\(kind.rawValue)/*", forHTTPHeaderField: "Accept")
+        if canStreamDirectly {
+            request.setValue("bytes=0-0", forHTTPHeaderField: "Range")
+        }
         for (name, value) in headers {
             request.setValue(value, forHTTPHeaderField: name)
         }
@@ -108,12 +114,21 @@ struct IOSMediaArtifactLoader: Sendable {
             throw LoadError.payloadTooLarge
         }
         guard let http = urlResponse as? HTTPURLResponse else { throw LoadError.invalidResponse }
+        if http.statusCode == 202 {
+            return .preparing
+        }
         guard (200..<300).contains(http.statusCode) else {
             throw LoadError.requestFailed(statusCode: http.statusCode)
         }
         guard let mimeType = http.mimeType?.lowercased(),
               mimeType.hasPrefix(kind.mimeTypePrefix)
         else { throw LoadError.unsupportedMediaType }
+        if canStreamDirectly {
+            return .stream(OpenClawChatMediaStream(
+                url: url,
+                mimeType: mimeType,
+                sizeBytes: response.artifact.sizebytes))
+        }
         guard data.count <= maximumBytes else { throw LoadError.payloadTooLarge }
         return .data(OpenClawChatMediaData(data: data, mimeType: mimeType))
     }
@@ -148,5 +163,15 @@ struct IOSMediaArtifactLoader: Sendable {
         base.percentEncodedQuery = relative.percentEncodedQuery
         base.fragment = nil
         return base.url
+    }
+
+    private static func playbackURL(_ url: URL, mode: OpenClawChatPlaybackMode?) -> URL? {
+        guard mode == .transcode else { return url }
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        var queryItems = components.queryItems ?? []
+        queryItems.removeAll { $0.name == "playback" }
+        queryItems.append(URLQueryItem(name: "playback", value: "1"))
+        components.queryItems = queryItems
+        return components.url
     }
 }

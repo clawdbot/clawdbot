@@ -48,7 +48,12 @@ export type HookClientIpConfig = Readonly<{
 export type HooksRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
 type HookDispatchers = {
-  dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
+  dispatchWakeHook: (value: {
+    text: string;
+    mode: "now" | "next-heartbeat";
+    agentId?: string;
+    sessionKey?: string;
+  }) => void;
   dispatchAgentHook: (
     value: HookAgentDispatchPayload,
   ) => HookAgentDispatchResult | Promise<HookAgentDispatchResult>;
@@ -56,7 +61,7 @@ type HookDispatchers = {
 
 export type HookAgentDispatchResult =
   | { ok: true; runId: string }
-  | { ok: false; statusCode: 409 | 502 | 503; error: string; runId?: string };
+  | { ok: false; statusCode: 400 | 409 | 502 | 503; error: string; runId?: string };
 
 type HookReplayEntry = {
   ts: number;
@@ -340,6 +345,13 @@ export function createHooksRequestHandler(
         sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
         return true;
       }
+      if (normalized.value.sessionMode === "persistent" && !normalized.value.sessionKey) {
+        sendJson(res, 400, {
+          ok: false,
+          error: "sessionKey is required when sessionMode is persistent",
+        });
+        return true;
+      }
       const sessionKey = resolveHookSessionKey({
         hooksConfig,
         source: "request",
@@ -347,6 +359,17 @@ export function createHooksRequestHandler(
       });
       if (!sessionKey.ok) {
         sendJson(res, 400, { ok: false, error: sessionKey.error });
+        return true;
+      }
+      if (
+        normalized.value.sessionMode === "persistent" &&
+        !hooksConfig.sessionPolicy.allowedSessionKeyPrefixes?.length
+      ) {
+        sendJson(res, 400, {
+          ok: false,
+          error:
+            "hooks.allowedSessionKeyPrefixes is required when direct hook sessionMode is persistent",
+        });
         return true;
       }
       const targetAgentId = resolveHookTargetAgentId(hooksConfig, normalized.value.agentId);
@@ -365,9 +388,11 @@ export function createHooksRequestHandler(
           message: normalized.value.message,
           name: normalized.value.name,
           wakeMode: normalized.value.wakeMode,
+          sessionMode: normalized.value.sessionMode,
           deliver: normalized.value.deliver,
           channel: normalized.value.channel,
           to: normalized.value.to ?? null,
+          accountId: normalized.value.accountId ?? null,
           model: normalized.value.model ?? null,
           thinking: normalized.value.thinking ?? null,
           timeoutSeconds: normalized.value.timeoutSeconds ?? null,
@@ -418,11 +443,40 @@ export function createHooksRequestHandler(
             return true;
           }
           if (mapped.action.kind === "wake") {
+            const action = mapped.action;
+            let targetAgentId: string | undefined;
+            let dispatchSessionKey: string | undefined;
+            if (action.agentId || action.sessionKey) {
+              if (!isHookAgentAllowed(hooksConfig, action.agentId)) {
+                sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
+                return true;
+              }
+              targetAgentId = resolveEffectiveHookTargetAgentId(hooksConfig, action.agentId);
+              if (action.sessionKey) {
+                const sessionKey = resolveHookSessionKey({
+                  hooksConfig,
+                  source:
+                    action.sessionKeySource === "static" ? "mapping-static" : "mapping-templated",
+                  sessionKey: action.sessionKey,
+                });
+                if (!sessionKey.ok) {
+                  sendJson(res, 400, { ok: false, error: sessionKey.error });
+                  return true;
+                }
+                dispatchSessionKey =
+                  resolveDispatchSessionKeyOrRespond(sessionKey.value, targetAgentId) ?? undefined;
+                if (!dispatchSessionKey) {
+                  return true;
+                }
+              }
+            }
             dispatchWakeHook({
-              text: mapped.action.text,
-              mode: mapped.action.mode,
+              text: action.text,
+              mode: action.mode,
+              ...(targetAgentId ? { agentId: targetAgentId } : {}),
+              ...(dispatchSessionKey ? { sessionKey: dispatchSessionKey } : {}),
             });
-            sendJson(res, 200, { ok: true, mode: mapped.action.mode });
+            sendJson(res, 200, { ok: true, mode: action.mode });
             return true;
           }
           const action = mapped.action;
@@ -441,6 +495,18 @@ export function createHooksRequestHandler(
             : { mode: "none" as const };
           if (!isHookAgentAllowed(hooksConfig, action.agentId)) {
             sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
+            return true;
+          }
+          if (
+            mapped.action.sessionMode === "persistent" &&
+            !mapped.action.sessionKey &&
+            !hooksConfig.sessionPolicy.defaultSessionKey
+          ) {
+            sendJson(res, 400, {
+              ok: false,
+              error:
+                "sessionKey or hooks.defaultSessionKey is required when mapped hook sessionMode is persistent",
+            });
             return true;
           }
           const sessionKey = resolveHookSessionKey({
@@ -474,6 +540,7 @@ export function createHooksRequestHandler(
               message: action.message,
               name: action.name ?? "Hook",
               wakeMode: action.wakeMode,
+              sessionMode: action.sessionMode,
               deliver,
               channel,
               to: action.to ?? null,
@@ -495,6 +562,7 @@ export function createHooksRequestHandler(
               agentId: targetAgentId,
               wakeMode: action.wakeMode,
               sessionKey: dispatchSessionKey,
+              sessionMode: action.sessionMode,
               sourcePath: `${basePath}/${subPath}`,
               deliver,
               channel,

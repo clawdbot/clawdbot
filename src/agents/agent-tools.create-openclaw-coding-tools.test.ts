@@ -969,7 +969,16 @@ describe("createOpenClawCodingTools", () => {
 
     try {
       const tools = createOpenClawCodingTools({
-        config: testConfig,
+        config: {
+          ...testConfig,
+          channels: {
+            discord: {
+              accounts: {
+                creator: {},
+              },
+            },
+          },
+        },
         agentId: "main",
         sessionKey: "agent:main:telegram:direct:alice",
         messageProvider: "discord-voice",

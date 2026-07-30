@@ -132,6 +132,7 @@ export function applyJobResult(
       status: "error",
       error: result.error,
       errorReason: job.state.lastErrorReason,
+      runAtMs: result.startedAt,
       consecutiveCount: job.state.consecutiveErrors,
       ...(opts?.replayFailureAlertAtMs !== undefined
         ? { delivery: "record-only" as const, occurredAtMs: opts.replayFailureAlertAtMs }
@@ -146,6 +147,7 @@ export function applyJobResult(
         alertConfig,
         status: "skipped",
         error: result.error,
+        runAtMs: result.startedAt,
         consecutiveCount: job.state.consecutiveSkipped,
         ...(opts?.replayFailureAlertAtMs !== undefined
           ? { delivery: "record-only" as const, occurredAtMs: opts.replayFailureAlertAtMs }
