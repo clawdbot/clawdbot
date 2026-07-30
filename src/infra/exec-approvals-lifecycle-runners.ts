@@ -99,6 +99,26 @@ function packageTarget(argv: readonly string[], start: number): string[] | null 
   return index < argv.length ? [argv[index] ?? "", ...argv.slice(index + 1)] : null;
 }
 
+function packageTargets(argv: readonly string[], start: number): string[] {
+  const targets: string[] = [];
+  for (let index = start; index < argv.length; index += 1) {
+    const token = argv[index]?.trim() ?? "";
+    if (token === "--") {
+      targets.push(...argv.slice(index + 1));
+      break;
+    }
+    if (token.startsWith("-") && token !== "-") {
+      const name = optionName(token);
+      if (PACKAGE_TARGET_OPTIONS_WITH_VALUE.has(name) && !token.includes("=")) {
+        index += 1;
+      }
+      continue;
+    }
+    targets.push(token);
+  }
+  return targets;
+}
+
 function looksLikeUnresolvedLifecycleRunner(argv: readonly string[]): boolean {
   const text = argv.join(" ").toLowerCase();
   return text.includes("openclaw") && /\b(?:daemon|gateway|uninstall|update)\b/u.test(text);
@@ -112,9 +132,9 @@ function packageOperationMutatesOpenClaw(
   if (!PACKAGE_MUTATION_ALIASES.has(operation)) {
     return false;
   }
-  return argv
-    .slice(subcommandIndex + 1)
-    .some((token) => /^(?:openclaw|[^@\s]+@npm:openclaw)(?:@|$)/iu.test(token.trim()));
+  return packageTargets(argv, subcommandIndex + 1).some((token) =>
+    /^(?:openclaw|[^@\s]+@npm:openclaw)(?:@|$)/iu.test(token.trim()),
+  );
 }
 
 /** Resolve command argv launched by npm-compatible package runners. */

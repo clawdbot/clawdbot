@@ -136,6 +136,8 @@ function extractAtDepth(command: string, depth: number): ShellSubstitutionScan {
       quote = quote === '"' ? null : '"';
       continue;
     }
+    // Double quotes still execute `$()` and backticks, so their content must
+    // intentionally fall through to the substitution scanner below.
 
     const next = command[index + 1] ?? "";
     const opensParenSubstitution =

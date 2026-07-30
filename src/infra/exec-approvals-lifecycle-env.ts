@@ -5,6 +5,27 @@ const CMD_VARIABLE_RE = /%([A-Za-z_][A-Za-z0-9_]*)%/gu;
 const VARIABLE_REFERENCE_RE =
   /\$(?:\{[A-Za-z_][A-Za-z0-9_]*[^}]*\}|[A-Za-z_][A-Za-z0-9_]*|env:[A-Za-z_][A-Za-z0-9_]*)|%[A-Za-z_][A-Za-z0-9_]*%/iu;
 const POSIX_PARAMETER_OPERATOR_RE = /\$\{[A-Za-z_][A-Za-z0-9_]*(?::?[-+=?]|:[0-9])[^}]*\}/u;
+const OPENCLAW_GLOBAL_FLAGS = new Set(["--dev", "--no-color"]);
+const OPENCLAW_GLOBAL_OPTIONS = new Set(["--container", "--log-level", "--profile"]);
+const SYSTEMCTL_OPTIONS_WITH_VALUE = new Set([
+  "-h",
+  "-m",
+  "-p",
+  "-s",
+  "-t",
+  "--host",
+  "--image-policy",
+  "--job-mode",
+  "--lines",
+  "--machine",
+  "--output",
+  "--property",
+  "--root",
+  "--runtime-scope",
+  "--signal",
+  "--state",
+  "--type",
+]);
 
 export type LifecycleEnvironmentExpansion = {
   argv: string[];
@@ -23,6 +44,38 @@ function normalizedExecutable(value: string | undefined): string {
   );
 }
 
+function optionName(token: string): string {
+  return token.trim().toLowerCase().split("=", 1)[0] ?? "";
+}
+
+function scanFirstPositional(
+  argv: readonly string[],
+  start: number,
+  optionsWithValue: ReadonlySet<string>,
+  standaloneOptions: ReadonlySet<string> = new Set(),
+): number {
+  for (let index = start; index < argv.length; index += 1) {
+    const token = argv[index]?.trim() ?? "";
+    if (token === "--") {
+      return index + 1;
+    }
+    const name = optionName(token);
+    if (standaloneOptions.has(name)) {
+      continue;
+    }
+    if (optionsWithValue.has(name)) {
+      if (!token.includes("=")) {
+        index += 1;
+      }
+      continue;
+    }
+    if (!token.startsWith("-") || token === "-") {
+      return index;
+    }
+  }
+  return argv.length;
+}
+
 /** Return true when a partial environment can fill a lifecycle-sensitive argv position. */
 export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): boolean {
   if (!argv.some((token) => VARIABLE_REFERENCE_RE.test(token))) {
@@ -34,15 +87,24 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
   const executable = normalizedExecutable(argv[0]);
   const tokens = argv.map((token) => token.trim().toLowerCase());
   if (executable === "launchctl") {
-    return !tokens.some((token) => ["blame", "list", "print", "procinfo"].includes(token));
+    const actionIndex = scanFirstPositional(argv, 1, new Set(["-d", "-s"]));
+    return !["blame", "list", "print", "procinfo"].includes(tokens[actionIndex] ?? "");
   }
   if (executable === "systemctl") {
-    const action = tokens.slice(1).find((token) => !token.startsWith("-"));
-    return !["is-active", "is-enabled", "list-units", "show", "status"].includes(action ?? "");
+    const actionIndex = scanFirstPositional(argv, 1, SYSTEMCTL_OPTIONS_WITH_VALUE);
+    return !["is-active", "is-enabled", "list-units", "show", "status"].includes(
+      tokens[actionIndex] ?? "",
+    );
   }
   if (executable === "openclaw") {
-    return !tokens.some((token) =>
-      ["--help", "health", "probe", "status", "update.status"].includes(token),
+    const commandIndex = scanFirstPositional(
+      argv,
+      1,
+      OPENCLAW_GLOBAL_OPTIONS,
+      OPENCLAW_GLOBAL_FLAGS,
+    );
+    return !["--help", "health", "probe", "status", "update.status"].includes(
+      tokens[commandIndex] ?? "",
     );
   }
   return [

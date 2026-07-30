@@ -119,6 +119,7 @@ const mutationCases: Array<[string, string[]]> = [
   ["npm exec -- openclaw gateway restart", ["npm", "exec", "--", "openclaw", "gateway", "restart"]],
   ["npm install -g openclaw@latest", ["npm", "install", "-g", "openclaw@latest"]],
   ["npm install -g oc@npm:openclaw@latest", ["npm", "install", "-g", "oc@npm:openclaw@latest"]],
+  ["npm install --prefix /tmp openclaw", ["npm", "install", "--prefix", "/tmp", "openclaw"]],
   ["npm rm -g openclaw", ["npm", "rm", "-g", "openclaw"]],
   ["npm r -g openclaw", ["npm", "r", "-g", "openclaw"]],
   ["npm unlink -g openclaw", ["npm", "unlink", "-g", "openclaw"]],
@@ -239,6 +240,7 @@ const nonMutationCases: Array<[string, string[]]> = [
   [`echo '$(openclaw gateway restart)'`, ["echo", "$(openclaw gateway restart)"]],
   ["echo $(date)", ["echo", "$(date)"]],
   ["systemctl status $(hostname)", ["systemctl", "status", "$(hostname)"]],
+  ["npm install --prefix openclaw lodash", ["npm", "install", "--prefix", "openclaw", "lodash"]],
 ];
 
 describe("OpenClaw lifecycle exec approvals", () => {
@@ -366,6 +368,21 @@ describe("OpenClaw lifecycle exec approvals", () => {
           {
             raw: "${TOOL:-openclaw} gateway restart",
             argv: ["${TOOL:-openclaw}", "gateway", "restart"],
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not mistake an OpenClaw profile value for a read-only command", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: 'openclaw --profile status "${COMMAND:-update}"',
+        env: {},
+        segments: [
+          {
+            raw: 'openclaw --profile status "${COMMAND:-update}"',
+            argv: ["openclaw", "--profile", "status", "${COMMAND:-update}"],
           },
         ],
       }),
