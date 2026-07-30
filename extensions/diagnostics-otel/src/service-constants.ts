@@ -83,3 +83,5 @@ export const CONTEXT_TOKENS_BUCKETS = [
   2_000_000,
 ];
 export const MAX_RETAINED_TRUSTED_SPAN_CONTEXTS = 1024;
+/** Outlasts any real turn, so only stragglers that would skew a parent's duration miss. */
+export const RETAINED_TRUSTED_SPAN_CONTEXT_MAX_AGE_MS = 600_000;

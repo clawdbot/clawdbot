@@ -11,7 +11,10 @@ import type {
   DiagnosticTraceContext,
 } from "../api.js";
 import { redactOtelAttributes } from "./service-attributes.js";
-import { MAX_RETAINED_TRUSTED_SPAN_CONTEXTS } from "./service-constants.js";
+import {
+  MAX_RETAINED_TRUSTED_SPAN_CONTEXTS,
+  RETAINED_TRUSTED_SPAN_CONTEXT_MAX_AGE_MS,
+} from "./service-constants.js";
 import {
   contextForTraceContext,
   normalizedTrustedTraceContext,
@@ -25,14 +28,13 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     string,
     { span: ReturnType<typeof tracer.startSpan>; spanId: string; owner: TrustedSpanAliasOwner }
   >();
-  // Translates a completed lifecycle span's diagnostic span id to the real OTel
-  // span context so late children still attach to the span we exported. Kept for
-  // the service lifetime, bounded by MAX_RETAINED_TRUSTED_SPAN_CONTEXTS: children
-  // of a long turn arrive on later ticks, so any elapsed-time eviction silently
-  // reparents them into brand-new single-span traces.
+  // Translates a completed lifecycle span's diagnostic span id to the real OTel span
+  // context so late children still attach to the span we exported. Children of a long
+  // turn arrive many ticks later, so the horizon must outlast a whole turn; past it a
+  // straggler would stretch its parent's reported duration instead.
   const retainedTrustedSpanContexts = new Map<
     string,
-    { spanContext: SpanContext; owner?: TrustedSpanAliasOwner }
+    { spanContext: SpanContext; retainedAtMs: number; owner?: TrustedSpanAliasOwner }
   >();
   const stopActiveTrustedSpans = () => {
     const stopAt = Date.now();
@@ -123,12 +125,17 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
           )
         : undefined) ??
       retainedTrustedSpanContexts.get(retainedTrustedSpanContextKey(traceContext.traceId, spanId));
-    // Both sides key on the diagnostic trace id, so a hit is already trace-correct.
-    // Re-comparing against the stored OTel SpanContext.traceId would wrongly reject
-    // root lifecycle spans, whose OTel trace id is SDK-generated; spans parented from
-    // an upstream traceparent do adopt the diagnostic trace id, so the two are equal
-    // there and unequal here.
+    // Keys carry the diagnostic trace id, so a hit is already trace-correct; comparing
+    // against the stored OTel trace id would wrongly reject root lifecycle spans.
     if (!retained) {
+      return undefined;
+    }
+    // Aged out lazily rather than on a timer: a timer that fires mid-turn is what
+    // silently split traces before, and an expired parent would only skew its duration.
+    if (Date.now() - retained.retainedAtMs > RETAINED_TRUSTED_SPAN_CONTEXT_MAX_AGE_MS) {
+      retainedTrustedSpanContexts.delete(
+        retainedTrustedSpanContextKey(traceContext.traceId, spanId, retained.owner),
+      );
       return undefined;
     }
     if (retained.owner && !sameTrustedSpanAliasOwner(retained.owner, owner)) {
@@ -291,6 +298,7 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
   ) => {
     retainedTrustedSpanContexts.set(retainedTrustedSpanContextKey(traceId, spanId, owner), {
       spanContext,
+      retainedAtMs: Date.now(),
       ...(owner ? { owner } : {}),
     });
     while (retainedTrustedSpanContexts.size > MAX_RETAINED_TRUSTED_SPAN_CONTEXTS) {

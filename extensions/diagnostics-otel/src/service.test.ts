@@ -191,7 +191,10 @@ import {
   runWithDiagnosticTraceContext,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { emitDiagnosticEvent } from "../api.js";
-import { MAX_RETAINED_TRUSTED_SPAN_CONTEXTS } from "./service-constants.js";
+import {
+  MAX_RETAINED_TRUSTED_SPAN_CONTEXTS,
+  RETAINED_TRUSTED_SPAN_CONTEXT_MAX_AGE_MS,
+} from "./service-constants.js";
 import { createDiagnosticsOtelService } from "./service.js";
 import {
   CHILD_SPAN_ID,
@@ -3706,8 +3709,35 @@ describe("diagnostics-otel service", () => {
     },
   );
 
-  // Retained contexts live for the service lifetime, so this bound is the only
-  // thing keeping a long-lived gateway from growing the map without limit.
+  // Past the horizon a straggler would only stretch its parent's reported duration, so
+  // it starts its own trace instead. The window must stay far above a real turn.
+  test("stops parenting late children once the retention horizon has passed", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      await startOtelService({ traces: true, metrics: true });
+
+      emitRunStarted();
+      emitRunCompleted();
+      vi.advanceTimersByTime(RETAINED_TRUSTED_SPAN_CONTEXT_MAX_AGE_MS + 1_000);
+      await flushDiagnosticEvents();
+      telemetryState.tracer.startSpan.mockClear();
+
+      emitTrustedDiagnosticEvent({
+        type: "model.call.completed",
+        ...MODEL_CALL_FIXTURE,
+        durationMs: 80,
+        trace: createTestTrace(MODEL_CALL_SPAN_ID, CHILD_SPAN_ID),
+      });
+      await flushDiagnosticEvents();
+
+      expect(startedSpanParentContexts("openclaw.model.call")[0]).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Retained contexts outlive the turn, so this bound is what keeps a long-lived
+  // gateway from growing the map without limit.
   test("bounds retained run contexts by evicting the oldest completed runs", async () => {
     await startOtelService({ traces: true, metrics: true });
 
