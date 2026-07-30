@@ -184,6 +184,7 @@ internal class WearViewModel(
   private val resyncEventBuffer = WearEventResyncBuffer()
   private val historyLoadTracker = WearHistoryLoadTracker()
   private val sendAttemptTracker = WearSendAttemptTracker()
+  private val controlBusyOwner = WearControlBusyOwner()
   private var loadJob: Job? = null
   private var phoneRouteGeneration = 0L
 
@@ -409,16 +410,10 @@ internal class WearViewModel(
     ) {
       return
     }
-    mutableState.update { state ->
-      if (isCurrentControlRoute(phoneNodeId, routeGeneration, state)) {
-        state.copy(controlBusy = true, failure = null)
-      } else {
-        state
-      }
-    }
+    val controlAction = beginControlAction(phoneNodeId, routeGeneration) ?: return
     viewModelScope.launch {
-      if (!isCurrentControlRoute(phoneNodeId, routeGeneration)) return@launch
       try {
+        if (!isCurrentControlRoute(phoneNodeId, routeGeneration)) return@launch
         repository.selectAgent(agentId, phoneNodeId, current.proxyCapabilities)
         if (!isCurrentControlRoute(phoneNodeId, routeGeneration)) return@launch
         mutableState.update { state ->
@@ -434,13 +429,7 @@ internal class WearViewModel(
       } catch (err: Throwable) {
         recordFailureForControlRoute(err, phoneNodeId, routeGeneration, loading = false)
       } finally {
-        mutableState.update { state ->
-          if (isCurrentControlRoute(phoneNodeId, routeGeneration, state)) {
-            state.copy(controlBusy = false)
-          } else {
-            state
-          }
-        }
+        finishControlAction(controlAction)
       }
     }
   }
@@ -462,16 +451,10 @@ internal class WearViewModel(
     ) {
       return
     }
-    mutableState.update { state ->
-      if (isCurrentControlRoute(phoneNodeId, routeGeneration, state)) {
-        state.copy(controlBusy = true, failure = null)
-      } else {
-        state
-      }
-    }
+    val controlAction = beginControlAction(phoneNodeId, routeGeneration) ?: return
     viewModelScope.launch {
-      if (!isCurrentControlRoute(phoneNodeId, routeGeneration)) return@launch
       try {
+        if (!isCurrentControlRoute(phoneNodeId, routeGeneration)) return@launch
         cancelModelLoad()
         val responseRequest = eventSequenceTracker.beginResponseRequest()
         val selection =
@@ -511,13 +494,7 @@ internal class WearViewModel(
       } catch (err: Throwable) {
         recordFailureForControlRoute(err, phoneNodeId, routeGeneration)
       } finally {
-        mutableState.update { state ->
-          if (isCurrentControlRoute(phoneNodeId, routeGeneration, state)) {
-            state.copy(controlBusy = false)
-          } else {
-            state
-          }
-        }
+        finishControlAction(controlAction)
       }
     }
   }
@@ -533,16 +510,10 @@ internal class WearViewModel(
     ) {
       return
     }
-    mutableState.update { state ->
-      if (isCurrentControlRoute(phoneNodeId, routeGeneration, state)) {
-        state.copy(controlBusy = true, failure = null)
-      } else {
-        state
-      }
-    }
+    val controlAction = beginControlAction(phoneNodeId, routeGeneration) ?: return
     viewModelScope.launch {
-      if (!isCurrentControlRoute(phoneNodeId, routeGeneration)) return@launch
       try {
+        if (!isCurrentControlRoute(phoneNodeId, routeGeneration)) return@launch
         if (!enabled) {
           talkStartJob?.cancel()
           talkStartJob = null
@@ -564,13 +535,7 @@ internal class WearViewModel(
       } catch (err: Throwable) {
         recordFailureForControlRoute(err, phoneNodeId, routeGeneration, loading = false)
       } finally {
-        mutableState.update { state ->
-          if (isCurrentControlRoute(phoneNodeId, routeGeneration, state)) {
-            state.copy(controlBusy = false)
-          } else {
-            state
-          }
-        }
+        finishControlAction(controlAction)
       }
     }
   }
@@ -961,6 +926,7 @@ internal class WearViewModel(
 
   private fun resetForPhoneRouteChange() {
     phoneRouteGeneration += 1
+    controlBusyOwner.reset()
     mutableState.update(WearUiState::resetForPhoneChange)
   }
 
@@ -1089,6 +1055,28 @@ internal class WearViewModel(
       currentRouteGeneration = phoneRouteGeneration,
     )
 
+  private fun beginControlAction(
+    phoneNodeId: String,
+    routeGeneration: Long,
+  ): Long? {
+    val owner = controlBusyOwner.claim() ?: return null
+    while (true) {
+      val state = mutableState.value
+      if (state.controlBusy || !isCurrentControlRoute(phoneNodeId, routeGeneration, state)) {
+        controlBusyOwner.release(owner)
+        return null
+      }
+      if (mutableState.compareAndSet(state, state.copy(controlBusy = true, failure = null))) {
+        return owner
+      }
+    }
+  }
+
+  private fun finishControlAction(owner: Long) {
+    if (!controlBusyOwner.release(owner)) return
+    mutableState.update { state -> state.copy(controlBusy = false) }
+  }
+
   private fun recordFailure(
     error: Throwable,
     loading: Boolean = mutableState.value.loading,
@@ -1207,13 +1195,33 @@ internal fun wearControlRouteIsCurrent(
   requestedRouteGeneration == currentRouteGeneration &&
     currentState.phoneNodeId == requestedPhoneNodeId
 
+internal class WearControlBusyOwner {
+  private var nextOwner = 0L
+  private var activeOwner: Long? = null
+
+  fun claim(): Long? {
+    if (activeOwner != null) return null
+    nextOwner += 1
+    return nextOwner.also { owner -> activeOwner = owner }
+  }
+
+  fun release(owner: Long): Boolean {
+    if (activeOwner != owner) return false
+    activeOwner = null
+    return true
+  }
+
+  fun reset() {
+    activeOwner = null
+  }
+}
+
 internal fun applyWearGatewayControlStatus(
   state: WearUiState,
   status: WearProxyStatus,
   enabled: Boolean,
 ): WearUiState =
   state.copy(
-    controlBusy = false,
     connected = status.connected,
     phoneNodeId = status.phoneNodeId,
     activeAgentId = status.activeAgentId ?: state.activeAgentId,

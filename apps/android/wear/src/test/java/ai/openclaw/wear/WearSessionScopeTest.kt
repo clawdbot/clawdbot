@@ -185,7 +185,28 @@ class WearSessionScopeTest {
   }
 
   @Test
-  fun gatewayControlResponseClearsBusyWhenItAdoptsAnotherPhoneRoute() {
+  fun staleControlCompletionCannotClearReplacementBusyOwner() {
+    val owners = WearControlBusyOwner()
+    val staleOwner = checkNotNull(owners.claim())
+
+    owners.reset()
+    val replacementOwner = checkNotNull(owners.claim())
+
+    assertFalse(owners.release(staleOwner))
+    assertTrue(owners.release(replacementOwner))
+  }
+
+  @Test
+  fun abandonedControlActionReleasesItsOwnBusyOwner() {
+    val owners = WearControlBusyOwner()
+    val owner = checkNotNull(owners.claim())
+
+    assertTrue(owners.release(owner))
+    assertTrue(owners.claim() != null)
+  }
+
+  @Test
+  fun gatewayControlResponseKeepsBusyUntilItsOwnerFinalizes() {
     val updated =
       applyWearGatewayControlStatus(
         state =
@@ -208,7 +229,7 @@ class WearSessionScopeTest {
         enabled = true,
       )
 
-    assertFalse(updated.controlBusy)
+    assertTrue(updated.controlBusy)
     assertEquals("phone-b", updated.phoneNodeId)
     assertEquals("agent-b", updated.activeAgentId)
   }
