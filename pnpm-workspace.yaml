@@ -137,13 +137,14 @@ overrides:
   brace-expansion: 5.0.8
   file-type: 22.0.1
   form-data: 4.0.6
+  "werift-ice@0.2.2>ip": "npm:neoip@3.1.0"
   ip-address: 10.3.1
   minimatch: 10.2.5
   path-to-regexp: 8.4.2
   qs: 6.15.3
   sharp: 0.35.3
   node-domexception: "npm:@nolyfill/domexception@1.0.28"
-  typebox: 1.3.8
+  typebox: 1.3.6
   tar: 7.5.22
   tough-cookie: 5.1.2
   yauzl: 3.4.0

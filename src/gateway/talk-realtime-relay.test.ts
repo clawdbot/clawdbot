@@ -92,6 +92,36 @@ describe("talk realtime gateway relay", () => {
     };
   }
 
+  it("injects the host agent runner only into gateway-relay bridge creation", () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const provider = createIdleRelayProvider();
+    provider.createBridge = (request) => {
+      bridgeRequest = request;
+      return createIdleRelayProvider().createBridge(request);
+    };
+    const session = createTalkRealtimeRelaySession({
+      context: {
+        broadcastToConnIds: vi.fn(),
+        chatAbortControllers: new Map(),
+        getRuntimeConfig: () => ({}),
+        logGateway: { warn: vi.fn() },
+      } as never,
+      connId: "conn-runner",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      sessionKey: "agent:main:main",
+    });
+
+    expect(bridgeRequest?.runAgentConsult).toEqual(expect.any(Function));
+    expect(bridgeRequest?.agentId).toBe("main");
+    stopTalkRealtimeRelaySession({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-runner",
+    });
+  });
+
   it("appends finalized relay transcripts to the canonical agent session", async () => {
     const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     const tempDir = await fs.realpath(

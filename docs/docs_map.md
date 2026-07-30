@@ -64,7 +64,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /automation/cron-jobs
 - Headings:
   - H2: Quick start
-  - H2: How cron works
+  - H2: How automations work
   - H2: Schedule types
   - H3: Heartbeat task migration
   - H3: Stream sources
@@ -85,7 +85,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Webhooks
   - H3: Authentication
   - H2: Gmail PubSub integration
-  - H3: Wizard setup (recommended)
+  - H3: Configure a restricted Gmail reader (recommended)
+  - H3: Authenticate the reader model
+  - H3: Connect Gmail transport
+  - H3: Verify the reader boundary
   - H3: Gateway auto-start
   - H3: Manual one-time setup
   - H3: Gmail model override
@@ -141,9 +144,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /automation
 - Headings:
   - H2: Quick decision guide
-  - H3: Scheduled Tasks (Cron) vs Heartbeat
+  - H3: Automations vs Heartbeat
   - H2: Core concepts
-  - H3: Scheduled tasks (cron)
+  - H3: Automations
   - H3: Tasks
   - H3: Task Flow
   - H3: Standing orders
@@ -165,7 +168,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Why standing orders
   - H2: How they work
   - H2: Anatomy of a standing order
-  - H2: Standing orders plus cron jobs
+  - H2: Standing orders plus automations
   - H2: Examples
   - H3: Example 1: content and social media (weekly cycle)
   - H3: Example 2: finance operations (event-triggered)
@@ -349,6 +352,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Command menu
   - H2: Durable media delivery
   - H2: Agent activity rows
+  - H2: Group mention gating
+  - H3: Mention detection
+  - H3: Configuration example
+  - H3: Migration warning
   - H2: Targets
   - H2: Permissions
   - H2: Troubleshooting
@@ -1473,7 +1480,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /cli/cron
 - Headings:
-  - H1: openclaw cron
+  - H1: openclaw automations
   - H2: Create jobs quickly
   - H2: Sessions
   - H2: Delivery
@@ -1484,7 +1491,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Recurring jobs
   - H3: Manual runs
   - H2: Models
-  - H3: Isolated cron model precedence
+  - H3: Isolated automation model precedence
   - H3: Fast mode
   - H3: Live model switch retries
   - H2: Run output and denials
@@ -3138,8 +3145,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Three timezone surfaces
   - H2: Setting the user timezone
-  - H2: Envelope timezone values
-  - H2: When to override
   - H2: Related
 
 ## concepts/typebox.md
@@ -3208,10 +3213,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Message envelopes (local by default)
   - H3: Examples
-  - H2: System prompt: current date and time
+  - H2: System prompt: temporal context
   - H2: System event lines (local by default)
-  - H3: Configure user timezone + format
-  - H2: Time format detection (auto)
+  - H3: Configure user timezone
+  - H2: Time format detection
   - H2: Tool payloads + connectors (raw provider time + normalized fields)
   - H2: Related docs
 
@@ -3416,7 +3421,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: agents.defaults.imageMaxDimensionPx
   - H3: agents.defaults.imageQuality
   - H3: agents.defaults.userTimezone
-  - H3: agents.defaults.timeFormat
   - H3: agents.defaults.model
   - H3: Runtime policy
   - H3: CLI backend selection
@@ -3561,7 +3565,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Wizard
   - H2: Identity
   - H2: Bridge (legacy, removed)
-  - H2: Cron
+  - H2: Automations (cron)
   - H3: cron.failureAlert
   - H2: Media model template variables
   - H2: Config includes ($include)
@@ -3694,7 +3698,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Per-channel vs per-account examples
   - H3: Common patterns
   - H2: Monitor scratch (optional)
-  - H3: Schedule recurring checks with cron
+  - H3: Schedule recurring checks with automations
   - H3: Can the agent update its scratch?
   - H2: Manual wake (on-demand)
   - H2: Cost awareness
@@ -3714,6 +3718,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Multiple gateways (same host)
   - H2: Remote access
   - H2: Supervision and service lifecycle
+  - H3: Existing system LaunchDaemons
   - H2: Dev profile quick path
   - H2: Protocol quick reference (operator view)
   - H2: Operational checks
@@ -5143,6 +5148,23 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: UX copy (suggested)
   - H2: Related
 
+## nodes/media-playback.md
+
+- Route: /nodes/media-playback
+- Headings:
+  - H2: Client support
+  - H2: Portable formats
+  - H2: Lazy playback renditions
+  - H2: Managed attachments and access
+  - H2: Metadata and limits
+  - H2: Troubleshooting
+  - H3: Duration or dimensions are missing
+  - H3: A recognized format downloads instead of playing
+  - H3: Playback stays in preparing state
+  - H3: Linux reports a codec error
+  - H3: Android shows a media row while offline
+  - H2: Related
+
 ## nodes/media-understanding.md
 
 - Route: /nodes/media-understanding
@@ -5842,6 +5864,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Minimal backend plugin
   - H2: Config shape
   - H2: Advanced backend hooks
+  - H3: parseJsonlEvent: provider-specific JSONL streams
   - H3: ownsNativeCompaction: opting out of OpenClaw compaction
   - H2: MCP tool bridge
   - H2: Selecting the backend
@@ -6219,6 +6242,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Dashboards and health reports
   - H2: Search and retrieval
   - H2: Agent tools
+  - H2: Browsing the wiki in the Control UI
   - H2: Prompt and context behavior
   - H2: Configuration
   - H3: Per-agent vaults
@@ -7615,6 +7639,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Terminal outcome classification
   - H3: Agent-end side effects
   - H3: User input and tool surfaces
+  - H3: Native MCP inventory
   - H3: Native Codex harness mode
   - H2: Runtime strictness
   - H2: Native sessions and transcript mirror
@@ -10334,6 +10359,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /tools/mcp
 - Headings:
   - H2: Add a server from Settings
+  - H2: Add a server from the composer
   - H2: Add a server from the CLI
   - H2: Configure a server directly
   - H2: Troubleshooting
@@ -10589,6 +10615,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Per-agent vs shared skills
   - H2: Agent allowlists
   - H2: Plugins and skills
+  - H2: Reference a skill in a prompt
   - H2: Skill Workshop
   - H2: Installing from ClawHub
   - H2: Security
@@ -10893,6 +10920,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Activity tab
   - H2: Operator terminal
   - H2: Browser panel
+  - H2: Composer capability menu
   - H2: Chat behavior
   - H2: Connection loss and reconnect
   - H2: PWA install and web push

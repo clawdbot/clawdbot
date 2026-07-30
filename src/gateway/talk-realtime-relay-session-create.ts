@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeTalkSection } from "../config/talk.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { createPluginRuntime } from "../plugins/runtime/index.js";
+import { consultRealtimeVoiceAgent } from "../talk/agent-consult-runtime.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-tool.js";
 import { buildRealtimeVoiceAgentCancelProviderResult } from "../talk/agent-run-control-shared.js";
 import {
@@ -11,6 +14,7 @@ import { resolveTalkSessionAgentId } from "../talk/agent-target.js";
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "../talk/provider-types.js";
 import { createRealtimeVoiceSessionHarness } from "../talk/realtime-session-harness.js";
 import type { TalkEventInput } from "../talk/talk-session-controller.js";
+import { registerChatAbortController } from "./chat-abort.js";
 import {
   buildAlreadyDeliveredToolResult,
   scheduleForcedAgentConsult,
@@ -26,6 +30,7 @@ import {
   closeRelaySession,
   enforceRelaySessionLimits,
   pruneInactiveRelayAgentRuns,
+  registerTalkRealtimeRelayAgentRun,
   steerTalkRealtimeRelayAgentRun,
 } from "./talk-realtime-relay-operations.js";
 import { suppressedToolResultOptions } from "./talk-realtime-relay-provider-results.js";
@@ -98,8 +103,75 @@ export function createTalkRealtimeRelaySession(
   let ready = false;
   let failureEmitted = false;
   const relayRef: { current?: RelaySession } = {};
+  let consultAgentRuntime: ReturnType<typeof createPluginRuntime>["agent"] | undefined;
+  const relaySessionKey = params.sessionKey?.trim();
+  const relayAgentId = relaySessionKey
+    ? resolveTalkSessionAgentId(params.cfg ?? params.context.getRuntimeConfig(), relaySessionKey)
+    : undefined;
+  const runAgentConsult = async ({ prompt, signal }: { prompt: string; signal?: AbortSignal }) => {
+    const runtimeConfig = params.cfg ?? params.context.getRuntimeConfig();
+    const sessionKey = relaySessionKey;
+    if (!sessionKey) {
+      throw new Error("Realtime gateway-relay agent consult requires a pinned session key");
+    }
+    const agentId = relayAgentId ?? resolveTalkSessionAgentId(runtimeConfig, sessionKey);
+    consultAgentRuntime ??= createPluginRuntime().agent;
+    const talkConfig = normalizeTalkSection(runtimeConfig.talk);
+    return await consultRealtimeVoiceAgent({
+      cfg: runtimeConfig,
+      agentRuntime: consultAgentRuntime,
+      logger: params.context.logGateway,
+      agentId,
+      sessionKey,
+      messageProvider: "webchat",
+      lane: "talk",
+      runIdPrefix: "talk-realtime-relay-consult",
+      args: { question: prompt },
+      transcript: [],
+      surface: "a gateway-relay Talk session",
+      userLabel: "User",
+      questionSourceLabel: "user",
+      thinkLevel: talkConfig?.consultThinkingLevel,
+      fastMode: talkConfig?.consultFastMode,
+      abortSignal: signal,
+      onRunStarted: ({ runId, sessionId, timeoutMs }) => {
+        registerTalkRealtimeRelayAgentRun({
+          relaySessionId,
+          connId: params.connId,
+          sessionKey,
+          runId,
+        });
+        const registration = registerChatAbortController({
+          chatAbortControllers: params.context.chatAbortControllers,
+          runId,
+          sessionId,
+          sessionKey,
+          agentId,
+          timeoutMs,
+          ownerConnId: params.connId,
+          controlUiVisible: false,
+          kind: "chat-send",
+        });
+        return {
+          abortSignal: registration.controller.signal,
+          cleanup: registration.cleanup,
+        };
+      },
+    });
+  };
+  // The generic harness should stay transport-neutral. Wrap only this relay provider
+  // invocation so provider-owned delegations cannot acquire the host runner elsewhere.
+  const relayProvider = {
+    ...params.provider,
+    createBridge: (request: Parameters<typeof params.provider.createBridge>[0]) =>
+      params.provider.createBridge({
+        ...request,
+        ...(relayAgentId ? { agentId: relayAgentId } : {}),
+        runAgentConsult,
+      }),
+  };
   const bridge = harness.createBridge({
-    provider: params.provider,
+    provider: relayProvider,
     cfg: params.cfg,
     providerConfig: params.providerConfig,
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,

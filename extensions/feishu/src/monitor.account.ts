@@ -570,6 +570,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
           runtime,
           abortSignal,
           eventDispatcher: durableEventDispatcher,
+          ...(durableIngress ? { invokeWebhookEvent: durableIngress.invokeWebhook } : {}),
           ...(params.statusSink ? { statusSink: params.statusSink } : {}),
         });
       }

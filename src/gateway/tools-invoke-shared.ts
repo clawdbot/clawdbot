@@ -8,6 +8,10 @@ import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js
 import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tools.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
+import {
+  AUTOMATIONS_TOOL_NAME,
+  isAutomationsToolName,
+} from "../agents/tools/automations-tool-name.js";
 import { ToolInputError, type AnyAgentTool } from "../agents/tools/common.js";
 import {
   normalizeConversationReadInvocationOrigin,
@@ -174,7 +178,13 @@ export async function invokeGatewayTool(params: {
   const conversationReadOrigin = normalizeConversationReadInvocationOrigin(
     params.conversationReadOrigin,
   );
-  const toolName = normalizeOptionalString(params.input.name ?? params.input.tool) ?? "";
+  const requestedToolName = normalizeOptionalString(params.input.name ?? params.input.tool) ?? "";
+  // "cron" is a permanently accepted inbound alias for the scheduler tool
+  // (owner decision, RFC 0026; same contract as bash -> exec). Canonicalize
+  // before core-id checks and exact-name dispatch below.
+  const toolName = isAutomationsToolName(requestedToolName)
+    ? AUTOMATIONS_TOOL_NAME
+    : requestedToolName;
   if (!toolName) {
     return {
       ok: false,

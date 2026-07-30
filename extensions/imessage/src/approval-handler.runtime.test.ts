@@ -361,6 +361,48 @@ describe("imessageApprovalNativeRuntime", () => {
     expect(payload.text).toContain("👍 Allow Once");
   });
 
+  it("carries the same bold headers and labels in tapback and poll mode", async () => {
+    // #85954: poll mode used to fall back to the unstyled legacy prompt, so
+    // every label reached Messages as flat text on any poll-capable bridge.
+    const payload = await imessageApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: {} as never,
+      accountId: "default",
+      context: { accountId: "default" },
+      request: {
+        id: "exec-bold",
+        request: { command: "echo hi" },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "exec",
+      nowMs: 0,
+      view: {
+        approvalKind: "exec",
+        approvalId: "exec-bold",
+        commandText: "echo hi",
+        host: "gateway",
+        cwd: "/tmp/work",
+        expiresAtMs: 60_000,
+        actions: [
+          { decision: "allow-once", label: "Allow Once", command: "/approve exec-bold allow-once" },
+          { decision: "deny", label: "Deny", command: "/approve exec-bold deny" },
+        ],
+      } as never,
+    });
+
+    for (const text of [payload.text, payload.pollText]) {
+      expect(text).toContain("**Exec approval required**");
+      expect(text).toContain("**ID:** exec-bold");
+      expect(text).toContain("**Host:** gateway");
+      expect(text).toContain("**CWD:**");
+      expect(text).toContain("**Expires in:**");
+      expect(text).toContain("**Full id:**");
+    }
+    // The poll owns the controls, so the tapback hint stays out of poll mode.
+    expect(payload.text).toContain("React with:");
+    expect(payload.pollText).not.toContain("React with:");
+  });
+
   describe("native poll controls", () => {
     const pollDeliverArgs = {
       cfg: {
@@ -489,6 +531,27 @@ describe("imessageApprovalNativeRuntime", () => {
         ["id-allow", "allow-once"],
         ["id-deny", "deny"],
       ]);
+    });
+
+    it("keeps markdown markers out of the poll question", async () => {
+      // The details message is styled through attributedBody ranges, but
+      // `imsg poll send --question` has no formatting channel, so the balloon
+      // would otherwise show literal asterisks.
+      const pollText = ["**Exec approval required**", "**ID:** exec-poll"].join("\n");
+      await imessageApprovalNativeRuntime.transport.deliverPending({
+        ...pollDeliverArgs,
+        pendingPayload: { ...pollDeliverArgs.pendingPayload, pollText },
+      });
+
+      // The send path converts the markers into typed ranges itself.
+      expect(sendMock.sendMessageIMessage).toHaveBeenCalledWith(
+        "+15551230000",
+        pollText,
+        expect.objectContaining({ conversationReadOrigin: "direct-operator" }),
+      );
+      const question = actionsMock.sendPoll.mock.calls[0]?.[0]?.question;
+      expect(question).toBe("Exec approval required\nID: exec-poll");
+      expect(question).not.toContain("**");
     });
 
     it("binds the poll before deliverPending returns", async () => {

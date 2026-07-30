@@ -49,7 +49,8 @@ const memoryPlugins = [
   },
   {
     id: "memory-core",
-    name: "OpenClaw Memory",
+    // The UI owns this product label; catalog ids/names are implementation detail.
+    name: "memory-core",
     installed: true,
     enabled: true,
     state: "enabled",
@@ -105,12 +106,24 @@ describeControlUiE2e("Control UI memory engine settings mocked Gateway E2E", () 
       await gateway.deferNext("config.set");
       await gateway.deferNext("plugins.setEnabled");
       await engineGroup.getByRole("radio", { name: "Off", exact: true }).click();
-      const pendingOffSave = await gateway.waitForRequest("config.set");
-      expect(pendingOffSave.params).toMatchObject({ baseHash: "memory-hash-1" });
-
+      // Click again immediately, before the 800 ms autosave debounce. The
+      // write barrier must flush Off first instead of letting the plugin RPC
+      // race a still-scheduled config.set.
       await engineGroup.getByRole("radio", { name: "OpenClaw Memory", exact: true }).click();
       expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
 
+      const pendingOffSave = await gateway.waitForRequest("config.set");
+      expect(pendingOffSave.params).toMatchObject({ baseHash: "memory-hash-1" });
+      if (captureUiProofEnabled) {
+        await mkdir(uiProofArtifactDir, { recursive: true });
+        await page
+          .locator(".settings-page > .settings-section")
+          .first()
+          .screenshot({
+            animations: "disabled",
+            path: path.join(uiProofArtifactDir, "00-off-write-draining.png"),
+          });
+      }
       await gateway.resolveDeferred("config.set", { ok: true, hash: "mock-config-hash-1" });
       const enableRequest = await gateway.waitForRequest("plugins.setEnabled");
       expect(enableRequest.params).toEqual({ pluginId: "memory-core", enabled: true });
@@ -137,6 +150,59 @@ describeControlUiE2e("Control UI memory engine settings mocked Gateway E2E", () 
           .screenshot({
             animations: "disabled",
             path: path.join(uiProofArtifactDir, "01-openclaw-memory-selected.png"),
+          });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps a missing default engine labelled, first, and selected as unavailable", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "config.get": configResponse("memory-core", "memory-hash-missing-default"),
+        "plugins.list": {
+          plugins: memoryPlugins.filter((plugin) => plugin.id !== "memory-core"),
+          diagnostics: [],
+          mutationAllowed: true,
+        },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}settings/memory/settings`);
+      expect(response?.status()).toBe(200);
+
+      const engineGroup = page.locator("wa-radio-group.settings-segmented").first();
+      await engineGroup.waitFor();
+      await expect
+        .poll(async () =>
+          (await engineGroup.locator("wa-radio").allTextContents()).map((label) => label.trim()),
+        )
+        .toEqual(["OpenClaw Memory (Unavailable)", "Memory LanceDB", "Off"]);
+      await expect
+        .poll(() =>
+          engineGroup
+            .getByRole("radio", { name: "OpenClaw Memory (Unavailable)", exact: true })
+            .getAttribute("aria-checked"),
+        )
+        .toBe("true");
+
+      if (captureUiProofEnabled) {
+        await mkdir(uiProofArtifactDir, { recursive: true });
+        await page
+          .locator(".settings-page > .settings-section")
+          .first()
+          .screenshot({
+            animations: "disabled",
+            path: path.join(uiProofArtifactDir, "02-configured-engine-unavailable.png"),
           });
       }
     } finally {

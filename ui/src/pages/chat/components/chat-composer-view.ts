@@ -26,6 +26,7 @@ import {
 import { renderChatGoal } from "./chat-composer-goal.ts";
 import { renderChatComposerPlusMenu } from "./chat-composer-plus-menu.ts";
 import { renderChatQueue } from "./chat-composer-queue.ts";
+import { renderSkillMenu } from "./chat-composer-skill-menu.ts";
 import { renderSlashMenu } from "./chat-composer-slash-menu.ts";
 import { commitComposerDraft } from "./chat-composer-state.ts";
 import {
@@ -58,6 +59,7 @@ type ChatComposerViewContext = {
   handleKeyDown: (event: KeyboardEvent) => void;
   handleBeforeInput: (event: InputEvent) => void;
   handleInput: (event: InputEvent) => void;
+  handleSelect: (event: Event) => void;
   draftKey: string;
   handleCompositionEnd: (event: CompositionEvent) => void;
   handleBlur: (event: FocusEvent) => void;
@@ -65,6 +67,7 @@ type ChatComposerViewContext = {
   runControlsProps: ChatRunControlsProps;
   mirrorCameraPreview: boolean;
   slashMenuVisible: boolean;
+  skillMenuVisible: boolean;
   activeSlashMenuOptionId: string | null;
   activeSlashMenuOptionLabel: string;
   slashMenuListboxId: string;
@@ -92,6 +95,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     handleKeyDown,
     handleBeforeInput,
     handleInput,
+    handleSelect,
     draftKey,
     handleCompositionEnd,
     handleBlur,
@@ -99,6 +103,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     runControlsProps,
     mirrorCameraPreview,
     slashMenuVisible,
+    skillMenuVisible,
     activeSlashMenuOptionId,
     activeSlashMenuOptionLabel,
     slashMenuListboxId,
@@ -188,6 +193,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 </div>`
               : nothing}
             ${slashMenuVisible ? renderSlashMenu(requestUpdate, props, visibleDraft) : nothing}
+            ${skillMenuVisible ? renderSkillMenu(requestUpdate, props) : nothing}
             ${renderAttachmentPreview(props)}
             ${props.replyTarget
               ? html`
@@ -363,7 +369,12 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   ?disabled=${!canCompose}
                   ?readonly=${dictation?.locksComposer === true}
                   aria-autocomplete="list"
-                  aria-controls=${ifDefined(slashMenuVisible ? slashMenuListboxId : undefined)}
+                  aria-controls=${ifDefined(
+                    slashMenuVisible || skillMenuVisible ? slashMenuListboxId : undefined,
+                  )}
+                  aria-expanded=${ifDefined(
+                    slashMenuVisible || skillMenuVisible ? "true" : undefined,
+                  )}
                   aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
                   aria-describedby=${slashMenuAnnouncementId}
                   aria-keyshortcuts=${sendShortcut === "enter"
@@ -372,6 +383,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   @keydown=${handleKeyDown}
                   @beforeinput=${handleBeforeInput}
                   @input=${handleInput}
+                  @select=${handleSelect}
                   @compositionstart=${(event: CompositionEvent) => {
                     state.composerComposing = true;
                     state.composingDraft = {

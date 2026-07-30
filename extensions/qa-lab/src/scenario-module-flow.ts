@@ -1,10 +1,29 @@
 // QA Lab scenario module references normalize into the canonical flow shape.
 import { z } from "zod";
 
+const qaFlowModuleExportArgSchema = z
+  .object({
+    moduleExport: z.string().trim().min(1),
+  })
+  .strict();
+const qaFlowModuleArgSchema = z.unknown().superRefine((arg, ctx) => {
+  if (
+    typeof arg !== "object" ||
+    arg === null ||
+    !("moduleExport" in arg) ||
+    qaFlowModuleExportArgSchema.safeParse(arg).success
+  ) {
+    return;
+  }
+  ctx.addIssue({
+    code: "custom",
+    message: "moduleExport arguments require a non-empty string export name",
+  });
+});
 const qaFlowModuleSchema = z.object({
   module: z.string().trim().min(1),
   call: z.string().trim().min(1),
-  args: z.array(z.unknown()).optional(),
+  args: z.array(qaFlowModuleArgSchema).optional(),
 });
 const qaFlowExecutionShape = {
   providerMode: z.enum(["aimock", "live-frontier", "mock-openai"]).optional(),
@@ -37,6 +56,16 @@ function normalizeQaScenarioFileMetadata<
   };
 }
 
+function resolveQaScenarioModuleArg(arg: unknown) {
+  const parsed = qaFlowModuleExportArgSchema.safeParse(arg);
+  if (!parsed.success) {
+    return arg;
+  }
+  return {
+    expr: `scenarioModule[${JSON.stringify(parsed.data.moduleExport)}]`,
+  };
+}
+
 function resolveQaScenarioFileFlow<TFlow extends QaScenarioFlowShape>(
   flow: TFlow | QaScenarioModuleFlow | undefined,
   title: string,
@@ -55,7 +84,7 @@ function resolveQaScenarioFileFlow<TFlow extends QaScenarioFlowShape>(
           },
           {
             call: `scenarioModule.${flow.call}`,
-            ...(flow.args ? { args: flow.args } : {}),
+            ...(flow.args ? { args: flow.args.map(resolveQaScenarioModuleArg) } : {}),
             saveAs: "result",
           },
         ],

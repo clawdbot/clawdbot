@@ -2834,6 +2834,44 @@ describe("mcp loopback server", () => {
     expect(signal).toBeInstanceOf(AbortSignal);
   });
 
+  it("resolves legacy cron tools/call names to the renamed automations tool", async () => {
+    const execute = vi.fn<MockGatewayTool["execute"]>(async () => ({
+      content: [{ type: "text", text: "SCHEDULED" }],
+    }));
+    const tool = makeMockTool({ name: "automations", description: "manage schedules", execute });
+
+    const payload = await handleMcpJsonRpc({
+      message: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "cron", arguments: {} },
+      },
+      tools: [tool as unknown as AnyAgentTool],
+      toolSchema: buildMockMcpToolSchema([tool]),
+    });
+
+    expectMcpResultText(payload as McpToolResultPayload, "SCHEDULED", false);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("still rejects legacy cron calls when the automations tool is not exposed", async () => {
+    const tool = makeMessageTool();
+
+    const payload = await handleMcpJsonRpc({
+      message: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "cron", arguments: {} },
+      },
+      tools: [tool as unknown as AnyAgentTool],
+      toolSchema: buildMockMcpToolSchema([tool]),
+    });
+
+    expectMcpResultText(payload as McpToolResultPayload, "Tool not available: cron", true);
+  });
+
   it("preserves request-disconnect evidence without classifying a tool failure", async () => {
     const controller = new AbortController();
     controller.abort();

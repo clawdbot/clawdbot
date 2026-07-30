@@ -276,11 +276,11 @@ export async function prepareCronRunContext(params: {
           )
         : Boolean(currentEntry);
       if (changed) {
-        throw new Error(`Session "${agentSessionKey}" changed while starting work. Retry.`);
+        throw new CronSessionLifecycleClaimError(agentSessionKey);
       }
       const archivedSessionError = resolveSessionWorkStartError(agentSessionKey, currentEntry);
       if (archivedSessionError) {
-        throw new Error(archivedSessionError);
+        throw new CronSessionLifecycleClaimError(agentSessionKey, archivedSessionError);
       }
     },
   });
@@ -340,7 +340,7 @@ export async function prepareCronRunContext(params: {
         typeof input.job.name === "string" && input.job.name.trim()
           ? input.job.name.trim()
           : input.job.id;
-      cronSession.sessionEntry.label = `Cron: ${labelSuffix}`;
+      cronSession.sessionEntry.label = `Automation: ${labelSuffix}`;
     }
 
     const resolvedModelSelection = await resolveCronModelSelection({

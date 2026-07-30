@@ -1,4 +1,4 @@
-import type { GatewayHelloOk } from "../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 
@@ -9,10 +9,10 @@ export type ApplicationStatusBanner = {
 
 export const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
 const UPDATE_RESTART_HEALTH_PENDING_REASON = "restart-health-pending";
-export const UPDATE_RESTART_VERIFICATION_POLL_MS = 250;
-export const UPDATE_RESTART_VERIFICATION_TIMEOUT_MS = 10_000;
-export const UPDATE_HANDOFF_POLL_MS = 1_000;
-export const UPDATE_HANDOFF_TIMEOUT_MS = 35 * 60_000;
+const UPDATE_RESTART_VERIFICATION_POLL_MS = 250;
+const UPDATE_RESTART_VERIFICATION_TIMEOUT_MS = 10_000;
+const UPDATE_HANDOFF_POLL_MS = 1_000;
+const UPDATE_HANDOFF_TIMEOUT_MS = 35 * 60_000;
 const PENDING_UPDATE_HANDOFF_REASONS = new Set([
   UPDATE_HANDOFF_STARTED_REASON,
   UPDATE_RESTART_HEALTH_PENDING_REASON,
@@ -35,7 +35,7 @@ const UPDATE_FAILURE_REASON_KEYS: Record<string, string> = {
   "doctor-failed": "updates.failureReasons.doctorFailed",
 };
 
-export type UpdateRestartStatusResponse = {
+type UpdateRestartStatusResponse = {
   sentinel?: {
     kind?: string;
     status?: string;
@@ -56,6 +56,29 @@ export type UpdateRunResponse = {
   handoff?: { status?: string };
   restart?: { coalesced?: boolean } | null;
 };
+
+export async function requestUpdateRestartStatus(
+  client: Pick<GatewayBrowserClient, "request">,
+  timeoutMs: number,
+): Promise<UpdateRestartStatusResponse | null> {
+  try {
+    return await client.request<UpdateRestartStatusResponse>("update.status", {}, { timeoutMs });
+  } catch {
+    return null;
+  }
+}
+
+export function resolveUpdateVerificationWindow(
+  kind: "handoff" | "restart",
+  nowMs = Date.now(),
+): { deadline: number; pollMs: number } {
+  const handoff = kind === "handoff";
+  return {
+    deadline:
+      nowMs + (handoff ? UPDATE_HANDOFF_TIMEOUT_MS : UPDATE_RESTART_VERIFICATION_TIMEOUT_MS),
+    pollMs: handoff ? UPDATE_HANDOFF_POLL_MS : UPDATE_RESTART_VERIFICATION_POLL_MS,
+  };
+}
 
 export function readUpdateAvailable(hello: GatewayHelloOk | null): UpdateAvailable | null {
   const snapshot = hello?.snapshot;
@@ -136,6 +159,23 @@ export function resolvePendingUpdateHandoffTimeoutBanner(): ApplicationStatusBan
     tone: "danger",
     text: t("updates.handoffTimeout"),
   };
+}
+
+export function resolveUnknownUpdateOutcomeBanner(): ApplicationStatusBanner {
+  return {
+    tone: "danger",
+    text: t("updates.outcomeUnknown"),
+  };
+}
+
+export function resolveAmbiguousUpdateOutcomeBanner(
+  expectedVersion: string | null,
+  hello: GatewayHelloOk | null,
+): ApplicationStatusBanner | null {
+  const currentVersion = hello?.server?.version?.trim() || null;
+  return expectedVersion && currentVersion === expectedVersion
+    ? null
+    : resolveUnknownUpdateOutcomeBanner();
 }
 
 export function isPendingUpdateHandoffSentinel(

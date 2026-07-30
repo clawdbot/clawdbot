@@ -30,9 +30,15 @@ import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
 vi.mock("./embedded-agent-mcp.js", () => ({
   loadEmbeddedAgentMcpConfig: (params: {
     cfg?: { mcp?: { servers?: Record<string, unknown> } };
+    toolOverrides?: { mcpServers?: Record<string, boolean> };
   }) => ({
     diagnostics: [],
-    mcpServers: params.cfg?.mcp?.servers ?? {},
+    mcpServers: Object.fromEntries(
+      Object.entries(params.cfg?.mcp?.servers ?? {}).filter(([name]) => {
+        const overrides = params.toolOverrides?.mcpServers;
+        return !(overrides && Object.hasOwn(overrides, name) && overrides[name] === false);
+      }),
+    ),
   }),
 }));
 
@@ -3050,6 +3056,21 @@ describe("requester-scoped MCP connection resolution", () => {
     expect(
       resolveSessionMcpConfigSummary({ workspaceDir: "/workspace", cfg: cfg as never }).fingerprint,
     ).toBe(staticRuntime.configFingerprint);
+
+    const toolOverrides = { mcpServers: { shared: false } };
+    const overriddenSummary = resolveSessionMcpConfigSummary({
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      toolOverrides,
+    });
+    const overriddenRuntime = await manager.getOrCreate({
+      sessionId: "session-parity-overridden",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      toolOverrides,
+    });
+    expect(overriddenSummary.serverNames).toEqual(["user-mail"]);
+    expect(overriddenSummary.fingerprint).toBe(overriddenRuntime.configFingerprint);
 
     // With a resolver registered, tools.effective peeks the bare static-partition
     // runtime; summary parity keeps it from reporting stale-config forever.

@@ -59,4 +59,42 @@ describe("detectChangedScope Windows routing", () => {
       });
     }
   });
+
+  it("routes MXC runtime changes and Windows-only suites to Windows", () => {
+    for (const mxcPath of [
+      "extensions/mxc/src/mxc-backend.ts",
+      "extensions/mxc/test/mxc-backend.test.ts",
+      "extensions/mxc/test/sandbox-policy-loader.test.ts",
+    ]) {
+      expect(detectChangedScope([mxcPath]), mxcPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
+  it("routes exec script preflight changes and Windows-only coverage to Windows", () => {
+    for (const preflightPath of [
+      "src/agents/bash-tools.exec-script-preflight.ts",
+      "src/agents/bash-tools.exec-script-target.ts",
+      "src/agents/bash-tools.exec.script-preflight.test.ts",
+    ]) {
+      expect(detectChangedScope([preflightPath]), preflightPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
+  it("routes exec allowlist matcher changes and Windows-only coverage to Windows", () => {
+    for (const allowlistPath of [
+      "src/infra/exec-allowlist-pattern.ts",
+      "src/infra/exec-allowlist-pattern.test.ts",
+    ]) {
+      expect(detectChangedScope([allowlistPath]), allowlistPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
 });

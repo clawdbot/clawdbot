@@ -231,9 +231,9 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
         },
       ],
     },
-    wikiMemoryPalaceLoading: false,
-    wikiMemoryPalaceError: null,
-    wikiMemoryPalace: {
+    wikiOverviewLoading: false,
+    wikiOverviewError: null,
+    wikiOverview: {
       totalItems: 1,
       totalPages: 2,
       pageCounts: {
@@ -278,7 +278,7 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     onRefresh: () => {},
     onRefreshDiary: () => {},
     onRefreshImports: () => {},
-    onRefreshMemoryPalace: () => {},
+    onRefreshWikiOverview: () => {},
     onOpenConfig: () => {},
     onOpenWikiPage: async () => null,
     onBackfillDiary: () => {},
@@ -430,12 +430,12 @@ describe("dreaming view", () => {
     expect(subtabs).toEqual([
       { label: "Dreams", active: false },
       { label: "Imported Insights", active: true },
-      { label: "Memory Palace", active: false },
+      { label: "Memory Wiki", active: false },
     ]);
     container
-      .querySelector("#dream-diary-tab-palace")
+      .querySelector("#dream-diary-tab-wiki")
       ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-    expect(viewState.activeDiarySubTab).toBe("palace");
+    expect(viewState.activeDiarySubTab).toBe("wiki");
     expect(onViewStateChange).toHaveBeenCalledOnce();
     expect(compactText(container.querySelector(".dreams-diary__date"))).toBe(
       "Travel · 1 chats · 1 signals",
@@ -550,9 +550,9 @@ describe("dreaming view", () => {
     setDreamSubTab("scene");
   });
 
-  it("renders the memory palace inside the diary tab", () => {
+  it("renders the wiki overview inside the diary tab", () => {
     setDreamSubTab("diary");
-    setDreamDiarySubTab("palace");
+    setDreamDiarySubTab("wiki");
     const container = renderInto(buildProps());
     expect(compactText(container.querySelector(".dreams-diary__date"))).toBe(
       "Vault · 2 pages · 2 claim rows · 1 open question · 1 contradiction",
@@ -583,15 +583,15 @@ describe("dreaming view", () => {
     setDreamSubTab("scene");
   });
 
-  it("keeps non-report memory palace card clicks on details", () => {
+  it("keeps non-report wiki overview card clicks on details", () => {
     setDreamSubTab("diary");
-    setDreamDiarySubTab("palace");
+    setDreamDiarySubTab("wiki");
     const container = document.createElement("div");
     const rerender = () => render(renderDreaming(props), container);
     const props: DreamingProps = buildProps({ onViewStateChange: rerender });
     rerender();
 
-    const card = expectElement(container, "[data-palace-page='syntheses/travel-system.md']");
+    const card = expectElement(container, "[data-wiki-page='syntheses/travel-system.md']");
     card.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(textItems(container, ".dreams-diary__insight-list strong")).toContain("Page details");
@@ -599,9 +599,9 @@ describe("dreaming view", () => {
     setDreamSubTab("scene");
   });
 
-  it("opens report memory palace cards on primary click", async () => {
+  it("opens report wiki overview cards on primary click", async () => {
     setDreamSubTab("diary");
-    setDreamDiarySubTab("palace");
+    setDreamDiarySubTab("wiki");
     const onOpenWikiPage = vi.fn().mockResolvedValue({
       title: "Weekly stock report",
       path: "reports/weekly-stock.md",
@@ -614,7 +614,7 @@ describe("dreaming view", () => {
     const props: DreamingProps = buildProps({
       onOpenWikiPage,
       onViewStateChange: rerender,
-      wikiMemoryPalace: {
+      wikiOverview: {
         totalItems: 1,
         totalPages: 1,
         pageCounts: {
@@ -656,7 +656,7 @@ describe("dreaming view", () => {
     });
     rerender();
 
-    const card = expectElement(container, "[data-palace-page='reports/weekly-stock.md']");
+    const card = expectElement(container, "[data-wiki-page='reports/weekly-stock.md']");
     card.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await Promise.resolve();
     await Promise.resolve();
@@ -683,7 +683,7 @@ describe("dreaming view", () => {
 
   it("shows a memory-wiki enablement CTA when wiki subtabs are selected but the plugin is disabled", () => {
     setDreamSubTab("diary");
-    setDreamDiarySubTab("palace");
+    setDreamDiarySubTab("wiki");
     const onOpenConfig = vi.fn();
     const container = renderInto(
       buildProps({
@@ -697,7 +697,7 @@ describe("dreaming view", () => {
     expect(
       [...container.querySelectorAll(".dreams-diary__empty-hint")].map((node) => compactText(node)),
     ).toEqual([
-      "Imported Insights and Memory Palace are provided by the bundled memory-wiki plugin.",
+      "Imported Insights and Memory Wiki are provided by the bundled memory-wiki plugin.",
       "Enable plugins.entries.memory-wiki.enabled = true, then reload this tab.",
     ]);
 

@@ -169,7 +169,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       agentId: params.sessionAgentId,
     }),
   });
-  const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
+  const { runtimeInfo, userTimezone, userDate } = buildSystemPromptParams({
     config: attempt.config,
     agentId: params.sessionAgentId,
     workspaceDir: params.effectiveWorkspace,
@@ -320,8 +320,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       capabilityToolNames: [...params.capabilityToolNames].toSorted(),
       tools: params.effectiveTools,
       userTimezone,
-      userTime,
-      userTimeFormat,
+      userDate,
       contextFiles: params.bootstrap.contextFiles,
       bootstrapMode: params.bootstrap.bootstrapMode,
       bootstrapTruncationNotice: buildBootstrapPromptWarningNotice(

@@ -8,8 +8,10 @@ const relayMocks = vi.hoisted(() => ({
   connect: vi.fn<() => Promise<void>>(),
   auth: vi.fn<() => Promise<string>>(),
   publish: vi.fn<(event: Event) => Promise<string>>(),
+  send: vi.fn<(message: string) => Promise<void>>(),
   subscriptionClose: vi.fn(),
   close: vi.fn(),
+  connected: true,
   membershipEvents: [] as Event[],
   profileEvents: [] as Event[],
   subscriptions: [] as Array<{
@@ -28,9 +30,13 @@ vi.mock("nostr-tools", async (importOriginal) => {
     ...actual,
     Relay: class {
       onauth?: (template: unknown) => Promise<unknown>;
+      get connected() {
+        return relayMocks.connected;
+      }
       connect = relayMocks.connect;
       auth = relayMocks.auth;
       publish = relayMocks.publish;
+      send = relayMocks.send;
       close = relayMocks.close;
 
       subscribe(
@@ -63,7 +69,13 @@ vi.mock("nostr-tools", async (importOriginal) => {
 });
 
 import { sendBuzzTextOneShot, startBuzzBus } from "./buzz-bus.js";
+import {
+  BUZZ_DIFF_MESSAGE_KIND,
+  BUZZ_INBOUND_MESSAGE_KINDS,
+  type BuzzInboundMessage,
+} from "./message-event.js";
 
+const BUZZ_RICH_MESSAGE_KIND = 40_002;
 const PRIVATE_KEY = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 const SENDER_PRIVATE_KEY = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
 const ACCOUNT_ID = "default";
@@ -102,6 +114,8 @@ describe("Buzz bus lifecycle", () => {
     relayMocks.connect.mockResolvedValue();
     relayMocks.auth.mockRejectedValue(new Error("auth rejected"));
     relayMocks.publish.mockResolvedValue("");
+    relayMocks.send.mockResolvedValue();
+    relayMocks.connected = true;
   });
 
   afterEach(() => {
@@ -157,6 +171,59 @@ describe("Buzz bus lifecycle", () => {
     expect(relayMocks.close).toHaveBeenCalledOnce();
   });
 
+  it("sends room and thread typing without waiting for a relay acknowledgement", async () => {
+    relayMocks.auth.mockResolvedValue("ok");
+    const bus = await startBuzzBus({
+      accountId: ACCOUNT_ID,
+      relayUrl: "wss://buzz.example.com",
+      privateKey: PRIVATE_KEY,
+      channelIds: [CHANNEL_ID],
+      onMessage: async () => {},
+    });
+
+    await bus.sendTyping({
+      channelId: CHANNEL_ID,
+      threadId: "root-id",
+      replyToId: "parent-id",
+    });
+
+    const frame = JSON.parse(relayMocks.send.mock.calls[0]?.[0] ?? "null") as [string, Event];
+    expect(frame[0]).toBe("EVENT");
+    expect(frame[1]).toMatchObject({
+      kind: 20_002,
+      content: "",
+      pubkey: BOT_PUBLIC_KEY,
+      tags: [
+        ["h", CHANNEL_ID],
+        ["e", "root-id", "", "root"],
+        ["e", "parent-id", "", "reply"],
+      ],
+    });
+    expect(relayMocks.publish).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 20_002 }));
+    await bus.close();
+
+    relayMocks.send.mockClear();
+    await bus.sendTyping({ channelId: CHANNEL_ID });
+    expect(relayMocks.send).not.toHaveBeenCalled();
+  });
+
+  it("drops typing while the active relay is disconnected", async () => {
+    relayMocks.auth.mockResolvedValue("ok");
+    const bus = await startBuzzBus({
+      accountId: ACCOUNT_ID,
+      relayUrl: "wss://buzz.example.com",
+      privateKey: PRIVATE_KEY,
+      channelIds: [CHANNEL_ID],
+      onMessage: async () => {},
+    });
+    relayMocks.connected = false;
+
+    await bus.sendTyping({ channelId: CHANNEL_ID });
+
+    expect(relayMocks.send).not.toHaveBeenCalled();
+    await bus.close();
+  });
+
   it("closes a standalone relay when publishing fails", async () => {
     relayMocks.auth.mockResolvedValue("ok");
     relayMocks.publish.mockRejectedValue(new Error("rejected"));
@@ -175,7 +242,7 @@ describe("Buzz bus lifecycle", () => {
 
   it("deduplicates replayed relay events by event id", async () => {
     relayMocks.auth.mockResolvedValue("ok");
-    const onMessage = vi.fn(async () => {});
+    const onMessage = vi.fn(async (_message: BuzzInboundMessage) => {});
     const bus = await startBuzzBus({
       accountId: ACCOUNT_ID,
       relayUrl: "wss://buzz.example.com",
@@ -200,6 +267,55 @@ describe("Buzz bus lifecycle", () => {
     messageSubscription?.handlers.onevent(event);
 
     await vi.waitFor(() => expect(onMessage).toHaveBeenCalledOnce());
+    await bus.close();
+  });
+
+  it("subscribes to and dispatches every supported Buzz timeline message kind", async () => {
+    relayMocks.auth.mockResolvedValue("ok");
+    const receivedKinds: number[] = [];
+    const onMessage = vi.fn(async (message: BuzzInboundMessage) => {
+      receivedKinds.push(message.kind);
+    });
+    const bus = await startBuzzBus({
+      accountId: ACCOUNT_ID,
+      relayUrl: "wss://buzz.example.com",
+      privateKey: PRIVATE_KEY,
+      channelIds: [CHANNEL_ID],
+      onMessage,
+    });
+    const messageSubscription = relayMocks.subscriptions.find((entry) =>
+      entry.filter.kinds?.includes(9),
+    );
+    expect(messageSubscription?.filter.kinds).toEqual([...BUZZ_INBOUND_MESSAGE_KINDS]);
+
+    const richEvent = finalizeEvent(
+      {
+        kind: BUZZ_RICH_MESSAGE_KIND,
+        created_at: 1_700_000_000,
+        content: "**rich**",
+        tags: [["h", CHANNEL_ID]],
+      },
+      Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex")),
+    );
+    const diffEvent = finalizeEvent(
+      {
+        kind: BUZZ_DIFF_MESSAGE_KIND,
+        created_at: 1_700_000_001,
+        content: "@@ -1 +1 @@\n-old\n+new",
+        tags: [
+          ["h", CHANNEL_ID],
+          ["repo", "https://github.com/openclaw/openclaw"],
+          ["commit", "abcdef1"],
+        ],
+      },
+      Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex")),
+    );
+
+    messageSubscription?.handlers.onevent(richEvent);
+    messageSubscription?.handlers.onevent(diffEvent);
+
+    await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(2));
+    expect(receivedKinds).toEqual([BUZZ_RICH_MESSAGE_KIND, BUZZ_DIFF_MESSAGE_KIND]);
     await bus.close();
   });
 

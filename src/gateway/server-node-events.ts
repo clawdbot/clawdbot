@@ -698,6 +698,8 @@ export const handleNodeEvent = async (
         const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
         const supportsInlineImages = await resolveGatewayModelSupportsImages({
           loadGatewayModelCatalog: ctx.loadGatewayModelCatalog,
+          loadGatewayModelCatalogSnapshot: ctx.loadGatewayModelCatalogSnapshot,
+          agentId: sessionAgentId,
           provider: modelRef.provider,
           model: modelRef.model,
         });

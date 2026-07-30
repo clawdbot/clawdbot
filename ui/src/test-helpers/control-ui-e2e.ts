@@ -306,6 +306,7 @@ export async function startControlUiE2eServer(
     builtAt: "2026-07-10T12:34:56.000Z",
     branch: null,
     dirty: false,
+    release: false,
     buildId: "e2e",
   },
 ): Promise<ControlUiE2eServer> {

@@ -6,8 +6,10 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import "../../components/openclaw-mascot.ts";
 import { t } from "../../i18n/index.ts";
+import { channelSnapshotHasActiveChannel } from "../../lib/channels/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/custodian.css";
 import { renderCustodianChangeHistory } from "./custodian-history.ts";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
@@ -36,6 +38,30 @@ export class CustodianPage extends OpenClawLightDomElement {
   private historyRequestEpoch = 0;
   private subscribedStore: CustodianSessionStore | null = null;
   private storeCleanup: (() => void) | null = null;
+  private channelsSource: ApplicationContext["channels"] | null = null;
+  private channelRefreshRequested = false;
+  private readonly subscriptions = new SubscriptionsController(this).effect(
+    () => this.context?.channels,
+    (channels) => {
+      this.channelsSource = channels;
+      this.channelRefreshRequested = false;
+      const stop = channels.subscribe((channelState) => {
+        if (!channelState.connected) {
+          // Disconnect invalidates an in-flight refresh; reconnect must be able to retry.
+          this.channelRefreshRequested = false;
+        }
+        this.ensureOnboardingChannelStatus();
+        this.requestUpdate();
+      });
+      this.ensureOnboardingChannelStatus();
+      return () => {
+        stop();
+        if (this.channelsSource === channels) {
+          this.channelsSource = null;
+        }
+      };
+    },
+  );
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -46,6 +72,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.storeCleanup?.();
     this.storeCleanup = null;
     this.subscribedStore = null;
+    this.subscriptions.clear();
     super.disconnectedCallback();
   }
 
@@ -63,6 +90,25 @@ export class CustodianPage extends OpenClawLightDomElement {
       this.subscribeToStore();
     }
     this.synchronizeHistoryClient();
+    this.ensureOnboardingChannelStatus();
+  }
+
+  private ensureOnboardingChannelStatus(): void {
+    const channels = this.channelsSource;
+    if (!this.onboarding || !channels || this.channelRefreshRequested) {
+      return;
+    }
+    const channelState = channels.state;
+    if (
+      !channelState.connected ||
+      channelState.channelsSnapshot ||
+      channelState.channelsLoading ||
+      channelState.channelsError
+    ) {
+      return;
+    }
+    this.channelRefreshRequested = true;
+    void channels.refresh(false);
   }
 
   private subscribeToStore(): void {
@@ -153,6 +199,13 @@ export class CustodianPage extends OpenClawLightDomElement {
   }
 
   override render() {
+    const channelSnapshot = this.channelsSource?.state.channelsSnapshot ?? null;
+    const showChannelOnboardingNudge =
+      this.onboarding &&
+      !this.store.channelOnboardingNudgeClosed &&
+      channelSnapshot !== null &&
+      channelSnapshot.partial !== true &&
+      !channelSnapshotHasActiveChannel(channelSnapshot);
     const historyContent =
       this.historyOpen && this.historyAvailable
         ? renderCustodianChangeHistory({
@@ -212,6 +265,7 @@ export class CustodianPage extends OpenClawLightDomElement {
           .store=${this.store}
           .onboarding=${this.onboarding}
           .newAgentIntent=${this.newAgentIntent}
+          .showChannelOnboardingNudge=${showChannelOnboardingNudge}
           .historyContent=${historyContent}
         ></openclaw-custodian-surface>
       </section>

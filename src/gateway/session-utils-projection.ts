@@ -8,7 +8,10 @@ import { resolveStorePath, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { readRecentSessionUsageFromTranscript as readScopedRecentSessionUsageFromTranscript } from "./session-transcript-readers.js";
-import type { SessionListRowContext } from "./session-utils-contracts.js";
+import type {
+  SessionActorProfileIdentity,
+  SessionListRowContext,
+} from "./session-utils-contracts.js";
 import {
   buildStoreChildSessionIndex,
   getSingleRowChildSessionCandidates,
@@ -22,20 +25,20 @@ import { resolveConcreteSessionStorePath } from "./session-utils-store.js";
 export function buildSessionListRowContext(params: {
   store: Record<string, SessionEntry>;
   now: number;
-  userProfileLabelById?: Map<string, string | undefined>;
+  userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
 }): SessionListRowContext {
   const subagentRuns = buildSubagentRunReadIndex(params.now);
   return buildSessionListRowContextFromParts({
     subagentRuns,
     storeChildSessionsByKey: buildStoreChildSessionIndex(params.store, params.now, subagentRuns),
-    userProfileLabelById: params.userProfileLabelById,
+    userProfileIdentityById: params.userProfileIdentityById,
   });
 }
 
 function buildSessionListRowContextFromParts(params: {
   subagentRuns: ReturnType<typeof buildSubagentRunReadIndex>;
   storeChildSessionsByKey: Map<string, string[]>;
-  userProfileLabelById?: Map<string, string | undefined>;
+  userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
 }): SessionListRowContext {
   return {
     subagentRuns: params.subagentRuns,
@@ -44,19 +47,19 @@ function buildSessionListRowContextFromParts(params: {
     thinkingMetadataByModelRef: new Map(),
     displayModelIdentityByKey: new Map(),
     modelCostConfigByModelRef: new Map(),
-    userProfileLabelById: params.userProfileLabelById ?? new Map(),
+    userProfileIdentityById: params.userProfileIdentityById ?? new Map(),
     acpSessionMetaByEntry: new Map(),
   };
 }
 
 export function buildSessionListRowMetadataContext(params: {
   now: number;
-  userProfileLabelById?: Map<string, string | undefined>;
+  userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
 }): SessionListRowContext {
   return buildSessionListRowContextFromParts({
     subagentRuns: buildSubagentRunReadIndex(params.now),
     storeChildSessionsByKey: new Map(),
-    userProfileLabelById: params.userProfileLabelById,
+    userProfileIdentityById: params.userProfileIdentityById,
   });
 }
 

@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { isRecord } from "./lib/record-shared.mjs";
 
 const RUNTIME_IDS = ["openclaw", "codex"];
 const HARD_RUNTIME_ERROR_CLASSES = new Set([
@@ -60,10 +61,6 @@ const FROZEN_RUNTIME_PAIR_MANIFESTS = new Map([
   ["c37af96b18776fecc9e24268f27fc89b563481bf:core", FROZEN_CORE_RUNTIME_PAIR_MANIFEST],
 ]);
 
-function isRecord(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function isPassableCell(cell) {
   if (!isRecord(cell) || typeof cell.transportErrorClass === "string") {
     return false;
@@ -100,6 +97,15 @@ function projectedReportCellStatus(cell) {
   return cell.runtimeErrorClass || cell.transportErrorClass ? "fail" : "pass";
 }
 
+function hasPassingRuntimeCellStatus(cell) {
+  // Early frozen candidates did not serialize the derived cell status. Accept
+  // only that absent legacy field when the same runtime evidence projects pass.
+  return (
+    cell.status === "pass" ||
+    (!Object.hasOwn(cell, "status") && projectedReportCellStatus(cell) === "pass")
+  );
+}
+
 function requireRuntimePairScenario(scenario, index) {
   if (!isRecord(scenario)) {
     throw new Error(`scenario ${index + 1} is not an object`);
@@ -119,9 +125,12 @@ function requireRuntimePairScenario(scenario, index) {
   }
 
   if (scenario.status === "pass") {
-    const hasTwoPassingCells = openclaw.status === "pass" && codex.status === "pass";
+    const hasTwoPassingCells =
+      hasPassingRuntimeCellStatus(openclaw) && hasPassingRuntimeCellStatus(codex);
     const hasAdvisoryCodexGap =
-      parity.drift === "structural" && openclaw.status === "pass" && isExplicitCodexGap(codex);
+      parity.drift === "structural" &&
+      hasPassingRuntimeCellStatus(openclaw) &&
+      isExplicitCodexGap(codex);
     if (
       parity.drift === "failure-mode" ||
       (!hasTwoPassingCells && !hasAdvisoryCodexGap) ||

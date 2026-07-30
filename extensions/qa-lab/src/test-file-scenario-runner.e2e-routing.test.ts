@@ -39,12 +39,22 @@ describe("QA native Vitest scenario routing", () => {
         scenarios: [scenario],
         runCommand: async (command) => {
           commands.push(command);
+          const reportArg = command.args.find((arg) => arg.startsWith("--outputFile.json="));
+          if (!reportArg) {
+            throw new Error("native Vitest scenario did not request a JSON test report");
+          }
+          await fs.writeFile(
+            reportArg.slice("--outputFile.json=".length),
+            JSON.stringify({ numFailedTests: 0, numPassedTests: 1, success: true }),
+            "utf8",
+          );
           return { exitCode: 0, stdout: "1 passed\n", stderr: "" };
         },
       });
 
       expect(result.executionKind).toBe("vitest");
       expect(result.results).toMatchObject([{ status: "pass" }]);
+      expect(result.evidence.entries[0]?.result.status).toBe("pass");
       expect(commands.map((command) => command.args)).toEqual([
         [
           "scripts/run-vitest.mjs",
@@ -53,6 +63,14 @@ describe("QA native Vitest scenario routing", () => {
           "test/vitest/vitest.e2e.config.ts",
           testPath,
           "--reporter=verbose",
+          "--reporter=json",
+          `--outputFile.json=${path.join(
+            repoRoot,
+            ".artifacts",
+            "qa-e2e",
+            scenario.id,
+            `${scenario.id}.vitest-report.json`,
+          )}`,
         ],
       ]);
     } finally {

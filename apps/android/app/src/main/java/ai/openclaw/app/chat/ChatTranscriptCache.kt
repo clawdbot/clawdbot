@@ -32,6 +32,7 @@ private data class CachedMessageContent(
   val height: Int? = null,
   val sizeBytes: Long? = null,
   val durationMs: Long? = null,
+  val playback: String? = null,
 )
 
 /**
@@ -320,6 +321,7 @@ class RoomChatTranscriptCache internal constructor(
               height = part.height,
               sizeBytes = part.sizeBytes,
               durationMs = part.durationMs,
+              playback = part.playback,
             )
           },
         timestampMs = row.timestampMs,
@@ -438,6 +440,7 @@ class RoomChatTranscriptCache internal constructor(
                     height = part.height,
                     sizeBytes = part.sizeBytes,
                     durationMs = part.durationMs,
+                    playback = part.playback,
                   )
                 else -> null
               }

@@ -12,7 +12,7 @@ import {
   loadDreamDiary,
   loadDreamingStatus,
   loadWikiImportInsights,
-  loadWikiMemoryPalace,
+  loadWikiOverview,
   repairDreamingArtifacts,
   resetGroundedShortTerm,
   resetDreamDiary,
@@ -580,13 +580,13 @@ describe("dreaming controller", () => {
     expect(state.wikiImportInsightsLoading).toBe(false);
   });
 
-  it("loads and normalizes the wiki memory palace", async () => {
+  it("loads and normalizes the wiki wiki overview", async () => {
     const { state, request } = createState();
     state.hello = {
       type: "hello-ok",
       protocol: 4,
       auth: { role: "operator", scopes: [] },
-      features: { methods: ["wiki.palace"] },
+      features: { methods: ["wiki.overview"] },
     };
     state.configSnapshot = {
       hash: "hash-1",
@@ -639,43 +639,41 @@ describe("dreaming controller", () => {
       ],
     });
 
-    await loadWikiMemoryPalace(state);
+    await loadWikiOverview(state);
 
-    expect(request).toHaveBeenCalledWith("wiki.palace", {});
-    expect(state.wikiMemoryPalace?.totalItems).toBe(1);
-    expect(state.wikiMemoryPalace?.totalPages).toBe(2);
-    expect(state.wikiMemoryPalace?.pageCounts.source).toBe(1);
-    expect(state.wikiMemoryPalace?.pageCounts.synthesis).toBe(1);
-    expect(state.wikiMemoryPalace?.totalClaims).toBe(2);
-    expect(state.wikiMemoryPalace?.clusters).toHaveLength(1);
-    expect(state.wikiMemoryPalace?.clusters[0]?.key).toBe("synthesis");
-    expect(state.wikiMemoryPalace?.clusters[0]?.label).toBe("Syntheses");
-    expect(state.wikiMemoryPalace?.clusters[0]?.items).toHaveLength(1);
-    expect(state.wikiMemoryPalace?.clusters[0]?.items[0]?.title).toBe("Travel system");
-    expect(state.wikiMemoryPalace?.clusters[0]?.items[0]?.claims).toEqual([
-      "prefers direct receipts",
-    ]);
-    expect(state.wikiMemoryPalaceError).toBeNull();
-    expect(state.wikiMemoryPalaceLoading).toBe(false);
+    expect(request).toHaveBeenCalledWith("wiki.overview", {});
+    expect(state.wikiOverview?.totalItems).toBe(1);
+    expect(state.wikiOverview?.totalPages).toBe(2);
+    expect(state.wikiOverview?.pageCounts.source).toBe(1);
+    expect(state.wikiOverview?.pageCounts.synthesis).toBe(1);
+    expect(state.wikiOverview?.totalClaims).toBe(2);
+    expect(state.wikiOverview?.clusters).toHaveLength(1);
+    expect(state.wikiOverview?.clusters[0]?.key).toBe("synthesis");
+    expect(state.wikiOverview?.clusters[0]?.label).toBe("Syntheses");
+    expect(state.wikiOverview?.clusters[0]?.items).toHaveLength(1);
+    expect(state.wikiOverview?.clusters[0]?.items[0]?.title).toBe("Travel system");
+    expect(state.wikiOverview?.clusters[0]?.items[0]?.claims).toEqual(["prefers direct receipts"]);
+    expect(state.wikiOverviewError).toBeNull();
+    expect(state.wikiOverviewLoading).toBe(false);
   });
 
-  it("loads the wiki memory palace for the selected agent", async () => {
+  it("loads the wiki wiki overview for the selected agent", async () => {
     const { state, request } = createState();
     state.selectedAgentId = "marketing";
     state.hello = {
       type: "hello-ok",
       protocol: 4,
       auth: { role: "operator", scopes: [] },
-      features: { methods: ["wiki.palace"] },
+      features: { methods: ["wiki.overview"] },
     };
     request.mockResolvedValue({ totalItems: 1, clusters: [] });
 
-    await loadWikiMemoryPalace(state);
+    await loadWikiOverview(state);
 
-    expect(request).toHaveBeenCalledWith("wiki.palace", { agentId: "marketing" });
+    expect(request).toHaveBeenCalledWith("wiki.overview", { agentId: "marketing" });
   });
 
-  it("starts a new selected-agent palace load and ignores stale completions", async () => {
+  it("starts a new selected-agent wiki overview load and ignores stale completions", async () => {
     const { state, request } = createState();
     const agentA = createDeferred<unknown>();
     const agentB = createDeferred<unknown>();
@@ -683,7 +681,7 @@ describe("dreaming controller", () => {
       type: "hello-ok",
       protocol: 4,
       auth: { role: "operator", scopes: [] },
-      features: { methods: ["wiki.palace"] },
+      features: { methods: ["wiki.overview"] },
     };
     request.mockImplementation(async (_method: string, payload?: unknown) => {
       const agentId =
@@ -694,29 +692,29 @@ describe("dreaming controller", () => {
     });
 
     state.selectedAgentId = "agent-a";
-    const firstLoad = loadWikiMemoryPalace(state);
+    const firstLoad = loadWikiOverview(state);
     state.selectedAgentId = "agent-b";
-    const secondLoad = loadWikiMemoryPalace(state);
+    const secondLoad = loadWikiOverview(state);
 
     agentB.resolve({ totalItems: 2, clusters: [] });
     await secondLoad;
     agentA.resolve({ totalItems: 1, clusters: [] });
     await firstLoad;
 
-    expect(request).toHaveBeenCalledWith("wiki.palace", { agentId: "agent-a" });
-    expect(request).toHaveBeenCalledWith("wiki.palace", { agentId: "agent-b" });
-    expect(state.wikiMemoryPalace?.totalItems).toBe(2);
-    expect(state.wikiMemoryPalaceLoading).toBe(false);
-    expect(state.wikiMemoryPalaceError).toBeNull();
+    expect(request).toHaveBeenCalledWith("wiki.overview", { agentId: "agent-a" });
+    expect(request).toHaveBeenCalledWith("wiki.overview", { agentId: "agent-b" });
+    expect(state.wikiOverview?.totalItems).toBe(2);
+    expect(state.wikiOverviewLoading).toBe(false);
+    expect(state.wikiOverviewError).toBeNull();
   });
 
-  it("derives legacy wiki memory palace page counts from clusters", async () => {
+  it("derives legacy wiki wiki overview page counts from clusters", async () => {
     const { state, request } = createState();
     state.hello = {
       type: "hello-ok",
       protocol: 4,
       auth: { role: "operator", scopes: [] },
-      features: { methods: ["wiki.palace"] },
+      features: { methods: ["wiki.overview"] },
     };
     state.configSnapshot = {
       hash: "hash-1",
@@ -748,10 +746,10 @@ describe("dreaming controller", () => {
       ],
     });
 
-    await loadWikiMemoryPalace(state);
+    await loadWikiOverview(state);
 
-    expect(state.wikiMemoryPalace?.totalPages).toBe(1);
-    expect(state.wikiMemoryPalace?.pageCounts).toEqual({
+    expect(state.wikiOverview?.totalPages).toBe(1);
+    expect(state.wikiOverview?.pageCounts).toEqual({
       synthesis: 1,
       entity: 0,
       concept: 0,
@@ -760,7 +758,7 @@ describe("dreaming controller", () => {
     });
   });
 
-  it("falls back to config gating for wiki memory palace when methods are not advertised", async () => {
+  it("falls back to config gating for wiki wiki overview when methods are not advertised", async () => {
     const { state, request } = createState();
     state.configSnapshot = {
       hash: "hash-1",
@@ -782,24 +780,24 @@ describe("dreaming controller", () => {
       clusters: [],
     });
 
-    await loadWikiMemoryPalace(state);
+    await loadWikiOverview(state);
 
-    expect(request).toHaveBeenCalledWith("wiki.palace", {});
-    expect(state.wikiMemoryPalace?.totalItems).toBe(1);
-    expect(state.wikiMemoryPalace?.totalPages).toBe(1);
-    expect(state.wikiMemoryPalace?.pageCounts).toEqual({
+    expect(request).toHaveBeenCalledWith("wiki.overview", {});
+    expect(state.wikiOverview?.totalItems).toBe(1);
+    expect(state.wikiOverview?.totalPages).toBe(1);
+    expect(state.wikiOverview?.pageCounts).toEqual({
       synthesis: 0,
       entity: 0,
       concept: 0,
       source: 0,
       report: 0,
     });
-    expect(state.wikiMemoryPalace?.totalClaims).toBe(2);
-    expect(state.wikiMemoryPalaceError).toBeNull();
-    expect(state.wikiMemoryPalaceLoading).toBe(false);
+    expect(state.wikiOverview?.totalClaims).toBe(2);
+    expect(state.wikiOverviewError).toBeNull();
+    expect(state.wikiOverviewLoading).toBe(false);
   });
 
-  it("skips wiki memory palace when memory-wiki is not enabled", async () => {
+  it("skips wiki wiki overview when memory-wiki is not enabled", async () => {
     const { state, request } = createState();
     state.configSnapshot = {
       hash: "hash-1",
@@ -807,7 +805,7 @@ describe("dreaming controller", () => {
         plugins: {},
       },
     };
-    state.wikiMemoryPalace = {
+    state.wikiOverview = {
       totalItems: 1,
       totalPages: 1,
       pageCounts: {
@@ -822,17 +820,17 @@ describe("dreaming controller", () => {
       totalContradictions: 0,
       clusters: [],
     };
-    state.wikiMemoryPalaceError = "unknown method: wiki.palace";
+    state.wikiOverviewError = "unknown method: wiki.overview";
 
-    await loadWikiMemoryPalace(state);
+    await loadWikiOverview(state);
 
     expect(request).not.toHaveBeenCalled();
-    expect(state.wikiMemoryPalace).toBeNull();
-    expect(state.wikiMemoryPalaceError).toBeNull();
-    expect(state.wikiMemoryPalaceLoading).toBe(false);
+    expect(state.wikiOverview).toBeNull();
+    expect(state.wikiOverviewError).toBeNull();
+    expect(state.wikiOverviewLoading).toBe(false);
   });
 
-  it("skips wiki memory palace when the gateway does not advertise the method", async () => {
+  it("skips wiki wiki overview when the gateway does not advertise the method", async () => {
     const { state, request } = createState();
     state.hello = {
       type: "hello-ok",
@@ -852,7 +850,7 @@ describe("dreaming controller", () => {
         },
       },
     };
-    state.wikiMemoryPalace = {
+    state.wikiOverview = {
       totalItems: 1,
       totalPages: 1,
       pageCounts: {
@@ -867,14 +865,14 @@ describe("dreaming controller", () => {
       totalContradictions: 0,
       clusters: [],
     };
-    state.wikiMemoryPalaceError = "unknown method: wiki.palace";
+    state.wikiOverviewError = "unknown method: wiki.overview";
 
-    await loadWikiMemoryPalace(state);
+    await loadWikiOverview(state);
 
     expect(request).not.toHaveBeenCalled();
-    expect(state.wikiMemoryPalace).toBeNull();
-    expect(state.wikiMemoryPalaceError).toBeNull();
-    expect(state.wikiMemoryPalaceLoading).toBe(false);
+    expect(state.wikiOverview).toBeNull();
+    expect(state.wikiOverviewError).toBeNull();
+    expect(state.wikiOverviewLoading).toBe(false);
   });
 
   it("patches config to update global dreaming enablement", async () => {

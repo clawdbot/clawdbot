@@ -114,6 +114,7 @@ describe("OpenClaw setup detection protocol", () => {
         {
           id: "ollama",
           brandId: "ollama",
+          groupLabel: "Ollama",
           label: "Ollama",
           icon: "https://cdn.simpleicons.org/ollama",
           website: "https://ollama.com/download",
@@ -143,7 +144,7 @@ describe("OpenClaw setup detection protocol", () => {
           ({ brandId: _brandId, ...candidate }) => candidate,
         ),
         manualProviders: result.manualProviders.map(
-          ({ brandId: _brandId, ...provider }) => provider,
+          ({ brandId: _brandId, groupLabel: _groupLabel, ...provider }) => provider,
         ),
         recommendedInstalls: result.recommendedInstalls.map(
           ({ brandId: _brandId, ...install }) => install,

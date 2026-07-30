@@ -276,7 +276,22 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const run = () =>
       measureDiagnosticsTimelineSpan(
         "gateway.sessions.list",
-        async () => {
+        async function listVisibleSessions(
+          remainingVisibilityRetries = 1,
+        ): Promise<Awaited<ReturnType<typeof listSessionsFromStoreAsync>>> {
+          const modelCatalog = await measureDiagnosticsTimelineSpan(
+            "gateway.sessions.list.model_catalog",
+            () =>
+              loadOptionalServerMethodModelCatalog(
+                context,
+                "sessions.list",
+                p.agentId ? { loadParams: { agentId: p.agentId } } : undefined,
+              ),
+            {
+              config: cfg,
+              phase: "sessions.list",
+            },
+          );
           const { durableStorePath, storePath, store } = measureDiagnosticsTimelineSpanSync(
             "gateway.sessions.list.store_load",
             () =>
@@ -297,19 +312,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           const listStore = configuredAgentsOnly
             ? filterSessionStoreToConfiguredAgents(cfg, store)
             : store;
-          const modelCatalog = await measureDiagnosticsTimelineSpan(
-            "gateway.sessions.list.model_catalog",
-            () =>
-              loadOptionalServerMethodModelCatalog(
-                context,
-                "sessions.list",
-                p.agentId ? { loadParams: { agentId: p.agentId } } : undefined,
-              ),
-            {
-              config: cfg,
-              phase: "sessions.list",
-            },
-          );
           const result = await measureDiagnosticsTimelineSpan(
             "gateway.sessions.list.rows",
             () =>
@@ -474,6 +476,14 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                   !session.incognito &&
                   (session.visibility !== "draft" || session.sharingRole === "owner"),
               );
+          if (visibleSessions.length !== sessions.length) {
+            if (remainingVisibilityRetries === 0) {
+              throw new Error("session visibility changed during list reconciliation");
+            }
+            // Rebuild the complete canonical page so totals, offsets, creator
+            // facets, and replacement rows describe the same visible snapshot.
+            return await listVisibleSessions(remainingVisibilityRetries - 1);
+          }
           return {
             ...result,
             sessions: visibleSessions,
@@ -510,17 +520,16 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsCleanupParams, "sessions.cleanup", respond)) {
       return;
     }
-    const p = params;
     try {
       const { mode, appliedSummaries } = await runSessionsCleanup({
         cfg: context.getRuntimeConfig(),
         opts: {
-          agent: p.agent,
-          allAgents: p.allAgents,
-          enforce: p.enforce,
-          activeKey: p.activeKey,
-          fixMissing: p.fixMissing,
-          fixDmScope: p.fixDmScope,
+          agent: params.agent,
+          allAgents: params.allAgents,
+          enforce: params.enforce,
+          activeKey: params.activeKey,
+          fixMissing: params.fixMissing,
+          fixDmScope: params.fixDmScope,
         },
       });
       const result = serializeSessionCleanupResult({
@@ -618,8 +627,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsDescribeParams, "sessions.describe", respond)) {
       return;
     }
-    const p = params;
-    const key = requireSessionKey(p.key, respond);
+    const key = requireSessionKey(params.key, respond);
     if (!key) {
       return;
     }
@@ -635,8 +643,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       store,
       key: target.canonicalKey,
       entry,
-      includeDerivedTitles: p.includeDerivedTitles,
-      includeLastMessage: p.includeLastMessage,
+      includeDerivedTitles: params.includeDerivedTitles,
+      includeLastMessage: params.includeLastMessage,
       transcriptUsageMaxBytes: 64 * 1024,
     });
     const placement = row.sessionId

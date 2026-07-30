@@ -128,7 +128,8 @@ class ChatController internal constructor(
     agentId: String?,
     artifactId: String,
     kind: GatewayMediaKind,
-  ) -> GatewayLoadedMedia? = { _, _, _, _, _ -> null },
+    playbackRendition: Boolean,
+  ) -> GatewayLoadedMedia? = { _, _, _, _, _, _ -> null },
   private val commandOutbox: ChatCommandOutbox? = null,
   private val recordModelRecent: (String) -> Unit = {},
   private val onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
@@ -163,8 +164,8 @@ class ChatController internal constructor(
     loadGatewayImageArtifact = { gatewayId, sessionKey, agentId, artifactId ->
       session.loadImageArtifact(gatewayId, sessionKey, agentId, artifactId)
     },
-    loadGatewayMediaArtifact = { gatewayId, sessionKey, agentId, artifactId, kind ->
-      session.loadMediaArtifact(gatewayId, sessionKey, agentId, artifactId, kind)
+    loadGatewayMediaArtifact = { gatewayId, sessionKey, agentId, artifactId, kind, playbackRendition ->
+      session.loadMediaArtifact(gatewayId, sessionKey, agentId, artifactId, kind, playbackRendition)
     },
     commandOutbox = commandOutbox,
     recordModelRecent = recordModelRecent,
@@ -186,6 +187,7 @@ class ChatController internal constructor(
   suspend fun loadMediaArtifact(
     artifactId: String,
     kind: GatewayMediaKind,
+    playbackRendition: Boolean,
   ): GatewayLoadedMedia? {
     val normalizedArtifactId = artifactId.trim().takeIf(String::isNotEmpty) ?: return null
     if (kind == GatewayMediaKind.Image) return null
@@ -196,6 +198,7 @@ class ChatController internal constructor(
       resolveAgentIdForSessionKey(sessionKey),
       normalizedArtifactId,
       kind,
+      playbackRendition,
     )
   }
 
@@ -6718,6 +6721,7 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
         sizeBytes = obj["sizeBytes"].asLongOrNull(),
         base64 = inlineContent?.takeIf { type == "image" && it.length <= CHAT_IMAGE_MAX_BASE64_CHARS },
         durationMs = obj["durationMs"].asLongOrNull(),
+        playback = obj["playback"].asStringOrNull()?.takeIf { it == "native" || it == "transcode" },
       )
     }
 
@@ -6743,6 +6747,7 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
         height = attachment["height"].asLongOrNull()?.toInt(),
         sizeBytes = attachment["sizeBytes"].asLongOrNull(),
         durationMs = attachment["durationMs"].asLongOrNull(),
+        playback = attachment["playback"].asStringOrNull()?.takeIf { it == "native" || it == "transcode" },
       )
     }
 

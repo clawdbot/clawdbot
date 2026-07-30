@@ -921,7 +921,7 @@ describe("cron service ops seam coverage", () => {
         runtime: "cron",
         status: "succeeded",
         sourceId: "isolated-timeout",
-        progressSummary: "Running cron job.",
+        progressSummary: "Running automation.",
       });
       expect(findTaskByRunId(manualRunId)).toBeUndefined();
     });
@@ -1207,7 +1207,7 @@ describe("cron service ops seam coverage", () => {
         runtime: "cron",
         status: "timed_out",
         sourceId: "startup-timeout",
-        progressSummary: "Running cron job.",
+        progressSummary: "Running automation.",
       });
     });
   });
@@ -1244,8 +1244,8 @@ describe("cron service ops seam coverage", () => {
         throw new Error("expected active manual cron task ledger record");
       }
       expect(task.status).toBe("running");
-      expect(task.progressSummary).toBe("Running cron job.");
-      expect(formatTaskStatusDetail(task)).toBe("Running cron job.");
+      expect(task.progressSummary).toBe("Running automation.");
+      expect(formatTaskStatusDetail(task)).toBe("Running automation.");
 
       resolveRun?.({ status: "ok", summary: "done" });
       await manualRun;

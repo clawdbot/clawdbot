@@ -271,7 +271,6 @@ export class ConfigPage extends OpenClawLightDomElement {
   private systemInfoClient: GatewayBrowserClient | null = null;
   private sessionObserverModelsClient: GatewayBrowserClient | null = null;
   private readonly sessionObserverModelLoads = new WeakMap<GatewayBrowserClient, Promise<void>>();
-  private readonly sessionObserverModelFailures = new WeakSet<GatewayBrowserClient>();
   private readonly systemInfoPolling = new PollController(
     this,
     SESSION_OBSERVER_STATUS_POLL_INTERVAL_MS,
@@ -594,10 +593,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private ensureSessionObserverModels(client: GatewayBrowserClient): Promise<void> {
-    if (
-      this.sessionObserverModelsClient === client ||
-      this.sessionObserverModelFailures.has(client)
-    ) {
+    if (this.sessionObserverModelsClient === client) {
       return Promise.resolve();
     }
     const existing = this.sessionObserverModelLoads.get(client);
@@ -618,7 +614,6 @@ export class ConfigPage extends OpenClawLightDomElement {
         }
       })
       .catch(() => {
-        this.sessionObserverModelFailures.add(client);
         if (
           this.isConnected &&
           this.systemInfoGatewaySource === gatewaySource &&
@@ -728,12 +723,17 @@ export class ConfigPage extends OpenClawLightDomElement {
     const request = ++this.cameraSelectionRequest;
     const videoDeviceId = deviceId.trim() || undefined;
     this.cameraError = null;
-    this.applySettings({
-      ...this.settings,
-      realtimeTalkVideoDeviceId: videoDeviceId,
-    });
     try {
       await switchActiveRealtimeTalkCameras(videoDeviceId);
+      if (request !== this.cameraSelectionRequest) {
+        return;
+      }
+      // Persist only a camera the active Talk session accepted. A superseded
+      // request must not overwrite the newer confirmed selection.
+      this.applySettings({
+        ...this.settings,
+        realtimeTalkVideoDeviceId: videoDeviceId,
+      });
     } catch (error) {
       if (request === this.cameraSelectionRequest) {
         this.cameraError = error instanceof Error ? error.message : String(error);
@@ -801,6 +801,18 @@ export class ConfigPage extends OpenClawLightDomElement {
   private isUpdateBusy(): boolean {
     const update = this.context.overlays.snapshot;
     return update.updateRunning || update.updateReconciliationPending;
+  }
+
+  private isCuratedConfigMutationDisabled(): boolean {
+    const runtimeState = this.context.runtimeConfig.state;
+    return (
+      !runtimeState.connected ||
+      runtimeState.configLoading ||
+      runtimeState.configSaving ||
+      runtimeState.configApplying ||
+      this.isUpdateBusy() ||
+      !hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null)
+    );
   }
 
   private renderAdvancedConfig(configObject: Record<string, unknown>) {
@@ -995,6 +1007,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     if (this.pageId === "memory") {
       return renderMemoryPage({
         configObject,
+        mutationDisabled: this.isCuratedConfigMutationDisabled(),
         pluginsHref: pathForRoute("plugins", this.context.basePath),
         memoryImportHref: pathForRoute("memory-import", this.context.basePath),
         routeData: this.routeData,
@@ -1013,6 +1026,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     if (this.pageId === "talk") {
       return renderTalkPage({
         configObject,
+        mutationDisabled: this.isCuratedConfigMutationDisabled(),
         buildEditor: () =>
           renderConfig({
             ...props,
@@ -1026,11 +1040,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     }
     if (this.pageId === "security") {
       const runtimeState = runtimeConfig.state;
-      const configBusy =
-        runtimeState.configLoading ||
-        runtimeState.configSaving ||
-        runtimeState.configApplying ||
-        this.isUpdateBusy();
+      const configBusy = this.isCuratedConfigMutationDisabled();
       return renderSecurity({
         security: extractQuickSettingsSecurity(configObject),
         configBusy,

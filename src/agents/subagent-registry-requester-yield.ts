@@ -7,7 +7,7 @@ export function markRequesterTurnYieldedInRuns(params: {
   requesterSessionKey: string;
   requesterTurnRunId: string;
   runs: Map<string, SubagentRunRecord>;
-  persistOrThrow(): void;
+  persistOrThrow(...runIds: string[]): void;
 }): number {
   const requesterSessionKey = params.requesterSessionKey.trim();
   const requesterTurnRunId = params.requesterTurnRunId.trim();
@@ -27,7 +27,7 @@ export function markRequesterTurnYieldedInRuns(params: {
     entry.requesterTurnYielded = true;
   }
   try {
-    params.persistOrThrow();
+    params.persistOrThrow(...entries.map((entry) => entry.runId));
   } catch (error) {
     entries.forEach((entry, index) => {
       entry.requesterTurnYielded = previous[index];
@@ -43,7 +43,7 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
   requesterYielded: boolean;
   acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
   runs: Map<string, SubagentRunRecord>;
-  persistOrThrow(): void;
+  persistOrThrow(...runIds: string[]): void;
   schedule(runId: string, entry: SubagentRunRecord): void;
 }): boolean {
   const requesterSessionKey = params.requesterSessionKey.trim();
@@ -126,7 +126,7 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
     }
   }
   try {
-    params.persistOrThrow();
+    params.persistOrThrow(...entries.map((entry) => entry.runId));
   } catch (error) {
     entries.forEach((entry, index) => {
       const previous = previousStates[index];

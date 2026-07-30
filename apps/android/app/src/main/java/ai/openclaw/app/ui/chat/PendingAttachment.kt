@@ -19,6 +19,7 @@ data class PendingAttachment(
   val mimeType: String,
   val base64: String,
   val durationMs: Long? = null,
+  val videoThumbnailBase64: String? = null,
 )
 
 internal data class ChatComposerAttachmentMigration(
@@ -205,6 +206,7 @@ internal fun List<SessionEditorAttachment>.toPendingAttachments(): List<PendingA
 internal fun attachmentTypeForMimeType(mimeType: String): String =
   when {
     mimeType.startsWith("audio/") -> "audio"
+    mimeType.startsWith("video/") -> "video"
     mimeType.startsWith("image/") -> "image"
     else -> "file"
   }

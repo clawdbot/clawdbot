@@ -14,6 +14,12 @@ import type { CronServiceState } from "./service/state.js";
 import type { CronJob, CronJobPatch } from "./types.js";
 
 const DEFAULT_TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;
+const CREDENTIAL_WEBHOOK_URL = (() => {
+  const url = new URL("https://example.invalid/hook");
+  url.username = "user";
+  url.password = "password";
+  return url.href;
+})();
 
 function expectCronStaggerMs(job: CronJob, expected: number): void {
   expect(job.schedule.kind).toBe("cron");
@@ -437,6 +443,12 @@ describe("applyJobPatch", () => {
     {
       name: "invalid URL",
       patch: { delivery: { mode: "webhook", to: "not-a-url" } } satisfies CronJobPatch,
+    },
+    {
+      name: "URL-embedded credentials",
+      patch: {
+        delivery: { mode: "webhook", to: CREDENTIAL_WEBHOOK_URL },
+      } satisfies CronJobPatch,
     },
   ] as const)("rejects invalid webhook delivery target URL: $name", ({ patch }) => {
     const expectedError = "cron webhook delivery requires delivery.to to be a valid http(s) URL";

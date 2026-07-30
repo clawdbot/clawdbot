@@ -119,6 +119,77 @@ describe("loadCodexBundleMcpThreadConfig", () => {
     expect(loaded.fingerprint).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it("applies session server and tool denials to bundled Codex MCP config", () => {
+    mocks.bundleMcp = {
+      config: {
+        mcpServers: {
+          docs: {
+            type: "http",
+            url: "https://docs.example.com/mcp",
+            toolFilter: { exclude: ["delete_all"] },
+          },
+          constructor: { type: "http", url: "https://constructor.example.com/mcp" },
+          search: { type: "http", url: "https://search.example.com/mcp" },
+        },
+      },
+      diagnostics: [],
+    };
+
+    const loaded = loadCodexBundleMcpThreadConfig({
+      workspaceDir: "/workspace",
+      cfg: {},
+      toolOverrides: {
+        mcpServers: { search: false },
+        mcpToolsDeny: { docs: ["delete_page"] },
+      },
+    });
+
+    expect(loaded.configPatch).toEqual({
+      mcp_servers: {
+        constructor: {
+          url: "https://constructor.example.com/mcp",
+        },
+        docs: {
+          url: "https://docs.example.com/mcp",
+          disabled_tools: ["delete_all", "delete_page"],
+        },
+      },
+    });
+  });
+
+  it("lets user config disable a same-named bundled server unless the session enables it", () => {
+    mocks.bundleMcp = {
+      config: {
+        mcpServers: {
+          docs: { type: "http", url: "https://bundled.example.com/mcp" },
+        },
+      },
+      diagnostics: [],
+    };
+    const cfg = {
+      mcp: {
+        servers: {
+          docs: { enabled: false, url: "https://configured.example.com/mcp" },
+        },
+      },
+    };
+
+    expect(
+      loadCodexBundleMcpThreadConfig({ workspaceDir: "/workspace", cfg }).configPatch,
+    ).toBeUndefined();
+    expect(
+      loadCodexBundleMcpThreadConfig({
+        workspaceDir: "/workspace",
+        cfg,
+        toolOverrides: { mcpServers: { docs: true } },
+      }).configPatch,
+    ).toEqual({
+      mcp_servers: {
+        docs: { url: "https://bundled.example.com/mcp" },
+      },
+    });
+  });
+
   it("leaves user mcp.servers to the Codex user MCP projection path", () => {
     // User MCP config is projected elsewhere; this loader only injects bundled
     // MCP servers so the same server does not appear twice in Codex.

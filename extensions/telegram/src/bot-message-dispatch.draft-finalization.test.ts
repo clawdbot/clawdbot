@@ -10,7 +10,7 @@ import {
   dispatchTelegramMessage,
   dispatchWithContext,
   editMessageTelegram,
-  emitInternalMessageSentHook,
+  emitTelegramMessageSentHooks,
   expectDeliverRepliesParams,
   expectRecordFields,
   mockCallArg,
@@ -132,10 +132,26 @@ describeTelegramDispatch("dispatchTelegramMessage draft-finalization", () => {
     expect(answerDraftStream.stop).toHaveBeenCalled();
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
-    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+    expect(emitTelegramMessageSentHooks).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), {
       content: "block-only answer",
       messageId: 2001,
     });
+  });
+
+  it("does not emit a terminal when a finalized preview may have landed without an id", async () => {
+    const { answerDraftStream } = setupDraftStreams();
+    answerDraftStream.sendMayHaveLanded.mockReturnValue(true);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "uncertain final" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.stop).toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(emitTelegramMessageSentHooks).not.toHaveBeenCalled();
   });
 
   it("delivers a block-only answer when a native quote disables the draft stream", async () => {
@@ -217,7 +233,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-finalization", () => {
 
     expect(answerDraftStream.stop).toHaveBeenCalled();
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
-    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+    expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), {
       content: "partial answer",
       messageId: 2001,
     });
@@ -291,7 +307,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-finalization", () => {
 
     expect(answerDraftStream.stop).toHaveBeenCalled();
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
-    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+    expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), {
       content: "pending answer",
       messageId: 2001,
     });

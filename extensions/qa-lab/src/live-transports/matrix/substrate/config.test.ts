@@ -265,8 +265,46 @@ describe("matrix qa config", () => {
     expect(account?.streaming).toEqual({
       block: { enabled: true },
       mode: "partial",
+      preview: { toolProgress: true },
     });
     expect(config.messages?.groupChat?.mentionPatterns).toEqual(["\\S"]);
+  });
+
+  it("resets tool progress when a scalar streaming override follows an opt-out", () => {
+    const optedOut = buildMatrixQaConfig({} as OpenClawConfig, {
+      driverUserId: "@driver:matrix-qa.test",
+      homeserver: "http://127.0.0.1:28008/",
+      observerUserId: "@observer:matrix-qa.test",
+      overrides: {
+        streaming: {
+          mode: "quiet",
+          preview: { toolProgress: false },
+        },
+      },
+      sutAccessToken: "sut-token",
+      sutAccountId: "sut",
+      sutUserId: "@sut:matrix-qa.test",
+      topology,
+    });
+    const reset = buildMatrixQaConfig(optedOut, {
+      driverUserId: "@driver:matrix-qa.test",
+      homeserver: "http://127.0.0.1:28008/",
+      observerUserId: "@observer:matrix-qa.test",
+      overrides: { streaming: "quiet" },
+      sutAccessToken: "sut-token",
+      sutAccountId: "sut",
+      sutUserId: "@sut:matrix-qa.test",
+      topology,
+    });
+
+    expect(optedOut.channels?.matrix?.accounts?.sut?.streaming).toEqual({
+      mode: "quiet",
+      preview: { toolProgress: false },
+    });
+    expect(reset.channels?.matrix?.accounts?.sut?.streaming).toEqual({
+      mode: "quiet",
+      preview: { toolProgress: true },
+    });
   });
 
   it("applies Matrix approval delivery overrides with gateway forwarding enabled", () => {
