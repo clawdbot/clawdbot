@@ -383,6 +383,75 @@ describe("normalizeProviders", () => {
     expect(enforced?.moonshot?.apiKey).toBe("MOONSHOT_API_KEY"); // pragma: allowlist secret
   });
 
+  it("fills missing cost.cacheRead and cost.cacheWrite with 0", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    try {
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        anthropic: {
+          models: [
+            createModel({
+              id: "claude-sonnet-5",
+              cost: { input: 10, output: 50 },
+            }),
+          ],
+        },
+      };
+
+      const normalized = normalizeProviders({ providers, agentDir });
+      const models = normalized?.anthropic?.models;
+      expect(models).toHaveLength(1);
+      expect(models?.[0]?.cost).toEqual({ input: 10, output: 50, cacheRead: 0, cacheWrite: 0 });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not touch a cost object that already has all fields", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    try {
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        anthropic: {
+          models: [
+            createModel({
+              id: "claude-sonnet-5",
+              cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+            }),
+          ],
+        },
+      };
+
+      const normalized = normalizeProviders({ providers, agentDir });
+      const models = normalized?.anthropic?.models;
+      expect(models).toHaveLength(1);
+      expect(models?.[0]?.cost).toEqual({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not add cost when the model has no cost", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    try {
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        anthropic: {
+          models: [
+            createModel({
+              id: "claude-sonnet-5",
+              cost: undefined,
+            }),
+          ],
+        },
+      };
+
+      const normalized = normalizeProviders({ providers, agentDir });
+      const models = normalized?.anthropic?.models;
+      expect(models).toHaveLength(1);
+      expect(models?.[0]?.cost).toBeUndefined();
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("canonicalizes LM Studio baseUrl after merge-style explicit overwrite", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     try {

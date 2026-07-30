@@ -31,6 +31,36 @@ function getProviderModelId(model: ProviderModelConfig): string | undefined {
   return typeof model.id === "string" && model.id.trim() ? model.id : undefined;
 }
 
+/**
+ * Fill missing cost fields with 0 so the generated catalog always passes
+ * {@link ModelsConfigSchema} validation, which requires `input`, `output`,
+ * `cacheRead`, and `cacheWrite` when `cost` is present.
+ *
+ * Config validation (zod) accepts partial cost because all fields are optional,
+ * but the catalog schema (TypeBox) requires every field. Normalizing here at
+ * catalog-publication time preserves the accepted config shape while preventing
+ * a persistent `model catalog load issue` warning.
+ */
+function normalizeModelCostForCatalog(model: ProviderModelConfig): ProviderModelConfig {
+  if (!model.cost) {
+    return model;
+  }
+  const cost = model.cost as unknown as Record<string, number | undefined>;
+  const input = cost.input ?? 0;
+  const output = cost.output ?? 0;
+  const cacheRead = cost.cacheRead ?? 0;
+  const cacheWrite = cost.cacheWrite ?? 0;
+  if (
+    cost.input === input &&
+    cost.output === output &&
+    cost.cacheRead === cacheRead &&
+    cost.cacheWrite === cacheWrite
+  ) {
+    return model;
+  }
+  return { ...model, cost: { input, output, cacheRead, cacheWrite } };
+}
+
 function mergeNormalizedProviderModel(
   existing: ProviderModelConfig,
   incoming: ProviderModelConfig,
@@ -73,20 +103,24 @@ function normalizeProviderModelsForConfig(
     if (normalizedModel !== model) {
       mutated = true;
     }
-    const id = getProviderModelId(normalizedModel);
+    const costNormalizedModel = normalizeModelCostForCatalog(normalizedModel);
+    if (costNormalizedModel !== normalizedModel) {
+      mutated = true;
+    }
+    const id = getProviderModelId(costNormalizedModel);
     if (id) {
       const existingIndex = seenById.get(id);
       if (existingIndex !== undefined) {
         mutated = true;
         const existing = nextModels.at(existingIndex);
         if (existing) {
-          nextModels[existingIndex] = mergeNormalizedProviderModel(existing, normalizedModel);
+          nextModels[existingIndex] = mergeNormalizedProviderModel(existing, costNormalizedModel);
         }
         continue;
       }
       seenById.set(id, nextModels.length);
     }
-    nextModels.push(normalizedModel);
+    nextModels.push(costNormalizedModel);
   }
 
   return mutated
