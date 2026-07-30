@@ -8,14 +8,15 @@ import {
   unresolvedEnvironmentMayHideLifecycle,
 } from "./exec-approvals-lifecycle-env.js";
 import { resolveLifecyclePackageRunnerArgv } from "./exec-approvals-lifecycle-runners.js";
-import { extractShellSubstitutionCommands } from "./exec-approvals-lifecycle-substitutions.js";
+import {
+  bindLifecyclePosixShellPositionals,
+  extractShellSubstitutionCommands,
+  lifecyclePositionalBindingRequiresApproval,
+  resolveLifecyclePosixShellPositionals,
+} from "./exec-approvals-lifecycle-substitutions.js";
 import type { ExecCommandSegment } from "./exec-command-analysis-types.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
-import { POSIX_INLINE_COMMAND_FLAGS, resolveInlineCommandMatch } from "./shell-inline-command.js";
-import {
-  extractShellWrapperInlineCommand,
-  POSIX_PARSEABLE_SHELL_WRAPPERS,
-} from "./shell-wrapper-resolution.js";
+import { extractShellWrapperInlineCommand } from "./shell-wrapper-resolution.js";
 
 const MAX_NESTED_COMMAND_DEPTH = 8;
 const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "--version"]);
@@ -461,38 +462,6 @@ function splitInlineCommands(command: string): string[] {
   return splitCommandText(command, new Set([";", "|", "&", "\n", "\r"]));
 }
 
-function bindPosixShellPositionals(argv: string[], positionalArgv: readonly string[]): string[] {
-  const bound: string[] = [];
-  for (const token of argv) {
-    if (/^\$(?:@|\*|\{@\}|\{\*\})$/u.test(token)) {
-      bound.push(...positionalArgv.slice(1));
-      continue;
-    }
-    const replaced = token.replace(
-      /\$(?:\{([0-9]+)\}|([0-9]+))/gu,
-      (_match, bracedIndex: string | undefined, bareIndex: string | undefined) => {
-        const index = Number.parseInt(bracedIndex ?? bareIndex ?? "", 10);
-        return Number.isSafeInteger(index) ? (positionalArgv[index] ?? "") : "";
-      },
-    );
-    if (replaced) {
-      bound.push(replaced);
-    }
-  }
-  return bound;
-}
-
-function resolvePosixShellPositionals(argv: string[]): readonly string[] | null {
-  const executable = normalizeExecutableToken(argv[0] ?? "");
-  if (!POSIX_PARSEABLE_SHELL_WRAPPERS.has(executable)) {
-    return null;
-  }
-  const inlineMatch = resolveInlineCommandMatch(argv, POSIX_INLINE_COMMAND_FLAGS, {
-    allowCombinedC: true,
-  });
-  return inlineMatch.valueTokenIndex === null ? null : argv.slice(inlineMatch.valueTokenIndex + 1);
-}
-
 function isPowerShellSelection(argv: readonly string[]): boolean {
   return (
     ["get-process", "get-service", "gps", "gsv"].includes(
@@ -503,6 +472,7 @@ function isPowerShellSelection(argv: readonly string[]): boolean {
 
 function isPowerShellPipelineMutation(argv: readonly string[]): boolean {
   return [
+    "kill",
     "restart-service",
     "sasv",
     "start-service",
@@ -540,7 +510,11 @@ function commandHasLifecycleSubstitution(
   depth: number,
   shellContext?: ShellContext,
 ): boolean {
-  return extractShellSubstitutionCommands(command).some((nested) =>
+  const scan = extractShellSubstitutionCommands(command);
+  if (scan.uncertain) {
+    return true;
+  }
+  return scan.commands.some((nested) =>
     splitInlineCommands(nested).some((part) => {
       const argv = splitShellArgs(part);
       return argv ? classifyArgv(argv, part, depth + 1, shellContext) : true;
@@ -585,16 +559,22 @@ function classifyArgv(
     if (commandHasLifecycleSubstitution(inline, depth, nestedShellContext)) {
       return true;
     }
-    const positionalArgv = resolvePosixShellPositionals(argv);
+    const positionalArgv = resolveLifecyclePosixShellPositionals(argv);
     return splitInlineCommands(inline).some((part) => {
       const nestedArgv = splitShellArgs(part);
       if (!nestedArgv) {
         return false;
       }
+      if (
+        positionalArgv !== null &&
+        lifecyclePositionalBindingRequiresApproval(part, positionalArgv)
+      ) {
+        return true;
+      }
       const boundArgv =
         positionalArgv === null
           ? nestedArgv
-          : bindPosixShellPositionals(nestedArgv, positionalArgv);
+          : bindLifecyclePosixShellPositionals(nestedArgv, positionalArgv);
       return classifyArgv(boundArgv, part, depth + 1, nestedShellContext);
     });
   }
@@ -675,7 +655,8 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
           envComplete,
         });
         return (
-          (expanded.unresolved && unresolvedEnvironmentMayHideLifecycle(argv)) ||
+          ((expanded.unresolved || expanded.fieldSplitUncertain) &&
+            unresolvedEnvironmentMayHideLifecycle(argv)) ||
           classifyArgv(expanded.argv, segment.raw ?? params.command, 0)
         );
       })

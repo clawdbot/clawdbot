@@ -7,6 +7,7 @@ const VARIABLE_REFERENCE_RE =
 
 export type LifecycleEnvironmentExpansion = {
   argv: string[];
+  fieldSplitUncertain: boolean;
   unresolved: boolean;
 };
 
@@ -32,9 +33,8 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
     return !tokens.some((token) => ["blame", "list", "print", "procinfo"].includes(token));
   }
   if (executable === "systemctl") {
-    return !tokens.some((token) =>
-      ["is-active", "is-enabled", "list-units", "show", "status"].includes(token),
-    );
+    const action = tokens.slice(1).find((token) => !token.startsWith("-"));
+    return !["is-active", "is-enabled", "list-units", "show", "status"].includes(action ?? "");
   }
   if (executable === "openclaw") {
     return !tokens.some((token) =>
@@ -45,12 +45,21 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
     "",
     "kill",
     "killall",
+    "ash",
+    "bash",
+    "dash",
+    "env",
+    "fish",
+    "ksh",
     "pkill",
     "powershell",
     "pwsh",
     "schtasks",
     "service",
+    "sh",
     "taskkill",
+    "xargs",
+    "zsh",
   ].includes(executable);
 }
 
@@ -76,10 +85,12 @@ export function expandLifecycleEnvironmentArgv(params: {
   env?: NodeJS.ProcessEnv;
   envComplete: boolean;
 }): LifecycleEnvironmentExpansion {
+  let fieldSplitUncertain = false;
   let unresolved = false;
   const replaceVariable = (key: string): string => {
     const value = readEnvironmentValue(params.env, key);
     if (value !== undefined) {
+      fieldSplitUncertain ||= /\s/u.test(value);
       return value;
     }
     if (!params.envComplete) {
@@ -99,5 +110,5 @@ export function expandLifecycleEnvironmentArgv(params: {
         .replace(CMD_VARIABLE_RE, (_match, key: string) => replaceVariable(key)),
     )
     .filter((token) => token.length > 0);
-  return { argv, unresolved };
+  return { argv, fieldSplitUncertain, unresolved };
 }

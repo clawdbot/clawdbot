@@ -88,7 +88,9 @@ function packageOperationMutatesOpenClaw(
   if (!["add", "i", "install", "remove", "uninstall", "up", "update"].includes(operation)) {
     return false;
   }
-  return argv.slice(subcommandIndex + 1).some((token) => /^openclaw(?:@|$)/iu.test(token.trim()));
+  return argv
+    .slice(subcommandIndex + 1)
+    .some((token) => /^(?:openclaw|[^@\s]+@npm:openclaw)(?:@|$)/iu.test(token.trim()));
 }
 
 /** Resolve command argv launched by npm-compatible package runners. */

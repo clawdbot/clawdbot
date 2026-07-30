@@ -57,15 +57,35 @@ export function resolveLifecycleXargsArgv(argv: readonly string[]): LifecycleXar
   if (normalizeExecutableToken(argv[0] ?? "") !== "xargs") {
     return { kind: "not-xargs" };
   }
+  let replacementToken: string | undefined;
+  const commandPlan = (commandArgv: string[]): LifecycleXargsPlan =>
+    replacementToken && commandArgv[0]?.includes(replacementToken)
+      ? { kind: "approval-required" }
+      : { kind: "argv", argv: commandArgv };
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index]?.trim() ?? "";
     if (token === "--") {
-      return index + 1 < argv.length
-        ? { kind: "argv", argv: argv.slice(index + 1) }
-        : { kind: "not-xargs" };
+      return index + 1 < argv.length ? commandPlan(argv.slice(index + 1)) : { kind: "not-xargs" };
     }
     if (!token.startsWith("-") || token === "-") {
-      return { kind: "argv", argv: argv.slice(index) };
+      return commandPlan(argv.slice(index));
+    }
+    if (token === "-I") {
+      replacementToken = argv[index + 1]?.trim();
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("-I") && token.length > 2) {
+      replacementToken = token.slice(2);
+      continue;
+    }
+    if (token === "-i" || token === "--replace") {
+      replacementToken = "{}";
+      continue;
+    }
+    if (token.startsWith("--replace=")) {
+      replacementToken = token.slice("--replace=".length) || "{}";
+      continue;
     }
     const name = optionName(token);
     if (XARGS_FLAGS.has(name)) {

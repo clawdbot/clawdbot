@@ -1,5 +1,14 @@
 // Extracts shell command/process substitutions without treating quoted text as executable.
+import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
+import { POSIX_INLINE_COMMAND_FLAGS, resolveInlineCommandMatch } from "./shell-inline-command.js";
+import { POSIX_PARSEABLE_SHELL_WRAPPERS } from "./shell-wrapper-resolution.js";
+
 const MAX_SUBSTITUTION_DEPTH = 8;
+
+export type ShellSubstitutionScan = {
+  commands: string[];
+  uncertain: boolean;
+};
 
 function findClosingParen(command: string, start: number): number | null {
   let depth = 1;
@@ -62,11 +71,15 @@ function findClosingBacktick(command: string, start: number): number | null {
   return null;
 }
 
-function extractAtDepth(command: string, depth: number): string[] {
+function extractAtDepth(command: string, depth: number): ShellSubstitutionScan {
   if (depth >= MAX_SUBSTITUTION_DEPTH) {
-    return [];
+    return {
+      commands: [],
+      uncertain: /\$\(|[<>=]\(|`/u.test(command),
+    };
   }
   const extracted: string[] = [];
+  let uncertain = false;
   let quote: "'" | '"' | null = null;
   let escaped = false;
   for (let index = 0; index < command.length; index += 1) {
@@ -106,7 +119,9 @@ function extractAtDepth(command: string, depth: number): string[] {
       if (end !== null) {
         const nested = command.slice(index + 2, end).trim();
         if (nested) {
-          extracted.push(nested, ...extractAtDepth(nested, depth + 1));
+          const nestedScan = extractAtDepth(nested, depth + 1);
+          extracted.push(nested, ...nestedScan.commands);
+          uncertain ||= nestedScan.uncertain;
         }
         index = end;
       }
@@ -117,16 +132,66 @@ function extractAtDepth(command: string, depth: number): string[] {
       if (end !== null) {
         const nested = command.slice(index + 1, end).trim();
         if (nested) {
-          extracted.push(nested, ...extractAtDepth(nested, depth + 1));
+          const nestedScan = extractAtDepth(nested, depth + 1);
+          extracted.push(nested, ...nestedScan.commands);
+          uncertain ||= nestedScan.uncertain;
         }
         index = end;
       }
     }
   }
-  return extracted;
+  return { commands: extracted, uncertain };
 }
 
 /** Return executable text nested in POSIX-style command or process substitutions. */
-export function extractShellSubstitutionCommands(command: string): string[] {
+export function extractShellSubstitutionCommands(command: string): ShellSubstitutionScan {
   return extractAtDepth(command, 0);
+}
+
+/** Return POSIX shell argv bound as $0, $1, ... after an inline command. */
+export function resolveLifecyclePosixShellPositionals(argv: string[]): readonly string[] | null {
+  const executable = normalizeExecutableToken(argv[0] ?? "");
+  if (!POSIX_PARSEABLE_SHELL_WRAPPERS.has(executable)) {
+    return null;
+  }
+  const inlineMatch = resolveInlineCommandMatch(argv, POSIX_INLINE_COMMAND_FLAGS, {
+    allowCombinedC: true,
+  });
+  return inlineMatch.valueTokenIndex === null ? null : argv.slice(inlineMatch.valueTokenIndex + 1);
+}
+
+/** Return true when lost quote provenance makes positional field splitting ambiguous. */
+export function lifecyclePositionalBindingRequiresApproval(
+  command: string,
+  positionalArgv: readonly string[],
+): boolean {
+  return (
+    /\$(?:[1-9][0-9]*|[@*]|\{(?:[1-9][0-9]*|[@*])\})/u.test(command) &&
+    positionalArgv.some((token, index) => index > 0 && /\s/u.test(token))
+  );
+}
+
+/** Bind exact POSIX positional references for nested lifecycle classification. */
+export function bindLifecyclePosixShellPositionals(
+  argv: string[],
+  positionalArgv: readonly string[],
+): string[] {
+  const bound: string[] = [];
+  for (const token of argv) {
+    if (/^\$(?:@|\*|\{@\}|\{\*\})$/u.test(token)) {
+      bound.push(...positionalArgv.slice(1));
+      continue;
+    }
+    const replaced = token.replace(
+      /\$(?:\{([0-9]+)\}|([0-9]+))/gu,
+      (_match, bracedIndex: string | undefined, bareIndex: string | undefined) => {
+        const index = Number.parseInt(bracedIndex ?? bareIndex ?? "", 10);
+        return Number.isSafeInteger(index) ? (positionalArgv[index] ?? "") : "";
+      },
+    );
+    if (replaced) {
+      bound.push(replaced);
+    }
+  }
+  return bound;
 }

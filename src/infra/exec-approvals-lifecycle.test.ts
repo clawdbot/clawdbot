@@ -8,6 +8,14 @@ function requiresApproval(command: string, argv: string[]): boolean {
   });
 }
 
+function nestShellSubstitution(command: string, depth: number): string {
+  let nested = command;
+  for (let index = 0; index < depth; index += 1) {
+    nested = `echo "$(${nested})"`;
+  }
+  return nested;
+}
+
 const mutationCases: Array<[string, string[]]> = [
   ["openclaw gateway restart", ["openclaw", "gateway", "restart"]],
   ["openclaw gateway", ["openclaw", "gateway"]],
@@ -56,6 +64,10 @@ const mutationCases: Array<[string, string[]]> = [
     `sh -c 'openclaw gateway "$1"' sh restart`,
     ["sh", "-c", `openclaw gateway "$1"`, "sh", "restart"],
   ],
+  [
+    `sh -c 'openclaw $1' sh 'gateway restart'`,
+    ["sh", "-c", "openclaw $1", "sh", "gateway restart"],
+  ],
   ["npx openclaw@latest gateway restart", ["npx", "openclaw@latest", "gateway", "restart"]],
   [
     "npx --color always openclaw gateway restart",
@@ -68,6 +80,7 @@ const mutationCases: Array<[string, string[]]> = [
   [`npx -c "openclaw gateway restart"`, ["npx", "-c", "openclaw gateway restart"]],
   ["npm exec -- openclaw gateway restart", ["npm", "exec", "--", "openclaw", "gateway", "restart"]],
   ["npm install -g openclaw@latest", ["npm", "install", "-g", "openclaw@latest"]],
+  ["npm install -g oc@npm:openclaw@latest", ["npm", "install", "-g", "oc@npm:openclaw@latest"]],
   [
     "npm --prefix /tmp exec -- openclaw gateway restart",
     ["npm", "--prefix", "/tmp", "exec", "--", "openclaw", "gateway", "restart"],
@@ -91,17 +104,20 @@ const mutationCases: Array<[string, string[]]> = [
   ],
   ["Get-Process OpenClaw | Stop-Process", ["Get-Process", "OpenClaw", "|", "Stop-Process"]],
   ["Get-Service OpenClaw | Start-Service", ["Get-Service", "OpenClaw", "|", "Start-Service"]],
+  ["Get-Process OpenClaw | kill", ["Get-Process", "OpenClaw", "|", "kill"]],
   [
     "env env env env env env env env openclaw gateway restart",
     ["env", "env", "env", "env", "env", "env", "env", "env", "openclaw", "gateway", "restart"],
   ],
   ["xargs openclaw gateway", ["xargs", "openclaw", "gateway"]],
+  ["xargs -I{} {} gateway restart", ["xargs", "-I{}", "{}", "gateway", "restart"]],
   [`echo "$(openclaw gateway restart)"`, ["echo", "$(openclaw gateway restart)"]],
   [
     String.raw`echo "$(printf '\'; openclaw gateway restart)"`,
     ["echo", String.raw`$(printf '\'; openclaw gateway restart)`],
   ],
   ["echo `openclaw gateway restart`", ["echo", "openclaw gateway restart"]],
+  [nestShellSubstitution("openclaw gateway restart", 9), ["echo", "nested substitution"]],
 ];
 
 const nonMutationCases: Array<[string, string[]]> = [
@@ -234,6 +250,53 @@ describe("OpenClaw lifecycle exec approvals", () => {
           {
             raw: `systemctl "$ACTION" openclaw-gateway.service`,
             argv: ["systemctl", "$ACTION", "openclaw-gateway.service"],
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("fails closed when known environment expansion may field-split lifecycle argv", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: "systemctl $ARGS",
+        env: { ARGS: "restart openclaw-gateway.service" },
+        segments: [
+          {
+            raw: "systemctl $ARGS",
+            argv: ["systemctl", "$ARGS"],
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("fails closed when a partial environment supplies a wrapper payload", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `sh -c "$SCRIPT"`,
+        env: {},
+        envComplete: false,
+        segments: [
+          {
+            raw: `sh -c "$SCRIPT"`,
+            argv: ["sh", "-c", "$SCRIPT"],
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not let a later status token clear an unresolved systemctl action", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: "systemctl $ACTION status openclaw-gateway.service",
+        env: {},
+        envComplete: false,
+        segments: [
+          {
+            raw: "systemctl $ACTION status openclaw-gateway.service",
+            argv: ["systemctl", "$ACTION", "status", "openclaw-gateway.service"],
           },
         ],
       }),
