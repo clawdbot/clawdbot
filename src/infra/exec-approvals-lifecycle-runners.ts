@@ -135,7 +135,7 @@ export function resolveLifecyclePackageRunnerArgv(
       ? { kind: "approval-required" }
       : { kind: "not-runner" };
   }
-  if (!["npm", "pnpm", "yarn"].includes(executable)) {
+  if (!["bun", "npm", "pnpm", "yarn"].includes(executable)) {
     return { kind: "not-runner" };
   }
 
@@ -151,7 +151,12 @@ export function resolveLifecyclePackageRunnerArgv(
   ) {
     return { kind: "approval-required" };
   }
-  if (executable === "npm" && ["exec", "x"].includes(subcommand)) {
+  if (executable === "bun" && ["run", "x"].includes(subcommand)) {
+    const resolved = packageTarget(argv, subcommandIndex + 1);
+    if (resolved?.length) {
+      return { kind: "argv", argv: resolved };
+    }
+  } else if (executable === "npm" && ["exec", "x"].includes(subcommand)) {
     const inline = resolveInlineCommand(argv, subcommandIndex + 1);
     const resolved = inline ?? packageTarget(argv, subcommandIndex + 1);
     if (resolved?.length) {
@@ -163,6 +168,11 @@ export function resolveLifecyclePackageRunnerArgv(
       return { kind: "argv", argv: resolved };
     }
   } else if (["pnpm", "yarn"].includes(executable) && subcommand === "exec") {
+    const resolved = packageTarget(argv, subcommandIndex + 1);
+    if (resolved?.length) {
+      return { kind: "argv", argv: resolved };
+    }
+  } else if (executable === "yarn" && subcommand === "run") {
     const resolved = packageTarget(argv, subcommandIndex + 1);
     if (resolved?.length) {
       return { kind: "argv", argv: resolved };

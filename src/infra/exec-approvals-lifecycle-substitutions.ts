@@ -214,9 +214,20 @@ export function lifecyclePositionalBindingRequiresApproval(
   command: string,
   positionalArgv: readonly string[],
 ): boolean {
-  return (
-    /\$(?:[1-9][0-9]*|[@*]|\{(?:[1-9][0-9]*|[@*])\})/u.test(command) &&
-    positionalArgv.some((token, index) => index > 0 && /\s/u.test(token))
+  if (/\$\{(?:[0-9]+|[@*])(?::?[-+=?])[^}]*\}/u.test(command)) {
+    return true;
+  }
+  if (
+    /\$(?:[@*]|\{[@*]\})/u.test(command) &&
+    positionalArgv.slice(1).some((token) => /\s/u.test(token))
+  ) {
+    return true;
+  }
+  const referencedIndexes = [...command.matchAll(/\$(?:\{([0-9]+)\}|([0-9]+))/gu)].map((match) =>
+    Number.parseInt(match[1] ?? match[2] ?? "", 10),
+  );
+  return referencedIndexes.some(
+    (index) => Number.isSafeInteger(index) && /\s/u.test(positionalArgv[index] ?? ""),
   );
 }
 

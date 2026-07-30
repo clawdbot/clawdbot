@@ -101,6 +101,11 @@ const mutationCases: Array<[string, string[]]> = [
     `sh -c 'openclaw $1' sh 'gateway restart'`,
     ["sh", "-c", "openclaw $1", "sh", "gateway restart"],
   ],
+  [`sh -c '$0 restart' 'openclaw gateway'`, ["sh", "-c", "$0 restart", "openclaw gateway"]],
+  [
+    "sh -c '${1:-openclaw} gateway restart' sh",
+    ["sh", "-c", "${1:-openclaw} gateway restart", "sh"],
+  ],
   ["npx openclaw@latest gateway restart", ["npx", "openclaw@latest", "gateway", "restart"]],
   [
     "npx --color always openclaw gateway restart",
@@ -130,6 +135,9 @@ const mutationCases: Array<[string, string[]]> = [
     ["pnpm", "-C", "repo", "dlx", "openclaw", "gateway", "restart"],
   ],
   ["yarn dlx openclaw gateway restart", ["yarn", "dlx", "openclaw", "gateway", "restart"]],
+  ["yarn run openclaw gateway restart", ["yarn", "run", "openclaw", "gateway", "restart"]],
+  ["bun x openclaw gateway restart", ["bun", "x", "openclaw", "gateway", "restart"]],
+  ["bun run openclaw gateway restart", ["bun", "run", "openclaw", "gateway", "restart"]],
   [
     "pnpm -C repo openclaw gateway restart",
     ["pnpm", "-C", "repo", "openclaw", "gateway", "restart"],
