@@ -627,9 +627,6 @@ describe("qa mock openai server", () => {
           makeUserInput(
             "Tool progress error QA check: read `latest-missing-progress-target.txt` before answering. After the read fails, reply exactly `LATEST_PROGRESS_OK`.",
           ),
-          makeUserInput(
-            "Continue with the QA scenario plan and report worked, failed, and blocked items.",
-          ),
         ],
       }),
     });
@@ -663,6 +660,37 @@ describe("qa mock openai server", () => {
     expect(currentNormalBody).toContain('"name":"exec"');
     expect(currentNormalBody).toContain(command);
     expect(currentNormalBody).not.toContain("stale-missing-progress-target.txt");
+  });
+
+  it("does not recover tool-progress directives from an earlier user turn", async () => {
+    const server = await startMockServer();
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          makeUserInput(
+            "Tool progress QA check: read `stale-progress-target.txt` before answering. After the read completes, reply exactly `STALE_PROGRESS_OK`.",
+          ),
+          {
+            type: "function_call_output",
+            call_id: "call_stale_progress_read",
+            output: JSON.stringify({ text: "stale turn" }),
+          },
+          makeUserInput("Summarize the current turn in one short sentence."),
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).not.toContain('"name":"read"');
+    expect(body).not.toContain("stale-progress-target.txt");
+    expect(body).not.toContain("STALE_PROGRESS_OK");
   });
 
   it("prefers path-like refs over generic quoted keys in prompts", async () => {

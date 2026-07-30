@@ -320,43 +320,28 @@ function buildDeterministicEmbedding(text: string, dimensions = 16) {
   return values.map((value) => Number((value / magnitude).toFixed(8)));
 }
 
-function extractLastUserText(input: ResponsesInputItem[]) {
+type CurrentUserTurn = {
+  index: number;
+  text: string;
+};
+
+function findCurrentUserTurn(input: ResponsesInputItem[]): CurrentUserTurn | undefined {
   for (let index = input.length - 1; index >= 0; index -= 1) {
     const item = input[index];
     if (item.role !== "user" || !Array.isArray(item.content)) {
       continue;
     }
-    const text = extractInputText(item.content);
-    if (text) {
-      return text;
-    }
+    return { index, text: extractInputText(item.content) };
   }
-  return "";
+  return undefined;
 }
 
-function extractLastMatchingUserTurn(input: ResponsesInputItem[], pattern: RegExp) {
-  const matcher = new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ""));
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    if (item.role !== "user" || !Array.isArray(item.content)) {
-      continue;
-    }
-    const text = extractInputText(item.content);
-    if (text && matcher.test(text)) {
-      return { index, text };
-    }
-  }
-  return null;
+function extractLastUserText(input: ResponsesInputItem[]) {
+  return findCurrentUserTurn(input)?.text ?? "";
 }
 
 function findLastUserIndex(input: ResponsesInputItem[]) {
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    if (item.role === "user" && Array.isArray(item.content)) {
-      return index;
-    }
-  }
-  return -1;
+  return findCurrentUserTurn(input)?.index ?? -1;
 }
 
 function isToolOutputContinuationText(text: string) {
@@ -2018,13 +2003,13 @@ async function buildResponsesPayload(
   const canCallSessionsYield =
     hasDeclaredTool(body, "sessions_yield") ||
     QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText);
-  const toolProgressTurn = extractLastMatchingUserTurn(
-    input,
-    /tool progress(?: error)? qa check/i,
-  );
-  const toolProgressPrompt = toolProgressTurn?.text ?? "";
-  const toolProgressToolOutput = toolProgressTurn
-    ? extractToolOutput(input.slice(toolProgressTurn.index))
+  const currentUserTurn = findCurrentUserTurn(input);
+  const toolProgressPrompt = currentUserTurn?.text ?? "";
+  const currentTurnIsToolProgress =
+    QA_TOOL_PROGRESS_ERROR_PROMPT_RE.test(toolProgressPrompt) ||
+    QA_TOOL_PROGRESS_PROMPT_RE.test(toolProgressPrompt);
+  const toolProgressToolOutput = currentTurnIsToolProgress && currentUserTurn
+    ? extractToolOutput(input.slice(currentUserTurn.index))
     : "";
   const toolProgressToolJson = parseToolOutputJson(toolProgressToolOutput);
   const buildToolProgressReadEvents = () => {
