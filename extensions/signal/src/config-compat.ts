@@ -217,6 +217,28 @@ function resolveManagedConnectionUrl(
   return matchesBindEndpoint ? undefined : normalizedUrl;
 }
 
+function inferManagedPortFromHttpUrl(
+  value: (key: string) => unknown,
+): number | undefined {
+  const httpUrl = optionalString(value("httpUrl"));
+  if (!httpUrl) {
+    return undefined;
+  }
+  try {
+    const url = new URL(normalizeSignalTransportUrl(httpUrl));
+    if (!url.port) {
+      return undefined;
+    }
+    const inferredPort = Number.parseInt(url.port, 10);
+    if (isValidSignalManagedNativePort(inferredPort)) {
+      return inferredPort;
+    }
+  } catch {
+    // Invalid or unparseable URL — fall through
+  }
+  return undefined;
+}
+
 function buildManagedNativeTransport(
   entry: Record<string, unknown>,
   parent: Record<string, unknown>,
@@ -226,7 +248,8 @@ function buildManagedNativeTransport(
   const cliPath = optionalString(value("cliPath"));
   const url = resolveManagedConnectionUrl(entry, parent);
   const httpHost = optionalString(value("httpHost"));
-  const httpPort = value("httpPort");
+  const rawPort = value("httpPort");
+  const httpPort = typeof rawPort === "number" ? rawPort : inferManagedPortFromHttpUrl(value);
   const startupTimeoutMs = value("startupTimeoutMs");
   const receiveMode = value("receiveMode");
   const ignoreStories = value("ignoreStories");
