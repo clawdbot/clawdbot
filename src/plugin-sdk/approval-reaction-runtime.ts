@@ -83,9 +83,16 @@ export type ApprovalReactionPromptPayload = ReplyPayload & {
   reactionBindings: readonly ApprovalReactionDecisionBinding[];
 };
 
-/** Pair of reaction-enabled and manual-fallback approval prompt payloads. */
+/** Reaction-enabled, native-control, and manual-fallback approval prompt payloads. */
 export type ApprovalReactionPendingContent = {
   reactionPayload: ApprovalReactionPromptPayload;
+  /**
+   * Prompt copy for channels whose native controls (Apple Messages polls,
+   * inline buttons) own the decision surface. Carries the same bold headers and
+   * labels as `reactionPayload` (#85954) minus the tapback hint, which would
+   * advertise a second, redundant control path next to the native one.
+   */
+  nativeControlsPayload: ReplyPayload;
   manualFallbackPayload: ReplyPayload;
 };
 
@@ -465,6 +472,18 @@ export function buildApprovalReactionPendingContent(params: {
   nowMs: number;
 }): ApprovalReactionPendingContent {
   const reactionPayload = buildApprovalPendingPromptPayload(params);
+  // Same rich copy as the reaction prompt, without the tapback hint: the
+  // channel's native controls already own the decision surface.
+  const nativeControlsPayload = buildMetadataPayload({
+    request: params.request,
+    view: params.view,
+    text: buildApprovalReactionPromptText({
+      view: params.view,
+      nowMs: params.nowMs,
+      reactionHint: null,
+    }),
+    allowedDecisions: reactionPayload.allowedDecisions,
+  });
   const manualFallbackPayload =
     params.view.approvalKind === "plugin"
       ? (() => {
@@ -496,7 +515,7 @@ export function buildApprovalReactionPendingContent(params: {
             nowMs: params.nowMs,
           } satisfies ExecApprovalPendingReplyParams),
         );
-  return { reactionPayload, manualFallbackPayload };
+  return { reactionPayload, nativeControlsPayload, manualFallbackPayload };
 }
 
 /** Build reaction and manual-fallback pending approval content directly from a request. */
