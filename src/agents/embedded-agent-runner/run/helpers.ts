@@ -104,7 +104,6 @@ function scrubAnthropicRefusalMagic(prompt: string): string {
 
 /** Anthropic's transport interprets this marker even for native-owned attempts. */
 export function resolveEmbeddedAttemptBasePrompt(params: {
-  nativeModelOwned: boolean;
   provider: string;
   prompt: string;
 }): string {
