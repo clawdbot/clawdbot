@@ -177,7 +177,11 @@ function shouldIncludeToolErrorDetails(params: {
 }
 
 function shouldMarkNonTerminalToolErrorWarning(lastToolError: ToolErrorSummary): boolean {
-  return lastToolError.middlewareError === true;
+  // Both are bookkeeping errors rather than a tool reporting its own failure, so
+  // neither terminates the turn. Paired with `hasUserFacingAssistantReply` at the
+  // call site, that makes the warning fallback-only: channels deliver it when the
+  // turn produced nothing else, and suppress it in favour of a real answer.
+  return lastToolError.middlewareError === true || lastToolError.syntheticMissingResult === true;
 }
 
 function formatToolErrorWarningText(params: {

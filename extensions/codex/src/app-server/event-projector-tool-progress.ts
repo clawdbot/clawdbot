@@ -135,6 +135,7 @@ export class CodexToolProgressProjection {
           : {}),
         ...(error.timedOut ? { timedOut: true } : {}),
         ...(error.middlewareError ? { middlewareError: true } : {}),
+        ...(error.syntheticMissingResult ? { syntheticMissingResult: true } : {}),
       },
       nativeMutation: {
         mutatingAction: error.mutatingAction === true,

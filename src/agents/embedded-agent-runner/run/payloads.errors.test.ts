@@ -660,6 +660,23 @@ describe("buildEmbeddedRunPayloads", () => {
     );
   });
 
+  it("marks a synthesized missing-result warning as non-terminal", () => {
+    // Identical to the case above apart from the origin of the error: nothing
+    // reported a failure, the call/result pairing was simply incomplete when the
+    // turn ended. The turn still produced an answer, so the warning is
+    // fallback-only and must not stand in for that answer.
+    const payloads = buildPayloads({
+      assistantTexts: ["Done."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: { toolName: "write", error: "file missing", syntheticMissingResult: true },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe("Done.");
+    expect(payloads[1]?.isError).toBe(true);
+    expect(getReplyPayloadMetadata(payloads[1] as object)?.nonTerminalToolErrorWarning).toBe(true);
+  });
+
   it("still shows write tool errors when timedOut is true but no fileTarget was recorded", () => {
     // Without `fileTarget` we cannot distinguish a confirmed file write from
     // an unrelated mutating-tool timeout, so the default-visible warning is

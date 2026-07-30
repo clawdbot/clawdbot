@@ -14,6 +14,13 @@ export type ToolErrorSummary = {
   validationErrorSummary?: string;
   timedOut?: boolean;
   middlewareError?: boolean;
+  /**
+   * The error was synthesized because a tool call had no matching result when the
+   * turn ended, rather than reported by the tool itself. Like a middleware error
+   * this is non-terminal bookkeeping: the turn can still have produced a complete
+   * answer, so channels must be free to treat the warning as fallback-only.
+   */
+  syntheticMissingResult?: boolean;
   mutatingAction?: boolean;
   actionFingerprint?: string;
   fileTarget?: FileTarget;

@@ -559,6 +559,10 @@ export class CodexToolTranscriptProjection {
       toolName: name,
       ...(meta ? { meta } : {}),
       error: formatMissingToolResultError({ id: firstMissingId, name }),
+      // Nothing reported a failure here; the call/result pairing is incomplete.
+      // Marking the origin lets the reply layer classify the warning as
+      // non-terminal instead of treating it as evidence the turn failed.
+      syntheticMissingResult: true,
       ...(item && isMutatingNativeToolItem(item) ? { mutatingAction: true } : {}),
       ...(actionFingerprint ? { actionFingerprint } : {}),
     });

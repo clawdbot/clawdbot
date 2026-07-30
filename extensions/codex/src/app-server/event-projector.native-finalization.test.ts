@@ -470,6 +470,9 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
       toolName: "bash",
       error: expect.stringContaining("without a matching tool.result"),
       mutatingAction: true,
+      // Synthesized from an unmatched call rather than reported by the tool, so
+      // the reply layer can classify the warning as non-terminal.
+      syntheticMissingResult: true,
     });
     expect(result.lastToolError?.actionFingerprint).toContain("node scripts/report.js --publish");
     expect(result.assistantTexts).toEqual([
