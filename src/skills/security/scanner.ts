@@ -392,47 +392,45 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   const lines = source.split("\n");
   const heuristicSource = stripCommentsForHeuristics(source);
   const heuristicLines = heuristicSource.split("\n");
-  const matchedLineRules = new Set<string>();
 
   // --- Line rules ---
   for (const rule of LINE_RULES) {
-    if (matchedLineRules.has(rule.ruleId)) {
-      continue;
-    }
-
     // Skip rule entirely if context requirement not met
     if (rule.requiresContext && !rule.requiresContext.test(source)) {
       continue;
     }
 
     for (const [i, line] of lines.entries()) {
-      const match = rule.pattern.exec(line);
-      if (!match) {
-        continue;
-      }
-
-      if (rule.ruleId === "dangerous-exec" && isBenignMemberExecMatch(line, match)) {
-        continue;
-      }
-
-      // Special handling for suspicious-network: check port
-      if (rule.ruleId === "suspicious-network") {
-        const port = Number.parseInt(expectDefined(match[1], "scanner regex capture 1"), 10);
-        if (STANDARD_PORTS.has(port)) {
+      const matches = line.matchAll(
+        new RegExp(
+          rule.pattern.source,
+          rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`,
+        ),
+      );
+      for (const match of matches) {
+        if (rule.ruleId === "dangerous-exec" && isBenignMemberExecMatch(line, match)) {
           continue;
         }
-      }
 
-      findings.push({
-        ruleId: rule.ruleId,
-        severity: rule.severity,
-        file: filePath,
-        line: i + 1,
-        message: rule.message,
-        evidence: formatScanEvidence(line),
-      });
-      matchedLineRules.add(rule.ruleId);
-      break; // one finding per line-rule per file
+        // Special handling for suspicious-network: check port
+        if (rule.ruleId === "suspicious-network") {
+          const port = Number.parseInt(expectDefined(match[1], "scanner regex capture 1"), 10);
+          if (STANDARD_PORTS.has(port)) {
+            continue;
+          }
+        }
+
+        // Every call is independently reviewable. Stopping after the first match
+        // lets later execution sites hide behind an already-approved finding.
+        findings.push({
+          ruleId: rule.ruleId,
+          severity: rule.severity,
+          file: filePath,
+          line: i + 1,
+          message: rule.message,
+          evidence: formatScanEvidence(line),
+        });
+      }
     }
   }
 

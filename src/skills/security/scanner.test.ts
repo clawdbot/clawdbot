@@ -149,6 +149,20 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("scanSource", () => {
+  it("reports every dangerous execution call in a file", () => {
+    const source = `
+import { execFile, spawn } from "node:child_process";
+spawn("node", ["first.js"]);
+spawn("node", ["second.js"]); execFile("node", ["third.js"]);
+`;
+
+    const findings = scanSource(source, "plugin.ts").filter(
+      (candidate) => candidate.ruleId === "dangerous-exec",
+    );
+
+    expect(findings.map((finding) => finding.line)).toEqual([3, 4, 4]);
+  });
+
   it("keeps bounded evidence free of lone surrogates", () => {
     const source = `${"a".repeat(119)}😀 child_process.exec("echo unsafe")`;
     const finding = scanSource(source, "plugin.ts").find(
