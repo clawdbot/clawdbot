@@ -2738,6 +2738,10 @@ describe("systemd service control", () => {
     execFileMock
       .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "reset-failed", GATEWAY_SERVICE);
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
         assertUserSystemctlArgs(args, "start", GATEWAY_SERVICE);
         cb(null, "", "");
       });
@@ -2845,6 +2849,28 @@ describe("systemd service control", () => {
     // reset-failed must clear any start-limit-hit latch before the restart so a
     // crash-looped unit can recover.
     expect(restartSequence).toEqual(["reset-failed", "restart"]);
+  });
+
+  it("runs reset-failed before starting a crash-looped user unit", async () => {
+    const startSequence: string[] = [];
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "reset-failed", GATEWAY_SERVICE);
+        startSequence.push(args[1] ?? "");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "start", GATEWAY_SERVICE);
+        startSequence.push(args[1] ?? "");
+        cb(null, "", "");
+      });
+    const { write, stdout } = createWritableStreamMock();
+    await startSystemdService({ stdout, env: {} });
+    // start must clear the latch too, so `openclaw gateway start` recovers a
+    // crash-looped unit just like restart (mirrors launchd start's enable).
+    expect(startSequence).toEqual(["reset-failed", "start"]);
+    expect(requireFirstWrite(write)).toContain("Started systemd service");
   });
 
   it("surfaces stop failures with systemctl detail", async () => {
