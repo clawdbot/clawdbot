@@ -59,6 +59,24 @@ update_doctor_env+=" OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=1"
 update_doctor_env+=" OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART=1"
 update_doctor_env+=" OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR=1"
 update_doctor_env+=" OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION=0"
+
+create_default_service_state() {
+  local account_home
+  account_home="$(node -p 'require("node:os").userInfo().homedir')"
+
+  # Service mutation is intentionally restricted to the OS account home. Keep
+  # these disposable-container flows isolated without pretending a temp HOME owns it.
+  rm -rf \
+    "$account_home/.openclaw" \
+    "$account_home/.config/systemd/user/openclaw-gateway.service" \
+    "$account_home/.config/fish" \
+    "$account_home/.config/powershell" \
+    "$account_home/.local/bin/openclaw-wrapper" \
+    "$account_home/openclaw-wrapper-argv.log"
+  openclaw_test_state_create "$account_home" empty
+  unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH
+}
+
 is_legacy_package_acceptance_compat() {
   [ "$(node scripts/e2e/lib/package-compat.mjs "$1")" = "1" ]
 }
@@ -136,17 +154,9 @@ run_flow() {
   local install_log="/tmp/openclaw-doctor-switch-${name}-install.log"
   local doctor_log="/tmp/openclaw-doctor-switch-${name}-doctor.log"
   local command_timeout="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-900s}"
-  local account_home=""
 
   echo "== Flow: $name =="
-  openclaw_test_state_create "switch-${name}" empty
-  account_home="$(getent passwd "$(id -u)" | cut -d: -f6)"
-  if [ -z "$account_home" ]; then
-    echo "Could not resolve the current account home" >&2
-    exit 1
-  fi
-  export HOME="$account_home"
-  unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH
+  create_default_service_state
   export USER="testuser"
 
   if ! openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$install_cmd" >"$install_log" 2>&1; then
@@ -270,7 +280,7 @@ run_proxy_env_flow() {
   local command_timeout="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-900s}"
 
   echo "== Flow: $name =="
-  openclaw_test_state_create "switch-${name}" empty
+  create_default_service_state
   export USER="testuser"
 
   unit_path="$HOME/.config/systemd/user/openclaw-gateway.service"
@@ -316,7 +326,7 @@ run_wrapper_flow() {
   local command_timeout="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-900s}"
 
   echo "== Flow: $name =="
-  openclaw_test_state_create "switch-${name}" empty
+  create_default_service_state
   export USER="testuser"
   mkdir -p "$HOME/.local/bin"
   local wrapper="$HOME/.local/bin/openclaw-wrapper"

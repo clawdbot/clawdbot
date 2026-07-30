@@ -77,7 +77,10 @@ function asCommandTextMode(value: unknown): ChannelStreamingCommandTextMode | un
 
 export const DEFAULT_PROGRESS_DRAFT_LABELS = SHARED_PROGRESS_DRAFT_LABELS;
 
-export const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 5_000;
+// Short enough that a multi-tool turn is never silent, long enough that a
+// quick answer posts no draft at all: the gate only creates the draft when the
+// timer fires, and finalize cancels it.
+export const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 1_500;
 const DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS = 120;
 // Narration is a short paragraph, not a compact tool line; it gets its own
 // budget so the utility-model text is not mid-word truncated at line width.
@@ -799,9 +802,18 @@ export function resolveChannelStreamingPreviewChunk(
 export function resolveChannelStreamingPreviewToolProgress(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue = true,
+  /**
+   * The channel's resolved stream mode. Only the caller knows it: channels pick
+   * their own default when `streaming.mode` is unset (Discord and Telegram use
+   * "progress", Slack and others "partial"), and this helper has no channel
+   * identity to guess with. Omitting it reads the configured mode and treats
+   * unset as "partial".
+   */
+  mode?: StreamingMode,
 ): boolean {
   const config = getChannelStreamingConfigObject(entry);
-  if (resolveChannelPreviewStreamMode(entry, "partial") === "progress") {
+  const effectiveMode = mode ?? resolveChannelPreviewStreamMode(entry, "partial");
+  if (effectiveMode === "progress") {
     return (
       asBoolean(config?.progress?.toolProgress) ??
       asBoolean(config?.preview?.toolProgress) ??
@@ -877,7 +889,7 @@ export function resolveChannelStreamingNativeTransport(
 
 export function resolveChannelPreviewStreamMode(
   entry: StreamingCompatEntry | null | undefined,
-  defaultMode: "off" | "partial",
+  defaultMode: StreamingMode,
 ): StreamingMode {
   return parsePreviewStreamingMode(getChannelStreamingConfigObject(entry)?.mode) ?? defaultMode;
 }
@@ -1274,58 +1286,34 @@ export function formatChannelProgressDraftText(params: {
           seed: params.seed,
           random: params.random,
         });
-  if (narration) {
-    const formatted = formatLine(narration);
-    const status = resolvedLabel ? `${resolvedLabel}\n\n${formatted}` : formatted;
-    return planLines.length > 0 ? `${status}\n\n${planLines.join("\n")}` : status;
-  }
+  // The status headline sits above the rolling lines instead of replacing them:
+  // a headline-only draft reads as "the agent is quiet" even while tools run.
+  const statusHeadline = narration ? formatLine(narration) : "";
   const bullet = params.bullet ?? "•";
   const toolLineBudget = planLines.length > 0 ? Math.max(0, maxLines - planLines.length) : maxLines;
-  const visibleToolLines =
-    planLines.length === 0
-      ? params.lines
-      : toolLineBudget === 0
-        ? []
-        : params.lines.slice(-toolLineBudget);
-  const rawLines: Array<string | ChannelProgressDraftLine | { draftLabel: string }> = resolvedLabel
-    ? [{ draftLabel: resolvedLabel }, ...visibleToolLines]
-    : visibleToolLines;
-  const rollingLineLimit =
-    planLines.length > 0 ? toolLineBudget + (resolvedLabel ? 1 : 0) : maxLines;
-  const lines = rawLines
+  const renderedToolLines = params.lines
     .map((line) => {
-      const isLabelLine = typeof line === "object" && line !== null && "draftLabel" in line;
-      const prefix =
-        !isLabelLine && typeof line === "object" && line !== null ? line.prefix !== false : true;
-      const rawText = isLabelLine
-        ? line.draftLabel
-        : typeof line === "string"
-          ? line
-          : getProgressDraftLineText(line);
-      const text = compactChannelProgressDraftLine(rawText, maxLineChars);
-      return text ? { text, isLabelLine, prefix } : undefined;
+      const text = compactChannelProgressDraftLine(
+        typeof line === "string" ? line : getProgressDraftLineText(line),
+        maxLineChars,
+      );
+      if (!text) {
+        return undefined;
+      }
+      const prefix = typeof line === "object" && line !== null ? line.prefix !== false : true;
+      const formatted = formatLine(text);
+      return prefix && shouldPrefixProgressLine(text) ? `${bullet} ${formatted}` : formatted;
     })
-    .filter((line): line is { text: string; isLabelLine: boolean; prefix: boolean } =>
-      Boolean(line),
-    )
-    .slice(-rollingLineLimit)
-    .map(({ text, isLabelLine, prefix }) => {
-      const formatted = isLabelLine ? text : formatLine(text);
-      return {
-        text:
-          !isLabelLine && prefix && shouldPrefixProgressLine(text)
-            ? `${bullet} ${formatted}`
-            : formatted,
-        isLabelLine,
-      };
-    });
-  const renderedLines = lines.map((line) => line.text).filter((line) => Boolean(line));
-  if (planLines.length > 0) {
-    renderedLines.push(...planLines);
-  }
-  if (renderedLines.length > 1 && lines[0]?.isLabelLine) {
-    return `${renderedLines[0]}\n\n${renderedLines.slice(1).join("\n")}`;
-  }
-  return renderedLines.join("\n");
+    .filter((line): line is string => Boolean(line));
+  // Budget 0 is handled before the slice: slice(-0) returns every line.
+  const rollingLines = toolLineBudget === 0 ? [] : renderedToolLines.slice(-toolLineBudget);
+  // The label is a block, not a line: it yields its slot once real work lines
+  // fill the window, which is why a busy draft shows work instead of a title.
+  const labelBlock =
+    resolvedLabel && (planLines.length > 0 || rollingLines.length < maxLines)
+      ? compactChannelProgressDraftLine(resolvedLabel, maxLineChars)
+      : undefined;
+  const rollingBlock = [...rollingLines, ...planLines].join("\n");
+  return [labelBlock, statusHeadline, rollingBlock].filter(Boolean).join("\n\n");
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
