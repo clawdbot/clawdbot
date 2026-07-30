@@ -226,7 +226,7 @@ describe("Claw status and remove", () => {
           status: "found" as const,
           pluginId: "audit",
           installedVersion: "2.0.0",
-          record: { integrity: packageIntegrity },
+          record: { source: "clawhub", integrity: packageIntegrity },
         }),
       },
       packagePreflight: async () => ({
@@ -285,7 +285,7 @@ describe("Claw status and remove", () => {
           status: "found" as const,
           pluginId: "audit",
           installedVersion: "2.0.0",
-          record: { integrity: packageIntegrity },
+          record: { source: "clawhub", integrity: packageIntegrity },
         }),
       },
       packagePreflight: async () => ({

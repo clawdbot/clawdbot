@@ -317,7 +317,7 @@ describe("exportClawAgent", () => {
           status: "found" as const,
           pluginId: "coding-tools",
           installedVersion: "1.2.3",
-          record: { integrity },
+          record: { source: "clawhub", integrity },
         }),
       },
       packagePreflight: async () => ({
@@ -434,7 +434,7 @@ describe("exportClawAgent", () => {
           status: "found" as const,
           pluginId: "coding-tools",
           installedVersion: "1.2.3",
-          record: { integrity: extensionIntegrity },
+          record: { source: "clawhub", integrity: extensionIntegrity },
         }),
       },
       packagePreflight: async () => ({

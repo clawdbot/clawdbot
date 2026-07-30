@@ -56,6 +56,7 @@ function plan(
       },
       blocked: false,
     })),
+    extensions: [],
     readiness: { ready: true, requirements: [] },
     blockers: [],
     diagnostics: [],

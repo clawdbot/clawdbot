@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { ClawAnswersError, readClawAnswersDocument } from "./answers.js";
+import { readClawAnswersDocument } from "./answers.js";
 import { MAX_CLAW_SETUP_ANSWER_BYTES } from "./source-limits.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -23,11 +23,11 @@ describe("readClawAnswersDocument", () => {
     await expect(
       readClawAnswersDocument("-", Readable.from([Buffer.from('{"timezone":"UTC"}')])),
     ).resolves.toEqual({ timezone: "UTC" });
-    await expect(readClawAnswersDocument("-", Readable.from(["[]"]))).rejects.toMatchObject<
-      Partial<ClawAnswersError>
-    >({ code: "setup_answers_invalid" });
+    await expect(readClawAnswersDocument("-", Readable.from(["[]"]))).rejects.toMatchObject({
+      code: "setup_answers_invalid",
+    });
     await expect(
       readClawAnswersDocument("-", Readable.from([Buffer.alloc(MAX_CLAW_SETUP_ANSWER_BYTES + 1)])),
-    ).rejects.toMatchObject<Partial<ClawAnswersError>>({ code: "setup_answers_too_large" });
+    ).rejects.toMatchObject({ code: "setup_answers_too_large" });
   });
 });

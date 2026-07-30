@@ -8,6 +8,7 @@ import {
   readClawInstallRecord,
   type PersistedClawInstall,
 } from "./provenance.js";
+import { CLAW_SETUP_STATE_SCHEMA_VERSION } from "./setup-state.js";
 import type {
   ClawAddPlan,
   ClawManifest,
@@ -75,6 +76,7 @@ const addPlan: ClawAddPlan = {
     capabilityEscalations: 0,
   },
   actions: [],
+  extensions: [],
   capabilityChanges: [],
   blockers: [],
   diagnostics: [],
@@ -585,7 +587,7 @@ describe("applyClawUpdatePlan", () => {
         {
           kind: "package",
           id: "plugin:github",
-          action: "reuse",
+          action: "install",
           target: "clawhub:github@2.0.0",
           details: packageDetails,
           blocked: false,
@@ -620,7 +622,13 @@ describe("applyClawUpdatePlan", () => {
           rollback: vi.fn(async () => undefined),
         })),
         applyPackage,
-        applySetup: vi.fn(async () => undefined),
+        applySetup: vi.fn(async (fresh, _workspace, _materialization, targetState) => ({
+          ...targetState,
+          schemaVersion: CLAW_SETUP_STATE_SCHEMA_VERSION,
+          agentId: fresh.agentId,
+          status: "pending",
+          updatedAtMs: 1,
+        })),
         finalizeSetup: vi.fn(),
       },
     );

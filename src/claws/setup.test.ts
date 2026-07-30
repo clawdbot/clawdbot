@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { applyClawAddPlan, ClawAddMutationError } from "./add.js";
+import { applyClawAddPlan } from "./add.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { readClawManifestFile } from "./reader.js";
 import { parseClawManifest } from "./schema.js";
@@ -335,7 +335,7 @@ describe("Claw setup templates and plans", () => {
         consentPlanIntegrity: plan.planIntegrity,
         persistRecord,
       }),
-    ).rejects.toMatchObject<Partial<ClawAddMutationError>>({
+    ).rejects.toMatchObject({
       code: "setup_materialization_required",
     });
     expect(persistRecord).not.toHaveBeenCalled();

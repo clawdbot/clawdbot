@@ -188,7 +188,7 @@ describe("claws add setup answers", () => {
     );
     const plan = JSON.parse(first.logs[0] ?? "{}");
     const loaded = await readClawManifestFile(root);
-    if (!loaded.ok) {
+    if (!loaded.ok || loaded.manifest.schemaVersion !== 2) {
       throw new Error("Setup resume fixture did not load.");
     }
     const setup = await buildClawSetupPlan({

@@ -56,6 +56,7 @@ function plan(agentId: string, workspace: string): ClawAddPlan {
       capabilityEscalations: 0,
     },
     actions: [],
+    extensions: [],
     capabilityChanges: [],
     readiness: { ready: true, requirements: [] },
     blockers: [],

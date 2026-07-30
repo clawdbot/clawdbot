@@ -128,6 +128,7 @@ const addPlan: ClawAddPlan = {
     },
     blocked: false,
   })),
+  extensions: [],
   capabilityChanges: [],
   blockers: [],
   diagnostics: [],

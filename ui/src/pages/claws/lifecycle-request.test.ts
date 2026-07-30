@@ -24,7 +24,7 @@ describe("buildClawApplyRequest", () => {
       { name: "analyst", agentId: "analyst-one" },
       { name: "analyst", agentId: "analyst-two" },
       { name: "support", agentId: "support" },
-    ] as Parameters<typeof catalogUpdateTargets>[0];
+    ];
 
     expect(catalogUpdateTargets(records, "analyst", null, false)).toHaveLength(2);
     expect(catalogUpdateTargets(records, "analyst", "analyst-one", false)).toHaveLength(2);

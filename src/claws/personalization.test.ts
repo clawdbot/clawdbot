@@ -10,7 +10,6 @@ import { applyClawRemovePlan, buildClawRemovePlan } from "./lifecycle-state.js";
 import { readClawStatus } from "./lifecycle-status.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import {
-  ClawPersonalizationError,
   createClawPersonalizationSeeds,
   createClawUpdatePersonalizationSeeds,
 } from "./personalization.js";
@@ -38,7 +37,7 @@ function manifest(): ClawManifestV2 {
     mcpServers: {},
     cronJobs: [],
     setup: {
-      inputs: [{ id: "name", type: "string", label: "Name" }],
+      inputs: [{ id: "name", type: "string", label: "Name", maxLength: 256 }],
     },
     personalization: {
       seeds: [{ source: "setup/USER.md.tmpl", destination: "USER.md" }],
@@ -158,7 +157,7 @@ describe("Claw personalization state", () => {
       createClawPersonalizationSeeds(conflicting.plan, conflicting.setup.materialization!, {
         env: conflicting.env,
       }),
-    ).rejects.toMatchObject<Partial<ClawPersonalizationError>>({
+    ).rejects.toMatchObject({
       code: "setup_seed_collision",
     });
   });
@@ -373,8 +372,8 @@ describe("Claw personalization update reconciliation", () => {
       ...manifest(),
       setup: {
         inputs: [
-          { id: "name", type: "string", label: "Name", required: true },
-          { id: "team", type: "string", label: "Team", required: true },
+          { id: "name", type: "string", label: "Name", required: true, maxLength: 256 },
+          { id: "team", type: "string", label: "Team", required: true, maxLength: 256 },
         ],
       },
       personalization: {
@@ -416,7 +415,7 @@ describe("Claw personalization update reconciliation", () => {
         reconciliation.targetState,
         { env },
       ),
-    ).rejects.toMatchObject<Partial<ClawPersonalizationError>>({
+    ).rejects.toMatchObject({
       code: "setup_seed_collision",
       completedDestinations: ["USER.md"],
     });
@@ -473,8 +472,14 @@ describe("Claw personalization update reconciliation", () => {
       ...manifest(),
       setup: {
         inputs: [
-          { id: "name", type: "string", label: "Display name", required: true },
-          { id: "team", type: "string", label: "Team", required: true },
+          {
+            id: "name",
+            type: "string",
+            label: "Display name",
+            required: true,
+            maxLength: 256,
+          },
+          { id: "team", type: "string", label: "Team", required: true, maxLength: 256 },
         ],
       },
       personalization: {

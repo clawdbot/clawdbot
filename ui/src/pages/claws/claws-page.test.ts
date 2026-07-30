@@ -180,6 +180,8 @@ describe("ClawsPage", () => {
           channel: "official",
           official: true,
           latestVersion: "1.0.0",
+          downloads: 10,
+          updatedAtMs: 1,
         },
       ],
     });

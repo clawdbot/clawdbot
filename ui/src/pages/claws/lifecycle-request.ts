@@ -28,12 +28,12 @@ export type PendingClawOperation =
     }
   | { operation: "remove"; target: string };
 
-export function catalogUpdateTargets(
-  records: readonly ClawStatusEntry[],
+export function catalogUpdateTargets<T extends Pick<ClawStatusEntry, "agentId" | "name">>(
+  records: readonly T[],
   packageName: string,
   selectedAgentId: string | null,
   selectedAgentExplicit: boolean,
-): ClawStatusEntry[] {
+): T[] {
   const matches = records.filter((record) => record.name === packageName);
   const selected = selectedAgentExplicit
     ? matches.find((record) => record.agentId === selectedAgentId)

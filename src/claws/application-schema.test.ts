@@ -208,7 +208,7 @@ describe("Claw application planning", () => {
           mapped: ["commands", "skills"],
           unavailable: ["agents"],
           adapterIdentity: "openclaw/test",
-          requirements: [{ kind: "environment", name: "GITHUB_TOKEN" }],
+          requirements: [{ kind: "environment", mcpServer: "github", name: "GITHUB_TOKEN" }],
         }),
       },
     });
@@ -228,7 +228,7 @@ describe("Claw application planning", () => {
         id: "plugin:@acme/github",
         blocked: false,
         details: expect.objectContaining({
-          prerequisites: [{ kind: "environment", name: "GITHUB_TOKEN" }],
+          prerequisites: [{ kind: "environment", mcpServer: "github", name: "GITHUB_TOKEN" }],
           extension: expect.objectContaining({
             id: "github",
             detectedFormat: "claude",
@@ -239,7 +239,7 @@ describe("Claw application planning", () => {
     );
     expect(plan.readiness).toEqual({
       ready: false,
-      requirements: [{ kind: "environment", name: "GITHUB_TOKEN" }],
+      requirements: [{ kind: "environment", mcpServer: "github", name: "GITHUB_TOKEN" }],
     });
     expect(plan.actions).toContainEqual(
       expect.objectContaining({
