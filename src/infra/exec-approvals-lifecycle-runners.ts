@@ -218,3 +218,43 @@ export function resolveLifecyclePackageRunnerArgv(
     ? { kind: "approval-required" }
     : { kind: "not-runner" };
 }
+
+/** Return true when a dynamic package target could mutate the OpenClaw installation. */
+export function unresolvedPackageMutationMayTargetOpenClaw(
+  argv: readonly string[],
+  isUnresolved: (value: string | undefined) => boolean,
+): boolean {
+  const rawExecutable = normalizeExecutableToken(argv[0] ?? "");
+  if (rawExecutable === "corepack") {
+    const manager = normalizedToken(argv[1]);
+    const match = /^(npm|pnpm|yarn)(?:@[^/]+)?$/u.exec(manager);
+    return match
+      ? unresolvedPackageMutationMayTargetOpenClaw(
+          [match[1] ?? manager, ...argv.slice(2)],
+          isUnresolved,
+        )
+      : false;
+  }
+  const executable =
+    rawExecutable === "pnpx" ? "npx" : rawExecutable === "yarnpkg" ? "yarn" : rawExecutable;
+  if (!["bun", "npm", "pnpm", "yarn"].includes(executable)) {
+    return false;
+  }
+  const subcommandIndex = scanFirstPositional(argv, 1, PACKAGE_GLOBAL_OPTIONS_WITH_VALUE);
+  const subcommand = normalizedToken(argv[subcommandIndex]);
+  if (isUnresolved(argv[subcommandIndex])) {
+    return argv
+      .slice(subcommandIndex + 1)
+      .some((token) => isUnresolved(token) || isOpenClawPackageTarget(token));
+  }
+  if (PACKAGE_MUTATION_ALIASES.has(subcommand)) {
+    return packageTargets(argv, subcommandIndex + 1).some(isUnresolved);
+  }
+  return (
+    executable === "yarn" &&
+    subcommand === "global" &&
+    (isUnresolved(argv[subcommandIndex + 1]) ||
+      (PACKAGE_MUTATION_ALIASES.has(normalizedToken(argv[subcommandIndex + 1])) &&
+        packageTargets(argv, subcommandIndex + 2).some(isUnresolved)))
+  );
+}

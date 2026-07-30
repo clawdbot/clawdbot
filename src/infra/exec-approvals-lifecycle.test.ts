@@ -120,6 +120,10 @@ const mutationCases: Array<[string, string[]]> = [
     ["systemctl", "remove-requires", "multi-user.target", "openclaw-gateway.service"],
   ],
   [
+    "systemctl force-reload openclaw-gateway.service",
+    ["systemctl", "force-reload", "openclaw-gateway.service"],
+  ],
+  [
     "systemctl -p --help restart openclaw-gateway.service",
     ["systemctl", "-p", "--help", "restart", "openclaw-gateway.service"],
   ],
@@ -140,6 +144,8 @@ const mutationCases: Array<[string, string[]]> = [
     ["systemctl", "--signal=0", "--signal=TERM", "kill", "openclaw-gateway.service"],
   ],
   ["service openclaw-gateway stop", ["service", "openclaw-gateway", "stop"]],
+  ["net pause OpenClaw", ["net", "pause", "OpenClaw"]],
+  ["net continue OpenClaw", ["net", "continue", "OpenClaw"]],
   [
     String.raw`sc.exe \\localhost delete OpenClaw`,
     ["sc.exe", String.raw`\\localhost`, "delete", "OpenClaw"],
@@ -289,6 +295,10 @@ const mutationCases: Array<[string, string[]]> = [
   ["Get-Process OpenClaw | Stop-Process", ["Get-Process", "OpenClaw", "|", "Stop-Process"]],
   ["(Get-Process OpenClaw) | Stop-Process", ["(Get-Process", "OpenClaw)", "|", "Stop-Process"]],
   ["Get-Service OpenClaw | Start-Service", ["Get-Service", "OpenClaw", "|", "Start-Service"]],
+  ["Suspend-Service OpenClaw", ["Suspend-Service", "OpenClaw"]],
+  ["Resume-Service OpenClaw", ["Resume-Service", "OpenClaw"]],
+  ["Get-Service OpenClaw | Suspend-Service", ["Get-Service", "OpenClaw", "|", "Suspend-Service"]],
+  ["Get-Service OpenClaw | Resume-Service", ["Get-Service", "OpenClaw", "|", "Resume-Service"]],
   ["Get-Service OpenClaw | Remove-Service", ["Get-Service", "OpenClaw", "|", "Remove-Service"]],
   [
     "Get-Service OpenClaw | Set-Service -StartupType Disabled",
@@ -850,6 +860,55 @@ describe("OpenClaw lifecycle exec approvals", () => {
         ],
       }),
     ).toBe(true);
+  });
+
+  it("keeps unresolved variables in non-lifecycle data positions non-blocking", () => {
+    const cases: Array<{ command: string; argv: string[]; platform?: NodeJS.Platform }> = [
+      {
+        command: `npm install lodash --registry "$REGISTRY"`,
+        argv: ["npm", "install", "lodash", "--registry", "$REGISTRY"],
+      },
+      {
+        command: `powershell -Command "Write-Output $env:NAME"`,
+        argv: ["powershell", "-Command", "Write-Output $env:NAME"],
+        platform: "win32",
+      },
+      {
+        command: `openclaw config get "$KEY"`,
+        argv: ["openclaw", "config", "get", "$KEY"],
+      },
+      {
+        command: `openclaw approvals get "$ID"`,
+        argv: ["openclaw", "approvals", "get", "$ID"],
+      },
+      {
+        command: `node --loader "$LOADER" app.mjs gateway restart`,
+        argv: ["node", "--loader", "$LOADER", "app.mjs", "gateway", "restart"],
+      },
+      {
+        command: `Start-Process notepad -ArgumentList "gateway restart" -WorkingDirectory "$DIR"`,
+        argv: [
+          "Start-Process",
+          "notepad",
+          "-ArgumentList",
+          "gateway restart",
+          "-WorkingDirectory",
+          "$DIR",
+        ],
+        platform: "win32",
+      },
+    ];
+    for (const testCase of cases) {
+      expect(
+        commandRequiresOpenClawLifecycleApproval({
+          command: testCase.command,
+          env: {},
+          envComplete: false,
+          platform: testCase.platform ?? "linux",
+          segments: [{ raw: testCase.command, argv: testCase.argv }],
+        }),
+      ).toBe(false);
+    }
   });
 
   it("does not let a later status token clear an unresolved systemctl action", () => {

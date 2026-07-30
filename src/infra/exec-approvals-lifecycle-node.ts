@@ -48,20 +48,15 @@ function optionName(token: string): string {
   return token.trim().toLowerCase().replaceAll("_", "-").split("=", 1)[0] ?? "";
 }
 
-/** Return OpenClaw-equivalent argv when Node directly launches its CLI entry script. */
-export function resolveNodeOpenClawArgv(argv: readonly string[], cwd?: string): string[] | null {
-  if (normalizeExecutableToken(argv[0] ?? "") !== "node") {
-    return null;
-  }
+function nodeScriptIndex(argv: readonly string[]): number {
   let scriptIndex = 1;
   for (; scriptIndex < argv.length; scriptIndex += 1) {
     const token = argv[scriptIndex]?.trim() ?? "";
     if (token === "--") {
-      scriptIndex += 1;
-      break;
+      return scriptIndex + 1;
     }
     if (!token.startsWith("-") || token === "-") {
-      break;
+      return scriptIndex;
     }
     const name = optionName(token);
     if (/^-(?:c|r).+/u.test(name)) {
@@ -71,6 +66,15 @@ export function resolveNodeOpenClawArgv(argv: readonly string[], cwd?: string): 
       scriptIndex += 1;
     }
   }
+  return scriptIndex;
+}
+
+/** Return OpenClaw-equivalent argv when Node directly launches its CLI entry script. */
+export function resolveNodeOpenClawArgv(argv: readonly string[], cwd?: string): string[] | null {
+  if (normalizeExecutableToken(argv[0] ?? "") !== "node") {
+    return null;
+  }
+  const scriptIndex = nodeScriptIndex(argv);
   const scriptToken = (argv[scriptIndex] ?? "").trim();
   const isAbsolute = path.win32.isAbsolute(scriptToken) || path.posix.isAbsolute(scriptToken);
   const script = (cwd && !isAbsolute ? path.resolve(cwd, scriptToken) : scriptToken).toLowerCase();
@@ -81,4 +85,19 @@ export function resolveNodeOpenClawArgv(argv: readonly string[], cwd?: string): 
     return null;
   }
   return ["openclaw", ...argv.slice(scriptIndex + 1)];
+}
+
+/** Return true when a dynamic Node entry could be OpenClaw and receives lifecycle argv. */
+export function unresolvedNodeEntryMayHideLifecycle(
+  argv: readonly string[],
+  isUnresolved: (value: string | undefined) => boolean,
+): boolean {
+  if (normalizeExecutableToken(argv[0] ?? "") !== "node") {
+    return false;
+  }
+  const scriptIndex = nodeScriptIndex(argv);
+  return (
+    isUnresolved(argv[scriptIndex]) &&
+    /\b(?:daemon|gateway|uninstall|update)\b/iu.test(argv.slice(scriptIndex + 1).join(" "))
+  );
 }

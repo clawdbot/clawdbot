@@ -1,10 +1,18 @@
 // Expands known shell environment references used in lifecycle-sensitive argv.
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { resolveCarrierCommandArgv } from "./command-carriers.js";
+import { unresolvedOpenClawConfigActionMayMutate } from "./exec-approvals-lifecycle-config.js";
 import {
   classifyOpenClawGatewayArgv,
   unresolvedGatewayMethodMayHideLifecycle,
 } from "./exec-approvals-lifecycle-gateway.js";
+import { unresolvedNodeEntryMayHideLifecycle } from "./exec-approvals-lifecycle-node.js";
+import { unresolvedOpenClawApprovalPolicyActionMayMutate } from "./exec-approvals-lifecycle-policy.js";
+import { unresolvedPowerShellStartProcessMayHideLifecycle } from "./exec-approvals-lifecycle-powershell.js";
+import {
+  resolveLifecyclePackageRunnerArgv,
+  unresolvedPackageMutationMayTargetOpenClaw,
+} from "./exec-approvals-lifecycle-runners.js";
 import { splitLifecycleInlineCommands } from "./exec-approvals-lifecycle-shell.js";
 import { extractShellWrapperInlineCommand } from "./shell-wrapper-resolution.js";
 const POSIX_VARIABLE_RE = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/gu;
@@ -16,20 +24,7 @@ const VARIABLE_REFERENCE_RE =
 const POSIX_PARAMETER_OPERATOR_RE = /\$\{(?![A-Za-z_][A-Za-z0-9_]*\})[^}]+\}/u;
 const OPENCLAW_GLOBAL_FLAGS = new Set(["--dev", "--no-color"]);
 const OPENCLAW_GLOBAL_OPTIONS = new Set(["--container", "--log-level", "--profile"]);
-const LIFECYCLE_RUNNERS = new Set([
-  "bun",
-  "bunx",
-  "node",
-  "npm",
-  "npx",
-  "pnpm",
-  "pnpx",
-  "saps",
-  "start",
-  "start-process",
-  "yarn",
-  "yarnpkg",
-]);
+const UPDATE_OPTIONS_WITH_VALUE = new Set(["--channel", "--tag", "--timeout"]);
 const SYSTEMCTL_OPTIONS_WITH_VALUE = new Set([
   "-h",
   "-m",
@@ -71,6 +66,10 @@ function optionName(token: string): string {
   return token.trim().toLowerCase().split("=", 1)[0] ?? "";
 }
 
+function isVariableReference(value: string | undefined): boolean {
+  return VARIABLE_REFERENCE_RE.test(value ?? "");
+}
+
 function scanFirstPositional(
   argv: readonly string[],
   start: number,
@@ -101,10 +100,10 @@ function scanFirstPositional(
 
 /** Return true when a partial environment can fill a lifecycle-sensitive argv position. */
 export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): boolean {
-  if (!argv.some((token) => VARIABLE_REFERENCE_RE.test(token))) {
+  if (!argv.some(isVariableReference)) {
     return false;
   }
-  if (VARIABLE_REFERENCE_RE.test(argv[0] ?? "")) {
+  if (isVariableReference(argv[0])) {
     return true;
   }
   const executable = normalizedExecutable(argv[0]);
@@ -126,34 +125,68 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
       OPENCLAW_GLOBAL_OPTIONS,
       OPENCLAW_GLOBAL_FLAGS,
     );
-    if (["daemon", "gateway"].includes(tokens[commandIndex] ?? "")) {
+    const command = tokens[commandIndex] ?? "";
+    if (isVariableReference(argv[commandIndex])) {
+      return true;
+    }
+    if (["daemon", "gateway"].includes(command)) {
       return (
         classifyOpenClawGatewayArgv(argv, commandIndex + 1) ||
-        unresolvedGatewayMethodMayHideLifecycle(argv, commandIndex + 1, (value) =>
-          VARIABLE_REFERENCE_RE.test(value ?? ""),
-        )
+        unresolvedGatewayMethodMayHideLifecycle(argv, commandIndex + 1, isVariableReference)
       );
     }
-    return !["--help", "health", "probe", "status", "update.status"].includes(
-      tokens[commandIndex] ?? "",
-    );
+    if (command === "config") {
+      return unresolvedOpenClawConfigActionMayMutate(argv, commandIndex + 1, isVariableReference);
+    }
+    if (["approvals", "exec-approvals", "exec-policy"].includes(command)) {
+      return unresolvedOpenClawApprovalPolicyActionMayMutate(
+        command,
+        argv,
+        commandIndex + 1,
+        isVariableReference,
+      );
+    }
+    if (command === "update") {
+      const actionIndex = scanFirstPositional(argv, commandIndex + 1, UPDATE_OPTIONS_WITH_VALUE);
+      return isVariableReference(argv[actionIndex]);
+    }
+    return ["configure", "doctor", "onboard", "setup"].includes(command);
   }
-  if (["ash", "bash", "cmd", "dash", "fish", "ksh", "sh", "zsh"].includes(executable)) {
+  if (
+    ["ash", "bash", "cmd", "dash", "fish", "ksh", "powershell", "pwsh", "sh", "zsh"].includes(
+      executable,
+    )
+  ) {
     const inline = extractShellWrapperInlineCommand([...argv]);
     if (inline === null) {
       return false;
     }
-    return splitLifecycleInlineCommands(inline, executable === "cmd" ? "cmd" : "posix").some(
-      (part) => {
-        const nestedArgv = splitShellArgs(part);
-        return nestedArgv ? unresolvedEnvironmentMayHideLifecycle(nestedArgv) : true;
-      },
-    );
+    const dialect =
+      executable === "cmd"
+        ? "cmd"
+        : ["powershell", "pwsh"].includes(executable)
+          ? "powershell"
+          : "posix";
+    return splitLifecycleInlineCommands(inline, dialect).some((part) => {
+      const nestedArgv = splitShellArgs(part);
+      return nestedArgv ? unresolvedEnvironmentMayHideLifecycle(nestedArgv) : true;
+    });
   }
-  if (LIFECYCLE_RUNNERS.has(executable)) {
-    return /\b(?:add|daemon|gateway|install|remove|restart|rm|start|stop|uninstall|update|upgrade)\b/iu.test(
-      argv.join(" "),
-    );
+  const packageRunner = resolveLifecyclePackageRunnerArgv(argv);
+  if (packageRunner.kind === "approval-required") {
+    return true;
+  }
+  if (packageRunner.kind === "argv") {
+    return unresolvedEnvironmentMayHideLifecycle(packageRunner.argv);
+  }
+  if (unresolvedPackageMutationMayTargetOpenClaw(argv, isVariableReference)) {
+    return true;
+  }
+  if (unresolvedNodeEntryMayHideLifecycle(argv, isVariableReference)) {
+    return true;
+  }
+  if (unresolvedPowerShellStartProcessMayHideLifecycle(argv, isVariableReference)) {
+    return true;
   }
   if (executable === "env") {
     const carried = resolveCarrierCommandArgv([...argv], 0, { includeExec: true });
@@ -164,10 +197,16 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
     "kill",
     "killall",
     "pkill",
-    "powershell",
-    "pwsh",
+    "remove-service",
+    "restart-service",
+    "resume-service",
     "schtasks",
     "service",
+    "set-service",
+    "start-service",
+    "stop-process",
+    "stop-service",
+    "suspend-service",
     "taskkill",
     "xargs",
   ].includes(executable);

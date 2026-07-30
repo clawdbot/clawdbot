@@ -54,3 +54,28 @@ export function classifyOpenClawConfigArgv(argv: readonly string[], start: numbe
   }
   return !CONFIG_READ_ONLY.has(action ?? "");
 }
+
+/** Return true when an unresolved reference occupies the config action position. */
+export function unresolvedOpenClawConfigActionMayMutate(
+  argv: readonly string[],
+  start: number,
+  isUnresolved: (value: string | undefined) => boolean,
+): boolean {
+  for (let index = start; index < argv.length; index += 1) {
+    const token = argv[index]?.trim() ?? "";
+    const name = optionName(token);
+    if (HELP_OR_VERSION_FLAGS.has(token) || name === "--dry-run") {
+      return false;
+    }
+    if (CONFIG_OPTIONS_WITH_VALUE.has(name)) {
+      if (!token.includes("=")) {
+        index += 1;
+      }
+      continue;
+    }
+    if (!token.startsWith("-") || token === "-") {
+      return isUnresolved(token);
+    }
+  }
+  return false;
+}

@@ -34,10 +34,9 @@ function splitArgumentList(value: string): string[] {
   return splitShellArgs(normalized) ?? normalized.split(/\s+/u).filter(Boolean);
 }
 
-/** Return OpenClaw-equivalent argv when PowerShell Start-Process launches it. */
-export function resolvePowerShellStartProcessOpenClawArgv(
+function parseStartProcessArgv(
   argv: readonly string[],
-): string[] | null {
+): { argumentList: string[]; filePath: string | undefined } | null {
   if (!START_PROCESS_NAMES.has(normalizeExecutableToken(argv[0] ?? ""))) {
     return null;
   }
@@ -67,5 +66,33 @@ export function resolvePowerShellStartProcessOpenClawArgv(
       argumentList = splitArgumentList(token);
     }
   }
+  return { argumentList, filePath };
+}
+
+/** Return OpenClaw-equivalent argv when PowerShell Start-Process launches it. */
+export function resolvePowerShellStartProcessOpenClawArgv(
+  argv: readonly string[],
+): string[] | null {
+  const parsed = parseStartProcessArgv(argv);
+  if (!parsed) {
+    return null;
+  }
+  const { argumentList, filePath } = parsed;
   return isOpenClawExecutablePattern(filePath) ? ["openclaw", ...argumentList] : null;
+}
+
+/** Return true when Start-Process can dynamically select OpenClaw lifecycle argv. */
+export function unresolvedPowerShellStartProcessMayHideLifecycle(
+  argv: readonly string[],
+  isUnresolved: (value: string | undefined) => boolean,
+): boolean {
+  const parsed = parseStartProcessArgv(argv);
+  if (!parsed) {
+    return false;
+  }
+  return (
+    (isUnresolved(parsed.filePath) &&
+      /\b(?:daemon|gateway|uninstall|update)\b/iu.test(parsed.argumentList.join(" "))) ||
+    (isOpenClawExecutablePattern(parsed.filePath) && parsed.argumentList.some(isUnresolved))
+  );
 }

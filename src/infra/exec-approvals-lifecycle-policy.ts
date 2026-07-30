@@ -51,3 +51,17 @@ export function classifyOpenClawApprovalPolicyArgv(
   }
   return action === "allowlist" && ["add", "remove"].includes(args[1] ?? "");
 }
+
+/** Return true when an unresolved reference can select an approval-policy mutation. */
+export function unresolvedOpenClawApprovalPolicyActionMayMutate(
+  command: string,
+  argv: readonly string[],
+  start: number,
+  isUnresolved: (value: string | undefined) => boolean,
+): boolean {
+  const args = positionals(argv, start);
+  if (isUnresolved(args[0])) {
+    return true;
+  }
+  return command !== "exec-policy" && args[0] === "allowlist" && isUnresolved(args[1]);
+}

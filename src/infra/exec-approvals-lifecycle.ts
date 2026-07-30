@@ -65,6 +65,7 @@ const SYSTEMCTL_MUTATIONS = new Set([
   "disable",
   "edit",
   "enable",
+  "force-reload",
   "freeze",
   "import-environment",
   "isolate",
@@ -115,10 +116,12 @@ const POWERSHELL_SERVICE_MUTATIONS = new Set([
   "new-service",
   "remove-service",
   "restart-service",
+  "resume-service",
   "set-service",
   "start-service",
   "stop-process",
   "stop-service",
+  "suspend-service",
   "spps",
   "spsv",
   "sasv",
@@ -372,7 +375,8 @@ function classifyServiceManager(argv: readonly string[]): boolean {
   }
   if (executable === "net") {
     return (
-      ["start", "stop"].includes(normalizedToken(argv[1])) && argv.slice(2).some(looksLikeOpenClaw)
+      ["continue", "pause", "start", "stop"].includes(normalizedToken(argv[1])) &&
+      argv.slice(2).some(looksLikeOpenClaw)
     );
   }
   return false;
@@ -470,11 +474,13 @@ function isPowerShellPipelineMutation(argv: readonly string[]): boolean {
     "kill",
     "remove-service",
     "restart-service",
+    "resume-service",
     "sasv",
     "set-service",
     "start-service",
     "stop-process",
     "stop-service",
+    "suspend-service",
     "spps",
     "spsv",
   ].includes(normalizeExecutableToken(argv[0] ?? ""));
