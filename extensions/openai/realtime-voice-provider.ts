@@ -577,6 +577,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private static readonly CONNECT_TIMEOUT_MS = 10_000;
   private static readonly MAX_PENDING_AUDIO_CHUNKS = 320;
   private static readonly MAX_PENDING_AUDIO_BYTES = 1024 * 1024;
+  private static readonly MAX_OUTSTANDING_MARKS = 256;
   readonly supportsToolResultContinuation = true;
   readonly supportsToolResultSuppression = true;
 
@@ -1659,6 +1660,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private sendMark(): void {
     const markName = `audio-${Date.now()}`;
     this.markQueue.push(markName);
+    if (this.markQueue.length > OpenAIRealtimeVoiceBridge.MAX_OUTSTANDING_MARKS) {
+      this.markQueue.shift();
+    }
     this.config.onMark?.(markName);
   }
 
