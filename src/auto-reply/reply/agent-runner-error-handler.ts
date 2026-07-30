@@ -300,9 +300,15 @@ export async function handleAgentExecutionError(params: {
     !params.shouldSurfaceToControlUi
       ? classifyProviderRequestError(err)
       : undefined;
+  // CLI subprocess budget kills surface as a top-level FailoverError(reason:
+  // "timeout"), so the failover-reason disjunct must also honor the dedicated
+  // non-transport copy exclusion below — otherwise a killed subprocess replays
+  // through this whole-cycle retry even though isTransientTimeout skips it.
   const isTransientHttp =
     isTransientHttpError(message) ||
-    (isFailoverError(err) && (err.reason === "timeout" || err.reason === "server_error"));
+    (isFailoverError(err) &&
+      (err.reason === "timeout" || err.reason === "server_error") &&
+      !hasDedicatedNonTransportTimeoutCopy(message));
   // Bare connection errors (ECONNRESET, "socket hang up", "Connection error.")
   // carry no leading HTTP status, so they need their own predicate alongside
   // the status-based transient check for the retry gate below.

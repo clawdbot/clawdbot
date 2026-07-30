@@ -263,12 +263,15 @@ async function executeAgentTurnInternalWithRetryState(
     onError: (error) =>
       logVerbose(`agent model patch reconciliation failed: ${formatErrorMessage(error)}`),
   });
-  // The embedded prompt-lock window pins SDK maxRetries to 0 (#87180), dropping
-  // the configured provider retry budget in-window. Restore it here at the outer
-  // full-attempt owner, where each retry re-runs the whole cycle and reacquires
-  // the session lock. The budget is a prepared fact on the run (resolved once at
-  // run preparation, not re-read per request); unset keeps the shipped single retry.
-  let transientHttpRetriesRemaining = params.followupRun.run.providerRetryMaxRetries ?? 1;
+  // The embedded prompt-lock window pins SDK maxRetries to 0 (#87180), so the
+  // configured provider retry budget is honored per candidate at the candidate
+  // boundary (agent-runner-fallback-candidate.ts), where each retry reacquires
+  // the session lock without re-ordering the primary→fallback chain. This outer
+  // counter stays the shipped one-shot whole-cycle retry: it only re-runs the
+  // whole cycle for transient errors that surface above a single candidate
+  // (e.g. an exhausted fallback summary). Seeding it from the configured budget
+  // would re-run already-exhausted candidates and change provider load.
+  let transientHttpRetriesRemaining = 1;
   const consumeTransientHttpRetry = () => transientHttpRetriesRemaining-- > 0;
   let liveModelSwitchRetries = 0;
   const fallbackCycleState: AgentFallbackCycleState = {

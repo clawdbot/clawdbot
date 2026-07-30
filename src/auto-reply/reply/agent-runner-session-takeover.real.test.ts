@@ -16,15 +16,18 @@
 //     runAgentTurnWithFallback catch branch that produces the user-facing text.
 //
 // While the model call holds the released prompt lock, a concurrent "second
-// user" steering write rewrites the same session file, changing its
-// fingerprint. On reacquireAfterPrompt the fence mismatches and throws
-// EmbeddedAttemptSessionTakeoverError ORGANICALLY — not constructed by hand.
+// user" steering write rewrites the same session file. On reacquireAfterPrompt
+// the controller runs its reloadPromptReleasedSessionFile hook, which — like
+// production's sessionManager.reloadPersistedTranscript() — throws
+// EmbeddedAttemptSessionTakeoverError once it observes the transcript changed
+// under the released lock. The controller records that as a session takeover
+// and the wrapped prompt call rejects with it, exactly as production does.
 //
 // What is scaffolded (unavoidable reply-pipeline boundary, mirrors the existing
 // agent-runner-execution.test.ts mock surface): the surrounding reply helpers
 // and a thin runWithModelFallback that runs the candidate closure once and
 // re-throws non-provider coordination errors, exactly like the real
-// runWithModelFallback does at src/agents/model-fallback.ts (see
+// runWithModelFallback does at src/agents/model-fallback-runner.ts (see
 // isNonProviderRuntimeCoordinationError re-throw).
 import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
@@ -34,6 +37,7 @@ import { createOpenAICompletionsTransportStreamFn } from "@openclaw/ai/transport
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createEmbeddedAttemptSessionLockController,
+  EmbeddedAttemptSessionTakeoverError,
   installEmbeddedPromptRetryDefault,
   installPromptSubmissionLockRelease,
 } from "../../agents/embedded-agent-runner/run/attempt.session-lock.js";
@@ -66,12 +70,8 @@ vi.mock("../../agents/cli-runner.js", () => ({
   },
 }));
 
-vi.mock("../../agents/model-fallback.js", () => ({
+vi.mock("../../agents/model-fallback-runner.js", () => ({
   runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
-  isFallbackSummaryError: (err: unknown) =>
-    err instanceof Error &&
-    err.name === "FallbackSummaryError" &&
-    Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
 vi.mock("../../agents/model-selection.js", async () => {
@@ -185,11 +185,25 @@ vi.mock("./reply-media-paths.runtime.js", () => ({
 }));
 
 async function getRunAgentTurnWithFallback() {
-  // The orchestrator entry point is executeAgentTurn; the test-support helper
-  // adapts its AgentTurnExecutionResult into the { kind, runResult, payload }
-  // shape these assertions read.
-  const { getExecuteAgentTurnForTest } = await import("./agent-runner-execution.test-support.js");
-  return getExecuteAgentTurnForTest();
+  // The orchestrator entry point is executeAgentTurn; adapt its
+  // AgentTurnExecutionResult into the { kind, payload } shape these assertions
+  // read. Import executeAgentTurn directly instead of reusing test-support's
+  // getExecuteAgentTurnForTest: that helper's module registers its own full
+  // vi.mock suite (notably run-entry.js with an unconfigured mock), which would
+  // short-circuit this test's real candidate chain and never let the organic
+  // takeover reach the real handleAgentExecutionError classification.
+  const { executeAgentTurn } = await import("./agent-runner-execution.js");
+  return async (...args: Parameters<typeof executeAgentTurn>) => {
+    const execution = await executeAgentTurn(...args);
+    const outcome = execution.outcome;
+    if (outcome.kind === "rejected") {
+      return { kind: "final" as const, payload: outcome.payload };
+    }
+    if (outcome.kind === "settled") {
+      return { kind: "success" as const, runResult: outcome.result };
+    }
+    return { kind: "final" as const, payload: { text: "NO_REPLY" } };
+  };
 }
 
 type Deferred<T> = {
@@ -400,7 +414,14 @@ describe("runAgentTurnWithFallback — real session takeover (#87180)", () => {
     // around a REAL model HTTP call, then performs the concurrent steering write
     // and lets the call finish — producing the organic takeover error on
     // reacquire. This stands in for runEmbeddedAgent's lock orchestration while
-    // exercising the same real lock/fence helpers it uses.
+    // exercising the same real lock/fence helpers it uses. The controller's
+    // reloadPromptReleasedSessionFile hook mirrors production's
+    // sessionManager.reloadPersistedTranscript(): production surfaces a takeover
+    // by throwing EmbeddedAttemptSessionTakeoverError from that reload when the
+    // persisted transcript changed under the released lock (see
+    // attempt-session-lock-prepare.ts), and the controller records it as a
+    // session takeover on reacquire (attempt.session-lock.ts).
+    const originalTranscript = await fs.readFile(sessionFile, "utf8");
     const driveEmbeddedRunWithRealLock = async (): Promise<never> => {
       const controller = await createEmbeddedAttemptSessionLockController({
         acquireSessionWriteLock,
@@ -409,6 +430,15 @@ describe("runAgentTurnWithFallback — real session takeover (#87180)", () => {
           timeoutMs: 5_000,
           staleMs: 30_000,
           maxHoldMs: 30_000,
+        },
+        reloadPromptReleasedSessionFile: async () => {
+          // Production's reloadPersistedTranscript throws when the persisted
+          // session was taken over during the released prompt window; reproduce
+          // that here from the observed concurrent transcript rewrite.
+          const current = await fs.readFile(sessionFile, "utf8");
+          if (current !== originalTranscript) {
+            throw new EmbeddedAttemptSessionTakeoverError("main");
+          }
         },
       });
 
@@ -480,7 +510,7 @@ describe("runAgentTurnWithFallback — real session takeover (#87180)", () => {
     // candidate closure (which calls runEmbeddedAgent through the real IIFE
     // catch/rethrow), then propagate exactly as the real fallback would. The
     // real fallback re-throws non-provider coordination errors unchanged (see
-    // model-fallback.ts isNonProviderRuntimeCoordinationError re-throw); we
+    // model-fallback-runner.ts isNonProviderRuntimeCoordinationError re-throw); we
     // assert that contract holds for the organic error here, then let it
     // propagate to the real runAgentTurnWithFallback catch + classification.
     state.runEmbeddedAgentMock.mockImplementation(() => driveEmbeddedRunWithRealLock());

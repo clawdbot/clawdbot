@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { FailoverError } from "../../agents/failover-error.js";
 import type { TemplateContext } from "../templating.js";
 import {
   setupAgentRunnerExecutionTestState,
@@ -233,6 +234,45 @@ describe("runAgentTurnWithFallback: transient connection/timeout retry (#87180)"
     expect(result.payload.text).toContain("overall turn limit");
   });
 
+  it("does not retry a CLI budget-kill FailoverError(reason:timeout) at the candidate boundary (#87180)", async () => {
+    // CLI subprocess budget kills surface as a top-level FailoverError with
+    // reason:"timeout" (execute-process.ts) and rethrow unchanged, so at the
+    // candidate catch they satisfy the failover timeout branch. The dedicated
+    // non-transport-copy exclusion must run FIRST — otherwise a configured
+    // provider retry budget re-runs the killed subprocess for another full
+    // budget instead of surfacing the CLI copy once.
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
+      result: await params.run("anthropic", "claude"),
+      provider: "anthropic",
+      model: "claude",
+      attempts: [],
+    }));
+    state.runEmbeddedAgentMock.mockRejectedValue(
+      new FailoverError("CLI exceeded timeout (30s) and was terminated.", {
+        reason: "timeout",
+        code: "cli_overall_timeout",
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getExecuteAgentTurnForTest();
+    const followupRun = createFollowupRun();
+    // A non-zero budget would drive per-candidate retries if the gate misfired.
+    followupRun.run.providerRetryMaxRetries = 3;
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind !== "final") {
+      throw new Error("expected final reply");
+    }
+    // The killed subprocess ran exactly once — the budget did not replay it.
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
+    expect(result.payload.text).toContain("CLI turn: timed out");
+    expect(result.payload.text).toContain("overall turn limit");
+  });
+
   it("does not retry Codex app-server timeouts through the transient gate (#87180)", async () => {
     // Codex app-server idle timeouts read like timeout strings but are bridge
     // failures with their own surfaced copy and their own replay handling. The
@@ -278,12 +318,12 @@ describe("runAgentTurnWithFallback: transient connection/timeout retry (#87180)"
     expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
   });
 
-  it("restores the configured provider retry budget as the whole-attempt retry count (#87180)", async () => {
-    // settings.retry.provider.maxRetries is dropped in-window by the SDK pin, so
-    // the outer owner restores it: with a resolved budget of 3, a persistently
-    // transient error runs 1 initial cycle + 3 retries (4 cycles). Each retry
-    // re-runs the whole fallback chain, so the session lock is reacquired per
-    // attempt, then a terminal failure is surfaced once the budget is exhausted.
+  it("keeps a configured provider retry budget from scaling the whole-cycle retry count (#87180 P1)", async () => {
+    // The configured budget must NOT seed the outer whole-cycle counter: a
+    // transient error surfacing above a single candidate (e.g. an exhausted
+    // fallback summary) re-runs the cycle exactly once (the shipped one-shot),
+    // never `budget` times — so already-exhausted candidates are not re-run and
+    // primary/fallback provider load is unchanged.
     state.runWithModelFallbackMock.mockRejectedValue(new Error("Connection error."));
 
     const runAgentTurnWithFallback = await getExecuteAgentTurnForTest();
@@ -313,40 +353,41 @@ describe("runAgentTurnWithFallback: transient connection/timeout retry (#87180)"
         getActiveSessionEntry: () => undefined,
         resolvedVerboseLevel: "off",
       });
-      // Three fixed backoffs (2_500ms each) separate the four cycles.
-      await vi.advanceTimersByTimeAsync(8_000);
+      await vi.advanceTimersByTimeAsync(2_500);
       const result = await promise;
 
       expect(result.kind).toBe("final");
-      // 1 initial cycle + exactly 3 configured retries.
-      expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(4);
+      // 1 initial cycle + exactly 1 one-shot outer retry — NOT 1 + budget(3).
+      expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("succeeds within the configured provider retry budget when a transient error clears (#87180)", async () => {
-    // With a budget of 3, two transient failures are absorbed before a clean
-    // cycle succeeds — the extra budget is used, not the shipped single retry.
-    state.runWithModelFallbackMock
+  it("retries the failed provider candidate up to the configured budget before it recovers (#87180)", async () => {
+    // The budget now lives at the candidate boundary: two transient failures on
+    // the SAME candidate are absorbed by per-candidate retries (each embedded
+    // re-run reacquires the released session lock), then the third attempt
+    // succeeds — without re-running the whole fallback cycle.
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
+      result: await params.run("anthropic", "claude"),
+      provider: "anthropic",
+      model: "claude",
+      attempts: [],
+    }));
+    state.runEmbeddedAgentMock
       .mockRejectedValueOnce(new Error("Connection error."))
       .mockRejectedValueOnce(new Error("socket hang up"))
-      .mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-        result: await params.run("anthropic", "claude"),
-        provider: "anthropic",
-        model: "claude",
-        attempts: [],
-      }));
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "recovered" }],
-      meta: {
-        agentMeta: { sessionId: "session", provider: "anthropic", model: "claude" },
-      },
-    });
+      .mockResolvedValueOnce({
+        payloads: [{ text: "recovered" }],
+        meta: {
+          agentMeta: { sessionId: "session", provider: "anthropic", model: "claude" },
+        },
+      });
 
     const runAgentTurnWithFallback = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
-    followupRun.run.providerRetryMaxRetries = 3;
+    followupRun.run.providerRetryMaxRetries = 2;
     vi.useFakeTimers();
     try {
       const promise = runAgentTurnWithFallback({
@@ -371,12 +412,94 @@ describe("runAgentTurnWithFallback: transient connection/timeout retry (#87180)"
         getActiveSessionEntry: () => undefined,
         resolvedVerboseLevel: "off",
       });
-      await vi.advanceTimersByTimeAsync(6_000);
+      await vi.advanceTimersByTimeAsync(10_000);
       const result = await promise;
 
       expect(result.kind).toBe("success");
-      // 1 initial cycle + 2 retries before the third cycle recovers.
-      expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(3);
+      // 1 initial attempt + 2 per-candidate retries on the SAME candidate.
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(3);
+      // The whole fallback cycle ran once — the budget did not re-run it.
+      expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries each candidate at its own boundary before failing over, preserving order (#87180)", async () => {
+    // A transient primary is retried at the primary boundary; only after its
+    // budget is exhausted does the cycle fail over to the secondary, which is
+    // then retried at its own boundary. Failover order is unchanged and no
+    // candidate is re-run once the chain has moved on.
+    const attemptOrder: string[] = [];
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      try {
+        return {
+          result: await params.run("anthropic", "claude"),
+          provider: "anthropic",
+          model: "claude",
+          attempts: [],
+        };
+      } catch {
+        return {
+          result: await params.run("openai", "gpt"),
+          provider: "openai",
+          model: "gpt",
+          attempts: [{ provider: "anthropic", model: "claude", error: "Connection error." }],
+        };
+      }
+    });
+    state.runEmbeddedAgentMock.mockImplementation(async (runParams: { model?: string }) => {
+      const model = runParams.model ?? "";
+      attemptOrder.push(model);
+      if (model === "claude") {
+        throw new Error("Connection error.");
+      }
+      if (attemptOrder.filter((entry) => entry === "gpt").length === 1) {
+        throw new Error("socket hang up");
+      }
+      return {
+        payloads: [{ text: "recovered" }],
+        meta: { agentMeta: { sessionId: "session", provider: "openai", model: "gpt" } },
+      };
+    });
+
+    const runAgentTurnWithFallback = await getExecuteAgentTurnForTest();
+    const followupRun = createFollowupRun();
+    followupRun.run.providerRetryMaxRetries = 1;
+    vi.useFakeTimers();
+    try {
+      const promise = runAgentTurnWithFallback({
+        commandBody: "hello",
+        followupRun,
+        sessionCtx: {
+          Provider: "whatsapp",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+        opts: {},
+        typingSignals: createMockTypingSignaler(),
+        blockReplyPipeline: null,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        applyReplyToMode: (payload) => payload,
+        shouldEmitToolResult: () => true,
+        shouldEmitToolOutput: () => false,
+        pendingToolTasks: new Set(),
+        resetSessionAfterRoleOrderingConflict: async () => false,
+        isHeartbeat: false,
+        sessionKey: "main",
+        getActiveSessionEntry: () => undefined,
+        resolvedVerboseLevel: "off",
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      const result = await promise;
+
+      expect(result.kind).toBe("success");
+      // Primary retried once (2 attempts) before failover; secondary retried
+      // once (2 attempts). Order preserved and no candidate revisited after the
+      // chain moves on.
+      expect(attemptOrder).toEqual(["claude", "claude", "gpt", "gpt"]);
+      // The whole fallback cycle ran once — no whole-cycle re-run.
+      expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

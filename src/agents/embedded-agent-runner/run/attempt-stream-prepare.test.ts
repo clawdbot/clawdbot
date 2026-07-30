@@ -136,6 +136,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       sandboxSessionKey: "agent:main:main",
       builtinToolNames: new Set(),
       replaySafeToolNames: new Set(),
+      withOwnedTranscriptWrites: async (run) => run(),
     });
     const subscriptionInput = mocks.buildSubscriptionParams.mock.calls.at(-1)?.[0] as {
       onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
@@ -214,6 +215,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       sandboxSessionKey: "agent:main:main",
       builtinToolNames: new Set(),
       replaySafeToolNames: new Set(),
+      withOwnedTranscriptWrites: async (run) => run(),
     });
     const queued = prepared.queueHandle.queueMessage("new user input");
     const subscriptionInput = mocks.buildSubscriptionParams.mock.calls.at(-1)?.[0] as {

@@ -1059,14 +1059,7 @@ describe("installEmbeddedPromptRetryDefault", () => {
     // One release/reacquire per turn — repeated installs do not double them.
     expect(releaseForPrompt).toHaveBeenCalledTimes(2);
     expect(reacquireAfterPrompt).toHaveBeenCalledTimes(2);
-    expect(events).toEqual([
-      "release",
-      "stream",
-      "reacquire",
-      "release",
-      "stream",
-      "reacquire",
-    ]);
+    expect(events).toEqual(["release", "stream", "reacquire", "release", "stream", "reacquire"]);
   });
 
   it("does not re-wrap when retry installs repeat after lock-release", async () => {
