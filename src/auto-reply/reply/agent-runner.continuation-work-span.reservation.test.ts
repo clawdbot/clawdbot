@@ -52,6 +52,7 @@ const compactState = vi.hoisted(() => ({
 const requestHeartbeatNowMock = vi.hoisted(() => vi.fn());
 const spawnSubagentDirectMock = vi.hoisted(() => vi.fn());
 const patchSessionEntryMock = vi.hoisted(() => vi.fn());
+const updateSessionEntryMock = vi.hoisted(() => vi.fn());
 const loadSessionEntryMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../agents/model-fallback.js", () => ({
@@ -113,6 +114,9 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
       return implementation ? loadSessionEntryMock(...args) : actual.loadSessionEntry(...args);
     },
     patchSessionEntry: (...args: unknown[]) => patchSessionEntryMock(...args),
+    // Final-delivery persistence now verifies the row it wrote, so this seam has
+    // to behave like a real store instead of falling through to the unmocked one.
+    updateSessionEntry: (...args: unknown[]) => updateSessionEntryMock(...args),
   };
 });
 
@@ -239,6 +243,17 @@ beforeEach(() => {
     runId: "run-spawned",
   });
   patchSessionEntryMock
+    .mockReset()
+    .mockImplementation(
+      async (
+        _scope: unknown,
+        update: (entry: SessionEntry) => Partial<SessionEntry> | null,
+      ): Promise<SessionEntry | null> => {
+        const entry = { sessionId: "session", updatedAt: Date.now() } satisfies SessionEntry;
+        const patch = update(entry);
+        return patch ? { ...entry, ...patch } : null;
+      },
+    );  updateSessionEntryMock
     .mockReset()
     .mockImplementation(
       async (
