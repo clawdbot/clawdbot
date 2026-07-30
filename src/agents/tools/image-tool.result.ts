@@ -8,6 +8,7 @@ export type LoadedImageForTool = {
   mimeType: string;
   resolvedImage: string;
   rewrittenFrom?: string;
+  remoteSource?: boolean;
 };
 
 export function buildImageToolReferenceDetails(

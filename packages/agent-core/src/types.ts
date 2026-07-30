@@ -533,6 +533,13 @@ export interface AgentToolResult<T> {
   /** Optional public progress hint for partial tool updates; never model content. */
   progress?: AgentToolProgress;
   /**
+   * Per-invocation content source that overrides the tool-level
+   * `resultContentSource` when the tool fetches remote content only for some
+   * inputs (e.g. a media tool that taints http(s) URLs but not local paths).
+   * Omit to keep the static tool-level classification.
+   */
+  resultContentSource?: ToolResultContentSource;
+  /**
    * Hint that the agent should stop after the current tool batch.
    * Early termination only happens when every finalized tool result in the batch sets this to true.
    */

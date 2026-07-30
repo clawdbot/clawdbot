@@ -425,10 +425,6 @@ export function createPdfTool(options?: {
   return {
     label: "PDF",
     name: "pdf",
-    // Remote PDF text is externally controlled content (a prompt-injection
-    // vector), so the turn must be tainted and subsequent memory writes
-    // quarantined.
-    resultContentSource: "network",
     description,
     parameters: PdfToolSchema,
     execute: async (_toolCallId, args, signal) => {
@@ -495,6 +491,7 @@ export function createPdfTool(options?: {
         filename: string;
         resolvedPath: string;
         rewrittenFrom?: string;
+        remoteSource?: boolean;
       }> = [];
 
       for (const pdfRaw of pdfInputs) {
@@ -579,8 +576,11 @@ export function createPdfTool(options?: {
           base64,
           buffer: media.buffer,
           filename,
-          resolvedPath,
-          ...(rewrittenFrom ? { rewrittenFrom } : {}),
+          resolvedPath: resolvedPathInfo.resolved,
+          ...(isHttpUrl ? { remoteSource: true } : {}),
+          ...(resolvedPathInfo.rewrittenFrom
+            ? { rewrittenFrom: resolvedPathInfo.rewrittenFrom }
+            : {}),
         });
       }
 
@@ -639,7 +639,14 @@ export function createPdfTool(options?: {
             ),
           };
 
-      return buildTextToolResult(result, { native: result.native, ...pdfDetails });
+      // Per-invocation taint: only http(s) PDFs are externally controlled
+      // (a prompt-injection vector). Local paths and file:// keep the default
+      // trusted classification so local workflows are not over-tainted.
+      const anyRemoteSource = loadedPdfs.some((p) => p.remoteSource);
+      return {
+        ...buildTextToolResult(result, { native: result.native, ...pdfDetails }),
+        ...(anyRemoteSource ? { resultContentSource: "network" as const } : {}),
+      };
     },
   };
 }

@@ -1636,10 +1636,12 @@ async function finalizeExecutedToolCall(
       isError,
       executionStarted: executed.executionStarted,
       ...(prepared.tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
-      ...(executed.executionStarted &&
-      !executed.callerCancelled &&
-      prepared.tool.resultContentSource
-        ? { resultContentSource: prepared.tool.resultContentSource }
+      // Per-invocation provenance wins over the static tool-level marker: a tool
+      // that only sometimes fetches remote content (http(s) media vs local path)
+      // sets resultContentSource on the result; otherwise fall back to the static
+      // tool-level classification.
+      ...(resolveToolResultContentSource(result, prepared.tool)
+        ? { resultContentSource: resolveToolResultContentSource(result, prepared.tool) }
         : {}),
     },
     finalArgs,
@@ -1887,6 +1889,20 @@ function readTurnTaintMetadata(message: AgentMessage): TurnTaintMetadata | undef
 
 function toolResultTaintsTurn(message: ToolResultMessage): boolean {
   return readTurnTaintMetadata(message)?.resultContentSource === "network";
+}
+
+/**
+ * Resolves the effective content source for a finalized tool result. A
+ * per-invocation value returned by the tool's execute (on the result object)
+ * wins over the static tool-level `resultContentSource`, so a tool that only
+ * fetches remote content for some inputs (http(s) media vs local path) can
+ * classify each call precisely instead of over-tainting local inputs.
+ */
+function resolveToolResultContentSource(
+  result: AgentToolResult<unknown>,
+  tool: AgentTool,
+): ToolResultContentSource | undefined {
+  return result.resultContentSource ?? tool.resultContentSource;
 }
 
 function isActiveTurnTainted(messages: readonly AgentMessage[]): boolean {
