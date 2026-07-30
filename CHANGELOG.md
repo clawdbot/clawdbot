@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 - **Delivery and channel stability:** outbound receipts, delivery evidence, channel lifecycle, health monitoring, and gateway queues recover cleanly under retries, restarts, and overload.
 - **Gateway and storage reliability:** plugin responses, process probes, workspace bootstrap reads, and SQLite writes tolerate expected transient failures while preserving correct state.
 - **Matrix QA image checks:** the mock OpenAI adapter recognizes internal completed image-generation events and emits the normal media response.
+- **Matrix QA reliability:** command-progress checks accept their expected final preview replacement, and mock runs scope directives and tool output to the current user turn.
 
 ### Upcoming deprecations
 
