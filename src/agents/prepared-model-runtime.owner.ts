@@ -29,8 +29,8 @@ import {
   type InlineModelEntry,
 } from "./embedded-agent-runner/model.inline-provider.js";
 import {
+  createBundledStaticCatalogModelResolver,
   loadBundledProviderStaticCatalogContextModels,
-  resolveBundledStaticCatalogModel,
 } from "./embedded-agent-runner/model.static-catalog.js";
 import { staticModelIdMatches } from "./embedded-agent-runner/model.static-id.js";
 import { buildPreparedModelCatalogSnapshot, type ModelCatalogEntry } from "./model-catalog.js";
@@ -318,11 +318,19 @@ function collectPreparedModelRuntimeProviderIds(
 function prepareConfiguredRuntimeModels(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  metadataSnapshot: PluginMetadataSnapshot;
   providerStaticModels: readonly ProviderRuntimeModel[];
   workspaceDir?: string;
 }): PreparedConfiguredRuntimeModel[] {
   const prepared: PreparedConfiguredRuntimeModel[] = [];
   const seen = new Set<string>();
+  const resolveStaticCatalogModel = createBundledStaticCatalogModelResolver({
+    cfg: params.config,
+    env: params.env,
+    includeRuntimeDiscovery: true,
+    metadataSnapshot: params.metadataSnapshot,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
   for (const { value } of collectConfiguredModelRefs(params.config)) {
     const separator = value.indexOf("/");
     if (separator <= 0 || separator >= value.length - 1) {
@@ -341,14 +349,7 @@ function prepareConfiguredRuntimeModels(params: {
     // Match request-time fallback precedence exactly: manifest/runtime-discovery rows win,
     // and the provider-static catalog fills only models absent from that surface.
     const model =
-      resolveBundledStaticCatalogModel({
-        provider,
-        modelId,
-        cfg: params.config,
-        env: params.env,
-        workspaceDir: params.workspaceDir,
-        includeRuntimeDiscovery: true,
-      }) ??
+      resolveStaticCatalogModel({ provider, modelId }) ??
       params.providerStaticModels.find((candidate) =>
         staticModelIdMatches({
           candidateId: candidate.id,
@@ -541,6 +542,7 @@ async function buildSnapshot(
   const configuredRuntimeModels = prepareConfiguredRuntimeModels({
     config: input.config,
     env,
+    metadataSnapshot: pluginMetadataSnapshot,
     providerStaticModels,
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
   });

@@ -4,6 +4,7 @@ import type { SessionObserverDigest } from "../../../packages/gateway-protocol/s
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
+import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
 import { formatDurationCompact } from "../lib/format.ts";
@@ -26,10 +27,6 @@ import type { SessionDataController } from "./session-data-controller.ts";
 import { renderSessionLeadingState } from "./session-leading-indicator.ts";
 import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
-import {
-  resolveSessionOwnerUser,
-  type SessionOwnerIdentityHost,
-} from "./session-owner-identity.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import {
   renderSidebarSessionSubtitle,
@@ -40,7 +37,12 @@ import "./elapsed-time.ts";
 
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 
-export interface SessionListHost extends SessionOwnerIdentityHost {
+export interface SessionListHost {
+  readonly sessionDataContext:
+    | {
+        gateway: { snapshot: { selfUser?: AuthenticatedUser | null } };
+      }
+    | undefined;
   readonly sidebarLiveActivity: boolean;
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
@@ -168,7 +170,6 @@ export function renderRecentSession(params: {
     pullRequestState,
     ownerActor,
     ownerAttribution,
-    resolveSessionOwnerUser(host, ownerActor?.id),
   );
   const meta = display?.meta ?? session.meta;
   const rowMeta = session.pinned ? "" : meta;
@@ -270,6 +271,7 @@ export function renderRecentSession(params: {
           : nothing}
         <openclaw-viewer-facepile
           .presencePayload=${host.sessionData.presencePayload}
+          .selfUserId=${host.sessionDataContext?.gateway.snapshot.selfUser?.id}
           .selfInstanceId=${host.sessionData.presenceInstanceId}
           .sessionKey=${session.key}
           .maxVisible=${3}

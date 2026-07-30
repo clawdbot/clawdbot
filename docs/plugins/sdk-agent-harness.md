@@ -248,6 +248,11 @@ targeted runtime ids in `contracts.agentToolResultMiddleware`. This trusted
 seam is for async tool-result transforms that must run before OpenClaw or
 Codex feeds tool output back into the model.
 
+Middleware options may combine `runtimes` with a `matcher` tool-name list.
+Each registration keeps that pair intact, so registering the same handler for
+different runtimes does not broaden either matcher. Matchers use non-empty
+canonical OpenClaw tool ids; omit `matcher` to match all tools.
+
 Legacy bundled plugins can still use
 `api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only
 middleware, but new result transforms should use the runtime-neutral API. The
@@ -293,6 +298,24 @@ tool-search/code-mode control selection, local-model lean defaults,
 runtime-compatible schema filtering, hidden catalog execution, directory
 hydration, and catalog cleanup. Harnesses still own their SDK-specific tool
 conversion and native execution callback.
+
+### Native MCP inventory
+
+A harness that owns MCP connections outside OpenClaw's in-process MCP runtime
+can implement `loadMcpToolCatalog(params)`. The callback is used by read-only
+control surfaces such as the composer Tool access view. It receives the
+authoritative session identity, runtime config, workspace, and sparse session
+MCP overrides. `mcpServerNames` is the bounded set of OpenClaw-configured
+servers whose session policy the harness may represent. Return OpenClaw's
+`McpToolCatalog` shape for only that set.
+
+Use only an already-bound native process and thread. Returning `undefined`
+means no live catalog is available; do not start a new harness process merely
+to answer inventory. Preserve raw server/tool names, assign collision-safe
+server names with `assignMcpCatalogSafeServerNames(...)`, and retain tools
+hidden only by a session denial in `sessionDeniedTools`. Core still applies the
+final OpenClaw tool policy and schema compatibility checks before exposing the
+rows.
 
 Harnesses that forward embedded attempt params should pass
 `skillWorkshopProposalOnly` through. Proposal-only skill-workshop runs are

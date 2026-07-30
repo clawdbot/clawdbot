@@ -29,6 +29,7 @@
   "cli-backend",
   "cli-runtime",
   "codex-mcp-projection",
+  "codex-session-transcript-runtime",
   "command-status-runtime",
   "command-surface",
   "concurrency-runtime",

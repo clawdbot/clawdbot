@@ -1,6 +1,7 @@
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { DEDUPE_TTL_MS } from "../server-constants.js";
+import type { DedupeEntry } from "../server-shared.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -15,6 +16,12 @@ type ReservedSubagentDedupeReservation = {
   sessionKey: string;
   status: "accepted";
 };
+
+const activeReservedSubagentDedupeEntries = new WeakSet<DedupeEntry>();
+
+export function isActiveReservedSubagentDedupeEntry(entry: DedupeEntry): boolean {
+  return activeReservedSubagentDedupeEntries.has(entry);
+}
 
 export function resolveAgentDedupeKeys(params: {
   idempotencyKey: string;
@@ -53,7 +60,8 @@ export function readReservedSubagentDedupeReservation(
     typeof payload.sessionKey === "string" &&
     typeof payload.pluginRuntimeOwnerId === "string" &&
     typeof payload.reservedSubagentClaimToken === "string" &&
-    isFutureDateTimestampMs(payload.expiresAtMs, { nowMs: Date.now() }) &&
+    (isActiveReservedSubagentDedupeEntry(entry) ||
+      isFutureDateTimestampMs(payload.expiresAtMs, { nowMs: Date.now() })) &&
     payload.reservationId === payload.reservedSubagentClaimToken
     ? (payload as ReservedSubagentDedupeReservation)
     : undefined;
@@ -101,10 +109,12 @@ export function reserveReservedSubagentDedupeEntry(params: {
       status: "accepted" as const,
     },
   };
+  activeReservedSubagentDedupeEntries.add(entry);
   for (const key of keys) {
     params.dedupe.set(key, entry);
   }
   return () => {
+    activeReservedSubagentDedupeEntries.delete(entry);
     for (const key of keys) {
       if (params.dedupe.get(key) === entry) {
         params.dedupe.delete(key);

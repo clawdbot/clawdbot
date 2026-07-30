@@ -562,7 +562,33 @@ describe("spawnSubagentDirect seam flow", () => {
       },
       expected: "reserved subagent spawn requires",
     },
-  ])("rejects an invalid plugin reservation: $name", async ({ context, expected }) => {
+    {
+      name: "incognito child for durable requester",
+      context: {
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: "agent:worker:subagent:incognito-reserved",
+        preallocatedRunId: "reserved-run",
+        pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "reserved-incognito-mismatch-claim",
+      },
+      expected: "matching incognito classification",
+    },
+    {
+      name: "durable child for incognito requester",
+      agentSessionKey: "agent:main:dashboard:incognito-parent",
+      context: {
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: "agent:worker:subagent:reserved",
+        preallocatedRunId: "reserved-run",
+        pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "reserved-incognito-requester-mismatch-claim",
+      },
+      expected: "matching incognito classification",
+    },
+  ])("rejects an invalid plugin reservation: $name", async (testCase) => {
+    const { context, expected } = testCase;
+    const agentSessionKey =
+      "agentSessionKey" in testCase ? testCase.agentSessionKey : "agent:main:main";
     hoisted.configOverride = createConfigOverride({
       agents: {
         defaults: { workspace: os.tmpdir() },
@@ -577,7 +603,7 @@ describe("spawnSubagentDirect seam flow", () => {
     const result = await spawnSubagentDirect(
       { task: "reject invalid reservation", agentId: "worker" },
       {
-        agentSessionKey: "agent:main:main",
+        agentSessionKey,
         ...context,
       },
     );

@@ -112,7 +112,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var browserProfileImportOfferRetryPending = false
     private var hasLiveContent = false
     private var isShowingFailurePage = false
+    private var navigationGeneration: UInt64 = 0
     private var pendingNativeCommands: [DashboardNativeCommand] = []
+    private var pendingNativeNavigation: DashboardNativeNavigation?
     var onClosed: (() -> Void)?
 
     init(
@@ -404,14 +406,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return window.isVisible || window.isMiniaturized
     }
 
-    /// Commands are deliverable when a document is live or a load is in flight
-    /// (the queue flushes at `didFinish`). A failure page, or a terminally
-    /// cancelled load with no successor, needs a reload before dispatch —
-    /// otherwise queued ⌘N/⌘K would wait on a `didFinish` that never comes.
-    var canDeliverNativeCommands: Bool {
-        !self.isShowingFailurePage && (self.hasLiveContent || self.webView.isLoading)
-    }
-
     func show() {
         if let window {
             let frame = window.frame
@@ -442,9 +436,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     func showFailure(title: String, message: String, detail: String? = nil) {
         self.hasLiveContent = false
         self.isShowingFailurePage = true
+        self.advanceNavigationGeneration()
         // Queued commands are moment-bound user intent; replaying them after a
         // later recovery reload would toggle or navigate unexpectedly.
         self.pendingNativeCommands = []
+        self.pendingNativeNavigation = nil
         self.currentURL = URL(string: "about:blank")!
         self.auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
         self.setUpdateBridgeEnabled(false)
@@ -1017,9 +1013,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         }
         self.hasLiveContent = false
         self.isShowingFailurePage = true
+        self.advanceNavigationGeneration()
         // Same moment-bound rule as showFailure: a terminal load failure
         // invalidates commands queued for the document that never arrived.
         self.pendingNativeCommands = []
+        self.pendingNativeNavigation = nil
         dashboardWindowLogger.error(
             """
             dashboard load failed url=\(dashboardLogString(for: self.currentURL), privacy: .public) \
@@ -1035,6 +1033,20 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 }
 
 extension DashboardWindowController {
+    /// Commands are deliverable when a document is live or a load is in flight
+    /// (the queue flushes at `didFinish`). A failure page, or a terminally
+    /// cancelled load with no successor, needs a reload before dispatch —
+    /// otherwise queued ⌘N/⌘K would wait on a `didFinish` that never comes.
+    var canDeliverNativeCommands: Bool {
+        !self.isShowingFailurePage && (self.hasLiveContent || self.webView.isLoading)
+    }
+
+    /// The canonical Dashboard mount URL supplied by the manager. WebKit route
+    /// loads and SPA history do not mutate it, so native fallbacks stay rooted.
+    var dashboardBaseURL: URL {
+        self.currentURL
+    }
+
     func windowWillClose(_: Notification) {
         self.webView.stopLoading()
         self.closeLinkBrowser(focusDashboard: false)
@@ -1119,9 +1131,15 @@ extension DashboardWindowController {
     }
 
     func dispatchNativeCommand(_ command: DashboardNativeCommand) {
+        if command.supersedesPendingNavigation {
+            self.advanceNavigationGeneration()
+        }
         guard self.hasLiveContent else {
             // Ordered queue, duplicates included: two ⌘K presses while loading
             // must toggle twice, and ⌘N followed by ⌘K must deliver both.
+            if command.supersedesPendingNavigation {
+                self.pendingNativeNavigation = nil
+            }
             self.pendingNativeCommands.append(command)
             return
         }
@@ -1129,6 +1147,9 @@ extension DashboardWindowController {
     }
 
     private func evaluateNativeCommand(_ command: DashboardNativeCommand) {
+        if command.supersedesPendingNavigation {
+            self.advanceNavigationGeneration()
+        }
         guard let fallback = command.legacyFallbackEventName else {
             self.webView.evaluateJavaScript(
                 "window.dispatchEvent(new CustomEvent(\(Self.jsStringLiteral(command.rawValue))))")
@@ -1156,6 +1177,53 @@ extension DashboardWindowController {
         for command in commands {
             self.evaluateNativeCommand(command)
         }
+    }
+
+    func dispatchNativeNavigation(_ navigation: DashboardNativeNavigation) {
+        self.advanceNavigationGeneration()
+        guard self.hasLiveContent else {
+            // Navigation is state selection, so only the newest destination matters while loading.
+            self.pendingNativeNavigation = navigation
+            return
+        }
+        self.evaluateNativeNavigation(navigation)
+    }
+
+    private func evaluateNativeNavigation(_ navigation: DashboardNativeNavigation) {
+        let generation = self.navigationGeneration
+        let sourceURL = self.currentURL
+        let script =
+            """
+            (() => !window.dispatchEvent(new CustomEvent('openclaw:native-navigate', {
+              cancelable: true,
+              detail: {path: \(Self.jsStringLiteral(navigation.path))}
+            })))()
+            """
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let result = try? await self.webView.evaluateJavaScript(script)
+            let handled = result as? Bool
+            // Async completions may return after another route or New Session intent.
+            // Only the newest navigation intent may load its fallback URL.
+            guard handled != true,
+                  self.navigationFallbackIsCurrent(generation: generation, sourceURL: sourceURL)
+            else { return }
+            self.load(navigation.fallbackURL)
+        }
+    }
+
+    private func advanceNavigationGeneration() {
+        self.navigationGeneration &+= 1
+    }
+
+    private func navigationFallbackIsCurrent(generation: UInt64, sourceURL: URL) -> Bool {
+        self.navigationGeneration == generation && self.currentURL == sourceURL
+    }
+
+    private func flushPendingNativeNavigation() {
+        guard let navigation = self.pendingNativeNavigation else { return }
+        self.pendingNativeNavigation = nil
+        self.evaluateNativeNavigation(navigation)
     }
 }
 
@@ -1285,6 +1353,7 @@ extension DashboardWindowController {
             self.publishNativeHistoryState()
             // History state must reach the shell before a queued command can navigate it.
             self.flushPendingNativeCommands()
+            self.flushPendingNativeNavigation()
         }
     }
 
@@ -1486,6 +1555,18 @@ extension DashboardWindowController {
 
     var _testPendingNativeCommands: [DashboardNativeCommand] {
         self.pendingNativeCommands
+    }
+
+    var _testPendingNativeNavigation: DashboardNativeNavigation? {
+        self.pendingNativeNavigation
+    }
+
+    var _testNavigationGeneration: UInt64 {
+        self.navigationGeneration
+    }
+
+    func _testNavigationFallbackIsCurrent(generation: UInt64, sourceURL: URL) -> Bool {
+        self.navigationFallbackIsCurrent(generation: generation, sourceURL: sourceURL)
     }
 
     var _testNavigationWebViewIdentity: ObjectIdentifier {

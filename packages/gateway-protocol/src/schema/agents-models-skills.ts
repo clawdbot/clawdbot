@@ -1042,6 +1042,7 @@ export const ToolsEffectiveNoticeSchema = closedObject({
   id: NonEmptyString,
   severity: Type.Union([Type.Literal("info"), Type.Literal("warning")]),
   message: Type.String(),
+  servers: Type.Optional(Type.Array(NonEmptyString)),
 });
 
 /** Effective tool set for a session, including profile and filtering notices. */

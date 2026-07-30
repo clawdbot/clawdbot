@@ -88,6 +88,14 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
       expected: "targetAgentId is invalid",
     },
     {
+      name: "noncanonical child",
+      params: {
+        ...reservation,
+        childSessionKey: "agent:worker:subagent:Plugin-Reserved-Child",
+      },
+      expected: "canonical values",
+    },
+    {
       name: "blank task",
       params: { ...reservation, task: " " },
       expected: "task must be non-empty",

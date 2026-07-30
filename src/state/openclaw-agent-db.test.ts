@@ -1637,8 +1637,15 @@ describe("openclaw agent database", () => {
     expect(database.db.prepare("SELECT id, text FROM memory_index_chunks").all()).toEqual([
       { id: "sentinel", text: "body" },
     ]);
+    expect(
+      database.db.prepare("SELECT hash FROM memory_index_sources WHERE id = 41").get(),
+    ).toEqual({
+      hash: "",
+    });
+    // Provenance backfill invalidates the affected source once so the next
+    // memory pass can classify its chunks instead of trusting legacy provenance.
     expect(database.db.prepare("SELECT revision FROM memory_index_state").get()).toEqual({
-      revision: 7,
+      revision: 8,
     });
     expect(
       database.db

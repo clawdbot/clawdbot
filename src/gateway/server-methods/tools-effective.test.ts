@@ -21,6 +21,7 @@ const runtimeMocks = vi.hoisted(() => ({
   buildBundleMcpToolsFromCatalog: vi.fn(() => [] as unknown[]),
   getActivePluginChannelRegistryVersion: vi.fn(() => 1),
   getActivePluginRegistryVersion: vi.fn(() => 1),
+  getRegisteredAgentHarness: vi.fn(),
   resolveRuntimeConfigCacheKey: vi.fn(() => "runtime:1:test"),
   resolveAgentDir: vi.fn(() => "/tmp/agents/main/agent"),
   listAgentIds: vi.fn(() => ["main"]),
@@ -85,7 +86,7 @@ type RespondCall = [boolean, unknown?, { code: number; message: string }?];
 type ToolsEffectivePayload = {
   agentId?: string;
   profile?: string;
-  notices?: Array<{ id?: string; severity?: string; message?: string }>;
+  notices?: Array<{ id?: string; severity?: string; message?: string; servers?: string[] }>;
   groups?: Array<{
     id?: string;
     label?: string;
@@ -275,6 +276,7 @@ describe("tools.effective handler", () => {
       serverNames: [] as string[],
     });
     runtimeMocks.peekSessionMcpRuntime.mockReturnValue(undefined);
+    runtimeMocks.getRegisteredAgentHarness.mockReturnValue(undefined);
     runtimeMocks.buildBundleMcpToolsFromCatalog.mockReturnValue([]);
     runtimeMocks.applyFinalEffectiveToolPolicy.mockImplementation(
       (params: { bundledTools: unknown[] }) => params.bundledTools,
@@ -485,12 +487,14 @@ describe("tools.effective handler", () => {
   });
 
   it("reports configured MCP servers as not connected without starting them", async () => {
-    mockMcpConfigSummary();
+    mockMcpConfigSummary({ serverNames: ["zeta", "alpha"] });
     const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
     await invoke();
 
     expectPayloadGroupIds(respond, ["core"]);
-    expect(expectPayloadNotice(respond, "mcp-not-yet-connected")?.message).toContain("reproProbe");
+    const notice = expectPayloadNotice(respond, "mcp-not-yet-connected");
+    expect(notice?.message).toContain('"alpha", "zeta"');
+    expect(notice?.servers).toEqual(["alpha", "zeta"]);
   });
 
   it("projects MCP tools from an already-populated session runtime catalog", async () => {
@@ -523,6 +527,73 @@ describe("tools.effective handler", () => {
       reservedToolNames: ["exec"],
       includeSessionDenied: true,
     });
+  });
+
+  it("projects MCP tools from the session-owning native harness catalog", async () => {
+    const loaded = runtimeMocks.loadSessionEntry();
+    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
+      ...loaded,
+      entry: {
+        ...loaded.entry,
+        agentHarnessId: "codex",
+        toolOverrides: { mcpToolsDeny: { docs: ["delete"] } },
+      },
+    } as never);
+    mockMcpConfigSummary();
+    const catalog = makeMcpCatalog();
+    const loadMcpToolCatalog = vi.fn().mockResolvedValue(catalog);
+    runtimeMocks.getRegisteredAgentHarness.mockReturnValueOnce({
+      harness: { loadMcpToolCatalog },
+    });
+    runtimeMocks.buildBundleMcpToolsFromCatalog.mockReturnValueOnce([makeMcpTool()]);
+
+    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
+    await invoke();
+
+    expect(loadMcpToolCatalog).toHaveBeenCalledWith({
+      config: {},
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "main:abc",
+      workspaceDir: "/tmp/workspace-main",
+      mcpServerNames: ["reproProbe"],
+      toolOverrides: { mcpToolsDeny: { docs: ["delete"] } },
+    });
+    expect(runtimeMocks.buildBundleMcpToolsFromCatalog).toHaveBeenCalledWith({
+      catalog,
+      reservedToolNames: ["exec"],
+      includeSessionDenied: true,
+    });
+    expectPayloadGroupIds(respond, ["core", "mcp"]);
+    expect(runtimeMocks.peekSessionMcpRuntime).not.toHaveBeenCalled();
+  });
+
+  it("does not substitute the core MCP catalog when native inventory is unavailable", async () => {
+    const loaded = runtimeMocks.loadSessionEntry();
+    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
+      ...loaded,
+      entry: { ...loaded.entry, agentHarnessId: "codex" },
+    } as never);
+    runtimeMocks.resolveSessionMcpConfigSummary.mockReturnValueOnce({
+      fingerprint: "mcp:1:test",
+      serverNames: ["reproProbe"],
+    });
+    const loadMcpToolCatalog = vi.fn().mockResolvedValue(undefined);
+    runtimeMocks.getRegisteredAgentHarness.mockReturnValueOnce({
+      harness: { loadMcpToolCatalog },
+    });
+    runtimeMocks.peekSessionMcpRuntime.mockReturnValue({
+      workspaceDir: "/tmp/workspace-main",
+      configFingerprint: "mcp:1:test",
+      peekCatalog: () => makeMcpCatalog(),
+    });
+
+    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
+    await invoke();
+
+    expectPayloadGroupIds(respond, ["core"]);
+    expectPayloadNotice(respond, "mcp-not-yet-connected");
+    expect(runtimeMocks.peekSessionMcpRuntime).not.toHaveBeenCalled();
   });
 
   it("preserves raw MCP identities and session denials across sanitized collisions", async () => {

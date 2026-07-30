@@ -20,8 +20,8 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
     activeTab: "settings",
     onTabChange: vi.fn(),
     engineOptions: [
-      { id: "memory-core", label: "OpenClaw Memory" },
-      { id: "memory-lancedb", label: "Memory LanceDB" },
+      { id: "memory-core", label: "OpenClaw Memory", available: true },
+      { id: "memory-lancedb", label: "Memory LanceDB", available: true },
     ],
     engineSelection: { kind: "auto", engineId: "memory-core" },
     engineState: "enabled",
@@ -130,6 +130,28 @@ describe("renderMemory", () => {
       createProps({ engineSelection: { kind: "pinned", engineId: "memory-core" } }),
     );
     expect(pinned.textContent).toContain("pinned in config");
+  });
+
+  it("keeps a configured missing engine selected and labels it unavailable", () => {
+    const container = renderInto(
+      createProps({
+        engineOptions: [{ id: "retired-memory", label: "retired-memory", available: false }],
+        engineSelection: { kind: "pinned", engineId: "retired-memory" },
+        engineState: "unknown",
+      }),
+    );
+
+    expect(
+      container
+        .querySelector('wa-radio[value="retired-memory"]')
+        ?.textContent?.replace(/\s+/g, " ")
+        .trim(),
+    ).toBe("retired-memory (Unavailable)");
+    expect(
+      container
+        .querySelector('wa-radio[value="retired-memory"]')
+        ?.classList.contains("settings-segmented__btn--active"),
+    ).toBe(true);
   });
 
   it("surfaces a failed engine write next to the control", () => {

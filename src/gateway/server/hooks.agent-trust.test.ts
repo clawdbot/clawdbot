@@ -172,6 +172,7 @@ describe("dispatchAgentHook trust handling", () => {
       mode: "announce" as const,
       channel: "telegram" as const,
       to: "123456",
+      accountId: "work",
     };
     runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
       status: "ok",
@@ -184,6 +185,7 @@ describe("dispatchAgentHook trust handling", () => {
       deliver: true,
       channel: delivery.channel,
       to: delivery.to,
+      accountId: delivery.accountId,
       delivery,
     });
 

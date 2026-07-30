@@ -7,6 +7,7 @@ const CURATOR_INITIAL_DELAY_MS = 5 * 60_000;
 const CURATOR_SWEEP_INTERVAL_MS = 24 * 60 * 60_000;
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
+import { reserveReservedSubagentDedupeEntry } from "./server-methods/agent-dedupe.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
@@ -488,6 +489,27 @@ describe("startGatewayMaintenanceTimers", () => {
 
     expect(deps.dedupe.has("agent:pending-agent")).toBe(true);
     expect(deps.dedupe.has("agent:expired-pending-agent")).toBe(false);
+
+    stopMaintenanceTimers(timers);
+  });
+
+  it("keeps an active reserved subagent marker until its dispatch settles", async () => {
+    const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
+    const runId = "plugin-reserved-run";
+    const release = reserveReservedSubagentDedupeEntry({
+      dedupe: deps.dedupe,
+      runId,
+      sessionKey: "agent:worker:subagent:plugin-reserved-child",
+      pluginRuntimeOwnerId: "agentic-os",
+      claimToken: "plugin-reserved-claim",
+    });
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.advanceTimersByTimeAsync(DEDUPE_TTL_MS + 60_000);
+
+    expect(deps.dedupe.has(`agent:${runId}`)).toBe(true);
+    release();
+    expect(deps.dedupe.has(`agent:${runId}`)).toBe(false);
 
     stopMaintenanceTimers(timers);
   });

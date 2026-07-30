@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createTelegramQaTransportAdapter: vi.fn(),
+  listTelegramQaScenarios: vi.fn(),
   printLiveTransportQaArtifacts: vi.fn(),
   resolveTelegramQaRunOptions: vi.fn(
     (options: { allowFailures?: boolean; providerMode?: string; repoRoot: string }) => ({
@@ -34,7 +35,7 @@ vi.mock("./run-options.runtime.js", () => ({
 }));
 
 vi.mock("./scenario-selection.js", () => ({
-  listTelegramQaScenarios: vi.fn(),
+  listTelegramQaScenarios: mocks.listTelegramQaScenarios,
   resolveTelegramQaScenarioIds: mocks.resolveTelegramQaScenarioIds,
 }));
 
@@ -110,5 +111,55 @@ describe("Telegram live QA scenario gate", () => {
     });
 
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it("lists only scenarios accepted by its flow runner", async () => {
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    mocks.listTelegramQaScenarios.mockReturnValue([
+      {
+        id: "channel-message-flows",
+        defaultEnabled: true,
+        title: "Message flows",
+        rationale: "Exercise Telegram message flows",
+        regressionRefs: [],
+      },
+    ]);
+    mocks.resolveTelegramQaRunOptions.mockReturnValueOnce({
+      allowFailures: false,
+      listScenarios: true,
+      providerMode: "mock-openai",
+      repoRoot: process.cwd(),
+    });
+
+    await runQaTelegramSuite({
+      listScenarios: true,
+      providerMode: "mock-openai",
+      repoRoot: process.cwd(),
+    });
+
+    const output = write.mock.calls.map(([chunk]) => String(chunk)).join("");
+    expect(output).toContain("channel-message-flows\tdefault\t");
+    expect(output).not.toContain("telegram-startup-getme-live");
+    expect(mocks.runQaFlowSuiteFromRuntime).not.toHaveBeenCalled();
+  });
+
+  it("keeps script scenarios out of the default flow-suite invocation", async () => {
+    writeSummary("pass");
+    mocks.resolveTelegramQaScenarioIds.mockReturnValue([
+      "channel-message-flows",
+      "telegram-help-command",
+    ]);
+
+    await runQaTelegramSuite({
+      allowFailures: true,
+      providerMode: "mock-openai",
+      repoRoot: process.cwd(),
+    });
+
+    expect(mocks.runQaFlowSuiteFromRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scenarioIds: expect.not.arrayContaining(["telegram-startup-getme-live"]),
+      }),
+    );
   });
 });

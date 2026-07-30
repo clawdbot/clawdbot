@@ -38,6 +38,13 @@ export function buildMattermostModelPickerSelectMessageSid(params: {
   return `interaction:${params.postId}:select:${provider}/${model}`;
 }
 
+export function buildMattermostButtonInteractionMessageSid(params: {
+  postId: string;
+  actionId: string;
+}): string {
+  return `interaction:${params.postId}:${params.actionId}`;
+}
+
 export function resolveMattermostReplyRootId(params: {
   kind: ChatType;
   threadRootId?: string;
@@ -53,6 +60,26 @@ export function resolveMattermostReplyRootId(params: {
     return threadRootId;
   }
   return normalizeOptionalString(params.replyToId);
+}
+
+export function resolveMattermostInteractionReplyRootId(params: {
+  kind: ChatType;
+  threadRootId?: string;
+  replyToId?: string;
+  interactionMessageSid: string;
+  sourcePostId: string;
+}): string | undefined {
+  const interactionMessageSid = normalizeOptionalString(params.interactionMessageSid);
+  const replyToId = normalizeOptionalString(params.replyToId);
+  // Interaction MessageSid values identify synthetic inbound events, not provider posts.
+  // Map only reply-to-current back to the source post or Mattermost rejects the root.
+  const providerReplyToId =
+    replyToId === interactionMessageSid ? normalizeOptionalString(params.sourcePostId) : replyToId;
+  return resolveMattermostReplyRootId({
+    kind: params.kind,
+    threadRootId: params.threadRootId,
+    replyToId: providerReplyToId,
+  });
 }
 
 export function canFinalizeMattermostPreviewInPlace(params: {

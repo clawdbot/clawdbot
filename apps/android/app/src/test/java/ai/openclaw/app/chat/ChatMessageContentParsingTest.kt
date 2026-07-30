@@ -333,6 +333,26 @@ class ChatMessageContentParsingTest {
   }
 
   @Test
+  fun parsesSupportedPlaybackRenditions() {
+    val direct =
+      Json.parseToJsonElement(
+        """{"type":"video","mimeType":"video/mp4","playback":"transcode"}""",
+      )
+    val attachment =
+      Json.parseToJsonElement(
+        """{"type":"attachment","attachment":{"kind":"audio","mimeType":"audio/mp4","playback":"native"}}""",
+      )
+    val unsupported =
+      Json.parseToJsonElement(
+        """{"type":"video","mimeType":"video/mp4","playback":"future"}""",
+      )
+
+    assertEquals("transcode", parseChatMessageContent(direct)?.playback)
+    assertEquals("native", parseChatMessageContent(attachment)?.playback)
+    assertEquals(null, parseChatMessageContent(unsupported)?.playback)
+  }
+
+  @Test
   fun dropsOversizedInlineImageContentBeforeRendering() {
     val oversized = "A".repeat(CHAT_IMAGE_MAX_BASE64_CHARS + 1)
     val image =

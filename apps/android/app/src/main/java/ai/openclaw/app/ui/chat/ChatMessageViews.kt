@@ -110,7 +110,7 @@ internal fun ChatMessageBubble(
   imageResolverReady: Boolean = false,
   loadImageArtifact: suspend (String) -> GatewayLoadedImage? = { null },
   inlineMediaPlaybackBlocked: Boolean = false,
-  loadMediaArtifact: suspend (String, GatewayMediaKind) -> GatewayLoadedMedia? = { _, _ -> null },
+  loadMediaArtifact: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia? = { _, _, _ -> null },
 ) {
   val role = normalizeVisibleChatMessageRole(message.role) ?: return
   val style = bubbleStyle(role)
@@ -242,7 +242,7 @@ private fun ChatMessageBody(
   imageResolverReady: Boolean,
   loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
   inlineMediaPlaybackBlocked: Boolean,
-  loadMediaArtifact: suspend (String, GatewayMediaKind) -> GatewayLoadedMedia?,
+  loadMediaArtifact: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia?,
 ) {
   Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
     for (part in content) {

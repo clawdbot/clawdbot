@@ -136,9 +136,17 @@ run_flow() {
   local install_log="/tmp/openclaw-doctor-switch-${name}-install.log"
   local doctor_log="/tmp/openclaw-doctor-switch-${name}-doctor.log"
   local command_timeout="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-900s}"
+  local account_home=""
 
   echo "== Flow: $name =="
   openclaw_test_state_create "switch-${name}" empty
+  account_home="$(getent passwd "$(id -u)" | cut -d: -f6)"
+  if [ -z "$account_home" ]; then
+    echo "Could not resolve the current account home" >&2
+    exit 1
+  fi
+  export HOME="$account_home"
+  unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH
   export USER="testuser"
 
   if ! openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$install_cmd" >"$install_log" 2>&1; then

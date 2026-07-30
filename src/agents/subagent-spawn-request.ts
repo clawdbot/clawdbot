@@ -254,12 +254,12 @@ export function resolveSubagentSpawnRequest(
       );
     }
     if (
-      isIncognitoSessionKey(requesterInternalKey) &&
-      !isIncognitoSessionKey(preallocatedChildSessionKey)
+      isIncognitoSessionKey(requesterInternalKey) !==
+      isIncognitoSessionKey(preallocatedChildSessionKey)
     ) {
       return rejectSubagentSpawnRequest(
         "forbidden",
-        "incognito requesters require an incognito reserved childSessionKey",
+        "requester and reserved childSessionKey must have matching incognito classification",
       );
     }
   }

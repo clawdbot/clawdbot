@@ -16,6 +16,14 @@
 
 const PROMOTION_SECTION_HEADING_RE = /^## Promoted From Short-Term Memory \(([^)]+)\)\s*$/;
 
+const PROMOTION_SUBSECTION_HEADING_RE = /^### (?:Global|Project: .+?)\s*$/;
+
+const PROMOTION_ENTRY_MARKER_RE = /^<!--\s*openclaw-memory-promotion:.*-->\s*$/i;
+
+const ATX_HEADING_RE = /^ {0,3}#{1,6}(?:[ \t]|$)/;
+
+const SETEXT_HEADING_UNDERLINE_RE = /^ {0,3}(?:=+|-+)[ \t]*$/;
+
 /**
  * Default budget for MEMORY.md content on disk, in characters. Chosen to
  * stay safely below the bootstrap injection cap (~12KB per file at the
@@ -37,6 +45,36 @@ const WRITE_OVERHEAD_RESERVE = 21;
 type MemoryBlock =
   | { kind: "preserved"; text: string }
   | { kind: "promotion"; date: string; text: string };
+
+function startsGeneratedPromotionSubsection(lines: string[], index: number): boolean {
+  if (!PROMOTION_SUBSECTION_HEADING_RE.test(lines[index] ?? "")) {
+    return false;
+  }
+  for (let next = index + 1; next < lines.length; next += 1) {
+    const line = lines[next] ?? "";
+    if (line.trim().length === 0) {
+      continue;
+    }
+    return PROMOTION_ENTRY_MARKER_RE.test(line);
+  }
+  return false;
+}
+
+function takeSetextHeadingLines(lines: string[]): string[] | undefined {
+  let start = lines.length;
+  while (start > 1 && lines[start - 1]?.trim().length !== 0) {
+    start -= 1;
+  }
+  if (start === lines.length) {
+    return undefined;
+  }
+  const headingLines = lines.slice(start);
+  if (headingLines.some((line) => PROMOTION_ENTRY_MARKER_RE.test(line))) {
+    return undefined;
+  }
+  lines.splice(start);
+  return headingLines;
+}
 
 function parseMemoryBlocks(content: string): MemoryBlock[] {
   if (content.length === 0) {
@@ -63,8 +101,18 @@ function parseMemoryBlocks(content: string): MemoryBlock[] {
     currentDate = undefined;
   };
 
-  for (const line of lines) {
-    if (line.startsWith("## ")) {
+  for (const [index, line] of lines.entries()) {
+    if (currentKind === "promotion" && SETEXT_HEADING_UNDERLINE_RE.test(line)) {
+      const headingLines = takeSetextHeadingLines(currentLines);
+      if (headingLines) {
+        flush();
+        currentLines = [...headingLines, line];
+        continue;
+      }
+    }
+    const continuesPromotionBody =
+      currentKind === "promotion" && startsGeneratedPromotionSubsection(lines, index);
+    if (ATX_HEADING_RE.test(line) && !continuesPromotionBody) {
       flush();
       const match = PROMOTION_SECTION_HEADING_RE.exec(line);
       if (match) {
@@ -104,7 +152,7 @@ type CompactMemoryResult = {
  *
  * Guarantees:
  * - Non-promotion content (user-authored markdown, the file header, any
- *   `##` heading not matching the promotion pattern) is preserved.
+ *   heading of any level not matching the promotion pattern) is preserved.
  * - Promotion sections are dropped in ascending date order (oldest first).
  * - If `existingMemory + newSection` already fits the budget, the existing
  *   memory is returned unchanged.

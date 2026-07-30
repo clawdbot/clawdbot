@@ -2422,6 +2422,7 @@ describe("runCodexAppServerAttempt", () => {
       appendSystemContext: "post system",
       prependContext: "queued context",
       appendContext: "tail context",
+      toolsAllow: ["*"],
     }));
     initializeGlobalHookRunner(
       createMockPluginRegistry([
@@ -2479,6 +2480,22 @@ describe("runCodexAppServerAttempt", () => {
     expect(llmInputPayload.prompt).toBe("queued context\n\nhello\n\ntail context");
     expect(llmInputPayload.historyMessages).toEqual([]);
     expect(JSON.stringify(llmInputPayload)).not.toContain("previous turn");
+  });
+
+  it("fails closed when before_prompt_build restricts Codex tools", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: () => ({ toolsAllow: ["message"] }),
+        },
+      ]),
+    );
+    const { sessionFile, workspaceDir } = createRunPaths();
+
+    await expect(runCodexAppServerAttempt(createParams(sessionFile, workspaceDir))).rejects.toThrow(
+      "Codex app-server cannot enforce before_prompt_build toolsAllow",
+    );
   });
 
   it("projects bounded continuity when starting Codex without a native thread binding", async () => {

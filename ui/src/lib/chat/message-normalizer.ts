@@ -294,6 +294,52 @@ function coerceAudioContentBlock(
   return null;
 }
 
+function coerceManagedMediaContentBlock(
+  item: Record<string, unknown>,
+): Extract<MessageContentItem, { type: "attachment" }> | null {
+  if ((item.type !== "audio" && item.type !== "video") || typeof item.url !== "string") {
+    return null;
+  }
+  const url = item.url.trim();
+  if (!url) {
+    return null;
+  }
+  const kind = item.type;
+  const fallbackLabel = kind === "audio" ? "Audio" : "Video";
+  const label =
+    typeof item.fileName === "string" && item.fileName.trim()
+      ? item.fileName.trim()
+      : typeof item.label === "string" && item.label.trim()
+        ? item.label.trim()
+        : fallbackLabel;
+  return {
+    type: "attachment",
+    attachment: {
+      url,
+      kind,
+      label,
+      ...(typeof item.mimeType === "string" ? { mimeType: item.mimeType } : {}),
+      ...(typeof item.artifactId === "string" ? { artifactId: item.artifactId } : {}),
+      ...(kind === "audio" && item.isVoiceNote === true ? { isVoiceNote: true } : {}),
+      ...(item.playback === "native" || item.playback === "transcode"
+        ? { playback: item.playback }
+        : {}),
+      ...(typeof item.sizeBytes === "number" && item.sizeBytes >= 0
+        ? { sizeBytes: item.sizeBytes }
+        : {}),
+      ...(typeof item.durationMs === "number" && item.durationMs >= 0
+        ? { durationMs: item.durationMs }
+        : {}),
+      ...(kind === "video" && typeof item.width === "number" && item.width > 0
+        ? { width: item.width }
+        : {}),
+      ...(kind === "video" && typeof item.height === "number" && item.height > 0
+        ? { height: item.height }
+        : {}),
+    },
+  };
+}
+
 function mergeAdjacentTextItems(items: MessageContentItem[]): MessageContentItem[] {
   const merged: MessageContentItem[] = [];
   for (const item of items) {
@@ -444,6 +490,10 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   } else if (contentItems) {
     content = contentItems.flatMap((item) => {
       if (isAssistantMessage) {
+        const managedMediaAttachment = coerceManagedMediaContentBlock(item);
+        if (managedMediaAttachment) {
+          return [managedMediaAttachment];
+        }
         const audioAttachment = coerceAudioContentBlock(item);
         if (audioAttachment) {
           return [audioAttachment];
@@ -463,6 +513,10 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
           label?: unknown;
           mimeType?: unknown;
           isVoiceNote?: unknown;
+          artifactId?: unknown;
+          playback?: unknown;
+          sizeBytes?: unknown;
+          durationMs?: unknown;
           width?: unknown;
           height?: unknown;
         };
@@ -485,6 +539,18 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
               label: attachment.label,
               ...(typeof attachment.mimeType === "string" ? { mimeType: attachment.mimeType } : {}),
               ...(attachment.isVoiceNote === true ? { isVoiceNote: true } : {}),
+              ...(typeof attachment.artifactId === "string"
+                ? { artifactId: attachment.artifactId }
+                : {}),
+              ...(attachment.playback === "native" || attachment.playback === "transcode"
+                ? { playback: attachment.playback }
+                : {}),
+              ...(typeof attachment.sizeBytes === "number" && attachment.sizeBytes >= 0
+                ? { sizeBytes: attachment.sizeBytes }
+                : {}),
+              ...(typeof attachment.durationMs === "number" && attachment.durationMs >= 0
+                ? { durationMs: attachment.durationMs }
+                : {}),
               ...(typeof attachment.width === "number" && attachment.width > 0
                 ? { width: attachment.width }
                 : {}),

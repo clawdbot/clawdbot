@@ -28,6 +28,7 @@ describe("codex cli node sessions", () => {
     } else {
       process.env.CODEX_HOME = previousCodexHome;
     }
+    vi.restoreAllMocks();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
@@ -153,6 +154,164 @@ describe("codex cli node sessions", () => {
         messageCount: 1,
       },
     ]);
+  });
+
+  it("streams rollout JSONL with a record spanning many chunks", async () => {
+    const sessionId = "019e23d1-f33d-78e3-959e-0f56f30a5250";
+    const sessionDir = path.join(tempDir, "sessions", "2026", "05", "14");
+    const sessionFile = path.join(sessionDir, `rollout-2026-05-14T00-10-22-${sessionId}.jsonl`);
+    await fs.mkdir(sessionDir, { recursive: true });
+    const filler = JSON.stringify({
+      timestamp: "2026-05-14T00:10:23.619Z",
+      type: "event_msg",
+      payload: { type: "token_count", padding: "x".repeat(5 * 1_024 * 1_024) },
+    });
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          timestamp: "2026-05-14T00:10:23.618Z",
+          type: "session_meta",
+          payload: { id: sessionId, cwd: "/tmp/codex-streaming" },
+        }),
+        filler,
+        JSON.stringify({
+          timestamp: "2026-05-14T00:10:24.000Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "rollout fallback" }],
+          },
+        }),
+      ].join("\n"),
+    );
+    const readFile = vi.spyOn(fs, "readFile");
+
+    const command = createCodexCliSessionNodeHostCommands().find(
+      (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
+    );
+    const raw = await command?.handle(JSON.stringify({ limit: 5 }));
+    const parsed = JSON.parse(raw ?? "{}") as {
+      sessions?: Array<{
+        sessionId?: string;
+        cwd?: string;
+        lastMessage?: string;
+        messageCount?: number;
+      }>;
+    };
+
+    expect(readFile).not.toHaveBeenCalledWith(sessionFile, "utf8");
+    expect(parsed.sessions).toEqual([
+      {
+        sessionId,
+        updatedAt: "2026-05-14T00:10:24.000Z",
+        cwd: "/tmp/codex-streaming",
+        lastMessage: "rollout fallback",
+        sessionFile,
+        messageCount: 1,
+      },
+    ]);
+  });
+
+  it("discards partial large-file summaries and closes after a later read fails", async () => {
+    const sessionId = "019e23d1-f33d-78e3-959e-0f56f30a5251";
+    const sessionDir = path.join(tempDir, "sessions", "2026", "05", "14");
+    const sessionFile = path.join(sessionDir, `rollout-2026-05-14T00-10-22-${sessionId}.jsonl`);
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.writeFile(sessionFile, "");
+    await fs.truncate(sessionFile, 5 * 1_024 * 1_024);
+    const firstChunk = Buffer.from(
+      `${JSON.stringify({
+        timestamp: "2026-05-14T00:10:23.618Z",
+        type: "session_meta",
+        payload: { id: sessionId, cwd: "/tmp/partial" },
+      })}\n`,
+    );
+    const close = vi.fn(async () => undefined);
+    const read = vi
+      .fn()
+      .mockImplementationOnce(async (buffer: Buffer) => {
+        firstChunk.copy(buffer);
+        return { bytesRead: firstChunk.length, buffer };
+      })
+      .mockRejectedValueOnce(Object.assign(new Error("read failed"), { code: "EIO" }));
+    vi.spyOn(fs, "open").mockResolvedValue({ read, close } as never);
+
+    const command = createCodexCliSessionNodeHostCommands().find(
+      (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
+    );
+    const raw = await command?.handle(JSON.stringify({ limit: 5 }));
+    const parsed = JSON.parse(raw ?? "{}") as { sessions?: unknown[] };
+
+    expect(parsed.sessions).toEqual([]);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a completed large-file summary when close rejects", async () => {
+    const sessionId = "019e23d1-f33d-78e3-959e-0f56f30a5252";
+    const sessionDir = path.join(tempDir, "sessions", "2026", "05", "14");
+    const sessionFile = path.join(sessionDir, `rollout-2026-05-14T00-10-22-${sessionId}.jsonl`);
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.writeFile(sessionFile, "");
+    await fs.truncate(sessionFile, 5 * 1_024 * 1_024);
+    const content = Buffer.from(
+      [
+        JSON.stringify({
+          timestamp: "2026-05-14T00:10:23.618Z",
+          type: "session_meta",
+          payload: { id: sessionId, cwd: "/tmp/close-failure" },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-14T00:10:24.000Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "survives close failure" }],
+          },
+        }),
+      ].join("\n"),
+    );
+    const close = vi.fn(async () => {
+      throw Object.assign(new Error("close failed"), { code: "EIO" });
+    });
+    const read = vi
+      .fn()
+      .mockImplementationOnce(async (buffer: Buffer) => {
+        content.copy(buffer);
+        return { bytesRead: content.length, buffer };
+      })
+      .mockResolvedValueOnce({ bytesRead: 0, buffer: Buffer.alloc(0) });
+    vi.spyOn(fs, "open").mockResolvedValue({ read, close } as never);
+
+    const command = createCodexCliSessionNodeHostCommands().find(
+      (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
+    );
+    const raw = await command?.handle(JSON.stringify({ limit: 5 }));
+    const parsed = JSON.parse(raw ?? "{}") as {
+      sessions?: Array<{
+        sessionId?: string;
+        updatedAt?: string;
+        cwd?: string;
+        lastMessage?: string;
+        sessionFile?: string;
+        messageCount?: number;
+      }>;
+    };
+
+    expect(parsed.sessions).toEqual([
+      {
+        sessionId,
+        updatedAt: "2026-05-14T00:10:24.000Z",
+        cwd: "/tmp/close-failure",
+        lastMessage: "survives close failure",
+        sessionFile,
+        messageCount: 1,
+      },
+    ]);
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it("reports malformed node session payloadJSON with an owned error", async () => {

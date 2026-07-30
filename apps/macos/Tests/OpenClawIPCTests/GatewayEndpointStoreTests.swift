@@ -1226,6 +1226,36 @@ extension GatewayEndpointStoreTests {
                 hostKeyPolicy: .openssh)))
     }
 
+    @Test func `ssh restart backoff propagates cancellation`() async {
+        await #expect(throws: CancellationError.self) {
+            try await RemoteTunnelManager._testWaitForRestartBackoff(seconds: 2) { _ in
+                throw CancellationError()
+            }
+        }
+    }
+
+    @Test func `stale ssh waiter cannot replace current tunnel create`() throws {
+        let oldTarget = try #require(CommandResolver.parseSSHTarget("alice@gateway-a.example"))
+        let newTarget = try #require(CommandResolver.parseSSHTarget("alice@gateway-b.example"))
+        let oldConfiguration = RemotePortTunnel.Configuration(
+            target: oldTarget,
+            identity: "/tmp/id-a",
+            remotePort: 18789,
+            hostKeyPolicy: .strict)
+        let newConfiguration = RemotePortTunnel.Configuration(
+            target: newTarget,
+            identity: "/tmp/id-b",
+            remotePort: 18789,
+            hostKeyPolicy: .strict)
+
+        #expect(!RemoteTunnelManager._testIsCurrentConfiguration(
+            requested: oldConfiguration,
+            current: newConfiguration))
+        #expect(RemoteTunnelManager._testIsCurrentConfiguration(
+            requested: newConfiguration,
+            current: newConfiguration))
+    }
+
     @Test func `normalize gateway url rejects public host ws`() {
         let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://gateway.example:18789")
         #expect(url == nil)

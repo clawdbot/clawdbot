@@ -569,7 +569,8 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     func loadMediaArtifact(
         sessionKey: String,
         artifactId: String,
-        kind: OpenClawChatMediaKind) async throws -> OpenClawChatLoadedMedia?
+        kind: OpenClawChatMediaKind,
+        playback: OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
     {
         guard let serverLease = await connection.captureServerLease() else {
             throw OpenClawChatTransportSendError.notDispatched
@@ -580,6 +581,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             agentID: target.agentID,
             artifactId: artifactId,
             kind: kind,
+            playback: playback,
             ifCurrentServerLease: serverLease)
     }
 

@@ -37,6 +37,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
 import type { AgentMessage } from "./agent-core.js";
+import { withProjectedSessionTranscriptWriteLock } from "./session-transcript-lock-runtime.js";
 import {
   formatSessionTranscriptMemoryHitKey,
   parseSessionTranscriptMemoryHitKey,
@@ -445,42 +446,7 @@ export async function withSessionTranscriptWriteLock<T>(
   params: SessionTranscriptWriteLockParams,
   run: (context: SessionTranscriptWriteLockContext) => Promise<T> | T,
 ): Promise<T> {
-  const storageTarget = await resolveSessionTranscriptRuntimeTarget(params);
-  const target = projectPublicTarget({
-    ...storageTarget,
-    targetKind: "runtime-session",
-  });
-  const boundScope = {
-    ...params,
-    sessionId: storageTarget.sessionId,
-    sessionKey: storageTarget.sessionKey,
-  };
-  // Treat publishUpdate as a post-commit callback: future transactional stores
-  // must not expose updates when the scoped write callback fails.
-  const queuedUpdates: Array<TranscriptUpdatePayload | undefined> = [];
-  const result = await withTranscriptWriteLock(
-    boundScope,
-    async (locked) =>
-      await run({
-        target,
-        readEvents: locked.readEvents,
-        appendMessage: (options) =>
-          locked.appendMessage({
-            ...options,
-            ...(params.config !== undefined ? { config: params.config } : {}),
-          }),
-        publishUpdate: async (update) => {
-          queuedUpdates.push(update ? { ...update } : undefined);
-        },
-      }),
-  );
-  for (const update of queuedUpdates) {
-    await publishSessionTranscriptUpdateByIdentity({
-      ...boundScope,
-      update,
-    });
-  }
-  return result;
+  return await withProjectedSessionTranscriptWriteLock(params, run, (context) => context);
 }
 
 function createAssistantMirrorMessage(params: {

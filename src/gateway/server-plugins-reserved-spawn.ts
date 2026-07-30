@@ -8,6 +8,7 @@ import { getAgentRunContext } from "../infra/agent-events.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { isValidAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { reserveReservedSubagentDedupeEntry } from "./server-methods/agent-dedupe.js";
 import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
@@ -96,6 +97,7 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
   if (
     !childSessionKey ||
     childSessionKey !== params.childSessionKey ||
+    normalizeSessionKeyPreservingOpaquePeerIds(childSessionKey) !== childSessionKey ||
     !runId ||
     runId !== params.runId
   ) {

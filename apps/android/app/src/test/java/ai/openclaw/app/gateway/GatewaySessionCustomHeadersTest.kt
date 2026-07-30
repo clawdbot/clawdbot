@@ -12,6 +12,8 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
@@ -31,6 +33,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 private const val TEST_TIMEOUT_MS = 8_000L
@@ -76,6 +79,12 @@ class GatewaySessionCustomHeadersTest {
       val videoAttachmentId = "22222222-2222-4222-8222-222222222222"
       val videoArtifactId = "artifact_managed_media_$videoAttachmentId"
       val videoPath = "/api/chat/media/outgoing/main/$videoAttachmentId/full?mediaTicket=video-ticket"
+      val audioAttachmentId = "33333333-3333-4333-8333-333333333333"
+      val audioArtifactId = "artifact_managed_media_$audioAttachmentId"
+      val audioPath = "/api/chat/media/outgoing/main/$audioAttachmentId/full?mediaTicket=audio-ticket"
+      val audioPlaybackPath = "$audioPath&playback=1"
+      val audioBytes = byteArrayOf(5, 6, 7, 8)
+      val audioRequestCount = AtomicInteger()
       val server =
         MockWebServer().apply {
           dispatcher =
@@ -86,6 +95,14 @@ class GatewaySessionCustomHeadersTest {
                   return MockResponse()
                     .setHeader("Content-Type", "image/png")
                     .setBody(Buffer().write(imageBytes))
+                }
+                if (request.path == audioPlaybackPath) {
+                  if (audioRequestCount.incrementAndGet() == 1) {
+                    return MockResponse().setResponseCode(202).setBody("""{"status":"preparing"}""")
+                  }
+                  return MockResponse()
+                    .setHeader("Content-Type", "audio/mp4")
+                    .setBody(Buffer().write(audioBytes))
                 }
                 return MockResponse().withWebSocketUpgrade(
                   object : WebSocketListener() {
@@ -117,6 +134,15 @@ class GatewaySessionCustomHeadersTest {
                           ) {
                             webSocket.send(
                               """{"type":"res","id":"$id","ok":true,"payload":{"artifact":{"id":"$videoArtifactId","type":"video","mimeType":"video/mp4","download":{"mode":"url"}},"url":"$videoPath"}}""",
+                            )
+                          } else if (frame["params"]
+                              ?.jsonObject
+                              ?.get("artifactId")
+                              ?.jsonPrimitive
+                              ?.content == audioArtifactId
+                          ) {
+                            webSocket.send(
+                              """{"type":"res","id":"$id","ok":true,"payload":{"artifact":{"id":"$audioArtifactId","type":"audio","mimeType":"audio/mp4","download":{"mode":"url"}},"url":"$audioPath"}}""",
                             )
                           } else {
                             webSocket.send(
@@ -184,12 +210,91 @@ class GatewaySessionCustomHeadersTest {
         assertEquals("http://127.0.0.1:${server.port}$videoPath", streamed.url)
         assertEquals("video/*", streamed.headers["Accept"])
         assertEquals("video/mp4", streamed.mimeType)
+        assertEquals(false, streamed.retryPreparingPlayback)
+
+        val transcodedVideo =
+          session.loadMediaArtifact(stableId, "main", "main", videoArtifactId, GatewayMediaKind.Video, true) as GatewayLoadedMedia.Streaming
+        assertEquals("http://127.0.0.1:${server.port}$videoPath&playback=1", transcodedVideo.url)
+        assertTrue(transcodedVideo.retryPreparingPlayback)
+
+        val audio =
+          session.loadMediaArtifact(stableId, "main", "main", audioArtifactId, GatewayMediaKind.Audio, true) as GatewayLoadedMedia.Buffered
+        assertArrayEquals(audioBytes, audio.bytes)
+        assertEquals(2, audioRequestCount.get())
       } finally {
         session.disconnectAndJoin()
         scope.cancel()
         server.shutdown()
       }
     }
+
+  @Test
+  fun preparingPlaybackInterceptorRetries202WithoutSurfacingLoadError() {
+    val server = MockWebServer()
+    server.enqueue(MockResponse().setResponseCode(202).setBody("""{"status":"preparing"}"""))
+    server.enqueue(MockResponse().setResponseCode(200).setBody("ready"))
+    server.start()
+    var nowMs = 0L
+    val client =
+      OkHttpClient
+        .Builder()
+        .addInterceptor(
+          GatewayPreparingPlaybackInterceptor(
+            policy = GatewayPlaybackRetryPolicy(maxElapsedMs = 100L, initialDelayMs = 0L, maxDelayMs = 0L),
+            nowMs = { nowMs++ },
+            sleepMs = {},
+          ),
+        ).build()
+
+    try {
+      client.newCall(Request.Builder().url(server.url("/video?playback=1")).build()).execute().use { response ->
+        assertEquals(200, response.code)
+        assertEquals("ready", response.body.string())
+      }
+      assertEquals(2, server.requestCount)
+    } finally {
+      server.shutdown()
+    }
+  }
+
+  @Test
+  fun preparingPlaybackRetryStopsAtTwoMinuteCap() {
+    val retry = GatewayPlaybackRetryState(startedAtMs = 1_000L)
+
+    assertTrue(retry.canAttempt(nowMs = 1_000L))
+    assertEquals(500L, retry.nextDelayMs(nowMs = 1_000L))
+    assertEquals(false, retry.canAttempt(nowMs = 121_000L))
+    assertNull(retry.nextDelayMs(nowMs = 121_001L))
+  }
+
+  @Test
+  fun preparingPlaybackInterceptorDoesNotStartRequestAfterOvershootingDeadline() {
+    val server = MockWebServer()
+    server.enqueue(MockResponse().setResponseCode(202).setBody("""{"status":"preparing"}"""))
+    server.start()
+    var nowMs = 0L
+    val client =
+      OkHttpClient
+        .Builder()
+        .addInterceptor(
+          GatewayPreparingPlaybackInterceptor(
+            policy = GatewayPlaybackRetryPolicy(maxElapsedMs = 2L, initialDelayMs = 1L, maxDelayMs = 1L),
+            nowMs = { nowMs },
+            sleepMs = { delayMs -> nowMs += delayMs + 1L },
+          ),
+        ).build()
+
+    try {
+      val failure =
+        runCatching {
+          client.newCall(Request.Builder().url(server.url("/video?playback=1")).build()).execute().use { }
+        }.exceptionOrNull()
+      assertTrue(failure is java.io.IOException)
+      assertEquals(1, server.requestCount)
+    } finally {
+      server.shutdown()
+    }
+  }
 
   @Test
   fun tlsUpgradeRequest_carriesLatestSanitizedHeadersForOnlyThisGateway() {

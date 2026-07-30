@@ -23,6 +23,7 @@ import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
 import { applySelectedSessionProjection } from "./chat-pane-state.ts";
 import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
+import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import {
   invalidateChatMetadataCache,
@@ -278,16 +279,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       }
       this.connectedClient = null;
       setQuestionPromptClient(this.questionPromptState, null);
-      state.realtimeTalkSession?.stop();
-      state.realtimeTalkSession = null;
-      state.realtimeTalkActive = false;
-      state.realtimeTalkVideoStream = null;
-      state.realtimeTalkCameraDevices = [];
-      state.realtimeTalkVideoCapable = false;
-      state.realtimeTalkVideoPending = false;
-      state.realtimeTalkCameraError = false;
-      state.realtimeTalkStatus = "idle";
-      state.realtimeTalkInputLevel.set(0);
+      stopChatRealtimeTalk(state);
       state.resetToolStream();
       state.requestUpdate?.();
       return;

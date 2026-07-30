@@ -23,6 +23,8 @@ type SubagentRunParams = {
   lane?: string;
   lightContext?: boolean;
   deliver?: boolean;
+  /** Deliver the completion to the authenticated requester of the current hook invocation. */
+  completionDelivery?: "current-requester";
   idempotencyKey?: string;
   cwd?: string;
 };

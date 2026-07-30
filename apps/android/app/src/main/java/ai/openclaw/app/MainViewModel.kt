@@ -1314,7 +1314,8 @@ class MainViewModel private constructor(
   internal suspend fun loadChatMediaArtifact(
     artifactId: String,
     kind: GatewayMediaKind,
-  ) = ensureRuntime().loadChatMediaArtifact(artifactId, kind)
+    playbackRendition: Boolean,
+  ) = ensureRuntime().loadChatMediaArtifact(artifactId, kind, playbackRendition)
 
   fun requestCanvasRehydrate(source: String = "screen_tab") {
     ensureRuntime().requestCanvasRehydrate(source = source, force = true)
