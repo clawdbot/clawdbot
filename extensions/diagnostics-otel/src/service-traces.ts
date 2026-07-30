@@ -5,17 +5,13 @@ import {
   type SpanKind,
   type Tracer,
 } from "@opentelemetry/api";
-import { waitForDiagnosticEventsDrained } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
   DiagnosticTraceContext,
 } from "../api.js";
 import { redactOtelAttributes } from "./service-attributes.js";
-import {
-  MAX_RETAINED_TRUSTED_SPAN_CONTEXTS,
-  RETAINED_TRUSTED_SPAN_CONTEXT_TIMEOUT_MS,
-} from "./service-constants.js";
+import { MAX_RETAINED_TRUSTED_SPAN_CONTEXTS } from "./service-constants.js";
 import { contextForTraceContext, normalizeTraceContext } from "./service-trace-context.js";
 import type { TrustedSpanAliasOwner } from "./service-types.js";
 
@@ -25,17 +21,17 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     string,
     { span: ReturnType<typeof tracer.startSpan>; spanId: string; owner: TrustedSpanAliasOwner }
   >();
+  // Translates a completed lifecycle span's diagnostic span id to the real OTel
+  // span context so late children still attach to the span we exported. Kept for
+  // the service lifetime, bounded by MAX_RETAINED_TRUSTED_SPAN_CONTEXTS: children
+  // of a long turn arrive on later ticks, so any elapsed-time eviction silently
+  // reparents them into brand-new single-span traces.
   const retainedTrustedSpanContexts = new Map<
     string,
-    { spanContext: SpanContext; retentionMarker: symbol; owner?: TrustedSpanAliasOwner }
+    { spanContext: SpanContext; owner?: TrustedSpanAliasOwner }
   >();
-  const retainedTrustedSpanContextCleanupTimers = new Set<ReturnType<typeof setTimeout>>();
   const stopActiveTrustedSpans = () => {
     const stopAt = Date.now();
-    for (const handle of retainedTrustedSpanContextCleanupTimers) {
-      clearTimeout(handle);
-    }
-    retainedTrustedSpanContextCleanupTimers.clear();
     retainedTrustedSpanContexts.clear();
     for (const span of new Set([
       ...activeTrustedSpans.values(),
@@ -79,10 +75,15 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
   };
   const trustedTraceContext = (evt: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) =>
     metadata.trusted ? normalizeTraceContext(evt.trace) : undefined;
+  // trustedTraceContext marks an untrusted payload whose trace context still came
+  // from OpenClaw-owned scope, which is all these helpers need to link spans.
   const internalOrTrustedTraceContext = (
     evt: DiagnosticEventPayload,
     metadata: DiagnosticEventMetadata,
-  ) => (metadata.trusted || metadata.internal ? normalizeTraceContext(evt.trace) : undefined);
+  ) =>
+    metadata.trusted || metadata.internal || metadata.trustedTraceContext === true
+      ? normalizeTraceContext(evt.trace)
+      : undefined;
   const trustedSpanAliasOwner = (
     evt: DiagnosticEventPayload,
   ): TrustedSpanAliasOwner | undefined => {
@@ -267,12 +268,10 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     traceId: string,
     spanId: string,
     spanContext: SpanContext,
-    retentionMarker: symbol,
     owner?: TrustedSpanAliasOwner,
   ) => {
     retainedTrustedSpanContexts.set(retainedTrustedSpanContextKey(traceId, spanId, owner), {
       spanContext,
-      retentionMarker,
       ...(owner ? { owner } : {}),
     });
     while (retainedTrustedSpanContexts.size > MAX_RETAINED_TRUSTED_SPAN_CONTEXTS) {
@@ -282,39 +281,6 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
       }
       retainedTrustedSpanContexts.delete(oldestKey);
     }
-  };
-  const scheduleRetainedTrustedSpanContextCleanup = (retentionMarker: symbol) => {
-    let drainHandle: ReturnType<typeof setTimeout> | undefined;
-    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-    const cleanup = () => {
-      if (drainHandle) {
-        clearTimeout(drainHandle);
-        retainedTrustedSpanContextCleanupTimers.delete(drainHandle);
-        drainHandle = undefined;
-      }
-      if (timeoutHandle) {
-        clearTimeout(timeoutHandle);
-        retainedTrustedSpanContextCleanupTimers.delete(timeoutHandle);
-        timeoutHandle = undefined;
-      }
-      for (const [key, retained] of retainedTrustedSpanContexts) {
-        if (retained.retentionMarker === retentionMarker) {
-          retainedTrustedSpanContexts.delete(key);
-        }
-      }
-    };
-    drainHandle = setTimeout(() => {
-      if (drainHandle) {
-        retainedTrustedSpanContextCleanupTimers.delete(drainHandle);
-        drainHandle = undefined;
-      }
-      void waitForDiagnosticEventsDrained().then(cleanup, cleanup);
-    }, 0);
-    (drainHandle as { unref?: () => void }).unref?.();
-    retainedTrustedSpanContextCleanupTimers.add(drainHandle);
-    timeoutHandle = setTimeout(cleanup, RETAINED_TRUSTED_SPAN_CONTEXT_TIMEOUT_MS);
-    (timeoutHandle as { unref?: () => void }).unref?.();
-    retainedTrustedSpanContextCleanupTimers.add(timeoutHandle);
   };
   const completeTrackedLifecycleSpan = (
     spanId: string,
@@ -339,17 +305,14 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
       }
     }
     span.end(endTimeMs);
-    const retentionMarker = Symbol("retainedTrustedSpanContext");
     for (const retainedKey of retainedKeys) {
       retainTrustedSpanContext(
         spanContext.traceId,
         retainedKey.spanId,
         spanContext,
-        retentionMarker,
         retainedKey.owner,
       );
     }
-    scheduleRetainedTrustedSpanContextCleanup(retentionMarker);
   };
 
   const addRunAttrs = (
