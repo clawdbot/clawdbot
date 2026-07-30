@@ -40,25 +40,38 @@ function inlineOptionValue(token: string): string | undefined {
   return separatorIndex === -1 ? undefined : token.slice(separatorIndex + 1);
 }
 
+function looksLikeOpenClawSelector(token: string, allowUnresolved: boolean): boolean {
+  const normalized = token
+    .trim()
+    .toLowerCase()
+    .replaceAll("`", "")
+    .replaceAll("^", "")
+    .replace(/\[([a-z0-9])\]/giu, "$1")
+    .replace(/["']/gu, "");
+  return (
+    normalized.includes("openclaw") ||
+    /opencla[?*]/u.test(normalized) ||
+    (allowUnresolved && /\$env:[A-Za-z_][A-Za-z0-9_]*/iu.test(token))
+  );
+}
+
+function isPowerShellProcessOrServiceSource(argv: readonly string[]): boolean {
+  return ["get-process", "get-service", "gps", "gsv", "ps"].includes(
+    normalizeExecutableToken(argv[0] ?? ""),
+  );
+}
+
 function isPowerShellSelection(argv: readonly string[], allowUnresolved: boolean): boolean {
   return (
-    ["get-process", "get-service", "gps", "gsv", "ps"].includes(
-      normalizeExecutableToken(argv[0] ?? ""),
-    ) &&
-    argv.slice(1).some((token) => {
-      const normalized = token
-        .trim()
-        .toLowerCase()
-        .replaceAll("`", "")
-        .replaceAll("^", "")
-        .replace(/\[([a-z0-9])\]/giu, "$1")
-        .replace(/["']/gu, "");
-      return (
-        normalized.includes("openclaw") ||
-        /opencla[?*]/u.test(normalized) ||
-        (allowUnresolved && /\$env:[A-Za-z_][A-Za-z0-9_]*/iu.test(token))
-      );
-    })
+    isPowerShellProcessOrServiceSource(argv) &&
+    argv.slice(1).some((token) => looksLikeOpenClawSelector(token, allowUnresolved))
+  );
+}
+
+function isPowerShellOpenClawFilter(argv: readonly string[], allowUnresolved: boolean): boolean {
+  return (
+    ["?", "where", "where-object"].includes(normalizeExecutableToken(argv[0] ?? "")) &&
+    argv.slice(1).some((token) => looksLikeOpenClawSelector(token, allowUnresolved))
   );
 }
 
@@ -88,6 +101,7 @@ export function commandHasPowerShellLifecyclePipeline(
   if (stages.length < 2) {
     return false;
   }
+  let processOrServiceSource = false;
   let selectedOpenClaw = false;
   for (const stage of stages) {
     const normalizedStage = stage.trim().replace(/^[({\s]+|[)}\s]+$/gu, "");
@@ -96,6 +110,15 @@ export function commandHasPowerShellLifecyclePipeline(
       return false;
     }
     if (isPowerShellSelection(argv, allowUnresolved)) {
+      processOrServiceSource = true;
+      selectedOpenClaw = true;
+      continue;
+    }
+    if (isPowerShellProcessOrServiceSource(argv)) {
+      processOrServiceSource = true;
+      continue;
+    }
+    if (processOrServiceSource && isPowerShellOpenClawFilter(argv, allowUnresolved)) {
       selectedOpenClaw = true;
       continue;
     }

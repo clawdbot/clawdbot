@@ -20,6 +20,10 @@ import {
   matchesOpenClawProcessPattern,
   matchesOpenClawUnitPattern,
 } from "./exec-approvals-lifecycle-patterns.js";
+import {
+  classifyOpenClawHooksArgv,
+  classifyOpenClawPluginsArgv,
+} from "./exec-approvals-lifecycle-plugins.js";
 import { classifyOpenClawApprovalPolicyArgv } from "./exec-approvals-lifecycle-policy.js";
 import {
   commandHasPowerShellLifecyclePipeline,
@@ -280,6 +284,10 @@ function classifyOpenClawArgv(argv: readonly string[]): boolean {
       return classifyOpenClawDoctorArgv(argv, index + 1);
     case "node":
       return classifyOpenClawNodeServiceArgv(argv, index + 1);
+    case "hooks":
+      return classifyOpenClawHooksArgv(argv, index + 1);
+    case "plugins":
+      return classifyOpenClawPluginsArgv(argv, index + 1);
     case "reset":
       return classifyOpenClawResetArgv(argv, index + 1);
     case "configure":
