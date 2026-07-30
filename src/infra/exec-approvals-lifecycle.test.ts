@@ -102,6 +102,11 @@ const mutationCases: Array<[string, string[]]> = [
   ["openclaw node run", ["openclaw", "node", "run"]],
   ["openclaw node --host example restart", ["openclaw", "node", "--host", "example", "restart"]],
   [
+    "openclaw reset --scope full --yes --non-interactive",
+    ["openclaw", "reset", "--scope", "full", "--yes", "--non-interactive"],
+  ],
+  ["openclaw reset --dry-run=false", ["openclaw", "reset", "--dry-run=false"]],
+  [
     "launchctl stop gui/$UID/com.openclaw.gateway",
     ["launchctl", "stop", "gui/$UID/com.openclaw.gateway"],
   ],
@@ -253,6 +258,8 @@ const mutationCases: Array<[string, string[]]> = [
   ["npm exec -- openclaw gateway restart", ["npm", "exec", "--", "openclaw", "gateway", "restart"]],
   ["npm install -g openclaw@latest", ["npm", "install", "-g", "openclaw@latest"]],
   ["npm rebuild openclaw", ["npm", "rebuild", "openclaw"]],
+  ["npm it openclaw", ["npm", "it", "openclaw"]],
+  ["npm install-test openclaw", ["npm", "install-test", "openclaw"]],
   ["pnpm rebuild openclaw", ["pnpm", "rebuild", "openclaw"]],
   ["npm --help=false install openclaw", ["npm", "--help=false", "install", "openclaw"]],
   ["npm --version=false install openclaw", ["npm", "--version=false", "install", "openclaw"]],
@@ -395,6 +402,7 @@ const nonMutationCases: Array<[string, string[]]> = [
   ["openclaw node status", ["openclaw", "node", "status"]],
   ["openclaw node identity", ["openclaw", "node", "identity"]],
   ["openclaw node install --help", ["openclaw", "node", "install", "--help"]],
+  ["openclaw reset --dry-run", ["openclaw", "reset", "--dry-run"]],
   ["openclaw exec-policy show", ["openclaw", "exec-policy", "show"]],
   ["openclaw approvals pending", ["openclaw", "approvals", "pending"]],
   ["openclaw approvals get", ["openclaw", "approvals", "get"]],

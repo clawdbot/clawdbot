@@ -22,6 +22,7 @@ import {
 } from "./exec-approvals-lifecycle-patterns.js";
 import { classifyOpenClawApprovalPolicyArgv } from "./exec-approvals-lifecycle-policy.js";
 import { resolvePowerShellStartProcessOpenClawArgv } from "./exec-approvals-lifecycle-powershell.js";
+import { classifyOpenClawResetArgv } from "./exec-approvals-lifecycle-reset.js";
 import { resolveLifecyclePackageRunnerArgv } from "./exec-approvals-lifecycle-runners.js";
 import {
   splitLifecycleCommandText,
@@ -36,6 +37,7 @@ import {
   lifecycleSubstitutionResultMayHideLifecycle,
   resolveLifecyclePosixShellPositionals,
 } from "./exec-approvals-lifecycle-substitutions.js";
+import { lifecycleOptionName as optionName } from "./exec-approvals-lifecycle-tokens.js";
 import type { ExecCommandSegment } from "./exec-command-analysis-types.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 import { extractShellWrapperInlineCommand } from "./shell-wrapper-resolution.js";
@@ -181,10 +183,6 @@ function hasEffectiveHelpOrVersion(
   return false;
 }
 
-function optionName(token: string): string {
-  return normalizedToken(token).split("=", 1)[0] ?? "";
-}
-
 function scanFirstPositional(
   argv: readonly string[],
   start: number,
@@ -273,6 +271,8 @@ function classifyOpenClawArgv(argv: readonly string[]): boolean {
       return classifyOpenClawDoctorArgv(argv, index + 1);
     case "node":
       return classifyOpenClawNodeServiceArgv(argv, index + 1);
+    case "reset":
+      return classifyOpenClawResetArgv(argv, index + 1);
     case "configure":
     case "onboard":
     case "setup":
