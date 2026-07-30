@@ -1,12 +1,12 @@
-@testable import OpenClaw
 import Testing
+@testable import OpenClaw
 
 private actor SimpleTaskSignal {
     private var signaled = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
     func signal() {
-        signaled = true
+        self.signaled = true
         let waiters = self.waiters
         self.waiters.removeAll()
         for waiter in waiters {
@@ -15,7 +15,7 @@ private actor SimpleTaskSignal {
     }
 
     func wait() async {
-        if signaled {
+        if self.signaled {
             return
         }
         await withCheckedContinuation { continuation in
@@ -28,11 +28,11 @@ private actor SimpleTaskOperationProbe {
     private var recordedCalls: [String] = []
 
     func recordCall(_ value: String) {
-        recordedCalls.append(value)
+        self.recordedCalls.append(value)
     }
 
     func calls() -> [String] {
-        recordedCalls
+        self.recordedCalls
     }
 }
 
@@ -53,8 +53,7 @@ struct SimpleTaskSupportTests {
             },
             operation: {
                 await operation.recordCall("loop")
-            }
-        )
+            })
 
         await sleepStarted.wait()
         guard let runningTask = task else {
@@ -85,8 +84,7 @@ struct SimpleTaskSupportTests {
             },
             operation: {
                 await operation.recordCall("first")
-            }
-        )
+            })
 
         await firstSleepStarted.wait()
         guard let firstTask = task else {
@@ -100,8 +98,7 @@ struct SimpleTaskSupportTests {
             sleep: { _ in },
             operation: {
                 await operation.recordCall("second")
-            }
-        )
+            })
         guard let secondTask = task else {
             Issue.record("replacement task did not start")
             return
@@ -132,8 +129,7 @@ struct SimpleTaskSupportTests {
             },
             operation: {
                 await operation.recordCall("stale")
-            }
-        )
+            })
 
         guard let runningTask = task else {
             Issue.record("scheduled task did not start")

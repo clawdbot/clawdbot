@@ -18,8 +18,8 @@ enum SimpleTaskSupport {
         task: inout Task<Void, Never>?,
         interval: TimeInterval,
         sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) },
-        operation: @escaping @Sendable () async -> Void
-    ) {
+        operation: @escaping @Sendable () async -> Void)
+    {
         guard task == nil else { return }
         task = Task.detached {
             await operation()
@@ -35,8 +35,8 @@ enum SimpleTaskSupport {
         delay: TimeInterval,
         sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) },
         beforeOperationCheck: @escaping @Sendable () -> Void = {},
-        operation: @escaping @MainActor @Sendable () async -> Void
-    ) {
+        operation: @escaping @MainActor @Sendable () async -> Void)
+    {
         task?.cancel()
         task = Task {
             guard await self.waitForNextOperation(interval: delay, sleep: sleep) else { return }
@@ -48,8 +48,7 @@ enum SimpleTaskSupport {
 
     nonisolated static func waitForNextOperation(
         interval: TimeInterval,
-        sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }
-    ) async
+        sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }) async
         -> Bool
     {
         guard !Task.isCancelled else { return false }
