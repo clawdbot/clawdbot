@@ -29,11 +29,13 @@ describe("safe regex", () => {
     ["([é]|\\D)*$", null],
     ["(é|É)*$", null, "i"],
     ["((a|a)|(a|a))*$", null],
+    ["^(a)(\\1|a)*!$", null],
     ["(a|b)*$", RegExp],
     ["(ab|cd)*$", RegExp],
     ["(cat|dog)+$", RegExp],
     ["(\\d|\\s)*$", RegExp],
     ["([a-f]|[g-z])*$", RegExp],
+    ["([\\w]|[-.])+@([\\w]|[-.])+\\.\\w+", RegExp, "gi"],
     ["(a|aa){2}$", RegExp],
     ["(a|a){2}$", RegExp],
   ] as const)("compiles %s safely", (pattern, expected, flags) => {

@@ -230,6 +230,11 @@ function atomsMayOverlap(left: string, right: string, flags: string): boolean {
   if (left === right) {
     return true;
   }
+  if (/^\\(?:[1-9]\d*|k<)/.test(left) || /^\\(?:[1-9]\d*|k<)/.test(right)) {
+    // Backreferences only have meaning in the complete pattern's capture context.
+    // A standalone atom probe cannot prove them disjoint from another branch.
+    return true;
+  }
   try {
     const safeFlags = flags.replace(/[gy]/g, "");
     const leftRegex = new RegExp(`^(?:${left})$`, safeFlags);
@@ -248,7 +253,7 @@ function atomsMayOverlap(left: string, right: string, flags: string): boolean {
     }
     // A finite side proves disjointness once every value has been tested.
     // Unknown atom languages fail closed so sampling can never declare them safe.
-    return flags.includes("i") || (leftValues === null && rightValues === null);
+    return leftValues === null && rightValues === null;
   } catch {
     return true;
   }
@@ -347,6 +352,9 @@ function tokenizePattern(source: string): PatternToken[] {
         atomEnd = Math.min(source.length, i + 6);
       } else if (source[i + 1] === "x") {
         atomEnd = Math.min(source.length, i + 4);
+      } else if (source[i + 1] === "k" && source[i + 2] === "<") {
+        const closing = source.indexOf(">", i + 3);
+        atomEnd = closing < 0 ? atomEnd : closing + 1;
       }
       const atom = source.slice(i, atomEnd);
       i = atomEnd - 1;
