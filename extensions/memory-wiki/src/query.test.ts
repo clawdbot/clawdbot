@@ -1588,6 +1588,47 @@ describe("getMemoryWikiPage", () => {
     expect(result?.truncated).toBe(true);
   });
 
+  it("reads an exact canonical path without enumerating unrelated pages", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    const targetPath = path.join(rootDir, "sources", "alpha.md");
+    const unrelatedPath = path.join(rootDir, "sources", "unrelated-bad.md");
+    await fs.writeFile(
+      targetPath,
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha Source" },
+        body: "# Alpha Source\n\nexact path content\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(unrelatedPath, "# Unrelated\n", "utf8");
+
+    const originalReadFile = fs.readFile.bind(fs);
+    const readFileSpy = vi
+      .spyOn(fs, "readFile")
+      .mockImplementation(async (...args: Parameters<typeof fs.readFile>) => {
+        if (args[0] === unrelatedPath) {
+          throw new Error("unrelated page is unreadable");
+        }
+        return await originalReadFile(...args);
+      });
+
+    try {
+      const result = await getMemoryWikiPage({
+        config,
+        lookup: "sources/alpha.md",
+      });
+
+      expect(result?.path).toBe("sources/alpha.md");
+      expect(result?.content).toContain("exact path content");
+      expect(readFileSpy).toHaveBeenCalledWith(targetPath, "utf8");
+      expect(readFileSpy).not.toHaveBeenCalledWith(unrelatedPath, "utf8");
+    } finally {
+      readFileSpy.mockRestore();
+    }
+  });
+
   it("defaults non-finite wiki line options before slicing", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,
