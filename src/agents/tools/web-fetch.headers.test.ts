@@ -120,9 +120,11 @@ describe("web_fetch configured request headers", () => {
   it("refuses credential headers, which would reach model-chosen hosts", async () => {
     const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Credentials"));
     global.fetch = withFetchPreconnect(fetchSpy);
+    const warnSpy = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    const credentialLogSentinel = "credential-log-sentinel";
 
     const tool = createToolWithHeaders({
-      Authorization: "Bearer operator-token",
+      Authorization: `Bearer ${credentialLogSentinel}`,
       "X-Authorization": "Bearer operator-token",
       Cookie: "session=abc",
       Cookie2: "legacy=abc",
@@ -165,6 +167,9 @@ describe("web_fetch configured request headers", () => {
     expect(names).not.toContain("X-GitHub-Token");
     expect(names).not.toContain("X-APIKEY");
     expect(names).not.toContain("X-Trace-Token");
+    const warnings = warnSpy.mock.calls.map(([message]) => message);
+    expect(warnings.some((message) => message.includes("Authorization"))).toBe(true);
+    expect(warnings.every((message) => !message.includes(credentialLogSentinel))).toBe(true);
   });
 
   it("refuses framing headers that undici rejects or ignores", async () => {
@@ -290,9 +295,9 @@ describe("web_fetch configured request headers", () => {
     await tool?.execute?.("call", { url: "https://example.com/rejected-collision" });
 
     const headers = getRequestHeaders(fetchSpy);
-    expect(
-      Object.keys(headers).some((name) => name.toLowerCase() === "x-routing-target"),
-    ).toBe(false);
+    expect(Object.keys(headers).some((name) => name.toLowerCase() === "x-routing-target")).toBe(
+      false,
+    );
     const warnings = warnSpy.mock.calls.map(([message]) => message);
     expect(warnings).toEqual(
       expect.arrayContaining([

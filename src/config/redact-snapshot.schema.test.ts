@@ -91,4 +91,26 @@ describe("realredactConfigSnapshot_real", () => {
     const activities = discord.activities as Record<string, unknown>;
     expect(activities.clientSecret).toBe(REDACTED_SENTINEL);
   });
+
+  it("redacts and restores web fetch operator headers from generated schema hints", () => {
+    const hints = buildConfigSchema().uiHints;
+    expect(hints["tools.web.fetch.headers.*"]?.sensitive).toBe(true);
+    const snapshot = makeSnapshot({
+      tools: {
+        web: {
+          fetch: {
+            headers: {
+              "X-Routing-Target": "staging-private-route",
+            },
+          },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    expect(result.config.tools.web.fetch.headers["X-Routing-Target"]).toBe(REDACTED_SENTINEL);
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.tools.web.fetch.headers["X-Routing-Target"]).toBe("staging-private-route");
+  });
 });
