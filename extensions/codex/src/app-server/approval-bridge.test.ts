@@ -232,6 +232,48 @@ describe("Codex app-server approval bridge", () => {
     },
   );
 
+  it("preserves the initiating requester when re-running policy for a promoted file approval", async () => {
+    const params = createParams();
+    params.senderId = "owner-1";
+    params.senderIsOwner = true;
+    params.memberRoleIds = ["role-a", "role-b"];
+    mockRunBeforeToolCallHook.mockImplementation(async ({ params: hookParams, ctx }) =>
+      ctx?.requester?.senderIsOwner === true
+        ? { blocked: false, params: hookParams }
+        : { blocked: true, reason: "owner required", kind: "veto" },
+    );
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/fileChange/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "patch-owner-policy",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      autoApproveOpenClawToolPolicy: true,
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "apply_patch",
+        ctx: expect.objectContaining({
+          requester: {
+            channel: "telegram",
+            accountId: "default",
+            senderId: "owner-1",
+            senderIsOwner: true,
+            roleIds: ["role-a", "role-b"],
+          },
+        }),
+      }),
+    );
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["promoted tool policy", { autoApproveOpenClawToolPolicy: true }],
     ["full-auto runtime policy", { autoApprove: true }],
@@ -328,6 +370,10 @@ describe("Codex app-server approval bridge", () => {
         agentId: "main",
         sessionKey: "agent:main:session-1",
         channelId: "chat-1",
+        requester: {
+          channel: "telegram",
+          accountId: "default",
+        },
         workspaceDir: undefined,
         turnSourceChannel: "telegram",
         turnSourceTo: "chat-1",

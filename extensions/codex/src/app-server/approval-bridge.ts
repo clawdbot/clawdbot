@@ -19,6 +19,7 @@ import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-ru
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
+import { buildCodexHookRequester } from "./hook-requester.js";
 import {
   approvalRequestExplicitlyUnavailable,
   mapExecDecisionToOutcome,
@@ -470,6 +471,7 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
     currentChannelId: params.paramsForRun.currentChannelId,
     messageTo: params.paramsForRun.messageTo,
   }).channelId;
+  const requester = buildCodexHookRequester(params.paramsForRun);
   const outcome = await runBeforeToolCallHook({
     toolName: policyRequest.toolName,
     params: policyRequest.params,
@@ -485,6 +487,9 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
       ...(params.paramsForRun.sessionId ? { sessionId: params.paramsForRun.sessionId } : {}),
       ...(params.paramsForRun.runId ? { runId: params.paramsForRun.runId } : {}),
       ...(hookChannelId ? { channelId: hookChannelId } : {}),
+      // This is the same concrete call already seen by native PreToolUse. Preserve
+      // its host-proven actor so sender-aware policy cannot authorize two identities.
+      ...(requester ? { requester } : {}),
       trigger: params.paramsForRun.trigger,
       approvalReviewerDeviceId: params.paramsForRun.approvalReviewerDeviceId,
       turnSourceChannel: params.paramsForRun.messageChannel ?? params.paramsForRun.messageProvider,
