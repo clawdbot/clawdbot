@@ -11,6 +11,7 @@ export function parseArgs(argv: unknown): {
     release_profile?: string;
     rerun_group: string;
     reuse_evidence: string;
+    fail_fast: string;
   };
 };
 export function releaseProfileForTarget(

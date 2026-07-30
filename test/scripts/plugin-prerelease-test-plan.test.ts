@@ -649,12 +649,24 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "${{ inputs.release_profile != 'beta' && 240 || 60 }}",
     );
     const fullReleaseSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
+    expect(fullReleaseWorkflow.on.workflow_dispatch.inputs.fail_fast).toEqual({
+      description:
+        "Cancel each child workflow after its first failed job; false collects independent failures to completion",
+      required: false,
+      default: false,
+      type: "boolean",
+    });
     expect(
       fullReleaseSource.match(/has failed child jobs before the workflow completed/gu)?.length,
     ).toBeGreaterThanOrEqual(3);
+    expect(fullReleaseSource.match(/if \[\[ "\$FAIL_FAST" != "true" \]\]; then/gu)?.length).toBe(4);
+    expect(fullReleaseSource).toContain('-f fail_fast="$FAIL_FAST"');
     expect(fullReleaseSource).toContain(
       "npm-telegram-beta-e2e.yml has failed child jobs before the workflow completed; cancelling the remaining run.",
     );
+    const releaseChecksSource = readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8");
+    expect(releaseChecksSource).toContain("FAIL_FAST: ${{ needs.resolve_target.outputs.fail_fast }}");
+    expect(releaseChecksSource).toContain('if [[ "$FAIL_FAST" == "true" ]]');
   });
 
   it("allows Unreleased notes only for current-tree release checks", () => {
