@@ -208,7 +208,7 @@ export function createTelegramProgressController(params: {
     if (payload.phase === "start") {
       const windowRendersTool =
         canPushToolProgress() &&
-        resolveChannelStreamingPreviewToolProgress(params.telegramCfg) &&
+        resolveChannelStreamingPreviewToolProgress(params.telegramCfg, true, params.streamMode) &&
         isChannelProgressDraftWorkToolName(toolName);
       if (windowRendersTool) {
         summary.noteToolCall();

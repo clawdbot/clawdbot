@@ -93,7 +93,8 @@ export function createDiscordDraftPreviewController(params: {
   let progressDraftCollapsed = false;
   let progressNarratorLifecycle: { beginTurn: () => void; stopTurn: () => void } | undefined;
   const previewToolProgressEnabled =
-    Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(params.discordConfig);
+    Boolean(draftStream) &&
+    resolveChannelStreamingPreviewToolProgress(params.discordConfig, true, discordStreamMode);
   const narrationProgressEnabled =
     Boolean(draftStream) &&
     discordStreamMode === "progress" &&

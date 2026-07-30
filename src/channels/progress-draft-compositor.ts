@@ -160,7 +160,7 @@ export function createChannelProgressDraftCompositor(params: {
       .map((line) => line.replace(/^_(.*)_$/su, "$1"))
       .join("\n");
   const previewToolProgressEnabled =
-    params.active && resolveChannelStreamingPreviewToolProgress(params.entry);
+    params.active && resolveChannelStreamingPreviewToolProgress(params.entry, true, params.mode);
   const commentaryProgressEnabled =
     params.active && resolveChannelStreamingProgressCommentary(params.entry);
   const thinkingProgressEnabled =

@@ -802,12 +802,18 @@ export function resolveChannelStreamingPreviewChunk(
 export function resolveChannelStreamingPreviewToolProgress(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue = true,
+  /**
+   * The channel's resolved stream mode. Only the caller knows it: channels pick
+   * their own default when `streaming.mode` is unset (Discord and Telegram use
+   * "progress", Slack and others "partial"), and this helper has no channel
+   * identity to guess with. Omitting it reads the configured mode and treats
+   * unset as "partial".
+   */
+  mode?: StreamingMode,
 ): boolean {
   const config = getChannelStreamingConfigObject(entry);
-  // An unset `streaming.mode` means the channel's own default applies, and the
-  // progress-draft channels (Discord, Telegram) default to "progress". Guessing
-  // "partial" here dropped their explicit `progress.toolProgress` opt-out.
-  if (resolveChannelPreviewStreamMode(entry, "progress") === "progress") {
+  const effectiveMode = mode ?? resolveChannelPreviewStreamMode(entry, "partial");
+  if (effectiveMode === "progress") {
     return (
       asBoolean(config?.progress?.toolProgress) ??
       asBoolean(config?.preview?.toolProgress) ??
