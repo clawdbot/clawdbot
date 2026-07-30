@@ -482,6 +482,47 @@ function isInsideFence(fenceSpans: Array<{ start: number; end: number }>, offset
   return fenceSpans.some((span) => offset >= span.start && offset < span.end);
 }
 
+/** Sentinel seed for code-block masking in reply whitespace normalization. */
+const MEDIA_BLOCK_SENTINEL_SEED = "\uE001";
+
+function createBlockSentinel(text: string): string {
+  let sentinel = MEDIA_BLOCK_SENTINEL_SEED;
+  while (text.includes(sentinel)) {
+    sentinel += MEDIA_BLOCK_SENTINEL_SEED;
+  }
+  return sentinel;
+}
+
+/**
+ * Normalizes whitespace in non-code portions of reply text, preserving code
+ * blocks (fenced ```/~~~ and indent-code 4-space/tab) byte-identical.
+ * Mirrors the pattern from directive-tags.ts normalizeDirectiveWhitespace.
+ */
+function normalizeReplyWhitespace(text: string): string {
+  const sentinel = createBlockSentinel(text);
+  const placeholderRe = new RegExp(`${sentinel}(\\d+)${sentinel}`, "g");
+  const blocks: string[] = [];
+
+  const masked = text.replace(
+    /(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\1[^\n]*|(?:(?:^|\n)(?:    |\t)[^\n]*)+/gm,
+    (block) => {
+      blocks.push(block);
+      return `${sentinel}${blocks.length - 1}${sentinel}`;
+    },
+  );
+
+  const normalized = masked
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
+
+  return normalized.replace(placeholderRe, (_, i) => {
+    const idx = Number(i);
+    return idx >= 0 && idx < blocks.length ? blocks[idx] : _;
+  });
+}
+
 /** Splits tool/stdout text into visible text, media attachments, voice tags, and ordered segments. */
 export function splitMediaFromOutput(
   raw: string,
@@ -687,18 +728,13 @@ export function splitMediaFromOutput(
     lineOffset += line.length + 1; // +1 for newline
   }
 
-  let cleanedText = keptLines
-    .join("\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/\n{2,}/g, "\n")
-    .trim();
+  let cleanedText = normalizeReplyWhitespace(keptLines.join("\n"));
 
   // Detect and strip [[audio_as_voice]] tag
   const audioTagResult = parseAudioTag(cleanedText);
   const hasAudioAsVoice = audioTagResult.audioAsVoice;
   if (audioTagResult.hadTag) {
-    cleanedText = audioTagResult.text.replace(/\n{2,}/g, "\n").trim();
+    cleanedText = normalizeReplyWhitespace(audioTagResult.text);
   }
 
   if (media.length === 0) {

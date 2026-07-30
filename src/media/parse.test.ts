@@ -287,4 +287,136 @@ describe("splitMediaFromOutput", () => {
       extractMarkdownImages,
     );
   });
+
+  it("preserves fenced code block indentation when media is present", () => {
+    const input = [
+      "Here is some code:",
+      "",
+      "```js",
+      "function foo() {",
+      "    return 42;",
+      "        const nested = true;",
+      "}",
+      "```",
+      "",
+      "MEDIA:/tmp/output.png",
+    ].join("\n");
+    expectParsedMediaOutputCase(input, {
+      text: [
+        "Here is some code:",
+        "```js",
+        "function foo() {",
+        "    return 42;",
+        "        const nested = true;",
+        "}",
+        "```",
+      ].join("\n"),
+      mediaUrls: ["/tmp/output.png"],
+    });
+  });
+
+  it("preserves tab-indented code inside a fenced block when media is present", () => {
+    const input = [
+      "Code example:",
+      "",
+      "```go",
+      "func main() {",
+      "\tfmt.Println(\"hello\")",
+      "\t\tif true {",
+      "\t\t}",
+      "}",
+      "```",
+      "",
+      "MEDIA:/tmp/output.png",
+    ].join("\n");
+    expectParsedMediaOutputCase(input, {
+      text: [
+        "Code example:",
+        "```go",
+        "func main() {",
+        "\tfmt.Println(\"hello\")",
+        "\t\tif true {",
+        "\t\t}",
+        "}",
+        "```",
+      ].join("\n"),
+      mediaUrls: ["/tmp/output.png"],
+    });
+  });
+
+  it("preserves indent-code-block lines (4-space prefix) when media is present", () => {
+    const input = [
+      "Here is some code:",
+      "",
+      "    const x = 1;",
+      "    const y = 2;",
+      "",
+      "MEDIA:/tmp/output.png",
+    ].join("\n");
+    expectParsedMediaOutputCase(input, {
+      text: [
+        "Here is some code:",
+        "",
+        "    const x = 1;",
+        "    const y = 2;",
+      ].join("\n"),
+      mediaUrls: ["/tmp/output.png"],
+    });
+  });
+
+  it("preserves blank lines inside fenced code blocks when media is present", () => {
+    const input = [
+      "Code:",
+      "",
+      "```ts",
+      "function a() {",
+      "    return 1;",
+      "}",
+      "",
+      "function b() {",
+      "    return 2;",
+      "}",
+      "```",
+      "",
+      "MEDIA:/tmp/output.png",
+    ].join("\n");
+    expectParsedMediaOutputCase(input, {
+      text: [
+        "Code:",
+        "```ts",
+        "function a() {",
+        "    return 1;",
+        "}",
+        "",
+        "function b() {",
+        "    return 2;",
+        "}",
+        "```",
+      ].join("\n"),
+      mediaUrls: ["/tmp/output.png"],
+    });
+  });
+
+  it("collapses multiple spaces on prose but not inside fenced code blocks", () => {
+    const input = [
+      "Hello    world   with  extra spaces",
+      "",
+      "```py",
+      "    def foo():",
+      '        print("hello")',
+      "```",
+      "",
+      "MEDIA:/tmp/output.png",
+    ].join("\n");
+    expectParsedMediaOutputCase(input, {
+      text: [
+        "Hello world with extra spaces",
+        "```py",
+        "    def foo():",
+        '        print("hello")',
+        "```",
+      ].join("\n"),
+      mediaUrls: ["/tmp/output.png"],
+    });
+  });
 });
