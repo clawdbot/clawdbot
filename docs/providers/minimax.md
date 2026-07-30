@@ -134,7 +134,7 @@ Model refs follow the auth path: `minimax/<model>` for API-key setups, `minimax-
                 id: "MiniMax-M3",
                 name: "MiniMax M3",
                 reasoning: true,
-                input: ["text", "image"],
+                input: ["text", "image", "video"],
                 cost: { input: 0.6, output: 2.4, cacheRead: 0.12, cacheWrite: 0 },
                 contextWindow: 1000000,
                 maxTokens: 131072,
