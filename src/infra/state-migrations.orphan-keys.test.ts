@@ -167,6 +167,7 @@ describe("migrateOrphanedSessionKeys", () => {
       expect(store["agent:voice:metadata"]).toEqual({
         updatedAt: 1500,
         groupActivation: "always",
+        delivery: { kind: "none" },
       });
       expect(store["voice:15550001111"]).toBeUndefined();
       expect(result.changes).toHaveLength(1);
@@ -670,6 +671,44 @@ describe("migrateOrphanedSessionKeys", () => {
 
       expect(result.changes).toHaveLength(0);
       expect(result.warnings).toHaveLength(0);
+    });
+  });
+
+  it.each([
+    {
+      name: "commented JSON5 with trailing commas",
+      raw: `// operator-authored session history\n{\n  'agent:ops:work': { sessionId: 'abc-123', updatedAt: 1000, },\n}\n`,
+    },
+    {
+      name: "an escaped canonical session key",
+      raw: '{"agent:ops:w\\u006frk":{"sessionId":"abc-123","updatedAt":1000}}\n',
+    },
+  ])("preserves the exact bytes of $name", async ({ raw }) => {
+    await withStateFixture(async ({ stateDir }) => {
+      const storePath = opsSessionStorePath(stateDir);
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      fs.writeFileSync(storePath, raw);
+
+      expect(await migrateFixtureState(stateDir)).toEqual({ changes: [], warnings: [] });
+      expect(fs.readFileSync(storePath, "utf-8")).toBe(raw);
+    });
+  });
+
+  it("canonicalizes an escaped legacy session key using the shared JSON5 parser", async () => {
+    await withStateFixture(async ({ stateDir }) => {
+      const storePath = opsSessionStorePath(stateDir);
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      fs.writeFileSync(
+        storePath,
+        '{"agent:main:m\\u0061in":{"sessionId":"escaped-legacy","updatedAt":1000}}\n',
+      );
+
+      const result = await migrateFixtureState(stateDir);
+
+      expect(result.changes).toHaveLength(1);
+      expect(requireStoreEntry(readStore(storePath), "agent:ops:work").sessionId).toBe(
+        "escaped-legacy",
+      );
     });
   });
 

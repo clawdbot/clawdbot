@@ -5,6 +5,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import {
+  CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
+  interruptCodexTurnAndWaitBestEffort,
+} from "./attempt-client-cleanup.js";
+import {
   isRetryableErrorNotification,
   readCodexNotificationItem,
 } from "./attempt-notifications.js";
@@ -75,6 +79,15 @@ type CodexBoundedTurnResult = {
 
 type CodexBoundedTurnModelSelection = { mode: "required"; id: string } | { mode: "live-default" };
 
+class CodexBoundedTurnTimeoutError extends Error {
+  override name = "TimeoutError";
+
+  constructor(taskLabel: string, timeoutMs: number) {
+    const bound = timeoutMs % 1_000 === 0 ? `${timeoutMs / 1_000}s` : `${timeoutMs}ms`;
+    super(`codex app-server ${taskLabel} turn timed out after ${bound}`);
+  }
+}
+
 type CodexBoundedTurnParams = {
   config?: OpenClawConfig;
   model: CodexBoundedTurnModelSelection;
@@ -134,10 +147,11 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   timing?: { deadline: number; timeoutMs: number },
 ): Promise<CodexBoundedTurnResult> {
   const totalTimeoutMs = timing?.timeoutMs ?? resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
+  const timeoutError = new CodexBoundedTurnTimeoutError(params.taskLabel, totalTimeoutMs);
   const deadline = timing?.deadline ?? Date.now() + totalTimeoutMs;
   const timeoutMs = deadline - Date.now();
   if (timeoutMs <= 0) {
-    throw new Error(`${params.taskLabel} timed out`);
+    throw timeoutError;
   }
   const agentDir = params.agentDir?.trim() || undefined;
   // Hosted search needs a private Codex home and cwd so inherited native tools
@@ -154,6 +168,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         agentDir,
         config: params.config,
         timeoutMs,
+        ...(params.signal ? { abandonSignal: params.signal } : {}),
       })
     : await import("./shared-client.js").then(({ createIsolatedCodexAppServerClient }) =>
         createIsolatedCodexAppServerClient({
@@ -163,10 +178,30 @@ async function runBoundedCodexAppServerTurnInWorkspace(
           agentDir,
           authProfileStore: params.authProfileStore,
           config: params.config,
+          ...(params.signal ? { abandonSignal: params.signal } : {}),
         }),
       );
   const abortController = new AbortController();
-  const abortFromCaller = () => abortController.abort(params.signal?.reason ?? "aborted");
+  let activeThreadId: string | undefined;
+  let activeTurnId = "";
+  let interruptPromise: Promise<void> | undefined;
+  const requestInterrupt = () => {
+    if (!activeThreadId || interruptPromise) {
+      return;
+    }
+    // Codex serializes start/interrupt per thread; an empty turn id is its
+    // explicit startup-interrupt contract while turn/start is still resolving.
+    interruptPromise = interruptCodexTurnAndWaitBestEffort(client, {
+      threadId: activeThreadId,
+      turnId: activeTurnId,
+      timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
+    });
+  };
+  const abortRun = (reason: unknown) => {
+    abortController.abort(reason);
+    requestInterrupt();
+  };
+  const abortFromCaller = () => abortRun(params.signal?.reason ?? "aborted");
   if (params.signal?.aborted) {
     abortFromCaller();
   } else {
@@ -174,9 +209,9 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   }
   const remainingRunMs = deadline - Date.now();
   if (remainingRunMs <= 0) {
-    abortController.abort("timeout");
+    abortRun(timeoutError);
   }
-  const timeout = setTimeout(() => abortController.abort("timeout"), Math.max(1, remainingRunMs));
+  const timeout = setTimeout(() => abortRun(timeoutError), Math.max(1, remainingRunMs));
   timeout.unref?.();
 
   let retrySelection = false;
@@ -218,6 +253,10 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         { timeoutMs, signal: abortController.signal },
       ),
     );
+    activeThreadId = thread.thread.id;
+    if (abortController.signal.aborted) {
+      requestInterrupt();
+    }
     if (params.requireNoExternalCapabilities) {
       // Attest the started thread before injecting historical tool evidence.
       // Otherwise inherited MCP state could act on a finalization-only turn.
@@ -254,10 +293,14 @@ async function runBoundedCodexAppServerTurnInWorkspace(
           { timeoutMs, signal: abortController.signal },
         ),
       );
+      activeTurnId = turn.turn.id;
+      if (abortController.signal.aborted) {
+        requestInterrupt();
+      }
       return {
         ...(await collector.collect(turn.turn, {
-          timeoutMs,
           signal: abortController.signal,
+          timeoutError,
         })),
         model,
       };
@@ -266,6 +309,13 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       cleanup();
     }
   } catch (error) {
+    if (abortController.signal.aborted) {
+      throw resolveCodexBoundedTurnAbortError(
+        abortController.signal,
+        params.taskLabel,
+        timeoutError,
+      );
+    }
     if (ownsClient && isCodexAppServerStartSelectionChangedError(error) && selectionAttempt === 0) {
       retrySelection = true;
     } else {
@@ -274,6 +324,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   } finally {
     clearTimeout(timeout);
     params.signal?.removeEventListener("abort", abortFromCaller);
+    await interruptPromise;
     if (ownsClient) {
       client.close();
     }
@@ -488,7 +539,7 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
     handleNotification,
     async collect(
       startedTurn: CodexTurn,
-      options: { timeoutMs: number; signal: AbortSignal },
+      options: { signal: AbortSignal; timeoutError: CodexBoundedTurnTimeoutError },
     ): Promise<Omit<CodexBoundedTurnResult, "model">> {
       turnId = startedTurn.id;
       if (isTerminalTurn(startedTurn)) {
@@ -500,9 +551,9 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
       if (!completedTurn && !promptError) {
         await waitForTurnCompletion({
           completion,
-          timeoutMs: options.timeoutMs,
           signal: options.signal,
           taskLabel,
+          timeoutError: options.timeoutError,
         });
       }
       if (promptError) {
@@ -547,36 +598,41 @@ function collectCompletedItems(
 
 async function waitForTurnCompletion(params: {
   completion: Promise<void>;
-  timeoutMs: number;
   signal: AbortSignal;
   taskLabel: string;
+  timeoutError: CodexBoundedTurnTimeoutError;
 }): Promise<void> {
   if (params.signal.aborted) {
-    throw new Error(`codex app-server ${params.taskLabel} turn aborted`);
+    throw resolveCodexBoundedTurnAbortError(params.signal, params.taskLabel, params.timeoutError);
   }
-  let timeout: ReturnType<typeof setTimeout> | undefined;
   let cleanupAbort: (() => void) | undefined;
   try {
     await Promise.race([
       params.completion,
       new Promise<never>((_, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error(`codex app-server ${params.taskLabel} turn timed out`)),
-          params.timeoutMs,
-        );
-        timeout.unref?.();
         const abortListener = () =>
-          reject(new Error(`codex app-server ${params.taskLabel} turn aborted`));
+          reject(
+            resolveCodexBoundedTurnAbortError(params.signal, params.taskLabel, params.timeoutError),
+          );
         params.signal.addEventListener("abort", abortListener, { once: true });
         cleanupAbort = () => params.signal.removeEventListener("abort", abortListener);
       }),
     ]);
   } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
     cleanupAbort?.();
   }
+}
+
+function resolveCodexBoundedTurnAbortError(
+  signal: AbortSignal,
+  taskLabel: string,
+  timeoutError: CodexBoundedTurnTimeoutError,
+): Error {
+  // Only this owner can classify its deadline as a timeout. Caller cancellation
+  // reasons remain behind the established Error-shaped aborted-turn boundary.
+  return signal.reason === timeoutError
+    ? timeoutError
+    : new Error(`codex app-server ${taskLabel} turn aborted`);
 }
 
 function collectAssistantTextFromItems(items: CodexThreadItem[] | undefined): string {

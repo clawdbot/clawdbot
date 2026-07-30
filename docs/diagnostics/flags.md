@@ -162,7 +162,7 @@ Named profiles use `/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log`; for
 example, `--dev` uses `openclaw-dev-YYYY-MM-DD.log`.
 
 If you set `logging.file`, use that path instead. Logs are JSONL (one JSON
-object per line). Redaction still applies based on `logging.redactSensitive`.
+object per line). Redaction still applies; it is always on.
 See [Logging](/logging) for the full log-path resolution, rotation, and
 redaction model.
 

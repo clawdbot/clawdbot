@@ -22,6 +22,7 @@ import {
   coerceNodeInvokePayload,
 } from "./invoke-payload.js";
 import { prepareNodeHostRuntime, type NodeHostInventory } from "./runtime.js";
+import { runStartupMigrations } from "./startup-state-migrations.js";
 
 type NodeHostRunOptions = {
   gatewayHost: string;
@@ -124,9 +125,6 @@ function isUnsupportedNodeSkillsUpdateError(error: unknown): boolean {
 }
 
 async function publishNodePluginTools(client: GatewayClient, tools: unknown[]): Promise<void> {
-  if (tools.length === 0) {
-    return;
-  }
   try {
     await client.request("node.pluginTools.update", { tools });
   } catch (error) {
@@ -158,8 +156,7 @@ async function resolveNodeHostGatewayCredentials(params: {
   return await resolveGatewayConnectionAuth({
     config: configForResolution,
     env: params.env,
-    localTokenPrecedence: "env-first",
-    localPasswordPrecedence: "env-first", // pragma: allowlist secret
+    localPrecedence: "env-first",
     remoteTokenPrecedence: "env-first",
     remotePasswordPrecedence: "env-first", // pragma: allowlist secret
   });
@@ -180,6 +177,9 @@ function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
 }
 
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
+  // Operator-approved startup is a second authorized entry point for Doctor-owned
+  // state migrators. Runtime invokes those owners here and never migrates inline.
+  await runStartupMigrations({ log: { info: writeStderrLine, warn: writeStderrLine } });
   const plannedGateway: NodeHostGatewayConfig = {
     host: opts.gatewayHost,
     port: opts.gatewayPort,

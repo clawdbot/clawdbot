@@ -6,6 +6,7 @@ import {
 import { listAgentEntries } from "../../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { type ModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
@@ -19,7 +20,10 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import { markCommandReplyForDelivery } from "../reply-payload.js";
-import type { MsgContext, TemplateContext } from "../templating.js";
+import type {
+  FinalizedRuntimeMsgContext,
+  FinalizedTemplateContext as TemplateContext,
+} from "../templating.js";
 import {
   normalizeThinkLevel,
   type ElevatedLevel,
@@ -87,23 +91,12 @@ function canUseFastExplicitModelDirective(params: {
   );
 }
 
-function resolveDirectiveCommandText(params: { ctx: MsgContext; sessionCtx: TemplateContext }) {
-  const commandSource =
-    params.sessionCtx.BodyForCommands ??
-    params.sessionCtx.CommandBody ??
-    params.sessionCtx.RawBody ??
-    params.sessionCtx.Transcript ??
-    params.sessionCtx.BodyStripped ??
-    params.sessionCtx.Body ??
-    params.ctx.BodyForCommands ??
-    params.ctx.CommandBody ??
-    params.ctx.RawBody ??
-    "";
-  const promptSource =
-    params.sessionCtx.BodyForAgent ??
-    params.sessionCtx.BodyStripped ??
-    params.sessionCtx.Body ??
-    "";
+function resolveDirectiveCommandText(params: {
+  ctx: FinalizedRuntimeMsgContext;
+  sessionCtx: TemplateContext;
+}) {
+  const commandSource = params.sessionCtx.commandText;
+  const promptSource = params.sessionCtx.agentText;
   return {
     commandSource,
     promptSource,
@@ -142,6 +135,9 @@ type ReplyDirectiveContinuation = {
   resolvedBlockStreamingBreak: "text_end" | "message_end";
   provider: string;
   model: string;
+  requestedRouteResolution: Awaited<
+    ReturnType<typeof createModelSelectionState>
+  >["requestedRouteResolution"];
   modelState: Awaited<ReturnType<typeof createModelSelectionState>>;
   contextTokens: number;
   inlineStatusRequested: boolean;
@@ -159,7 +155,7 @@ type ReplyDirectiveResult =
   | { kind: "continue"; result: ReplyDirectiveContinuation };
 
 export async function resolveReplyDirectives(params: {
-  ctx: MsgContext;
+  ctx: FinalizedRuntimeMsgContext;
   cfg: OpenClawConfig;
   agentId: string;
   agentDir: string;
@@ -189,6 +185,7 @@ export async function resolveReplyDirectives(params: {
   typing: TypingController;
   opts?: GetReplyOptions;
   skillFilter?: string[];
+  preparedModelCatalog?: ModelCatalogSnapshot;
 }): Promise<ReplyDirectiveResult> {
   const {
     ctx,
@@ -228,8 +225,6 @@ export async function resolveReplyDirectives(params: {
   let provider = initialProvider;
   let model = initialModel;
 
-  // Prefer CommandBody/RawBody (clean message without structural context) for directive parsing.
-  // Keep `Body`/`BodyStripped` as the best-available prompt text (may include context).
   const { commandText } = resolveDirectiveCommandText({
     ctx,
     sessionCtx,
@@ -368,7 +363,7 @@ export async function resolveReplyDirectives(params: {
         hasQueueDirective: false,
         queueReset: false,
       };
-  const existingBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
+  const existingBody = sessionCtx.agentText;
   let cleanedBody = (() => {
     if (!existingBody) {
       if (resetTriggered) {
@@ -376,13 +371,6 @@ export async function resolveReplyDirectives(params: {
       }
       return parsedDirectives.cleaned;
     }
-    if (!sessionCtx.CommandBody && !sessionCtx.RawBody) {
-      return parseInlineDirectives(existingBody, {
-        modelAliases: configuredAliases,
-        allowStatusDirective,
-      }).cleaned;
-    }
-
     const markerIndex = existingBody.indexOf(CURRENT_MESSAGE_MARKER);
     if (markerIndex < 0) {
       return parseInlineDirectives(existingBody, {
@@ -404,6 +392,7 @@ export async function resolveReplyDirectives(params: {
     cleanedBody = stripInlineStatus(cleanedBody).cleaned;
   }
 
+  sessionCtx.agentText = cleanedBody;
   sessionCtx.BodyForAgent = cleanedBody;
   sessionCtx.Body = cleanedBody;
   sessionCtx.BodyStripped = cleanedBody;
@@ -554,6 +543,7 @@ export async function resolveReplyDirectives(params: {
           skipStoredModelOverride,
           hasResolvedHeartbeatModelOverride,
           isHeartbeat: opts?.isHeartbeat === true,
+          preparedModelCatalog: params.preparedModelCatalog,
         });
   } catch (error) {
     if (error instanceof ModelSelectionLockedError) {
@@ -728,6 +718,9 @@ export async function resolveReplyDirectives(params: {
       resolvedBlockStreamingBreak,
       provider,
       model,
+      requestedRouteResolution: effectiveModelDirective
+        ? "resolved"
+        : modelState.requestedRouteResolution,
       modelState,
       contextTokens,
       inlineStatusRequested,

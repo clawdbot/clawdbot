@@ -5,6 +5,7 @@ import type {
 import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { runBoundedCodexAppServerTurn, type CodexBoundedTurnOptions } from "./bounded-turn.js";
 import { createAssistantMessage } from "./event-projector-assistant-message.js";
+import { isJsonObject, type CodexThreadItem } from "./protocol.js";
 import { projectSettledCodexMessages } from "./settled-turn-projection.js";
 import {
   fingerprintCodexMirrorSourceMessage,
@@ -50,7 +51,28 @@ export async function runCodexSettledTurnFinalization(
     historyItems,
     requireNoExternalCapabilities: true,
   });
-  const unexpectedItem = bounded.items.find((item) => !FINALIZER_PASSIVE_ITEM_TYPES.has(item.type));
+  let promptEchoSeen = false;
+  let unexpectedItem: CodexThreadItem | undefined;
+  for (const item of bounded.items) {
+    if (FINALIZER_PASSIVE_ITEM_TYPES.has(item.type)) {
+      continue;
+    }
+    if (item.type === "userMessage" && !promptEchoSeen) {
+      const content = Array.isArray(item.content) ? item.content : [];
+      const input = content[0];
+      const isPromptEcho =
+        content.length === 1 &&
+        isJsonObject(input) &&
+        input.type === "text" &&
+        input.text === attempt.prompt;
+      if (isPromptEcho) {
+        promptEchoSeen = true;
+        continue;
+      }
+    }
+    unexpectedItem = item;
+    break;
+  }
   if (unexpectedItem) {
     throw new Error(
       `Codex settled-turn finalization returned unexpected native item: ${unexpectedItem.type}`,

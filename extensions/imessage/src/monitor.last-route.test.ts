@@ -3,9 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
+import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient } from "./client.js";
@@ -54,30 +56,40 @@ const debouncerControl = vi.hoisted(() => ({
   },
 }));
 const createChannelInboundDebouncerMock = vi.hoisted(() =>
-  vi.fn((opts: { onFlush: (entries: unknown[]) => Promise<void> }) => ({
-    debouncer: {
-      enqueue: async (entry: unknown) => {
-        if (!debouncerControl.holdEntries) {
-          await opts.onFlush([entry]);
-          return;
-        }
-        debouncerControl.entries.push(entry);
-        debouncerControl.flush = async () => {
-          const entries = debouncerControl.entries.splice(0);
-          await opts.onFlush(entries);
-        };
-        // Flush each collected entry as its own single-entry bucket, modeling
-        // the real non-debounced path (shouldDebounceTextInbound is mocked to
-        // false here) where every row dispatches individually.
-        debouncerControl.flushEach = async () => {
-          const entries = debouncerControl.entries.splice(0);
-          for (const queued of entries) {
-            await opts.onFlush([queued]);
+  vi.fn(
+    (opts: {
+      onFlush: (
+        entries: unknown[],
+        createFlush: typeof createTestInboundDebounceFlush,
+      ) => { completion: Promise<void> };
+    }) => ({
+      debouncer: {
+        enqueue: async (entry: unknown) => {
+          if (!debouncerControl.holdEntries) {
+            await opts.onFlush([entry], createTestInboundDebounceFlush).completion;
+            return;
           }
-        };
+          debouncerControl.entries.push(entry);
+          debouncerControl.flush = async () => {
+            const entries = debouncerControl.entries.splice(0);
+            await opts.onFlush(entries, createTestInboundDebounceFlush).completion;
+          };
+          // Flush each collected entry as its own single-entry bucket, modeling
+          // the real non-debounced path (shouldDebounceTextInbound is mocked to
+          // false here) where every row dispatches individually.
+          debouncerControl.flushEach = async () => {
+            const entries = debouncerControl.entries.splice(0);
+            for (const queued of entries) {
+              await opts.onFlush([queued], createTestInboundDebounceFlush).completion;
+            }
+          };
+        },
+        flushKey: async () => {},
+        cancelKey: () => false,
+        drain: async () => {},
       },
-    },
-  })),
+    }),
+  ),
 );
 
 vi.mock("openclaw/plugin-sdk/transport-ready-runtime", () => ({
@@ -139,6 +151,7 @@ async function runChannelInboundEventForLastRouteTest(params: RunChannelInboundE
 
 describe("iMessage monitor last-route updates", () => {
   const tempDirs: string[] = [];
+  const openClawStates: OpenClawTestState[] = [];
 
   beforeEach(() => {
     vi.spyOn(channelInbound, "runChannelInboundEvent").mockImplementation(
@@ -154,9 +167,10 @@ describe("iMessage monitor last-route updates", () => {
     expireCachedPrivateApiStatus();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+    await Promise.all(openClawStates.splice(0).map((state) => state.cleanup()));
     vi.unstubAllEnvs();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -1030,9 +1044,19 @@ describe("iMessage monitor last-route updates", () => {
     expect(runtimeErrorMock).not.toHaveBeenCalled();
     await vi.waitFor(() => {
       expect(getSessionEntry({ storePath, sessionKey })).toMatchObject({
-        lastChannel: "imessage",
-        lastTo: "imessage:+15550001111",
-        lastAccountId: "default",
+        delivery: {
+          kind: "external",
+          context: {
+            channel: "imessage",
+            to: "imessage:+15550001111",
+            accountId: "default",
+          },
+          route: {
+            channel: "imessage",
+            accountId: "default",
+            target: { to: "imessage:+15550001111" },
+          },
+        },
       });
     });
     expect(getSessionEntry({ storePath, sessionKey: "agent:main:main" })).toBeUndefined();
@@ -1663,9 +1687,12 @@ describe("iMessage monitor last-route updates", () => {
   });
 
   it("repairs anchorless group watch payloads before routing or cursor updates", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-anchor-repair-"));
-    tempDirs.push(stateDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    openClawStates.push(
+      await createOpenClawTestState({
+        layout: "state-only",
+        prefix: "openclaw-imsg-anchor-repair-",
+      }),
+    );
 
     let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
     const client = {

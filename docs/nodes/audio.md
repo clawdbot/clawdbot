@@ -5,6 +5,10 @@ read_when:
 title: "Audio and voice notes"
 ---
 
+This page covers inbound transcription and voice-note handling. For inline
+audio and video players in OpenClaw chat clients, see
+[Media playback](/nodes/media-playback).
+
 ## What it does
 
 When audio understanding is enabled (or auto-detected), OpenClaw:
@@ -63,7 +67,7 @@ The provider inventory reports the local fallback winner separately from global 
         {
           type: "cli",
           command: "whisper",
-          args: ["--model", "base", "{{MediaPath}}"],
+          args: ["--model", "base", "{{AttachmentPath}}"],
           timeoutSeconds: 45,
           capabilities: ["audio"],
         },
@@ -150,7 +154,7 @@ The provider inventory reports the local fallback winner separately from global 
 - Transcript is available to templates as `{{Transcript}}`.
 - `tools.media.audio.echoTranscript` is off by default; `echoFormat` accepts a `{transcript}` placeholder.
 - CLI stdout is capped at 5MB; keep CLI output concise.
-- CLI `args` should use `{{MediaPath}}` for the local audio file path. Run `openclaw doctor --fix` to migrate deprecated `{input}` placeholders from older `audio.transcription.command` configs (retired key: `audio.transcription`, replaced by `tools.media.models`).
+- CLI `args` should use `{{AttachmentPath}}` for the local audio file path. Run `openclaw doctor --fix` to migrate deprecated `{input}` placeholders from older `audio.transcription.command` configs (retired key: `audio.transcription`, replaced by `tools.media.models`). `{{MediaPath}}` remains a deprecated compatibility alias.
 - `tools.media.concurrency` bounds media tasks; it is not a GPU scheduler.
 
 ### Resident local STT
@@ -198,6 +202,7 @@ On channels that support audio preflight, OpenClaw transcribes audio **before** 
 
 ## Related
 
+- [Media playback](/nodes/media-playback)
 - [Media understanding](/nodes/media-understanding)
 - [Talk mode](/nodes/talk)
 - [Voice wake](/nodes/voicewake)

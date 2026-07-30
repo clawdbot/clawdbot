@@ -6,7 +6,7 @@ import { vi } from "vitest";
 import { heartbeatRunnerTelegramPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { listSessionEntries, replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeCronJobScratch } from "../cron/scratch-store.js";
 import { CronService } from "../cron/service.js";
@@ -14,14 +14,19 @@ import { resolveCronJobsStorePath } from "../cron/store.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { HeartbeatDeps } from "./heartbeat-runner.js";
 
 // Heartbeat test utilities seed session stores and temporary heartbeat prompts
 // while keeping plugin registry and environment state isolated per test.
-type HeartbeatSessionSeed = Partial<SessionEntry> & {
+type HeartbeatSessionSeed = Partial<InternalSessionEntry> & {
   lastChannel: string;
   lastProvider: string;
   lastTo: string;
+  deliveryContext?: DeliveryContext;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
 };
 
 type HeartbeatReplyFn = NonNullable<HeartbeatDeps["getReplyFromConfig"]>;
@@ -76,12 +81,29 @@ export async function seedSessionStore(
   sessionKey: string,
   session: HeartbeatSessionSeed,
 ): Promise<void> {
+  const {
+    deliveryContext,
+    lastAccountId,
+    lastChannel,
+    lastProvider: _lastProvider,
+    lastThreadId,
+    lastTo,
+    ...entry
+  } = session;
   await replaceSessionEntry(
     { storePath, sessionKey },
     {
       sessionId: session.sessionId ?? "sid",
       updatedAt: session.updatedAt ?? Date.now(),
-      ...session,
+      ...entry,
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: deliveryContext?.channel ?? lastChannel,
+          to: deliveryContext?.to ?? lastTo,
+          accountId: deliveryContext?.accountId ?? lastAccountId,
+          threadId: deliveryContext?.threadId ?? lastThreadId,
+        },
+      }),
     },
   );
 }

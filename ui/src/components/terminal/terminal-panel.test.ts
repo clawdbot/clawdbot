@@ -1,65 +1,20 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
-
-type CreateOptions = {
-  parent: HTMLElement;
-  terminalOptions?: {
-    fontFamily?: string;
-    theme?: { background?: string; foreground?: string };
-  };
-  onData?: (bytes: Uint8Array) => void;
-  onResize?: (size: { columns: number; rows: number }) => void;
-};
-
-type CreateGhosttyTerminalMock = Mock<
-  (options: CreateOptions) => Promise<ReturnType<typeof createTerminalController>>
->;
-type TerminalFactory = typeof import("./terminal-runtime.ts").createIsolatedGhosttyTerminal;
+import {
+  createTerminalController,
+  defineTestTerminalPanelElement,
+  terminalOpenResult,
+  type CreateGhosttyTerminalMock,
+  type CreateOptions,
+} from "./terminal-panel.test-support.ts";
+import { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
-
-function createTerminalController(dispose: () => void = vi.fn()) {
-  const wasmTerm = {};
-  const renderer = {
-    setTheme: vi.fn(),
-    render: vi.fn(),
-  };
-  return {
-    readOnly: false,
-    terminal: {
-      cols: 100,
-      rows: 30,
-      viewportY: 0,
-      wasmTerm,
-      renderer,
-      write: vi.fn(),
-      focus: vi.fn(),
-      reset: vi.fn(),
-      paste: vi.fn(),
-    },
-    write: vi.fn(),
-    fit: vi.fn(),
-    resize: vi.fn(),
-    setReadOnly: vi.fn(),
-    attach: vi.fn(),
-    dispose,
-  };
-}
-
-function terminalOpenResult(sessionId: string) {
-  return {
-    sessionId,
-    agentId: "ops",
-    shell: "/bin/zsh",
-    cwd: "/work/ops",
-    confined: false,
-  };
-}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -71,17 +26,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-import { OpenClawTerminalPanel } from "./terminal-panel.ts";
-
-const TERMINAL_PANEL_ELEMENT_NAME = `test-openclaw-terminal-panel-${crypto.randomUUID()}`;
-
-// The full non-isolated UI suite can import the production panel before this
-// test. Override its factory instead of relying on a module mock import order.
-class TestTerminalPanel extends OpenClawTerminalPanel {
-  override createTerminalController = createGhosttyTerminalMock as unknown as TerminalFactory;
-}
-
-customElements.define(TERMINAL_PANEL_ELEMENT_NAME, TestTerminalPanel);
+const TERMINAL_PANEL_ELEMENT_NAME = defineTestTerminalPanelElement(createGhosttyTerminalMock);
 
 async function startPanelWithPendingOpen() {
   let createOptions: CreateOptions | undefined;
@@ -136,11 +81,10 @@ describe("OpenClawTerminalPanel", () => {
     element.available = true;
     document.body.append(element);
 
-    class LazyUpgradeTerminalPanel extends TestTerminalPanel {}
-    customElements.define(tagName, LazyUpgradeTerminalPanel);
+    defineTestTerminalPanelElement(createGhosttyTerminalMock, tagName);
     const panel = element as unknown as OpenClawTerminalPanel;
     await panel.updateComplete;
-    await waitForFast(() => expect((panel as unknown as { open: boolean }).open).toBe(true));
+    await waitForFast(() => expect(panel.terminalPanelOpen).toBe(true));
   });
 
   it("opens new sessions for the selected agent", async () => {
@@ -178,6 +122,7 @@ describe("OpenClawTerminalPanel", () => {
         params: { agentId: "ops", cols: 100, rows: 30 },
       });
     });
+    expect(createOptions?.terminalOptions?.fontSize).toBe(11);
     expect(createOptions?.terminalOptions?.fontFamily).toContain("MesloLGLDZ Nerd Font Mono");
     expect(getComputedStyle(createOptions!.parent).caretColor).toBe("rgba(0, 0, 0, 0)");
     const styleResults = Array.isArray(OpenClawTerminalPanel.styles)

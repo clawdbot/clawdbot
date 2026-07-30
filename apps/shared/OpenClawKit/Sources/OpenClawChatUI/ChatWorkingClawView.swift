@@ -331,21 +331,21 @@ struct ChatWorkingClawView: View {
 private struct ChatWorkingClawBodyShape: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
-        path.addEllipse(in: CGRect(x: 4, y: 9.2, width: 11.2, height: 11.2))
-        path.move(to: CGPoint(x: 10, y: 20))
+        path.addEllipse(in: CGRect(x: 3, y: 10, width: 10.4, height: 10.4))
+        path.move(to: CGPoint(x: 10.2, y: 20))
         path.addCurve(
-            to: CGPoint(x: 20.1, y: 16.1),
-            control1: CGPoint(x: 14, y: 20.9),
-            control2: CGPoint(x: 17.9, y: 19.5))
+            to: CGPoint(x: 22.3, y: 13.2),
+            control1: CGPoint(x: 14.5, y: 20.8),
+            control2: CGPoint(x: 19, y: 18.6))
         path.addCurve(
-            to: CGPoint(x: 19.25, y: 14.65),
-            control1: CGPoint(x: 20.6, y: 15.4),
-            control2: CGPoint(x: 20.05, y: 14.5))
-        path.addCurve(
-            to: CGPoint(x: 13.2, y: 13),
-            control1: CGPoint(x: 17.1, y: 15),
-            control2: CGPoint(x: 14.9, y: 14.4))
-        path.addLine(to: CGPoint(x: 10.6, y: 16))
+            to: CGPoint(x: 18.4, y: 12.8),
+            control1: CGPoint(x: 21, y: 12.9),
+            control2: CGPoint(x: 19.7, y: 12.7))
+        path.addLine(to: CGPoint(x: 17.5, y: 14.6))
+        path.addLine(to: CGPoint(x: 16, y: 12.9))
+        path.addLine(to: CGPoint(x: 14.3, y: 14.5))
+        path.addLine(to: CGPoint(x: 13.5, y: 13))
+        path.addLine(to: CGPoint(x: 11.5, y: 14.2))
         path.closeSubpath()
         return path.applying(self.transform(for: rect))
     }
@@ -365,28 +365,26 @@ private struct ChatWorkingClawBodyShape: Shape {
 private struct ChatWorkingClawJawShape: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
-        path.move(to: CGPoint(x: 6, y: 10.6))
+        path.move(to: CGPoint(x: 5.6, y: 12.2))
         path.addCurve(
-            to: CGPoint(x: 17.6, y: 2.8),
-            control1: CGPoint(x: 6.6, y: 4.4),
-            control2: CGPoint(x: 12.4, y: 0.8))
+            to: CGPoint(x: 15.6, y: 2),
+            control1: CGPoint(x: 5.2, y: 5.6),
+            control2: CGPoint(x: 10.4, y: 1.4))
         path.addCurve(
-            to: CGPoint(x: 23, y: 9.8),
-            control1: CGPoint(x: 20.8, y: 4),
-            control2: CGPoint(x: 22.8, y: 6.8))
+            to: CGPoint(x: 22.6, y: 8.2),
+            control1: CGPoint(x: 19.4, y: 2.6),
+            control2: CGPoint(x: 21.8, y: 5.2))
         path.addCurve(
-            to: CGPoint(x: 21.1, y: 10.7),
-            control1: CGPoint(x: 23.07, y: 10.9),
-            control2: CGPoint(x: 21.9, y: 11.4))
+            to: CGPoint(x: 17.6, y: 7.9),
+            control1: CGPoint(x: 20.9, y: 7.7),
+            control2: CGPoint(x: 19.2, y: 7.6))
+        path.addLine(to: CGPoint(x: 16.9, y: 6.3))
+        path.addLine(to: CGPoint(x: 15.2, y: 8.5))
         path.addCurve(
-            to: CGPoint(x: 14.7, y: 9.5),
-            control1: CGPoint(x: 19.4, y: 9.2),
-            control2: CGPoint(x: 16.9, y: 8.7))
-        path.addCurve(
-            to: CGPoint(x: 11.6, y: 12.1),
-            control1: CGPoint(x: 13.4, y: 10),
-            control2: CGPoint(x: 12.3, y: 10.9))
-        path.addLine(to: CGPoint(x: 7.2, y: 12.4))
+            to: CGPoint(x: 11.6, y: 12.4),
+            control1: CGPoint(x: 13.6, y: 9.4),
+            control2: CGPoint(x: 12.2, y: 10.9))
+        path.addLine(to: CGPoint(x: 6.8, y: 13))
         path.closeSubpath()
         let scale = min(rect.width, rect.height) / 24
         return path.applying(CGAffineTransform(
@@ -404,6 +402,7 @@ struct ChatWorkingStatusText: View {
 
     let startedAt: Date
     let seed: String
+    let outputTokens: Int?
 
     var body: some View {
         Group {
@@ -425,6 +424,14 @@ struct ChatWorkingStatusText: View {
             Text(duration)
                 .font(OpenClawChatTypography.captionSemiBold)
                 .monospacedDigit()
+            if let tokensText = ChatTurnRecapText.tokens(self.outputTokens) {
+                Text("·")
+                    .font(OpenClawChatTypography.caption)
+                    .accessibilityHidden(true)
+                Text(tokensText)
+                    .font(OpenClawChatTypography.caption)
+                    .monospacedDigit()
+            }
             if let index = ChatWorkingPhrase.index(
                 seed: self.seed,
                 elapsedMilliseconds: elapsedMilliseconds)

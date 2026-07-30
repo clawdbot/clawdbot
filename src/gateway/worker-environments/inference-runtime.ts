@@ -1,4 +1,5 @@
 import { normalizeCodexResponsesBaseUrlForOpenAISdk } from "@openclaw/ai/transports";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
 import type {
   WorkerInferenceContext,
@@ -151,10 +152,6 @@ function inferenceError(
     message: ERROR_MESSAGES[reason],
     ...(usage ? { usage: structuredClone(usage) } : {}),
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function copyTool(tool: NonNullable<WorkerInferenceContext["tools"]>[number]): Tool | undefined {
@@ -555,6 +552,7 @@ async function resolveApprovedModel(params: {
           ...options,
           authStorage: preparedStores.authStorage,
           modelRegistry: preparedStores.modelRegistry,
+          preparedModelRuntime: runtimeSnapshot,
           ...(agentRuntimeId ? { agentRuntimeId } : {}),
           workspaceDir,
         }),
@@ -571,7 +569,6 @@ async function resolveApprovedModel(params: {
       ...(selectedProfile ? { preferredProfile: selectedProfile.id } : {}),
       ...(selectedProfile ? { bindAuthOwner: true } : {}),
       allowMissingApiKeyModes: ["aws-sdk"],
-      useAsyncModelResolution: true,
       modelResolver,
     });
     return {

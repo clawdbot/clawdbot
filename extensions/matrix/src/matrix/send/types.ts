@@ -82,6 +82,8 @@ export type MatrixSendResult = {
   roomId: string;
   primaryMessageId?: string;
   receipt: MessageReceipt;
+  /** Provider-accepted visible bodies in event order for this send operation. */
+  content: string;
 };
 
 export type MatrixSendOpts = {

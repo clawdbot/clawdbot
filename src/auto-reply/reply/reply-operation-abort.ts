@@ -1,4 +1,4 @@
-import { isFallbackSummaryError } from "../../agents/model-fallback.js";
+import { isFallbackSummaryError } from "../../agents/model-fallback-attempt.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";

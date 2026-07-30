@@ -5,7 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix } from "../infra/home-dir.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import {
   openOpenClawStateDatabase,
@@ -18,11 +18,13 @@ import { readCronStoreStatePath } from "./store/config-state.js";
 import { cronStoreKey } from "./store/key.js";
 import {
   assertCronStoreCanPersist,
+  deleteStaleCronJobFamilyRows,
   loadedCronStoreFromRows,
   loadCronRows,
   replaceCronRows,
   updateCronRuntimeRows,
 } from "./store/row-codec.js";
+import type { CronJobFamilyIdentity } from "./store/row-codec.js";
 import type {
   CronQuarantineFile,
   LoadedCronStore,
@@ -91,6 +93,19 @@ export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promis
   };
 }
 
+/** Removes an owned declarative job family left under obsolete absolute store keys. */
+export function removeStaleCronJobFamilyRows(
+  storePath: string,
+  family: CronJobFamilyIdentity,
+): number {
+  const activeStoreKey = cronStoreKey(path.resolve(storePath));
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => deleteStaleCronJobFamilyRows(db, activeStoreKey, family),
+    {},
+    { operationLabel: "cron.job-family-adoption" },
+  );
+}
+
 function emptyLoadedCronStore(): LoadedCronStore {
   return {
     store: { version: 1, jobs: [] },
@@ -120,8 +135,7 @@ export async function loadCronJobsStoreWithConfigJobsReadOnly(
   }
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);
-  const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(statePath, { readOnly: true });
+  const db = openNodeSqliteDatabase(statePath, { readOnly: true });
   try {
     if (!tableExists(db, "cron_jobs")) {
       return emptyLoadedCronStore();

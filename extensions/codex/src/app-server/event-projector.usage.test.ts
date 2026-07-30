@@ -6,6 +6,7 @@ import {
   createParams,
   createProjector,
   buildEmptyToolTelemetry,
+  readAttemptTerminal,
   expectUsageFields,
   forCurrentTurn,
   agentMessageDelta,
@@ -80,6 +81,18 @@ describe("CodexAppServerEventProjector usage projection", () => {
       promptTokens: 5,
       totalTokens: 12,
     });
+  });
+
+  it("counts unique upstream responses as model iterations", async () => {
+    const projector = await createProjector();
+
+    for (const responseId of ["response-1", "response-1", "response-2"]) {
+      await projector.handleNotification(
+        forCurrentTurn("rawResponse/completed", { responseId, usage: null }),
+      );
+    }
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).modelIterations).toBe(2);
   });
 
   it("keeps cumulative-only thread usage unknown", async () => {
@@ -285,13 +298,13 @@ describe("CodexAppServerEventProjector usage projection", () => {
 
     projector.markTimedOut();
     const timedOut = projector.buildResult(buildEmptyToolTelemetry());
-    expect(timedOut.aborted).toBe(true);
+    expect(readAttemptTerminal(timedOut).aborted).toBe(true);
     expect(timedOut.attemptUsage?.contextUsage).toEqual({ state: "unavailable" });
 
     expect(projector.recoverCompletedTerminalAssistantAfterTurnWatchTimeout()).toBe(true);
     const recovered = projector.buildResult(buildEmptyToolTelemetry());
-    expect(recovered.aborted).toBe(false);
-    expect(recovered.promptError).toBeNull();
+    expect(readAttemptTerminal(recovered).aborted).toBe(false);
+    expect(readAttemptTerminal(recovered).promptError).toBeNull();
     expect(recovered.attemptUsage?.contextUsage).toEqual({
       state: "available",
       promptTokens: 5,

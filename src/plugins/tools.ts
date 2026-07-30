@@ -52,6 +52,11 @@ export type PluginToolMcpMeta = {
   safeServerName: string;
   toolName: string;
   operation: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
+  deniedBySession?: true;
+  node?: {
+    id: string;
+    displayName?: string;
+  };
 };
 
 /** Runtime metadata used to trace an agent tool back to its owning plugin registration. */

@@ -223,7 +223,12 @@ export function resolveControlUiBuildInfo(
     normalizeControlUiBuildInfo({ branch: githubBranch }).branch ??
     normalizeControlUiBuildInfo({ branch: (sources.readGitBranch ?? readGitBranch)() }).branch;
   const dirty = (sources.readGitDirty ?? readGitDirty)();
-  const metadata = { version, commit, builtAt };
+  const releaseFlag = env.OPENCLAW_CONTROL_UI_RELEASE_BUILD?.trim();
+  if (releaseFlag && releaseFlag !== "1") {
+    throw new Error("OPENCLAW_CONTROL_UI_RELEASE_BUILD must be 1 when set");
+  }
+  const release = releaseFlag === "1";
+  const metadata = { version, commit, builtAt, release };
   const explicitBuildId = env.OPENCLAW_CONTROL_UI_BUILD_ID?.trim();
   return {
     ...metadata,
@@ -307,6 +312,8 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "string-normalization"),
     sourcePackageAlias("normalization-core", "utf16-slice"),
     sourcePackageAlias("normalization-core"),
+    sourcePackageAlias("session-url-contract", "parse"),
+    sourcePackageAlias("session-url-contract"),
     sourcePackageAlias("workboard-contract"),
   ];
 }

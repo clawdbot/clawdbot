@@ -67,6 +67,16 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
       `Invalid --mode "${String(opts.mode)}". Use "local" or "remote", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
     );
   }
+  const remoteOnlyFlags = [
+    opts.remoteUrl !== undefined ? "--remote-url" : undefined,
+    opts.remoteToken !== undefined ? "--remote-token" : undefined,
+  ].filter((flag): flag is string => flag !== undefined);
+  if (opts.nonInteractive && (opts.mode ?? "local") === "local" && remoteOnlyFlags.length > 0) {
+    return rejectOption(
+      runtime,
+      `${remoteOnlyFlags.join(" and ")} ${remoteOnlyFlags.length === 1 ? "requires" : "require"} --mode remote in non-interactive setup.`,
+    );
+  }
   const choiceValidations: Array<readonly [string, string | undefined, readonly string[]]> = [
     ["--gateway-bind", opts.gatewayBind, ["loopback", "tailnet", "lan", "auto", "custom"]],
     ["--gateway-auth", opts.gatewayAuth, ["token", "password"]],
@@ -398,10 +408,11 @@ function validateResetNonInteractiveGateway(params: {
  * Interactive onboarding defaults to guided setup. Any explicit
  * setup flag beyond this allowlist keeps the classic wizard — those flags are
  * a public automation contract and guided setup does not honor them.
- * Boolean false and undefined mean "not passed" (Commander coerces unset
- * booleans to false); explicit `--no-install-daemon` arrives as `false` via
- * resolveInstallDaemonFlag and is special-cased. `--modern` never reaches this
- * dispatch; the command layer routes it through the inference-gated OpenClaw.
+ * Most false booleans mean "not passed" because the command layer normalizes
+ * them with Boolean(). False-valued explicit choices preserve undefined when
+ * omitted, so daemon, Tailscale-reset, and custom-model input overrides are
+ * special-cased. `--modern` never reaches this dispatch; the command layer
+ * routes it through the inference-gated OpenClaw.
  */
 const GUIDED_SAFE_ONBOARD_KEYS = new Set([
   "workspace",
@@ -417,7 +428,11 @@ function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {
   if (opts.classic === true) {
     return true;
   }
-  if (opts.installDaemon !== undefined) {
+  if (
+    opts.installDaemon !== undefined ||
+    opts.tailscaleResetOnExit !== undefined ||
+    opts.customImageInput !== undefined
+  ) {
     return true;
   }
   for (const [key, value] of Object.entries(opts)) {
@@ -473,6 +488,13 @@ export async function setupWizardCommand(
     runtime.exit(1);
     return;
   }
+  if (normalizedOpts.tui && normalizedOpts.nonInteractive) {
+    runtime.error(
+      "--tui cannot be combined with --non-interactive. Remove --tui for automation, or remove --non-interactive to open the terminal hatch.",
+    );
+    runtime.exit(1);
+    return;
+  }
   if (
     normalizedOpts.secretInputMode &&
     normalizedOpts.secretInputMode !== "plaintext" && // pragma: allowlist secret
@@ -488,6 +510,13 @@ export async function setupWizardCommand(
   if (normalizedOpts.resetScope && !VALID_RESET_SCOPES.has(normalizedOpts.resetScope)) {
     runtime.error(
       `Invalid --reset-scope. Use "config", "config+creds+sessions", or "full". Run ${formatCliCommand("openclaw onboard --reset --reset-scope config")} for a config-only reset.`,
+    );
+    runtime.exit(1);
+    return;
+  }
+  if (normalizedOpts.resetScope && !normalizedOpts.reset) {
+    runtime.error(
+      `--reset-scope requires --reset. Re-run with ${formatCliCommand(`openclaw onboard --reset --reset-scope ${normalizedOpts.resetScope}`)}.`,
     );
     runtime.exit(1);
     return;

@@ -88,6 +88,8 @@ export type ResolvedTalkConfig = {
 };
 
 export type TalkConfig = {
+  /** Agent that owns Talk sessions created without an agent-scoped session key. */
+  agentId?: string;
   /** Active Talk TTS provider (for example "acme-speech"). */
   provider?: string;
   /** Provider-specific Talk config keyed by provider id. */
@@ -107,7 +109,7 @@ export type TalkConfig = {
     | "ultra";
   /** Optional fast mode override for the agent run behind Talk realtime consults. */
   consultFastMode?: boolean;
-  /** BCP 47 locale id used for Talk speech recognition on device nodes. */
+  /** BCP 47 locale id used for Talk speech recognition on device nodes and the iOS system-voice fallback. */
   speechLocale?: string;
   /** Stop speaking when user starts talking (default: true). */
   interruptOnSpeech?: boolean;
@@ -294,7 +296,7 @@ export type GatewayRemoteConfig = {
  * host terminal is allowed.
  */
 export type GatewayTerminalConfig = {
-  /** Master switch for the operator terminal. Default: false. */
+  /** Master switch for the operator terminal. Default: true; set false to opt out. */
   enabled?: boolean;
   /**
    * Shell executable to launch. When unset the host login shell is used
@@ -453,6 +455,12 @@ export type GatewayPushConfig = {
 };
 
 export type GatewayNodePairingConfig = {
+  /**
+   * Silently approve trusted local device pairing and access upgrades.
+   * Set false to require explicit approval; metadata refreshes remain automatic.
+   * Default: true.
+   */
+  autoApproveLocal?: boolean;
   /**
    * Opt-in CIDR/IP allowlist for auto-approving first-time node-role pairing.
    * Only applies to fresh node pairing requests with no requested scopes.

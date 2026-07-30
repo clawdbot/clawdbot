@@ -426,6 +426,10 @@ actor GatewayEndpointStore {
         }
     }
 
+    func currentState() async -> GatewayEndpointState {
+        self.state
+    }
+
     func refresh() async {
         _ = await self.refreshIfCurrent()
     }
@@ -594,10 +598,6 @@ actor GatewayEndpointStore {
                 userInfo: [NSLocalizedDescriptionKey: "Missing tunnel port"])
         }
         return port
-    }
-
-    func requireConfig() async throws -> GatewayConnection.Config {
-        try await self.requireEndpoint().config
     }
 
     /// Returns endpoint credentials and tunnel authority from the same actor

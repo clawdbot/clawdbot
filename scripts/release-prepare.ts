@@ -40,6 +40,7 @@ type WorktreeState = {
 
 const DEFAULT_JOBS = 4;
 const MAX_JOBS = 16;
+const GIT_OUTPUT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
 export function parseReleasePrepareArgs(argv: string[]): ReleasePrepareArgs {
   let android = false;
@@ -298,7 +299,7 @@ export function runReleasePrepareStep(
   return result.status ?? 1;
 }
 
-function readWorktreeState(rootDir: string): WorktreeState {
+export function readWorktreeState(rootDir: string): WorktreeState {
   const head = git(rootDir, ["rev-parse", "HEAD"]);
   const status = git(rootDir, ["status", "--porcelain=v1", "--untracked-files=all"]);
   const diff = git(rootDir, ["diff", "--binary", "HEAD"]);
@@ -334,6 +335,9 @@ function git(cwd: string, args: string[]): string {
     cwd,
     encoding: "utf8",
     env: process.env,
+    // Version preparation can legitimately create multi-megabyte generated diffs.
+    // Keep the fingerprint capture bounded without inheriting Node's 1 MiB default.
+    maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (result.status !== 0) {

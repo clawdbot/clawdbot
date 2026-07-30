@@ -79,13 +79,13 @@ describe("sandbox explain command", () => {
     expect(parsed).toHaveProperty("sandbox.tools.sources.allow.source");
     expect(parsed.fixIt).toEqual([
       "agents.defaults.sandbox.mode=off",
-      "agents.list[].sandbox.mode=off",
+      "agents.entries.*.sandbox.mode=off",
       "tools.sandbox.tools.allow",
       "tools.sandbox.tools.alsoAllow",
       "tools.sandbox.tools.deny",
-      "agents.list[].tools.sandbox.tools.allow",
-      "agents.list[].tools.sandbox.tools.alsoAllow",
-      "agents.list[].tools.sandbox.tools.deny",
+      "agents.entries.*.tools.sandbox.tools.allow",
+      "agents.entries.*.tools.sandbox.tools.alsoAllow",
+      "agents.entries.*.tools.sandbox.tools.deny",
       "tools.elevated.enabled",
     ]);
   });
@@ -131,7 +131,7 @@ describe("sandbox explain command", () => {
     expect(parsed.sandbox.tools.deny).not.toContain("browser");
     expect(parsed.sandbox.tools.sources.allow).toEqual({
       source: "agent",
-      key: "agents.list[].tools.sandbox.tools.alsoAllow",
+      key: "agents.entries.*.tools.sandbox.tools.alsoAllow",
     });
   });
 
@@ -233,8 +233,11 @@ describe("sandbox explain command", () => {
     } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
 
     const parsed = JSON.parse(logs.join(""));
-    expect(parsed.sandbox.effectiveHostWorkspaceRoot).toMatch(
-      /^\/tmp\/openclaw-sandboxes\/agent-builder-/,
+    expect(path.dirname(parsed.sandbox.effectiveHostWorkspaceRoot)).toBe(
+      path.resolve("/tmp/openclaw-sandboxes"),
+    );
+    expect(path.basename(parsed.sandbox.effectiveHostWorkspaceRoot)).toMatch(
+      /^workspace-[a-f0-9]{32}$/,
     );
     expect(parsed.sandbox.workspaceSource).toBe("sandbox");
     expect(parsed.sandbox.workspaceMounts).toEqual([

@@ -210,6 +210,64 @@ describe("agent command restart recovery ownership", () => {
     expect(run).toHaveBeenCalledOnce();
   });
 
+  it("admits foreground work after clearing terminal recovery residue", async () => {
+    const target = createTarget();
+    await write(target, {
+      sessionId: target.sessionId,
+      updatedAt: 100,
+      status: "failed",
+      abortedLastRun: true,
+      restartRecoveryRuns: [{ runId: "stale-run", lifecycleGeneration: "dead-generation" }],
+    });
+    const run = vi.fn(async () => "ran");
+
+    await expect(
+      runWithAgentCommandRecoveryOwner({
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        mode: "claim",
+        opts: {} as AgentCommandOpts,
+        prepare: async () => target,
+        run,
+      }),
+    ).resolves.toBe("ran");
+    expect(run).toHaveBeenCalledOnce();
+    const stored = loadSessionEntry({ sessionKey, storePath: target.storePath }) as SessionEntry;
+    expect(stored).toMatchObject({ status: "failed", abortedLastRun: false });
+    expect(stored.restartRecoveryRuns).toBeUndefined();
+    expect(stored.mainRestartRecovery).toBeUndefined();
+  });
+
+  it("allows read-only standalone inspection of terminal recovery residue", async () => {
+    const target = createTarget();
+    const residue: SessionEntry = {
+      sessionId: target.sessionId,
+      updatedAt: 100,
+      status: "done",
+      abortedLastRun: true,
+      restartRecoveryRuns: [{ runId: "stale-run", lifecycleGeneration: "dead-generation" }],
+    };
+    await write(target, residue);
+    const run = vi.fn(async () => "ran");
+
+    await expect(
+      runWithAgentCommandRecoveryOwner({
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        mode: "reject_uncoordinated",
+        opts: {} as AgentCommandOpts,
+        prepare: async () => target,
+        run,
+      }),
+    ).resolves.toBe("ran");
+    expect(run).toHaveBeenCalledOnce();
+    const stored = loadSessionEntry({ sessionKey, storePath: target.storePath }) as SessionEntry;
+    expect(stored).toMatchObject({
+      status: "done",
+      abortedLastRun: true,
+      restartRecoveryRuns: residue.restartRecoveryRuns,
+    });
+    expect(stored.mainRestartRecovery).toBeUndefined();
+  });
+
   it("runs a Gateway-admitted recovery without acquiring a foreground owner", async () => {
     const target = createTarget();
     await write(target, {

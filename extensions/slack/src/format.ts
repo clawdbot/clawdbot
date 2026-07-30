@@ -1,9 +1,11 @@
 // Slack helper module supports format behavior.
+import { eastAsianWidthType } from "get-east-asian-width";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import {
   chunkTextForOutbound,
-  type FormatCapabilityProfile,
+  FormatCapabilityProfile,
   markdownToIR,
+  type MarkdownIR,
   type MarkdownLinkSpan,
   renderMarkdownIRChunksWithinLimit,
 } from "openclaw/plugin-sdk/text-chunking";
@@ -107,29 +109,92 @@ type SlackMarkdownOptions = {
   tableMode?: MarkdownTableMode;
 };
 
-const SLACK_FORMAT_PROFILE = {
+const SLACK_MRKDWN_WORD_CHARACTER_RE = /[\p{L}\p{M}\p{N}_]/u;
+const SLACK_MRKDWN_PUNCTUATION_RE = /\p{P}/u;
+const SLACK_MRKDWN_SYMBOL_RE = /\p{S}/u;
+const SLACK_MRKDWN_CJK_SCRIPT_RE =
+  /[\p{Script_Extensions=Han}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}\p{Script_Extensions=Hangul}]/u;
+const SLACK_MRKDWN_EMOJI_PRESENTATION_RE = /\p{Emoji_Presentation}/u;
+
+function getCodePointBefore(text: string, index: number): string {
+  if (index <= 0) {
+    return "";
+  }
+  const lastCodeUnit = text.charCodeAt(index - 1);
+  if (lastCodeUnit >= 0xdc00 && lastCodeUnit <= 0xdfff && index > 1) {
+    const previousCodeUnit = text.charCodeAt(index - 2);
+    if (previousCodeUnit >= 0xd800 && previousCodeUnit <= 0xdbff) {
+      return text.slice(index - 2, index);
+    }
+  }
+  return text[index - 1] ?? "";
+}
+
+function getCodePointAt(text: string, index: number): string {
+  const codePoint = text.codePointAt(index);
+  return codePoint === undefined ? "" : String.fromCodePoint(codePoint);
+}
+
+function isSlackCjkPunctuation(character: string): boolean {
+  if (!SLACK_MRKDWN_PUNCTUATION_RE.test(character)) {
+    return false;
+  }
+  if (SLACK_MRKDWN_CJK_SCRIPT_RE.test(character)) {
+    return true;
+  }
+  const codePoint = character.codePointAt(0);
+  if (codePoint === undefined) {
+    return false;
+  }
+  const width = eastAsianWidthType(codePoint);
+  return (
+    width === "fullwidth" ||
+    width === "halfwidth" ||
+    (width === "wide" && !SLACK_MRKDWN_EMOJI_PRESENTATION_RE.test(character))
+  );
+}
+
+function isUnsafeSlackEmphasisBoundary(character: string): boolean {
+  if (SLACK_MRKDWN_WORD_CHARACTER_RE.test(character)) {
+    return true;
+  }
+  const codePoint = character.codePointAt(0);
+  if (codePoint === undefined || codePoint <= 0x7f) {
+    return false;
+  }
+  return SLACK_MRKDWN_SYMBOL_RE.test(character) || isSlackCjkPunctuation(character);
+}
+
+function makeSlackEmphasisStylesSafe(ir: MarkdownIR): MarkdownIR {
+  const styles = ir.styles.filter((span) => {
+    if (span.style !== "italic" && span.style !== "bold") {
+      return true;
+    }
+    // Slack's parser can expose markers accepted by the CJK-friendly Markdown parser.
+    // Drop only the affected style so transport syntax never leaks into visible text.
+    return (
+      !isUnsafeSlackEmphasisBoundary(getCodePointBefore(ir.text, span.start)) &&
+      !isUnsafeSlackEmphasisBoundary(getCodePointAt(ir.text, span.end))
+    );
+  });
+  return styles.length === ir.styles.length ? ir : { ...ir, styles };
+}
+
+const SLACK_FORMAT_PROFILE = FormatCapabilityProfile.define({
   mechanism: "markdown",
   constructs: {
-    bold: "native",
-    italic: "native",
     underline: "strip",
-    strikethrough: "native",
     spoiler: "fallback",
-    codeInline: "native",
-    codeBlock: "native",
     codeLanguage: "fallback",
-    linkLabel: "native",
     heading: "fallback",
     bulletList: "fallback",
     orderedList: "fallback",
     taskList: "fallback",
     table: "fallback",
-    blockquote: "native",
     image: "fallback",
-    mention: "native",
   },
   chunk: { limit: 4000, unit: "chars", hardCap: 40_000 },
-} satisfies FormatCapabilityProfile;
+});
 
 type SlackCodeMarker = "`" | "```";
 const SLACK_ASSISTANT_TRANSCRIPT_PREFIX = "`Assistant:` ";
@@ -377,14 +442,16 @@ function buildSlackRenderOptions() {
 }
 
 function markdownToSlackMrkdwn(markdown: string, options: SlackMarkdownOptions = {}): string {
-  const ir = markdownToIR(markdown ?? "", {
-    assistantTranscriptRoleHeaders: true,
-    linkify: false,
-    autolink: false,
-    headingStyle: "rich",
-    blockquotePrefix: "> ",
-    tableMode: options.tableMode,
-  });
+  const ir = makeSlackEmphasisStylesSafe(
+    markdownToIR(markdown ?? "", {
+      assistantTranscriptRoleHeaders: true,
+      linkify: false,
+      autolink: false,
+      headingStyle: "rich",
+      blockquotePrefix: "> ",
+      tableMode: options.tableMode,
+    }),
+  );
   return renderMarkdownWithMarkers(ir, buildSlackRenderOptions(), SLACK_FORMAT_PROFILE);
 }
 
@@ -464,14 +531,16 @@ export function markdownToSlackMrkdwnChunks(
   limit: number,
   options: SlackMarkdownOptions = {},
 ): string[] {
-  const ir = markdownToIR(markdown ?? "", {
-    assistantTranscriptRoleHeaders: true,
-    linkify: false,
-    autolink: false,
-    headingStyle: "rich",
-    blockquotePrefix: "> ",
-    tableMode: options.tableMode,
-  });
+  const ir = makeSlackEmphasisStylesSafe(
+    markdownToIR(markdown ?? "", {
+      assistantTranscriptRoleHeaders: true,
+      linkify: false,
+      autolink: false,
+      headingStyle: "rich",
+      blockquotePrefix: "> ",
+      tableMode: options.tableMode,
+    }),
+  );
   const renderOptions = buildSlackRenderOptions();
   return renderMarkdownIRChunksWithinLimit({
     ir,

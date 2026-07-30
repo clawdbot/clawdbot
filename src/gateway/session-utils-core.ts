@@ -9,6 +9,7 @@ import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagent-run-liveness.js";
+import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
@@ -51,6 +52,7 @@ function truncateTitle(text: string, maxLen: number): string {
 export function deriveSessionTitle(
   entry: SessionEntry | undefined,
   firstUserMessage?: string | null,
+  externalDisplayName?: string | null,
 ): string | undefined {
   if (!entry) {
     return undefined;
@@ -61,16 +63,23 @@ export function deriveSessionTitle(
     return label;
   }
 
-  if (normalizeOptionalString(entry.displayName)) {
-    return normalizeOptionalString(entry.displayName);
+  const displayName =
+    normalizeOptionalString(externalDisplayName) ?? normalizeOptionalString(entry.displayName);
+  if (displayName) {
+    return displayName;
   }
 
-  if (normalizeOptionalString(entry.subject)) {
-    return normalizeOptionalString(entry.subject);
+  const subject = normalizeOptionalString(entry.subject);
+  if (subject) {
+    return subject;
   }
 
-  if (firstUserMessage?.trim()) {
-    const normalized = firstUserMessage.replace(/\s+/g, " ").trim();
+  // Transcript metadata is model-only; sanitize at the shared title boundary so
+  // SQLite, file-backed sessions, and every session-list client stay consistent.
+  const normalized = firstUserMessage
+    ? stripInboundMetadata(firstUserMessage).replace(/\s+/g, " ").trim()
+    : "";
+  if (normalized) {
     return truncateTitle(normalized, DERIVED_TITLE_MAX_LEN);
   }
 
@@ -271,7 +280,7 @@ export function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): 
 }
 
 type SingleRowChildSessionCandidateCacheEntry = {
-  store: Record<string, SessionEntry>;
+  entriesByKey: Map<string, SessionEntry>;
   childSessionCandidatesByParentKey: Map<string, string[]>;
 };
 
@@ -319,6 +328,17 @@ function buildStoreChildSessionCandidateIndex(
   return childSessionsByKey;
 }
 
+function singleRowChildSessionCacheMatches(
+  cached: SingleRowChildSessionCandidateCacheEntry,
+  store: Record<string, SessionEntry>,
+): boolean {
+  const entries = Object.entries(store);
+  return (
+    entries.length === cached.entriesByKey.size &&
+    entries.every(([key, entry]) => cached.entriesByKey.get(key) === entry)
+  );
+}
+
 export function getSingleRowChildSessionCandidates(params: {
   storePath: string;
   store: Record<string, SessionEntry> | null | undefined;
@@ -327,12 +347,14 @@ export function getSingleRowChildSessionCandidates(params: {
     return new Map();
   }
   const cached = singleRowChildSessionCandidateCache.get(params.storePath);
-  if (cached?.store === params.store) {
+  if (cached && singleRowChildSessionCacheMatches(cached, params.store)) {
     return cached.childSessionCandidatesByParentKey;
   }
   const childSessionCandidatesByParentKey = buildStoreChildSessionCandidateIndex(params.store);
   rememberSingleRowChildSessionCandidateCacheEntry(params.storePath, {
-    store: params.store,
+    // Exact read-only lookups rebuild a sparse record but borrow stable entry objects
+    // from the SQLite snapshot. Compare those identities so the derived index survives.
+    entriesByKey: new Map(Object.entries(params.store)),
     childSessionCandidatesByParentKey,
   });
   return childSessionCandidatesByParentKey;

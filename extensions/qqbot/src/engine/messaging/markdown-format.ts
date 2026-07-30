@@ -1,7 +1,7 @@
 // QQ Bot Markdown formatting declares dialect capabilities and applies shared fallbacks.
 
 import {
-  type FormatCapabilityProfile,
+  FormatCapabilityProfile,
   type MarkdownIR,
   markdownToIR,
   renderMarkdownIRChunksWithinLimit,
@@ -29,29 +29,18 @@ function utf8ByteLength(text: string): number {
   return Buffer.byteLength(text, "utf8");
 }
 
-const QQBOT_FORMAT_CAPABILITIES = {
+const QQBOT_FORMAT_CAPABILITIES = FormatCapabilityProfile.define({
   mechanism: "markdown",
   constructs: {
-    bold: "native",
-    italic: "native",
     underline: "strip",
-    strikethrough: "native",
     spoiler: "strip",
     codeInline: "fallback",
     codeBlock: "fallback",
     codeLanguage: "fallback",
-    linkLabel: "native",
-    heading: "native",
-    bulletList: "native",
-    orderedList: "native",
-    taskList: "native",
     table: "fallback",
-    blockquote: "native",
-    image: "native",
-    mention: "native",
   },
   chunk: { limit: QQBOT_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT, unit: "bytes" },
-} satisfies FormatCapabilityProfile;
+});
 
 const QQBOT_MARKERS = {
   bold: { open: "**", close: "**" },

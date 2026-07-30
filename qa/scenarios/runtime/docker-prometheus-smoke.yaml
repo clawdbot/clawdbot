@@ -27,7 +27,7 @@ scenario:
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
     - extensions/diagnostics-prometheus/src/service.ts
-    - src/diagnostics/internal-diagnostics.ts
+    - src/infra/diagnostic-events.ts
     - extensions/qa-lab/src/suite.ts
   execution:
     kind: flow

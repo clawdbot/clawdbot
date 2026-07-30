@@ -11,10 +11,10 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import "../../styles/sessions.css";
-import { pathForRoute } from "../../app-route-paths.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsPage,
+  renderSettingsSegmented,
   renderSettingsSection,
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
@@ -46,7 +46,11 @@ import {
   type SessionsGroupBy,
   UNGROUPED_ID,
 } from "../../lib/sessions/grouping.ts";
-import { searchForSession, type SessionArchivedFilter } from "../../lib/sessions/index.ts";
+import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
+import {
+  resolveSessionPreferredFace,
+  sessionNavigationTarget,
+} from "../../lib/sessions/route-navigation.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -74,6 +78,8 @@ export type SessionsProps = {
   includeUnknown: boolean;
   statusFilter: SessionArchivedFilter;
   basePath: string;
+  agentId: string;
+  mainKey: string;
   searchQuery: string;
   transcriptSearchAvailable: boolean;
   transcriptSearchQuery: string;
@@ -1302,33 +1308,21 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
               includeUnknown: checked,
             }),
         })}
-        <div
-          class="settings-segmented sessions-view-segment"
-          role="group"
-          aria-label=${t("sessionsView.sessionState")}
-        >
-          ${(["active", "archived", "all"] as const).map(
-            (statusFilter) => html`
-              <button
-                type="button"
-                class="settings-segmented__btn ${props.statusFilter === statusFilter
-                  ? "settings-segmented__btn--active"
-                  : ""}"
-                aria-pressed=${String(props.statusFilter === statusFilter)}
-                title=${statusFilter === "archived"
-                  ? t("sessionsView.archivedOnlyTooltip")
-                  : nothing}
-                @click=${() => props.onStatusFilterChange(statusFilter)}
-              >
-                ${statusFilter === "active"
-                  ? t("common.active")
-                  : statusFilter === "archived"
-                    ? t("sessionsView.archived")
-                    : t("sessionsView.all")}
-              </button>
-            `,
-          )}
-        </div>
+        ${renderSettingsSegmented<SessionArchivedFilter>({
+          value: props.statusFilter,
+          ariaLabel: t("sessionsView.sessionState"),
+          className: "sessions-view-segment",
+          options: [
+            { value: "active", label: t("common.active") },
+            {
+              value: "archived",
+              label: t("sessionsView.archived"),
+              title: t("sessionsView.archivedOnlyTooltip"),
+            },
+            { value: "all", label: t("sessionsView.all") },
+          ],
+          onChange: (value) => props.onStatusFilterChange(value),
+        })}
       </div>
       <span class="sessions-toolbar__divider" aria-hidden="true"></span>
       <label class="session-groupby">
@@ -1462,13 +1456,16 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
             <div class="data-table-pagination__controls">
               <select
                 class="data-table-pagination__size"
+                aria-label=${t("sessionsView.pageSize")}
                 .value=${String(props.pageSize)}
                 @change=${(e: Event) =>
                   props.onPageSizeChange(Number((e.target as HTMLSelectElement).value))}
               >
                 ${PAGE_SIZES.map(
+                  // The matching option owns initial selection because the select's value
+                  // property binds before these dynamic children exist on first render.
                   (s) =>
-                    html`<option value=${s}>
+                    html`<option value=${s} ?selected=${s === props.pageSize}>
                       ${t("sessionsView.rowsPerPage", { count: String(s) })}
                     </option>`,
                 )}
@@ -1515,7 +1512,15 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const keyCellTitle = friendlyKeyLabel ?? row.key;
   const canLink = row.kind !== "global";
   const chatUrl = canLink
-    ? `${pathForRoute("chat", props.basePath)}${searchForSession(row.key)}`
+    ? sessionNavigationTarget({
+        face: resolveSessionPreferredFace(row),
+        sessionKey: row.key,
+        fallbackAgentId: props.agentId,
+        basePath: props.basePath,
+        row,
+        mainKey: props.mainKey,
+        preferenceDerivedFace: true,
+      }).href
     : null;
   const displayKind = resolveSessionDisplayKind(row);
   const kindClass = `session-kind session-kind--${displayKind}`;

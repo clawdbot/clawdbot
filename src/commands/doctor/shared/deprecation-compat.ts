@@ -436,7 +436,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     docsPath: "/channels/channel-routing",
     tests: ["src/commands/doctor/shared/channel-legacy-config-migrate.test.ts"],
     notes:
-      "Bundled channel schemas are nested-only; doctor keeps this migration to move shipped configs during upgrade. src/channels/streaming.ts retains a warn-once flat-key fallback for external SDK plugin configs until the next release train.",
+      "Runtime reads are nested-only; doctor keeps this migration to move shipped configs during upgrade.",
   }),
   deprecatedCompatRecord({
     code: "doctor-webchat-channel-config",

@@ -16,6 +16,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
  * back into runtime output blocks, and applies provider request policy.
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import {
   createAnthropicInlineImageBudget,
@@ -23,55 +24,61 @@ import {
   resolveAnthropicImageMediaType,
   type AnthropicInlineImageBudget,
 } from "../internal/anthropic-inline-images.js";
+import { calculateCost, clampThinkingLevel } from "../model-utils.js";
+import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
 import {
-  ANTHROPIC_OMITTED_REASONING_TEXT,
-  ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
-  CLAUDE_FABLE_5_FALLBACK_MODEL_COST,
-  applyClaudeRequestContract,
-  applyAnthropicFallbackBoundary,
-  buildAnthropicServerSideFallbacks,
-  defaultsClaudeAdaptiveThinking,
-  applyAnthropicRefusal,
-  findActiveAnthropicToolTurnAssistantIndex,
   omitFoundryBearerCredentialHeaders,
-  prepareClaudeSonnet5RequestContext,
-  projectAnthropicTools,
-  reconcileAnthropicToolChoice,
+  usesFoundryBearerAuth,
+} from "../providers/anthropic-auth-headers.js";
+import {
+  applyClaudeRequestContract,
+  defaultsClaudeAdaptiveThinking,
+  prepareClaudeNoPrefillRequestContext,
   requiresClaudeAdaptiveThinking,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
-  resolveOriginalAnthropicToolName,
-  readAnthropicFallbackBoundary,
-  readAnthropicPromptUsageSnapshot,
-  readAnthropicUsageTokenCount,
-  readLastAnthropicIterationUsage,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
   usesClaudeFable5MessagesContract,
   usesClaudeStreamingRefusalContract,
-  usesFoundryBearerAuth,
-  type AnthropicOptions,
-  type AnthropicPromptUsageSnapshot,
-  type AnthropicProjectedToolChoice,
-  type AnthropicThinkingDisplay,
-  type AnthropicToolProjection,
-} from "../internal/anthropic.js";
+} from "../providers/anthropic-model-contract.js";
+import { applyAnthropicRefusal } from "../providers/anthropic-refusal.js";
 import {
-  calculateCost,
-  clampThinkingLevel,
-  createDeferredEventBuffer,
-  getEnvApiKey,
-  notifyLlmRequestActivity,
-  parseStreamingJson,
-} from "../internal/runtime.js";
+  ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
+  ANTHROPIC_SERVER_SIDE_FALLBACKS,
+  applyAnthropicFallbackBoundary,
+  readAnthropicFallbackBoundary,
+  resolveAnthropicFallbackServingModelCost,
+} from "../providers/anthropic-server-fallback.js";
+import {
+  ANTHROPIC_OMITTED_REASONING_TEXT,
+  findActiveAnthropicToolTurnAssistantIndex,
+} from "../providers/anthropic-thinking-replay.js";
+import {
+  projectAnthropicTools,
+  reconcileAnthropicToolChoice,
+  resolveOriginalAnthropicToolName,
+  type AnthropicProjectedToolChoice,
+  type AnthropicToolProjection,
+} from "../providers/anthropic-tool-projection.js";
+import {
+  readAnthropicPromptUsageSnapshot,
+  readAnthropicUsageTokenCount,
+  readLastAnthropicIterationUsage,
+  type AnthropicPromptUsageSnapshot,
+} from "../providers/anthropic-usage.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultBlockText,
   extractToolResultText,
   isImageWithMediaPayload,
-} from "../internal/shared.js";
+} from "../providers/tool-result-text.js";
 import { tagPendingCommentaryText } from "../utils/assistant-text-phase.js";
+import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
+import { parseStreamingJson } from "../utils/json-parse.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
@@ -91,6 +98,7 @@ import {
   mergeTransportHeaders,
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
+  transportAbortError,
 } from "./transport-stream-shared.js";
 import {
   createAbortError as createNamedAbortError,
@@ -344,7 +352,11 @@ function isKimiAnthropicProvider(provider: string | undefined): boolean {
  * identity) requests are excluded until the beta is verified there.
  */
 function useAnthropicServerSideFallback(model: AnthropicTransportModel): boolean {
-  return usesClaudeFable5MessagesContract(model) && isDirectAnthropicModel(model);
+  return (
+    (usesClaudeFable5MessagesContract(model) ||
+      resolveClaudeOpus5ModelIdentity(model) !== undefined) &&
+    isDirectAnthropicModel(model)
+  );
 }
 
 function supportsReasoningContentReplay(
@@ -1072,11 +1084,11 @@ async function buildAnthropicParams(
     max_tokens: maxTokens,
     stream: true,
   };
-  // Fable safety classifiers can decline benign-adjacent work; server-side
-  // fallback re-serves the same call on claude-opus-4-8 instead of failing
-  // the turn. Requires the matching beta header from the transport client.
+  // Fable 5 and Opus 5 safety classifiers can decline benign-adjacent work.
+  // Anthropic owns the per-category fallback recommendation so routing can
+  // evolve without a client release.
   if (!isOAuthToken && useAnthropicServerSideFallback(model)) {
-    params.fallbacks = buildAnthropicServerSideFallbacks();
+    params.fallbacks = ANTHROPIC_SERVER_SIDE_FALLBACKS;
   }
   if (isOAuthToken) {
     params.system = [
@@ -1176,7 +1188,11 @@ function resolveAnthropicTransportOptions(
     modelContextWindow: model.contextWindow,
     modelMaxTokens: model.maxTokens,
     requestedMaxTokens: options?.maxTokens,
-    useModelDefault: resolveClaudeSonnet5ModelIdentity(model) !== undefined,
+    // Claude 5 defaults thinking on; the clamped 32k baseline starves thinking
+    // plus response output, so these models keep their full catalog cap.
+    useModelDefault:
+      resolveClaudeSonnet5ModelIdentity(model) !== undefined ||
+      resolveClaudeOpus5ModelIdentity(model) !== undefined,
   });
   if (baseMaxTokens === undefined) {
     throw new Error(
@@ -1273,7 +1289,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           throw new Error(`No API key for provider: ${model.provider}`);
         }
         const transportOptions = resolveAnthropicTransportOptions(model, options, apiKey);
-        const requestContext = prepareClaudeSonnet5RequestContext(model, context);
+        const requestContext = prepareClaudeNoPrefillRequestContext(model, context);
         const { client, isOAuthToken } = createAnthropicTransportClient({
           model,
           context: requestContext,
@@ -1507,7 +1523,14 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               // Cost intentionally mirrors top-level usage (serving attempt at
               // serving-model rates). A mid-stream decline's billed partial is
               // only in usage.iterations and is not folded in here.
-              costModel = { ...model, cost: CLAUDE_FABLE_5_FALLBACK_MODEL_COST };
+              costModel = {
+                ...model,
+                cost: resolveAnthropicFallbackServingModelCost({
+                  requestedModelId: model.id,
+                  servingModelId: fallbackBoundary.toModel,
+                  requestedCost: model.cost,
+                }),
+              };
               calculateCost(costModel, output.usage);
               eventSink.push({ type: "start", partial: output as never });
               for (const [i, block] of output.content.entries()) {
@@ -1880,7 +1903,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           throw new Error("Anthropic stream ended before message_stop");
         }
         if (transportOptions.signal?.aborted) {
-          throw new Error("Request was aborted");
+          throw transportAbortError(transportOptions.signal);
         }
         if (output.stopReason === "aborted" || output.stopReason === "error") {
           throw new Error(output.errorMessage ?? "An unknown error occurred");

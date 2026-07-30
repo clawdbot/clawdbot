@@ -48,20 +48,16 @@
         },
         {
           "properties": {
-            "credentialSource": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/AmazonBedrockCredentialSource"
-                }
-              ],
-              "default": "awsManaged"
-            },
             "type": {
               "enum": [
                 "amazonBedrock"
               ],
               "title": "AmazonBedrockAccountType",
               "type": "string"
+            },
+            "usesCodexManagedCredentials": {
+              "default": false,
+              "type": "boolean"
             }
           },
           "required": [
@@ -71,13 +67,6 @@
           "type": "object"
         }
       ]
-    },
-    "AmazonBedrockCredentialSource": {
-      "enum": [
-        "codexManaged",
-        "awsManaged"
-      ],
-      "type": "string"
     },
     "PlanType": {
       "enum": [
@@ -89,6 +78,7 @@
         "team",
         "self_serve_business_usage_based",
         "business",
+        "ent26",
         "enterprise_cbp_usage_based",
         "enterprise",
         "edu",

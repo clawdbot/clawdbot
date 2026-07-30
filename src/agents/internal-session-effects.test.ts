@@ -111,9 +111,10 @@ describe("internal session effects", () => {
         sessionId: target.sessionId,
         createdVia: "internal",
         createdActor: { type: "system" },
+        delivery: { kind: "internal" },
         createdAt: expect.any(Number),
       });
-      expect(listSessionEntries({ storePath })).toEqual([]);
+      expect(listSessionEntries({ agentId: "main", storePath })).toEqual([]);
       await expect(loadTranscriptEvents(target)).resolves.toEqual([
         expect.objectContaining({ id: target.sessionId, type: "session" }),
       ]);
@@ -172,7 +173,7 @@ describe("internal session effects", () => {
           type: "message",
         }),
       );
-      expect(listSessionEntries({ storePath })).toEqual([
+      expect(listSessionEntries({ agentId: "main", storePath })).toEqual([
         expect.objectContaining({ sessionKey: source.sessionKey }),
       ]);
     });

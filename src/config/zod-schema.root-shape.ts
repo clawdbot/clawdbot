@@ -1,10 +1,6 @@
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import {
-  isValidControlUiChatMessageMaxWidth,
-  normalizeControlUiChatMessageMaxWidth,
-} from "./control-ui-css.js";
 import { SilentReplyPolicyConfigSchema } from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
@@ -222,9 +218,6 @@ export const OpenClawSchemaShape = {
           themeMode: z
             .union([z.literal("light"), z.literal("dark"), z.literal("system")])
             .optional(),
-          textScale: z
-            .union([z.literal(90), z.literal(100), z.literal(110), z.literal(125), z.literal(140)])
-            .optional(),
           locale: z.string().max(20).optional(),
           chatShowThinking: z.boolean().optional(),
           chatShowToolCalls: z.boolean().optional(),
@@ -232,16 +225,6 @@ export const OpenClawSchemaShape = {
           chatSendShortcut: z.union([z.literal("enter"), z.literal("modifier-enter")]).optional(),
           chatFollowUpMode: z.union([z.literal("steer"), z.literal("queue")]).optional(),
           sidebarEntries: z.array(z.string()).optional(),
-          chatMessageMaxWidth: z
-            .string()
-            .transform((value) => normalizeControlUiChatMessageMaxWidth(value))
-            .refine((value) => isValidControlUiChatMessageMaxWidth(value), {
-              message:
-                "Expected a CSS width value such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem)",
-            })
-            .optional(),
-          sidebarLiveActivity: z.boolean().optional(),
-          showAdvancedSettings: z.boolean().optional(),
         })
         .optional(),
     })
@@ -389,6 +372,28 @@ export const OpenClawSchemaShape = {
       gmail: HooksGmailSchema,
       internal: InternalHooksSchema,
     })
+    .superRefine((hooks, ctx) => {
+      const hasDefaultSessionKey = hooks.defaultSessionKey?.trim();
+      for (const [index, mapping] of (hooks.mappings ?? []).entries()) {
+        if (!mapping) {
+          continue;
+        }
+        if (
+          (mapping.action ?? "agent") === "agent" &&
+          mapping.sessionMode === "persistent" &&
+          !mapping.sessionKey?.trim() &&
+          !hasDefaultSessionKey &&
+          !mapping.transform
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["mappings", index, "sessionKey"],
+            message:
+              "persistent hook mappings require sessionKey, hooks.defaultSessionKey, or a transform",
+          });
+        }
+      }
+    })
     .optional(),
   channels: ChannelsSchema,
   discovery: z
@@ -418,7 +423,6 @@ export const OpenClawSchemaShape = {
           extraDirs: z.array(z.string()).optional(),
           allowSymlinkTargets: z.array(z.string()).optional(),
           watch: z.boolean().optional(),
-          watchDebounceMs: z.number().int().min(0).optional(),
         })
         .optional(),
       install: z
@@ -443,7 +447,7 @@ export const OpenClawSchemaShape = {
         .strictObject({
           autonomous: z
             .strictObject({
-              enabled: z.boolean().optional(),
+              mode: z.union([z.literal("off"), z.literal("propose"), z.literal("auto")]).optional(),
             })
             .optional(),
           approvalPolicy: z.union([z.literal("pending"), z.literal("auto")]).optional(),

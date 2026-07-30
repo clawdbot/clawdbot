@@ -275,17 +275,16 @@ export async function resolveGatewayInteractiveSurfaceAuth(params: {
   };
 
   const resolvePassword = async () => {
-    const localPassword =
-      explicitPassword || envPassword
-        ? { value: explicitPassword ?? envPassword }
-        : await resolveGatewayCredential({
-            config: params.config,
-            env,
-            diagnostics,
-            path: "gateway.auth.password",
-            value: params.config.gateway?.auth?.password,
-          });
-    const password = explicitPassword ?? envPassword ?? localPassword.value;
+    const localPassword = explicitPassword
+      ? { value: explicitPassword }
+      : await resolveGatewayCredential({
+          config: params.config,
+          env,
+          diagnostics,
+          path: "gateway.auth.password",
+          value: params.config.gateway?.auth?.password,
+        });
+    const password = explicitPassword ?? localPassword.value ?? envPassword;
     return {
       password,
       failureReason: password

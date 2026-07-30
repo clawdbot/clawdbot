@@ -348,7 +348,7 @@ test("sessions.reset forwards the retired generation to registered agent harness
       agentId: "main",
       sessionId: "sess-main",
       sessionKey: "agent:main:main",
-      sessionFile: expect.stringMatching(/^sqlite:main:sess-main:/),
+      sessionFile: "agent:main:main",
       reason: "reset",
     });
   } finally {

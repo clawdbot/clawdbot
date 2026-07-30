@@ -2,8 +2,8 @@ import {
   embeddedAgentLog,
   formatErrorMessage,
   type AgentMessage,
-  type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import { serializeCodexMirrorSourceEvidence } from "./transcript-mirror-attestation.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";

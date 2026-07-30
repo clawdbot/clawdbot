@@ -1,3 +1,5 @@
+import type { SessionToolOverrides } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 /**
  * Public native agent harness contracts and capability shapes.
  */
@@ -6,6 +8,7 @@ import type {
   ProviderModelRouteRuntimePolicy,
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
+import type { McpToolCatalog } from "../agent-bundle-mcp-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
 
 export type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
@@ -46,18 +49,55 @@ export type AgentHarnessSupport =
 
 type InternalEmbeddedRunAttemptParams =
   import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptParams;
+/** @deprecated Read `terminal` instead. Remove no earlier than the 2026.9 stable release. */
+type AgentHarnessDeprecatedAttemptTerminalFields = {
+  aborted?: boolean;
+  externalAbort?: boolean;
+  timedOut?: boolean;
+  idleTimedOut?: boolean;
+  timedOutDuringCompaction?: boolean;
+  timedOutDuringToolExecution?: boolean;
+  timedOutByRunBudget?: boolean;
+  promptError?: unknown;
+  promptErrorSource?:
+    | import("../agent-run-terminal-outcome.js").AgentRunAttemptFailureSource
+    | null;
+};
+type AgentHarnessCanonicalAttemptResult =
+  import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult &
+    AgentHarnessDeprecatedAttemptTerminalFields;
+
+/** @deprecated Return `terminal` instead. Remove no earlier than the 2026.9 stable release. */
+type AgentHarnessLegacyAttemptResult = Omit<
+  import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult,
+  "terminal"
+> &
+  AgentHarnessDeprecatedAttemptTerminalFields & {
+    aborted: boolean;
+    externalAbort: boolean;
+    timedOut: boolean;
+    idleTimedOut: boolean;
+    timedOutDuringCompaction: boolean;
+    timedOutDuringToolExecution?: boolean;
+    timedOutByRunBudget?: boolean;
+    promptError: unknown;
+    promptErrorSource:
+      | import("../agent-run-terminal-outcome.js").AgentRunAttemptFailureSource
+      | null;
+  };
 
 export type AgentHarnessAttemptParams = Omit<
   InternalEmbeddedRunAttemptParams,
   "trajectoryRecorder"
 >;
 export type AgentHarnessAttemptResult =
-  import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult;
+  | AgentHarnessCanonicalAttemptResult
+  | AgentHarnessLegacyAttemptResult;
 type AgentHarnessSettledTurnFinalizationParams = {
   /** Fully prepared attempt context for the isolated finalization operation. */
   attempt: AgentHarnessAttemptParams;
   /** Settled result whose completed tool transcript needs a final visible answer. */
-  settledAttempt: AgentHarnessAttemptResult;
+  settledAttempt: AgentHarnessCanonicalAttemptResult;
 };
 export type AgentHarnessSettledTurnFinalizationResult = {
   /** The single completed assistant answer produced by the isolated operation. */
@@ -287,6 +327,22 @@ type AgentHarnessProviderUsageCapability = {
     | undefined;
 };
 
+type AgentHarnessMcpCatalogParams = {
+  config: OpenClawConfig;
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  workspaceDir: string;
+  /** OpenClaw-configured servers whose session policy this harness can enforce. */
+  mcpServerNames: readonly string[];
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
+};
+
+type AgentHarnessMcpCatalogCapability = {
+  /** Lists the MCP tools owned by this session's native runtime, if it is already bound. */
+  loadMcpToolCatalog?(params: AgentHarnessMcpCatalogParams): Promise<McpToolCatalog | undefined>;
+};
+
 export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessSideQuestionCapability &
   AgentHarnessClassificationCapability &
@@ -294,6 +350,7 @@ export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessRuntimeArtifactCapability &
   AgentHarnessAuthBindingCapability &
   AgentHarnessProviderUsageCapability &
+  AgentHarnessMcpCatalogCapability &
   AgentHarnessSessionForkCapability &
   AgentHarnessSessionLifecycleCapability;
 

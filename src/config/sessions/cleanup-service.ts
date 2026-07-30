@@ -290,8 +290,14 @@ function pruneMissingTranscriptEntries(params: {
     ) {
       continue;
     }
-    // Header-only supervised transcripts are valid while their first native turn is pending.
-    if (parseAgentSessionKey(key) && entry.sessionId === key && !entry.sessionFile) {
+    const legacySessionFile = (entry as { sessionFile?: unknown }).sessionFile;
+    // Explicitly pending sessions and their shipped pre-flag shape may not have a first turn yet.
+    if (
+      parseAgentSessionKey(key) &&
+      (entry.initializationPending === true ||
+        (entry.sessionId === key &&
+          (typeof legacySessionFile !== "string" || !legacySessionFile.trim())))
+    ) {
       continue;
     }
     if (!entry?.sessionId) {
@@ -574,12 +580,10 @@ export async function runSessionsCleanup(params: {
         storePath: target.storePath,
         removals,
         activeSessionKey: opts.activeKey,
-        preserveActiveWork: true,
         maintenanceOverride: {
           ...maintenance,
           mode,
         },
-        restrictArchivedTranscriptsToStoreDir: true,
       });
       const postApplyStore = loadCleanupSessionStore(target, { createIfMissing: true });
       const appliedUnreferencedArtifacts =

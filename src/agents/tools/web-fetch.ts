@@ -11,8 +11,8 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
-import { resolveWebProviderConfig } from "../../../packages/web-content-core/src/provider-runtime-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
@@ -22,6 +22,7 @@ import { wrapExternalContent, wrapWebContent } from "../../security/external-con
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isRecord } from "../../utils.js";
 import { extractReadableContent } from "../../web-fetch/content-extractors.runtime.js";
+import { resolveWebProviderConfig } from "../../web/provider-runtime-shared.js";
 import { stringEnum } from "../schema/string-enum.js";
 import { writePrivateTempFile } from "../sessions/tools/private-temp-file.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
@@ -611,7 +612,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     throw new Error("Invalid URL: must be http or https");
   }
   const cacheKey = normalizeCacheKey(
-    `fetch:${parsedUrl.href}:${params.extractMode}:${params.maxChars}${params.providerCacheKey ? `:provider:${params.providerCacheKey}` : ""}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}${allowIpv6UniqueLocalRange ? ":allow-ipv6-ula" : ""}${useTrustedEnvProxy ? ":trusted-env-proxy" : ""}`,
+    `fetch:${parsedUrl.href}:${params.extractMode}:${params.maxChars}:user-agent:${sha256Hex(params.userAgent)}${params.providerCacheKey ? `:provider:${params.providerCacheKey}` : ""}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}${allowIpv6UniqueLocalRange ? ":allow-ipv6-ula" : ""}${useTrustedEnvProxy ? ":trusted-env-proxy" : ""}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) {
@@ -815,6 +816,11 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
   } finally {
+    if (!res.bodyUsed) {
+      // Fallbacks and provider failures can abandon the upstream stream. Cancel
+      // without awaiting so a stalled cancellation cannot block guard release.
+      void res.body?.cancel().catch(() => undefined);
+    }
     if (release) {
       await release();
     }
@@ -835,6 +841,7 @@ export function createWebFetchTool(options?: {
   const tool: AnyAgentTool = {
     label: "Web Fetch",
     name: "web_fetch",
+    resultContentSource: "network",
     description: "Fetch URL; extract readable markdown/text. Lightweight; no browser automation.",
     parameters: WebFetchSchema,
     outputSchema: WebFetchOutputSchema,

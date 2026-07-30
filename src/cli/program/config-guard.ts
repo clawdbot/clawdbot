@@ -12,6 +12,7 @@ import {
   resolveStateDir,
 } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
+import { resolveExecApprovalsPath } from "../../infra/exec-approvals-config.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
@@ -126,10 +127,13 @@ function hasLegacyStateMigrationInputs(): boolean {
     path.join(stateDir, "plugin-state", "state.sqlite"),
     path.join(stateDir, "tasks", "runs.sqlite"),
   ];
+  const legacyExecApprovalsPath = resolveExecApprovalsPath(process.env);
   return (
     [
       path.join(stateDir, "agent"),
       path.join(stateDir, "agents"),
+      legacyExecApprovalsPath,
+      `${legacyExecApprovalsPath}.doctor-importing`,
       path.join(stateDir, "plugins", "installs.json"),
       path.join(stateDir, "restart-sentinel.json"),
       path.join(stateDir, "restart-sentinel.json.doctor-importing"),
@@ -264,10 +268,12 @@ export async function ensureConfigReady(
     preflightSnapshot = await runStateMigrationPreflight();
   }
 
-  // Status performs a second non-observing read for its materialized/source pair;
-  // keep the startup guard from recording config health before the command begins.
+  // Status reads its materialized/source pair; remote Gateway calls must not
+  // record config health in the state owned by the Gateway being queried.
   const configSnapshotOptions =
-    commandName === "status" ? ({ observe: false } as const) : undefined;
+    commandName === "status" || (commandName === "gateway" && subcommandName === "call")
+      ? ({ observe: false } as const)
+      : undefined;
   let snapshot = preflightSnapshot ?? (await getConfigSnapshot(configSnapshotOptions));
   if (
     !preflightSnapshot &&

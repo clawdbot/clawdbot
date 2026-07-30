@@ -161,15 +161,6 @@ export function resolveTranscriptStemToSessionKeys(params: {
     if (isIncognitoSessionKey(sessionKey)) {
       continue;
     }
-    const sessionFile = normalizeOptionalString(entry.sessionFile);
-    if (sessionFile) {
-      const base = path.basename(sessionFile);
-      const fileStem = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
-      if (fileStem === params.stem) {
-        matches.push(sessionKey);
-        continue;
-      }
-    }
     if (entry.sessionId === params.stem || (parsedStemId && entry.sessionId === parsedStemId)) {
       matches.push(sessionKey);
     }
@@ -183,15 +174,6 @@ export function resolveTranscriptStemToSessionKeys(params: {
     for (const [sessionKey, entry] of Object.entries(store)) {
       if (isIncognitoSessionKey(sessionKey)) {
         continue;
-      }
-      const sessionFile = normalizeOptionalString(entry.sessionFile);
-      if (sessionFile) {
-        const base = path.basename(sessionFile);
-        const fileStem = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
-        if (normalizeQmdSessionStem(fileStem) === normalizedStem) {
-          matches.push(sessionKey);
-          continue;
-        }
       }
       const entrySessionId = normalizeOptionalString(entry.sessionId);
       if (entrySessionId && normalizeQmdSessionStem(entrySessionId) === normalizedStem) {

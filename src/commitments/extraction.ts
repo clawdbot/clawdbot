@@ -245,7 +245,7 @@ Rules:
 - Dedupe keys should be stable within a session, like "interview:2026-04-29" or "sleep:2026-04-29".
 
 Items:
-${JSON.stringify(items, null, 2)}`;
+${JSON.stringify(items)}`;
 }
 
 function parseDueMs(raw: string | undefined): number | undefined {

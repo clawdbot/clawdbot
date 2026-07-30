@@ -147,6 +147,57 @@ describeControlUiE2e("Control UI custodian event nudge mocked Gateway E2E", () =
     }
   });
 
+  it("keeps a blocking startup error next to the composer", async () => {
+    if (captureUiProofEnabled) {
+      await mkdir(uiProofArtifactDir, { recursive: true });
+    }
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 1200, width: 1600 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["openclaw.chat"],
+      featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat"],
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}custodian`);
+      expect(response?.status()).toBe(200);
+      await gateway.waitForRequest("openclaw.chat");
+      await gateway.rejectDeferred("openclaw.chat", {
+        code: "UNAVAILABLE",
+        message:
+          "OpenClaw requires working inference: No agent model is configured. Run `openclaw onboard` first.",
+        retryable: true,
+      });
+
+      const alert = page.getByRole("alert");
+      await alert.waitFor();
+      const composer = page.locator(".agent-chat__composer-shell");
+      const [alertBox, composerBox] = await Promise.all([
+        alert.boundingBox(),
+        composer.boundingBox(),
+      ]);
+      expect(alertBox).not.toBeNull();
+      expect(composerBox).not.toBeNull();
+
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(uiProofArtifactDir, "04-inference-error.png"),
+        });
+      }
+
+      const verticalGap = composerBox!.y - (alertBox!.y + alertBox!.height);
+      expect(verticalGap).toBeLessThanOrEqual(32);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps event nudges out of sensitive wizard input", async () => {
     const context = await browser.newContext({
       locale: "en-US",

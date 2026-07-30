@@ -1,6 +1,9 @@
 // Builds CI node/Vitest shard plans from the full suite configuration.
 import { relative } from "node:path";
-import { agentsCoreIsolatedTestFiles } from "../../test/vitest/vitest.agents-paths.mjs";
+import {
+  agentVitestProjectOwners,
+  embeddedAgentVitestProjectOwners,
+} from "../../test/vitest/vitest.agents-paths.mjs";
 import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 import { toolingIsolatedTestFiles } from "../../test/vitest/vitest.tooling-isolated-paths.mjs";
@@ -30,6 +33,12 @@ const GATEWAY_STARTUP_CORE_RUNNER = DEFAULT_NODE_TEST_RUNNER;
 const GATEWAY_STARTUP_HEALTH_RUNTIME_ENV = {
   OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000",
 };
+// The first embedded-agent file owns 157 serial tests and can stay quiet for
+// more than five minutes on a cold GitHub-hosted fork runner. Keep the outer
+// watchdog above the scoped 600-second hook budget so it cannot preempt Vitest.
+const AGENTS_EMBEDDED_AGENT_ENV = {
+  OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000",
+};
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // PR-only bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
@@ -58,7 +67,9 @@ const UNIT_FAST_NODE_TEST_STRIPES = 2;
 const COMPACT_GROUP_SECONDS_HINTS = new Map([
   ["agentic-agents-core-auth", 27],
   ["agentic-agents-core-isolated", 9],
-  ["agentic-agents-core-models", 51],
+  // Model catalog and full UI both cold-load broad graphs. Keep their combined
+  // hint above the compact-bin cap so model visibility cannot starve for 120s.
+  ["agentic-agents-core-models", 70],
   // Reliability's runtime-free provider check dropped its wall time from
   // ~245s to ~5s; the narrow anthropic cli-api artifact removes the same
   // full-barrel evaluation for the remaining facade importers (spawn).
@@ -71,7 +82,9 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map([
   ["agentic-agents-core-runtime", 79],
   ["agentic-agents-core-subagents", 32],
   ["agentic-agents-core-tools", 52],
-  ["agentic-agents-embedded", 57],
+  // A cold fork run is about 430s and emits no file result for most of its
+  // first five minutes. Keep this whole-config whale in its own compact job.
+  ["agentic-agents-embedded", 430],
   ["agentic-agents-support", 105],
   ["agentic-agents-tools", 42],
   ["agentic-cli", 72],
@@ -201,7 +214,7 @@ function isExclusiveCompactGroup(group) {
 // scales with the runner class. infra-process spawns child processes per test
 // and hit worker-startup timeouts under contention before serialization.
 const PINNED_WORKER_COMPACT_GROUP_RE =
-  /^core-tooling(?:-\d+|-isolated)$|^core-runtime-tui-pty$|^core-runtime-infra-process$|^core-runtime-media-ui$|^agentic-gateway-(?:core|methods)$/u;
+  /^core-tooling(?:-\d+|-isolated)$|^core-runtime-tui-pty$|^core-runtime-infra-process$|^core-runtime-media-ui$|^agentic-cli$|^agentic-gateway-(?:core|methods)$/u;
 const PINNED_COMPACT_GROUP_ENV = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
 
 function applyCompactGroupWorkerPins(group) {
@@ -513,7 +526,7 @@ function resolveAgentCoreShardName(file) {
 }
 
 function createAgentCoreSplitShards() {
-  const isolatedTests = new Set(agentsCoreIsolatedTestFiles);
+  const isolatedTests = new Set(agentVitestProjectOwners.coreIsolated.include);
   const groups = new Map();
   for (const file of listTestFiles("src/agents")) {
     const name = relative("src/agents", file).replaceAll("\\", "/");
@@ -543,7 +556,7 @@ function createAgentCoreSplitShards() {
       if (shardName === "agentic-agents-core-runner-cli") {
         return createStripedBatches(includePatterns, AGENTS_CORE_RUNNER_CLI_STRIPES).map(
           (batch, index) => ({
-            configs: ["test/vitest/vitest.agents-core.config.ts"],
+            configs: [agentVitestProjectOwners.core.config],
             includePatterns: batch,
             requiresDist: false,
             shardName: `${shardName}-${index + 1}`,
@@ -552,7 +565,7 @@ function createAgentCoreSplitShards() {
       }
       return [
         {
-          configs: ["test/vitest/vitest.agents-core.config.ts"],
+          configs: [agentVitestProjectOwners.core.config],
           includePatterns,
           requiresDist: false,
           shardName,
@@ -564,8 +577,8 @@ function createAgentCoreSplitShards() {
   return [
     ...sharedShards,
     {
-      configs: ["test/vitest/vitest.agents-core-isolated.config.ts"],
-      includePatterns: agentsCoreIsolatedTestFiles,
+      configs: [agentVitestProjectOwners.coreIsolated.config],
+      includePatterns: agentVitestProjectOwners.coreIsolated.include,
       requiresDist: false,
       shardName: "agentic-agents-core-isolated",
     },
@@ -1167,7 +1180,7 @@ const SPLIT_NODE_SHARDS = new Map([
       ...createGatewayServerSplitShards(),
       {
         shardName: "agentic-cli",
-        configs: ["test/vitest/vitest.cli.config.ts"],
+        configs: ["test/vitest/vitest.cli.config.ts", "test/vitest/vitest.cli-process.config.ts"],
         requiresDist: false,
       },
       {
@@ -1182,17 +1195,18 @@ const SPLIT_NODE_SHARDS = new Map([
       ...createAgentCoreSplitShards(),
       {
         shardName: "agentic-agents-embedded",
-        configs: ["test/vitest/vitest.agents-embedded-agent.config.ts"],
+        configs: embeddedAgentVitestProjectOwners.map((owner) => owner.config),
+        env: AGENTS_EMBEDDED_AGENT_ENV,
         requiresDist: false,
       },
       {
         shardName: "agentic-agents-support",
-        configs: ["test/vitest/vitest.agents-support.config.ts"],
+        configs: [agentVitestProjectOwners.support.config],
         requiresDist: false,
       },
       {
         shardName: "agentic-agents-tools",
-        configs: ["test/vitest/vitest.agents-tools.config.ts"],
+        configs: [agentVitestProjectOwners.tools.config],
         requiresDist: false,
       },
       {

@@ -17,6 +17,7 @@ import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { redactSecretDegradationReason } from "../secrets/runtime-degraded-state.js";
+import type { StatusSummary } from "../status/types.js";
 import { VERSION } from "../version.js";
 import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
@@ -24,7 +25,6 @@ import {
   gatewayProbeResultSawGateway,
 } from "./gateway-health-auth-diagnostic.js";
 import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
-import type { StatusSummary } from "./status.types.js";
 
 type GatewayMemoryProbe = {
   checked: boolean;

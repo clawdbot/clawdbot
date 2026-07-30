@@ -261,6 +261,10 @@ describe("cross-OS release checks workflow", () => {
     );
 
     const resolve = step(prepare, "Resolve provided candidate package");
+    expect(step(prepare, "Install workflow validation dependencies")).toMatchObject({
+      if: "inputs.candidate_artifact_name != ''",
+      run: "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
+    });
     expect(resolve.run).toContain("resolve-openclaw-package-candidate.mjs");
     expect(resolve.run).toContain("--source artifact");
     expect(resolve.run).toContain('--package-sha256 "$INPUT_CANDIDATE_SHA256"');

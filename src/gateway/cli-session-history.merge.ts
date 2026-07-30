@@ -87,11 +87,11 @@ function resolveImportedExternalIdentity(message: unknown): ImportedExternalIden
     : undefined;
 }
 
-function hasSameExternalIdentity(existing: unknown, imported: unknown): boolean {
+function hasSameExternalIdentity(existing: unknown, imported: unknown): boolean | undefined {
   const importedIdentity = resolveImportedExternalIdentity(imported);
   const existingIdentity = resolveImportedExternalIdentity(existing);
   if (!importedIdentity || !existingIdentity) {
-    return false;
+    return undefined;
   }
   return (
     importedIdentity.externalId === existingIdentity.externalId &&
@@ -101,8 +101,10 @@ function hasSameExternalIdentity(existing: unknown, imported: unknown): boolean 
 }
 
 function isEquivalentImportedMessage(existing: unknown, imported: unknown): boolean {
-  if (hasSameExternalIdentity(existing, imported)) {
-    return true;
+  // Text is a fallback only when either message lacks authoritative source identity.
+  const sameExternalIdentity = hasSameExternalIdentity(existing, imported);
+  if (sameExternalIdentity !== undefined) {
+    return sameExternalIdentity;
   }
 
   const existingRole = resolveComparableRole(existing);

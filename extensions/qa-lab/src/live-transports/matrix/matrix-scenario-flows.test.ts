@@ -4,6 +4,24 @@ import {
   readQaScenarioById,
   readQaScenarioExecutionConfig,
 } from "../../scenario-catalog.js";
+import { requireFlowScenario } from "../../scenario-catalog.test-utils.js";
+
+const MATRIX_MENTION_GATE_PRIMARY_SCENARIOS = [
+  "matrix-allowbots-default-block",
+  "matrix-allowbots-mentions-mentioned-room",
+  "matrix-allowbots-mentions-unmentioned-open-room-block",
+  "matrix-allowbots-room-override-blocks-account-true",
+  "matrix-allowbots-room-override-enables-account-off",
+  "matrix-allowbots-self-sender-ignored",
+  "matrix-allowbots-true-unmentioned-open-room",
+  "matrix-mention-metadata-spoof-block",
+] as const;
+
+const MATRIX_ISOLATED_ALLOWBOTS_ADMISSION_SCENARIOS = [
+  "matrix-allowbots-mentions-mentioned-room",
+  "matrix-allowbots-room-override-enables-account-off",
+  "matrix-allowbots-true-unmentioned-open-room",
+] as const;
 
 function readModuleBinding(
   scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number],
@@ -113,6 +131,65 @@ describe("Matrix QA Lab scenario flows", () => {
     });
   });
 
+  it("isolates scenarios that assert fresh thread and DM session routing", () => {
+    const expectedReasons = {
+      "dm-shared-session": "pristine per-user DM session routing",
+      "thread-isolation": "fresh session boundary",
+      "thread-reply-override": "must not inherit an existing room session",
+    } as const;
+
+    for (const [scenarioId, reason] of Object.entries(expectedReasons)) {
+      const execution = requireFlowScenario(readQaScenarioById(scenarioId)).execution;
+      expect(execution.suiteIsolation, scenarioId).toBe("isolated");
+      expect(execution.isolationReason, scenarioId).toContain(reason);
+    }
+  });
+
+  it("isolates the homeserver restart from the shared Matrix sync streams", () => {
+    expect(readQaScenarioById("matrix-homeserver-restart-resume").execution).toMatchObject({
+      kind: "flow",
+      channel: "matrix",
+      suiteIsolation: "isolated",
+      isolationReason:
+        "Restarts the disposable homeserver process and its active Matrix sync streams.",
+    });
+  });
+
+  it("isolates the DM thread override from session-scope bindings", () => {
+    expect(readQaScenarioById("matrix-dm-thread-reply-override").execution).toMatchObject({
+      kind: "flow",
+      channel: "matrix",
+      suiteIsolation: "isolated",
+      isolationReason:
+        "Asserts fresh DM native-thread routing after session-scope scenarios and cannot inherit their DM session binding.",
+    });
+  });
+
+  it("isolates channel and DM approval fan-out from shared routing state", () => {
+    expect(readQaScenarioById("matrix-approval-channel-target-both").execution).toMatchObject({
+      kind: "flow",
+      channel: "matrix",
+      suiteIsolation: "isolated",
+      isolationReason:
+        "Asserts fresh channel and DM approval fan-out and cannot inherit shared Matrix approval routing state.",
+    });
+  });
+
+  it("isolates only model-driven allowBots admission scenarios", () => {
+    const isolatedScenarioIds = MATRIX_MENTION_GATE_PRIMARY_SCENARIOS.filter(
+      (scenarioId) =>
+        requireFlowScenario(readQaScenarioById(scenarioId)).execution.suiteIsolation === "isolated",
+    );
+
+    expect(isolatedScenarioIds).toEqual(MATRIX_ISOLATED_ALLOWBOTS_ADMISSION_SCENARIOS);
+    for (const scenarioId of MATRIX_ISOLATED_ALLOWBOTS_ADMISSION_SCENARIOS) {
+      expect(
+        requireFlowScenario(readQaScenarioById(scenarioId)).execution.isolationReason,
+        scenarioId,
+      ).toContain("fresh model-driven configured-bot admission");
+    }
+  });
+
   it("runs the allowlist scenario through its config-file reload owner", () => {
     const scenario = catalog.scenarios.find((entry) => entry.id === "matrix-allowlist-hot-reload");
     expect(scenario?.execution.kind).toBe("flow");
@@ -125,6 +202,21 @@ describe("Matrix QA Lab scenario flows", () => {
       call: "scenarioModule.runMatrixQaAllowlistHotReloadScenario",
       args: [{ expr: "scenarioContext" }],
       saveAs: "result",
+    });
+  });
+
+  it("attributes Matrix admission and media evidence to behavior the flows execute", () => {
+    for (const scenarioId of MATRIX_MENTION_GATE_PRIMARY_SCENARIOS) {
+      expect(readQaScenarioById(scenarioId).coverage, scenarioId).toEqual({
+        primary: ["matrix.mention-gates"],
+      });
+    }
+    expect(readQaScenarioById("matrix-mxid-prefixed-command-block").coverage).toEqual({
+      primary: ["matrix.mention-gates"],
+      secondary: ["channels.channel-native-commands"],
+    });
+    expect(readQaScenarioById("matrix-unsupported-media-safe").coverage).toEqual({
+      primary: ["channels.inbound-media-normalization"],
     });
   });
 

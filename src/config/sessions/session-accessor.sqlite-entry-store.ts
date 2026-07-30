@@ -11,8 +11,9 @@ import {
   prepareSessionConversation,
   upsertConversationIdentity,
 } from "./session-accessor.sqlite-conversation.js";
+import { publishSqliteSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import {
-  clearSessionMembersForKey,
+  clearSessionCollaborationForKey,
   deleteSessionNodeArtifacts,
   rehomeLegacySessionNodeArtifacts,
 } from "./session-accessor.sqlite-node-artifacts.js";
@@ -352,12 +353,14 @@ export function deleteSqliteSessionEntryRows(
       sessionKey,
       updatedAt: remainingWindow.updated_at,
     });
+    publishSqliteSessionEntryCacheInvalidation(database);
     return;
   }
   executeSqliteQuerySync(
     database.db,
     db.deleteFrom("session_nodes").where("session_key", "=", sessionKey),
   );
+  publishSqliteSessionEntryCacheInvalidation(database);
 }
 
 /** Remove the logical entry while retaining its node-owned transcript windows. */
@@ -479,6 +482,7 @@ export function deleteLegacySessionEntryRows(
       database.db,
       db.deleteFrom("session_nodes").where("session_key", "=", legacyKey),
     );
+    publishSqliteSessionEntryCacheInvalidation(database);
   }
 }
 
@@ -522,10 +526,10 @@ export function writeSessionEntry(
   if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {
     delete normalizedEntry.visibility;
   }
-  // Membership belongs to the exact canonical row being overwritten, which
-  // can differ from the selected alias during canonicalization.
+  // Collaboration rows belong to the exact canonical node being overwritten,
+  // which can differ from the selected alias during canonicalization.
   if (canonicalPreviousEntry && canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId) {
-    clearSessionMembersForKey(database, sessionKey);
+    clearSessionCollaborationForKey(database, sessionKey);
   }
   // Registry writes snapshot the current transcript watermark so recovery can
   // distinguish same-millisecond transcript writes before and after this row.
@@ -634,6 +638,7 @@ export function writeSessionEntry(
       updatedAt,
     });
   }
+  publishSqliteSessionEntryCacheInvalidation(database);
 }
 
 /** Resolves the parent fork decision using SQLite transcript rows when totals are stale. */

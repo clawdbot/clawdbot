@@ -3,6 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  saveAuthProfileStore,
+} from "openclaw/plugin-sdk/agent-runtime";
+import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
@@ -130,9 +134,8 @@ describe("openai video generation provider", () => {
     const previousOpenAIKey = process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_KEY;
     try {
-      fs.writeFileSync(
-        path.join(agentDir, "auth-profiles.json"),
-        JSON.stringify({
+      saveAuthProfileStore(
+        {
           version: 1,
           profiles: {
             "openai:chatgpt": {
@@ -143,11 +146,14 @@ describe("openai video generation provider", () => {
               expires: Date.now() + 60_000,
             },
           },
-        }),
+        },
+        agentDir,
+        { filterExternalAuthProfiles: false, syncExternalCli: false },
       );
 
       expect(buildOpenAIVideoGenerationProvider().isConfigured?.({ agentDir })).toBe(false);
     } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
       if (previousOpenAIKey === undefined) {
         delete process.env.OPENAI_API_KEY;
       } else {
@@ -403,7 +409,9 @@ describe("openai video generation provider", () => {
       fetchWithTimeoutGuardedCall();
     expect(downloadUrl).toBe("http://127.0.0.1:44080/v1/videos/vid_local/content?variant=video");
     expect(downloadInit?.method).toBe("GET");
-    expect(downloadTimeout).toBe(120000);
+    // Download shares the generation deadline, so earlier phases consume part of this budget.
+    expect(downloadTimeout).toBeGreaterThan(0);
+    expect(downloadTimeout).toBeLessThanOrEqual(120_000);
     expect(downloadFetch).toBe(fetch);
     expect(downloadOptions).toEqual({
       ssrfPolicy: { allowPrivateNetwork: true },
