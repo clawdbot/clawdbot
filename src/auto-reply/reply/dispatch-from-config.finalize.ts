@@ -269,8 +269,15 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   const replyAcceptedByActiveRun = replyAdmission?.status === "accepted";
   const queueCapRejected =
     replyAdmission?.status === "skipped" && replyAdmission.reason === "queue-cap";
+  // Group/channel surfaces: a long run's final can settle under a newer dispatch
+  // of the same conversation (#116356), so an empty ledger here does not prove
+  // the conversation saw silence. Posting the canned failure text on that false
+  // negative spams every member; keep the fallback for direct chats only, where
+  // overlapping dispatches are rare and the notice is a real signal.
+  const noVisibleReplyFallbackSurface = chatType !== "group" && chatType !== "channel";
   const noVisibleReplyFallbackAllowed = () =>
     noVisibleReplyFallbackDirected &&
+    noVisibleReplyFallbackSurface &&
     !suppressDelivery &&
     !sendPolicyDenied &&
     state.sourceReplyDeliveryMode !== "message_tool_only" &&
@@ -375,6 +382,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       // timed-out settle leaves delivery unresolved, and a fallback reported as
       // delivered must not stay recoverable — either could double-send.
       ...(noVisibleReplyFallbackDirected &&
+      noVisibleReplyFallbackSurface &&
       queuedSettleResult === "settled" &&
       !turnLedger.hasVisibleDelivery() &&
       !noVisibleReplyFallbackDelivered &&
