@@ -3,6 +3,7 @@ import nodePath from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { drainSystemEvents } from "../infra/system-events.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   cronIsolatedRun,
   installGatewayTestHooks,
@@ -10,6 +11,7 @@ import {
   withGatewayServer,
   waitForSystemEvent,
 } from "./test-helpers.js";
+import { setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -251,6 +253,21 @@ describe("gateway hook session mode", () => {
       token: HOOK_TOKEN,
     };
     await withGatewayServer(async ({ port }) => {
+      setTestPluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "discord",
+            source: "test",
+            plugin: createChannelTestPluginBase({
+              id: "discord",
+              config: {
+                listAccountIds: () => ["work", "personal"],
+                resolveAccount: (_cfg, accountId) => ({ accountId }),
+              },
+            }),
+          },
+        ]),
+      );
       mockRunsOk();
       const headers = { "Idempotency-Key": "hook-idem-account-id" };
       const basePayload = {
