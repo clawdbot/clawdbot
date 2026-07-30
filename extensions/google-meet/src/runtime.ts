@@ -248,18 +248,35 @@ export class GoogleMeetRuntime {
     const url = request.url
       ? GOOGLE_MEET_PLATFORM_ADAPTER.urls.validateAndNormalize(request.url)
       : undefined;
+    // Without an explicit URL, only recover tabs owned by this runtime's sessions (#113990).
+    // Passing no url and no tracked ownership makes recoverMeetingBrowserTab refuse adoption.
+    const owned = !url
+      ? this.#sessions
+          .list()
+          .filter(
+            (session) => Boolean(session.url) || Boolean(session.chrome?.browserTab?.targetId),
+          )
+          .toSorted((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")))[0]
+      : undefined;
+    const trackedMeetingUrl = owned?.url;
+    const trackedTargetId = owned?.chrome?.browserTab?.targetId;
+    const resolvedUrl = url ?? owned?.url;
     return transport === "chrome-node"
       ? await recoverCurrentMeetTabOnNode({
           runtime: this.params.runtime,
           config: this.params.config,
           fullConfig: this.params.fullConfig,
-          url,
+          url: resolvedUrl,
+          trackedMeetingUrl,
+          trackedTargetId,
         })
       : await recoverCurrentMeetTab({
           runtime: this.params.runtime,
           config: this.params.config,
           fullConfig: this.params.fullConfig,
-          url,
+          url: resolvedUrl,
+          trackedMeetingUrl,
+          trackedTargetId,
         });
   }
 

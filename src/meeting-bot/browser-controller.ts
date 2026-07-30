@@ -557,13 +557,17 @@ export async function recoverMeetingBrowserTab<
     (!trackedUrlHasMeetingIdentity || trackedUrlMatches)
       ? trackedCandidate
       : undefined;
+  // Never adopt a random Meet tab when the caller omitted both ownership and URL.
+  // Untargeted selection arms mic/camera on whatever tab Chrome returns first (#113990).
   const tab =
     trackedTab ??
-    findRecoverableTab({
-      adapter: params.adapter,
-      tabs,
-      requestedMeetingUrl: params.requestedMeetingUrl,
-    });
+    (params.requestedMeetingUrl
+      ? findRecoverableTab({
+          adapter: params.adapter,
+          tabs,
+          requestedMeetingUrl: params.requestedMeetingUrl,
+        })
+      : undefined);
   const targetId = tab?.targetId;
   if (!tab || !targetId) {
     return {
@@ -571,7 +575,9 @@ export async function recoverMeetingBrowserTab<
       tab,
       message: params.requestedMeetingUrl
         ? `No existing ${params.adapter.browserLabel} tab matched ${params.requestedMeetingUrl}.`
-        : `No existing ${params.adapter.browserLabel} tab found ${params.locationLabel}.`,
+        : trackedCandidate || params.trackedTargetId || params.trackedMeetingUrl
+          ? `No existing ${params.adapter.browserLabel} tab found ${params.locationLabel}.`
+          : `No owned ${params.adapter.browserLabel} tab for this session. Pass a meeting url to recover a specific tab.`,
     };
   }
   return await inspectRecoverableTab({

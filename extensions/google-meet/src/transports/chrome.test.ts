@@ -75,6 +75,8 @@ describe("google meet chrome transport", () => {
       fullConfig: { transcripts: { enabled: false } },
       mode: "agent",
       readOnly: true,
+      // Explicit URL required — untargeted recovery must not adopt a random Meet tab (#113990).
+      url: "https://meet.google.com/abc-defg-hij?hl=en",
     });
 
     expect(recovered).toMatchObject({ found: true, targetId: "meet-tab" });
@@ -212,8 +214,42 @@ describe("google meet chrome transport", () => {
         config: resolveGoogleMeetConfig({}),
         mode: "transcribe",
         readOnly: true,
+        url: "https://meet.google.com/abc-defg-hij?hl=en",
       }),
     ).rejects.toThrow("Google Meet browser status JSON is malformed.");
+  });
+
+  it("refuses untargeted recovery without ownership or url (#113990)", async () => {
+    const gatewayRequest = vi.fn(async (_method, params) => {
+      if (params.path === "/tabs") {
+        return {
+          tabs: [
+            {
+              targetId: "stranger-meet-tab",
+              title: "Meet",
+              url: "https://meet.google.com/abc-defg-hij?hl=en",
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected browser request path ${String(params.path)}`);
+    });
+
+    const recovered = await recoverCurrentMeetTab({
+      runtime: browserRuntime(gatewayRequest),
+      config: resolveGoogleMeetConfig({}),
+      mode: "transcribe",
+      readOnly: true,
+    });
+
+    expect(recovered).toMatchObject({ found: false });
+    expect(recovered.message).toMatch(/owned|url/i);
+    // Must not focus or arm mic on a stranger tab.
+    expect(gatewayRequest).not.toHaveBeenCalledWith(
+      "browser.request",
+      expect.objectContaining({ path: "/tabs/focus" }),
+      expect.anything(),
+    );
   });
 
   it.each([
