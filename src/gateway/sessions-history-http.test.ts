@@ -516,6 +516,16 @@ describe("session history Accept parsing", () => {
       name: "more-specific matching parameter acceptance",
     },
     {
+      accept: "text/event-stream;q=0.5;charset=utf-8",
+      expected: true,
+      name: "matching media parameter after q",
+    },
+    {
+      accept: "text/event-stream;q=1;charset=utf-16",
+      expected: false,
+      name: "mismatched media parameter after q",
+    },
+    {
       accept: "text/event-stream; charset=utf-16",
       expected: false,
       name: "mismatched representation parameter",
@@ -551,8 +561,8 @@ describe("session history Accept parsing", () => {
     { accept: "text/event-stream;q=0.5;q=1", expected: false, name: "duplicate q parameter" },
     {
       accept: 'text/event-stream;q=0.5;legacy;note="quoted,comma;semicolon"',
-      expected: true,
-      name: "legacy Accept extensions after q",
+      expected: false,
+      name: "obsolete bare Accept extension after q",
     },
     {
       accept: 'text/event-stream; note="unterminated',
@@ -593,6 +603,8 @@ describe("session history HTTP endpoints", () => {
           accept: "text/event-stream;q=0, text/event-stream;charset=utf-8;q=0.5",
           expected: "sse",
         },
+        { accept: "text/event-stream;q=0.5;charset=utf-8", expected: "sse" },
+        { accept: "text/event-stream;q=1;charset=utf-16", expected: "json" },
         { accept: "text/event-stream;charset=utf-16", expected: "json" },
         { accept: "text/event-streaming", expected: "json" },
         { accept: "text/event-streamx", expected: "json" },
@@ -607,7 +619,7 @@ describe("session history HTTP endpoints", () => {
         { accept: "text/event-stream;\u00a0q=0.5", expected: "json" },
         {
           accept: 'text/event-stream;q=0.5;legacy;note="quoted,comma;semicolon"',
-          expected: "sse",
+          expected: "json",
         },
       ] as const;
 

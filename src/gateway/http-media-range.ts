@@ -117,21 +117,6 @@ function parseMediaType(value: string, allowQuality: boolean): ParsedMediaType |
     if (!HTTP_TOKEN_PATTERN.test(name)) {
       return null;
     }
-    // RFC 7231 used q as the boundary between media parameters and Accept extensions.
-    // Keep accepting that deployed syntax, but extensions never affect representation matching.
-    if (qualitySeen) {
-      if (name === "q") {
-        return null;
-      }
-      if (separator < 0) {
-        continue;
-      }
-      const extensionValue = parameter.slice(separator + 1);
-      if (!extensionValue || parseParameterValue(extensionValue) === null) {
-        return null;
-      }
-      continue;
-    }
     if (separator <= 0) {
       return null;
     }
@@ -142,6 +127,8 @@ function parseMediaType(value: string, allowQuality: boolean): ParsedMediaType |
       return null;
     }
     if (name === "q") {
+      // RFC 9110 recognizes q as the weight regardless of parameter order;
+      // every other parameter still participates in representation matching.
       if (!allowQuality || qualitySeen || !HTTP_QVALUE_PATTERN.test(rawValue)) {
         return null;
       }
