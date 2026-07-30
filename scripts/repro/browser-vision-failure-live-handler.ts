@@ -98,9 +98,7 @@ function buildConfig(gatewayPort: number): OpenClawConfig {
     },
     tools: {
       media: {
-        image: {
-          models: [{ provider: "openai", model: "gpt-4o-mini" }],
-        },
+        models: [{ provider: "openai", model: "gpt-4o-mini", capabilities: ["image"] }],
       },
     },
   };

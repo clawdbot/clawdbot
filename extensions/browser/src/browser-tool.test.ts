@@ -3678,7 +3678,11 @@ describe("browser screenshot vision-failure session-contamination proof (#106703
     // takes the vision path rather than the raw-image fallback.
     configMocks.loadConfig.mockReturnValue({
       browser: {},
-      tools: { media: { image: { models: [{ provider: "openai", model: "gpt-vision" }] } } },
+      tools: {
+        media: {
+          models: [{ provider: "openai", model: "gpt-vision", capabilities: ["image"] }],
+        },
+      },
     } as never);
     // Force the ONLY vision call to fail (configured provider error). Everything
     // else runs through the real production browser screenshot handler.
