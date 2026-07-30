@@ -212,7 +212,7 @@ export const slackQaProgressCommentaryTrueScenario: SlackQaScenarioImplementatio
   },
   buildRun: (sutUserId) =>
     buildSlackProgressCommentaryRun(sutUserId, {
-      commentary: "draft",
+      commentary: "lane",
       toolProgress: "absent",
     }),
 };
@@ -223,7 +223,7 @@ export const slackQaProgressCommentaryFalseScenario: SlackQaScenarioImplementati
   },
   buildRun: (sutUserId) =>
     buildSlackProgressCommentaryRun(sutUserId, {
-      commentary: "absent",
+      commentary: "headline",
       toolProgress: "absent",
     }),
 };
@@ -234,7 +234,7 @@ export const slackQaProgressCommentaryOmittedScenario: SlackQaScenarioImplementa
   },
   buildRun: (sutUserId) =>
     buildSlackProgressCommentaryRun(sutUserId, {
-      commentary: "draft",
+      commentary: "headline",
       toolProgress: "draft",
     }),
 };
