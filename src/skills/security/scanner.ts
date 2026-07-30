@@ -271,13 +271,16 @@ function buildChildProcessAliasRules(source: string): LineRule[] {
     }
   }
   const rules: LineRule[] = [];
+  // `$` is a valid identifier character but not a `\w` character, so `\b` never matches
+  // immediately before it; a negative lookbehind treats it like the rest of the alias.
+  const identifierStartGuard = String.raw`(?<![\w$])`;
   if (methodAliases.size > 0) {
     rules.push({
       ruleId: "dangerous-exec",
       severity: "critical",
       message: "Shell command execution detected (child_process import alias)",
       pattern: new RegExp(
-        String.raw`\b(?:${[...methodAliases].map(escapeAliasForPattern).join("|")})\s*\(`,
+        `${identifierStartGuard}(?:${[...methodAliases].map(escapeAliasForPattern).join("|")})\\s*\\(`,
       ),
     });
   }
@@ -287,7 +290,7 @@ function buildChildProcessAliasRules(source: string): LineRule[] {
       severity: "critical",
       message: "Shell command execution detected (child_process computed member)",
       pattern: new RegExp(
-        String.raw`\b(?:${[...namespaceAliases].map(escapeAliasForPattern).join("|")})\s*\[\s*["'](?:${CHILD_PROCESS_EXEC_METHODS.join("|")})["']\s*\]\s*\(`,
+        `${identifierStartGuard}(?:${[...namespaceAliases].map(escapeAliasForPattern).join("|")})\\s*\\[\\s*["'](?:${CHILD_PROCESS_EXEC_METHODS.join("|")})["']\\s*\\]\\s*\\(`,
       ),
     });
   }
@@ -498,7 +501,10 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   const heuristicLines = heuristicSource.split("\n");
 
   // --- Line rules ---
-  const lineRules = [...LINE_RULES, ...buildChildProcessAliasRules(source)];
+  // Discover bindings from comment-stripped source so a commented-out import
+  // cannot manufacture a provenance-bearing alias rule that then flags an
+  // unrelated call as critical (ClawSweeper #116365 follow-up).
+  const lineRules = [...LINE_RULES, ...buildChildProcessAliasRules(heuristicSource)];
   for (const rule of lineRules) {
     // Skip rule entirely if context requirement not met
     if (rule.requiresContext && !rule.requiresContext.test(source)) {
