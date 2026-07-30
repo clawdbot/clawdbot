@@ -344,7 +344,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         isDirect: !entry.isGroup,
         isGroup: entry.isGroup,
         isMentionableGroup: entry.isGroup,
-        requireMention: entry.requireMention === true,
         canDetectMention: entry.canDetectMention === true,
         effectiveWasMentioned: entry.wasMentioned === true,
       }),

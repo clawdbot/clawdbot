@@ -224,6 +224,9 @@ describe("announce loop guard (#18264)", () => {
 
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
     expect(entry.cleanupCompletedAt).toBeGreaterThanOrEqual(beforeInit);
+    expect(mocks.saveSubagentRegistryChangesToSqlite).toHaveBeenCalledWith(expect.any(Map), [
+      entry.runId,
+    ]);
   });
 
   test("expired completion-message entries are still resumed for announce", async () => {

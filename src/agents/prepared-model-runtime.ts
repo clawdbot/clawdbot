@@ -16,10 +16,11 @@ import {
   normalizePreparedModelRuntimeInput,
   ownerKey,
   preparedModelRuntimeConfigsMatch,
+  publishPreparedModelRuntimeOwnerBatch,
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
   resolvePublishedOwner,
-  startSerializedSnapshotBuild,
+  startSerializedSnapshotBuildBatch,
   toError,
   type PreparedModelRuntimeOwner,
   type PreparedModelRuntimeInput,
@@ -490,12 +491,11 @@ export function rejectPendingPreparedModelRuntimeReplacement(
 /** Rebuilds active owners after config/plugin runtime publication. */
 async function refreshPreparedModelRuntimeSnapshotsNow(
   config: OpenClawConfig,
-  options: PreparedModelRuntimeRefreshOptions = {},
+  options: PreparedModelRuntimeRefreshOptions,
+  publicationEpoch: number,
 ): Promise<void> {
   const catalogMode = options.catalogMode ?? "live";
-  if (options.gatewayLifecycle) {
-    gatewayLifecycleActive = true;
-  }
+  gatewayLifecycleActive ||= options.gatewayLifecycle === true;
   const staleError = new Error("prepared model runtime owner is stale after config publication");
   for (const owner of owners.values()) {
     // Invalidate every prior generation before starting any replacement. A failed reload must
@@ -552,26 +552,35 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
     owner.needsRefresh = true;
     owner.refreshError = undefined;
     const generation = owner.generation;
-    const build = startSerializedSnapshotBuild(
-      input,
-      agentBuildCompletions,
-      modelRuntimeBuildTimeoutMs,
-      catalogMode,
-    );
-    owner.buildCompletion = build.completion;
-    owners.set(ownerKey(input), owner);
+    const isCurrent = () =>
+      publicationEpoch === refreshRequestEpoch &&
+      owner.generation === generation &&
+      owners.get(ownerKey(input)) === owner;
+    return { input, isCurrent, owner };
+  });
+  const build = startSerializedSnapshotBuildBatch(
+    candidates.map(({ input }) => input),
+    agentBuildCompletions,
+    modelRuntimeBuildTimeoutMs,
+    catalogMode,
+    options.onBuildStats,
+    new Map(candidates.map((candidate) => [candidate.input, candidate.isCurrent])),
+    () => publicationEpoch === refreshRequestEpoch,
+  );
+  for (const candidate of candidates) {
+    owners.set(ownerKey(candidate.input), candidate.owner);
+    candidate.owner.buildCompletion = build.completion;
     void build.completion.then(() => {
-      if (owner.buildCompletion === build.completion) {
-        owner.buildCompletion = undefined;
+      if (candidate.owner.buildCompletion === build.completion) {
+        candidate.owner.buildCompletion = undefined;
       }
     });
-    return { build, generation, owner };
-  });
+  }
   const publication = (async () => {
     try {
-      const snapshots = await Promise.all(candidates.map(({ build }) => build.pending));
+      const snapshots = await build.pending;
       for (const [index, candidate] of candidates.entries()) {
-        if (candidate.owner.generation !== candidate.generation) {
+        if (!candidate.isCurrent()) {
           continue;
         }
         candidate.owner.snapshot = snapshots[index]!;
@@ -581,9 +590,8 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
       return snapshots;
     } catch (error) {
       const refreshError = toError(error);
-      await Promise.allSettled(candidates.map(({ build }) => build.pending));
       for (const candidate of candidates) {
-        if (candidate.owner.generation !== candidate.generation) {
+        if (!candidate.isCurrent()) {
           continue;
         }
         candidate.owner.pending = undefined;
@@ -594,7 +602,16 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
     }
   })();
   for (const [index, candidate] of candidates.entries()) {
-    const pending = publication.then((snapshots) => snapshots[index]!);
+    const pending = publication.then((snapshots) => {
+      // Config publication is atomic, including callers deduplicated against an individual owner.
+      // A superseded batch must not leak its unpublished snapshot through that pending promise.
+      if (!candidate.isCurrent()) {
+        throw new PreparedModelRuntimePublicationSupersededError(
+          `prepared model runtime publication was superseded for ${candidate.input.agentDir}`,
+        );
+      }
+      return snapshots[index]!;
+    });
     candidate.owner.pending = pending;
     void pending.catch(() => undefined);
   }
@@ -614,7 +631,7 @@ export function refreshPreparedModelRuntimeSnapshots(
     if (requestEpoch !== refreshRequestEpoch) {
       return;
     }
-    await refreshPreparedModelRuntimeSnapshotsNow(config, options);
+    await refreshPreparedModelRuntimeSnapshotsNow(config, options, requestEpoch);
     if (requestEpoch !== refreshRequestEpoch) {
       return;
     }
@@ -686,29 +703,12 @@ async function drainPendingAuthMutations(): Promise<void> {
         entries.push({ owner, input: owner.input });
       }
     }
-    const results = await Promise.allSettled(
-      entries.map(
-        async ({ owner, input }) =>
-          await publishPreparedModelRuntimeSnapshot(input, {
-            force: true,
-            provenance: owner.provenance,
-          }),
-      ),
-    );
-    // Supersession belongs to one owner generation. Wait for every sibling refresh before
-    // deciding the batch outcome so an expected race cannot hide a genuine owner failure.
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" &&
-      !(result.reason instanceof PreparedModelRuntimePublicationSupersededError)
-        ? [result.reason]
-        : [],
-    );
-    if (failures.length === 1) {
-      throw failures[0];
-    }
-    if (failures.length > 1) {
-      throw new AggregateError(failures, `${failures.length} model runtime owner refreshes failed`);
-    }
+    await publishPreparedModelRuntimeOwnerBatch({
+      entries,
+      owners,
+      agentBuildCompletions,
+      buildTimeoutMs: modelRuntimeBuildTimeoutMs,
+    });
   }
 }
 

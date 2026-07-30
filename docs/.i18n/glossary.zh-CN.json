@@ -1694,5 +1694,13 @@
   {
     "source": "TOOLS.md retired",
     "target": "TOOLS.md 已弃用"
+  },
+  {
+    "source": "Automations",
+    "target": "自动化"
+  },
+  {
+    "source": "Automations (cron)",
+    "target": "自动化 (cron)"
   }
 ]

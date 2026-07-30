@@ -23,6 +23,7 @@ import {
   DISMISS_TASK_TOOL_DISPLAY_SUMMARY,
   UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
 } from "./tool-description-presets.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
 /** Built-in tool profile ids exposed in config and UI. */
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
@@ -341,8 +342,8 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
-    id: "cron",
-    label: "cron",
+    id: AUTOMATIONS_TOOL_NAME,
+    label: AUTOMATIONS_TOOL_NAME,
     description: CRON_TOOL_DISPLAY_SUMMARY,
     sectionId: "automation",
     profiles: ["coding"],

@@ -511,7 +511,11 @@ export function createMSTeamsReplyDispatcher(params: {
   // tools fire (instead of the rotating "Thinking..." label sitting unchanged
   // for the duration of a long tool chain). In other modes these calls are
   // no-ops on the controller side.
-  const previewToolProgressEnabled = resolveChannelStreamingPreviewToolProgress(msteamsCfg);
+  const previewToolProgressEnabled = resolveChannelStreamingPreviewToolProgress(
+    msteamsCfg,
+    true,
+    teamsStreamMode,
+  );
   const suppressDefaultToolProgressMessages =
     resolveChannelStreamingSuppressDefaultToolProgressMessages(msteamsCfg);
   const shouldSuppressDefaultToolProgressMessages =

@@ -23,6 +23,11 @@ on:
         required: false
         default: false
         type: boolean
+      fail_fast:
+        description: Stop the Matrix QA lane after its first failed check or scenario
+        required: false
+        default: false
+        type: boolean
       run_telegram:
         description: Run the Telegram live lane
         required: false
@@ -392,17 +397,23 @@ jobs:
         shell: bash
         env:
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          FAIL_FAST: ${{ inputs.fail_fast }}
         run: |
           set -euo pipefail
 
           output_dir=".artifacts/qa-e2e/matrix-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "${output_dir}"
 
-          pnpm openclaw qa matrix \
+          matrix_args=(
             --repo-root . \
             --output-dir "${output_dir}" \
             --provider-mode mock-openai \
             --fast
+          )
+          if [[ "$FAIL_FAST" == "true" ]] && pnpm openclaw qa matrix --help 2>/dev/null | grep -F -q -- "--fail-fast"; then
+            matrix_args+=(--fail-fast)
+          fi
+          pnpm openclaw qa matrix "${matrix_args[@]}"
 
       - name: Upload Matrix QA artifacts
         id: upload_artifacts

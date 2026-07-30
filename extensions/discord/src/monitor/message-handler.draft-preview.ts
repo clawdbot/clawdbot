@@ -3,7 +3,6 @@ import {
   type AgentPlanStep,
   type ChannelProgressDraftLine,
   createChannelProgressDraftCompositor,
-  resolveChannelProgressDraftConfig,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewCommandText,
   resolveChannelStreamingPreviewToolProgress,
@@ -93,18 +92,9 @@ export function createDiscordDraftPreviewController(params: {
   let progressDraftStartedBeforeFinal = false;
   let progressDraftCollapsed = false;
   let progressNarratorLifecycle: { beginTurn: () => void; stopTurn: () => void } | undefined;
-  const progressConfig = resolveChannelProgressDraftConfig(params.discordConfig);
-  const progressHasExplicitLabel =
-    progressConfig.label !== undefined || progressConfig.labels !== undefined;
-  // Discord defaults to progress mode even when `streaming.mode` is omitted,
-  // so pass that resolved mode into the shared default through this fallback.
-  const progressToolDefault = progressConfig.toolProgress ?? progressHasExplicitLabel;
   const previewToolProgressEnabled =
     Boolean(draftStream) &&
-    resolveChannelStreamingPreviewToolProgress(
-      params.discordConfig,
-      discordStreamMode === "progress" ? progressToolDefault : true,
-    );
+    resolveChannelStreamingPreviewToolProgress(params.discordConfig, true, discordStreamMode);
   const narrationProgressEnabled =
     Boolean(draftStream) &&
     discordStreamMode === "progress" &&

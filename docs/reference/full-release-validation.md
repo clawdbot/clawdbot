@@ -26,6 +26,9 @@ pnpm ci:full-release \
 end-to-end agent turn. The helper infers the `beta` profile from alpha/beta
 package versions and `stable` otherwise. Pass alternate workflow inputs with
 `-f key=value`; use `-f release_profile=full` only for the broad advisory sweep.
+`fail_fast` defaults to `false`, so dispatched child workflows finish and expose
+independent failures together. Pass `-f fail_fast=true` when the shorter
+first-failure cancellation path is preferable.
 
 The helper creates a temporary `release-ci/*` ref pinned to one trusted
 `origin/main` workflow SHA, passes the target SHA only as the candidate `ref`,

@@ -78,7 +78,7 @@
     "agents_list",
     "message",
     "sessions_spawn",
-    "cron",
+    "automations",
     "gateway",
     "nodes",
     "session_status",
@@ -222,20 +222,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 62661,
-    "roughTokens": 15666
+    "chars": 62668,
+    "roughTokens": 15667
   },
   "openClawDeveloperInstructions": {
-    "chars": 2695,
-    "roughTokens": 674
+    "chars": 2702,
+    "roughTokens": 676
   },
   "totalTextOnly": {
-    "chars": 27136,
-    "roughTokens": 6784
+    "chars": 27143,
+    "roughTokens": 6786
   },
   "totalWithDynamicToolsJson": {
-    "chars": 89799,
-    "roughTokens": 22450
+    "chars": 89813,
+    "roughTokens": 22454
   },
   "userInputText": {
     "chars": 1284,
@@ -422,7 +422,7 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ````text
 You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
-Deferred searchable OpenClaw dynamic tools available: cron, gateway, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
+Deferred searchable OpenClaw dynamic tools available: automations, gateway, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
 
 Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.
 
@@ -521,7 +521,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
   "agents_list",
   "message",
   "sessions_spawn",
-  "cron",
+  "automations",
   "gateway",
   "nodes",
   "session_status",

@@ -399,6 +399,7 @@ describe("Buzz gateway lifecycle", () => {
       {
         publicKey: "a".repeat(64),
         sendText: async () => "event-id",
+        sendTyping: async () => {},
         close: async () => {},
       },
     );

@@ -1096,7 +1096,7 @@
           "required": ["action"],
           "type": "object"
         },
-        "name": "cron",
+        "name": "automations",
         "type": "function"
       },
       {

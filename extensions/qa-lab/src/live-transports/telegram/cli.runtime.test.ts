@@ -1,14 +1,20 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createTelegramQaTransportAdapter: vi.fn(),
   listTelegramQaScenarios: vi.fn(),
   printLiveTransportQaArtifacts: vi.fn(),
   resolveTelegramQaRunOptions: vi.fn(
-    (options: { allowFailures?: boolean; providerMode?: string; repoRoot: string }) => ({
+    (options: {
+      allowFailures?: boolean;
+      listScenarios?: boolean;
+      primaryModel?: string;
+      providerMode?: string;
+      repoRoot: string;
+    }) => ({
       ...options,
       allowFailures: options.allowFailures ?? false,
       listScenarios: false,
@@ -39,9 +45,12 @@ vi.mock("./scenario-selection.js", () => ({
   resolveTelegramQaScenarioIds: mocks.resolveTelegramQaScenarioIds,
 }));
 
-import { runQaTelegramSuite } from "./cli.runtime.js";
+import { runQaTelegramCommand, runQaTelegramSuite } from "./cli.runtime.js";
+
+const SUT_COMMAND_ENV = "OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND";
 
 describe("Telegram live QA scenario gate", () => {
+  const originalSutCommand = process.env[SUT_COMMAND_ENV];
   let previousExitCode: typeof process.exitCode;
   let tempRoot: string;
   let summaryPath: string;
@@ -64,6 +73,7 @@ describe("Telegram live QA scenario gate", () => {
     previousExitCode = process.exitCode;
     process.exitCode = undefined;
     vi.clearAllMocks();
+    delete process.env[SUT_COMMAND_ENV];
     tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-qa-telegram-gate-"));
     summaryPath = path.join(tempRoot, "qa-suite-summary.json");
     mocks.resolveTelegramQaScenarioIds.mockReturnValue(["channel-canary"]);
@@ -76,6 +86,14 @@ describe("Telegram live QA scenario gate", () => {
   afterEach(() => {
     process.exitCode = previousExitCode;
     rmSync(tempRoot, { force: true, recursive: true });
+  });
+
+  afterAll(() => {
+    if (originalSutCommand === undefined) {
+      delete process.env[SUT_COMMAND_ENV];
+    } else {
+      process.env[SUT_COMMAND_ENV] = originalSutCommand;
+    }
   });
 
   it.each(["fail", "skip", "skipped", "timeout"])(
@@ -160,6 +178,48 @@ describe("Telegram live QA scenario gate", () => {
       expect.objectContaining({
         scenarioIds: expect.not.arrayContaining(["telegram-startup-getme-live"]),
       }),
+    );
+  });
+
+  it("lists scenarios against the exact requested model", async () => {
+    mocks.resolveTelegramQaRunOptions.mockReturnValueOnce({
+      allowFailures: false,
+      listScenarios: true,
+      primaryModel: "openai/custom-list-model",
+      providerMode: "live-frontier",
+      repoRoot: process.cwd(),
+    });
+    mocks.listTelegramQaScenarios.mockReturnValue([]);
+
+    await runQaTelegramSuite({
+      listScenarios: true,
+      primaryModel: "openai/custom-list-model",
+      providerMode: "live-frontier",
+      repoRoot: process.cwd(),
+    });
+
+    expect(mocks.listTelegramQaScenarios).toHaveBeenCalledWith({
+      primaryModel: "openai/custom-list-model",
+      providerMode: "live-frontier",
+    });
+  });
+
+  it("selects scenarios against the exact requested model before suite startup", async () => {
+    await runQaTelegramCommand({
+      allowFailures: true,
+      primaryModel: "openai/custom-selection-model",
+      providerMode: "live-frontier",
+      repoRoot: process.cwd(),
+    });
+
+    expect(mocks.resolveTelegramQaScenarioIds).toHaveBeenCalledWith({
+      profile: undefined,
+      primaryModel: "openai/custom-selection-model",
+      providerMode: "live-frontier",
+      scenarioIds: undefined,
+    });
+    expect(mocks.runQaFlowSuiteFromRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ primaryModel: "openai/custom-selection-model" }),
     );
   });
 });

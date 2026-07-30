@@ -680,7 +680,10 @@ suite.define(() => {
       await page.reload();
 
       await page.getByText(historyText).waitFor({ timeout: 10_000 });
-      await expect.poll(async () => (await gateway.getRequests("chat.startup")).length).toBe(2);
+      // The mock request journal belongs to the current document and restarts
+      // on reload, so the restored page records its own startup request once.
+      await gateway.waitForRequest("chat.startup");
+      expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
     } finally {
       await suite.closeBrowserContext(context);
     }

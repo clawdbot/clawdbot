@@ -1,6 +1,7 @@
 /** In-memory spoken confirmation binding for high-impact Talk actions. */
 import { createHash, randomUUID } from "node:crypto";
 import { buildToolMutationState } from "../agents/tool-mutation.js";
+import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
 
 const CONFIRMATION_TTL_MS = 2 * 60_000;
 
@@ -72,7 +73,7 @@ function requiresHighImpactVoiceConfirmation(toolName: string, params: unknown):
       "computer",
       "mobile_ui",
       "canvas",
-      "cron",
+      AUTOMATIONS_TOOL_NAME,
       "process",
     ].includes(normalizedTool)
   ) {

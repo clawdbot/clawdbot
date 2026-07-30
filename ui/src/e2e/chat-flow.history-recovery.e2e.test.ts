@@ -608,12 +608,10 @@ suite.define(() => {
           type: "file",
         },
       ]);
-      await queue.getByText("Needs review").waitFor({ timeout: 10_000 });
-      await queue
-        .getByText("Delivery could not be confirmed after reconnect.", { exact: false })
-        .waitFor({ timeout: 10_000 });
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+      await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
       if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/02-reconnected-review.png`, fullPage: true });
+        await page.screenshot({ path: `${artifactDir}/02-reconnected-active.png`, fullPage: true });
       }
       await expectRequestCountStable(gateway, "chat.send", 1);
       const requestsAfterReconnect = await gateway.getRequests("chat.send");

@@ -410,7 +410,7 @@ describe("resolveTuiCtrlCAction", () => {
   it("exits immediately after a gateway disconnect", () => {
     expect(
       resolveTuiCtrlCAction({
-        hasInput: true,
+        hasInput: false,
         now: 2000,
         lastCtrlCAt: 0,
         wasDisconnected: true,
@@ -421,10 +421,24 @@ describe("resolveTuiCtrlCAction", () => {
     });
   });
 
+  it("clears a nonempty draft before exiting after a gateway disconnect", () => {
+    expect(
+      resolveTuiCtrlCAction({
+        hasInput: true,
+        now: 2000,
+        lastCtrlCAt: 0,
+        wasDisconnected: true,
+      }),
+    ).toEqual({
+      action: "clear",
+      nextLastCtrlCAt: 2000,
+    });
+  });
+
   it("forces exit when shutdown is already in progress", () => {
     expect(
       resolveTuiCtrlCAction({
-        hasInput: false,
+        hasInput: true,
         now: 2000,
         lastCtrlCAt: 1000,
         exitRequested: true,

@@ -116,7 +116,7 @@ Example placeholders (replace or remove them):
 
 When you receive a heartbeat poll (message matches the configured heartbeat prompt), don't just reply `HEARTBEAT_OK` every time. Keep a short checklist or reminders in the heartbeat monitor's cron scratch; use `openclaw cron list --all` to find the monitor job, then `openclaw cron scratch <jobId> --set "..."` to update it. Keep it small to limit token burn.
 
-See [Scheduled Tasks (Cron) vs Heartbeat](/automation#scheduled-tasks-cron-vs-heartbeat) for the full decision table. Short version: heartbeat batches periodic checks with full session context on approximate timing (default every 30 minutes); cron is for exact timing, isolated runs, a different model, or one-shot reminders.
+See [Scheduled Tasks (Cron) vs Heartbeat](/automation#automations-vs-heartbeat) for the full decision table. Short version: heartbeat batches periodic checks with full session context on approximate timing (default every 30 minutes); cron is for exact timing, isolated runs, a different model, or one-shot reminders.
 
 **Things to check (rotate through these, 2-4 times per day):** emails for urgent unread messages; calendar for events in the next 24-48h; social mentions; weather if your human might go out.
 
@@ -151,5 +151,5 @@ This is a starting point. Add your own conventions, style, and rules as you figu
 ## Related
 
 - [Default AGENTS.md](/reference/AGENTS.default)
-- [Scheduled tasks vs heartbeat](/automation#scheduled-tasks-cron-vs-heartbeat)
+- [Scheduled tasks vs heartbeat](/automation#automations-vs-heartbeat)
 - [Heartbeat](/gateway/heartbeat)

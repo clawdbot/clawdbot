@@ -32,6 +32,9 @@ export function createSubagentRegistryLifecycleRequesterWake(
           Boolean(entry?.requesterSettleWake) &&
           entry?.requesterSettleWake?.rearmGeneration === state.rearmGeneration,
       );
+    if (entries.length === 0) {
+      return;
+    }
     const previousStates = entries.map((entry) => structuredClone(entry.requesterSettleWake));
     for (const entry of entries) {
       entry.requesterSettleWake = {
@@ -42,7 +45,7 @@ export function createSubagentRegistryLifecycleRequesterWake(
       };
     }
     try {
-      params.persistOrThrow();
+      params.persistOrThrow(...entries.map((entry) => entry.runId));
     } catch (error) {
       entries.forEach((entry, index) => {
         entry.requesterSettleWake = previousStates[index];
@@ -62,6 +65,9 @@ export function createSubagentRegistryLifecycleRequesterWake(
           Boolean(pair[1]?.requesterSettleWake) &&
           pair[1]?.requesterSettleWake?.rearmGeneration === rearmGeneration,
       );
+    if (entries.length === 0) {
+      return;
+    }
     const requesterSessionKeys = new Set(entries.map(([, entry]) => entry.requesterSessionKey));
     const previousStates = entries.map(([, entry]) => ({
       requesterSettleWake: structuredClone(entry.requesterSettleWake),
@@ -82,7 +88,7 @@ export function createSubagentRegistryLifecycleRequesterWake(
       }
     }
     try {
-      params.persistOrThrow();
+      params.persistOrThrow(...entries.map(([runId]) => runId));
     } catch (error) {
       entries.forEach(([runId, entry], index) => {
         const previous = previousStates[index];
@@ -144,7 +150,7 @@ export function createSubagentRegistryLifecycleRequesterWake(
     }
     markRequesterSettleWakePending(entry, options);
     try {
-      params.persistOrThrow();
+      params.persistOrThrow(entry.runId);
     } catch (error) {
       entry.cleanupCompletedAt = previousCleanupCompletedAt;
       entry.requesterSettleWake = previousWake;

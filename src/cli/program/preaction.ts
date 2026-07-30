@@ -18,8 +18,11 @@ import {
   resolvePluginInstallInvalidConfigPolicy,
   resolvePluginInstallPreactionRequest,
 } from "../plugin-install-config-policy.js";
+import { getCommanderCommandPath, hasCommanderOptionValue } from "./commander-parse-facts.js";
 import { isCommandJsonOutputMode } from "./json-mode.js";
 import { isParentDefaultHelpAction } from "./parent-default-help.js";
+
+const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "-V", "--version"]);
 
 function setProcessTitleForCommand(actionCommand: Command) {
   let current: Command = actionCommand;
@@ -45,16 +48,6 @@ function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: 
       }),
     ) === "allow-plugin-recovery"
   );
-}
-
-function getActionCommandPath(actionCommand: Command): string[] {
-  const commandPath: string[] = [];
-  let current: Command | null = actionCommand;
-  while (current.parent) {
-    commandPath.unshift(current.name());
-    current = current.parent;
-  }
-  return commandPath;
 }
 
 function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
@@ -113,14 +106,22 @@ export function registerPreActionHooks(program: Command, programVersion: string)
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     setProcessTitleForCommand(actionCommand);
     const argv = process.argv;
-    if (isHelpOrVersionInvocation(argv) || isBareParentDefaultHelpInvocation(actionCommand, argv)) {
+    const helpOrVersionWasOptionValue = hasCommanderOptionValue(
+      actionCommand,
+      argv,
+      HELP_OR_VERSION_FLAGS,
+    );
+    if (
+      (isHelpOrVersionInvocation(argv) && !helpOrVersionWasOptionValue) ||
+      isBareParentDefaultHelpInvocation(actionCommand, argv)
+    ) {
       return;
     }
     const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
     applyResolvedCommandOutputMode(jsonOutputMode);
     const { commandPath, startupPolicy } = resolveCliExecutionStartupContext({
       argv,
-      protocolCommandPath: getActionCommandPath(actionCommand),
+      protocolCommandPath: getCommanderCommandPath(actionCommand),
       jsonOutputMode,
       env: process.env,
     });
