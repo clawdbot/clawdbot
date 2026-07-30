@@ -392,9 +392,7 @@ describe("ChatGPT Responses cached transport", () => {
     const receivedConnectionIds: number[] = [];
     const requestBodies: Array<{ connectionId: number; body: Record<string, unknown> }> = [];
     let seedServerSocket: WebSocket | undefined;
-    let holdLoserHandshake:
-      | ((accept: (info: unknown, cb?: () => void) => void) => void)
-      | undefined;
+    let holdLoserHandshake: ((res: boolean) => void) | undefined;
     let verifyCount = 0;
     let holdNextReconnect = false;
 
