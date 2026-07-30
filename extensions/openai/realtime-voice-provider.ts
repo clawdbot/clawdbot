@@ -1263,7 +1263,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       case "session.created":
         return;
 
-      case "session.updated":
+      case "session.updated": {
         if (!this.lifecycle.ready(connection)) {
           return;
         }
@@ -1285,6 +1285,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           this.sendAudio(chunk);
         }
         return;
+      }
 
       case "response.created":
         this.responseActive = true;
