@@ -159,9 +159,7 @@ export function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
 }
 
 /** Reject shared-state access after a process-local terminal failure. */
-export function assertOpenClawStateDatabaseOpenAllowed(
-  options: OpenClawStateDatabaseOptions = {},
-): void {
+function assertOpenClawStateDatabaseOpenAllowed(options: OpenClawStateDatabaseOptions = {}): void {
   const pathname = resolveDatabasePath(options);
   const terminalFailure = terminalOpenLatch.get(pathname);
   if (terminalFailure) {
