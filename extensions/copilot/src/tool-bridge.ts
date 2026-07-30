@@ -145,6 +145,11 @@ interface CopilotToolBridgeInput {
 
 interface CopilotToolBridge {
   cleanup?: () => void;
+  /**
+   * Resolved code-mode gate for the run, so the attempt result can report it.
+   * Optional because a stubbed bridge simply leaves engagement unreported.
+   */
+  codeModeEngaged?: boolean;
   sdkTools: SdkTool[];
   sourceTools: AnyAgentTool[];
 }
@@ -161,7 +166,7 @@ export async function createCopilotToolBridge(
   input: CopilotToolBridgeInput,
 ): Promise<CopilotToolBridge> {
   if (!input.allowModelTools && !supportsModelTools(input.modelProvider)) {
-    return { sdkTools: [], sourceTools: [] };
+    return { codeModeEngaged: false, sdkTools: [], sourceTools: [] };
   }
 
   const attemptParams = input.attemptParams ?? ({} as CopilotToolAttemptParams);
@@ -186,7 +191,7 @@ export async function createCopilotToolBridge(
       }
     : toolPlan;
   if (!effectiveToolPlan.constructTools) {
-    return { sdkTools: [], sourceTools: [] };
+    return { codeModeEngaged: false, sdkTools: [], sourceTools: [] };
   }
 
   const createOpenClawCodingTools =
@@ -268,6 +273,11 @@ export async function createCopilotToolBridge(
 
   return {
     cleanup: toolSurfaceRuntime.cleanup,
+    // Harness runs resolve `tools.codeMode: "auto"` inside the tool surface
+    // bridge, so this is the only place that knows whether the turn actually
+    // got code-mode controls. Without it the run reports `codeModeEngaged`
+    // as unset and telemetry cannot tell "off" from "harness did not report".
+    codeModeEngaged: toolSurfaceRuntime.codeModeControlsEnabled,
     sdkTools: filteredTools.map((sourceTool) =>
       convertOpenClawToolToSdkTool(sourceTool, {
         abortSignal: input.abortSignal,
@@ -790,7 +800,7 @@ function isCopilotRawModelRun(params: CopilotToolAttemptParams): boolean {
  * codex equivalent at
  * `extensions/codex/src/app-server/run-attempt.ts:4253-4258`.
  */
-function shouldForceCopilotMessageTool(params: CopilotToolAttemptParams): boolean {
+export function shouldForceCopilotMessageTool(params: CopilotToolAttemptParams): boolean {
   if (params.disableMessageTool === true) {
     return false;
   }
@@ -803,14 +813,20 @@ function shouldForceCopilotMessageTool(params: CopilotToolAttemptParams): boolea
  * so final filtering keeps aliases, groups, plugin policies, and glob
  * semantics identical to the in-tree embedded runner.
  */
-function filterCopilotToolsForAllowlist<T extends { name: string }>(
+export function filterCopilotToolsForAllowlist<T extends { name: string }>(
   tools: T[],
   toolsAllow?: string[],
+  options?: { forceToolNames?: readonly string[] },
 ): T[] {
-  return applyEmbeddedAttemptToolsAllow(tools, toolsAllow, {
+  const filtered = applyEmbeddedAttemptToolsAllow(tools, toolsAllow, {
     toolMeta: (tool) =>
       getPluginToolMeta(tool as unknown as AnyAgentTool) ?? readInlinePluginToolMeta(tool),
   });
+  if (!options?.forceToolNames?.length) {
+    return filtered;
+  }
+  const allowedNames = new Set([...filtered.map((tool) => tool.name), ...options.forceToolNames]);
+  return tools.filter((tool) => allowedNames.has(tool.name));
 }
 
 function filterCopilotToolsForConstructionPlan<T extends { name: string }>(

@@ -31,6 +31,8 @@ private data class CachedMessageContent(
   val width: Int? = null,
   val height: Int? = null,
   val sizeBytes: Long? = null,
+  val durationMs: Long? = null,
+  val playback: String? = null,
 )
 
 /**
@@ -108,7 +110,7 @@ internal data class CachedMessageEntity(
   val sessionKey: String,
   val rowOrder: Int,
   val role: String,
-  // JSON array of text and managed-image references; attachment bytes are never persisted.
+  // JSON array of text and managed-media references; attachment bytes are never persisted.
   val textPartsJson: String,
   val timestampMs: Long?,
   // Kept so live history reconciliation can match cached rows by identity key.
@@ -318,6 +320,8 @@ class RoomChatTranscriptCache internal constructor(
               width = part.width,
               height = part.height,
               sizeBytes = part.sizeBytes,
+              durationMs = part.durationMs,
+              playback = part.playback,
             )
           },
         timestampMs = row.timestampMs,
@@ -399,8 +403,8 @@ class RoomChatTranscriptCache internal constructor(
     val gateway = scopedGatewayId(gatewayId) ?: return
     val agent = scopedAgentId(agentId) ?: return
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return
-    // Persist small managed-image references, never attachment bytes. This keeps generated images
-    // visible offline without turning the disposable transcript cache into a binary store.
+    // Persist small managed-media references, never attachment bytes. Cards remain visible offline
+    // even though their short-lived download capability must be reacquired after reconnecting.
     val rows =
       messages
         .mapNotNull { message ->
@@ -422,6 +426,21 @@ class RoomChatTranscriptCache internal constructor(
                     width = part.width,
                     height = part.height,
                     sizeBytes = part.sizeBytes,
+                  )
+                part.type == "audio" || part.type == "video" ->
+                  CachedMessageContent(
+                    type = part.type,
+                    mimeType = part.mimeType,
+                    fileName = part.fileName,
+                    artifactId = part.artifactId,
+                    url = part.url,
+                    openUrl = part.openUrl,
+                    alt = part.alt,
+                    width = part.width,
+                    height = part.height,
+                    sizeBytes = part.sizeBytes,
+                    durationMs = part.durationMs,
+                    playback = part.playback,
                   )
                 else -> null
               }

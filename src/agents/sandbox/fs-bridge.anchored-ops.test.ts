@@ -150,6 +150,18 @@ describe("sandbox fs bridge anchored ops", () => {
 
   const pinnedCases = [
     {
+      name: "exclusive create pins canonical parent + basename",
+      invoke: (bridge: ReturnType<typeof createSandboxFsBridge>) => {
+        const createFileExclusive = bridge.createFileExclusive?.bind(bridge);
+        if (!createFileExclusive) {
+          throw new Error("expected exclusive-create capability");
+        }
+        return createFileExclusive({ filePath: "nested/new.txt", data: "created" });
+      },
+      expectedArgs: ["create", "/workspace", "nested", "new.txt", "1"],
+      forbiddenArgs: ["/workspace/nested/new.txt"],
+    },
+    {
       name: "write pins canonical parent + basename",
       invoke: (bridge: ReturnType<typeof createSandboxFsBridge>) =>
         bridge.writeFile({ filePath: "nested/file.txt", data: "updated" }),

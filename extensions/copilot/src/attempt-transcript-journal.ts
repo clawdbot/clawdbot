@@ -25,6 +25,40 @@ type ToolGroup = {
   results: Map<string, PendingWrite>;
 };
 
+type TurnTaintMetadata = { resultContentSource?: "network"; turnTainted?: true };
+
+function readTurnTaintMetadata(message: AgentMessage): TurnTaintMetadata | undefined {
+  const metadata = (message as unknown as Record<string, unknown>)["__openclaw"];
+  return metadata && typeof metadata === "object" && !Array.isArray(metadata)
+    ? (metadata as TurnTaintMetadata)
+    : undefined;
+}
+
+function isActiveTurnTainted(messages: readonly AgentMessage[]): boolean {
+  for (const message of messages.toReversed()) {
+    if (message.role === "user") {
+      return false;
+    }
+    const metadata = readTurnTaintMetadata(message);
+    if (metadata?.turnTainted === true || metadata?.resultContentSource === "network") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function withAssistantTurnTaint(
+  message: Extract<AgentMessage, { role: "assistant" }>,
+  tainted: boolean,
+) {
+  return tainted
+    ? ({
+        ...message,
+        __openclaw: { ...readTurnTaintMetadata(message), turnTainted: true },
+      } as typeof message)
+    : message;
+}
+
 export type AttemptTranscriptJournal = ReturnType<typeof createAttemptTranscriptJournal>;
 
 export function createAttemptTranscriptJournal(params: {
@@ -40,6 +74,7 @@ export function createAttemptTranscriptJournal(params: {
       message,
     });
   const messagesSnapshot = [...params.messages];
+  let turnTainted = isActiveTurnTainted(messagesSnapshot);
   const snapshotIdempotencyKeys = new Set(
     messagesSnapshot.flatMap((message) => {
       const key = readIdempotencyKey(message);
@@ -128,6 +163,7 @@ export function createAttemptTranscriptJournal(params: {
       replayInvalid = true;
     }
     const idempotencyKey = (message as { idempotencyKey?: string }).idempotencyKey;
+    const taintMetadata = readTurnTaintMetadata(message);
     const toolIdentity =
       message.role === "toolResult"
         ? { toolCallId: message.toolCallId, toolName: message.toolName }
@@ -135,6 +171,9 @@ export function createAttemptTranscriptJournal(params: {
     const prepared = projectDisplay({
       ...hooked,
       ...toolIdentity,
+      ...(taintMetadata
+        ? { __openclaw: { ...readTurnTaintMetadata(hooked), ...taintMetadata } }
+        : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
       ...((message as { display?: boolean }).display === false ? { display: false } : {}),
     }) as TranscriptMessage;
@@ -392,6 +431,7 @@ export function createAttemptTranscriptJournal(params: {
         return;
       }
       replayInvalid ||= input.replayIncomplete === true;
+      const message = withAssistantTurnTaint(input.message, turnTainted);
       const key = `copilot-sdk:${params.sdkSessionId}:${input.eventId}`;
       latestAssistantKey = key;
       assistantTranscriptOwned = false;
@@ -402,7 +442,7 @@ export function createAttemptTranscriptJournal(params: {
         }
         const write = {
           eventId: input.eventId,
-          message: { ...input.message, idempotencyKey: key } as TranscriptMessage,
+          message: { ...message, idempotencyKey: key } as TranscriptMessage,
         };
         if (input.toolCallIds.length > 0) {
           pendingTools = {
@@ -429,6 +469,7 @@ export function createAttemptTranscriptJournal(params: {
       if (!claim(input.eventId)) {
         return;
       }
+      turnTainted ||= readTurnTaintMetadata(input.message)?.resultContentSource === "network";
       schedule(async () => {
         const group = pendingTools;
         if (!group || !group.order.includes(input.message.toolCallId)) {

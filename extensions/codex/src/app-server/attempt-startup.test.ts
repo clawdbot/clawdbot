@@ -766,6 +766,7 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("continues with a deny-all apps patch when plugin discovery exceeds its shared deadline", async () => {
+    vi.useFakeTimers();
     const deadlinePluginConfig = {
       appServer: { command: "codex", requestTimeoutMs: 400 },
       codexPlugins: {
@@ -782,10 +783,8 @@ describe("startCodexAttemptThread", () => {
       pluginConfig: deadlinePluginConfig,
     });
     await answerInitialize(harness);
-    const pluginList = await waitForRequest(harness, "plugin/list");
-    expect(
-      readHarnessMessages(harness.writes).find((message) => message.id === pluginList.id),
-    ).toMatchObject({ method: "plugin/list", params: {} });
+    await waitForRequest(harness, "plugin/installed");
+    await vi.advanceTimersByTimeAsync(100);
 
     const threadStart = await waitForThreadStart(harness);
     const startMessage = readHarnessMessages(harness.writes).find(

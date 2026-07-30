@@ -55,6 +55,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
+  uiSessionEventMatches,
   uiSessionRowMatchesSelectedChat,
 } from "./session-key.ts";
 import { SwarmActivityTracker } from "./swarm-activity.ts";
@@ -1913,6 +1914,24 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
             { key: reconciled.deletedKey, agentId: reconciled.agentId ?? undefined },
           ],
         });
+      } else if ((eventReason === "create" || eventReason === "new") && eventInfo) {
+        const remainingDeletedSessions = state.deletedSessions.filter(
+          ({ key, agentId }) =>
+            !uiSessionEventMatches(
+              {
+                assistantAgentId: agentId ?? gateway.snapshot.assistantAgentId,
+                hello: gateway.snapshot.hello,
+                sessionKey: key,
+              },
+              eventInfo.key,
+              eventInfo.agentId,
+            ),
+        );
+        if (remainingDeletedSessions.length !== state.deletedSessions.length) {
+          // Gateway create events are ordered after the prior deletion. Retire
+          // only that generation's marker before the debounced list refresh.
+          publish({ ...state, deletedSessions: remainingDeletedSessions });
+        }
       }
       // Gateway lists are filtered and windowed. Events cannot preserve server
       // membership or ordering, so the coalesced refresh remains canonical. Only

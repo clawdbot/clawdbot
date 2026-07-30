@@ -109,6 +109,14 @@ export class CronService implements CronServiceContract {
     return await mutationOps.add(this.state, input, opts);
   }
 
+  async removeStaleJobFamily(family: {
+    declarationKey: string;
+    name: string;
+    ownerPluginTag: string;
+  }) {
+    return await mutationOps.removeStaleJobFamily(this.state, family);
+  }
+
   async update(id: string, patch: CronJobPatch, opts?: CronUpdateOptions) {
     return await mutationOps.update(this.state, id, patch, opts);
   }

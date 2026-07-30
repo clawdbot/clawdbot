@@ -88,6 +88,9 @@ describe("LabsPage", () => {
     });
 
     expect(page.querySelector(".settings-page__intro")?.textContent).toContain("experimental");
+    const introLink = page.querySelector<HTMLAnchorElement>(".settings-page__intro a");
+    expect(introLink?.textContent?.trim()).toBe("Learn more");
+    expect(introLink?.href).toBe("https://docs.openclaw.ai/concepts/experimental-features");
     expect(page.querySelectorAll(".settings-row")).toHaveLength(LAB_FEATURES.length);
     expect(page.textContent).toContain("Code Mode");
     expect(page.textContent).toContain("Swarm");
@@ -156,8 +159,15 @@ describe("LabsPage", () => {
       note: "labs: update toolSearch",
     },
     {
-      label: "Lean tools for local models",
+      label: "Tool-loop detection",
       index: 3,
+      sourceConfig: { tools: { loopDetection: { enabled: false } } },
+      expectedPatch: { tools: { loopDetection: { enabled: true } } },
+      note: "labs: update loopDetection",
+    },
+    {
+      label: "Lean tools for local models",
+      index: 4,
       sourceConfig: {},
       expectedPatch: { agents: { defaults: { experimental: { localModelLean: true } } } },
       note: "labs: update localModelLean",
@@ -166,7 +176,7 @@ describe("LabsPage", () => {
       // Not a boolean gate: the on state is the conservative `direct` mode, so
       // enabling here cannot start recording group or unknown conversations.
       label: "Message audit metadata",
-      index: 4,
+      index: 5,
       sourceConfig: { logging: { audit: { messages: "off" } } },
       expectedPatch: { logging: { audit: { messages: "direct" } } },
       note: "labs: update auditMessages",
@@ -318,6 +328,47 @@ describe("LabsPage tool search enablement", () => {
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
       raw: { tools: { toolSearch: { enabled: false } } },
       note: "labs: update toolSearch",
+    });
+  });
+});
+
+describe("LabsPage tool loop detection enablement", () => {
+  const loopDetectionIndex = LAB_FEATURES.findIndex((feature) => feature.id === "loopDetection");
+
+  // Mirrors resolveToolLoopDetectionConfig and the detector default: only an
+  // explicit true enables the rolling-history detectors.
+  it.each([
+    { label: "unset", config: {}, expected: false },
+    {
+      label: "explicit enabled",
+      config: { tools: { loopDetection: { enabled: true } } },
+      expected: true,
+    },
+    {
+      label: "explicit disabled",
+      config: { tools: { loopDetection: { enabled: false } } },
+      expected: false,
+    },
+  ])("reads $label as $expected", async ({ config, expected }) => {
+    const { page, provider } = await mountPage(config);
+
+    expect(labToggle(page, loopDetectionIndex, "Tool-loop detection").checked).toBe(expected);
+    provider.remove();
+  });
+
+  it("patches only enabled so sibling settings remain untouched", async () => {
+    const { page, runtimeConfig } = await mountPage({
+      tools: { loopDetection: { enabled: false, warningThreshold: 12 } },
+    });
+    const toggle = labToggle(page, loopDetectionIndex, "Tool-loop detection");
+
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+
+    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: { tools: { loopDetection: { enabled: true } } },
+      note: "labs: update loopDetection",
     });
   });
 });

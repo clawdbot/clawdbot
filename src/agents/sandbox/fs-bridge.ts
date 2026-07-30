@@ -12,6 +12,8 @@ import type {
 } from "./backend-handle.types.js";
 import { runDockerSandboxShellCommand } from "./docker-backend.js";
 import {
+  buildPinnedCreatePlan,
+  SANDBOX_CREATE_EXISTS_EXIT_CODE,
   buildPinnedCopyPlan,
   buildPinnedMkdirpPlan,
   buildPinnedRemovePlan,
@@ -147,6 +149,49 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       stdin: buffer,
       signal: params.signal,
     });
+  }
+
+  async createFileExclusive(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<"created" | "exists"> {
+    const target = this.resolveResolvedPath(params);
+    this.ensureWriteAccess(target, "create files");
+    const createCheck = {
+      target,
+      options: { action: "create files", requireWritable: true } as const,
+    };
+    await this.pathGuard.assertPathSafety(target, createCheck.options);
+    const buffer = Buffer.isBuffer(params.data)
+      ? params.data
+      : Buffer.from(params.data, params.encoding ?? "utf8");
+    const pinnedCreateTarget = await this.pathGuard.resolveAnchoredPinnedEntry(
+      target,
+      "create files",
+    );
+    const result = await this.runCheckedCommand({
+      ...buildPinnedCreatePlan({
+        check: createCheck,
+        pinned: pinnedCreateTarget,
+        mkdir: params.mkdir !== false,
+      }),
+      allowFailure: true,
+      stdin: buffer,
+      signal: params.signal,
+    });
+    if (result.code === SANDBOX_CREATE_EXISTS_EXIT_CODE) {
+      return "exists";
+    }
+    if (result.code !== 0) {
+      throw new Error(
+        `sandbox create failed for ${target.containerPath}: ${result.stderr.toString("utf8").trim()}`,
+      );
+    }
+    return "created";
   }
 
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {

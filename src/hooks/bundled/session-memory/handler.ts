@@ -13,6 +13,7 @@ import {
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
+import { resolveUserTimezone } from "../../../agents/date-time.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
 import {
@@ -25,6 +26,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../../../infra/env.js";
 import { root } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
 import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -34,6 +36,7 @@ import { shortenHomePath } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
+import { isSessionAutoResetReason } from "../../session-auto-reset.js";
 import { countSessionMemoryMessages, getRecentSessionContentFromEvents } from "./transcript.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
@@ -48,27 +51,16 @@ function pickDateTimePart(
   return parts.find((part) => part.type === type)?.value;
 }
 
-function resolveLocalTimeZone(): string | undefined {
-  const timeZone = process.env.TZ?.trim();
-  if (!timeZone) {
-    return undefined;
-  }
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone }).format(new Date());
-    return timeZone;
-  } catch {
-    return undefined;
-  }
-}
-
-function formatLocalSessionTimestamp(date: Date): {
+function formatLocalSessionTimestamp(
+  date: Date,
+  timeZone: string,
+): {
   date: string;
   time: string;
   timeSlug: string;
-  timeZoneName?: string;
 } {
   const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: resolveLocalTimeZone(),
+    timeZone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -76,7 +68,6 @@ function formatLocalSessionTimestamp(date: Date): {
     minute: "2-digit",
     second: "2-digit",
     hourCycle: "h23",
-    timeZoneName: "short",
   }).formatToParts(date);
 
   const year = pickDateTimePart(parts, "year") ?? String(date.getFullYear()).padStart(4, "0");
@@ -85,16 +76,10 @@ function formatLocalSessionTimestamp(date: Date): {
   const hour = pickDateTimePart(parts, "hour") ?? String(date.getHours()).padStart(2, "0");
   const minute = pickDateTimePart(parts, "minute") ?? String(date.getMinutes()).padStart(2, "0");
   const second = pickDateTimePart(parts, "second") ?? String(date.getSeconds()).padStart(2, "0");
-  const timeZoneName = [...parts]
-    .toReversed()
-    .find((part) => part.type === "timeZoneName")
-    ?.value?.trim();
-
   return {
     date: `${year}-${month}-${day}`,
     time: `${hour}:${minute}:${second}`,
     timeSlug: `${hour}${minute}`,
-    timeZoneName,
   };
 }
 
@@ -220,9 +205,6 @@ function resolveDisplaySessionKey(params: {
   });
 }
 
-/**
- * Save session context to memory when /new or /reset command is triggered
- */
 const pendingSessionMemoryWrites = new Set<Promise<void>>();
 
 export async function flushSessionMemoryWritesForTest(): Promise<void> {
@@ -234,7 +216,7 @@ async function saveSessionMemoryNow(
   capturedEvents?: TranscriptEvent[],
 ): Promise<void> {
   try {
-    log.debug("Hook triggered for reset/new command", { action: event.action });
+    log.debug("Session memory hook triggered", { action: event.action, type: event.type });
 
     const context = event.context || {};
     const cfg = context.cfg as OpenClawConfig | undefined;
@@ -263,17 +245,19 @@ async function saveSessionMemoryNow(
     const memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
 
-    // Use the user's local timezone for memory artifact names and headings.
+    // Session-memory artifacts share the same configured user-day boundary as daily memory files.
     const now = new Date(event.timestamp);
-    const localTimestamp = formatLocalSessionTimestamp(now);
+    const userTimezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone ?? process.env.TZ);
+    const localTimestamp = formatLocalSessionTimestamp(now, userTimezone);
     const dateStr = localTimestamp.date;
 
-    // Generate descriptive slug from session when explicitly enabled
-    // Prefer previousSessionEntry (old session before /new) over current (which may be empty)
-    const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<
-      string,
-      unknown
-    >;
+    // Manual commands carry the prior entry separately; automatic rollover
+    // events already identify the ended session as sessionEntry.
+    const sessionEntry = (
+      event.type === "command"
+        ? context.previousSessionEntry || context.sessionEntry || {}
+        : context.sessionEntry || {}
+    ) as Record<string, unknown>;
     const currentSessionId =
       typeof sessionEntry.sessionId === "string" && sessionEntry.sessionId.trim()
         ? sessionEntry.sessionId.trim()
@@ -338,19 +322,21 @@ async function saveSessionMemoryNow(
     });
 
     const timeStr = localTimestamp.time;
-    const timeZoneSuffix = localTimestamp.timeZoneName ? ` ${localTimestamp.timeZoneName}` : "";
 
     // Extract context details
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
-    const source = (context.commandSource as string) || "unknown";
+    const boundaryDetail =
+      event.type === "session"
+        ? `- **Reason**: ${(context.reason as string) || "unknown"}`
+        : `- **Source**: ${(context.commandSource as string) || "unknown"}`;
 
     // Build Markdown entry
     const entryParts = [
-      `# Session: ${dateStr} ${timeStr}${timeZoneSuffix}`,
+      `# Session: ${dateStr} ${timeStr} ${userTimezone}`,
       "",
       `- **Session Key**: ${displaySessionKey}`,
       `- **Session ID**: ${sessionId}`,
-      `- **Source**: ${source}`,
+      boundaryDetail,
       "",
     ];
 
@@ -383,20 +369,26 @@ async function saveSessionMemoryNow(
 }
 
 const saveSessionToMemory: HookHandler = (event) => {
-  // Only trigger on reset/new commands. This is silent housekeeping, so keep it
-  // off the command reply path.
+  // Manual commands retain their shipped hook contract, including /reset soft.
+  // Automatic rollover uses a distinct lifecycle event so command hooks do not
+  // receive synthetic commands and manual reset cannot double-write memory.
   const isResetCommand = event.action === "new" || event.action === "reset";
-  if (event.type !== "command" || !isResetCommand) {
-    return;
+  const isAutoReset =
+    event.type === "session" &&
+    event.action === "auto-reset" &&
+    isSessionAutoResetReason(event.context.reason);
+  if ((event.type !== "command" || !isResetCommand) && !isAutoReset) {
+    return undefined;
   }
 
   let capturedEvents: TranscriptEvent[] | undefined;
   try {
     const context = event.context || {};
-    const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<
-      string,
-      unknown
-    >;
+    const sessionEntry = (
+      event.type === "command"
+        ? context.previousSessionEntry || context.sessionEntry || {}
+        : context.sessionEntry || {}
+    ) as Record<string, unknown>;
     const sessionId =
       typeof sessionEntry.sessionId === "string" && sessionEntry.sessionId.trim()
         ? sessionEntry.sessionId.trim()
@@ -426,11 +418,21 @@ const saveSessionToMemory: HookHandler = (event) => {
     // one transaction. An in-flight rebuild throws here and schedules repair,
     // so the async writer falls back to the authoritative transcript rows.
   }
-  const writePromise = saveSessionMemoryNow(event, capturedEvents);
+  const writePromise = isAutoReset
+    ? saveSessionMemoryNow(event, capturedEvents)
+    : runWithGatewayIndependentRootWorkContinuation(() =>
+        saveSessionMemoryNow(event, capturedEvents),
+      );
   pendingSessionMemoryWrites.add(writePromise);
   void writePromise.finally(() => {
     pendingSessionMemoryWrites.delete(writePromise);
   });
+  // Automatic rollover dispatch is already detached from the successor turn.
+  // Keep its gateway admission alive until nested slug/model work finishes.
+  if (isAutoReset) {
+    return writePromise;
+  }
+  return undefined;
 };
 
 export default saveSessionToMemory;

@@ -18,6 +18,7 @@ import { runDoctorLintChecks } from "./doctor-lint-flow.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 const mocks = vi.hoisted(() => ({
+  isDefaultInstallIdentity: vi.fn(() => true),
   maybeRunConfiguredPluginInstallReleaseStep: vi.fn(),
   registerBundledHealthChecks: vi.fn(),
   runDoctorHealthRepairs: vi.fn(),
@@ -52,6 +53,7 @@ const mocks = vi.hoisted(() => ({
   getSkippedExecRefStaticError: vi.fn(() => undefined),
   maybeRepairGatewayServiceConfig: vi.fn().mockResolvedValue(undefined),
   maybeScanExtraGatewayServices: vi.fn().mockResolvedValue(undefined),
+  maybeResolveDuelingSystemdGatewayScopes: vi.fn().mockResolvedValue(undefined),
   noteMacLaunchAgentOverrides: vi.fn(),
   noteMacLaunchctlGatewayEnvOverrides: vi.fn(),
   noteMacStaleOpenClawUpdateLaunchdJobs: vi.fn(),
@@ -162,6 +164,11 @@ const mocks = vi.hoisted(() => ({
   getSkillCuratorDoctorWarning: vi.fn(),
 }));
 
+vi.mock("../config/paths.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
+  return { ...actual, isDefaultInstallIdentity: mocks.isDefaultInstallIdentity };
+});
+
 const DOCTOR_GATEWAY_HEALTH_ID = "doctor:gateway-health";
 
 vi.mock("../commands/doctor/shared/release-configured-plugin-installs.js", () => ({
@@ -208,6 +215,7 @@ vi.mock("../secrets/exec-resolution-policy.js", () => ({
 vi.mock("../commands/doctor-gateway-services.js", () => ({
   maybeRepairGatewayServiceConfig: mocks.maybeRepairGatewayServiceConfig,
   maybeScanExtraGatewayServices: mocks.maybeScanExtraGatewayServices,
+  maybeResolveDuelingSystemdGatewayScopes: mocks.maybeResolveDuelingSystemdGatewayScopes,
 }));
 
 vi.mock("../commands/doctor-auth-flat-profiles.js", () => ({
@@ -498,6 +506,7 @@ vi.mock("../cli/command-format.js", () => ({
 vi.mock("../commands/doctor-gateway-services.js", () => ({
   maybeRepairGatewayServiceConfig: mocks.maybeRepairGatewayServiceConfig,
   maybeScanExtraGatewayServices: mocks.maybeScanExtraGatewayServices,
+  maybeResolveDuelingSystemdGatewayScopes: mocks.maybeResolveDuelingSystemdGatewayScopes,
 }));
 
 vi.mock("../commands/doctor-platform-notes.js", () => ({

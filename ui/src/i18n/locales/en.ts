@@ -380,6 +380,8 @@ export const en: TranslationMap = {
       "Update installed but running version did not change — restart may have been blocked. Expected v{expectedVersion}, running v{actualVersion}.",
     handoffTimeout:
       "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
+    outcomeUnknown:
+      "The update request may have been accepted, but the Gateway did not report a final result after reconnect. Run `openclaw update status` before retrying.",
     failureReasons: {
       dirty: "Commit or stash changes, then retry.",
       noUpstream: "Set an upstream branch, then retry.",
@@ -2012,26 +2014,37 @@ export const en: TranslationMap = {
     },
     prepare: {
       title: "Set up a local model",
-      intro: "Download or prepare a local model on this Gateway.",
+      intro:
+        "OpenClaw checks the local service, confirms tool support, and helps prepare a compatible model.",
       button: "Set up / Download model",
+      ollamaButton: "Check & set up",
       ollamaLabel: "Ollama",
-      ollamaHint: "Download a tools-capable model from your Ollama server",
+      ollamaHint: "Connect to the Ollama service on this Gateway and prepare a tools-capable model",
       llamaCppLabel: "Local model (llama.cpp)",
       llamaCppHint: "Download an approximately 5.0 GB local model; requires 16 GB RAM",
     },
     manual: {
       title: "Connect with an API key or token",
-      provider: "Provider",
+      provider: "Provider and access method",
       selectProvider: "Select a provider",
+      selectProviderHint: "Choose where this credential comes from",
       accessValue: "API key or token",
+      accessValueFor: "{provider} API key or token",
       accessValuePlaceholder: "Paste an API key or token",
       connect: "Connect",
+      connectAndVerify: "Connect & verify",
+      verifyHint: "OpenClaw verifies a real model reply before marking the connection ready.",
       required: "Choose a provider and enter an API key or token.",
     },
     success: {
-      title: "Your AI is ready",
+      title: "Connection verified",
+      body: "OpenClaw received a real reply from {modelRef}. You can start chatting now.",
+      activeModel: "Active model",
+      latency: "Verified in {latencyMs} ms",
       detail: "{modelRef} · {latencyMs} ms",
-      openChat: "Open Chat",
+      openChat: "Start chatting",
+      continueSetup: "Continue setup",
+      stayHere: "Stay in settings",
       configuredModel: "Configured model",
     },
     failure: {
@@ -2135,7 +2148,7 @@ export const en: TranslationMap = {
       rollbackConfirmDescription:
         "Remove diary entries and staged memories created by session backfill for this agent.",
       rollbackWarning:
-        "Tracked session cursors stay in place, so removed entries will not be staged again.",
+        "Session backfill cursors are rewound, so the same candidates can be staged again.",
       rollbackComplete: "Session backfill rolled back",
       rollbackCounts: "{diary} diary entries and {staged} staged entries removed",
       unavailable: "Session backfill is unavailable on this Gateway.",
@@ -2217,6 +2230,11 @@ export const en: TranslationMap = {
       channelDegraded: "{channel} is degraded — ask me what happened",
       channelFallback: "A channel",
       dismiss: "Dismiss this update",
+      channelSetupTitle: "Reach OpenClaw outside this app",
+      channelSetupBody:
+        "The web app already works. Add a channel only if you want to message OpenClaw from another service.",
+      channelSetupAction: "Set up a channel",
+      channelSetupDismiss: "Keep using the web app",
     },
   },
   mcpServers: {
@@ -2230,6 +2248,10 @@ export const en: TranslationMap = {
     targetLabel: "URL or command",
     nameInvalid: "Server names use letters, numbers, dots, dashes, or underscores.",
     targetInvalid: "Enter a URL for HTTP transports or a valid command line for stdio.",
+    sessionEnableFailed:
+      "The server was saved disabled globally, but enabling it for this session failed: {error}",
+    sessionChanged: "The active session changed before it could be enabled.",
+    sessionUnavailable: "The active session is unavailable; refresh and try again.",
     nameTaken: "An MCP server named “{name}” already exists.",
     missing: "MCP server “{name}” was not found in the configuration.",
     missingTransport: "missing transport",
@@ -2396,7 +2418,9 @@ export const en: TranslationMap = {
       description:
         "Exactly one memory plugin owns the memory slot. Selecting an engine enables it and disables the others.",
       rowTitle: "Memory engine",
+      openClawMemory: "OpenClaw Memory",
       off: "Off",
+      unavailable: "Unavailable",
       autoHint: "No engine is pinned in config, so the slot falls back to its default owner.",
       explicitHint: "This engine is pinned in config under plugins.slots.memory.",
       offHint: "Memory is switched off in config: plugins.slots.memory is set to none.",
@@ -2690,6 +2714,11 @@ export const en: TranslationMap = {
       title: "Tool Search",
       description:
         "Keep a bounded tool directory visible and defer the rest behind search, so large MCP and plugin catalogs stop crowding the prompt.",
+    },
+    loopDetection: {
+      title: "Tool-loop detection",
+      description:
+        "Enable rolling-history guards that warn or block repeated tool calls when an agent stops making progress.",
     },
     localModelLean: {
       title: "Lean tools for local models",
@@ -3714,12 +3743,12 @@ export const en: TranslationMap = {
       loadingPage: "Loading wiki page…",
       dreamsTab: "Dreams",
       insightsTab: "Imported Insights",
-      palaceTab: "Memory Palace",
+      wikiTab: "Memory Wiki",
       dreamsExplainer:
         "This is the raw dream diary the system writes while replaying and consolidating memory; use it to inspect what the memory system is noticing, and where it still looks noisy or thin.",
       insightsExplainer:
         "These are imported insights clustered from external history; use them to review what imports surfaced before any of it graduates into durable memory.",
-      palaceExplainer:
+      wikiExplainer:
         "This is the compiled memory wiki surface the system can search and reason over; use it to inspect actual memory pages, claims, open questions, and contradictions rather than raw imported source chats.",
       copyArchivePath: "Copy archive path",
       loadingInsights: "Loading imported insights…",
@@ -3735,9 +3764,9 @@ export const en: TranslationMap = {
       riskReasons: "Risk reasons:",
       labels: "Labels:",
       openSourcePage: "Open source page",
-      loadingPalace: "Loading memory palace…",
-      emptyPalace: "Memory palace is not populated yet",
-      emptyPalaceHint:
+      loadingWiki: "Loading memory wiki…",
+      emptyWiki: "Memory wiki is not populated yet",
+      emptyWikiHint:
         "Right now the wiki mostly has raw source imports and operational reports. This tab becomes useful once syntheses, entities, or concepts start getting written.",
       claims: "Claims",
       openQuestions: "Open questions",
@@ -3747,7 +3776,7 @@ export const en: TranslationMap = {
       id: "Id:",
       openWikiPage: "Open wiki page",
       unavailable: "Memory Wiki is not enabled",
-      unavailablePluginPrefix: "Imported Insights and Memory Palace are provided by the bundled",
+      unavailablePluginPrefix: "Imported Insights and Memory Wiki are provided by the bundled",
       unavailablePluginSuffix: "plugin.",
       enablePrefix: "Enable",
       enableSuffix: ", then reload this tab.",
@@ -3813,7 +3842,7 @@ export const en: TranslationMap = {
       tidyingKnowledgeGraph: "tidying the knowledge graph…",
       replayingConversations: "replaying today's conversations…",
       weavingShortTerm: "weaving short-term into long-term…",
-      defragmentingMindPalace: "defragmenting the mind palace…",
+      defragmentingMemoryLane: "defragmenting memory lane…",
       filingLooseThoughts: "filing away loose thoughts…",
       connectingDots: "connecting distant dots…",
       compostingContext: "composting old context windows…",
@@ -3837,7 +3866,8 @@ export const en: TranslationMap = {
     emptyTitle: "No model providers configured",
     emptySubtitle: "Sign in to a provider or add an API key, then refresh.",
     status: {
-      ok: "Connected",
+      ok: "Signed in",
+      ready: "Ready",
       expiring: "Expiring",
       expired: "Expired",
       missing: "Not signed in",
@@ -3888,8 +3918,18 @@ export const en: TranslationMap = {
         timeout: "Timed out",
         format: "Invalid response",
         unknown: "Connection failed",
-        no_model: "No model available",
+        no_model: "No models available",
       },
+    },
+    readiness: {
+      title: "AI setup",
+      heading: "Connect your AI",
+      signedInNoModels:
+        "You're signed in, but this account exposes no usable models. Choose another provider or account to continue.",
+      notConfigured: "Choose a provider and verify the model OpenClaw will use.",
+      noModels: "No models available",
+      modelRequired: "Model required",
+      chooseProvider: "Choose another provider",
     },
     logout: {
       action: "Log out",
@@ -4833,6 +4873,7 @@ export const en: TranslationMap = {
       pause: "Pause",
       seek: "Seek media",
       download: "Download {filename}",
+      preparing: "Preparing playback…",
       videoUnavailable: "Can't play this format — download instead.",
     },
     modelControls: {
@@ -5003,7 +5044,22 @@ export const en: TranslationMap = {
         manageSkills: "Manage skills",
         browseConnectors: "Browse connectors",
         addMcpServer: "Add MCP server…",
-        toolAccess: "Tool access",
+        addMcpServerTitle: "Add MCP server",
+        addMcpServerDescription: "Configure the server and choose where it is enabled.",
+        scopeLabel: "Availability",
+        scopeSession: "This session",
+        scopeEverywhere: "Everywhere",
+        scopeSessionHint:
+          "The server is saved globally disabled and enabled only for this session.",
+        scopeEverywhereHint: "The server is saved and enabled for every session.",
+        toolAccess: {
+          label: "Tool access",
+          loading: "Loading tools…",
+          loadFailed: "Couldn’t load tools.",
+          noTools: "No tools available for this connector.",
+          summary: "{enabled} of {total} tools on",
+          summaryOne: "{enabled} of {total} tool on",
+        },
         enabledCount: "{count} on",
         loadingSkills: "Loading skills…",
         skillsLoadFailed: "Couldn’t load skills.",
@@ -5488,7 +5544,8 @@ export const en: TranslationMap = {
       summaryCronTz: "Cron schedule {expr} ({tz})",
       timezoneOptional: "Timezone",
       timezonePlaceholder: "America/Los_Angeles",
-      timezoneHelp: "Optional. Any valid IANA timezone.",
+      timezoneHelp:
+        "Optional. Leave blank to use the Gateway host timezone, or enter any valid IANA timezone.",
       runsIn: "Runs in",
       mainSession: "Main session",
       isolatedSession: "Isolated session",

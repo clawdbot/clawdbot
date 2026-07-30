@@ -1,3 +1,4 @@
+import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot, GatewaySessionRow } from "../../api/types.ts";
@@ -7,12 +8,20 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 
 function createContext(configSnapshot: ConfigSnapshot | null): ApplicationContext {
   return {
-    gateway: { snapshot: { hello: null } },
+    gateway: {
+      snapshot: {
+        phase: "connected",
+        hello: {
+          auth: { role: "operator", scopes: ["operator.admin", "operator.write"] },
+        },
+      },
+    },
     navigate: vi.fn(),
     runtimeConfig: {
       ensureLoaded: vi.fn(async () => undefined),
       state: { configLoading: false, configSnapshot },
     },
+    sessions: { state: { modelOverrides: {} } },
   } as unknown as ApplicationContext;
 }
 
@@ -26,6 +35,186 @@ function createState(): ChatPageHost {
 }
 
 describe("ChatComposerCapabilityHost", () => {
+  it("adds an everywhere server globally without a session patch", async () => {
+    const events: string[] = [];
+    const patchSession = vi.fn(async () => {
+      events.push("session");
+      return { ok: true } as const;
+    });
+    const loadSessionOverrides = vi.fn(async () => {
+      events.push("load");
+      return { ok: true, overrides: undefined } as const;
+    });
+
+    const result = await ChatComposerCapabilityHost.addMcpServer({
+      scope: "everywhere",
+      name: "docs",
+      config: { url: "https://mcp.example.test", transport: "streamable-http" },
+      patchGlobal: async (config) => {
+        events.push("global");
+        expect(config).toEqual({
+          url: "https://mcp.example.test",
+          transport: "streamable-http",
+        });
+        return { ok: true };
+      },
+      loadSessionOverrides,
+      patchSession,
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(events).toEqual(["global"]);
+    expect(loadSessionOverrides).not.toHaveBeenCalled();
+    expect(patchSession).not.toHaveBeenCalled();
+  });
+
+  it("adds a session server disabled globally before enabling its sparse override", async () => {
+    const events: string[] = [];
+
+    const result = await ChatComposerCapabilityHost.addMcpServer({
+      scope: "session",
+      name: "docs",
+      config: { command: "docs-mcp" },
+      patchGlobal: async (config) => {
+        events.push("global");
+        expect(config).toEqual({ command: "docs-mcp", enabled: false });
+        return { ok: true };
+      },
+      loadSessionOverrides: async () => {
+        events.push("load");
+        return { ok: true, overrides: { skills: { release: false } } };
+      },
+      patchSession: async (next) => {
+        events.push("session");
+        expect(next).toEqual({
+          mcpServers: { docs: true },
+          skills: { release: false },
+        });
+        return { ok: true };
+      },
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(events).toEqual(["global", "load", "session"]);
+  });
+
+  it("does not patch the session when the global add fails", async () => {
+    const patchSession = vi.fn(async () => ({ ok: true }) as const);
+    const loadSessionOverrides = vi.fn(async () => ({ ok: true, overrides: undefined }) as const);
+
+    const result = await ChatComposerCapabilityHost.addMcpServer({
+      scope: "session",
+      name: "docs",
+      config: { command: "docs-mcp" },
+      patchGlobal: async () => ({ ok: false, error: "duplicate" }),
+      loadSessionOverrides,
+      patchSession,
+    });
+
+    expect(result).toEqual({ ok: false, error: "duplicate", stage: "config" });
+    expect(patchSession).not.toHaveBeenCalled();
+    expect(loadSessionOverrides).not.toHaveBeenCalled();
+  });
+
+  it("classifies a thrown global write as a config-stage failure", async () => {
+    const result = await ChatComposerCapabilityHost.addMcpServer({
+      scope: "everywhere",
+      name: "docs",
+      config: { command: "docs-mcp" },
+      patchGlobal: async () => {
+        throw new Error("config failed");
+      },
+      loadSessionOverrides: async () => ({ ok: true, overrides: undefined }),
+      patchSession: async () => ({ ok: true }),
+    });
+
+    expect(result).toEqual({ ok: false, error: "config failed", stage: "config" });
+  });
+
+  it("reports a session-stage failure after retaining the global add", async () => {
+    const events: string[] = [];
+
+    const result = await ChatComposerCapabilityHost.addMcpServer({
+      scope: "session",
+      name: "docs",
+      config: { command: "docs-mcp" },
+      patchGlobal: async () => {
+        events.push("global");
+        return { ok: true };
+      },
+      loadSessionOverrides: async () => {
+        events.push("load");
+        return { ok: true, overrides: undefined };
+      },
+      patchSession: async () => {
+        events.push("session");
+        return { ok: false, error: "gateway disconnected" };
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "gateway disconnected",
+      stage: "session",
+    });
+    expect(events).toEqual(["global", "load", "session"]);
+  });
+
+  it("aborts the session stage when navigation changes the submitted identity", async () => {
+    const host = new ChatComposerCapabilityHost(vi.fn());
+    const refresh = vi.fn(async () => undefined);
+    const state = {
+      ...createState(),
+      sessionKey: "other",
+      sessions: {
+        refresh,
+        state: { agentId: "main", error: null, result: null },
+      },
+    } as unknown as ChatPageHost;
+    const loadCurrentSessionOverrides = (
+      host as unknown as {
+        loadCurrentSessionOverrides: (
+          state: ChatPageHost,
+          sessionKey: string,
+          agentId: string | undefined,
+        ) => Promise<{ ok: boolean; error?: string }>;
+      }
+    ).loadCurrentSessionOverrides;
+
+    expect(await loadCurrentSessionOverrides.call(host, state, "main", "main")).toEqual({
+      ok: false,
+      error: "The active session changed before it could be enabled.",
+    });
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("returns a session-stage error when refreshing current overrides rejects", async () => {
+    const host = new ChatComposerCapabilityHost(vi.fn());
+    const state = {
+      ...createState(),
+      sessions: {
+        refresh: vi.fn(async () => {
+          throw new Error("refresh failed");
+        }),
+        state: { agentId: "main", error: null, result: null },
+      },
+    } as unknown as ChatPageHost;
+    const loadCurrentSessionOverrides = (
+      host as unknown as {
+        loadCurrentSessionOverrides: (
+          state: ChatPageHost,
+          sessionKey: string,
+          agentId: string | undefined,
+        ) => Promise<{ ok: boolean; error?: string }>;
+      }
+    ).loadCurrentSessionOverrides;
+
+    expect(await loadCurrentSessionOverrides.call(host, state, "main", "main")).toEqual({
+      ok: false,
+      error: "refresh failed",
+    });
+  });
+
   it("blocks session mutations until the row and runtime config have loaded", () => {
     const host = new ChatComposerCapabilityHost(vi.fn());
     const context = createContext(null);
@@ -41,6 +230,44 @@ describe("ChatComposerCapabilityHost", () => {
     const props = host.props(context, state, session, "main");
     expect(props.mutationBlockedReason).toBeNull();
     expect(props.webSearchBaseEnabled).toBe(false);
+  });
+
+  it("keeps Everywhere selectable while a missing session row blocks session submit", async () => {
+    const host = new ChatComposerCapabilityHost(vi.fn());
+    const context = createContext({ runtimeConfig: {} });
+    const state = createState();
+    host.props(context, state, undefined, "main").onAddServer?.();
+    const container = document.createElement("div");
+    render(host.renderAddServerDialog(context, state, undefined), container);
+    await Promise.resolve();
+
+    const scope = container.querySelector<HTMLElement & { disabled: boolean }>("wa-radio-group");
+    const submit = container.querySelector<HTMLButtonElement>('button[type="submit"]');
+    expect(scope?.disabled).toBe(false);
+    expect(submit?.disabled).toBe(true);
+  });
+
+  it("blocks session submit before global config while an override patch is in flight", async () => {
+    const host = new ChatComposerCapabilityHost(vi.fn());
+    const context = createContext({ runtimeConfig: {} });
+    const state = createState();
+    const session = { key: "main" } as GatewaySessionRow;
+    const props = host.props(context, state, session, "main");
+    (
+      host as unknown as {
+        patchTokens: Map<string, symbol>;
+      }
+    ).patchTokens.set("main", Symbol("pending"));
+    props.onAddServer?.();
+    const container = document.createElement("div");
+    render(host.renderAddServerDialog(context, state, session), container);
+    await Promise.resolve();
+
+    const scope = container.querySelector<HTMLElement & { disabled: boolean }>("wa-radio-group");
+    const submit = container.querySelector<HTMLButtonElement>('button[type="submit"]');
+    expect(scope?.disabled).toBe(false);
+    expect(submit?.disabled).toBe(true);
+    expect(submit?.title).toContain("current session capability change");
   });
 
   it("derives capability defaults from the active runtime snapshot", () => {
@@ -65,5 +292,85 @@ describe("ChatComposerCapabilityHost", () => {
       { name: "runtime", enabled: false },
     ]);
     expect(props.webSearchBaseEnabled).toBe(true);
+  });
+
+  it("refetches effective tools when an active connector definition changes", async () => {
+    const host = new ChatComposerCapabilityHost(vi.fn());
+    const context = createContext({
+      appliedConfigHash: "config-1",
+      runtimeConfig: {
+        mcp: { servers: { github: { url: "https://mcp.example.test", enabled: true } } },
+      },
+    });
+    context.gateway.snapshot.hello = {
+      features: { methods: ["tools.effective"] },
+    } as NonNullable<typeof context.gateway.snapshot.hello>;
+    const firstResult = { agentId: "main", groups: [], profile: "full" };
+    const secondResult = { agentId: "main", groups: [], profile: "minimal" };
+    const request = vi.fn().mockResolvedValueOnce(firstResult).mockResolvedValueOnce(secondResult);
+    const state = createState();
+    state.client = { request } as unknown as GatewayBrowserClient;
+    const session = { key: "main" } as GatewaySessionRow;
+
+    host.props(context, state, session, "main").onOpenToolAccess?.("github");
+    await vi.waitFor(() => {
+      expect(host.props(context, state, session, "main").toolsEffectiveResult).toBe(firstResult);
+    });
+
+    context.runtimeConfig.state.configSnapshot = {
+      appliedConfigHash: "config-2",
+      runtimeConfig: {
+        mcp: {
+          servers: {
+            github: { url: "https://new-mcp.example.test", enabled: true },
+          },
+        },
+      },
+    };
+    host.props(context, state, session, "main").onEnsureToolAccess?.("github");
+
+    await vi.waitFor(() => {
+      expect(host.props(context, state, session, "main").toolsEffectiveResult).toBe(secondResult);
+    });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("records an unexpected effective-tools loader rejection", async () => {
+    const notify = vi.fn();
+    const host = new ChatComposerCapabilityHost(notify);
+    const context = createContext({ runtimeConfig: {} });
+    context.gateway.snapshot.hello = {
+      features: { methods: ["tools.effective"] },
+    } as NonNullable<typeof context.gateway.snapshot.hello>;
+    let stateReads = 0;
+    Object.defineProperty(context.sessions, "state", {
+      configurable: true,
+      get: () => {
+        stateReads += 1;
+        if (stateReads === 3) {
+          throw new Error("unexpected loader failure");
+        }
+        return { modelOverrides: {} };
+      },
+    });
+    const state = createState();
+    const request = vi.fn().mockResolvedValue({ agentId: "main", groups: [], profile: "full" });
+    state.client = { request } as unknown as GatewayBrowserClient;
+    const session = { key: "main" } as GatewaySessionRow;
+
+    host.props(context, state, session, "main").onOpenToolAccess?.("github");
+    await vi.waitFor(() => {
+      expect(host.props(context, state, session, "main").toolsEffectiveError).toBe(true);
+    });
+
+    expect(host.props(context, state, session, "main").toolAccessMutationBlockedReason).toBe(
+      "Couldn’t load tools.",
+    );
+
+    host.props(context, state, session, "main").onOpenToolAccess?.("github");
+    await vi.waitFor(() => {
+      expect(host.props(context, state, session, "main").toolsEffectiveResult).not.toBeNull();
+    });
+    expect(request).toHaveBeenCalledTimes(1);
   });
 });

@@ -320,7 +320,8 @@ function buildTwilioVerificationUrl(
   try {
     const base = new URL(publicUrl);
     const requestUrl = new URL(ctx.url);
-    base.pathname = requestUrl.pathname;
+    // Proxies may rewrite the local request path. Preserve the provider-facing
+    // publicUrl path and apply only per-request query parameters.
     base.search = requestUrl.search;
     return base.toString();
   } catch {
@@ -490,8 +491,8 @@ export function verifyTelnyxWebhook(
     return { ok: false, reason: "Missing signature or timestamp header" };
   }
 
-  const eventTimeSec = Number.parseInt(timestamp, 10);
-  if (!Number.isFinite(eventTimeSec)) {
+  const eventTimeSec = /^(?:0|[1-9]\d*)$/.test(timestamp) ? Number(timestamp) : undefined;
+  if (eventTimeSec === undefined || !Number.isSafeInteger(eventTimeSec)) {
     return { ok: false, reason: "Invalid timestamp header" };
   }
 

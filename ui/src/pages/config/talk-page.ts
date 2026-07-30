@@ -31,6 +31,7 @@ type CatalogConnection = {
 
 type TalkPageProps = {
   configObject: Record<string, unknown>;
+  mutationDisabled: boolean;
   /** Builds the embedded schema editor over the full `talk` section. */
   buildEditor: () => TemplateResult;
 };
@@ -58,6 +59,7 @@ class TalkSettingsPage extends OpenClawLightDomElement {
   private context!: ApplicationContext;
 
   @property({ attribute: false }) configObject: Record<string, unknown> = {};
+  @property({ type: Boolean }) mutationDisabled = false;
   @property({ attribute: false }) buildEditor: TalkPageProps["buildEditor"] = () => html``;
 
   @state() private catalog: TalkCatalogState = { kind: "unavailable" };
@@ -188,6 +190,9 @@ class TalkSettingsPage extends OpenClawLightDomElement {
    * the top-level key would make Default a no-op over provider-level config.
    */
   private changeModel(model: string | null) {
+    if (this.mutationDisabled) {
+      return;
+    }
     const runtimeConfig = this.context.runtimeConfig;
     if (model !== null) {
       runtimeConfig.patchForm(["talk", "realtime", "model"], model);
@@ -207,6 +212,9 @@ class TalkSettingsPage extends OpenClawLightDomElement {
   }
 
   private changeVoice(voice: string | null) {
+    if (this.mutationDisabled) {
+      return;
+    }
     const runtimeConfig = this.context.runtimeConfig;
     if (voice !== null) {
       runtimeConfig.patchForm(["talk", "realtime", "speakerVoice"], voice);
@@ -246,6 +254,9 @@ class TalkSettingsPage extends OpenClawLightDomElement {
    * supplies that provider's fallback values.
    */
   private changeProvider(providerId: string | null) {
+    if (this.mutationDisabled) {
+      return;
+    }
     const runtimeConfig = this.context.runtimeConfig;
     for (const key of ["model", "speakerVoice", "speakerVoiceId"]) {
       runtimeConfig.removeFormValue(["talk", "realtime", key]);
@@ -281,7 +292,10 @@ class TalkSettingsPage extends OpenClawLightDomElement {
       selection: resolveTalkRealtimeSelection(this.configObject),
       catalog: this.catalog,
       configBusy:
-        runtimeState.configLoading || runtimeState.configSaving || runtimeState.configApplying,
+        this.mutationDisabled ||
+        runtimeState.configLoading ||
+        runtimeState.configSaving ||
+        runtimeState.configApplying,
       onProviderChange: (providerId) => this.changeProvider(providerId),
       onModelChange: (model) => this.changeModel(model),
       onVoiceChange: (voice) => this.changeVoice(voice),
@@ -298,6 +312,7 @@ export function renderTalkPage(props: TalkPageProps) {
   return html`
     <openclaw-talk-settings
       .configObject=${props.configObject}
+      .mutationDisabled=${props.mutationDisabled}
       .buildEditor=${props.buildEditor}
     ></openclaw-talk-settings>
   `;

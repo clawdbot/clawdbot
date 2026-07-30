@@ -389,20 +389,20 @@ describe("OpenClaw shell source initialization", () => {
     shell.routeState = { routeId: "usage" };
     const client = {} as GatewayBrowserClient;
     const snapshot = { client, phase: "connected" } as ApplicationGatewaySnapshot;
-    const firstAgents = {
-      state: { agentsList: null },
-      ensureList: vi.fn(() => Promise.resolve(null)),
-    } as unknown as ApplicationContext["agents"];
-    const secondAgents = {
-      state: { agentsList: null },
-      ensureList: vi.fn(() => Promise.resolve(null)),
-    } as unknown as ApplicationContext["agents"];
-    const firstRuntimeConfig = {
-      ensureLoaded: vi.fn(() => Promise.resolve()),
-    } as unknown as ApplicationContext["runtimeConfig"];
-    const secondRuntimeConfig = {
-      ensureLoaded: vi.fn(() => Promise.resolve()),
-    } as unknown as ApplicationContext["runtimeConfig"];
+    const createAgents = () =>
+      ({
+        state: { agentsList: null },
+        ensureList: vi.fn(() => Promise.resolve(null)),
+      }) as unknown as ApplicationContext["agents"];
+    const createRuntimeConfig = () =>
+      ({
+        state: { client, connected: true },
+        ensureLoaded: vi.fn(() => Promise.resolve()),
+      }) as unknown as ApplicationContext["runtimeConfig"];
+    const firstAgents = createAgents();
+    const secondAgents = createAgents();
+    const firstRuntimeConfig = createRuntimeConfig();
+    const secondRuntimeConfig = createRuntimeConfig();
 
     shell.ensureAgentsList(snapshot, firstAgents);
     shell.ensureAgentsList(snapshot, firstAgents);
@@ -485,8 +485,8 @@ describe("OpenClaw shell route session commits", () => {
         agents: {
           state: { agentsList: { defaultId: "research", mainKey: "workspace" } },
         },
-        agentSelection: { state: { selectedId: null } },
-        gateway: { snapshot },
+        agentSelection: { set: vi.fn(), state: { selectedId: null } },
+        gateway: { setSessionKey: vi.fn(), snapshot },
         sessions: { state: { result: null } },
         replace,
       } as unknown as ApplicationContext,
@@ -844,7 +844,6 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellLazySurfaceState;
     shell.commandPaletteElement = element;
     Object.defineProperty(shell, "updateComplete", {
-      configurable: true,
       get: () => Promise.resolve(true),
     });
     Object.defineProperty(shell, "commandPalette", {
@@ -855,7 +854,8 @@ describe("OpenClaw shell keyboard shortcuts", () => {
           : undefined,
     });
     const event = new KeyboardEvent("keydown", {
-      key: "k",
+      key: "л",
+      code: "KeyK",
       ctrlKey: true,
       cancelable: true,
     });

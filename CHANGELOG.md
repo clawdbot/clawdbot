@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Control UI first-run setup:** continue verified model setup into Custodian, explain that the web app is ready without a channel, and offer an optional dismissible path to Channels.
 - **Fish Audio speech:** add hosted S2.1 synthesis with streaming, voice notes, voice discovery, and telephony, plus local Fish S2 Pro reference-voice streaming in native macOS Talk. Thanks @Conan-Scott for the earlier community-plugin implementation.
 - **Control UI cloud workspace conflicts:** surface staged-ref guidance, bounded conflicted paths, structured transcript events, and sidebar attention for cloud worker results that kept local versions.
 - **Control UI update recovery:** the "A new version is available" Reload button now waits out the gateway restart that stranded the chunk and reloads as soon as it answers, instead of silently doing nothing and leaving a manual hard reload as the only way out.
@@ -17,12 +18,15 @@ Docs: https://docs.openclaw.ai
 - **Channel plugin ingress monitors:** add a shared plugin SDK monitor for durable admission, polling, pruning, claim identity validation, adoption handoff, and shutdown, and migrate IRC, Synology Chat, and Google Chat to the shared lifecycle.
 - **Dashboard MCP apps:** pin originating-session MCP app views as living dashboard widgets, renew their sandboxed view leases, and keep tool interactivity behind revision-bound grants with graceful stale-state recovery.
 - **External gateway supervision:** add `OPENCLAW_SUPERVISOR_MODE=external` for lifecycle owners such as OCM, preserving verified restart and deferral behavior without exposing native service authority, blocking native service mutation and self-update, and providing a versioned atomic restart-handoff consume contract. Thanks @shakkernerd.
+- **Buzz message fidelity:** preserve Markdown output and accept Buzz normal, rich-content, and structured-diff room messages through the existing authorized inbound path. Thanks @shakkernerd.
+- **Buzz typing indicators:** show room- and thread-scoped typing during agent replies and heartbeat deliveries, refresh through the active authenticated connection without waiting for relay acknowledgement, and drop ephemeral updates safely during disconnects or shutdown. Thanks @shakkernerd.
 - **ClickClack guided setup:** configure ClickClack from `openclaw onboard` or `openclaw channels add clickclack` with URL, token, and workspace prompts, default-account env fallback, nonfatal live connection validation, and gateway-aware next steps that connect automatically when OpenClaw is already running. Thanks @shakkernerd.
 - **ClickClack command menus:** publish each bot's native OpenClaw commands to ClickClack composer autocomplete at gateway startup, with per-account opt-out and nonfatal compatibility handling for older tokens and servers. Thanks @shakkernerd.
 - **Skill Workshop approvals:** run agent-initiated apply, reject, and quarantine actions without an additional approval prompt by default while preserving `skills.workshop.approvalPolicy: "pending"` as an opt-in approval gate. Thanks @shakkernerd.
 - **TUI fuzzy selectors:** delegate list matching to pi-tui, adding slash-token and alpha-number matching while removing the local matcher fork.
 - **macOS paired-node terminals:** advertise duplex Codex and Claude terminal resume commands from the embedded node host and forward interactive input and cancellation through the native app bridge. (#107335)
 - **Control UI catalog terminals:** open eligible Codex and Claude Code sessions in the native CLI on their Gateway or paired-node host, with viewer-versus-terminal preferences, validated resume commands, and an interactive PTY relay. (#107086)
+- **Control UI coding catalogs:** show provider brand icons beside Claude Code and Codex session catalog headings in the sidebar.
 - **Skill Workshop history review:** add a manual, newest-first session scan that progressively searches older substantial work for conservative skill ideas, stores only SQLite cursor metadata, and leaves up to three results as pending proposals even when autonomous self-learning is disabled. (#106182)
 - **SQLite snapshots:** add `openclaw backup sqlite create|list|verify|restore` for compact, verified global and per-agent database artifacts with fresh-target-only restore. (#94805) Thanks @giodl73-repo.
 - **GPT-5.6 Ultra and runtime switching:** support Sol, Terra, and Luna across OpenClaw and Codex engines; keep model, runtime, and thinking selection atomic through `/model` and fallback; and add live matrix coverage for both harnesses. (#98021) Thanks @anyech.
@@ -52,6 +56,17 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Control UI dynamic deep links:** reuse the initial route loader result when publishing real agent, session, dashboard, Workboard, Memory, and Plugins paths, avoiding redundant route-loader work during startup. Thanks @shakkernerd.
+- **Linux gateway service ownership:** refuse user-scope systemd publication and activation when the same gateway unit name is already owned or cannot be verified in the system scope, including `--force`, with actionable recovery guidance instead of creating restart-looping dual managers. Fixes #116129.
+- **macOS remote tunnel lifecycle:** prevent cancelled or superseded restart backoffs from recreating SSH tunnels, and join a tunnel create that another caller started while the actor was suspended.
+- **macOS location permission requests:** coalesce concurrent prompts so every caller resumes, and stop cancelled timeouts from opening Settings or completing a newer request.
+- **macOS Voice Wake cancellation:** stop superseded silence, capture, and recognizer-restart timers immediately so cancelled work cannot restart the microphone pipeline or keep stale monitor loops alive.
+- **Control UI update reconciliation:** preserve an unresolved managed-update request across disconnects, accept the replacement Gateway version when it proves success, and otherwise show explicit recovery guidance instead of trusting an unrelated cached update result or failing silently. Fixes #116075. Thanks @shakkernerd.
+- **Control UI model readiness:** put AI setup first when no model is selectable, distinguish signed-in credentials from ready providers, and route accounts with no exposed models directly to provider recovery instead of leading with disabled default controls.
+- **Control UI Talk session isolation:** stop active realtime Talk media and retire its callbacks before chat session changes, Gateway disconnects, or pane disposal so previous-session audio, transcript, camera, and status updates cannot leak into the next view. Thanks @shakkernerd.
+- **Gateway reconnect event ordering:** reset the shared TypeScript client's outer event-sequence baseline for each replacement WebSocket, preventing gap recovery from comparing unrelated connection generations across Control UI, TUI, SDK, and browser extension clients. Thanks @shakkernerd.
+- **Skill Workshop offline apply:** preserve configless local proposal apply after upgrades under exclusive Gateway startup ownership, while keeping running Gateway snapshot invalidation fail-closed when CLI credentials are unavailable.
+- **macOS and Control UI keyboard navigation:** let Tab traverse links and controls inside embedded Dashboard, browser, and Canvas web views, and keep shortcuts working on non-Latin keyboard layouts without firing during IME composition.
 - **Control UI session diffs:** hide unchanged checkout modifications and untracked files that already existed when a thread started, so the diff panel attributes only files touched by that session. Fixes #115628.
 - **Code Mode small-model repair:** give malformed pre-dispatch `exec` calls one bounded correction turn, expose typed failure-phase and bridge-dispatch evidence, and stop retries after nested tools begin. Fixes #115311.
 - **Shared state corruption recovery:** evict only the exact cached SQLite owner after proven read or write corruption so a repaired database recovers without a Gateway restart while caller-injected handles remain untouched. Fixes #114269. Thanks @rizquuula.

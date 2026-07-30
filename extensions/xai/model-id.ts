@@ -1,4 +1,6 @@
 // Xai plugin module implements model id behavior.
+export const XAI_OAUTH_AUTO_MODEL_ID = "auto";
+
 export function normalizeXaiModelId(id: string): string {
   if (id === "grok-4.3-latest") {
     return "grok-4.3";

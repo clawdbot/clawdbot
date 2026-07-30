@@ -27,6 +27,7 @@ import {
   type MemorySource,
   type MemoryEntryProvenance,
   MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
+  MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
@@ -593,67 +594,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     texts: string[],
     generation?: MemorySemanticProviderGeneration,
   ): Promise<number[][]> {
-    if (texts.length === 0) {
-      return [];
-    }
-    const provider = generation?.provider ?? this.provider;
-    if (!provider) {
-      throw new Error("Cannot embed batch in FTS-only mode (no embedding provider)");
-    }
-    try {
-      return await this.withProviderUse(
-        provider,
-        async () =>
-          await runMemoryEmbeddingBatchRetryWithSplit({
-            items: texts,
-            run: async (batchTexts) => {
-              const timeoutMs = this.resolveEmbeddingTimeout(
-                "batch",
-                provider,
-                generation?.runtime,
-              );
-              log.debug("memory embeddings: batch start", {
-                provider: provider.id,
-                items: batchTexts.length,
-                timeoutMs,
-              });
-              const result = await runEmbeddingOperationWithTimeout({
-                timeoutMs,
-                message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
-                run: async (signal) => await provider.embedBatch(batchTexts, { signal }),
-              });
-              log.debug("memory embeddings: batch completed", {
-                provider: provider.id,
-                items: batchTexts.length,
-              });
-              return result;
-            },
-            isRetryable: isRetryableMemoryEmbeddingError,
-            isSplittable: isSplittableMemoryEmbeddingTransportError,
-            waitForRetry: async (delayMs) => {
-              await this.waitForEmbeddingRetry(delayMs, "retrying");
-            },
-            maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
-            baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
-            onSplit: ({ itemCount, splitAt }) => {
-              log.warn(
-                `memory embeddings transport failed after retries; splitting batch of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
-              );
-            },
-          }),
-      );
-    } catch (err) {
-      log.debug("memory embeddings: batch failed", {
-        provider: provider.id,
-        error: formatErrorMessage(err),
-      });
-      this.markLocalEmbeddingProviderDegraded(err);
-      throw createMemoryEmbeddingOperationError({
-        operation: "batch",
-        providerId: provider.id,
-        cause: err,
-      });
-    }
+    return await this.runProviderBatchWithRetry({
+      items: texts,
+      generation,
+      operation: "batch",
+      run: async (provider, batchTexts, signal) =>
+        await provider.embedBatch(batchTexts, { signal }),
+    });
   }
 
   protected async embedBatchInputsWithRetry(
@@ -671,47 +618,87 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         generation,
       );
     }
+    return await this.runProviderBatchWithRetry({
+      items: inputs,
+      generation,
+      operation: "structured-batch",
+      run: async (_provider, batchInputs, signal) =>
+        await embedBatchInputs(batchInputs, { signal }),
+    });
+  }
+
+  private async runProviderBatchWithRetry<T>(params: {
+    items: T[];
+    generation?: MemorySemanticProviderGeneration;
+    operation: "batch" | "structured-batch";
+    run: (provider: EmbeddingProvider, items: T[], signal: AbortSignal) => Promise<number[][]>;
+  }): Promise<number[][]> {
+    if (params.items.length === 0) {
+      return [];
+    }
+    const provider = params.generation?.provider ?? this.provider;
+    if (!provider) {
+      throw new Error("Cannot embed batch in FTS-only mode (no embedding provider)");
+    }
+    const structured = params.operation === "structured-batch";
+    const label = structured ? "structured batch" : "batch";
     try {
       return await this.withProviderUse(
         provider,
         async () =>
           await runMemoryEmbeddingBatchRetryWithSplit({
-            items: inputs,
-            run: async (batchInputs) => {
+            items: params.items,
+            run: async (batchItems) => {
               const timeoutMs = this.resolveEmbeddingTimeout(
                 "batch",
                 provider,
-                generation?.runtime,
+                params.generation?.runtime,
               );
-              log.debug("memory embeddings: structured batch start", {
+              log.debug(`memory embeddings: ${label} start`, {
                 provider: provider.id,
-                items: batchInputs.length,
+                items: batchItems.length,
                 timeoutMs,
               });
-              return await runEmbeddingOperationWithTimeout({
+              const result = await runEmbeddingOperationWithTimeout({
                 timeoutMs,
                 message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
-                run: async (signal) => await embedBatchInputs(batchInputs, { signal }),
+                run: async (signal) => await params.run(provider, batchItems, signal),
               });
+              if (!structured) {
+                log.debug("memory embeddings: batch completed", {
+                  provider: provider.id,
+                  items: batchItems.length,
+                });
+              }
+              return result;
             },
             isRetryable: isRetryableMemoryEmbeddingError,
             isSplittable: isSplittableMemoryEmbeddingTransportError,
             waitForRetry: async (delayMs) => {
-              await this.waitForEmbeddingRetry(delayMs, "retrying structured batch");
+              await this.waitForEmbeddingRetry(
+                delayMs,
+                structured ? "retrying structured batch" : "retrying",
+              );
             },
             maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
             baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
             onSplit: ({ itemCount, splitAt }) => {
               log.warn(
-                `memory embeddings transport failed after retries; splitting structured batch of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
+                `memory embeddings transport failed after retries; splitting ${label} of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
               );
             },
           }),
       );
     } catch (err) {
+      if (!structured) {
+        log.debug("memory embeddings: batch failed", {
+          provider: provider.id,
+          error: formatErrorMessage(err),
+        });
+      }
       this.markLocalEmbeddingProviderDegraded(err);
       throw createMemoryEmbeddingOperationError({
-        operation: "structured-batch",
+        operation: params.operation,
         providerId: provider.id,
         cause: err,
       });
@@ -997,17 +984,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         );
         this.db
           .prepare(
-            `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at, importance, triggers, project_key)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                hash=excluded.hash,
                model=excluded.model,
                text=excluded.text,
                embedding=excluded.embedding,
-               updated_at=excluded.updated_at,
-               importance=excluded.importance,
-               triggers=excluded.triggers,
-               project_key=excluded.project_key`,
+               updated_at=excluded.updated_at`,
           )
           .run(
             id,
@@ -1020,10 +1004,18 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             chunk.text,
             JSON.stringify(embedding),
             now,
-            chunk.importance,
-            chunk.triggers,
-            chunk.projectKey,
           );
+        this.db
+          .prepare(
+            `INSERT INTO ${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE} (
+               chunk_id, importance, triggers, project_key
+             ) VALUES (?, ?, ?, ?)
+             ON CONFLICT(chunk_id) DO UPDATE SET
+               importance=excluded.importance,
+               triggers=excluded.triggers,
+               project_key=excluded.project_key`,
+          )
+          .run(id, chunk.importance, chunk.triggers, chunk.projectKey);
         const provenance = chunk.provenance ?? {
           originClass: "untrusted" as const,
           sessionKind: "unknown" as const,

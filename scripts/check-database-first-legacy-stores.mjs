@@ -973,6 +973,28 @@ export function collectDatabaseFirstLegacyStoreViolations(
     }
   }
 
+  function visitObjectLiteralProperties(objectName, initializer, onProperty, onSpread = null) {
+    const objectLiteral = unwrapExpression(initializer);
+    if (!ts.isObjectLiteralExpression(objectLiteral)) {
+      return;
+    }
+    for (const property of objectLiteral.properties) {
+      if (ts.isSpreadAssignment(property)) {
+        onSpread?.(unwrapExpression(property.expression));
+        continue;
+      }
+      const isAssignment = ts.isPropertyAssignment(property);
+      const name = isAssignment
+        ? propertyNameText(property.name)
+        : ts.isShorthandPropertyAssignment(property)
+          ? property.name.text
+          : null;
+      if (name) {
+        onProperty(`${objectName}.${name}`, isAssignment ? property.initializer : property.name);
+      }
+    }
+  }
+
   function resolveLegacyPathIdentifier(name) {
     return scopeForRead(legacyPathScopes, name)?.get(name) === true;
   }
@@ -1719,32 +1741,9 @@ export function collectDatabaseFirstLegacyStoreViolations(
     scope = lastScope(fsWriteAliasScopes),
     conditionalWrite = false,
   ) {
-    const objectLiteral = unwrapExpression(initializer);
-    if (!ts.isObjectLiteralExpression(objectLiteral)) {
-      return;
-    }
-    for (const property of objectLiteral.properties) {
-      if (ts.isPropertyAssignment(property)) {
-        const name = propertyNameText(property.name);
-        if (name) {
-          setFsWriteObjectAlias(
-            scope,
-            `${objectName}.${name}`,
-            legacyFsWriteName(property.initializer),
-            conditionalWrite,
-          );
-        }
-        continue;
-      }
-      if (ts.isShorthandPropertyAssignment(property)) {
-        setFsWriteObjectAlias(
-          scope,
-          `${objectName}.${property.name.text}`,
-          resolveFsWriteAlias(property.name.text),
-          conditionalWrite,
-        );
-      }
-    }
+    visitObjectLiteralProperties(objectName, initializer, (name, value) => {
+      setFsWriteObjectAlias(scope, name, legacyFsWriteName(value), conditionalWrite);
+    });
   }
 
   function clearFsSafeStoreObjectAliases(storeScope, jsonStoreScope, objectName) {
@@ -1813,47 +1812,29 @@ export function collectDatabaseFirstLegacyStoreViolations(
     jsonStoreScope = lastScope(fsSafeJsonStoreScopes),
     conditionalWrite = false,
   ) {
-    const objectLiteral = unwrapExpression(initializer);
-    if (!ts.isObjectLiteralExpression(objectLiteral)) {
-      return;
-    }
-    for (const property of objectLiteral.properties) {
-      if (ts.isPropertyAssignment(property)) {
-        const name = propertyNameText(property.name);
-        if (name) {
-          setFsSafeStoreObjectAlias(
-            storeScope,
-            jsonStoreScope,
-            `${objectName}.${name}`,
-            isFsSafeStoreExpression(property.initializer),
-            expressionContainsFsSafeJsonStoreLegacyPath(property.initializer),
-            conditionalWrite,
-          );
-          if (ts.isObjectLiteralExpression(unwrapExpression(property.initializer))) {
-            registerFsSafeStoreObjectAliases(
-              `${objectName}.${name}`,
-              property.initializer,
-              storeScope,
-              jsonStoreScope,
-              conditionalWrite,
-            );
-          }
-        }
-        continue;
-      }
-      if (ts.isShorthandPropertyAssignment(property)) {
+    visitObjectLiteralProperties(
+      objectName,
+      initializer,
+      (name, value) => {
         setFsSafeStoreObjectAlias(
           storeScope,
           jsonStoreScope,
-          `${objectName}.${property.name.text}`,
-          resolveFsSafeStore(property.name.text),
-          resolveFsSafeJsonStore(property.name.text),
+          name,
+          isFsSafeStoreExpression(value),
+          expressionContainsFsSafeJsonStoreLegacyPath(value),
           conditionalWrite,
         );
-        continue;
-      }
-      if (ts.isSpreadAssignment(property)) {
-        const spreadExpression = unwrapExpression(property.expression);
+        if (ts.isObjectLiteralExpression(unwrapExpression(value))) {
+          registerFsSafeStoreObjectAliases(
+            name,
+            value,
+            storeScope,
+            jsonStoreScope,
+            conditionalWrite,
+          );
+        }
+      },
+      (spreadExpression) => {
         if (ts.isIdentifier(spreadExpression)) {
           copyFsSafeStoreObjectAliases(
             objectName,
@@ -1870,8 +1851,8 @@ export function collectDatabaseFirstLegacyStoreViolations(
             conditionalWrite,
           );
         }
-      }
-    }
+      },
+    );
   }
 
   function setFsModuleObjectProperty(scope, name, isFsModule, conditionalWrite) {
@@ -1893,32 +1874,9 @@ export function collectDatabaseFirstLegacyStoreViolations(
     scope = lastScope(fsModulePropertyScopes),
     conditionalWrite = false,
   ) {
-    const objectLiteral = unwrapExpression(initializer);
-    if (!ts.isObjectLiteralExpression(objectLiteral)) {
-      return;
-    }
-    for (const property of objectLiteral.properties) {
-      if (ts.isPropertyAssignment(property)) {
-        const name = propertyNameText(property.name);
-        if (name) {
-          setFsModuleObjectProperty(
-            scope,
-            `${objectName}.${name}`,
-            isFsModuleExpression(property.initializer),
-            conditionalWrite,
-          );
-        }
-        continue;
-      }
-      if (ts.isShorthandPropertyAssignment(property)) {
-        setFsModuleObjectProperty(
-          scope,
-          `${objectName}.${property.name.text}`,
-          resolveFsModuleBinding(property.name.text),
-          conditionalWrite,
-        );
-      }
-    }
+    visitObjectLiteralProperties(objectName, initializer, (name, value) => {
+      setFsModuleObjectProperty(scope, name, isFsModuleExpression(value), conditionalWrite);
+    });
   }
 
   function collectFsModuleBindingsFromBinding(node) {
@@ -4091,30 +4049,9 @@ export function collectDatabaseFirstLegacyStoreViolations(
       initializer,
       scope = lastScope(bodyFsWriteAliasScopes),
     ) {
-      const objectLiteral = unwrapExpression(initializer);
-      if (!ts.isObjectLiteralExpression(objectLiteral)) {
-        return;
-      }
-      for (const property of objectLiteral.properties) {
-        if (ts.isPropertyAssignment(property)) {
-          const name = propertyNameText(property.name);
-          if (name) {
-            setBodyFsWriteObjectAlias(
-              scope,
-              `${objectName}.${name}`,
-              legacyWrapperFsWriteName(property.initializer),
-            );
-          }
-          continue;
-        }
-        if (ts.isShorthandPropertyAssignment(property)) {
-          setBodyFsWriteObjectAlias(
-            scope,
-            `${objectName}.${property.name.text}`,
-            resolveBodyFsWriteAlias(property.name.text),
-          );
-        }
-      }
+      visitObjectLiteralProperties(objectName, initializer, (name, value) => {
+        setBodyFsWriteObjectAlias(scope, name, legacyWrapperFsWriteName(value));
+      });
     }
 
     function isWrapperFsBindingExpression(expression) {

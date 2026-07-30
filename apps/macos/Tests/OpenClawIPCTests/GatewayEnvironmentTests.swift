@@ -41,6 +41,21 @@ struct GatewayEnvironmentTests {
         #expect(Semver.parse(normalized2) == Semver(major: 2026, minor: 4, patch: 2))
     }
 
+    @Test func `failed global version probe falls back to local package`() async throws {
+        let projectRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-gateway-environment-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: projectRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: projectRoot) }
+        try Data(#"{"version":"2026.7.29"}"#.utf8)
+            .write(to: projectRoot.appendingPathComponent("package.json"))
+
+        let version = await GatewayEnvironment.installedGatewayVersion(
+            gatewayBin: "/usr/bin/false",
+            projectRoot: projectRoot)
+
+        #expect(version == "2026.7.29")
+    }
+
     @Test func `semver compatibility requires same major and not older`() {
         let required = Semver(major: 2, minor: 1, patch: 0)
         #expect(Semver(major: 2, minor: 1, patch: 0).compatible(with: required))

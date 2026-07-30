@@ -264,12 +264,10 @@ enum CLIInstaller {
 
     private static func runtimeIsCompatible(environment: [String: String]) async -> Bool {
         let paths = environment["PATH"]?.split(separator: ":").map(String.init) ?? []
-        return await Task.detached(priority: .utility) {
-            if case .success = RuntimeLocator.resolve(searchPaths: paths) {
-                return true
-            }
-            return false
-        }.value
+        if case .success = await RuntimeLocator.resolve(searchPaths: paths) {
+            return true
+        }
+        return false
     }
 
     static func classifyVersion(
@@ -336,7 +334,11 @@ enum CLIInstaller {
             target: target,
             prefix: prefix,
             scriptPath: installerURL.path)
-        let response = await ShellExecutor.runDetailed(command: cmd, cwd: nil, env: nil, timeout: 900)
+        let response = await ShellExecutor.runDetailed(
+            command: cmd,
+            cwd: nil,
+            env: nil,
+            timeout: self.installWatchdogTimeout(for: target))
 
         if response.success {
             let expectedVersion = target.requiresExactVersion ? GatewayEnvironment.appVersionString() : nil
@@ -364,6 +366,12 @@ enum CLIInstaller {
         let fallback = response.errorMessage ?? "install failed"
         await statusHandler("Install failed: \(detail.isEmpty ? fallback : detail)")
         return false
+    }
+
+    static func installWatchdogTimeout(for target: InstallTarget) -> TimeInterval {
+        // Dev installs clone/fetch source, install dependencies, and build the UI
+        // plus CLI. Keep that workflow bounded without killing healthy cold builds.
+        target == .channel(.dev) ? 7200 : 900
     }
 
     private static func installPrefix() -> String {

@@ -23,6 +23,11 @@ import type {
 import type { CodexAppServerRequestResult, v2 } from "./protocol.js";
 
 const CODEX_PLUGINS_REMOTE_MARKETPLACE_NAME = `${CODEX_PLUGINS_MARKETPLACE_NAME}-remote`;
+// Codex serves the curated catalog under this wire name for API-key/Bedrock
+// accounts (codex-rs/core-plugins is_openai_curated_marketplace_name). It is
+// the same logical catalog, so configured `openai-curated` plugins resolve
+// from it and marketplace refs normalize back to CODEX_PLUGINS_MARKETPLACE_NAME.
+const CODEX_PLUGINS_API_MARKETPLACE_NAME = "openai-api-curated";
 
 /** Request callback used to call Codex app-server plugin/app methods. */
 export type CodexPluginRuntimeRequest = (method: string, params?: unknown) => Promise<unknown>;
@@ -545,10 +550,11 @@ function marketplaceRef(
   };
 }
 
-/** True for either supported OpenAI curated marketplace wire name. */
+/** True for any supported OpenAI curated marketplace wire name, matching Codex's own curated predicate. */
 export function isOpenAiCuratedMarketplace(marketplace: v2.PluginMarketplaceEntry): boolean {
   return (
     marketplace.name === CODEX_PLUGINS_MARKETPLACE_NAME ||
-    marketplace.name === CODEX_PLUGINS_REMOTE_MARKETPLACE_NAME
+    marketplace.name === CODEX_PLUGINS_REMOTE_MARKETPLACE_NAME ||
+    marketplace.name === CODEX_PLUGINS_API_MARKETPLACE_NAME
   );
 }

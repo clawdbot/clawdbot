@@ -50,7 +50,14 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async () => {
     throw Object.assign(new Error("gateway unavailable"), { kind: "closed", code: 1006 });
   }),
+  isGatewayCredentialsRequiredError: () => false,
   isGatewayTransportError: () => true,
+}));
+
+vi.mock("../infra/gateway-lock.js", () => ({
+  acquireGatewayLock: vi.fn(async () => ({
+    release: vi.fn(async () => undefined),
+  })),
 }));
 
 vi.mock("../terminal/links.js", () => ({

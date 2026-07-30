@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
+import { runQaScenarioCommandLifecycle } from "./test-file-scenario-command-lifecycle.js";
 import { dockerE2eLaneName } from "./test-file-scenario-docker-batch.js";
 import {
   qaTestFileScenarioRunnerTesting,
@@ -118,6 +119,25 @@ async function makeTempRepo(prefix: string) {
   return repoRoot;
 }
 
+async function writeNativeVitestReport(
+  command: QaScenarioCommandExecution,
+  counts: { failed?: number; passed: number },
+) {
+  const reportArg = command.args.find((arg) => arg.startsWith("--outputFile.json="));
+  if (!reportArg) {
+    return;
+  }
+  await fs.writeFile(
+    reportArg.slice("--outputFile.json=".length),
+    JSON.stringify({
+      numFailedTests: counts.failed ?? 0,
+      numPassedTests: counts.passed,
+      success: (counts.failed ?? 0) === 0,
+    }),
+    "utf8",
+  );
+}
+
 async function writeScriptProducerEvidence(params: {
   outputDir: string;
   scenarioId?: string;
@@ -202,6 +222,7 @@ describe("qa test file scenario runner", () => {
       ],
       runCommand: async (command) => {
         commands.push(command);
+        await writeNativeVitestReport(command, { passed: 1 });
         return {
           exitCode: 0,
           stdout: "pass\n",
@@ -225,6 +246,14 @@ describe("qa test file scenario runner", () => {
         "runner",
         "ui/src/e2e/chat-flow.e2e.test.ts",
         "--reporter=verbose",
+        "--reporter=json",
+        `--outputFile.json=${path.join(
+          repoRoot,
+          ".artifacts",
+          "qa-e2e",
+          "scenario-playwright",
+          "scenario-playwright.vitest-report.json",
+        )}`,
         "--testNamePattern",
         "sends a chat turn through the GUI",
       ],
@@ -288,11 +317,14 @@ describe("qa test file scenario runner", () => {
       primaryModel: "mock-openai/gpt-5.6-luna",
       scenarios: [makeTestFileScenario("playwright", "ui/src/e2e/chat-flow.e2e.test.ts")],
       writeEvidenceFile: false,
-      runCommand: async () => ({
-        exitCode: 0,
-        stdout: "pass\n",
-        stderr: "",
-      }),
+      runCommand: async (command) => {
+        await writeNativeVitestReport(command, { passed: 1 });
+        return {
+          exitCode: 0,
+          stdout: "pass\n",
+          stderr: "",
+        };
+      },
     });
 
     expect(result.evidence.entries).toHaveLength(1);
@@ -324,6 +356,14 @@ describe("qa test file scenario runner", () => {
         "scripts/run-vitest.mjs",
         "extensions/qa-lab/src/coverage-report.test.ts",
         "--reporter=verbose",
+        "--reporter=json",
+        `--outputFile.json=${path.join(
+          repoRoot,
+          ".artifacts",
+          "qa-e2e",
+          "scenario-vitest",
+          "scenario-vitest.vitest-report.json",
+        )}`,
       ],
     ]);
     expect(commands.map((command) => command.timeoutMs)).toEqual([undefined]);
@@ -366,6 +406,87 @@ describe("qa test file scenario runner", () => {
       },
     });
   });
+
+  it.each([
+    { executionKind: "vitest" as const, passed: 0, expectedStatus: "fail" as const },
+    { executionKind: "playwright" as const, passed: 0, expectedStatus: "fail" as const },
+    { executionKind: "vitest" as const, passed: 1, expectedStatus: "pass" as const },
+    { executionKind: "playwright" as const, passed: 1, expectedStatus: "pass" as const },
+  ])(
+    "requires an actually passed $executionKind test when the native child exits successfully ($passed passed)",
+    async ({ executionKind, expectedStatus, passed }) => {
+      const repoRoot = await makeTempRepo(`qa-${executionKind}-executed-tests-`);
+      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", `scenario-${executionKind}`);
+      const scenarioPath =
+        executionKind === "playwright"
+          ? "ui/src/e2e/chat-flow.e2e.test.ts"
+          : "extensions/qa-lab/src/coverage-report.test.ts";
+      const commands: QaScenarioCommandExecution[] = [];
+      const result = await runQaTestFileScenarios({
+        repoRoot,
+        outputDir,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        scenarios: [makeTestFileScenario(executionKind, scenarioPath)],
+        runCommand: async (command) => {
+          commands.push(command);
+          await writeNativeVitestReport(command, { passed });
+          return { exitCode: 0, stdout: "child exited successfully\n", stderr: "" };
+        },
+      });
+
+      expect(result.results[0]).toMatchObject({ status: expectedStatus });
+      expect(result.evidence.entries[0]?.result.status).toBe(expectedStatus);
+      expect(
+        commands.filter((command) => command.args[0] === "scripts/run-vitest.mjs"),
+      ).toHaveLength(1);
+      if (expectedStatus === "fail") {
+        expect(result.results[0]?.failureMessage).toBe(
+          "Vitest exited successfully without reporting a successfully executed test.",
+        );
+      }
+    },
+  );
+
+  it.each([{ executionKind: "vitest" as const }, { executionKind: "playwright" as const }])(
+    "does not reuse a prior passing $executionKind report when the next child writes none",
+    async ({ executionKind }) => {
+      const repoRoot = await makeTempRepo(`qa-${executionKind}-stale-vitest-report-`);
+      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", `scenario-${executionKind}`);
+      const scenarioPath =
+        executionKind === "playwright"
+          ? "ui/src/e2e/chat-flow.e2e.test.ts"
+          : "extensions/qa-lab/src/coverage-report.test.ts";
+      const reportPath = path.join(outputDir, `scenario-${executionKind}.vitest-report.json`);
+      let writeReport = true;
+      const runParams = {
+        repoRoot,
+        outputDir,
+        providerMode: "mock-openai" as const,
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        scenarios: [makeTestFileScenario(executionKind, scenarioPath)],
+        runCommand: async (command: QaScenarioCommandExecution) => {
+          if (writeReport) {
+            await writeNativeVitestReport(command, { passed: 1 });
+          }
+          return { exitCode: 0, stdout: "child exited successfully\n", stderr: "" };
+        },
+      };
+
+      const firstRun = await runQaTestFileScenarios(runParams);
+      expect(firstRun.results[0]).toMatchObject({ status: "pass" });
+      await expect(fs.access(reportPath)).resolves.toBeUndefined();
+
+      writeReport = false;
+      const secondRun = await runQaTestFileScenarios(runParams);
+      expect(secondRun.results[0]).toMatchObject({
+        failureMessage: `Vitest exited successfully without writing a valid JSON test report at ${reportPath}.`,
+        status: "fail",
+      });
+      expect(secondRun.evidence.entries[0]?.result.status).toBe("fail");
+      await expect(fs.access(reportPath)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 
   it.each([
     { failFast: true, expectedScenarioIds: ["first-native-scenario"] },
@@ -411,6 +532,116 @@ describe("qa test file scenario runner", () => {
       expect(result.evidence.entries.map((entry) => entry.test.id)).toEqual(expectedScenarioIds);
     },
   );
+
+  it.each([
+    { evidence: "missing", expectedFailure: /without writing fresh producer QA evidence/u },
+    { evidence: "stale", expectedFailure: /without writing fresh producer QA evidence/u },
+    { evidence: "empty", expectedFailure: /without reporting an executed producer check/u },
+    { evidence: "malformed", expectedFailure: /invalid JSON/u },
+    { evidence: "outside", expectedFailure: /inside its scenario output directory/u },
+  ] as const)(
+    "fails a successful script with $evidence producer evidence",
+    async ({ evidence, expectedFailure }) => {
+      const repoRoot = await makeTempRepo(`qa-script-${evidence}-producer-evidence-`);
+      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script");
+      const scenarioOutputDir = path.join(outputDir, "scenario-script");
+      const latestRunPath = path.join(scenarioOutputDir, "latest-run.json");
+      const evidencePath = path.join(scenarioOutputDir, "qa-evidence.json");
+
+      if (evidence === "stale") {
+        await writeScriptProducerEvidence({ outputDir, status: "pass" });
+        const staleEvidencePath = path.join(scenarioOutputDir, "run-1", "qa-evidence.json");
+        await fs.copyFile(staleEvidencePath, evidencePath);
+        const staleTimestamp = new Date(Date.now() - 60_000);
+        await Promise.all([
+          fs.utimes(staleEvidencePath, staleTimestamp, staleTimestamp),
+          fs.utimes(evidencePath, staleTimestamp, staleTimestamp),
+        ]);
+      }
+
+      const result = await runQaTestFileScenarios({
+        repoRoot,
+        outputDir,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
+        runCommand: async () => {
+          await fs.mkdir(scenarioOutputDir, { recursive: true });
+          if (evidence === "stale") {
+            await expect(fs.access(latestRunPath)).rejects.toMatchObject({ code: "ENOENT" });
+            await expect(fs.access(evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
+            await fs.writeFile(
+              latestRunPath,
+              JSON.stringify({
+                qaEvidence: path.join(scenarioOutputDir, "run-1", "qa-evidence.json"),
+              }),
+              "utf8",
+            );
+          } else if (evidence === "empty") {
+            await fs.writeFile(
+              evidencePath,
+              JSON.stringify({
+                kind: "openclaw.qa.evidence-summary",
+                schemaVersion: 2,
+                generatedAt: new Date().toISOString(),
+                evidenceMode: "full",
+                entries: [],
+              }),
+              "utf8",
+            );
+          } else if (evidence === "malformed") {
+            await fs.writeFile(evidencePath, "{not valid JSON", "utf8");
+          } else if (evidence === "outside") {
+            await writeScriptProducerEvidence({
+              outputDir,
+              scenarioId: "different-script-scenario",
+              status: "pass",
+            });
+            await fs.writeFile(
+              latestRunPath,
+              JSON.stringify({
+                qaEvidence: path.join(
+                  outputDir,
+                  "different-script-scenario",
+                  "run-1",
+                  "qa-evidence.json",
+                ),
+              }),
+              "utf8",
+            );
+          }
+          return { exitCode: 0, stdout: "script exited successfully\n", stderr: "" };
+        },
+      });
+
+      expect(result.results[0]).toMatchObject({ status: "fail" });
+      expect(result.results[0]?.failureMessage).toMatch(expectedFailure);
+      expect(result.evidence.entries).toHaveLength(1);
+      expect(result.evidence.entries[0]).toMatchObject({
+        test: { id: "scenario-script" },
+        result: { status: "fail" },
+      });
+    },
+  );
+
+  it("preserves individual Docker lane success without generic producer evidence", async () => {
+    const repoRoot = await makeTempRepo("qa-script-docker-individual-no-producer-evidence-");
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "docker-individual"),
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      failFast: true,
+      scenarios: [makeDockerE2eScenario("docker-gateway-network", "gateway-network")],
+      runCommand: async () => ({ exitCode: 0, stdout: "Docker lane passed\n", stderr: "" }),
+    });
+
+    expect(result.results[0]).toMatchObject({
+      scenario: { id: "docker-gateway-network" },
+      status: "pass",
+    });
+    expect(result.evidence.entries[0]?.result.status).toBe("pass");
+  });
 
   it("runs script scenarios and imports producer QA evidence artifacts", async () => {
     const repoRoot = await makeTempRepo("qa-script-scenario-");
@@ -661,7 +892,7 @@ describe("qa test file scenario runner", () => {
 
     beforeAll(async () => {
       const tempRoot = await makeTempDir("qa-script-timeout-");
-      const scriptPath = path.join(tempRoot, "hanging-producer.ts");
+      const scriptPath = path.join(tempRoot, "hanging-producer.mjs");
       const descendantPidPath = path.join(tempRoot, "descendant.pid");
       const descendantScript = [
         "process.on('SIGTERM', () => {});",
@@ -692,9 +923,23 @@ describe("qa test file scenario runner", () => {
         primaryModel: "mock-openai/gpt-5.6-luna",
         scenarios: [makeTestFileScenario("script", scriptPath)],
         commandTimeoutMs,
+        // Exercise the real process-group lifecycle without spending its
+        // bounded startup budget on an unrelated cold tsx import.
+        runCommand: (execution) =>
+          runQaScenarioCommandLifecycle({ ...execution, args: [scriptPath] }),
       });
-      descendantPid = await readPid(descendantPidPath, commandTimeoutMs);
-      result = await run;
+      const [pidResult, runResult] = await Promise.allSettled([
+        readPid(descendantPidPath, commandTimeoutMs),
+        run,
+      ]);
+      if (pidResult.status === "rejected") {
+        throw pidResult.reason;
+      }
+      if (runResult.status === "rejected") {
+        throw runResult.reason;
+      }
+      descendantPid = pidResult.value;
+      result = runResult.value;
       await waitForDead(descendantPid, 2_000);
     });
 

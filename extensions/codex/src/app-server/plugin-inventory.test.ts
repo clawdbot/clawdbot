@@ -277,6 +277,67 @@ describe("Codex plugin inventory", () => {
     expect(inventory.diagnostics).toStrictEqual([]);
   });
 
+  it("accepts the API-key curated marketplace wire name", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async (method, params) =>
+        codexAppInventoryResponse(method, [appInfo("google-calendar-app", true)], params),
+    });
+    const listed = {
+      marketplaces: [
+        {
+          name: "openai-api-curated",
+          path: "/codex-home/.tmp/plugins/.agents/plugins/api_marketplace.json",
+          interface: null,
+          plugins: [
+            pluginSummary("google-calendar@openai-api-curated", {
+              name: "google-calendar",
+              installed: true,
+              enabled: true,
+            }),
+          ],
+        },
+      ],
+      marketplaceLoadErrors: [],
+    } satisfies v2.PluginInstalledResponse;
+
+    const inventory = await readCodexPluginInventory({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request: async (method, params) => {
+        if (method === "plugin/installed") {
+          return listed;
+        }
+        if (method === "plugin/read") {
+          expect(params).toEqual({
+            marketplacePath: "/codex-home/.tmp/plugins/.agents/plugins/api_marketplace.json",
+            pluginName: "google-calendar",
+          });
+          return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(inventory.records[0]?.ownedAppIds).toStrictEqual(["google-calendar-app"]);
+    expect(inventory.records[0]?.apps[0]?.accessible).toBe(true);
+    expect(inventory.diagnostics).toStrictEqual([]);
+  });
+
   it("fails closed when an installed remote curated plugin omits its opaque id", async () => {
     const calls: string[] = [];
     const inventory = await readCodexPluginInventory({

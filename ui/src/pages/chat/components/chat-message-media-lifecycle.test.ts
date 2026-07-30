@@ -10,6 +10,7 @@ import {
   observeChatMediaResource,
   readManagedImageBlobUrl,
   releaseChatMediaResourceSubscriber,
+  schedulePairingQrExpiryRefresh,
   type ImageRenderOptions,
   type RenderableImageBlock,
 } from "./chat-message-media.ts";
@@ -77,6 +78,50 @@ function observeSubscriber(subscriber: () => void): () => void {
 }
 
 describe("chat media resource lifecycle", () => {
+  it("refreshes every split pane when a shared pairing QR expires", async () => {
+    const message = {
+      content: [
+        {
+          type: "openclaw_pairing_qr",
+          image_url: "data:image/png;base64,cXJwbmc=",
+          expiresAtMs: Date.now() + 1_000,
+        },
+      ],
+    };
+    const refreshFirst = observeSubscriber(vi.fn());
+    const refreshSecond = observeSubscriber(vi.fn());
+
+    schedulePairingQrExpiryRefresh("shared-pairing-qr", message, refreshFirst);
+    schedulePairingQrExpiryRefresh("shared-pairing-qr", message, refreshSecond);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(refreshFirst).toHaveBeenCalledOnce();
+    expect(refreshSecond).toHaveBeenCalledOnce();
+  });
+
+  it("releases a pairing QR expiry timer when its chat pane disconnects", async () => {
+    const refresh = observeSubscriber(vi.fn());
+    schedulePairingQrExpiryRefresh(
+      "disconnected-pairing-qr",
+      {
+        content: [
+          {
+            type: "openclaw_pairing_qr",
+            image_url: "data:image/png;base64,cXJwbmc=",
+            expiresAtMs: Date.now() + 1_000,
+          },
+        ],
+      },
+      refresh,
+    );
+
+    releaseChatMediaResourceSubscriber(refresh);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(refresh).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("wakes a managed image after one transient failure without an external render", async () => {
     const source = managedImageSource();
     const blobUrl = installManagedImageUrls();

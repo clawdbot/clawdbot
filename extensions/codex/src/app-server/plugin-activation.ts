@@ -186,7 +186,14 @@ async function refreshCodexPluginRuntimeState(params: {
   await params.request("config/mcpServer/reload", undefined);
 
   if (params.appCache && params.appCacheKey) {
-    params.appCache.invalidate(params.appCacheKey, "Codex plugin activation changed app inventory");
+    // Scope the invalidation to the activated plugin's apps so the follow-up
+    // targeted refresh (immediate or deferred union) can revalidate the entry.
+    params.appCache.invalidate(
+      params.appCacheKey,
+      "Codex plugin activation changed app inventory",
+      undefined,
+      params.targetAppIds,
+    );
     if (params.deferAppInventoryRefresh) {
       return { diagnostics };
     }

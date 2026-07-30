@@ -1236,6 +1236,50 @@ describe("prepareCliRunContext", () => {
     });
   });
 
+  it("carries projected network-result capability into the prepared CLI context", async () => {
+    setRawCliBackendForPrepareTest({
+      id: "network-tool-cli",
+      pluginId: "network-tool-plugin",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      config: {
+        command: "network-tool-cli",
+        args: ["--print"],
+        output: "text",
+        input: "arg",
+        sessionMode: "none",
+      },
+    });
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime: vi.fn(() => ({
+        port: 31783,
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
+      })),
+      resolveMcpLoopbackScopedTools: vi.fn(() => ({
+        agentId: "main",
+        tools: [
+          {
+            name: "fake_web_tool",
+            label: "Fake web tool",
+            description: "Test network content capability",
+            parameters: Type.Object({}, { additionalProperties: false }),
+            resultContentSource: "network" as const,
+            execute: vi.fn(async () => ({ content: [] })),
+          },
+        ],
+      })),
+    });
+
+    const context = await fixture.prepare({
+      provider: "network-tool-cli",
+      model: "test-model",
+      config: createCliBackendConfig({ bundleMcp: true }),
+    });
+
+    expect(context.resultContentSourceByToolName?.get("fake_web_tool")).toBe("network");
+  });
+
   it("lets Gemini CLI preparation override generated MCP system settings auth", async () => {
     const { dir } = fixture.session;
     const profileSystemSettingsPath = path.join(dir, "profile-system-settings.json");

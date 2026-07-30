@@ -57,12 +57,13 @@ observation side effects.
 
 `api.on(name, handler, opts?)` accepts:
 
-| Option             | Effect                                                                                                                                                                                            |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `priority`         | Ordering; higher runs first.                                                                                                                                                                      |
-| `registrationId`   | Stable identity for one registration inside a plugin. Skill evaluators use it as `evaluatorId`; otherwise the plugin id is used.                                                                  |
-| `timeoutMs`        | Per-hook await budget. When it expires, OpenClaw stops awaiting that handler and moves on. It does not cancel the handler or its side effects. Omit to use the runner's default per-hook timeout. |
-| `eligibleTriggers` | For `before_agent_reply` only, limits host dispatch to one or more of `cron`, `heartbeat`, or `user`.                                                                                             |
+| Option             | Effect                                                                                                                                                                                                                                                 |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `matcher`          | Non-empty list of canonical OpenClaw tool ids handled by `before_tool_call` or `after_tool_call`, such as `exec`, `apply_patch`, or `spawn_agent`. Omit to match all tools. Empty lists, wildcards, blanks, and provider-specific aliases are invalid. |
+| `priority`         | Ordering; higher runs first.                                                                                                                                                                                                                           |
+| `registrationId`   | Stable identity for one registration inside a plugin. Skill evaluators use it as `evaluatorId`; otherwise the plugin id is used.                                                                                                                       |
+| `timeoutMs`        | Per-hook await budget. When it expires, OpenClaw stops awaiting that handler and moves on. It does not cancel the handler or its side effects. Omit to use the runner's default per-hook timeout.                                                      |
+| `eligibleTriggers` | For `before_agent_reply` only, limits host dispatch to one or more of `cron`, `heartbeat`, or `user`.                                                                                                                                                  |
 
 Trigger eligibility is enforced by the host before it invokes the handler. A
 hook registered with `eligibleTriggers: ["heartbeat", "cron"]` is therefore
@@ -97,9 +98,11 @@ positive integer up to 600000 ms. Prefer per-hook overrides for known-slow
 hooks so one plugin does not get a longer budget everywhere.
 
 A timed-out handler promise continues running because hook callbacks do not
-receive a cancellation signal. The hook dispatch can release its Gateway
-admission while that plugin work is still in progress. Plugins that own
-long-running work must provide their own cancellation and shutdown lifecycle.
+receive a timeout-owned cancellation signal. `before_tool_call` receives the
+owning tool call's `ctx.abortSignal`, but hook timeout expiry does not abort it.
+The hook dispatch can release its Gateway admission while that plugin work is
+still in progress. Plugins that own long-running work must provide their own
+cancellation and shutdown lifecycle.
 
 Policy hooks `before_tool_call` and `before_install` use a 15-second default per
 handler. A timeout fails closed: the tool call or installation is rejected
@@ -137,7 +140,7 @@ observation-only.
 | ------------------------------- | ---------------------------------------------------------------------------------------- |
 | `before_model_resolve`          | Override provider or model before session messages load                                  |
 | `agent_turn_prepare`            | Consume queued plugin turn injections and add same-turn context before prompt hooks      |
-| `before_prompt_build`           | Add dynamic context or system-prompt text before the model call                          |
+| `before_prompt_build`           | Add prompt context or narrow the current turn's submitted tool surface                   |
 | **`before_agent_run`**          | Inspect the final prompt and session messages before model submission; can block the run |
 | **`before_agent_reply`**        | Short-circuit the model turn with a synthetic reply or silence                           |
 | **`before_agent_finalize`**     | Inspect the natural final answer and request one more model pass                         |
@@ -164,16 +167,22 @@ observation-only.
 
 **Messages and delivery**
 
-| Hook                            | Purpose                                                           |
-| ------------------------------- | ----------------------------------------------------------------- |
-| **`inbound_claim`**             | Claim an inbound message before agent routing (synthetic replies) |
-| **`channel_pairing_requested`** | Observe newly created DM pairing requests                         |
-| `message_received`              | Observe inbound content, sender, thread, and metadata             |
-| **`message_sending`**           | Rewrite outbound content or cancel delivery                       |
-| **`reply_payload_sending`**     | Mutate or cancel normalized reply payloads before delivery        |
-| `message_sent`                  | Observe outbound delivery success or failure                      |
-| **`before_dispatch`**           | Inspect or rewrite an outbound dispatch before channel handoff    |
-| **`reply_dispatch`**            | Participate in the final reply-dispatch pipeline                  |
+| Hook                        | Purpose                                                                    |
+| --------------------------- | -------------------------------------------------------------------------- |
+| **`inbound_claim`**         | Claim an inbound message for the plugin that owns its conversation binding |
+| `channel_pairing_requested` | Observe newly created DM pairing requests                                  |
+| `message_received`          | Observe inbound content, sender, thread, and metadata                      |
+| **`message_sending`**       | Rewrite outbound content or cancel delivery                                |
+| **`reply_payload_sending`** | Mutate or cancel normalized reply payloads before delivery                 |
+| `message_sent`              | Observe outbound delivery success or failure                               |
+| **`before_dispatch`**       | Inspect or rewrite an outbound dispatch before channel handoff             |
+| **`reply_dispatch`**        | Participate in the final reply-dispatch pipeline                           |
+
+`inbound_claim` is not a global pre-routing broadcast. OpenClaw invokes it only
+for the plugin that owns the message's core-managed conversation binding. To
+suppress an ordinary agent turn before model input without retaining the
+original prompt in transcript, use `before_agent_run`. To short-circuit an agent
+turn with a synthetic reply or silence, use `before_agent_reply`.
 
 **Sessions and compaction**
 
@@ -309,6 +318,9 @@ provider payloads, start the Gateway with `--raw-stream` and
 - optional `event.toolCallId`
 - context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
   `ctx.runId`, `ctx.toolKind`, `ctx.toolInputKind`, and diagnostic `ctx.trace`
+- optional `ctx.abortSignal`, which aborts when the owning tool call is
+  cancelled; handlers should pass it to cancellable I/O and remove any
+  listeners they register
 - optional `ctx.requester`, the host-derived requester that initiated the current
   message run. It can include `channel`, `accountId`, `senderId`,
   `senderIsOwner`, and provider-native `roleIds`. Missing fields are unproven,
@@ -493,6 +505,9 @@ plugin, so different plugins may reuse the same local id. Use this tier only
 for host-trusted gates such as workspace policy, budget enforcement, or
 reserved workflow safety.
 
+Trusted policies may set `matcher` to the same canonical tool-id list accepted
+by `before_tool_call`. Omit the matcher to retain match-all behavior.
+
 ### Exec environment hook
 
 `resolve_exec_env` lets plugins contribute environment variables to `exec`
@@ -543,7 +558,15 @@ Use the phase-specific hooks for new plugins:
   Return `prependContext` or `appendContext`.
 - `before_prompt_build`: receives the current prompt and session messages.
   Return `prependContext`, `appendContext`, `systemPrompt`,
-  `prependSystemContext`, or `appendSystemContext`.
+  `prependSystemContext`, `appendSystemContext`, or `toolsAllow`. `toolsAllow`
+  can only narrow the host-resolved tool surface for the current turn; `[]`
+  submits no optional tools, while omitting it leaves the existing surface unchanged.
+  Restrictions returned by multiple hooks are intersected. The embedded runner
+  and Copilot harness apply this field to their turn-scoped submitted tool
+  surfaces. The Codex app-server harness rejects restrictive values because its
+  dynamic tools are thread-scoped and Codex `turn/start` has no tool-surface
+  override; use the embedded or Copilot runtime when a plugin requires this
+  policy.
 - `heartbeat_prompt_contribution`: runs only for heartbeat turns and returns
   `prependContext` or `appendContext`. Intended for background monitors that
   need to summarize current state without changing user-initiated turns.
@@ -750,6 +773,9 @@ and `before_dispatch` contexts also expose reply metadata when the channel
 has visibility-filtered quoted message data: `replyToId`, `replyToIdFull`,
 `replyToBody`, `replyToSender`, and `replyToIsQuote`. Prefer these
 first-class fields before reading legacy metadata.
+
+`before_dispatch` receives the canonical inbound `messageId` in both its event
+and context.
 
 Prefer typed `threadId` and `replyToId` fields before using channel-specific
 metadata.

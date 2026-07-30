@@ -82,6 +82,7 @@ type ModelProvidersViewProps = {
   onDefaultModelsReset: () => void;
   onThinkingChange: (level: string) => void;
   onFastModeChange: (mode: FastMode) => void;
+  onOpenModelSetup: () => void;
 };
 
 // The global default intentionally omits "minimal"; the full list stays
@@ -161,6 +162,38 @@ function renderAuthStatus(card: ModelProviderCard) {
       ${renderSettingsStatus({ kind: AUTH_KIND_STATUS[auth.kind], label })}
     </span>
   `;
+}
+
+function hasProviderCredentials(card: ModelProviderCard): boolean {
+  return card.hasConfigApiKey || Boolean(card.apiKey) || card.profiles.length > 0;
+}
+
+function hasValidProviderSignIn(card: ModelProviderCard): boolean {
+  return card.auth?.kind === "ok";
+}
+
+function renderProviderStatus(card: ModelProviderCard) {
+  if (card.auth?.kind === "expired" || card.auth?.kind === "missing") {
+    return renderAuthStatus(card);
+  }
+  if (card.auth?.kind === "expiring") {
+    return renderAuthStatus(card);
+  }
+  if (!hasProviderCredentials(card)) {
+    return renderAuthStatus(card);
+  }
+  if (card.availableModelCount > 0 && (hasValidProviderSignIn(card) || !card.auth)) {
+    return renderSettingsStatus({
+      kind: "ok",
+      label: t("modelProviders.status.ready"),
+    });
+  }
+  return hasValidProviderSignIn(card)
+    ? renderSettingsStatus({
+        kind: "muted",
+        label: t("modelProviders.status.ok"),
+      })
+    : renderAuthStatus(card);
 }
 
 function modelsText(card: ModelProviderCard): string | null {
@@ -428,7 +461,7 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
         </div>
         <div class="settings-row__control">
           ${card.usage?.plan ? renderSettingsValue(card.usage.plan) : nothing}
-          ${renderAuthStatus(card)}
+          ${renderProviderStatus(card)}
         </div>
       </div>
       ${renderCredentialSummary(card, props.credentialAgentLabel)}
@@ -521,6 +554,34 @@ function renderAddProvider(props: ModelProvidersViewProps) {
   );
 }
 
+function renderModelReadiness(props: ModelProvidersViewProps) {
+  const signedIn = props.cards.some(hasValidProviderSignIn);
+  return html`
+    <div class="model-providers__setup" data-model-readiness="model-required">
+      ${renderSettingsSection(
+        { title: t("modelProviders.readiness.title") },
+        renderSettingsRow({
+          title: t("modelProviders.readiness.heading"),
+          description: signedIn
+            ? t("modelProviders.readiness.signedInNoModels")
+            : t("modelProviders.readiness.notConfigured"),
+          control: html`
+            ${renderSettingsStatus({
+              kind: "warn",
+              label: signedIn
+                ? t("modelProviders.readiness.noModels")
+                : t("modelProviders.readiness.modelRequired"),
+            })}
+            <button class="btn primary" @click=${props.onOpenModelSetup}>
+              ${signedIn ? t("modelProviders.readiness.chooseProvider") : t("modelSetup.heading")}
+            </button>
+          `,
+        }),
+      )}
+    </div>
+  `;
+}
+
 export function renderModelProviders(props: ModelProvidersViewProps) {
   if (!props.connected) {
     return renderSettingsPage(
@@ -551,22 +612,25 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
         )
       : props.cards.map((card) => renderProviderRow(card, props))}
   `;
+  const needsModelSetup = !props.configuredModels.some((model) => model.available !== false);
   return renderSettingsPage(html`
-    ${renderDefaultModels({
-      models: props.configuredModels,
-      selection: props.defaultModels,
-      dirty: props.defaultModelsDirty,
-      canMutate: props.canMutate,
-      mutationBlockedReason: props.mutationBlockedReason,
-      busy: props.busy,
-      message: props.messages.defaults,
-      onPrimaryChange: props.onPrimaryChange,
-      onFallbackAdd: props.onFallbackAdd,
-      onFallbackRemove: props.onFallbackRemove,
-      onUtilityChange: props.onUtilityChange,
-      onSave: props.onDefaultModelsSave,
-      onReset: props.onDefaultModelsReset,
-    })}
+    ${needsModelSetup
+      ? renderModelReadiness(props)
+      : renderDefaultModels({
+          models: props.configuredModels,
+          selection: props.defaultModels,
+          dirty: props.defaultModelsDirty,
+          canMutate: props.canMutate,
+          mutationBlockedReason: props.mutationBlockedReason,
+          busy: props.busy,
+          message: props.messages.defaults,
+          onPrimaryChange: props.onPrimaryChange,
+          onFallbackAdd: props.onFallbackAdd,
+          onFallbackRemove: props.onFallbackRemove,
+          onUtilityChange: props.onUtilityChange,
+          onSave: props.onDefaultModelsSave,
+          onReset: props.onDefaultModelsReset,
+        })}
     ${renderModelBehavior(props)}
     ${renderSettingsSection(
       {

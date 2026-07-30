@@ -289,7 +289,7 @@ describe("MemorySettingsPage engine slot", () => {
       configObject: {},
       catalog: [
         engine("memory-lancedb", true, "Memory LanceDB"),
-        engine("memory-core", false, "OpenClaw Memory"),
+        engine("memory-core", false, "memory-core"),
       ],
     });
     document.body.append(element);
@@ -542,6 +542,10 @@ describe("MemorySettingsPage catalog state", () => {
       expect(addonStatus(element, "Memory wiki")).toBe("Disabled");
       expect(addonSwitch(element, "Active memory")).toBeNull();
       expect(addonSwitch(element, "Memory wiki")).toBeNull();
+      const engineGroup = element.querySelector<HTMLElement & { disabled?: boolean }>(
+        "wa-radio-group.settings-segmented",
+      );
+      expect(engineGroup?.disabled).toBe(true);
     } finally {
       element.remove();
     }
@@ -971,7 +975,7 @@ describe("MemorySettingsPage tab routing", () => {
     },
   );
 
-  it("loads Overview status once per activation, agent change, and reconnect", async () => {
+  it("loads Overview status once per activation, header agent change, and reconnect", async () => {
     const memoryStatus = vi.fn((agentId: string) =>
       Promise.resolve({ agentId, provider: "none", embedding: { ok: false, checked: false } }),
     );
@@ -989,7 +993,11 @@ describe("MemorySettingsPage tab routing", () => {
         request.mock.calls.filter(([method]) => method === "doctor.memory.status"),
       ).toHaveLength(1);
 
-      const select = element.querySelector("openclaw-agent-select") as HTMLElement & {
+      expect(element.querySelectorAll("openclaw-agent-select")).toHaveLength(1);
+      expect(element.textContent).not.toContain("Agent view");
+      const select = element.querySelector(
+        ".hub-page-header__actions openclaw-agent-select",
+      ) as HTMLElement & {
         onSelect?: (value: string) => void;
       };
       select.onSelect?.("research");

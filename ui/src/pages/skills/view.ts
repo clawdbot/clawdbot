@@ -8,6 +8,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
 import "../../components/agent-select-registration.ts";
+import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import "../../components/modal-dialog.ts";
@@ -649,27 +650,33 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
 
           ${skill.clawhub || skill.skillCard?.present
             ? html`
-                <div class="agent-tabs">
-                  <button
-                    class="agent-tab ${detailTab === "overview" ? "active" : ""}"
-                    @click=${() => props.onDetailTabChange("overview")}
-                  >
-                    ${t("skillsPage.overview")}
-                  </button>
-                  ${skill.skillCard?.present
-                    ? html`<button
-                        class="agent-tab ${detailTab === "card" ? "active" : ""}"
-                        @click=${() => props.onDetailTabChange("card")}
-                      >
-                        ${t("skillsPage.skillCard")}
-                      </button>`
-                    : nothing}
-                </div>
+                ${renderHubTabs({
+                  id: "skill-detail",
+                  active: detailTab,
+                  tabs: [
+                    { value: "overview", label: t("skillsPage.overview") },
+                    ...(skill.skillCard?.present
+                      ? [{ value: "card" as const, label: t("skillsPage.skillCard") }]
+                      : []),
+                  ],
+                  ariaLabel: skill.name,
+                  panelId: "skill-detail-panel",
+                  variant: "sub",
+                  onSelect: props.onDetailTabChange,
+                })}
               `
             : nothing}
-          ${detailTab === "overview"
-            ? renderInstalledClawHubOverview(skill, props, verdict)
-            : renderInstalledSkillCard(skill, props)}
+          <div
+            id="skill-detail-panel"
+            role=${skill.clawhub || skill.skillCard?.present ? "tabpanel" : nothing}
+            aria-labelledby=${skill.clawhub || skill.skillCard?.present
+              ? `skill-detail-tab-${detailTab}`
+              : nothing}
+          >
+            ${detailTab === "overview"
+              ? renderInstalledClawHubOverview(skill, props, verdict)
+              : renderInstalledSkillCard(skill, props)}
+          </div>
           ${missing.length > 0
             ? html`
                 <div

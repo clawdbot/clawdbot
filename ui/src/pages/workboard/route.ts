@@ -7,6 +7,14 @@ import { resolveWorkboardRouteLocation, type WorkboardRouteData } from "./route-
 
 export type { WorkboardRouteData } from "./route-location.ts";
 
+function workboardLoaderDeps(context: ApplicationContext, location: RouteLocation): string {
+  const route = resolveWorkboardRouteLocation(location, context.basePath);
+  const canonicalLocation = route.canonicalLocation;
+  return `${canonicalLocation?.pathname ?? location.pathname}\u0000${
+    canonicalLocation?.search ?? route.search
+  }`;
+}
+
 async function loadWorkboardRoute(
   context: ApplicationContext,
   location: RouteLocation,
@@ -24,8 +32,7 @@ async function loadWorkboardRoute(
 
 export const page = definePage({
   ...routePageSpec("workboard"),
-  loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
-    `${location.pathname}\u0000${location.search}`,
+  loaderDeps: workboardLoaderDeps,
   loader: (context: ApplicationContext, { location }) => loadWorkboardRoute(context, location),
   component: () =>
     import("./workboard-page.ts").then(() => ({

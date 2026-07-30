@@ -1847,6 +1847,24 @@ afterEach(() => {
 });
 
 describe("per-pane chat presentation state", () => {
+  it("opens thread search from the physical shortcut on a non-Latin layout", () => {
+    const onRequestUpdate = vi.fn();
+    const container = renderChatView({ onRequestUpdate });
+    const chat = requireElement(container, "section.card.chat", "chat view");
+    const event = new KeyboardEvent("keydown", {
+      key: "а",
+      code: "KeyF",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    chat.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(onRequestUpdate).toHaveBeenCalledOnce();
+  });
+
   it("keeps slash menus independent and resets only the targeted pane", () => {
     const paneA = document.createElement("div");
     const paneB = document.createElement("div");
@@ -5768,13 +5786,14 @@ describe("right-click Reply", () => {
     section.appendChild(confirmationOwner);
     window.localStorage.removeItem("openclaw:skip-rewind-confirm");
     chatMessage.openChatRewindConfirmation(confirmationTrigger, vi.fn());
+    const confirmation = document.querySelector<HTMLElement>(".chat-delete-confirm");
     const { bubble } = appendChatBubble(container, { text: "open message actions" });
 
     try {
-      expect(confirmationOwner.querySelector(".chat-delete-confirm")).not.toBeNull();
+      expect(confirmation?.isConnected).toBe(true);
       bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
 
-      expect(confirmationOwner.querySelector(".chat-delete-confirm")).toBeNull();
+      expect(confirmation?.isConnected).toBe(false);
       expect(document.querySelector(".chat-reply-context-menu")).not.toBeNull();
     } finally {
       chatMessage.dismissConfirmedActionPopovers(confirmationOwner);
@@ -5924,9 +5943,7 @@ describe("right-click Reply", () => {
     rewindButton!.click();
     flushFrames();
 
-    const cancel = document.querySelector<HTMLButtonElement>(
-      ".chat-reply-context-menu .chat-delete-confirm__cancel",
-    );
+    const cancel = document.querySelector<HTMLButtonElement>(".chat-delete-confirm__cancel");
     expect(cancel).toBeInstanceOf(HTMLButtonElement);
     expect(document.activeElement).toBe(cancel);
     const confirmationEscape = new KeyboardEvent("keydown", {

@@ -6,6 +6,7 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { normalizeSidebarEntries } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
+import type { RuntimeConfigCapability } from "../lib/config/index.ts";
 import {
   loadSettings,
   normalizeChatFollowUpModeOverride,
@@ -88,6 +89,15 @@ type SyncedPrefKey = keyof typeof SYNCED_PREFS;
 type SyncedPrefValue<K extends SyncedPrefKey> =
   ReturnType<(typeof SYNCED_PREFS)[K]["extract"]> extends (infer T) | undefined ? T : never;
 type ServerUiPrefs = { [K in SyncedPrefKey]?: SyncedPrefValue<K> | null };
+type ServerUiPrefsWriter = Pick<RuntimeConfigCapability, "runExternalMutation"> & {
+  readonly state: {
+    readonly client: GatewayBrowserClient | null;
+    readonly connected: boolean;
+  };
+};
+type ServerUiPrefsCommit = {
+  needsRefresh: boolean;
+};
 const SYNCED_PREF_KEYS = Object.keys(SYNCED_PREFS) as SyncedPrefKey[];
 function extractServerUiPrefs(configObject: unknown): ServerUiPrefs {
   const prefs = asRecord(asRecord(asRecord(configObject)?.ui)?.prefs);
@@ -172,8 +182,9 @@ const MAX_CONFLICT_REDRAINS = 5;
 let applyingServerPrefs = false;
 let pendingScope = "";
 let pendingPrefs: ServerUiPrefs | null = null;
-let pushClient: GatewayBrowserClient | null = null;
-let pushAfterCommit: (() => void) | undefined;
+let pushWriter: ServerUiPrefsWriter | null = null;
+let pushScope = "";
+let pushAfterCommit: ((commit: ServerUiPrefsCommit) => void) | undefined;
 let pushDraining = false;
 let drainRequested = false;
 let pushEpoch = 0;
@@ -250,7 +261,8 @@ export function resetServerUiPrefsSync() {
   clearConflictRedrain();
   applyingServerPrefs = pushDraining = drainRequested = false;
   pendingScope = "";
-  pendingPrefs = pushClient = null;
+  pendingPrefs = pushWriter = null;
+  pushScope = "";
   lastReconciledScope = "";
   lastReconciledConfigObject = null;
 }
@@ -317,15 +329,32 @@ export function applyServerUiPrefs(
 export function isApplyingServerUiPrefs(): boolean {
   return applyingServerPrefs;
 }
-function adoptPushClient(client: GatewayBrowserClient): void {
-  if (pushClient === client) {
+function adoptPushWriter(writer: ServerUiPrefsWriter): void {
+  const scope = writer.state.client?.gatewayUrl ?? "";
+  if (pushWriter === writer && pushScope === scope) {
     return;
   }
+  const unscopedPending =
+    pendingScope === ""
+      ? {
+          ...parseStoredPrefs(readStorage(PENDING_KEY, "")),
+          ...pendingPrefs,
+        }
+      : null;
   clearConflictRedrain();
   pushEpoch += 1;
-  pushClient = client;
+  pushWriter = writer;
+  pushScope = scope;
   pushDraining = false;
-  adoptPendingScope(client.gatewayUrl, true);
+  adoptPendingScope(scope, true);
+  if (scope && unscopedPending && Object.keys(unscopedPending).length) {
+    // A preference can be edited before the first gateway client is adopted.
+    // Move only that unscoped intent forward; preferences from one real
+    // gateway must never bleed into another gateway's scope.
+    pendingPrefs = { ...pendingPrefs, ...unscopedPending };
+    mergePendingIntoStorage();
+    writeStorage(PENDING_KEY, "", null);
+  }
 }
 function removeBatch(batch: ServerUiPrefs): void {
   if (!pendingPrefs) {
@@ -342,79 +371,88 @@ function removeBatch(batch: ServerUiPrefs): void {
 }
 // Conflicts mean another writer committed, so bounded rescheduling converges under progress.
 // The cap prevents an endlessly conflicting server from keeping a timer chain alive.
-function scheduleConflictRedrain(client: GatewayBrowserClient, epoch: number): void {
+function scheduleConflictRedrain(writer: ServerUiPrefsWriter, epoch: number): void {
   if (conflictRedrainTimer !== null || consecutiveConflictRedrains >= MAX_CONFLICT_REDRAINS) {
     return;
   }
   consecutiveConflictRedrains += 1;
   conflictRedrainTimer = setTimeout(() => {
     conflictRedrainTimer = null;
-    if (pushClient === client && pushEpoch === epoch && pendingPrefs) {
-      startPendingDrain(client);
+    if (pushWriter === writer && pushEpoch === epoch && pendingPrefs) {
+      startPendingDrain(writer);
     }
   }, CONFLICT_REDRAIN_DELAY_MS);
 }
-async function drainPendingPrefs(client: GatewayBrowserClient, epoch: number): Promise<void> {
+async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Promise<void> {
   while (pendingPrefs) {
-    if (pushClient !== client || pushEpoch !== epoch) {
+    if (pushWriter !== writer || pushEpoch !== epoch) {
       return;
     }
     const batch = { ...pendingPrefs };
     const afterCommit = pushAfterCommit;
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      if (pushClient !== client || pushEpoch !== epoch) {
+      if (pushWriter !== writer || pushEpoch !== epoch) {
         return;
       }
-      try {
-        await client.request("config.patch", {
-          raw: JSON.stringify({ ui: { prefs: batch } }),
-          ...(batch.sidebarEntries !== undefined
-            ? { replacePaths: ["ui.prefs.sidebarEntries"] }
-            : {}),
-          note: "control-ui prefs sync",
-        });
-        if (pushClient !== client || pushEpoch !== epoch) {
-          return;
-        }
-        // Start refresh while pending still shadows the pre-commit snapshot published by load.
-        afterCommit?.();
-        if (pushClient !== client || pushEpoch !== epoch) {
-          return;
-        }
+      const result = await writer.runExternalMutation(
+        (client) =>
+          // ui.prefs is a deliberately narrow hashless LWW surface enforced by
+          // hasHashlessPatchLwwStructure in the gateway. Serialization still
+          // matters: a pending whole-config save must commit before this merge.
+          client.request("config.patch", {
+            raw: JSON.stringify({ ui: { prefs: batch } }),
+            ...(batch.sidebarEntries !== undefined
+              ? { replacePaths: ["ui.prefs.sidebarEntries"] }
+              : {}),
+            note: "control-ui prefs sync",
+          }),
+        { waitForWritesResumed: true },
+      );
+      if (pushWriter !== writer || pushEpoch !== epoch) {
+        return;
+      }
+      if (result.ok) {
         removeBatch(batch);
         const lastSeen = parseStoredPrefs(readStorage(LAST_SEEN_KEY, pendingScope)) ?? {};
         writeStorage(LAST_SEEN_KEY, pendingScope, JSON.stringify({ ...lastSeen, ...batch }));
         settlePendingStorage(batch);
         clearConflictRedrain();
+        if (pushWriter !== writer || pushEpoch !== epoch) {
+          return;
+        }
+        if (result.refresh.ok && afterCommit && lastReconciledScope === pendingScope) {
+          // The authoritative refresh published while pending intent still
+          // shadowed this batch. Re-evaluate that same snapshot after cleanup
+          // so a concurrent server value wins without another config.get.
+          lastReconciledConfigObject = null;
+        }
+        afterCommit?.({ needsRefresh: !result.refresh.ok });
+        if (pushWriter !== writer || pushEpoch !== epoch) {
+          return;
+        }
         break;
-      } catch (error) {
-        if (pushClient !== client || pushEpoch !== epoch) {
-          return;
-        }
-        const conflict = String(error).includes("config changed since last load");
-        if (conflict && attempt === 0) {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 250);
-          });
-          continue;
-        }
-        if (conflict) {
-          scheduleConflictRedrain(client, epoch);
-          return;
-        }
-        if (!client.connected) {
-          return;
-        }
-        // Connected viewer-scope or validation failures degrade silently to device-local state;
-        // connection loss and CAS conflicts retain pending intent for replay.
-        removeBatch(batch);
-        settlePendingStorage(batch);
+      }
+      if (result.reason === "conflict" && attempt === 0) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 250);
+        });
+        continue;
+      }
+      if (result.reason === "conflict") {
+        scheduleConflictRedrain(writer, epoch);
         return;
       }
+      if (result.reason === "unavailable" || result.reason === "suspended") {
+        return;
+      }
+      // Connected viewer-scope or validation failures degrade silently to device-local state.
+      removeBatch(batch);
+      settlePendingStorage(batch);
+      return;
     }
   }
 }
-function startPendingDrain(client: GatewayBrowserClient): void {
+function startPendingDrain(writer: ServerUiPrefsWriter): void {
   if (pushDraining) {
     drainRequested = true;
     return;
@@ -424,38 +462,38 @@ function startPendingDrain(client: GatewayBrowserClient): void {
   }
   pushDraining = true;
   const epoch = pushEpoch;
-  void drainPendingPrefs(client, epoch)
+  void drainPendingPrefs(writer, epoch)
     .catch(() => undefined)
     .finally(() => {
-      if (pushClient === client && pushEpoch === epoch) {
+      if (pushWriter === writer && pushEpoch === epoch) {
         pushDraining = false;
         if (drainRequested) {
           drainRequested = false;
-          startPendingDrain(client);
+          startPendingDrain(writer);
         }
       }
     });
 }
 export function pushServerUiPrefs(
-  client: GatewayBrowserClient,
+  writer: ServerUiPrefsWriter,
   prefs: ServerUiPrefs,
-  hooks: { afterCommit?: () => void } = {},
+  hooks: { afterCommit?: (commit: ServerUiPrefsCommit) => void } = {},
 ): void {
-  adoptPushClient(client);
+  adoptPushWriter(writer);
   clearConflictRedrain();
   pendingPrefs = { ...pendingPrefs, ...prefs };
   pushAfterCommit = hooks.afterCommit;
   mergePendingIntoStorage();
-  startPendingDrain(client);
+  startPendingDrain(writer);
 }
 export function flushServerUiPrefs(
-  client: GatewayBrowserClient,
-  hooks: { afterCommit?: () => void } = {},
+  writer: ServerUiPrefsWriter,
+  hooks: { afterCommit?: (commit: ServerUiPrefsCommit) => void } = {},
 ): void {
-  adoptPushClient(client);
+  adoptPushWriter(writer);
   clearConflictRedrain();
   pushEpoch += 1;
   pushDraining = drainRequested = false;
   pushAfterCommit = hooks.afterCommit;
-  startPendingDrain(client);
+  startPendingDrain(writer);
 }

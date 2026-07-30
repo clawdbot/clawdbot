@@ -14,6 +14,7 @@ import {
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { resolveGatewayPort } from "../config/paths.js";
 import { CLAWHUB_TRUST_ERROR_CODE } from "../infra/clawhub-install-trust.js";
 import {
   CLAWHUB_SKILLS_SH_TRUST_LABEL,
@@ -123,6 +124,7 @@ type ResolvedSkillsWorkspace = ReturnType<typeof resolveSkillsWorkspace>;
 
 const GATEWAY_SKILLS_STATUS_TIMEOUT_MS = 1_500;
 const GATEWAY_SKILLS_EVALUATION_TIMEOUT_MS = 650_000;
+const GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS = 250;
 // Apply can await evaluator, proposal-change, and skill-change hook phases.
 const GATEWAY_SKILLS_APPLY_TIMEOUT_MS = 1_850_000;
 
@@ -432,7 +434,8 @@ async function runSkillProposalApply(
   resolved: ResolvedSkillsWorkspace,
   proposalId: string,
 ): Promise<SkillProposalApplyResult> {
-  const { callGateway, isGatewayTransportError } = await import("../gateway/call.js");
+  const { callGateway, isGatewayCredentialsRequiredError, isGatewayTransportError } =
+    await import("../gateway/call.js");
   try {
     // Decide offline fallback before dispatching the non-idempotent mutation.
     // Once a Gateway answers, apply failures must never be replayed locally.
@@ -446,21 +449,42 @@ async function runSkillProposalApply(
       requiredMethods: ["skills.proposals.apply"],
     });
   } catch (err) {
-    if (
-      resolved.config.gateway?.mode === "remote" ||
-      !isGatewayTransportError(err) ||
-      err.kind !== "closed" ||
-      err.code !== 1006
-    ) {
+    const isOfflineCandidate =
+      isGatewayCredentialsRequiredError(err) ||
+      (isGatewayTransportError(err) && err.kind === "closed" && err.code === 1006);
+    if (resolved.config.gateway?.mode === "remote" || !isOfflineCandidate) {
       throw err;
     }
-    return await applySkillProposal({
-      agentId: resolved.agentId,
-      eventActor: { type: "system", id: "cli" },
-      workspaceDir: resolved.workspaceDir,
-      config: resolved.config,
-      proposalId,
-    });
+
+    // Hold the canonical Gateway ownership locks across local mutation. This
+    // makes offline apply atomic with Gateway startup, so a new process cannot
+    // inherit a stale process-local skill snapshot.
+    const { acquireGatewayLock } = await import("../infra/gateway-lock.js");
+    let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
+    try {
+      lock = await acquireGatewayLock({
+        allowInTests: true,
+        port: resolveGatewayPort(resolved.config, process.env),
+        role: "skill-workshop-apply",
+        timeoutMs: GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS,
+      });
+    } catch {
+      throw err;
+    }
+    if (!lock) {
+      throw err;
+    }
+    try {
+      return await applySkillProposal({
+        agentId: resolved.agentId,
+        eventActor: { type: "system", id: "cli" },
+        workspaceDir: resolved.workspaceDir,
+        config: resolved.config,
+        proposalId,
+      });
+    } finally {
+      await lock.release();
+    }
   }
 
   return await callGateway<SkillProposalApplyResult>({

@@ -501,12 +501,12 @@ suite("Claude native session catalog", () => {
     });
     await page.clock.runFor(100);
     await page.locator('.chat-virtual-row:not([data-virtual-row-key="history"])').first().waitFor();
-    const anchor = await firstVisibleVirtualRow(thread);
     await expect
       .poll(() => gateway.getRequests("sessions.catalog.read").then((requests) => requests.length))
       .toBe(initialReadCount + 1);
     await page.locator(".chat-history-loading").waitFor();
     expect(await page.getByRole("button", { name: "Load older" }).count()).toBe(0);
+    const anchor = await firstVisibleVirtualRow(thread);
     await startVirtualRowPrependProbe(thread, anchor);
     await gateway.resolveDeferred("sessions.catalog.read");
     await expect
@@ -634,9 +634,9 @@ suite("Claude native session catalog", () => {
       element.dispatchEvent(new Event("scroll"));
     });
     await page.locator('.chat-virtual-row:not([data-virtual-row-key="history"])').first().waitFor();
-    const anchor = await firstVisibleVirtualRow(thread);
     await gateway.waitForRequest("chat.history");
     await page.locator(".chat-history-loading").waitFor();
+    const anchor = await firstVisibleVirtualRow(thread);
     await startVirtualRowPrependProbe(thread, anchor);
     await gateway.resolveDeferred("chat.history");
     await expect

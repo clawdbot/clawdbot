@@ -1,4 +1,7 @@
+import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
+import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { detectInferenceBackends } from "../commands/onboard-inference.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -27,6 +30,31 @@ import {
   toProviderAutoSetupKind,
 } from "./setup-inference-core.js";
 import { parseRef } from "./setup-inference-plan-helpers.js";
+
+function resolveConfiguredCandidateKind(
+  config: Parameters<typeof resolveModelRuntimePolicy>[0]["config"],
+  modelRef: string | undefined,
+): SetupInferenceCandidate["kind"] | undefined {
+  if (!modelRef) {
+    return undefined;
+  }
+  const ref = parseRef(modelRef);
+  const runtime = normalizeOptionalAgentRuntimeId(
+    resolveModelRuntimePolicy({
+      config,
+      provider: ref.provider,
+      modelId: ref.model,
+      agentId: resolveDefaultAgentId(config ?? {}),
+    }).policy?.id,
+  );
+  if (runtime === "codex") {
+    return "codex-cli";
+  }
+  if (runtime === "claude-cli") {
+    return "claude-cli";
+  }
+  return undefined;
+}
 
 /**
  * Manual setup options only — no CLI probing, no credential discovery. Used
@@ -113,7 +141,19 @@ export async function detectSetupInference(
         "OpenCode CLI is installed, but its ACP harness requires separate setup and is not a reusable guided-setup inference route.",
     });
   }
-  const raw = detected.filter((candidate) => candidate.kind !== "gemini-cli");
+  const configuredModel = detected.find(
+    (candidate) => candidate.kind === "existing-model",
+  )?.modelRef;
+  const configuredCandidateKind = resolveConfiguredCandidateKind(cfg, configuredModel);
+  const raw = detected.filter(
+    (candidate) =>
+      candidate.kind !== "gemini-cli" &&
+      !(
+        candidate.kind === configuredCandidateKind &&
+        configuredModel &&
+        areRuntimeModelRefsEquivalent(candidate.modelRef, configuredModel, { config: cfg })
+      ),
+  );
   const { workspace } = await resolveSetupInferenceWorkspace({
     configExists: snapshot.exists,
     configValid: snapshot.valid,
@@ -174,9 +214,6 @@ export async function detectSetupInference(
       resolveCandidatePresentation(candidate, authChoices),
     ),
   );
-  const configuredModel = candidates.find(
-    (candidate) => candidate.kind === "existing-model",
-  )?.modelRef;
   const discoveryChoices = authChoices.filter(
     (choice) =>
       choice.appGuidedDiscovery === true && supportsSetupTextInference(choice.onboardingScopes),

@@ -11,8 +11,9 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { renderPluginsHubTabs, type PluginsHubTab } from "../../components/plugins-hub-tabs.ts";
+import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { t } from "../../i18n/index.ts";
 import {
   closeClawHubDetail,
   installFromClawHub,
@@ -35,6 +36,11 @@ import {
 } from "../../lib/skills/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import {
+  PLUGINS_HUB_PANEL_ID,
+  pluginsHubTabs,
+  type PluginsHubTab,
+} from "../plugins/plugins-hub.ts";
 import { renderSkills, type SkillDetailTab, type SkillsStatusFilter } from "./view.ts";
 
 export type SkillsRouteData = {
@@ -394,10 +400,18 @@ class SkillsPage extends OpenClawLightDomElement {
       </section>
       ${renderSettingsWorkspace(html`
         <div class="plugins-hub-tabs-row">
-          ${renderPluginsHubTabs({ active: "skills", onSelect: (tab) => this.selectHubTab(tab) })}
+          ${renderHubTabs({
+            id: "plugins",
+            active: "skills",
+            tabs: pluginsHubTabs(),
+            ariaLabel: t("pluginsPage.hubTablistLabel"),
+            panelId: PLUGINS_HUB_PANEL_ID,
+            className: "plugins-tabs",
+            onSelect: (tab) => this.selectHubTab(tab),
+          })}
         </div>
         <wa-tab-panel
-          id="plugins-hub-panel"
+          id=${PLUGINS_HUB_PANEL_ID}
           name="skills"
           active
           aria-labelledby="plugins-tab-skills"

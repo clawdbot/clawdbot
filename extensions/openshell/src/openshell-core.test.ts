@@ -945,6 +945,61 @@ describe("openshell fs bridges", () => {
     );
   });
 
+  it("creates mirror files exclusively before syncing them", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    const createFileExclusive = bridge.createFileExclusive?.bind(bridge);
+    expect(createFileExclusive).toBeTypeOf("function");
+
+    await expect(
+      createFileExclusive!({ filePath: "nested/file.txt", data: "first" }),
+    ).resolves.toBe("created");
+    await expect(
+      createFileExclusive!({ filePath: "nested/file.txt", data: "replacement" }),
+    ).resolves.toBe("exists");
+    await expect(fs.readFile(path.join(workspaceDir, "nested", "file.txt"), "utf8")).resolves.toBe(
+      "first",
+    );
+    expect(backend["syncLocalPathToRemote"]).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the canonical local exclusive create when mirror sync fails", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const backend = createMirrorBackendMock();
+    backend["syncLocalPathToRemote"] = vi.fn().mockRejectedValue(new Error("remote rejected"));
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    const createFileExclusive = bridge.createFileExclusive?.bind(bridge);
+    expect(createFileExclusive).toBeTypeOf("function");
+
+    await expect(createFileExclusive!({ filePath: "file.txt", data: "canonical" })).rejects.toThrow(
+      "remote rejected",
+    );
+    await expect(fs.readFile(path.join(workspaceDir, "file.txt"), "utf8")).resolves.toBe(
+      "canonical",
+    );
+  });
+
   it("creates remote mirror directories through the pinned backend operation", async () => {
     const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
     const backend = createMirrorBackendMock();

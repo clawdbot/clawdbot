@@ -820,16 +820,30 @@ export class NodeRegistry {
 
   /** Probe websocket liveness with ping/pong when the socket supports it. */
   async checkConnectivity(nodeId: string, timeoutMs = 2_000): Promise<NodeConnectivityResult> {
-    const node = this.nodesById.get(nodeId);
+    const node = this.getRegisteredSession(nodeId);
     if (!node) {
       return {
         ok: false,
         error: { code: "NOT_CONNECTED", message: "node not connected" },
       };
     }
+    // A successful old transport must never certify a replacement node.
+    const currentConnectionResult = (result: NodeConnectivityResult): NodeConnectivityResult =>
+      this.nodesById.get(nodeId) === node && node.client.invalidated !== true
+        ? result
+        : {
+            ok: false,
+            error: {
+              code: "NOT_CONNECTED",
+              message: "node connection changed during connectivity probe",
+            },
+          };
     const eventTransport = this.eventTransportsByConn.get(node.connId);
     if (eventTransport) {
-      return eventTransport.checkConnectivity?.(timeoutMs) ?? { ok: true };
+      const result = eventTransport.checkConnectivity
+        ? await eventTransport.checkConnectivity(timeoutMs)
+        : { ok: true as const };
+      return currentConnectionResult(result);
     }
     const socket = node.client.socket as PingableSocket;
     if (socket.readyState !== WEBSOCKET_OPEN_READY_STATE) {
@@ -860,7 +874,7 @@ export class NodeRegistry {
         settled = true;
         clearTimeout(timer);
         cleanup();
-        resolve(result);
+        resolve(currentConnectionResult(result));
       };
       const onPong = () => finish({ ok: true });
       const onClose = () =>

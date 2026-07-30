@@ -7,7 +7,7 @@ import {
   jsonResponse,
   stubFetch,
   stubVydraApiKey,
-} from "./provider-test-helpers.test.js";
+} from "./provider-test-helpers.js";
 
 function fetchCall(fetchMock: ReturnType<typeof vi.fn>, index = 0): [string, RequestInit] {
   const call = fetchMock.mock.calls[index];

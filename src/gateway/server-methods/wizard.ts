@@ -121,6 +121,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
                 {
                   mode: params.mode,
                   workspace: readStringValue(params.workspace),
+                  installDaemon: params.installDaemon,
                 },
                 runtime,
                 prompter,
@@ -181,8 +182,10 @@ export const wizardHandlers: GatewayRequestHandlers = {
     }
     const cancelled = session.cancel();
     const status = readWizardStatus(session);
-    if (cancelled || status.status !== "running") {
-      context.wizardSessions.delete(sessionId);
+    if (cancelled) {
+      void session.whenSettled().then(() => context.purgeWizardSession(sessionId));
+    } else {
+      context.purgeWizardSession(sessionId);
     }
     respond(true, status, undefined);
   },
@@ -196,9 +199,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
       return;
     }
     const status = readWizardStatus(session);
-    if (status.status !== "running") {
-      context.wizardSessions.delete(sessionId);
-    }
+    context.purgeWizardSession(sessionId);
     respond(true, status, undefined);
   },
 };

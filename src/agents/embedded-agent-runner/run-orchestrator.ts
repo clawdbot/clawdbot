@@ -60,6 +60,7 @@ import type {
   RunEmbeddedAgentParamsWithSessionFile,
 } from "./run/internal-params.js";
 import { createEmbeddedRunLaneController } from "./run/lane-controller.js";
+import { withEmbeddedRunLaneProgressHeartbeat } from "./run/lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
 import { bindRunToPreparedModelRuntime } from "./run/prepared-runtime-context.js";
 import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
@@ -213,10 +214,15 @@ async function runEmbeddedAgentInternal(
       };
       // Configless direct hosts reuse one bounded idle generation. Gateway and explicitly
       // configured runs release dynamic workspaces so one-off paths cannot accumulate owners.
-      const preparedModelRuntimeLease =
-        params.preparedModelRuntimeMode === "isolated-read-only"
-          ? await acquireReadOnlyPreparedModelRuntime(preparedInput)
-          : await acquireAgentRunPreparedModelRuntime(preparedInput, { retainIdleRunOwner });
+      // Cold plugin loading and provider discovery can exceed the lane no-progress budget.
+      // Active runtime acquisition is progress, not a hung lane task.
+      const preparedModelRuntimeLease = await withEmbeddedRunLaneProgressHeartbeat(
+        noteLaneTaskProgress,
+        () =>
+          params.preparedModelRuntimeMode === "isolated-read-only"
+            ? acquireReadOnlyPreparedModelRuntime(preparedInput)
+            : acquireAgentRunPreparedModelRuntime(preparedInput, { retainIdleRunOwner }),
+      );
       const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
       try {
         // A reload may complete while admission waits. The committed generation owns config,
@@ -310,6 +316,7 @@ async function runEmbeddedAgentInternal(
           sessionKey: resolvedSessionKey,
           sessionId: params.sessionId,
           workspaceDir: resolvedWorkspace,
+          activeProjectKeys: [...activeProjectKeys],
           modelProviderId: provider,
           modelId,
           trigger: params.trigger,

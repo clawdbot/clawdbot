@@ -371,6 +371,7 @@ export function toToolDefinitions(
               ...hookMetadata,
               toolCallId,
               ctx: hookContext,
+              signal,
             });
             if (hookOutcome.blocked) {
               if (hookOutcome.kind === "veto") {
@@ -492,7 +493,7 @@ export function toClientToolDefinitions(
       description: func.description ?? "",
       parameters: func.parameters as ToolDefinition["parameters"],
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
-        const { toolCallId, params } = splitToolExecuteArgs(args);
+        const { toolCallId, params, signal } = splitToolExecuteArgs(args);
         if (onClientToolCall && typeof onClientToolCall !== "function") {
           onClientToolCall.reserve?.(toolCallId, func.name);
         }
@@ -503,6 +504,7 @@ export function toClientToolDefinitions(
             params: initialParamsRecord,
             toolCallId,
             ctx: hookContext,
+            signal,
           });
           if (outcome.blocked) {
             if (onClientToolCall && typeof onClientToolCall !== "function") {

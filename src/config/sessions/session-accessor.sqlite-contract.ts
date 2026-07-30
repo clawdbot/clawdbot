@@ -102,6 +102,7 @@ export type {
 } from "./session-accessor.types.js";
 
 export type TranscriptMessageAppendOptions<TMessage> = {
+  appendIntent?: "active-branch";
   config?: OpenClawConfig;
   cwd?: string;
   idempotencyLookup?: "scan" | "scan-assistant" | "caller-checked";
@@ -115,6 +116,7 @@ export type TranscriptMessageAppendOptions<TMessage> = {
 
 export type TranscriptMessageAppendResult<TMessage> = {
   appended: boolean;
+  effectiveParentId?: string | null;
   message: TMessage;
   messageId: string;
 };

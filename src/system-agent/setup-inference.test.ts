@@ -626,6 +626,7 @@ describe("detectSetupInference", () => {
         choiceId: "zeta-api-key",
         choiceLabel: "Zeta API key",
         choiceHint: "Direct key",
+        groupLabel: "Zeta",
         icon: "https://cdn.example.com/zeta.svg",
         website: "https://zeta.example.com/keys",
         optionKey: "zetaApiKey",
@@ -638,6 +639,7 @@ describe("detectSetupInference", () => {
         methodId: "api-key",
         choiceId: "alpha-api-key",
         choiceLabel: "Alpha API key",
+        groupLabel: "Alpha",
         appGuidedSecret: true,
       },
       {
@@ -656,6 +658,7 @@ describe("detectSetupInference", () => {
       {
         id: "alpha-api-key",
         brandId: "alpha",
+        groupLabel: "Alpha",
         label: "Alpha API key",
       },
       {
@@ -666,6 +669,7 @@ describe("detectSetupInference", () => {
       {
         id: "zeta-api-key",
         brandId: "zeta",
+        groupLabel: "Zeta",
         label: "Zeta API key",
         hint: "Direct key",
         icon: "https://cdn.example.com/zeta.svg",
@@ -807,6 +811,117 @@ describe("detectSetupInference", () => {
       configuredModel: "openai/gpt-5.5",
       setupComplete: true,
     });
+  });
+
+  it("does not re-offer the configured Codex route as a setup candidate", async () => {
+    const { readConfigFileSnapshot } = await import("../config/config.js");
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: { model: "openai/gpt-5.6-sol" },
+        entries: {
+          main: {
+            default: true,
+            models: {
+              "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+            },
+          },
+        },
+      },
+    };
+    vi.mocked(readConfigFileSnapshot).mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      issues: [],
+      config,
+      sourceConfig: config,
+      runtimeConfig: config,
+    } as never);
+    vi.mocked(detectInferenceBackends).mockResolvedValueOnce([
+      {
+        kind: "existing-model",
+        modelRef: "openai/gpt-5.6-sol",
+        label: "Current model",
+        detail: "openai/gpt-5.6-sol — already configured",
+        credentials: true,
+      },
+      {
+        kind: "claude-cli",
+        modelRef: "claude-cli/claude-opus-5",
+        label: "Claude Code",
+        detail: "logged in",
+        credentials: true,
+      },
+      {
+        kind: "codex-cli",
+        modelRef: "openai/gpt-5.6-sol",
+        label: "Codex",
+        detail: "logged in",
+        credentials: true,
+      },
+    ]);
+
+    const detection = await detectSetupInference({
+      resolveManifestProviderAuthChoices: () => [],
+      probeLocalCommand: vi.fn(async (command) => ({ command, found: false })),
+    });
+
+    expect(detection.candidates.map((candidate) => candidate.kind)).toEqual([
+      "existing-model",
+      "claude-cli",
+    ]);
+  });
+
+  it("keeps a Codex candidate when it would switch the configured model", async () => {
+    const { readConfigFileSnapshot } = await import("../config/config.js");
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: { model: "openai/gpt-5.5" },
+        entries: {
+          main: {
+            default: true,
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+            },
+          },
+        },
+      },
+    };
+    vi.mocked(readConfigFileSnapshot).mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      issues: [],
+      config,
+      sourceConfig: config,
+      runtimeConfig: config,
+    } as never);
+    vi.mocked(detectInferenceBackends).mockResolvedValueOnce([
+      {
+        kind: "existing-model",
+        modelRef: "openai/gpt-5.5",
+        label: "Current model",
+        detail: "openai/gpt-5.5 — already configured",
+        credentials: true,
+      },
+      {
+        kind: "codex-cli",
+        modelRef: "openai/gpt-5.6-sol",
+        label: "Codex",
+        detail: "logged in",
+        credentials: true,
+      },
+    ]);
+
+    const detection = await detectSetupInference({
+      resolveManifestProviderAuthChoices: () => [],
+      probeLocalCommand: vi.fn(async (command) => ({ command, found: false })),
+    });
+
+    expect(detection.candidates.map((candidate) => candidate.kind)).toEqual([
+      "existing-model",
+      "codex-cli",
+    ]);
   });
 
   it("omits Gemini CLI because setup verification cannot hard-disable its tools", async () => {

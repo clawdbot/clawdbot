@@ -132,6 +132,19 @@ describe("message hook mappers", () => {
     expect(canonical.guildId).toBe("guild-1");
   });
 
+  it("normalizes canonical inbound message id precedence", () => {
+    expect(
+      deriveInboundMessageHookContext(
+        makeInboundCtx({ MessageSidFull: "full-message-id", MessageSid: "short-message-id" }),
+      ).messageId,
+    ).toBe("full-message-id");
+    expect(
+      deriveInboundMessageHookContext(
+        makeInboundCtx({ MessageSidFull: "  ", MessageSid: "short-message-id" }),
+      ).messageId,
+    ).toBe("short-message-id");
+  });
+
   it("uses the session key as the Control UI conversation id", () => {
     const canonical = deriveInboundMessageHookContext(
       makeInboundCtx({
