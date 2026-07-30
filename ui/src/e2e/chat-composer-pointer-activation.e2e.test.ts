@@ -383,7 +383,10 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
       await page.mouse.move(bounds.x - 20, bounds.y - 20);
       await page.mouse.up();
       await page.evaluate(
-        () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          }),
       );
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await expect.poll(() => textarea.inputValue()).toBe("Do not send this draft");
