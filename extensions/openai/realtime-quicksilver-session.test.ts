@@ -350,14 +350,21 @@ describe("GPT-Live offer broker", () => {
     }
   });
 
-  it("keeps only the latest delegation pending while a consult settles", async () => {
+  it("keeps only the latest delegation when the superseded consult rejects on abort", async () => {
     const resolvers: Array<(value: { text: string }) => void> = [];
     const signals: AbortSignal[] = [];
     const runAgentConsult = vi.fn(
       async ({ signal }: { prompt: string; signal?: AbortSignal }) =>
-        await new Promise<{ text: string }>((resolve) => {
+        await new Promise<{ text: string }>((resolve, reject) => {
           signals.push(signal as AbortSignal);
           resolvers.push(resolve);
+          signal?.addEventListener(
+            "abort",
+            () => {
+              reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
+            },
+            { once: true },
+          );
         }),
     );
     const { realtime, sockets } = createBroker({ runAgentConsult });
@@ -396,7 +403,6 @@ describe("GPT-Live offer broker", () => {
 
       expect(runAgentConsult).toHaveBeenCalledOnce();
       expect(signals[0]?.aborted).toBe(true);
-      resolvers[0]?.({ text: "stale result" });
       await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(2));
       expect(runAgentConsult.mock.calls[1]?.[0].prompt).toContain("latest task");
       expect(runAgentConsult.mock.calls[1]?.[0].prompt).not.toContain("second task");
@@ -405,7 +411,7 @@ describe("GPT-Live offer broker", () => {
       await vi.waitFor(() =>
         expect(socket.sent.some((entry) => entry.includes("latest result"))).toBe(true),
       );
-      expect(socket.sent.some((entry) => entry.includes("stale result"))).toBe(false);
+      expect(socket.closed).toBe(false);
     } finally {
       await realtime.cleanup();
     }
