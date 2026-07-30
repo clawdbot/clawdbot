@@ -9,6 +9,7 @@ import {
   resolveMemoryFallbackProviderRequest,
   resolveMemoryPrimaryProviderRequest,
   resolveMemoryProviderState,
+  shouldAttemptPrimaryProviderRecovery,
 } from "./manager-provider-state.js";
 
 const DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";
@@ -253,5 +254,60 @@ describe("memory manager mistral provider wiring", () => {
         currentProviderId: "lmstudio",
       }),
     ).toBeNull();
+  });
+});
+
+describe("memory manager primary provider recovery throttle", () => {
+  it("skips recovery when no fallback is active", () => {
+    expect(
+      shouldAttemptPrimaryProviderRecovery({
+        fallbackFrom: undefined,
+        lastAttemptMs: 0,
+        nowMs: 60_000,
+        throttleMs: 30_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("allows recovery on the first attempt after fallback activates", () => {
+    expect(
+      shouldAttemptPrimaryProviderRecovery({
+        fallbackFrom: "ollama",
+        lastAttemptMs: 0,
+        nowMs: 1_000,
+        throttleMs: 30_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("throttles repeated recovery attempts within the probe window", () => {
+    expect(
+      shouldAttemptPrimaryProviderRecovery({
+        fallbackFrom: "ollama",
+        lastAttemptMs: 10_000,
+        nowMs: 40_001,
+        throttleMs: 30_000,
+      }),
+    ).toBe(true);
+    expect(
+      shouldAttemptPrimaryProviderRecovery({
+        fallbackFrom: "ollama",
+        lastAttemptMs: 10_000,
+        nowMs: 39_999,
+        throttleMs: 30_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("forces recovery regardless of throttle when force is set", () => {
+    expect(
+      shouldAttemptPrimaryProviderRecovery({
+        fallbackFrom: "ollama",
+        lastAttemptMs: 10_000,
+        nowMs: 10_001,
+        throttleMs: 30_000,
+        force: true,
+      }),
+    ).toBe(true);
   });
 });

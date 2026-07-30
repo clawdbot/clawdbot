@@ -222,7 +222,7 @@ function splitSourceWideEmbeddingChunks<T>(chunks: T[], maxRequests: number): T[
   return batches;
 }
 
-function resolveEmbeddingTimeoutMs(params: {
+export function resolveEmbeddingTimeoutMs(params: {
   kind: "query" | "batch";
   providerId?: string;
   providerRuntime?: Pick<
@@ -269,7 +269,7 @@ function resolveMemoryIndexConcurrency(params: {
   return params.providerId === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
 }
 
-async function runEmbeddingOperationWithTimeout<T>(params: {
+export async function runEmbeddingOperationWithTimeout<T>(params: {
   timeoutMs: number;
   message: string;
   /** Caller-owned cancellation, merged with the per-call watchdog abort. */

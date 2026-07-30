@@ -107,6 +107,33 @@ export function resolveFallbackCurrentProviderId(params: {
   return null;
 }
 
+/**
+ * Decides whether to attempt restoring the primary embedding provider given
+ * that fallback is currently active. Throttles attempts so a latched fallback
+ * does not produce a network probe on every search call.
+ *
+ * `lastAttemptMs: 0` is treated as "never attempted", so the first recovery
+ * check after fallback activation is always allowed.
+ */
+export function shouldAttemptPrimaryProviderRecovery(params: {
+  fallbackFrom: string | undefined;
+  lastAttemptMs: number;
+  nowMs: number;
+  throttleMs: number;
+  force?: boolean;
+}): boolean {
+  if (!params.fallbackFrom) {
+    return false;
+  }
+  if (params.force) {
+    return true;
+  }
+  if (params.lastAttemptMs === 0) {
+    return true;
+  }
+  return params.nowMs - params.lastAttemptMs >= params.throttleMs;
+}
+
 export function resolveMemoryPrimaryProviderRequest(params: {
   settings: ResolvedMemorySearchConfig;
 }): {

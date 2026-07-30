@@ -64,13 +64,18 @@ import { awaitPendingManagerWork, startAsyncSearchSync } from "./manager-async-s
 import { MEMORY_BATCH_FAILURE_LIMIT } from "./manager-batch-state.js";
 import { getOrCreateManagedCacheEntry, resolveSingletonManagedCache } from "./manager-cache.js";
 import { closeMemoryDatabase } from "./manager-db.js";
-import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
+import {
+  MemoryManagerEmbeddingOps,
+  resolveEmbeddingTimeoutMs,
+  runEmbeddingOperationWithTimeout,
+} from "./manager-embedding-ops.js";
 import { isLocalEmbeddingWorkerFailure } from "./manager-local-worker-errors.js";
 import {
   createDegradedMemoryProviderLifecycle,
   createPendingMemoryProviderLifecycle,
   resolveMemoryPrimaryProviderRequest,
   resolveMemoryProviderState,
+  shouldAttemptPrimaryProviderRecovery,
   type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
 import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
@@ -442,6 +447,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private managerIdleWaiters = new Set<() => void>();
   protected override fallbackFrom?: EmbeddingProviderId;
   protected override fallbackReason?: string;
+  // Throttles primary-provider recovery attempts so a latched fallback does
+  // not bring the network path back online every search call. Without this,
+  // a transient remote outage permanently downgrades the in-gateway tool even
+  // after the primary is reachable again (only a full process restart clears
+  // the latch).
+  private lastPrimaryRecoveryAttemptMs = 0;
+  private primaryProviderRecoveryPromise: Promise<boolean> | null = null;
   protected providerUnavailableReason?: string;
   protected override providerLifecycle: MemoryProviderLifecycleState;
   protected override providerRuntime?: EmbeddingProviderRuntime;
@@ -508,12 +520,15 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     agentId: string;
     settings: ResolvedMemorySearchConfig;
     acquireLocalService?: MemoryCoreAcquireLocalService;
+    disableFallback?: boolean;
   }): Promise<EmbeddingProviderResult> {
+    const providerRequest = resolveMemoryPrimaryProviderRequest({ settings: params.settings });
     return await createEmbeddingProvider({
       config: params.cfg,
       agentDir: resolveAgentDir(params.cfg, params.agentId),
       ...(params.acquireLocalService ? { acquireLocalService: params.acquireLocalService } : {}),
-      ...resolveMemoryPrimaryProviderRequest({ settings: params.settings }),
+      ...providerRequest,
+      fallback: params.disableFallback ? "none" : providerRequest.fallback,
     });
   }
 
@@ -916,6 +931,153 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.providerLifecycle = createPendingMemoryProviderLifecycle(this.requestedProvider);
   }
 
+  /**
+   * Attempts to restore the configured primary embedding provider after a
+   * fallback was activated. Returns true when the primary is reachable again
+   * and the manager has switched back.
+   *
+   * Without this, a single transient outage permanently latches the in-gateway
+   * memory tool onto the fallback provider. The index is keyed by the original
+   * model identity, so subsequent searches fail identity validation until the
+   * gateway process fully restarts. In-process restarts and config soft-reloads
+   * reuse the singleton manager instance and must recover explicitly.
+   */
+  private async attemptPrimaryProviderRecovery(params: {
+    force?: boolean;
+    signal?: AbortSignal;
+  }): Promise<boolean> {
+    if (params.signal?.aborted) {
+      throw params.signal.reason instanceof Error
+        ? params.signal.reason
+        : new Error("search aborted");
+    }
+    const pending = this.primaryProviderRecoveryPromise;
+    if (pending) {
+      return await this.waitForPrimaryProviderRecovery(pending, params.signal);
+    }
+    const nowMs = Date.now();
+    if (
+      !shouldAttemptPrimaryProviderRecovery({
+        fallbackFrom: this.fallbackFrom,
+        lastAttemptMs: this.lastPrimaryRecoveryAttemptMs,
+        nowMs,
+        throttleMs: EMBEDDING_PROBE_CACHE_TTL_MS,
+        force: params.force,
+      })
+    ) {
+      return false;
+    }
+    this.lastPrimaryRecoveryAttemptMs = nowMs;
+    const recovery = this.withManagerOperation(
+      async () => await this.attemptPrimaryProviderRecoveryOnce(),
+    );
+    this.primaryProviderRecoveryPromise = recovery;
+    void recovery.then(
+      () => {
+        if (this.primaryProviderRecoveryPromise === recovery) {
+          this.primaryProviderRecoveryPromise = null;
+        }
+      },
+      () => {
+        if (this.primaryProviderRecoveryPromise === recovery) {
+          this.primaryProviderRecoveryPromise = null;
+        }
+      },
+    );
+    return await this.waitForPrimaryProviderRecovery(recovery, params.signal);
+  }
+
+  private async waitForPrimaryProviderRecovery(
+    recovery: Promise<boolean>,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    if (!signal) {
+      return await recovery;
+    }
+    if (signal.aborted) {
+      throw signal.reason instanceof Error ? signal.reason : new Error("search aborted");
+    }
+    return await Promise.race([
+      recovery,
+      new Promise<boolean>((_resolve, reject) => {
+        const abort = () => {
+          reject(signal.reason instanceof Error ? signal.reason : new Error("search aborted"));
+        };
+        signal.addEventListener("abort", abort, { once: true });
+        void recovery.then(
+          () => signal.removeEventListener("abort", abort),
+          () => signal.removeEventListener("abort", abort),
+        );
+      }),
+    ]);
+  }
+
+  private async attemptPrimaryProviderRecoveryOnce(): Promise<boolean> {
+    let pendingProvider: EmbeddingProvider | null = null;
+    const discardPending = (label: string): void => {
+      const provider = pendingProvider;
+      pendingProvider = null;
+      if (provider && provider !== this.provider) {
+        void Promise.resolve(provider.close?.()).catch((err: unknown) => {
+          log.debug(`memory embeddings: failed to close ${label}: ${String(err)}`);
+        });
+      }
+    };
+    try {
+      const primaryResult = await MemoryIndexManager.loadProviderResult({
+        cfg: this.cfg,
+        agentId: this.agentId,
+        settings: this.settings,
+        acquireLocalService: this.acquireLocalService,
+        disableFallback: true,
+      });
+      if (!primaryResult.provider || primaryResult.fallbackFrom) {
+        pendingProvider = primaryResult.provider;
+        discardPending("discarded recovery probe");
+        return false;
+      }
+      pendingProvider = primaryResult.provider;
+      const pingProvider = primaryResult.provider;
+      const pingRuntime = primaryResult.runtime;
+      const pingTimeoutMs = resolveEmbeddingTimeoutMs({
+        kind: "batch",
+        providerId: pingProvider.id,
+        providerRuntime: pingRuntime
+          ? {
+              inlineQueryTimeoutMs: pingRuntime.inlineQueryTimeoutMs,
+              inlineBatchTimeoutMs: pingRuntime.inlineBatchTimeoutMs,
+            }
+          : undefined,
+        configuredBatchTimeoutSeconds: this.settings.sync.embeddingBatchTimeoutSeconds,
+      });
+      await runEmbeddingOperationWithTimeout({
+        timeoutMs: pingTimeoutMs,
+        message: `memory embeddings recovery ping timed out after ${Math.round(pingTimeoutMs / 1000)}s`,
+        run: async (signal) => await pingProvider.embedBatch(["ping"], { signal }),
+      });
+      const previousProvider = this.provider;
+      this.applyProviderResult(primaryResult);
+      this.providerKey = this.computeProviderKey();
+      this.batch = this.resolveBatchConfig();
+      this.lastPrimaryRecoveryAttemptMs = 0;
+      pendingProvider = null;
+      if (previousProvider && previousProvider !== this.provider) {
+        void this.retireProvider(previousProvider);
+      }
+      EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
+      log.info(
+        `memory embeddings: recovered primary provider (${primaryResult.provider.id}) from fallback`,
+      );
+      return true;
+    } catch (err) {
+      discardPending("failed recovery probe");
+      log.debug(
+        `memory embeddings: primary recovery attempted but failed: ${formatErrorMessage(err)}`,
+      );
+      return false;
+    }
+  }
+
   protected markLocalEmbeddingProviderDegraded(err: unknown): void {
     if (this.provider?.id !== "local") {
       return;
@@ -951,8 +1113,17 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (provider) {
       this.provider = null;
       this.providerRuntime = undefined;
-      this.providersPendingRetirement.add(provider);
+      return this.retireProvider(provider);
     }
+    return this.drainProviderRetirementQueue();
+  }
+
+  private retireProvider(provider: EmbeddingProvider): Promise<void> {
+    this.providersPendingRetirement.add(provider);
+    return this.drainProviderRetirementQueue();
+  }
+
+  private drainProviderRetirementQueue(): Promise<void> {
     if (this.providersPendingRetirement.size === 0) {
       return this.providerRetirementPromise;
     }
@@ -1141,6 +1312,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     opts?: MemoryIndexSearchOptions,
   ): Promise<MemorySearchResult[]> {
     return await this.withManagerOperation(async () => {
+      const enteredDuringFallbackInitialization =
+        this.getPendingFallbackProviderInitialization() !== null;
       opts?.onDebug?.({ backend: "builtin" });
       if (this.providerRequirement.mode === "required") {
         await this.ensureProviderInitialized();
@@ -1241,11 +1414,28 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           });
         }
       }
-      const indexIdentity = embeddingBootstrapKeywordOnly
+      let indexIdentity = embeddingBootstrapKeywordOnly
         ? this.refreshKeywordFallbackIndexIdentity()
         : this.refreshIndexIdentityDirty({
             providerKeyKnown: this.providerInitialized,
           });
+      if (
+        !embeddingBootstrapKeywordOnly &&
+        !opts?.lexicalOnly &&
+        !enteredDuringFallbackInitialization &&
+        this.fallbackFrom &&
+        indexIdentity.status !== "valid" &&
+        !opts?.signal?.aborted
+      ) {
+        const recovered = await this.attemptPrimaryProviderRecovery({
+          signal: opts?.signal,
+        });
+        if (recovered) {
+          indexIdentity = this.refreshIndexIdentityDirty({
+            providerKeyKnown: this.providerInitialized,
+          });
+        }
+      }
       if (indexIdentity.status !== "valid") {
         return [];
       }
