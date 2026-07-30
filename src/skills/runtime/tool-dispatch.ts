@@ -16,6 +16,7 @@ import {
   mergeAlsoAllowPolicy,
   replaceWithEffectiveToolAllowlist,
   resolveToolProfilePolicy,
+  type ToolPolicyLike,
 } from "../../agents/tool-policy.js";
 import {
   replaceWithEffectiveCronCreatorToolAllowlist,
@@ -118,9 +119,10 @@ export function resolveSkillDispatchTools(params: {
     sessionKey: params.sessionKey,
   });
   const sandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
-  const ownerOnlyCoreToolPolicy =
-    params.senderIsOwner === false ? { deny: [...GATEWAY_OWNER_ONLY_CORE_TOOLS] } : undefined;
-  const explicitPolicyList = [
+  const ownerOnlyCoreToolPolicy = !params.senderIsOwner
+    ? { deny: [...GATEWAY_OWNER_ONLY_CORE_TOOLS] }
+    : undefined;
+  const explicitPolicyList: Array<ToolPolicyLike | undefined> = [
     profilePolicy,
     providerProfilePolicy,
     globalPolicy,
