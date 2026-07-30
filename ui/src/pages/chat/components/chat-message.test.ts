@@ -595,6 +595,16 @@ async function requireAudioPlayer(container: HTMLElement) {
   return player;
 }
 
+async function requireVideoPlayer(container: HTMLElement) {
+  const player = expectElement(
+    container,
+    "openclaw-chat-video-player",
+    HTMLElement,
+  ) as HTMLElement & { updateComplete: Promise<unknown> };
+  await player.updateComplete;
+  return player;
+}
+
 afterEach(() => {
   markdownRenderMock.mockClear();
   document.querySelectorAll("[data-media-player-test-fixture]").forEach((element) => {
@@ -3119,7 +3129,10 @@ describe("grouped chat rendering", () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       expect(url).toContain("meta=1");
       expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
-      return { ok: true, json: async () => mediaTicketPayload("ticket-bootstrap-audio") };
+      return {
+        ok: true,
+        json: async () => ({ ...mediaTicketPayload("ticket-bootstrap-audio"), durationMs: 2_345 }),
+      };
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
@@ -3153,6 +3166,373 @@ describe("grouped chat rendering", () => {
     expect(audio.getAttribute("src")).toBe(
       `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-bootstrap-audio`,
     );
+    expect((audioPlayer as unknown as { serverDurationMs?: number }).serverDurationMs).toBe(2_345);
+  });
+
+  it("resolves managed transcode audio through an artifact ticket", async () => {
+    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const ticketedUrl = `${source}?mediaTicket=managed-ticket`;
+    const artifactId = `artifact_managed_media_${crypto.randomUUID()}`;
+    const resolveArtifactDownload = vi.fn(async () => ({ url: ticketedUrl }));
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toBe(`${ticketedUrl}&playback=1`);
+      expect(init?.method).toBe("HEAD");
+      expect(new Headers(init?.headers).get("Authorization")).toBeNull();
+      return new Response(null, { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
+    const rerender = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-managed-transcode-audio",
+          role: "assistant",
+          content: [
+            {
+              type: "audio",
+              artifactId,
+              url: source,
+              fileName: "voice.caf",
+              mimeType: "audio/x-caf",
+              playback: "transcode",
+              sizeBytes: 4_096,
+              durationMs: 2_345,
+            },
+          ],
+          timestamp: Date.now(),
+        },
+        {
+          showToolCalls: false,
+          assistantAttachmentAuthToken: "must-not-be-forwarded",
+          onRequestUpdate: rerender,
+          resolveArtifactDownload,
+        },
+      );
+
+    rerender();
+    await flushAssistantAttachmentAvailabilityChecks();
+    const player = await requireAudioPlayer(container);
+    await flushAssistantAttachmentAvailabilityChecks();
+    await player.updateComplete;
+
+    expect(resolveArtifactDownload).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      artifactId,
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(expectElement(player, "audio", HTMLAudioElement).getAttribute("src")).toBe(
+      `${ticketedUrl}&playback=1`,
+    );
+    expect((player as unknown as { serverDurationMs?: number }).serverDurationMs).toBeUndefined();
+  });
+
+  it("keeps a valid managed media ticket while refresh retries", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-29T00:00:00.000Z"));
+    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const ticketedUrl = `${source}?mediaTicket=managed-old`;
+    const artifactId = `artifact_managed_media_${crypto.randomUUID()}`;
+    const resolveArtifactDownload = vi
+      .fn<() => Promise<{ url: string; expiresAt: string }>>()
+      .mockResolvedValueOnce({
+        url: ticketedUrl,
+        expiresAt: new Date(Date.now() + 31_000).toISOString(),
+      })
+      .mockRejectedValueOnce(new Error("refresh unavailable"));
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
+    const rerender = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-managed-ticket-refresh",
+          role: "assistant",
+          content: [
+            {
+              type: "audio",
+              artifactId,
+              url: source,
+              fileName: "voice.mp3",
+              mimeType: "audio/mpeg",
+              playback: "native",
+            },
+          ],
+          timestamp: Date.now(),
+        },
+        { showToolCalls: false, onRequestUpdate: rerender, resolveArtifactDownload },
+      );
+
+    rerender();
+    await flushAssistantAttachmentAvailabilityChecks();
+    const player = await requireAudioPlayer(container);
+    expect(expectElement(player, "audio", HTMLAudioElement).getAttribute("src")).toBe(ticketedUrl);
+
+    await vi.advanceTimersByTimeAsync(1_001);
+    await flushAssistantAttachmentAvailabilityChecks();
+    await player.updateComplete;
+
+    expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
+    expect(container.querySelector(".chat-assistant-attachment-card--blocked")).toBeNull();
+    expect(expectElement(player, "audio", HTMLAudioElement).getAttribute("src")).toBe(ticketedUrl);
+  });
+
+  it("backs off stale managed ticket refreshes and eventually marks them unavailable", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-29T00:00:00.000Z"));
+    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const artifactId = `artifact_managed_media_${crypto.randomUUID()}`;
+    let finishSecondRequest: (() => void) | undefined;
+    const resolveArtifactDownload = vi.fn(() => {
+      const requestNumber = resolveArtifactDownload.mock.calls.length;
+      const result = {
+        url: `${source}?mediaTicket=stale-${requestNumber}`,
+        expiresAt: new Date(Date.now() + (requestNumber === 1 ? 6_000 : -1_000)).toISOString(),
+      };
+      if (requestNumber !== 2) {
+        return Promise.resolve(result);
+      }
+      return new Promise<typeof result>((resolve) => {
+        finishSecondRequest = () => resolve(result);
+      });
+    });
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
+    const rerender = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-managed-stale-ticket-refresh",
+          role: "assistant",
+          content: [
+            {
+              type: "audio",
+              artifactId,
+              url: source,
+              fileName: "voice.mp3",
+              mimeType: "audio/mpeg",
+              playback: "native",
+            },
+          ],
+          timestamp: Date.now(),
+        },
+        { showToolCalls: false, onRequestUpdate: rerender, resolveArtifactDownload },
+      );
+
+    rerender();
+    await flushAssistantAttachmentAvailabilityChecks();
+    expect(resolveArtifactDownload).toHaveBeenCalledTimes(1);
+    expect(container.querySelector("openclaw-chat-audio-player")).not.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(resolveArtifactDownload).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await flushAssistantAttachmentAvailabilityChecks();
+    expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
+    expect(container.querySelector("openclaw-chat-audio-player")).not.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
+    expect(container.querySelector("openclaw-chat-audio-player")).toBeNull();
+    finishSecondRequest?.();
+    await flushAssistantAttachmentAvailabilityChecks();
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    expect(resolveArtifactDownload).toHaveBeenCalledTimes(3);
+    expect(container.querySelector(".chat-assistant-attachment-card--blocked")).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(resolveArtifactDownload).toHaveBeenCalledTimes(3);
+  });
+
+  it("retains the current managed ticket until expiry after refresh exhaustion", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-29T00:00:00.000Z"));
+    const expiresAt = new Date(Date.now() + 20_000).toISOString();
+    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const artifactId = `artifact_managed_media_${crypto.randomUUID()}`;
+    const resolveArtifactDownload = vi.fn(async () => ({
+      url: `${source}?mediaTicket=short-${resolveArtifactDownload.mock.calls.length}`,
+      expiresAt,
+    }));
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
+    const rerender = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-managed-ticket-exhaustion",
+          role: "assistant",
+          content: [
+            {
+              type: "audio",
+              artifactId,
+              url: source,
+              fileName: "voice.mp3",
+              mimeType: "audio/mpeg",
+              playback: "native",
+            },
+          ],
+          timestamp: Date.now(),
+        },
+        { showToolCalls: false, onRequestUpdate: rerender, resolveArtifactDownload },
+      );
+
+    rerender();
+    await flushAssistantAttachmentAvailabilityChecks();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushAssistantAttachmentAvailabilityChecks();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    expect(resolveArtifactDownload).toHaveBeenCalledTimes(3);
+    expect(
+      container.querySelector("openclaw-chat-audio-player audio")?.getAttribute("src"),
+    ).toContain("mediaTicket=short-2");
+    expect(container.querySelector(".chat-assistant-attachment-card--blocked")).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(container.querySelector("openclaw-chat-audio-player")).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    expect(resolveArtifactDownload).toHaveBeenCalledTimes(3);
+    expect(container.querySelector(".chat-assistant-attachment-card--blocked")).not.toBeNull();
+  });
+
+  it("retains a longer-lived incoming managed ticket after refresh exhaustion", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-29T00:00:00.000Z"));
+    const initialExpiry = Date.now() + 20_000;
+    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const artifactId = `artifact_managed_media_${crypto.randomUUID()}`;
+    const resolveArtifactDownload = vi.fn(async () => ({
+      url: `${source}?mediaTicket=short-${resolveArtifactDownload.mock.calls.length}`,
+      expiresAt: new Date(
+        resolveArtifactDownload.mock.calls.length === 3 ? Date.now() + 20_000 : initialExpiry,
+      ).toISOString(),
+    }));
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
+    const rerender = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-managed-later-ticket",
+          role: "assistant",
+          content: [
+            {
+              type: "audio",
+              artifactId,
+              url: source,
+              fileName: "voice.mp3",
+              mimeType: "audio/mpeg",
+              playback: "native",
+            },
+          ],
+          timestamp: Date.now(),
+        },
+        { showToolCalls: false, onRequestUpdate: rerender, resolveArtifactDownload },
+      );
+
+    rerender();
+    await flushAssistantAttachmentAvailabilityChecks();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushAssistantAttachmentAvailabilityChecks();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    expect(resolveArtifactDownload).toHaveBeenCalledTimes(3);
+    expect(
+      container.querySelector("openclaw-chat-audio-player audio")?.getAttribute("src"),
+    ).toContain("mediaTicket=short-3");
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushAssistantAttachmentAvailabilityChecks();
+    expect(container.querySelector("openclaw-chat-audio-player")).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(15_000);
+    await flushAssistantAttachmentAvailabilityChecks();
+    expect(container.querySelector(".chat-assistant-attachment-card--blocked")).not.toBeNull();
+  });
+
+  it("refreshes a managed attachment that arrives with an initial ticket", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-29T00:00:00.000Z"));
+    const rawSource = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const source = `${rawSource}?mediaTicket=initial`;
+    const refreshedSource = `${rawSource}?mediaTicket=refreshed`;
+    const artifactId = `artifact_managed_media_${crypto.randomUUID()}`;
+    const resolveArtifactDownload = vi.fn(async () => ({ url: refreshedSource }));
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
+    const rerender = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-managed-initial-ticket",
+          role: "assistant",
+          content: [
+            {
+              type: "audio",
+              artifactId,
+              url: source,
+              fileName: "voice.mp3",
+              mimeType: "audio/mpeg",
+              playback: "native",
+            },
+          ],
+          timestamp: Date.now(),
+        },
+        { showToolCalls: false, onRequestUpdate: rerender, resolveArtifactDownload },
+      );
+
+    rerender();
+    await flushAssistantAttachmentAvailabilityChecks();
+    const player = await requireAudioPlayer(container);
+
+    expect(resolveArtifactDownload).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      artifactId,
+    });
+    expect(expectElement(player, "audio", HTMLAudioElement).getAttribute("src")).toBe(
+      refreshedSource,
+    );
+
+    await vi.advanceTimersByTimeAsync(4 * 60_000 + 30_001);
+    await flushAssistantAttachmentAvailabilityChecks();
+    expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not render an unticketed managed attachment without an artifact resolver", () => {
+    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        id: "assistant-managed-media-without-resolver",
+        role: "assistant",
+        content: [
+          {
+            type: "audio",
+            artifactId: `artifact_managed_media_${crypto.randomUUID()}`,
+            url: source,
+            fileName: "voice.mp3",
+            mimeType: "audio/mpeg",
+            playback: "native",
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      { showToolCalls: false },
+    );
+
+    expect(container.querySelector("openclaw-chat-audio-player")).toBeNull();
+    expect(
+      container.querySelector(".chat-assistant-attachment-card--blocked")?.textContent,
+    ).toContain("Unavailable");
   });
 
   it("checks local assistant images against server metadata while preview roots load", async () => {
@@ -3249,7 +3629,7 @@ describe("grouped chat rendering", () => {
     },
   );
 
-  it("shows the download fallback when the video element emits an error", () => {
+  it("shows the download fallback when the video element emits an error", async () => {
     const container = document.body.appendChild(document.createElement("div"));
     container.dataset.mediaPlayerTestFixture = "";
 
@@ -3274,8 +3654,10 @@ describe("grouped chat rendering", () => {
       { showToolCalls: false },
     );
 
-    const card = expectElement(container, ".chat-assistant-attachment-card--video", HTMLElement);
+    const videoPlayer = await requireVideoPlayer(container);
+    const card = expectElement(videoPlayer, ".chat-assistant-attachment-card--video", HTMLElement);
     expectElement(card, "video", HTMLVideoElement).dispatchEvent(new Event("error"));
+    await videoPlayer.updateComplete;
     expect(card.hasAttribute("data-unplayable")).toBe(true);
     expect(card.querySelector(".chat-assistant-video-fallback")?.textContent).toContain(
       "Can't play this format — download instead.",
@@ -3756,8 +4138,9 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-text")?.textContent?.trim()).toBe("Blocked\nDone");
   });
 
-  it("renders transcript video URLs with encoded extensions", () => {
-    const container = document.createElement("div");
+  it("renders transcript video URLs with encoded extensions", async () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
     const mediaUrl = "https://cdn.example/clip%2Emp4?download=1";
 
     renderGroupedMessage(
@@ -3773,7 +4156,8 @@ describe("grouped chat rendering", () => {
       { showToolCalls: false },
     );
 
-    expect(expectElement(container, "video", HTMLVideoElement).src).toBe(mediaUrl);
+    const videoPlayer = await requireVideoPlayer(container);
+    expect(expectElement(videoPlayer, "video", HTMLVideoElement).src).toBe(mediaUrl);
   });
 
   it("renders transcript image variants and structured image blocks", async () => {

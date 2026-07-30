@@ -14,7 +14,9 @@ import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 
 const handleGatewayRequest = vi.hoisted(() => vi.fn());
 
-vi.mock("../../server-methods.js", () => ({ handleGatewayRequest }));
+vi.mock("./authenticated-request-dispatch.server-methods.runtime.js", () => ({
+  handleGatewayRequest,
+}));
 
 const activeRegistries = new Set<NodeRegistry>();
 

@@ -16,6 +16,10 @@ import {
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
+import {
+  notifyDiscordActiveTurnThreadCreated,
+  notifyDiscordActiveTurnThreadReplyDelivered,
+} from "../active-turn-thread-route.js";
 import { notifyDiscordInboundEventOutboundSuccess } from "../inbound-event-delivery.js";
 import {
   DISCORD_PRESENTATION_CAPABILITIES,
@@ -31,6 +35,17 @@ import type { DiscordMessagingActionOptions } from "./runtime.messaging.shared.j
 import { readDiscordAutoArchiveDurationParam } from "./runtime.shared.js";
 
 const providerId = "discord";
+
+function withCurrentSourceReplyRoute<T>(result: AgentToolResult<T>): AgentToolResult<T> {
+  const details =
+    result.details && typeof result.details === "object" && !Array.isArray(result.details)
+      ? result.details
+      : {};
+  return {
+    ...result,
+    details: { ...details, sourceReplyRoute: "current-source" } as T,
+  };
+}
 
 function readCurrentDiscordTarget(
   toolContext: Pick<ChannelMessageActionContext, "toolContext">["toolContext"],
@@ -402,6 +417,18 @@ export async function handleDiscordMessageAction(
       cfg,
       actionOptions,
     );
+    const details =
+      result.details && typeof result.details === "object" && !Array.isArray(result.details)
+        ? (result.details as { thread?: { id?: unknown } })
+        : undefined;
+    const threadId = typeof details?.thread?.id === "string" ? details.thread.id : undefined;
+    await notifyDiscordActiveTurnThreadCreated({
+      sessionKey: ctx.sessionKey,
+      accountId,
+      sourceChannelId: resolveChannelId(),
+      sourceMessageId: messageId,
+      threadId,
+    });
     notifyVisibleOutbound(resolveChannelId());
     return result;
   }
@@ -451,7 +478,17 @@ export async function handleDiscordMessageAction(
   });
   if (adminResult !== undefined) {
     if (action === "thread-reply") {
-      notifyVisibleOutbound(readStringParam(params, "threadId") ?? readTarget());
+      const threadId = readStringParam(params, "threadId") ?? readTarget();
+      notifyVisibleOutbound(threadId);
+      if (
+        notifyDiscordActiveTurnThreadReplyDelivered({
+          sessionKey: ctx.sessionKey,
+          accountId,
+          threadId,
+        })
+      ) {
+        return withCurrentSourceReplyRoute(adminResult);
+      }
     }
     return adminResult;
   }

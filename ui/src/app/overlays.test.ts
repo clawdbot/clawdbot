@@ -26,7 +26,8 @@ vi.mock("../lib/nodes/index.ts", () => ({
   peekStoredDeviceIdentityId: peekStoredDeviceIdentityIdMock,
 }));
 
-const VERIFICATION_POLL_MS = 250;
+const HANDOFF_POLL_MS = 1_000;
+const RESTART_VERIFICATION_TIMEOUT_MS = 10_000;
 
 function installUpdateTranslations() {
   const translations: Record<string, string> = {
@@ -37,6 +38,8 @@ function installUpdateTranslations() {
       "Another managed update is already running. Wait for it to complete, then refresh update status.",
     "updates.verificationFailedWithVersions":
       "Update installed but running version did not change — restart may have been blocked. Expected v{expectedVersion}, running v{actualVersion}.",
+    "updates.outcomeUnknown":
+      "The update request may have been accepted, but the Gateway did not report a final result after reconnect. Run `openclaw update status` before retrying.",
   };
   return vi.spyOn(i18n, "t").mockImplementation((key, params) => {
     const template = translations[key] ?? key;
@@ -924,7 +927,7 @@ describe("application update overlays", () => {
     overlays.dispose();
   });
 
-  it("verifies on reconnect and survives updates within the connected epoch", async () => {
+  it("promotes restart health polling to the managed handoff budget", async () => {
     vi.useFakeTimers();
     let statusRequests = 0;
     const request = vi.fn<RequestFn>((method) => {
@@ -940,7 +943,7 @@ describe("application update overlays", () => {
       if (method === "update.status") {
         statusRequests += 1;
         return Promise.resolve(
-          statusRequests === 1
+          statusRequests <= 11
             ? {
                 sentinel: {
                   kind: "update",
@@ -971,10 +974,16 @@ describe("application update overlays", () => {
       expect(statusRequests).toBe(1);
 
       harness.update({ sessionKey: "agent:main:next" });
-      await vi.advanceTimersByTimeAsync(VERIFICATION_POLL_MS);
+      await vi.advanceTimersByTimeAsync(RESTART_VERIFICATION_TIMEOUT_MS);
       await flushMicrotasks();
 
-      expect(statusRequests).toBe(2);
+      expect(statusRequests).toBe(11);
+      expect(overlays.snapshot.updateReconciliationPending).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(HANDOFF_POLL_MS);
+      await flushMicrotasks();
+
+      expect(statusRequests).toBe(12);
       expect(overlays.snapshot.updateStatusBanner).toBeNull();
       expect(overlays.snapshot.updateReconciliationPending).toBe(false);
     } finally {
