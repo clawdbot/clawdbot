@@ -134,6 +134,7 @@ import {
   type SessionStoreOwnership,
 } from "./state-migrations.session-store.js";
 import { resetLegacySessionSurfacesForTest } from "./state-migrations.session-surfaces.js";
+import { legacyMigrationSourceOrClaimMayExist } from "./state-migrations.source-snapshot.js";
 import {
   autoMigrateLegacyStateDir,
   resetAutoMigrateLegacyTaskStateSidecarsForTest,
@@ -440,7 +441,9 @@ export async function detectLegacyStateMigrations(params: {
     triggersPath: resolveLegacyVoiceWakeTriggersPath(stateDir),
     routingPath: resolveLegacyVoiceWakeRoutingPath(stateDir),
   };
-  const hasVoiceWake = fileExists(voiceWake.triggersPath) || fileExists(voiceWake.routingPath);
+  const hasVoiceWake =
+    legacyMigrationSourceOrClaimMayExist(voiceWake.triggersPath) ||
+    legacyMigrationSourceOrClaimMayExist(voiceWake.routingPath);
   const updateCheck = {
     sourcePath: resolveLegacyUpdateCheckPath(stateDir),
   };

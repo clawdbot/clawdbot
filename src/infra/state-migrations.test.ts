@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -485,6 +486,7 @@ async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
 }
 
 afterEach(() => {
+  __setFsSafeTestHooksForTest();
   vi.useRealTimers();
   pluginDoctorStateMigrationEntries.entries = [];
   resetAutoMigrateLegacyStateForTest();
@@ -2030,7 +2032,7 @@ describe("state migrations", () => {
         return Reflect.apply(realExec, this, [sql]);
       });
     try {
-      const first = migrateLegacyVoiceWakeSettings({
+      const first = await migrateLegacyVoiceWakeSettings({
         detected: {
           triggersPath,
           routingPath: path.join(settingsDir, "missing-routing.json"),
@@ -2047,7 +2049,7 @@ describe("state migrations", () => {
       execSpy.mockRestore();
     }
 
-    const retry = migrateLegacyVoiceWakeSettings({
+    const retry = await migrateLegacyVoiceWakeSettings({
       detected: {
         triggersPath,
         routingPath: path.join(settingsDir, "missing-routing.json"),
@@ -2072,28 +2074,23 @@ describe("state migrations", () => {
     await fs.mkdir(settingsDir, { recursive: true });
     await fs.writeFile(triggersPath, JSON.stringify({ triggers: ["legacy-wake"] }), "utf8");
 
-    const realRenameSync = fsSync.renameSync.bind(fsSync);
-    const renameSpy = vi.spyOn(fsSync, "renameSync").mockImplementation((source, target) => {
-      if (String(source) === triggersPath && String(target) === `${triggersPath}.migrated`) {
-        throw new Error("archive blocked");
-      }
-      return realRenameSync(source, target);
+    __setFsSafeTestHooksForTest({
+      beforeRootFallbackMutation: (operation, targetPath) => {
+        if (operation === "move" && targetPath.endsWith("voicewake.json.migrated")) {
+          throw new Error("archive blocked");
+        }
+      },
     });
-    try {
-      const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
-      const result = await runLegacyStateMigrations({ detected, config: cfg });
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
 
-      expect(result.warnings).toContain(
-        `Failed archiving voice wake triggers legacy source ${triggersPath}: Error: archive blocked`,
-      );
-      expect(result.notices).toBeUndefined();
-      await expect(fs.readFile(triggersPath, "utf8")).resolves.toContain("legacy-wake");
-      await expect(loadVoiceWakeConfig(stateDir)).resolves.toMatchObject({
-        triggers: ["sqlite-wake"],
-      });
-    } finally {
-      renameSpy.mockRestore();
-    }
+    expect(result.warnings.join("\n")).toContain("archive blocked");
+    expect(result.notices).toBeUndefined();
+    await expect(fs.readFile(triggersPath, "utf8")).resolves.toContain("legacy-wake");
+    await expectMissingPath(`${triggersPath}.doctor-importing`);
+    await expect(loadVoiceWakeConfig(stateDir)).resolves.toMatchObject({
+      triggers: ["sqlite-wake"],
+    });
   });
 
   it("auto-migrates standalone legacy JSON settings", async () => {
