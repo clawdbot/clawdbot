@@ -6,7 +6,10 @@ import {
   type ExtensionRelayHandle,
 } from "../src/browser/extension-relay/relay-server.js";
 import { useAutoCleanupTempDirTracker } from "../test-support.js";
-import { copyCopilotSidepanelExtension } from "./sidepanel.e2e-support.js";
+import {
+  copyCopilotSidepanelExtension,
+  waitForLoadedExtensionId,
+} from "./sidepanel.e2e-support.js";
 
 declare const chrome: {
   runtime: {
@@ -165,10 +168,10 @@ describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay"
       throw new Error("Chromium browser connection unavailable");
     }
     const browserCdp = await browser.newBrowserCDPSession();
-    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
-    const extensionId = new URL(worker.url()).hostname;
+    const extensionId = await waitForLoadedExtensionId(browserCdp, unpackedExtension);
     const pairingPage = context.pages()[0] ?? (await context.newPage());
     await pairingPage.goto(`chrome-extension://${extensionId}/popup.html`);
+    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
 
     const pairing = await pairingPage.evaluate(
       async (pairingString) => await chrome.runtime.sendMessage({ type: "pair", pairingString }),
