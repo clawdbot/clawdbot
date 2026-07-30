@@ -3,7 +3,6 @@
 import { MAX_TIMER_TIMEOUT_SECONDS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  canonicalizeUrlCacheDimension,
   normalizeCacheKey,
   readCache,
   readResponseText,
@@ -60,29 +59,6 @@ describe("web cache keys", () => {
     expect(upper).toBe("fetch:https://example.com/get?marker=OpenClawCase");
     expect(lower).toBe("fetch:https://example.com/get?marker=openclawcase");
     expect(upper).not.toBe(lower);
-  });
-
-  it("collapses case-only scheme and host variants of a URL dimension", () => {
-    expect(canonicalizeUrlCacheDimension("HTTPS://EXAMPLE.COM/page")).toBe(
-      canonicalizeUrlCacheDimension("https://example.com/page"),
-    );
-  });
-
-  it("keeps case-sensitive URL components distinct after canonicalization", () => {
-    // The whole point of normalizeCacheKey staying case-preserving: canonicalizing the
-    // scheme/host must not start collapsing paths and query values again.
-    expect(canonicalizeUrlCacheDimension("https://example.com/Page")).not.toBe(
-      canonicalizeUrlCacheDimension("https://example.com/page"),
-    );
-    expect(canonicalizeUrlCacheDimension("https://example.com/p?q=A")).not.toBe(
-      canonicalizeUrlCacheDimension("https://example.com/p?q=a"),
-    );
-  });
-
-  it("passes unparseable values through instead of throwing", () => {
-    // Runs while composing a key, before the request that is entitled to reject a bad URL.
-    expect(canonicalizeUrlCacheDimension("not a url")).toBe("not a url");
-    expect(canonicalizeUrlCacheDimension("")).toBe("");
   });
 });
 

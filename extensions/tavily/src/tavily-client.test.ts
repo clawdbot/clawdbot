@@ -6,7 +6,6 @@ import { createStreamingResponse } from "../../test-support/streaming-error-resp
 const postTrustedWebToolsJson = vi.fn();
 
 vi.mock("openclaw/plugin-sdk/provider-web-search", () => ({
-  canonicalizeUrlCacheDimension: (v: string) => v,
   DEFAULT_CACHE_TTL_MINUTES: 5,
   normalizeCacheKey: (k: string) => k,
   postTrustedWebToolsJson,
@@ -103,5 +102,36 @@ describe("tavily client X-Client-Source header", () => {
     await expect(runTavilyExtract({ urls: ["https://example.com"] })).rejects.toThrow(
       "Tavily Extract: malformed JSON response",
     );
+  });
+});
+
+describe("canonicalizeUrlCacheDimension", () => {
+  let testing: typeof import("./tavily-client.js").testing;
+
+  beforeAll(async () => {
+    ({ testing } = await import("./tavily-client.js"));
+  });
+
+  it("collapses case-only scheme and host variants of a URL dimension", () => {
+    expect(testing.canonicalizeUrlCacheDimension("HTTPS://EXAMPLE.COM/page")).toBe(
+      testing.canonicalizeUrlCacheDimension("https://example.com/page"),
+    );
+  });
+
+  it("keeps case-sensitive URL components distinct after canonicalization", () => {
+    // The whole point of normalizeCacheKey staying case-preserving: canonicalizing the
+    // scheme/host must not start collapsing paths and query values again.
+    expect(testing.canonicalizeUrlCacheDimension("https://example.com/Page")).not.toBe(
+      testing.canonicalizeUrlCacheDimension("https://example.com/page"),
+    );
+    expect(testing.canonicalizeUrlCacheDimension("https://example.com/p?q=A")).not.toBe(
+      testing.canonicalizeUrlCacheDimension("https://example.com/p?q=a"),
+    );
+  });
+
+  it("passes unparseable values through instead of throwing", () => {
+    // Runs while composing a key, before the request that is entitled to reject a bad URL.
+    expect(testing.canonicalizeUrlCacheDimension("not a url")).toBe("not a url");
+    expect(testing.canonicalizeUrlCacheDimension("")).toBe("");
   });
 });

@@ -2,7 +2,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import {
-  canonicalizeUrlCacheDimension,
   DEFAULT_CACHE_TTL_MINUTES,
   markdownToText,
   normalizeCacheKey,
@@ -63,6 +62,26 @@ const FIRECRAWL_SELF_HOSTED_PRIVATE_ERROR =
   "Firecrawl custom baseUrl must target a private or internal self-hosted endpoint.";
 const FIRECRAWL_HTTP_PRIVATE_ERROR =
   "Firecrawl HTTP baseUrl must target a private or internal self-hosted endpoint. Use https:// for public hosts.";
+
+/**
+ * Canonicalizes one URL-valued cache-key dimension.
+ *
+ * `normalizeCacheKey` deliberately preserves case, because a composed key mixes dimensions
+ * whose case is significant (paths, query values, model ids). URL-valued dimensions are the
+ * exception: RFC 3986 §3.1/§6.2.2.1 make scheme and host case-insensitive, so leaving them
+ * raw splits one resource across several cache entries. The owner of a key applies the rule to
+ * its own URL dimension, so it lives with that key rather than inside `normalizeCacheKey`.
+ *
+ * Unparseable input is returned untouched: this runs while composing a cache key, before the
+ * request that is entitled to reject a bad URL, so it must never be the thing that throws.
+ */
+function canonicalizeUrlCacheDimension(value: string): string {
+  try {
+    return new URL(value).href;
+  } catch {
+    return value;
+  }
+}
 
 type FirecrawlEndpointMode = "selfHosted" | "strict";
 type FirecrawlResolvedEndpoint = {
@@ -719,6 +738,7 @@ export async function runFirecrawlScrape(
 
 export const testing = {
   assertFirecrawlScrapeTargetAllowed,
+  canonicalizeUrlCacheDimension,
   parseFirecrawlScrapePayload,
   postFirecrawlJson,
   readFirecrawlJsonResponse,

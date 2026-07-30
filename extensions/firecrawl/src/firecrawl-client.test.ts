@@ -733,3 +733,28 @@ describe("parseFirecrawlScrapePayload", () => {
     expect(result.title).toBeUndefined();
   });
 });
+
+describe("canonicalizeUrlCacheDimension", () => {
+  it("collapses case-only scheme and host variants of a URL dimension", () => {
+    expect(firecrawlClient.canonicalizeUrlCacheDimension("HTTPS://EXAMPLE.COM/page")).toBe(
+      firecrawlClient.canonicalizeUrlCacheDimension("https://example.com/page"),
+    );
+  });
+
+  it("keeps case-sensitive URL components distinct after canonicalization", () => {
+    // The whole point of normalizeCacheKey staying case-preserving: canonicalizing the
+    // scheme/host must not start collapsing paths and query values again.
+    expect(firecrawlClient.canonicalizeUrlCacheDimension("https://example.com/Page")).not.toBe(
+      firecrawlClient.canonicalizeUrlCacheDimension("https://example.com/page"),
+    );
+    expect(firecrawlClient.canonicalizeUrlCacheDimension("https://example.com/p?q=A")).not.toBe(
+      firecrawlClient.canonicalizeUrlCacheDimension("https://example.com/p?q=a"),
+    );
+  });
+
+  it("passes unparseable values through instead of throwing", () => {
+    // Runs while composing a key, before the request that is entitled to reject a bad URL.
+    expect(firecrawlClient.canonicalizeUrlCacheDimension("not a url")).toBe("not a url");
+    expect(firecrawlClient.canonicalizeUrlCacheDimension("")).toBe("");
+  });
+});

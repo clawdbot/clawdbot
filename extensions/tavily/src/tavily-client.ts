@@ -2,7 +2,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
-  canonicalizeUrlCacheDimension,
   DEFAULT_CACHE_TTL_MINUTES,
   normalizeCacheKey,
   postTrustedWebToolsJson,
@@ -29,6 +28,26 @@ const EXTRACT_CACHE = new Map<
 >();
 const DEFAULT_SEARCH_COUNT = 5;
 const TAVILY_EXTRACT_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Canonicalizes one URL-valued cache-key dimension.
+ *
+ * `normalizeCacheKey` deliberately preserves case, because a composed key mixes dimensions
+ * whose case is significant (paths, query values, model ids). URL-valued dimensions are the
+ * exception: RFC 3986 §3.1/§6.2.2.1 make scheme and host case-insensitive, so leaving them
+ * raw splits one resource across several cache entries. The owner of a key applies the rule to
+ * its own URL dimension, so it lives with that key rather than inside `normalizeCacheKey`.
+ *
+ * Unparseable input is returned untouched: this runs while composing a cache key, before the
+ * request that is entitled to reject a bad URL, so it must never be the thing that throws.
+ */
+function canonicalizeUrlCacheDimension(value: string): string {
+  try {
+    return new URL(value).href;
+  } catch {
+    return value;
+  }
+}
 
 export type TavilySearchParams = {
   cfg?: OpenClawConfig;
@@ -314,6 +333,7 @@ export async function runTavilyExtract(
 }
 
 export const testing = {
+  canonicalizeUrlCacheDimension,
   readTavilyJsonResponse,
   resolveEndpoint,
 };

@@ -59,7 +59,6 @@ export { markdownToText, truncateText } from "../agents/tools/web-fetch-utils.js
 export {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_TIMEOUT_SECONDS,
-  canonicalizeUrlCacheDimension,
   normalizeCacheKey,
   readCache,
   readResponseText,
