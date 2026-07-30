@@ -16,6 +16,7 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { t } from "../../i18n/index.ts";
 import {
   closeClawHubDetail,
+  hydrateClawHubSecurityVerdicts,
   installFromClawHub,
   installSkill,
   loadClawHubDetail,
@@ -275,6 +276,11 @@ class SkillsPage extends OpenClawLightDomElement {
       this.routeDataEnabled &&
       (this.routeData?.agentsList || this.routeData?.report || this.routeData?.error)
     ) {
+      // Route loader only fetches skills.status — still hydrate security verdicts
+      // so linked ClawHub skills do not first-paint as "Unavailable" (#108647).
+      if (this.skillsReport) {
+        void hydrateClawHubSecurityVerdicts(this);
+      }
       return;
     }
     if (!this.agentsList && !this.agentsLoading) {

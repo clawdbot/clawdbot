@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
+  hydrateClawHubSecurityVerdicts,
   installFromClawHub,
   installSkill,
   loadSkills,
@@ -179,6 +180,61 @@ describe("loadSkills", () => {
     });
     expect(state.clawhubVerdictsLoading).toBe(false);
     expect(state.clawhubVerdictsError).toBeNull();
+  });
+
+  it("hydrates security verdicts when route data already set skillsReport (#108647)", async () => {
+    const { state, request } = createState();
+    state.skillsReport = {
+      workspaceDir: "/tmp/ws",
+      managedSkillsDir: "/tmp/skills",
+      skills: [
+        {
+          name: "AgentReceipt",
+          skillKey: "agentreceipt",
+          source: "workspace",
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://clawhub.ai",
+            slug: "agentreceipt",
+            installedVersion: "1.2.3",
+            installedAt: 123,
+          },
+        },
+      ],
+    } as never;
+    request.mockImplementation(async (method: string) => {
+      if (method === "skills.securityVerdicts") {
+        return {
+          schema: "openclaw.skills.security-verdicts.v1",
+          items: [
+            {
+              registry: "https://clawhub.ai",
+              ok: true,
+              decision: "pass",
+              reasons: [],
+              requestedSlug: "agentreceipt",
+              requestedVersion: "1.2.3",
+              slug: "agentreceipt",
+              version: "1.2.3",
+              securityStatus: "clean",
+              securityPassed: true,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    await hydrateClawHubSecurityVerdicts(state);
+
+    expect(request).toHaveBeenCalledWith("skills.securityVerdicts", {});
+    expect(state.clawhubVerdicts).toEqual({
+      "https://clawhub.ai\u0000agentreceipt\u00001.2.3": expect.objectContaining({
+        securityStatus: "clean",
+        decision: "pass",
+      }),
+    });
   });
 
   it("loads selected agent skills and verdicts with the agent id", async () => {

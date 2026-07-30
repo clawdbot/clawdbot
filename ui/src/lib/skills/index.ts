@@ -455,6 +455,22 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
   }
 }
 
+/**
+ * Hydrate ClawHub security verdicts when the Skills route loader already supplied
+ * `skills.status` but skipped `skills.securityVerdicts` (first-paint Unavailable badge).
+ * See openclaw/openclaw#108647.
+ */
+export async function hydrateClawHubSecurityVerdicts(state: SkillsState) {
+  const report = state.skillsReport;
+  if (!report || state.clawhubVerdictsLoading) {
+    return;
+  }
+  if (Object.keys(state.clawhubVerdicts).length > 0) {
+    return;
+  }
+  await loadClawHubSecurityVerdicts(state, report);
+}
+
 async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStatusReport) {
   const client = state.client;
   const agentScope = captureSkillsAgentScope(state);
