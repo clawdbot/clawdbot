@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import type { ChannelAccountSnapshot } from "../../api/types.ts";
 import { renderSettingsSection, renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { channelSnapshotEntryIsActive } from "../../lib/channels/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type { ChannelKey, ChannelsProps } from "./view.types.ts";
 
@@ -11,7 +12,6 @@ type ChannelDisplayState = {
   running: boolean | null;
   connected: boolean | null;
   defaultAccount: ChannelAccountSnapshot | null;
-  hasAnyActiveAccount: boolean;
   status: Record<string, unknown> | undefined;
 };
 
@@ -52,7 +52,6 @@ export function resolveChannelDisplayState(
   props: ChannelsProps,
 ): ChannelDisplayState {
   const status = resolveChannelStatus(key, props);
-  const accounts = props.snapshot?.channelAccounts?.[key] ?? [];
   const defaultAccount = resolveDefaultChannelAccount(key, props);
   const configured =
     typeof status?.configured === "boolean"
@@ -62,31 +61,18 @@ export function resolveChannelDisplayState(
         : null;
   const running = typeof status?.running === "boolean" ? status.running : null;
   const connected = typeof status?.connected === "boolean" ? status.connected : null;
-  const hasAnyActiveAccount = accounts.some(
-    (account) => account.configured || account.running || account.connected,
-  );
 
   return {
     configured,
     running,
     connected,
     defaultAccount,
-    hasAnyActiveAccount,
     status,
   };
 }
 
 export function channelEnabled(key: ChannelKey, props: ChannelsProps) {
-  if (!props.snapshot) {
-    return false;
-  }
-  const displayState = resolveChannelDisplayState(key, props);
-  return (
-    displayState.configured === true ||
-    displayState.running === true ||
-    displayState.connected === true ||
-    displayState.hasAnyActiveAccount
-  );
+  return channelSnapshotEntryIsActive(props.snapshot, key);
 }
 
 export function resolveChannelConfigured(key: ChannelKey, props: ChannelsProps): boolean | null {
@@ -162,8 +148,7 @@ export function renderChannelProbeRow(probe: {
 /** Trailing action row carrying a button cluster in the control slot. */
 export function renderChannelActionRow(actions: unknown) {
   return html`
-    <div class="settings-row">
-      <div class="settings-row__text"></div>
+    <div class="settings-row settings-row--actions">
       <div class="settings-row__control">${actions}</div>
     </div>
   `;
@@ -202,8 +187,10 @@ export function renderChannelAccountRow(params: {
 
 /**
  * One channel = one settings section: heading with optional account count,
- * a group holding the status facts, error/probe rows, extra content, the
- * config form, and a trailing action row.
+ * a group holding the status facts, error/probe rows, the config form,
+ * extra content, and a trailing action row. Extra content sits directly
+ * above the actions so action feedback (e.g. the WhatsApp QR) appears next
+ * to the button that triggered it instead of scrolled away above the form.
  */
 export function renderSingleAccountChannelCard(params: {
   title: string;
@@ -225,8 +212,9 @@ export function renderSingleAccountChannelCard(params: {
     html`
       ${renderChannelFacts(params.statusRows)}
       ${params.lastError ? renderChannelErrorRow(params.lastError) : nothing}
-      ${params.secondaryCallout ?? nothing} ${params.extraContent ?? nothing}
-      ${params.configSection} ${params.footer ? renderChannelActionRow(params.footer) : nothing}
+      ${params.secondaryCallout ?? nothing} ${params.configSection}
+      ${params.extraContent ?? nothing}
+      ${params.footer ? renderChannelActionRow(params.footer) : nothing}
     `,
   );
 }

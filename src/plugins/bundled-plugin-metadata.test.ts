@@ -55,7 +55,6 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "ollama",
   "opencode",
   "openshell",
-  "phone-control",
   "policy",
   "reef",
   "talk-voice",
@@ -73,13 +72,15 @@ const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "canvas",
   "device-pair",
   "file-transfer",
+  "google-meet",
   "linux-canvas",
   "linux-node",
   "memory-core",
   "ollama",
   "opencode",
-  "phone-control",
   "talk-voice",
+  "teams-meetings",
+  "zoom-meetings",
 ] as const;
 
 installGeneratedPluginTempRootCleanup();

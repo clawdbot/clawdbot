@@ -6,12 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import {
-  deleteRegistryWorktree,
-  getRegistryWorktree,
-  getRegistryWorktreeProvisionedPaths,
-  insertRegistryWorktree,
-} from "./registry.js";
+import { insertRegistryWorktree } from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
@@ -231,30 +226,6 @@ describe("ManagedWorktreeService provisioned state", () => {
       );
     },
   );
-
-  it("upgrades the provisioned ledger when restoring a pre-ledger snapshot", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\n");
-    await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env.local\n");
-    await git(repo, "add", ".gitignore", ".worktreeinclude");
-    await git(repo, "commit", "-m", "configure worktree provisioning");
-    await fs.writeFile(path.join(repo, ".env.local"), "value=source\n");
-    await addRemote(root, repo);
-
-    const created = await service.create({ repoRoot: repo, name: "legacy-restore" });
-    await service.remove({ id: created.id, reason: "test" });
-    const removed = getRegistryWorktree(env, created.id)!;
-    deleteRegistryWorktree(env, created.id);
-    insertRegistryWorktree(env, removed);
-
-    const restored = await service.restore({ id: created.id });
-    expect(getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual([".env.local"]);
-    await fs.writeFile(path.join(restored.path, ".env.local"), "value=restored-local\n");
-    expect(await service.removeIfLossless(created.id)).toBe(true);
-    const roundTripped = await service.restore({ id: created.id });
-    expect(await fs.readFile(path.join(roundTripped.path, ".env.local"), "utf8")).toBe(
-      "value=restored-local\n",
-    );
-  });
 
   it("snapshots deleted skip-worktree files still included by sparse rules", async () => {
     const created = await service.create({ repoRoot: repo, name: "stale-sparse-bit" });

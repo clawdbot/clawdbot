@@ -258,6 +258,19 @@ Plugin-managed internal hooks show up in `openclaw hooks list` with
 `plugin:<id>`. You cannot enable or disable them through `openclaw hooks`;
 enable or disable the plugin instead.
 
+Hook registration also depends on Gateway startup selection. For a hook-only
+plugin, declare `activation.onCapabilities: ["hook"]` in
+`openclaw.plugin.json`, then enable the plugin and include it in
+`plugins.allow` when that allowlist is configured. The manifest hint does not
+bypass global disable, deny, or per-plugin enablement policy.
+
+An explicit hook policy is also startup intent. For example,
+`plugins.entries.<id>.hooks.allowConversationAccess: true` both authorizes
+non-bundled conversation hooks and selects that configured plugin for Gateway
+startup; normal plugin policy still applies. After changing manifest or hook
+policy, restart the Gateway and verify the registration with
+`openclaw plugins inspect <id> --runtime --json`.
+
 ## Verify the active Gateway
 
 `openclaw plugins list` and plain `openclaw plugins inspect` read cold config,

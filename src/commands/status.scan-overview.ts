@@ -29,7 +29,7 @@ const statusScanRuntimeModuleLoader = createLazyImportLoader(
   () => import("./status.scan.runtime.js"),
 );
 const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
-const statusSummaryModuleLoader = createLazyImportLoader(() => import("./status.summary.js"));
+const statusSummaryModuleLoader = createLazyImportLoader(() => import("../status/summary.js"));
 const channelPluginIdsModuleLoader = createLazyImportLoader(
   () => import("../plugins/channel-plugin-ids.js"),
 );

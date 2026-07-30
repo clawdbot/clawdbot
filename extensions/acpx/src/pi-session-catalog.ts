@@ -225,7 +225,7 @@ export async function listLocalPiSessionPage(value?: unknown): Promise<PiSession
     limit: params.limit,
     ...(params.searchTerm ? { searchTerm: params.searchTerm } : {}),
   });
-  const page = summaries.map(({ file: _file, ...session }) => session);
+  const page = summaries.map(({ file: _file, version: _version, ...session }) => session);
   return {
     sessions: page,
     ...(hasMore ? { nextCursor: encodeCursor(offset + page.length) } : {}),

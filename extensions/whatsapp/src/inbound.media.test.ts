@@ -452,7 +452,7 @@ describe("web inbound media saves with extension", () => {
       fileName: undefined,
       kind: "image",
     });
-    expect(inbound.payload.untrustedStructuredContext).toContainEqual({
+    expect(inbound.payload.channelStructuredContext).toContainEqual({
       label: "WhatsApp media",
       source: "whatsapp",
       type: "media",

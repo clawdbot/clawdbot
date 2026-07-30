@@ -721,7 +721,9 @@ struct OpenClawApp: App {
                 .environment(self.appModel.voiceWake)
                 .environment(self.gatewayController)
                 .task {
-                    self.voiceLiveActivityCoordinator.start(appModel: self.appModel)
+                    if !Self.screenshotModeEnabled {
+                        self.voiceLiveActivityCoordinator.start(appModel: self.appModel)
+                    }
                     self.appModel.setScenePhase(self.scenePhase)
                     self.appDelegate.appModel = self.appModel
                     self.appDelegate.scenePhaseChanged(self.scenePhase)

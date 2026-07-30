@@ -10,12 +10,27 @@ import type { FastModeSource } from "../../../src/shared/fast-mode.js";
 import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
+  SessionBoardFace,
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../../../src/shared/session-types.js";
 export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 export type { SessionGoal } from "../../../src/config/sessions/types.js";
 export type { FastMode } from "@openclaw/normalization-core/string-coerce";
+export type ChannelsPairingAccount =
+  import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingAccount;
+export type ChannelsPairingApproveResult =
+  import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingApproveResult;
+export type ChannelsPairingListResult =
+  import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingListResult;
+export type ChannelsPairingRequest =
+  import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingRequest;
+export type SessionVisibility =
+  import("../../../packages/gateway-protocol/src/index.js").SessionVisibility;
+type SessionSharingRole =
+  import("../../../packages/gateway-protocol/src/index.js").SessionSharingRole;
+export type SessionMembersListResult =
+  import("../../../packages/gateway-protocol/src/index.js").SessionMembersListResult;
 export type ChannelsStatusSnapshot = {
   ts: number;
   channelOrder: string[];
@@ -354,6 +369,9 @@ export type AgentFileEntry = {
   name: string;
   path: string;
   missing: boolean;
+  // Absence is a normal workspace state (optional profile files, MEMORY.md before
+  // anything is written); the editor offers these for creation instead of flagging them.
+  expectedAbsent?: boolean;
   size?: number;
   updatedAtMs?: number;
   content?: string;
@@ -389,6 +407,9 @@ type SessionWorkspaceFileEntry = {
   content?: string;
   /** sha256 hex of the file bytes; the CAS token for sessions.files.set. */
   hash?: string;
+  mimeType?: string;
+  contentEncoding?: "utf8" | "base64";
+  previewKind?: "text" | "image" | "unsupported";
 };
 
 type SessionWorkspaceBrowserEntry = {
@@ -423,6 +444,7 @@ type SessionWorkspaceArtifactEntry = {
 export type SessionWorkspaceListResult = {
   sessionKey: string;
   root?: string;
+  gitCheckout?: boolean;
   files: SessionWorkspaceFileEntry[];
   browser?: SessionWorkspaceBrowserResult;
   artifacts?: SessionWorkspaceArtifactEntry[];
@@ -445,6 +467,7 @@ export type ArtifactDownloadResult = {
   encoding?: "base64";
   data?: string;
   url?: string;
+  expiresAt?: string;
 };
 
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
@@ -484,7 +507,11 @@ type SessionCompactionCheckpointPreview = Pick<
 
 export type GatewaySessionRow = {
   key: string;
+  visibility?: SessionVisibility;
+  sharingRole?: SessionSharingRole;
+  incognito?: true;
   spawnedBy?: string;
+  controlOwnerSessionKey?: string;
   /** Collector swarm group that owns this child session, when applicable. */
   swarmGroupId?: string;
   parentSessionKey?: string;
@@ -495,11 +522,22 @@ export type GatewaySessionRow = {
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
   execCwd?: string;
+  forkedFromParent?: boolean;
+  spawnDepth?: number;
+  subagentRole?: "orchestrator" | "leaf";
+  subagentControlScope?: "children" | "none";
+  createdVia?: "operator" | "spawn" | "channel" | "cron" | "talk" | "run" | "plugin" | "internal";
+  createdActor?: import("../../../packages/gateway-protocol/src/schema/sessions.js").SessionCreatedActor;
+  createdAt?: number;
+  forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
+  previousSessionId?: string;
   placement?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacement;
-  kind: "cron" | "direct" | "group" | "global" | "unknown";
+  kind: "direct" | "group" | "global" | "unknown";
   label?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
+  /** Preferred Control UI face for generic session navigation. */
+  boardFace?: SessionBoardFace;
   displayName?: string;
   derivedTitle?: string;
   channel?: string;
@@ -513,11 +551,12 @@ export type GatewaySessionRow = {
   agentStatus?: SessionAgentStatus;
   observerDigest?: Pick<
     SessionObserverDigest,
-    "runId" | "headline" | "health" | "updatedAt" | "revision"
+    "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
   >;
   lastActivityAt?: number;
   archived?: boolean;
   archivedAt?: number;
+  archivedBy?: import("../../../packages/gateway-protocol/src/schema/sessions.js").SessionCreatedActor;
   pinned?: boolean;
   pinnedAt?: number;
   icon?: string;
@@ -529,6 +568,7 @@ export type GatewaySessionRow = {
   thinkingOptions?: string[];
   thinkingDefault?: string;
   fastMode?: FastMode;
+  toolOverrides?: import("../lib/sessions/patch.js").SessionToolOverrides;
   effectiveFastMode?: FastMode;
   effectiveFastModeSource?: FastModeSource;
   fastAutoOnSeconds?: number;
@@ -545,6 +585,8 @@ export type GatewaySessionRow = {
   lastRunError?: string;
   hasActiveRun?: boolean;
   activeRunIds?: string[];
+  /** Active transcript-branch leaf returned with chat history. */
+  activeLeafEntryId?: string | null;
   /** An enabled cron job is bound to this session (runs in it or delivers to it). */
   hasAutomation?: boolean;
   subagentRunState?: SubagentRunState;
@@ -853,13 +895,14 @@ export type SkillStatusEntry = {
   userInvocable?: boolean;
   commandVisible?: boolean;
   requirements: {
-    anyBins?: string[];
+    anyBins: string[];
     bins: string[];
     env: string[];
     config: string[];
     os: string[];
   };
   missing: {
+    anyBins: string[];
     bins: string[];
     env: string[];
     config: string[];

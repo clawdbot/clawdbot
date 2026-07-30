@@ -6,6 +6,11 @@ import { normalizeChannelId } from "../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import {
+  projectChannelAccountDisplayState,
+  resolveChannelAccountLinked,
+  resolveChannelAccountState,
+} from "../channels/status/account-state.js";
 import type { AgentBinding } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "../plugins/channel-plugin-ids.js";
@@ -170,20 +175,25 @@ export async function buildProviderStatusIndex(
         : snapshot?.configured;
       const resolvedEnabled = typeof enabled === "boolean" ? enabled : true;
       const resolvedConfigured = typeof configured === "boolean" ? configured : true;
-      const state =
-        plugin.status?.resolveAccountState?.({
-          account,
-          cfg,
-          configured: resolvedConfigured,
+      const linkState =
+        resolvedConfigured && plugin.config.isLinked
+          ? await plugin.config.isLinked(account, cfg)
+          : undefined;
+      const linked = resolveChannelAccountLinked(linkState, snapshot?.linked);
+      const fallbackState = plugin.status?.resolveAccountState?.({
+        account,
+        cfg,
+        configured: resolvedConfigured,
+        enabled: resolvedEnabled,
+      });
+      const state = projectChannelAccountDisplayState(
+        resolveChannelAccountState({
           enabled: resolvedEnabled,
-        }) ??
-        (typeof snapshot?.linked === "boolean"
-          ? snapshot.linked
-            ? "linked"
-            : "not linked"
-          : resolvedConfigured
-            ? "configured"
-            : "not configured");
+          configured: resolvedConfigured,
+          linked,
+        }),
+        fallbackState,
+      );
       const name = snapshot?.name ?? (account as { name?: string }).name;
       map.set(providerAccountKey(plugin.id, accountId), {
         provider: plugin.id,

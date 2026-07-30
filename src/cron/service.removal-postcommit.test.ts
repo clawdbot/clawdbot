@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
-import { list, run } from "./service/ops.js";
+import { list } from "./service/ops-read.js";
+import { run } from "./service/ops-run.js";
 import { createCronServiceState, type CronEvent, type CronServiceState } from "./service/state.js";
 import { ensureLoaded } from "./service/store.js";
 import { runMissedJobs } from "./service/timer.js";

@@ -439,11 +439,10 @@ function buildMatrixQaChannelAccountConfig(params: {
   // their scalar/boolean vocabulary and normalize here before config write.
   const streamingSlots = {
     ...(params.overrides?.streaming !== undefined
-      ? { mode: resolveMatrixQaStreamingMode(params.overrides.streaming) }
-      : {}),
-    ...(isMatrixQaStreamingConfig(params.overrides?.streaming) &&
-    params.overrides.streaming.preview?.toolProgress !== undefined
-      ? { preview: { toolProgress: params.overrides.streaming.preview.toolProgress } }
+      ? {
+          mode: resolveMatrixQaStreamingMode(params.overrides.streaming),
+          preview: { toolProgress: params.snapshot.streamingPreviewToolProgress },
+        }
       : {}),
     ...(params.snapshot.chunkMode !== undefined ? { chunkMode: params.snapshot.chunkMode } : {}),
     ...(params.overrides?.blockStreaming !== undefined

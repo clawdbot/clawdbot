@@ -32,10 +32,13 @@ export {
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
+  supportsClaude1MContext,
   supportsClaudeAdaptiveThinking,
+  supportsClaudeFastMode,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "@openclaw/llm-core";
@@ -44,6 +47,7 @@ export type {
   UnifiedModelCatalogKind,
   UnifiedModelCatalogSource,
 } from "@openclaw/model-catalog-core/model-catalog-types";
+export { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 export type {
   BedrockDiscoveryConfig,
   ModelCompatConfig,
@@ -67,7 +71,6 @@ export {
   GPT5_HEARTBEAT_PROMPT_OVERLAY,
   isGpt5ModelId,
   normalizeGpt5PromptOverlayMode,
-  renderGpt5PromptOverlay,
   resolveGpt5PromptOverlayMode,
   resolveGpt5SystemPromptContribution,
   type Gpt5PromptOverlayMode,
@@ -76,7 +79,6 @@ export { resolveProviderEndpoint } from "../agents/provider-attribution.js";
 export {
   applyModelCompatPatch,
   hasToolSchemaProfile,
-  hasNativeWebSearchTool,
   normalizeModelCompat,
   resolveUnsupportedToolSchemaKeywords,
   resolveToolCallArgumentsEncoding,
@@ -174,6 +176,7 @@ export {
 export {
   cloneFirstTemplateModel,
   matchesExactOrPrefix,
+  resolveFamilyForwardCompatModel,
 } from "../plugins/provider-model-helpers.js";
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 

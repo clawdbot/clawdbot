@@ -61,6 +61,16 @@
   gap: 12px;
 }
 
+.model-providers__setup .settings-row {
+  min-height: 92px;
+  padding-block: var(--space-5);
+}
+
+.model-providers__setup .settings-row__title {
+  font-size: var(--control-ui-text-lg);
+  font-weight: 600;
+}
+
 .model-providers__credentials {
   display: flex;
   align-items: baseline;
@@ -190,6 +200,21 @@
 }
 
 @media (max-width: 700px) {
+  .model-providers__head {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .model-providers__identity,
+  .model-providers__head > .settings-row__control {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  .model-providers__head > .settings-row__control {
+    justify-content: flex-start;
+  }
+
   .model-providers__default-grid,
   .model-providers__add-form {
     grid-template-columns: 1fr;

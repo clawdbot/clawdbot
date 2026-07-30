@@ -1083,7 +1083,11 @@ describe("maybeRepairLegacyCronStore", () => {
     let injectedFailure = false;
     const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
       const handle = await realOpen(...args);
-      if (args[0] === path.dirname(storePath) && args[1] === "r" && !injectedFailure) {
+      const flags = args[1];
+      const opensDirectory =
+        flags === "r" ||
+        (typeof flags === "number" && (flags & fsSync.constants.O_DIRECTORY) !== 0);
+      if (args[0] === path.dirname(storePath) && opensDirectory && !injectedFailure) {
         injectedFailure = true;
         vi.spyOn(handle, "sync").mockRejectedValueOnce(
           createFsError("EIO", "directory fsync failed"),
@@ -1766,6 +1770,39 @@ describe("maybeRepairLegacyCronStore", () => {
       "cron.webhook is not a valid HTTP(S) URL so doctor cannot migrate it automatically",
       "Doctor warnings",
     );
+  });
+
+  it("does not migrate legacy notify fallback from a credential-bearing webhook URL", async () => {
+    const storePath = await makeTempStorePath();
+    const credentialUrl = new URL("https://example.invalid/cron-finished?token=placeholder");
+    credentialUrl.username = "user";
+    credentialUrl.password = "password";
+    await writeCronStore(storePath, [
+      createLegacyCronJob({
+        id: "notify-credential-config",
+        jobId: undefined,
+        delivery: undefined,
+      }),
+    ]);
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath, credentialUrl.href),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const jobs = await readPersistedJobs(storePath);
+    const job = requirePersistedJob(jobs, 0);
+    expect(job.notify).toBeUndefined();
+    expect(job.delivery).toBeUndefined();
+    const reloaded = await loadCronJobsStoreWithConfigJobs(storePath);
+    const persisted = reloaded.configJobs as unknown as Array<Record<string, unknown>>;
+    expect(persisted[0]?.notify).toBe(true);
+    expectNoteContaining(
+      "cron.webhook is not a valid HTTP(S) URL so doctor cannot migrate it automatically",
+      "Doctor warnings",
+    );
+    expect(JSON.stringify(noteMock.mock.calls)).not.toContain(credentialUrl.href);
   });
 
   it("removes inert legacy notify:true for delivery.mode none when cron.webhook is unset and stops looping (#44460)", async () => {

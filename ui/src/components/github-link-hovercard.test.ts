@@ -95,12 +95,16 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(card?.textContent).toContain("5m ago");
     expect(anchor.href).toBe(href);
     expect(anchor.getAttribute("aria-describedby")).toBe(card?.id);
-    expect(request).toHaveBeenCalledWith("controlUi.githubPreview", {
-      kind: "pull",
-      number: 99816,
-      owner: "openclaw",
-      repo: "openclaw",
-    });
+    expect(request).toHaveBeenCalledWith(
+      "controlUi.githubPreview",
+      {
+        kind: "pull",
+        number: 99816,
+        owner: "openclaw",
+        repo: "openclaw",
+      },
+      { signal: expect.any(AbortSignal) },
+    );
 
     leave(anchor);
     expect(document.querySelector(".github-link-hovercard")).toBeNull();

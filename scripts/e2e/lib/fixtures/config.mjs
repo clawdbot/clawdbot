@@ -39,7 +39,6 @@ function writeConfig(kind) {
               profiles: {
                 "docker-cdp": {
                   cdpUrl: `http://127.0.0.1:${readTcpPortEnv("CDP_PORT", 19222)}`,
-                  color: "#FF4500",
                 },
               },
             },

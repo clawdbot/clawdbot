@@ -597,6 +597,10 @@ describe("plugin-sdk subpath exports", () => {
       "createDirectTextMediaOutbound",
       "createScopedChannelMediaMaxBytesResolver",
     ]);
+    expectSourceMentions("media-local-roots", [
+      "getAgentScopedMediaLocalRoots",
+      "getAgentScopedMediaLocalRootsForSources",
+    ]);
     expectSourceMentions("approval-auth-runtime", [
       "createResolvedApproverActionAuthAdapter",
       "isImplicitSameChatApprovalAuthorization",
@@ -659,6 +663,7 @@ describe("plugin-sdk subpath exports", () => {
         "SecretTargetRegistryEntry",
       ],
       omits: [
+        "buildChannelMetadata",
         "buildUntrustedChannelMetadata",
         "evaluateSupplementalContextVisibility",
         "resolvePinnedMainDmOwnerFromAllowlist",
@@ -759,7 +764,6 @@ describe("plugin-sdk subpath exports", () => {
     });
     expectSourceContract("memory-core-host-runtime-cli", {
       mentions: ["defaultRuntime", "withManager", "withProgressTotals"],
-      omits: ['export * from "../../packages/memory-host-sdk/src/runtime-cli.js";'],
     });
     expectSourceContract("memory-core-host-runtime-files", {
       mentions: ["listMemoryFiles", "normalizeExtraMemoryPaths", "MemorySearchResult"],
@@ -1206,7 +1210,12 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceOmits("core", ["buildOauthProviderAuthResult"]);
     expectSourceContract("provider-model-shared", {
-      mentions: ["DEFAULT_CONTEXT_TOKENS", "normalizeModelCompat", "cloneFirstTemplateModel"],
+      mentions: [
+        "DEFAULT_CONTEXT_TOKENS",
+        "normalizeModelCompat",
+        "cloneFirstTemplateModel",
+        "resolveFamilyForwardCompatModel",
+      ],
       omits: ["applyOpenAIConfig", "buildKilocodeModelDefinition", "discoverHuggingfaceModels"],
     });
     expectSourceContract("provider-catalog-shared", {
@@ -1223,6 +1232,8 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceMentions("setup-tools", ["formatCliCommand", "detectBinary", "formatDocsLink"]);
     expectSourceMentions("lazy-runtime", ["createLazyRuntimeSurface", "createLazyRuntimeModule"]);
+    expectSourceMentions("agent-harness", ["./agent-harness-runtime.js"]);
+    expectSourceMentions("agent-harness-runtime", ["AgentHarness", "EmbeddedPiCompactResult"]);
     expectSourceOmitsSnippet("agent-runtime", "./sglang.js");
     expectSourceOmitsSnippet("agent-runtime", "./vllm.js");
     expectSourceOmitsSnippet("agent-runtime", "../../extensions/");

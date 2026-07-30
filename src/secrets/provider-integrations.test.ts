@@ -551,8 +551,8 @@ describe("secret provider integration presets", () => {
     const rootDir = makeTempDir();
     const resolverPath = path.join(rootDir, "bin", "resolve.mjs");
     fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
-    fs.mkdirSync(path.dirname(resolverPath));
-    fs.writeFileSync(
+    makeSecureDir(path.dirname(resolverPath));
+    writeSecureFile(
       resolverPath,
       [
         "let input = '';",
@@ -564,7 +564,6 @@ describe("secret provider integration presets", () => {
         "  process.stdout.write(JSON.stringify({ protocolVersion: 1, values }));",
         "});",
       ].join("\n"),
-      "utf8",
     );
     fs.writeFileSync(
       path.join(rootDir, "openclaw.plugin.json"),

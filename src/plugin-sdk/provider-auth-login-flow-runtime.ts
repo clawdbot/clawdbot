@@ -22,7 +22,7 @@ const CODEX_LOGIN_PROVIDER = "openai";
 const CODEX_LOGIN_METHOD = "device-code";
 const CODEX_LOGIN_FLOW_TTL_MS = 15 * 60_000;
 
-const CODEX_LOGIN_PROVIDER_ALIASES = new Set(["codex", "openai", "openai-codex"]);
+const CODEX_LOGIN_PROVIDER_ALIASES = new Set(["codex", "openai"]);
 
 type CodexLoginFlowRecord = {
   expiresAt: number;

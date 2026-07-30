@@ -172,7 +172,7 @@ vi.mock("../commands/health.js", () => ({
   healthCommand,
 }));
 
-vi.mock("../commands/onboard-search.js", () => ({
+vi.mock("../flows/search-setup.js", () => ({
   listSearchProviderOptions: () => [],
   resolveSearchProviderOptions: () => [],
   hasExistingKey,

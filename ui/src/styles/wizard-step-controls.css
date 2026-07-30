@@ -1,0 +1,50 @@
+.wizard-step__form {
+  display: grid;
+  gap: 12px;
+}
+
+.wizard-step__message {
+  white-space: pre-wrap;
+}
+
+.wizard-step__device-code {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+
+.wizard-step__device-code code {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.wizard-step__options {
+  display: grid;
+  gap: 8px;
+}
+
+.wizard-step__option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.wizard-step__option small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.wizard-step__actions {
+  display: flex;
+  gap: 8px;
+}

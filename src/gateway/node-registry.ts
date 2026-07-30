@@ -7,6 +7,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 // NodeSession is plugin-SDK-reachable; importing these types from the
 // gateway-protocol index would retain the whole ProtocolSchemas registry in
 // the public plugin-sdk dts (check-plugin-sdk-exports guards this).
@@ -257,7 +258,13 @@ export class NodeRegistry {
     pendingInvokes: this.pendingInvokes,
     sendCancel: (requestId, pending) => {
       const node = this.nodesById.get(pending.nodeId);
-      if (!node || node.connId !== pending.connId) {
+      // Older nodes only negotiated streamed cancellation. The authenticated
+      // first-party host also aborts ordinary shell, MCP, and inference calls.
+      if (
+        !node ||
+        node.connId !== pending.connId ||
+        (!pending.onProgress && node.clientId !== GATEWAY_CLIENT_IDS.NODE_HOST)
+      ) {
         return;
       }
       this.sendEventToSession(node, "node.invoke.cancel", {
@@ -433,7 +440,8 @@ export class NodeRegistry {
     }
     const connect = client.connect;
     const nodeId = connect.device?.id ?? connect.client.id;
-    const previousPairingGeneration = this.nodesById.get(nodeId)?.pairingGeneration;
+    const previousSession = this.nodesById.get(nodeId);
+    const previousPairingGeneration = previousSession?.pairingGeneration;
     const caps = Array.isArray(connect.caps) ? connect.caps : [];
     const declaredCaps = Array.isArray((connect as { declaredCaps?: string[] }).declaredCaps)
       ? ((connect as { declaredCaps?: string[] }).declaredCaps ?? [])
@@ -505,9 +513,14 @@ export class NodeRegistry {
       pathEnv,
       connectedAtMs: Date.now(),
     };
-    const replacesPresence = this.nodesById.get(nodeId)?.lastActiveAtMs !== undefined;
+    const replacesPresence = previousSession?.lastActiveAtMs !== undefined;
     this.nodesById.set(nodeId, session);
     this.nodesByConn.set(client.connId, nodeId);
+    if (previousSession && previousSession.connId !== client.connId) {
+      // Install the replacement first so retiring its old invokes cannot
+      // remove the new session or publish a false offline transition.
+      this.unregister(previousSession.connId);
+    }
     if (
       previousPairingGeneration &&
       session.pairingGeneration &&
@@ -807,16 +820,30 @@ export class NodeRegistry {
 
   /** Probe websocket liveness with ping/pong when the socket supports it. */
   async checkConnectivity(nodeId: string, timeoutMs = 2_000): Promise<NodeConnectivityResult> {
-    const node = this.nodesById.get(nodeId);
+    const node = this.getRegisteredSession(nodeId);
     if (!node) {
       return {
         ok: false,
         error: { code: "NOT_CONNECTED", message: "node not connected" },
       };
     }
+    // A successful old transport must never certify a replacement node.
+    const currentConnectionResult = (result: NodeConnectivityResult): NodeConnectivityResult =>
+      this.nodesById.get(nodeId) === node && node.client.invalidated !== true
+        ? result
+        : {
+            ok: false,
+            error: {
+              code: "NOT_CONNECTED",
+              message: "node connection changed during connectivity probe",
+            },
+          };
     const eventTransport = this.eventTransportsByConn.get(node.connId);
     if (eventTransport) {
-      return eventTransport.checkConnectivity?.(timeoutMs) ?? { ok: true };
+      const result = eventTransport.checkConnectivity
+        ? await eventTransport.checkConnectivity(timeoutMs)
+        : { ok: true as const };
+      return currentConnectionResult(result);
     }
     const socket = node.client.socket as PingableSocket;
     if (socket.readyState !== WEBSOCKET_OPEN_READY_STATE) {
@@ -847,7 +874,7 @@ export class NodeRegistry {
         settled = true;
         clearTimeout(timer);
         cleanup();
-        resolve(result);
+        resolve(currentConnectionResult(result));
       };
       const onPong = () => finish({ ok: true });
       const onClose = () =>

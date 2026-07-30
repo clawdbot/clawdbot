@@ -18,8 +18,14 @@ import {
   type dispatchGatewayMethodInProcess,
 } from "../gateway/server-plugins.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  isGatewaySubordinateWorkAdmissionClosed,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { markSubagentRunTerminated } from "./subagent-registry.js";
 import {
   resetSubagentRegistryForTests,
   testing as subagentRegistryTesting,
@@ -90,6 +96,7 @@ async function waitForAssertion(assertion: () => void, timeoutMs = 2_000): Promi
 
 describe("spawnSubagentDirect in-process Gateway collector launch", () => {
   beforeEach(async () => {
+    resetGatewayWorkAdmission();
     swarmSchedulerTesting.reset();
     resetSubagentRegistryForTests({ persist: false });
     clearFallbackGatewayContext();
@@ -109,7 +116,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       path.join(stateDir, "openclaw.json"),
       `${JSON.stringify({
         session: { mainKey: "main", scope: "per-sender" },
-        tools: { swarm: true },
+        tools: { swarm: { enabled: true, maxConcurrent: 1 } },
         agents: {
           defaults: { workspace: stateDir },
           entries: { main: { workspace: stateDir } },
@@ -121,6 +128,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
 
   afterEach(async () => {
     clearFallbackGatewayContext();
+    resetGatewayWorkAdmission();
     swarmSchedulerTesting.reset();
     resetSubagentRegistryForTests({ persist: false });
     subagentRegistryTesting.setDepsForTest();
@@ -132,6 +140,178 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       await rm(stateDir, { recursive: true, force: true });
       stateDir = "";
     }
+  });
+
+  it("launches queued collectors after the parent admission lease is released", async () => {
+    const gatewayContext = makeGatewayContext();
+    let releaseFirstLaunch!: () => void;
+    const firstLaunchGate = new Promise<void>((resolve) => {
+      releaseFirstLaunch = resolve;
+    });
+    const subordinateAdmissionStates: boolean[] = [];
+    let launchCount = 0;
+    subagentSpawnTesting.setDepsForTest({
+      dispatchGatewayMethodInProcess: async <T>(
+        _method: string,
+        params: Record<string, unknown>,
+      ) => {
+        subordinateAdmissionStates.push(isGatewaySubordinateWorkAdmissionClosed());
+        launchCount += 1;
+        if (launchCount === 1) {
+          await firstLaunchGate;
+        }
+        return {
+          runId: params.idempotencyKey as string,
+          status: "accepted",
+        } as T;
+      },
+    });
+
+    const parentAdmission = tryBeginGatewayRootWorkAdmission();
+    expect(parentAdmission).not.toBeNull();
+    const results = await parentAdmission!.run(() =>
+      withPluginRuntimeGatewayRequestScope(
+        {
+          context: gatewayContext,
+          client: externalCliClient(),
+          isWebchatConnect: () => false,
+        },
+        () =>
+          Promise.all([
+            spawnSubagentDirect(
+              {
+                task: "first collector",
+                collect: true,
+                context: "isolated",
+                lightContext: true,
+                groupId: "swarm-queued-launch",
+                swarmLaunchReplayKey: "code-mode:agentSpawn:1",
+              },
+              {
+                agentSessionKey: "agent:main:main",
+                requesterRunId: "parent-run",
+              },
+            ),
+            spawnSubagentDirect(
+              {
+                task: "second collector",
+                collect: true,
+                context: "isolated",
+                lightContext: true,
+                groupId: "swarm-queued-launch",
+                swarmLaunchReplayKey: "code-mode:agentSpawn:2",
+              },
+              {
+                agentSessionKey: "agent:main:main",
+                requesterRunId: "parent-run",
+              },
+            ),
+          ]),
+      ),
+    );
+    parentAdmission!.release();
+
+    expect(results.map((result) => result.status)).toEqual(["accepted", "accepted"]);
+    await waitForAssertion(() => {
+      expect(launchCount).toBe(1);
+    });
+    releaseFirstLaunch();
+    await waitForAssertion(() => {
+      expect(launchCount).toBe(2);
+      for (const result of results) {
+        expect(subagentRuns.get(result.runId!)).toMatchObject({
+          collect: true,
+          swarmLaunchPending: false,
+        });
+      }
+    });
+    expect(subordinateAdmissionStates).toEqual([false, false]);
+  });
+
+  it("aborts a collector cancelled while Gateway acceptance is in flight", async () => {
+    const gatewayContext = makeGatewayContext();
+    let releaseFirstLaunch!: () => void;
+    const firstLaunchGate = new Promise<void>((resolve) => {
+      releaseFirstLaunch = resolve;
+    });
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    let launchCount = 0;
+    subagentSpawnTesting.setDepsForTest({
+      dispatchGatewayMethodInProcess: async <T>(
+        method: string,
+        params: Record<string, unknown>,
+      ) => {
+        requests.push({ method, params });
+        if (method === "agent") {
+          launchCount += 1;
+          if (launchCount === 1) {
+            await firstLaunchGate;
+          }
+          return { runId: `gateway-run-${launchCount}`, status: "accepted" } as T;
+        }
+        return {} as T;
+      },
+    });
+
+    const parentAdmission = tryBeginGatewayRootWorkAdmission();
+    expect(parentAdmission).not.toBeNull();
+    const results = await parentAdmission!.run(() =>
+      withPluginRuntimeGatewayRequestScope(
+        {
+          context: gatewayContext,
+          client: externalCliClient(),
+          isWebchatConnect: () => false,
+        },
+        () =>
+          Promise.all([
+            spawnSubagentDirect(
+              {
+                task: "cancelled collector",
+                collect: true,
+                context: "isolated",
+                lightContext: true,
+                groupId: "swarm-cancel-launch",
+                swarmLaunchReplayKey: "code-mode:agentSpawn:cancelled",
+              },
+              { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+            ),
+            spawnSubagentDirect(
+              {
+                task: "next collector",
+                collect: true,
+                context: "isolated",
+                lightContext: true,
+                groupId: "swarm-cancel-launch",
+                swarmLaunchReplayKey: "code-mode:agentSpawn:next",
+              },
+              { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+            ),
+          ]),
+      ),
+    );
+    parentAdmission!.release();
+    const firstRunId = results[0]?.runId;
+    expect(firstRunId).toBeTruthy();
+    await waitForAssertion(() => expect(launchCount).toBe(1));
+
+    expect(markSubagentRunTerminated({ runId: firstRunId, reason: "manual kill" })).toBe(1);
+    releaseFirstLaunch();
+
+    await waitForAssertion(() => {
+      expect(
+        requests.some(
+          (request) => request.method === "chat.abort" && request.params.runId === "gateway-run-1",
+        ),
+      ).toBe(true);
+      expect(launchCount).toBe(2);
+      expect(subagentRuns.get(firstRunId!)).toMatchObject({
+        collectorCompletion: { status: "killed" },
+      });
+      expect(subagentRuns.get("gateway-run-2")).toMatchObject({
+        swarmRunId: results[1]!.runId,
+        swarmLaunchPending: false,
+      });
+    });
   });
 
   it("hands a registered collector launch to Gateway as the host", async () => {

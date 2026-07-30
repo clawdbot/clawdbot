@@ -176,7 +176,7 @@ export function shouldSynthesizeToolProgressForItem(item: CodexThreadItem): bool
 }
 
 export function shouldRecordNativeToolTranscript(item: CodexThreadItem): boolean {
-  return shouldSynthesizeToolProgressForItem(item) && item.type !== "webSearch";
+  return shouldSynthesizeToolProgressForItem(item);
 }
 
 export function isMutatingNativeToolItem(item: CodexThreadItem): boolean {

@@ -165,6 +165,7 @@ type GatewayWsSharedHandlerParams = {
   nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
   preauthHandshakeTimeoutMs?: number;
   isStartupPending?: () => boolean;
+  isControlUiDeviceAuthMigrationPending?: () => boolean;
   gatewayMethods: string[];
   events: string[];
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
@@ -245,6 +246,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     browserRateLimiter,
     nodeReapprovalCoordinator,
     isStartupPending,
+    isControlUiDeviceAuthMigrationPending,
     gatewayMethods,
     events,
     refreshHealthSnapshot,
@@ -594,7 +596,9 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     });
 
     const setClient = (next: GatewayWsClient) => {
-      if (closed) {
+      // Concurrent connect frames can finish authentication out of order. Keep
+      // one socket owner so a raced finalizer cannot leak a client or ping loop.
+      if (closed || client) {
         return false;
       }
       if (next.worker) {
@@ -683,6 +687,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       browserRateLimiter,
       nodeReapprovalCoordinator,
       isStartupPending,
+      isControlUiDeviceAuthMigrationPending,
       gatewayMethods,
       events,
       extraHandlers,

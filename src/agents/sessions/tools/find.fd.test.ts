@@ -19,6 +19,7 @@ vi.mock("../../utils/tools-manager.js", () => ({
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type MockChild = ChildProcessWithoutNullStreams & {
+  nodeChildProcess: ChildProcessWithoutNullStreams;
   stdout: PassThrough;
   stderr: PassThrough;
   killMock: ReturnType<typeof vi.fn>;
@@ -30,7 +31,7 @@ afterEach(() => {
 
 function createChild(): MockChild {
   const kill = vi.fn(() => true);
-  return Object.assign(new EventEmitter(), {
+  const child = Object.assign(new EventEmitter(), {
     stdin: new PassThrough(),
     stdout: new PassThrough(),
     stderr: new PassThrough(),
@@ -38,6 +39,8 @@ function createChild(): MockChild {
     kill,
     killMock: kill,
   }) as unknown as MockChild;
+  child.nodeChildProcess = child;
+  return child;
 }
 
 it("rejects partial fd output when fd exits with an error", async () => {

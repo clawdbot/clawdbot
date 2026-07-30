@@ -57,9 +57,6 @@ describe("external CLI auth scope", () => {
           },
           mediaModels: { image: "minimax-portal/image-01" },
           voiceModel: "elevenlabs/eleven_multilingual_v2",
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "claude-cli/claude-opus-4-7": { alias: "opus" },
           },
@@ -96,9 +93,6 @@ describe("external CLI auth scope", () => {
       agents: {
         defaults: {
           model: "openai/gpt-5.5",
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "openai/gpt-5.5": { agentRuntime: { id: "claude-cli" } },
           },
