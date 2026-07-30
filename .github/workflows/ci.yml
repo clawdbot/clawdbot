@@ -2984,6 +2984,7 @@ jobs:
     timeout-minutes: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 30 || 20 }}
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
+      SWIFT_TEST_EXECUTION: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}
     steps:
       - *platform_checkout_step
 
@@ -3173,8 +3174,14 @@ jobs:
       - name: Swift test
         run: |
           set -euo pipefail
+          swift_test_args=(--package-path apps/macos --enable-code-coverage)
+          # Hosted release and retry runs have shown test-process contention;
+          # keep the faster first-attempt Blacksmith path parallel.
+          if [[ "$SWIFT_TEST_EXECUTION" == "parallel" ]]; then
+            swift_test_args+=(--parallel)
+          fi
           for attempt in 1 2 3; do
-            if swift test --package-path apps/macos --parallel --enable-code-coverage; then
+            if swift test "${swift_test_args[@]}"; then
               exit 0
             fi
             echo "swift test failed (attempt $attempt/3). Retrying…"
