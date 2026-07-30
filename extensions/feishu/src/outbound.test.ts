@@ -1846,6 +1846,39 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expectFeishuResult(result, "native_card_msg");
   });
 
+  it("sends the caption text before media in a card+media payload", async () => {
+    // The card+media send callback must forward the caption (text) so the media
+    // is not delivered without context. The caption goes out via sendOutboundText
+    // before the media send, matching the plain sendMedia path.
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "Here is the report",
+      accountId: "main",
+      mediaLocalRoots: ["/tmp"],
+      payload: {
+        text: "Here is the report",
+        mediaUrl: "/tmp/report.png",
+        interactive: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Open", url: "https://example.com" }] }],
+        },
+      },
+    });
+
+    const textCalls = sendMessageFeishuMock.mock.calls.map((call) => call[0]);
+    const captionCall = textCalls.find((params) => params?.text === "Here is the report");
+    expect(captionCall).toBeDefined();
+    expect(captionCall?.to).toBe("chat_1");
+    // The caption text must be sent before the media.
+    const captionOrder = sendMessageFeishuMock.mock.invocationCallOrder.find(
+      (_order, index) =>
+        sendMessageFeishuMock.mock.calls[index]?.[0]?.text === "Here is the report",
+    );
+    expect(captionOrder ?? 0).toBeLessThan(
+      sendMediaFeishuMock.mock.invocationCallOrder[0] ?? Infinity,
+    );
+  });
+
   it("threads native-card media and cards when replyToId is whitespace-only", async () => {
     await feishuOutbound.sendPayload?.({
       cfg: emptyConfig,

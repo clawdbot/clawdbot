@@ -752,8 +752,22 @@ export const feishuOutbound: ChannelOutboundAdapter = {
               attachChannelToResult("feishu", toFeishuOutboundResult(deliveryResult)),
             );
           },
-          send: async ({ mediaUrl }) => {
+          send: async ({ mediaUrl, text }) => {
             const { replyToMessageId, replyInThread } = nextReplyMode();
+            const audioAsVoice = payload.audioAsVoice === true || ctx.audioAsVoice === true;
+            // Send the caption text first (except for native voice bubbles), matching
+            // the plain sendMedia path. Without this the media would arrive with no
+            // caption whenever the card finalize step is skipped or fails.
+            if (text.trim() && !audioAsVoice) {
+              await sendOutboundText({
+                cfg: ctx.cfg,
+                to: ctx.to,
+                text,
+                accountId: ctx.accountId ?? undefined,
+                replyToMessageId,
+                replyInThread,
+              });
+            }
             return await sendMediaFeishu({
               cfg: ctx.cfg,
               to: ctx.to,
@@ -764,9 +778,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
               mediaReadFile: ctx.mediaReadFile,
               replyToMessageId,
               replyInThread,
-              ...(payload.audioAsVoice === true || ctx.audioAsVoice === true
-                ? { audioAsVoice: true }
-                : {}),
+              ...(audioAsVoice ? { audioAsVoice: true } : {}),
             });
           },
           finalize: async () => {
