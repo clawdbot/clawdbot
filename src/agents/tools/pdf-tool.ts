@@ -461,7 +461,7 @@ export function createPdfTool(options?: {
         message: "maxBytesMb must be greater than 0",
       });
       // Model-supplied maxBytesMb is clamped to prevent pathological allocations
-      // in PDF processing pipelines. Operator config (pdfMaxMb) is not clamped.
+      // in PDF processing pipelines. Operator config (agents.defaults.pdfMaxMb) is not clamped.
       const maxBytesMb =
         maxBytesMbRaw === undefined
           ? configuredMaxBytesMb
