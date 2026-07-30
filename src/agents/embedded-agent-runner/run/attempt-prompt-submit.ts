@@ -63,7 +63,6 @@ export async function submitEmbeddedAttemptPrompt(input: {
   runtimeContextMessage?: RuntimeContextCustomMessage;
   runtimeOnly: boolean;
   sessionPromptState: ReturnType<typeof getEmbeddedSessionPromptState>;
-  systemPrompt: string;
   toolResultAggregateMaxChars: number;
   toolResultMaxChars: number;
   toolResultPromptProjectionState: ToolResultPromptProjectionState;
@@ -112,10 +111,11 @@ export async function submitEmbeddedAttemptPrompt(input: {
   };
 
   input.onFinalPromptText(input.transcriptPrompt);
+  // context.compiled owns the conversation-state record for this attempt; duplicating
+  // messages/systemPrompt here pushed heavy turns past the event size cap and truncated
+  // away the prompt, the one field with no other trajectory source.
   input.trajectoryRecorder?.recordEvent("prompt.submitted", {
     prompt: input.modelPrompt,
-    systemPrompt: input.systemPrompt,
-    messages: activeSession.messages,
     imagesCount: input.images.length,
   });
   updateActiveEmbeddedRunSnapshot(attempt.sessionId, {
