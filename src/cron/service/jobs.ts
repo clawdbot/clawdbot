@@ -24,6 +24,7 @@ import type {
   CronJob,
   CronJobCreate,
   CronJobPatch,
+  CronJobState,
 } from "../types.js";
 import { resolveInitialCronDelivery } from "./initial-delivery.js";
 import {
@@ -172,6 +173,10 @@ export function createJob(
   const ownerAgentId = normalizeOptionalAgentId(input.owner?.agentId);
   const ownerSessionKey = normalizeOptionalString(input.owner?.sessionKey);
   const ownerAccountId = normalizeOptionalAccountId(input.owner?.accountId);
+  const initialState = { ...input.state } as Partial<CronJobState>;
+  // Schedule activation is stamped only by committed scheduling mutations.
+  // Accepting caller state here would let imports spoof restart catch-up ownership.
+  delete initialState.scheduleActivatedAtMs;
   const job: CronJob = {
     id,
     ...(declarationKey ? { declarationKey } : {}),
@@ -205,7 +210,7 @@ export function createJob(
     failureAlert: input.failureAlert,
     ...(input.trigger ? { trigger: structuredClone(input.trigger) } : {}),
     state: {
-      ...input.state,
+      ...initialState,
       ...(schedule.kind === "stream"
         ? { streamSourceIdentity: createCronStreamSourceIdentity() }
         : {}),
@@ -376,7 +381,11 @@ export function applyJobPatch(
         : undefined;
   }
   if (patch.state) {
-    job.state = { ...job.state, ...patch.state };
+    const statePatch = { ...patch.state } as Partial<CronJobState>;
+    // Runtime state patches may report execution progress, but the scheduler
+    // alone owns the boundary that decides whether restart catch-up can run.
+    delete statePatch.scheduleActivatedAtMs;
+    job.state = { ...job.state, ...statePatch };
   }
   if ("agentId" in patch) {
     job.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);
