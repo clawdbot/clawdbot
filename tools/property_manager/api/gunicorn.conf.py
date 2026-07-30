@@ -6,9 +6,10 @@ Worker rationale:
 - Two workers: light REST API; enough to survive one blocked/long request.
 - 120s timeout: meter confirm / mapping / manual ops can be slow via docker exec.
 - Graceful timeout defaults to 90s so in-flight ``docker exec … psql`` can finish
-  before workers are SIGKILLed on stop/reload. Prefer ``systemctl reload``
-  (HUP) over full restart for near-zero downtime; a hard restart can still
-  interrupt docker-exec children if a query exceeds graceful_timeout.
+  before workers are SIGKILLed on stop/reload. ``worker_exit`` waits on tracked
+  docker-exec children via ``db.wait_inflight_docker_execs``. Prefer
+  ``systemctl reload`` (HUP) for near-zero downtime; full restart still drains
+  within graceful_timeout when systemd uses ``KillMode=mixed``.
 - No autoreloader: systemd owns restarts; reload is ``kill -HUP`` / systemctl reload.
 """
 
@@ -44,3 +45,18 @@ loglevel = os.environ.get("PROPERTYMANAGER_API_LOG_LEVEL", "info")
 
 pidfile = str(_PID_DIR / "propertymanager-api.pid")
 proc_name = "propertymanager-api"
+
+
+def worker_exit(server, worker):  # noqa: ANN001 — Gunicorn hook signature
+    """Wait for tracked docker-exec children before the worker process exits."""
+    try:
+        import db as pm_db
+
+        remaining = pm_db.wait_inflight_docker_execs(timeout=float(graceful_timeout))
+        if remaining:
+            server.log.warning(
+                "worker_exit: %s docker-exec process(es) still alive after drain",
+                remaining,
+            )
+    except Exception as exc:  # pragma: no cover - defensive logging only
+        server.log.warning("worker_exit docker-exec drain failed: %s", exc)

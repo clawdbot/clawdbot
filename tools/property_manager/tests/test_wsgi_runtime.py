@@ -93,11 +93,18 @@ class PropertyManagerWsgiConfigurationTests(unittest.TestCase):
         self.assertIn("Gunicorn", unit)
         self.assertIn("ExecReload=/bin/kill -s HUP $MAINPID", unit)
         self.assertIn("KillSignal=SIGQUIT", unit)
+        self.assertIn("KillMode=mixed", unit)
         self.assertIn("TimeoutStopSec=120", unit)
         self.assertIn("Restart=on-failure", unit)
         self.assertIn("openclaw-cursor-propertymanager", unit)
         self.assertNotIn("propertymanager_api.py", unit)
         self.assertIn("development vm", unit.lower())
+
+    def test_gunicorn_config_defines_worker_exit_drain_hook(self):
+        config = load_config()
+        self.assertTrue(callable(getattr(config, "worker_exit", None)))
+        source = CONFIG_PATH.read_text(encoding="utf-8")
+        self.assertIn("wait_inflight_docker_execs", source)
 
     def test_run_api_starts_gunicorn_not_flask(self):
         script = (API_DIR / "run_api.sh").read_text(encoding="utf-8")

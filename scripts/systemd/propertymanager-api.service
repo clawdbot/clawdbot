@@ -19,8 +19,9 @@ Environment=PROPERTYMANAGER_ATTACHMENTS_ROOT=%h/.local/share/openclaw-dev/proper
 ExecStart=%h/ai/projects/openclaw/tools/property_manager/api/run_wsgi.sh
 ExecReload=/bin/kill -s HUP $MAINPID
 KillSignal=SIGQUIT
-KillMode=control-group
-TimeoutStopSec=45
+# mixed: SIGQUIT master only so in-flight docker-exec children are not killed early
+KillMode=mixed
+TimeoutStopSec=120
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true

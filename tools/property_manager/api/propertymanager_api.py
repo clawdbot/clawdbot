@@ -284,6 +284,40 @@ def health():
     return jsonify(body), (200 if healthy else 503)
 
 
+@app.get("/v1/test/slow-db")
+def test_slow_db():
+    """Test-only drain probe: sleep inside docker-exec when env gate is set.
+
+    Enabled only when ``PROPERTYMANAGER_TEST_SLOW_DB_MS`` is a positive integer.
+    Used by ``tests/test_restart_drain.py`` to prove in-flight DB work survives
+    ``systemctl --user restart propertymanager-api``.
+    """
+    raw = os.environ.get("PROPERTYMANAGER_TEST_SLOW_DB_MS", "").strip()
+    if not raw:
+        return error_response(
+            "NOT_FOUND",
+            "slow-db probe disabled (set PROPERTYMANAGER_TEST_SLOW_DB_MS)",
+            status=404,
+        )
+    try:
+        ms = int(raw)
+    except ValueError:
+        return error_response(
+            "VALIDATION_ERROR",
+            "PROPERTYMANAGER_TEST_SLOW_DB_MS must be an integer millisecond value",
+            status=400,
+        )
+    if ms <= 0:
+        return error_response(
+            "NOT_FOUND",
+            "slow-db probe disabled (PROPERTYMANAGER_TEST_SLOW_DB_MS <= 0)",
+            status=404,
+        )
+    ms = min(ms, 30_000)
+    pm_db.test_slow_sleep(ms / 1000.0)
+    return jsonify({"ok": True, "slept_ms": ms, "db_mode": "docker_exec" if pm_db.use_docker() else "tcp"})
+
+
 @app.errorhandler(413)
 def handle_payload_too_large(_exc):
     return error_response(

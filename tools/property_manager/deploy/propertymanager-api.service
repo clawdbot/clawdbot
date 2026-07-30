@@ -28,10 +28,13 @@ Environment=PROPERTYMANAGER_PID_DIR=/tmp/pm-dev
 Environment=OPENCLAW_BASE=%h/ai/projects/openclaw-cursor-propertymanager
 ExecStart=%h/ai/projects/openclaw-cursor-propertymanager/tools/property_manager/api/run_api.sh
 # Prefer ExecReload (HUP) for config/code pickup: new workers start, old drain.
-# Full restart sends SIGQUIT then waits TimeoutStopSec; keep it above gunicorn
-# graceful_timeout so docker-exec-per-query children can finish.
+# KillMode=mixed: SIGQUIT to Gunicorn master only. Default control-group would
+# also SIGQUIT in-flight docker-exec children and abort requests with HTTP 500.
+# TimeoutStopSec must stay above gunicorn graceful_timeout so workers can finish
+# tracked docker-exec work; after that the cgroup is SIGKILLed.
 ExecReload=/bin/kill -s HUP $MAINPID
 KillSignal=SIGQUIT
+KillMode=mixed
 TimeoutStopSec=120
 Restart=on-failure
 RestartSec=5

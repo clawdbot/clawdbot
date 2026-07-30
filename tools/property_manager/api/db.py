@@ -18,14 +18,17 @@ handler; do not store connections on module globals.
 Importing this module does not open connections, run migrations, or mutate data.
 Migrations remain an explicit operator action.
 
-Graceful shutdown / docker-exec limitation
-------------------------------------------
-Gunicorn ``graceful_timeout`` (default 90s) must cover in-flight docker-exec
-queries. If a worker is SIGKILLed after that window (or systemd
-``TimeoutStopSec`` fires), the child ``docker exec`` may die mid-query and the
-client can see HTTP 500 / connection reset. Prefer ``systemctl reload`` (HUP)
-over full restart for near-zero downtime. Do not start docker-exec in a detached
-process group — orphans would outlive the request without benefiting clients.
+Graceful shutdown / docker-exec drain
+-------------------------------------
+In-flight ``docker exec`` children are tracked in this module. Gunicorn
+``worker_exit`` waits for them (up to ``graceful_timeout``). systemd must use
+``KillMode=mixed`` so ``KillSignal=SIGQUIT`` reaches only the Gunicorn master —
+default ``control-group`` would SIGQUIT docker-exec children immediately and
+yield HTTP 500 on in-flight requests. After ``TimeoutStopSec``, remaining
+cgroup processes are SIGKILLed. ``wait_inflight_docker_execs`` terminates then
+kills any leftover tracked procs so they are never orphaned indefinitely.
+Prefer ``systemctl reload`` (HUP) for near-zero downtime; full restart still
+drains in-flight docker-exec work within the graceful window.
 """
 
 from __future__ import annotations
@@ -34,6 +37,8 @@ import json
 import os
 import signal
 import subprocess
+import threading
+import time
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
@@ -97,11 +102,71 @@ FORCE_DOCKER = os.environ.get("PROPERTYMANAGER_DB_VIA_DOCKER", "").strip() in {
     "yes",
 }
 
+_inflight_lock = threading.Lock()
+_inflight_procs: set[subprocess.Popen[str]] = set()
+
 
 def use_docker() -> bool:
     if FORCE_DOCKER:
         return True
     return not bool(DB_CONFIG["password"])
+
+
+def inflight_docker_exec_count() -> int:
+    """Return the number of tracked in-flight docker-exec processes."""
+    with _inflight_lock:
+        return sum(1 for proc in _inflight_procs if proc.poll() is None)
+
+
+def wait_inflight_docker_execs(*, timeout: float | None = None) -> int:
+    """Wait for tracked docker-exec children during worker drain.
+
+    Returns the number of processes still alive after the wait (0 on success).
+    On timeout, terminate then kill remaining tracked procs so they are not
+    orphaned indefinitely.
+    """
+    if timeout is None:
+        timeout = float(os.environ.get("PROPERTYMANAGER_API_GRACEFUL_TIMEOUT", "90"))
+    deadline = time.monotonic() + max(0.0, float(timeout))
+
+    while True:
+        with _inflight_lock:
+            alive = [proc for proc in _inflight_procs if proc.poll() is None]
+        if not alive:
+            return 0
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            alive[0].wait(timeout=min(0.5, remaining))
+        except subprocess.TimeoutExpired:
+            continue
+
+    with _inflight_lock:
+        leftover = [proc for proc in list(_inflight_procs) if proc.poll() is None]
+    for proc in leftover:
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+    kill_deadline = time.monotonic() + 1.0
+    for proc in leftover:
+        wait_left = kill_deadline - time.monotonic()
+        if wait_left <= 0:
+            break
+        try:
+            proc.wait(timeout=wait_left)
+        except subprocess.TimeoutExpired:
+            pass
+    for proc in leftover:
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        with _inflight_lock:
+            _inflight_procs.discard(proc)
+    return sum(1 for proc in leftover if proc.poll() is None)
 
 
 def _docker_psql(
@@ -127,12 +192,36 @@ def _docker_psql(
     if field_separator is not None:
         cmd.extend(["-F", field_separator])
     cmd.extend(["-c", sql])
-    return subprocess.run(
+    # Track Popen explicitly so worker_exit can wait. Do not start a new session
+    # (that would detach/orphan children across worker death).
+    proc: subprocess.Popen[str] = subprocess.Popen(
         cmd,
-        check=False,
-        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
+        start_new_session=False,
     )
+    with _inflight_lock:
+        _inflight_procs.add(proc)
+    try:
+        stdout, stderr = proc.communicate()
+        return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+    finally:
+        with _inflight_lock:
+            _inflight_procs.discard(proc)
+
+
+def test_slow_sleep(seconds: float) -> None:
+    """Test-only helper: block inside docker-exec via ``pg_sleep``.
+
+    Clamped to 30s. Used by ``GET /v1/test/slow-db`` when
+    ``PROPERTYMANAGER_TEST_SLOW_DB_MS`` is set.
+    """
+    clamped = max(0.0, min(float(seconds), 30.0))
+    # Literal seconds only (clamped float) — never interpolate untrusted input.
+    result = _docker_psql(f"SELECT pg_sleep({clamped})")
+    _raise_psql_failure(result)
 
 
 def _raise_psql_failure(result: subprocess.CompletedProcess[str]) -> None:
@@ -148,7 +237,7 @@ def _raise_psql_failure(result: subprocess.CompletedProcess[str]) -> None:
             sig_name = str(sig)
         raise RuntimeError(
             f"psql interrupted by {sig_name} during docker exec "
-            "(prefer systemctl reload over hard restart; raise graceful_timeout if queries are long)"
+            "(prefer systemctl reload; worker drain uses KillMode=mixed + graceful_timeout)"
         )
     raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "psql failed")
 
