@@ -46,11 +46,14 @@ import {
 } from "./configure.shared.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import { healthCommand } from "./health.js";
+import {
+  ensureOnboardingAgentWorkspace,
+  resolveOnboardingAgentTarget,
+} from "./onboard-agent-target.js";
 import { setupChannels } from "./onboard-channels.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
-  ensureWorkspaceAndSessions,
   guardCancel,
   probeGatewayReachable,
   resolveAdvertisedControlUiLinks,
@@ -123,8 +126,9 @@ async function runGatewayHealthCheck(params: {
     value: params.cfg.gateway?.auth?.password,
     path: "gateway.auth.password",
   });
-  const token = process.env.OPENCLAW_GATEWAY_TOKEN ?? configuredToken;
-  const password = process.env.OPENCLAW_GATEWAY_PASSWORD ?? configuredPassword;
+  const token = normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN) ?? configuredToken;
+  const password =
+    normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD) ?? configuredPassword;
 
   await waitForGatewayReachable({
     url: wsUrl,
@@ -211,7 +215,8 @@ async function promptWebToolsConfig(
   note(
     [
       "Web search lets your agent look things up online using the `web_search` tool.",
-      "Choose a managed provider now, and Codex-capable models can also use native Codex web search.",
+      "Codex-capable models can use native Codex web search.",
+      "Other models use a separate web search provider, which you can configure here.",
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",
@@ -219,7 +224,7 @@ async function promptWebToolsConfig(
 
   const enableSearch = guardCancel(
     await confirm({
-      message: "Enable web_search?",
+      message: "Enable the web_search tool?",
       initialValue: existingSearch?.enabled ?? hasManagedSearchProviders,
     }),
     runtime,
@@ -239,12 +244,12 @@ async function promptWebToolsConfig(
     if (codexRelevant) {
       note(
         [
-          "Codex-capable models can optionally use native Codex web search.",
-          "Managed web_search still controls non-Codex models.",
-          "If no managed provider is configured, non-Codex models still rely on provider auto-detect and may have no search available.",
+          "Codex-capable models can use native Codex web search instead of a separate provider.",
+          "Other models need a separate web search provider.",
+          "If you do not choose one, OpenClaw can select a provider from available credentials; otherwise other models may not have web search.",
           ...(describeCodexNativeWebSearch(nextConfig)
             ? [describeCodexNativeWebSearch(nextConfig)!]
-            : ["Recommended mode: cached."]),
+            : []),
         ].join("\n"),
         "Codex native search",
       );
@@ -261,7 +266,7 @@ async function promptWebToolsConfig(
       if (enableCodexNative) {
         const codexMode = guardCancel(
           await select({
-            message: "Codex native web search mode",
+            message: "Native Codex web search mode",
             options: [
               {
                 value: "cached",
@@ -289,7 +294,9 @@ async function promptWebToolsConfig(
         };
         configureManagedProvider = guardCancel(
           await confirm({
-            message: "Configure or change a managed web search provider now?",
+            message: existingSearch?.provider
+              ? `Change the separate web search provider (currently ${existingSearch.provider})?`
+              : "Also configure a separate web search provider for other models?",
             initialValue: Boolean(existingSearch?.provider),
           }),
           runtime,
@@ -307,7 +314,8 @@ async function promptWebToolsConfig(
     }
 
     if (configureManagedProvider) {
-      const { resolveSearchProviderOptions, setupSearch } = await import("./onboard-search.js");
+      const { resolveSearchProviderOptions, runSearchSetupFlow } =
+        await import("../flows/search-setup.js");
       const searchProviderOptions = resolveSearchProviderOptions(nextConfig);
       if (searchProviderOptions.length === 0) {
         note(
@@ -325,9 +333,10 @@ async function promptWebToolsConfig(
           };
         }
       } else {
-        workingConfig = await setupSearch(workingConfig, runtime, prompter, {
+        const searchSetup = await runSearchSetupFlow(workingConfig, runtime, prompter, {
           preserveDisabledSearchState: false,
         });
+        workingConfig = searchSetup.config;
         const selectedSearch = workingConfig.tools?.web?.search;
         nextSearch = {
           ...selectedSearch,
@@ -342,9 +351,17 @@ async function promptWebToolsConfig(
     }
   }
 
+  note(
+    [
+      "`web_fetch` is a separate tool for reading a specific URL.",
+      "It does not require an API key and works independently of web search providers, including Codex.",
+    ].join("\n"),
+    "Web fetch",
+  );
+
   const enableFetch = guardCancel(
     await confirm({
-      message: "Enable web_fetch (keyless HTTP fetch)?",
+      message: "Enable the web_fetch tool?",
       initialValue: existingFetch?.enabled ?? true,
     }),
     runtime,
@@ -446,8 +463,10 @@ export async function runConfigureWizard(
         ]);
         return probeGatewayReachable({
           url: localUrl,
-          token: process.env.OPENCLAW_GATEWAY_TOKEN ?? baseLocalProbeToken,
-          password: process.env.OPENCLAW_GATEWAY_PASSWORD ?? baseLocalProbePassword,
+          token: normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN) ?? baseLocalProbeToken,
+          password:
+            normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD) ??
+            baseLocalProbePassword,
           timeoutMs: GATEWAY_HINT_PROBE_TIMEOUT_MS,
         });
       })();
@@ -529,10 +548,8 @@ export async function runConfigureWizard(
       };
       didSetGatewayMode = true;
     }
-    let workspaceDir =
-      nextConfig.agents?.defaults?.workspace ??
-      baseConfig.agents?.defaults?.workspace ??
-      DEFAULT_WORKSPACE;
+    const resolveSetupTarget = () => resolveOnboardingAgentTarget(nextConfig);
+    let workspaceDir = resolveSetupTarget().workspaceDir;
     let gatewayPort = resolveGatewayPort(baseConfig);
 
     const persistConfig = async () => {
@@ -619,17 +636,34 @@ export async function runConfigureWizard(
           );
         }
       }
-      nextConfig = {
-        ...nextConfig,
-        agents: {
-          ...nextConfig.agents,
-          defaults: {
-            ...nextConfig.agents?.defaults,
-            workspace: workspaceDir,
-          },
-        },
-      };
-      await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+      const target = resolveSetupTarget();
+      const targetEntry = nextConfig.agents?.entries?.[target.agentId];
+      nextConfig =
+        targetEntry?.workspace !== undefined
+          ? {
+              ...nextConfig,
+              agents: {
+                ...nextConfig.agents,
+                entries: {
+                  ...nextConfig.agents?.entries,
+                  [target.agentId]: { ...targetEntry, workspace: workspaceDir },
+                },
+              },
+            }
+          : {
+              ...nextConfig,
+              agents: {
+                ...nextConfig.agents,
+                defaults: {
+                  ...nextConfig.agents?.defaults,
+                  workspace: workspaceDir,
+                },
+              },
+            };
+    };
+
+    const provisionWorkspace = async () => {
+      await ensureOnboardingAgentWorkspace(resolveSetupTarget(), runtime, {
         skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
       });
@@ -664,65 +698,83 @@ export async function runConfigureWizard(
       gatewayPort = parsePort(portInput) ?? gatewayPort;
     };
 
-    if (selectedSections) {
-      const selected = selectedSections;
-      if (!selected || selected.length === 0) {
-        outro("No configuration changes selected.");
-        return;
-      }
-
-      if (selected.includes("workspace")) {
+    let didConfigureGateway = false;
+    const sectionActions = {
+      workspace: async () => {
         await configureWorkspace();
-      }
-
-      if (selected.includes("model")) {
+        await provisionWorkspace();
+      },
+      model: async () => {
         nextConfig = await promptAuthConfig(nextConfig, runtime, prompter);
-      }
-
-      if (selected.includes("web")) {
+      },
+      web: async () => {
         nextConfig = await promptWebToolsConfig(nextConfig, runtime, prompter);
-      }
-
-      if (selected.includes("gateway")) {
+      },
+      gateway: async () => {
         const gateway = await promptGatewayConfig(nextConfig, runtime);
         nextConfig = gateway.config;
         gatewayPort = gateway.port;
-      }
-
-      if (selected.includes("channels")) {
-        await configureChannelsSection();
-      }
-
-      if (selected.includes("plugins")) {
+        didConfigureGateway = true;
+      },
+      channels: configureChannelsSection,
+      plugins: async () => {
         const { configurePluginConfig } = await loadSetupPluginConfigModule();
         nextConfig = await configurePluginConfig({
           config: nextConfig,
           prompter,
-          workspaceDir: resolveUserPath(workspaceDir),
+          workspaceDir: resolveSetupTarget().workspaceDir,
         });
+      },
+      skills: async () => {
+        nextConfig = await setupSkills(
+          nextConfig,
+          resolveSetupTarget().workspaceDir,
+          runtime,
+          prompter,
+        );
+      },
+      daemon: async () => {
+        if (!didConfigureGateway) {
+          await promptDaemonPort();
+        }
+        await maybeInstallDaemon({ runtime, port: gatewayPort });
+      },
+      health: async () => {
+        await runGatewayHealthCheck({ cfg: nextConfig, runtime, port: gatewayPort });
+      },
+    } satisfies Record<WizardSection, () => Promise<void>>;
+
+    if (selectedSections) {
+      if (selectedSections.length === 0) {
+        outro("No configuration changes selected.");
+        return;
       }
 
-      if (selected.includes("skills")) {
-        const wsDir = resolveUserPath(workspaceDir);
-        nextConfig = await setupSkills(nextConfig, wsDir, runtime, prompter);
+      // Section flags retain their canonical setup order regardless of flag order;
+      // the complete config is committed once before service or health effects.
+      for (const section of [
+        "workspace",
+        "model",
+        "web",
+        "gateway",
+        "channels",
+        "plugins",
+        "skills",
+      ] as const) {
+        if (selectedSections.includes(section)) {
+          await sectionActions[section]();
+        }
       }
 
       await persistConfig();
 
-      if (selected.includes("daemon")) {
-        if (!selected.includes("gateway")) {
-          await promptDaemonPort();
+      for (const section of ["daemon", "health"] as const) {
+        if (selectedSections.includes(section)) {
+          await sectionActions[section]();
         }
-
-        await maybeInstallDaemon({ runtime, port: gatewayPort });
-      }
-
-      if (selected.includes("health")) {
-        await runGatewayHealthCheck({ cfg: nextConfig, runtime, port: gatewayPort });
       }
     } else {
       let ranSection = false;
-      let didConfigureGateway = false;
 
       while (true) {
         const choice = await promptConfigureSection(runtime, ranSection);
@@ -730,63 +782,10 @@ export async function runConfigureWizard(
           break;
         }
         ranSection = true;
-
-        if (choice === "workspace") {
-          await configureWorkspace();
+        await sectionActions[choice]();
+        if (choice !== "daemon" && choice !== "health") {
+          // Interactive setup commits each section before showing another prompt.
           await persistConfig();
-        }
-
-        if (choice === "model") {
-          nextConfig = await promptAuthConfig(nextConfig, runtime, prompter);
-          await persistConfig();
-        }
-
-        if (choice === "web") {
-          nextConfig = await promptWebToolsConfig(nextConfig, runtime, prompter);
-          await persistConfig();
-        }
-
-        if (choice === "gateway") {
-          const gateway = await promptGatewayConfig(nextConfig, runtime);
-          nextConfig = gateway.config;
-          gatewayPort = gateway.port;
-          didConfigureGateway = true;
-          await persistConfig();
-        }
-
-        if (choice === "channels") {
-          await configureChannelsSection();
-          await persistConfig();
-        }
-
-        if (choice === "plugins") {
-          const { configurePluginConfig } = await loadSetupPluginConfigModule();
-          nextConfig = await configurePluginConfig({
-            config: nextConfig,
-            prompter,
-            workspaceDir: resolveUserPath(workspaceDir),
-          });
-          await persistConfig();
-        }
-
-        if (choice === "skills") {
-          const wsDir = resolveUserPath(workspaceDir);
-          nextConfig = await setupSkills(nextConfig, wsDir, runtime, prompter);
-          await persistConfig();
-        }
-
-        if (choice === "daemon") {
-          if (!didConfigureGateway) {
-            await promptDaemonPort();
-          }
-          await maybeInstallDaemon({
-            runtime,
-            port: gatewayPort,
-          });
-        }
-
-        if (choice === "health") {
-          await runGatewayHealthCheck({ cfg: nextConfig, runtime, port: gatewayPort });
         }
       }
 
@@ -836,21 +835,21 @@ export async function runConfigureWizard(
       tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
     });
     const newPassword =
-      process.env.OPENCLAW_GATEWAY_PASSWORD ??
+      normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD) ??
       (await resolveGatewaySecretInputForWizard({
         cfg: nextConfig,
         value: nextConfig.gateway?.auth?.password,
         path: "gateway.auth.password",
       }));
     const oldPassword =
-      process.env.OPENCLAW_GATEWAY_PASSWORD ??
+      normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD) ??
       (await resolveGatewaySecretInputForWizard({
         cfg: baseConfig,
         value: baseConfig.gateway?.auth?.password,
         path: "gateway.auth.password",
       }));
     const token =
-      process.env.OPENCLAW_GATEWAY_TOKEN ??
+      normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN) ??
       (await resolveGatewaySecretInputForWizard({
         cfg: nextConfig,
         value: nextConfig.gateway?.auth?.token,

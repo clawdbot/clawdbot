@@ -1,12 +1,15 @@
 /** Lifecycle-owned auth/model discovery snapshots for agent runs. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
+  createPreparedModelRuntimeOwner,
   createPreparedModelRuntimeReplacement,
   effectiveEnvironmentFingerprint,
+  hasConfiguredOwnerMatching,
   hasSameLifecycleInput,
   listConfiguredOwnerInputs,
   normalizeOptionalDir,
@@ -20,6 +23,8 @@ import {
   toError,
   type PreparedModelRuntimeOwner,
   type PreparedModelRuntimeInput,
+  type PreparedModelRuntimePublicationOptions,
+  type PreparedModelRuntimeRefreshOptions,
   type PreparedModelRuntimeLease,
   type PreparedModelRuntimeReplacement,
   type PreparedModelRuntimeReplacementGateId,
@@ -140,10 +145,7 @@ export function getPreparedModelRuntimeSnapshot(
 /** Publishes one owner from an explicit startup/activation lifecycle boundary. */
 export async function publishPreparedModelRuntimeSnapshot(
   rawInput: PreparedModelRuntimeInput,
-  options: {
-    force?: boolean;
-    provenance?: PreparedModelRuntimeOwner["provenance"];
-  } = {},
+  options: PreparedModelRuntimePublicationOptions = {},
 ): Promise<PreparedModelRuntimeSnapshot> {
   const input = normalizePreparedModelRuntimeInput(rawInput);
   const existing = owners.get(ownerKey(input));
@@ -158,6 +160,7 @@ export async function publishPreparedModelRuntimeSnapshot(
       modelRuntimeBuildTimeoutMs,
       existing,
       options.provenance,
+      options.catalogMode,
     );
   }
   if (existing?.buildCompletion) {
@@ -181,6 +184,7 @@ export async function publishPreparedModelRuntimeSnapshot(
     modelRuntimeBuildTimeoutMs,
     existing,
     options.provenance,
+    options.catalogMode,
   );
 }
 
@@ -268,8 +272,10 @@ async function acquirePreparedModelRuntimeLease(
       if (pendingModelRuntimeReplacement) {
         continue;
       }
-      input = rebindInputToCommittedConfiguredOwner(owners, input);
-      key = ownerKey(input);
+      if (provenance === "run") {
+        input = rebindInputToCommittedConfiguredOwner(owners, input);
+        key = ownerKey(input);
+      }
       continue;
     }
     let existing = owners.get(key);
@@ -281,13 +287,26 @@ async function acquirePreparedModelRuntimeLease(
       // Dynamic workspaces still inherit the committed agent/config generation. Only their
       // explicitly pinned workspace may differ from the configured owner. A stale leased owner
       // can share this key, so rebase its input before publishing a replacement generation.
-      input = rebindInputToCommittedConfiguredOwner(owners, input);
-      key = ownerKey(input);
-      existing = owners.get(key);
-      staleDynamicOwner =
-        existing?.needsRefresh &&
-        !existing.pending &&
-        (existing.provenance === "run" || existing.provenance === "ephemeral");
+      try {
+        input = rebindInputToCommittedConfiguredOwner(owners, input);
+        key = ownerKey(input);
+        existing = owners.get(key);
+        staleDynamicOwner =
+          existing?.needsRefresh &&
+          !existing.pending &&
+          (existing.provenance === "run" || existing.provenance === "ephemeral");
+      } catch (error) {
+        if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
+          throw error;
+        }
+        const canActivateConfiglessSetup =
+          input.agentId !== undefined && isReservedSystemAgentId(input.agentId);
+        if (hasConfiguredOwnerMatching(owners, input) || !canActivateConfiglessSetup) {
+          throw error;
+        }
+        // First-run Model Setup uses the reserved system-agent identity before a configless gateway
+        // has an owner to rebind. Keep ordinary agent runs fail-closed at this ownership boundary.
+      }
     }
     try {
       if (staleDynamicOwner) {
@@ -370,7 +389,7 @@ export async function acquireAgentRunPreparedModelRuntime(
   return await acquirePreparedModelRuntimeLease(rawInput, "run", options);
 }
 
-/** Acquires a one-read metadata generation without retaining a dynamic workspace owner. */
+/** Acquires an exact read-only generation scoped to the returned lease. */
 export async function acquireReadOnlyPreparedModelRuntime(
   rawInput: PreparedModelRuntimeInput,
 ): Promise<PreparedModelRuntimeLease> {
@@ -471,8 +490,9 @@ export function rejectPendingPreparedModelRuntimeReplacement(
 /** Rebuilds active owners after config/plugin runtime publication. */
 async function refreshPreparedModelRuntimeSnapshotsNow(
   config: OpenClawConfig,
-  options: { gatewayLifecycle?: boolean; defaultWorkspaceDir?: string } = {},
+  options: PreparedModelRuntimeRefreshOptions = {},
 ): Promise<void> {
+  const catalogMode = options.catalogMode ?? "live";
   if (options.gatewayLifecycle) {
     gatewayLifecycleActive = true;
   }
@@ -520,18 +540,13 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
   const candidates = entries.map(({ owner: existing, input }) => {
     // Dynamic and standalone owners have different lifetime contracts. A configured publication
     // must replace them so an older lease release cannot remove the committed generation.
-    const owner: PreparedModelRuntimeOwner =
+    const owner =
       existing?.provenance === "configured"
         ? existing
-        : {
-            input,
-            environmentFingerprint: effectiveEnvironmentFingerprint(input),
-            provenance: "configured",
-            generation: 0,
-            needsRefresh: true,
-          };
+        : createPreparedModelRuntimeOwner(input, "configured", catalogMode);
     owner.input = input;
     owner.environmentFingerprint = effectiveEnvironmentFingerprint(input);
+    owner.catalogMode = catalogMode;
     owner.provenance = "configured";
     owner.generation += 1;
     owner.needsRefresh = true;
@@ -541,6 +556,7 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
       input,
       agentBuildCompletions,
       modelRuntimeBuildTimeoutMs,
+      catalogMode,
     );
     owner.buildCompletion = build.completion;
     owners.set(ownerKey(input), owner);
@@ -588,7 +604,7 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
 /** Serializes config/plugin publications so only the latest completed refresh retires owners. */
 export function refreshPreparedModelRuntimeSnapshots(
   config: OpenClawConfig,
-  options: { gatewayLifecycle?: boolean; defaultWorkspaceDir?: string } = {},
+  options: PreparedModelRuntimeRefreshOptions = {},
 ): Promise<void> {
   // Stale synchronously. Queued publication must never leave the prior generation request-visible.
   markPreparedModelRuntimeSnapshotsStale(undefined, { waitForReplacement: true });

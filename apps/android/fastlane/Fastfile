@@ -66,8 +66,7 @@ def play_track
 end
 
 def wear_play_track
-  default_track = play_track == "internal" ? "qa" : play_track
-  "wear:#{default_track}"
+  "wear:#{play_track}"
 end
 
 def play_release_status

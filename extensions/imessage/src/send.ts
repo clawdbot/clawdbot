@@ -1,6 +1,5 @@
 // Imessage plugin module implements send behavior.
 import { constants, accessSync } from "node:fs";
-import { createRequire } from "node:module";
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createMessageReceiptFromOutboundResults,
@@ -13,6 +12,7 @@ import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-run
 import { kindFromMime, resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { sleep as delay } from "openclaw/plugin-sdk/runtime-env";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
 import {
@@ -45,7 +45,6 @@ import {
   parseIMessageTarget,
 } from "./targets.js";
 
-const require = createRequire(import.meta.url);
 type ParsedIMessageTarget = ReturnType<typeof parseIMessageTarget>;
 const MIN_PENDING_PERSISTED_ECHO_TTL_MS = 60_000;
 const PENDING_PERSISTED_ECHO_GRACE_MS = 5_000;
@@ -108,6 +107,10 @@ type IMessageSendResult = {
    * outbound key matches what the inbound tapback will surface.
    */
   guid?: string;
+  /** Transport confirmed by the bridge for the message that was sent. */
+  service?: Exclude<IMessageService, "auto">;
+  /** Conversation confirmed by the bridge for the message that was sent. */
+  chatGuid?: string;
   sentText: string;
   echoText?: string;
   echoMedia?: MediaPlaceholderTextFact;
@@ -177,14 +180,6 @@ function normalizeResolvedMessageGuid(value: unknown): string | null {
   return trimmed && !isNumericMessageRowId(trimmed) ? trimmed : null;
 }
 
-function loadNodeSqlite(): typeof import("node:sqlite") | null {
-  try {
-    return require("node:sqlite") as typeof import("node:sqlite");
-  } catch {
-    return null;
-  }
-}
-
 function resolveMessageGuidFromChatDb(params: {
   dbPath?: string;
   messageId: string;
@@ -194,13 +189,9 @@ function resolveMessageGuidFromChatDb(params: {
   if (!dbPath || !isNumericMessageRowId(messageId)) {
     return null;
   }
-  const sqlite = loadNodeSqlite();
-  if (!sqlite) {
-    return null;
-  }
   let db: import("node:sqlite").DatabaseSync | null = null;
   try {
-    db = new sqlite.DatabaseSync(dbPath, { readOnly: true });
+    db = openNodeSqliteDatabase(dbPath, { readOnly: true });
     const row = db.prepare("SELECT guid FROM message WHERE ROWID = ?").get(messageId) as
       | { guid?: unknown }
       | undefined;
@@ -239,13 +230,9 @@ function resolveLatestSentMessageGuidFromChatDb(params: {
   if (!dbPath) {
     return null;
   }
-  const sqlite = loadNodeSqlite();
-  if (!sqlite) {
-    return null;
-  }
   let db: import("node:sqlite").DatabaseSync | null = null;
   try {
-    db = new sqlite.DatabaseSync(dbPath, { readOnly: true });
+    db = openNodeSqliteDatabase(dbPath, { readOnly: true });
     const targetClauses: string[] = [];
     const targetParams: Array<string | number> = [];
     const lowerBound = appleMessageDateLowerBoundMs(params.sentAfterMs);
@@ -298,7 +285,7 @@ function resolveLatestSentMessageGuidFromChatDb(params: {
 
 function canResolveLatestSentMessageGuidFromChatDb(dbPath?: string): boolean {
   const normalizedDbPath = dbPath?.trim();
-  if (!normalizedDbPath || !loadNodeSqlite()) {
+  if (!normalizedDbPath) {
     return false;
   }
   try {
@@ -499,9 +486,17 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function resultService(value: unknown): IMessageService | undefined {
+function resultService(value: unknown): Exclude<IMessageService, "auto"> | undefined {
   const normalized = stringValue(value)?.toLowerCase();
   return normalized === "imessage" || normalized === "sms" ? normalized : undefined;
+}
+
+function resultChatGuidService(value: unknown): Exclude<IMessageService, "auto"> | undefined {
+  const chatGuid = stringValue(value);
+  if (/^imessage;/iu.test(chatGuid ?? "")) {
+    return "imessage";
+  }
+  return /^sms;/iu.test(chatGuid ?? "") ? "sms" : undefined;
 }
 
 function resolvePendingPersistedEchoTtlMs(timeoutMs: number): number {
@@ -769,9 +764,8 @@ export async function sendMessageIMessage(
     throw new Error("iMessage send requires text or media");
   }
   // Extract markdown bold/italic/underline/strikethrough into typed-run
-  // ranges that the imsg bridge applies via attributedBody. macOS 15+
-  // recipients render the runs natively; earlier macOS recipients still
-  // see the marker-stripped text without literal asterisks.
+  // ranges that the imsg bridge applies via attributedBody. The sender needs
+  // macOS 15+; pre-Sequoia recipients see the same marker-stripped plain text.
   const formatted = message.trim()
     ? extractMarkdownFormatRuns(message)
     : { text: message, ranges: [] };
@@ -974,12 +968,13 @@ export async function sendMessageIMessage(
     // edit/unsend actions can verify the agent actually sent the message
     // before dispatching. Inbound recording (in monitor/inbound-processing)
     // sets isFromMe=false, so the cache distinguishes own-sent from received.
+    const providerChatGuid = stringValue(result.chat_guid) ?? stringValue(result.chatGuid);
+    const confirmedService =
+      resultService(result.service) ??
+      resultChatGuidService(providerChatGuid) ??
+      (service === "imessage" || service === "sms" ? service : undefined);
     if (resolvedId) {
-      const chatContext = chatContextFromIMessageTarget(
-        target,
-        resultService(result.service) ?? service,
-      );
-      const providerChatGuid = stringValue(result.chat_guid) ?? stringValue(result.chatGuid);
+      const chatContext = chatContextFromIMessageTarget(target, confirmedService ?? service);
       rememberIMessageReplyCache({
         accountId: account.accountId,
         messageId: resolvedId,
@@ -1009,6 +1004,8 @@ export async function sendMessageIMessage(
     return {
       messageId,
       ...(approvalBindingMessageId ? { guid: approvalBindingMessageId } : {}),
+      ...(confirmedService ? { service: confirmedService } : {}),
+      ...(providerChatGuid ? { chatGuid: providerChatGuid } : {}),
       sentText: message,
       ...(echoText ? { echoText } : {}),
       ...(echoMedia ? { echoMedia } : {}),

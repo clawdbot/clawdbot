@@ -132,6 +132,11 @@ export function createChannelProgressDraftCompositor(params: {
   tryNativeUpdate?: (text: string) => Promise<boolean> | boolean;
   /** Publish when structured lines change even if the rendered text does not. */
   updateOnLineChange?: boolean;
+  /**
+   * Set when the channel renders `update`'s structured `lines` itself, so the
+   * composed text carries only the status block (label, headline, checklist).
+   */
+  rendersRollingLinesNatively?: boolean;
   formatLine?: (line: string) => string;
   isEmptyLine?: (line: ChannelProgressDraftCompositorLine | undefined) => boolean;
   shouldStartNow?: (line: ChannelProgressDraftCompositorLine | undefined) => boolean;
@@ -155,7 +160,7 @@ export function createChannelProgressDraftCompositor(params: {
       .map((line) => line.replace(/^_(.*)_$/su, "$1"))
       .join("\n");
   const previewToolProgressEnabled =
-    params.active && resolveChannelStreamingPreviewToolProgress(params.entry);
+    params.active && resolveChannelStreamingPreviewToolProgress(params.entry, true, params.mode);
   const commentaryProgressEnabled =
     params.active && resolveChannelStreamingProgressCommentary(params.entry);
   const thinkingProgressEnabled =
@@ -210,15 +215,21 @@ export function createChannelProgressDraftCompositor(params: {
       : effectiveNarration;
   };
 
-  const formatDraftText = (draftLines = lines, options?: { formatted?: boolean }) =>
-    formatChannelProgressDraftText({
+  const formatDraftText = (draftLines = lines, options?: { formatted?: boolean }) => {
+    const narration = resolveStatusText() || undefined;
+    // Channels that render the rolling lines themselves (from `update`'s
+    // `lines`) would print them twice if they also appeared in this text.
+    const linesRenderedByChannel =
+      params.rendersRollingLinesNatively === true && Boolean(narration || planSteps?.length);
+    return formatChannelProgressDraftText({
       entry: params.entry,
-      lines: draftLines,
+      lines: linesRenderedByChannel ? [] : draftLines,
       seed: params.seed,
       formatLine: options?.formatted === false ? undefined : params.formatLine,
-      narration: resolveStatusText() || undefined,
+      narration,
       plan: planSteps,
     });
+  };
 
   const getSnapshot = (): ChannelProgressDraftCompositorSnapshot => {
     const statusHeadline = resolveStatusText();

@@ -115,20 +115,6 @@ describe("session reset policy", () => {
     ).toMatchObject({ fresh: false, staleReason: "idle" });
   });
 
-  it("keeps legacy idleMinutes as an idle reset policy", () => {
-    const now = 10 * HOUR_MS;
-    const policy = resolveSessionResetPolicy({
-      sessionCfg: { idleMinutes: 30 },
-      resetType: "direct",
-    });
-
-    expect(policy).toMatchObject({ mode: "idle", idleMinutes: 30, configured: true });
-    expect(evaluateSessionFreshness({ updatedAt: now - DAY_MS, now, policy })).toMatchObject({
-      fresh: false,
-      staleReason: "idle",
-    });
-  });
-
   it("applies resetByType only to the matching session type", () => {
     const sessionCfg = {
       resetByType: { group: { mode: "idle" as const, idleMinutes: 30 } },

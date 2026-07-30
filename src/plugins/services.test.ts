@@ -17,6 +17,7 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 import { STATE_DIR } from "../config/paths.js";
+import { queuePluginSessionsChanged, subscribePluginSessionsChanged } from "./gateway-events.js";
 import { registerPluginHttpRoute } from "./http-registry.js";
 import {
   pinActivePluginHttpRouteRegistry,
@@ -191,6 +192,124 @@ describe("startPluginServices", () => {
       { revision: 1 },
       "operator.read",
     );
+  });
+
+  it("omits gateway events entirely when no broadcaster exists", async () => {
+    let context: OpenClawPluginServiceContext | undefined;
+    const handle = await startPluginServices({
+      registry: createRegistry([
+        {
+          id: "events",
+          start: (ctx) => {
+            context = ctx;
+          },
+        },
+      ]),
+      config: createServiceConfig(),
+    });
+
+    // Presence of ctx.gatewayEvents is the capability signal plugins
+    // feature-detect; a facade with a dropping emit would defeat fallbacks.
+    expect(context?.gatewayEvents).toBeUndefined();
+    await handle.stop();
+  });
+
+  it("subscribes services to sessions.changed and revokes them on stop", async () => {
+    const received = vi.fn();
+    let context: OpenClawPluginServiceContext | undefined;
+    const handle = await startPluginServices({
+      registry: createRegistry([
+        {
+          id: "events",
+          start: (ctx) => {
+            context = ctx;
+            ctx.gatewayEvents?.onSessionsChanged(received);
+          },
+        },
+      ]),
+      config: createServiceConfig(),
+      broadcastPluginEvent: vi.fn(),
+    });
+
+    queuePluginSessionsChanged({ sessionKey: "agent:main:main", reason: "rename", ignored: 1 });
+    await Promise.resolve();
+    expect(received).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      reason: "rename",
+    });
+    expect(() =>
+      context?.gatewayEvents?.emit("changed", {}, { scope: "operator.read" }),
+    ).not.toThrow();
+
+    await handle.stop();
+    queuePluginSessionsChanged({ sessionKey: "agent:main:main", reason: "archive" });
+    await Promise.resolve();
+    expect(received).toHaveBeenCalledOnce();
+  });
+
+  it("keeps duplicate handler subscriptions independent", async () => {
+    const received = vi.fn();
+    const unsubscribeFirst = subscribePluginSessionsChanged(received);
+    const unsubscribeSecond = subscribePluginSessionsChanged(received);
+
+    unsubscribeFirst();
+    queuePluginSessionsChanged({ sessionKey: "agent:main:main" });
+    await Promise.resolve();
+
+    expect(received).toHaveBeenCalledOnce();
+    unsubscribeSecond();
+  });
+
+  it("uses a stable sessions.changed subscription snapshot", async () => {
+    const received = vi.fn();
+    let unsubscribe: () => void = () => undefined;
+    const handler = () => {
+      received();
+      unsubscribe();
+      unsubscribe = subscribePluginSessionsChanged(handler);
+    };
+    unsubscribe = subscribePluginSessionsChanged(handler);
+
+    queuePluginSessionsChanged({ sessionKey: "agent:main:main" });
+    await Promise.resolve();
+
+    expect(received).toHaveBeenCalledOnce();
+    unsubscribe();
+  });
+
+  it("logs a throwing sessions.changed handler without blocking siblings", async () => {
+    const received = vi.fn();
+    const rejectingHandler = (() =>
+      Promise.reject(new Error("async handler failed"))) as () => void;
+    const handle = await startPluginServices({
+      registry: createRegistry([
+        {
+          id: "events",
+          start: (ctx) => {
+            ctx.gatewayEvents?.onSessionsChanged(() => {
+              throw new Error("handler failed");
+            });
+            ctx.gatewayEvents?.onSessionsChanged(rejectingHandler);
+            ctx.gatewayEvents?.onSessionsChanged(received);
+          },
+        },
+      ]),
+      config: createServiceConfig(),
+      broadcastPluginEvent: vi.fn(),
+    });
+
+    queuePluginSessionsChanged({ sessionKey: "agent:main:main", phase: "message" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(received).toHaveBeenCalledOnce();
+    expect(mockedLogger.warn).toHaveBeenCalledWith(
+      "plugin sessions.changed handler failed: Error: handler failed",
+    );
+    expect(mockedLogger.warn).toHaveBeenCalledWith(
+      "plugin sessions.changed handler failed: Error: async handler failed",
+    );
+    await handle.stop();
   });
 
   it("rejects unsafe event names, scopes, and payloads", async () => {

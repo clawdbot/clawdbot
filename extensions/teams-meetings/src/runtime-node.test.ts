@@ -1,6 +1,8 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { resolveTeamsMeetingsConfig } from "./config.js";
+import { teamsMeetingsConfig } from "./config.js";
+
+const resolveTeamsMeetingsConfig = teamsMeetingsConfig.resolveConfig;
 
 const realtimeMocks = vi.hoisted(() => ({
   speak: vi.fn(),
@@ -16,15 +18,23 @@ vi.mock("openclaw/plugin-sdk/meeting-runtime", async (importOriginal) => {
   const original = await importOriginal<typeof import("openclaw/plugin-sdk/meeting-runtime")>();
   return {
     ...original,
-    createNodeMeetingRealtimeAudioTransport: () => ({
-      clearOutput: vi.fn(async () => {}),
-      dispose: vi.fn(async () => {}),
-      onFatal: vi.fn(),
-      startInput: vi.fn(),
-      stop: vi.fn(async () => {}),
-      writeOutput: vi.fn(async () => {}),
-    }),
-    startMeetingAgentRealtimeEngine: realtimeMocks.startAgent,
+    MeetingPlatformAdapter: {
+      ...original.MeetingPlatformAdapter,
+      createChromeRuntimeBindings: () => ({
+        createBindings: original.createMeetingRealtimeEngineBindings,
+        createLocalAudioTransport: original.createLocalMeetingRealtimeAudioTransport,
+        createNodeAudioTransport: () => ({
+          clearOutput: vi.fn(async () => {}),
+          dispose: vi.fn(async () => {}),
+          onFatal: vi.fn(),
+          startInput: vi.fn(),
+          stop: vi.fn(async () => {}),
+          writeOutput: vi.fn(async () => {}),
+        }),
+        startAgentRealtimeEngine: realtimeMocks.startAgent,
+        startRealtimeEngine: original.startMeetingRealtimeEngine,
+      }),
+    },
   };
 });
 
@@ -79,9 +89,10 @@ describe("Microsoft Teams meetings node realtime recovery", () => {
                       }
                     : {
                         inCall: false,
-                        manualActionMessage: "Waiting for admission",
-                        manualActionReason: "teams-admission-required",
-                        manualActionRequired: true,
+                        manualAction: {
+                          reason: "teams-admission-required",
+                          message: "Waiting for admission",
+                        },
                         url: URL,
                       },
                 ),

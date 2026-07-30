@@ -103,7 +103,7 @@ function makeTelegramSummaryPlugin(params: {
       resolveAccount: getAccount,
       isConfigured: isFixtureAccountConfigured,
       isEnabled: isFixtureAccountEnabled,
-      formatAllowFrom: () => ["alice", "bob", "carol"],
+      formatAllowFrom: ({ allowFrom }) => allowFrom.map(String),
     },
     status: {
       buildChannelSummary: async () => ({
@@ -222,13 +222,15 @@ describe("buildChannelSummary", () => {
           configured: true,
           linked: true,
           authAgeMs: 300_000,
-          allowFrom: ["alice", "bob", "carol"],
+          allowFrom: ["+12133734253", "bot-token", "ignored"],
         }),
       ],
     });
 
     expect(lines).toContain("Telegram: linked +15551234567 auth 5m ago");
-    expect(lines).toContain("  - primary (Main Bot) (dm:mutuals, token:env, allow:alice,bob)");
+    expect(lines).toContain(
+      "  - primary (Main Bot) (dm:mutuals, token:env, allow:+12133734253,bot-token)",
+    );
   });
 
   it("shows not-linked status when linked metadata is explicitly false", async () => {

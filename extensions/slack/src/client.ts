@@ -4,6 +4,7 @@ import { type WebClientOptions, WebClient } from "@slack/web-api";
 import type { SlackLookupClientOptions } from "./client-options.js";
 import {
   resolveSlackLookupClientOptions,
+  resolveSlackReadClientOptions,
   resolveSlackWebClientOptions,
   resolveSlackWriteClientOptions,
   SLACK_WRITE_RETRY_OPTIONS,
@@ -26,7 +27,13 @@ export {
 } from "./client-options.js";
 
 export function createSlackWebClient(token: string, options: WebClientOptions = {}) {
+  // Shared or mixed-operation clients stay timeout-free unless the caller opts in.
+  // Slack can commit a mutation before a late response, so a default deadline is unsafe here.
   return new WebClient(token, resolveSlackWebClientOptions(options));
+}
+
+export function createSlackReadClient(token: string, options: WebClientOptions = {}) {
+  return new WebClient(token, resolveSlackReadClientOptions(options));
 }
 
 export function createSlackStartupAuthClient(token: string, options: WebClientOptions = {}) {

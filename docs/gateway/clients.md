@@ -31,7 +31,7 @@ install them only after the registry pages below resolve.
   provides schemas, runtime validators, TypeScript types, client identity and
   capability registries, structured error readers, and protocol version constants.
   Its npm tarball also includes the generated
-  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol/protocol.schema.json)
+  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol@beta/protocol.schema.json)
   machine-readable contract.
 - [`@openclaw/gateway-client`](https://www.npmjs.com/package/@openclaw/gateway-client)
   is the reference connection implementation. Import the package root for the Node
@@ -132,6 +132,30 @@ The outer event frame also has an optional `seq`, which orders events on the
 current WebSocket connection. It resets with a new connection. The `seq` inside
 an `agent` event payload is assigned per run and orders that run's lifecycle,
 assistant, plan, tool, and other stream events.
+
+## Render generated image artifacts
+
+Assistant-generated images arrive as canonical `type: "image"` content blocks.
+Managed blocks include a stable `artifactId`, a Gateway-relative `url`, MIME
+type, dimensions, size, and accessible alt text. Keep that reference in the
+transcript cache; do not persist downloaded bytes or temporary download URLs.
+
+Resolve the image through the authenticated WebSocket connection:
+
+1. Call `artifacts.download` with the current `sessionKey`, optional `agentId`,
+   and the block's `artifactId`.
+2. Use the returned short-lived `url` before `expiresAt`. The URL is scoped to
+   that exact transcript-backed artifact and does not contain a reusable Gateway
+   or device credential.
+3. Fetch it from the Gateway origin using the same TLS pin and reverse-proxy
+   headers as the active connection. Validate the response as an image and
+   enforce a 12 MiB source limit plus a bounded decoded thumbnail.
+4. If the URL expires, repeat `artifacts.download` once. Reconnect or route
+   changes cancel the old load rather than retargeting it to another Gateway.
+
+Older image blocks without `artifactId` remain displayable by existing Control
+UI clients, but native clients should show a readable attachment fallback rather
+than forward a shared owner credential.
 
 ## Use history metadata and stable anchors
 

@@ -42,6 +42,8 @@ type QaRunnerMessageRecorder = {
 
 type QaRunnerTransportFlowPreparationInput = {
   config: Record<string, unknown>;
+  scenarioId: string;
+  scenarioTitle: string;
   gateway: {
     baseUrl: string;
     tempRoot: string;
@@ -138,6 +140,8 @@ type QaRunnerTransportAdapterDefinition = {
 
 type QaRunnerTransportFactory = {
   id: string;
+  /** Each create() call owns isolated runtime state and may run concurrently. */
+  isolatesInstances?: boolean;
   matches: (context: { channelId: string; driver: string }) => boolean;
   create: (context: {
     adapterOptions?: QaRunnerAdapterOptions;
@@ -335,6 +339,8 @@ export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution
       if (
         adapterFactory &&
         (adapterFactory.id !== runner.commandName ||
+          (adapterFactory.isolatesInstances !== undefined &&
+            typeof adapterFactory.isolatesInstances !== "boolean") ||
           typeof adapterFactory.matches !== "function" ||
           typeof adapterFactory.create !== "function")
       ) {

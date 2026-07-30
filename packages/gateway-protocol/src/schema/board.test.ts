@@ -1,6 +1,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  BoardActionParamsSchema,
   BoardSnapshotSchema,
   BoardWidgetAppViewParamsSchema,
   BoardWidgetAppViewResultSchema,
@@ -8,6 +9,32 @@ import {
   BoardWidgetPutParamsSchema,
   BoardWidgetResizeOpSchema,
 } from "./board.js";
+
+describe("BoardActionParamsSchema", () => {
+  it("accepts both exact cron triggers and plugin action verbs", () => {
+    expect(
+      Value.Check(BoardActionParamsSchema, {
+        ticket: "v1.ticket.signature",
+        action: "cron.trigger",
+        jobId: "nightly",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(BoardActionParamsSchema, {
+        ticket: "v1.ticket.signature",
+        action: "workboard.dispatch",
+        params: { boardId: "release" },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(BoardActionParamsSchema, {
+        ticket: "v1.ticket.signature",
+        action: "workboard.dispatch",
+        params: "release",
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("BoardSnapshotSchema", () => {
   it("accepts optional HTML widget view metadata", () => {
@@ -101,6 +128,31 @@ describe("BoardSnapshotSchema", () => {
 });
 
 describe("BoardWidgetPutParamsSchema", () => {
+  it("accepts bounded plugin widget input shapes", () => {
+    const pluginWidget = {
+      sessionKey: "agent:main:main",
+      name: "work-item",
+      content: {
+        kind: "plugin",
+        pluginKind: "workboard:card",
+        props: { cardId: "card-123" },
+      },
+    };
+    expect(Value.Check(BoardWidgetPutParamsSchema, pluginWidget)).toBe(true);
+    expect(
+      Value.Check(BoardWidgetPutParamsSchema, {
+        ...pluginWidget,
+        content: { ...pluginWidget.content, pluginKind: "missing-separator" },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(BoardWidgetPutParamsSchema, {
+        ...pluginWidget,
+        content: { ...pluginWidget.content, props: ["not", "an", "object"] },
+      }),
+    ).toBe(false);
+  });
+
   it("accepts a gateway-resolved canvas document source", () => {
     expect(
       Value.Check(BoardWidgetPutParamsSchema, {

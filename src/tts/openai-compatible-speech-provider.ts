@@ -209,7 +209,7 @@ export function createOpenAiCompatibleSpeechProvider<
     return {
       apiKey: normalizeResolvedSecretInputString({
         value: raw?.apiKey,
-        path: `messages.tts.providers.${providerConfigKey}.apiKey`,
+        path: `tts.providers.${providerConfigKey}.apiKey`,
       }),
       baseUrl:
         trimToUndefined(raw?.baseUrl) == null

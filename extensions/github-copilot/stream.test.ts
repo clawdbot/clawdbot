@@ -1,7 +1,8 @@
 // Github Copilot tests cover stream plugin behavior.
 import type { Context } from "openclaw/plugin-sdk/llm";
-import { buildCopilotIdeHeaders, COPILOT_INTEGRATION_ID } from "openclaw/plugin-sdk/provider-auth";
+import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it, vi } from "vitest";
+import { COPILOT_RUNTIME_INTEGRATION_ID } from "./runtime-identity.js";
 import { wrapCopilotAnthropicStream, wrapCopilotProviderStream } from "./stream.js";
 
 function requireStreamFn(streamFn: ReturnType<typeof wrapCopilotProviderStream>) {
@@ -30,7 +31,7 @@ function buildExpectedCopilotHeaders(
 ): Record<string, string> {
   return {
     ...buildCopilotIdeHeaders(),
-    "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+    "Copilot-Integration-Id": COPILOT_RUNTIME_INTEGRATION_ID,
     "Openai-Organization": "github-copilot",
     "x-initiator": initiator,
     ...(hasImages ? { "Copilot-Vision-Request": "true" } : {}),
@@ -240,6 +241,8 @@ describe("wrapCopilotAnthropicStream", () => {
     ]);
     expect(payloads[0]?.input[1]?.id).toBeUndefined();
     expect(payloads[0]?.input[2]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
+    expect(payloads[0]?.input[0]).not.toHaveProperty("encrypted_content");
+    expect(payloads[0]?.input[1]).not.toHaveProperty("encrypted_content");
   });
 
   it("rewrites Copilot Responses IDs returned by an existing payload hook", async () => {

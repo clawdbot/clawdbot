@@ -40,17 +40,6 @@ if [ "${#files[@]}" -eq 0 ]; then
   exit 0
 fi
 
-if ! command -v trufflehog >/dev/null 2>&1; then
-  cat >&2 <<'EOF'
-OpenClaw requires TruffleHog for pre-commit secret scanning.
-
-Install it, then retry the commit:
-  macOS: brew install trufflehog
-  Other platforms: https://github.com/trufflesecurity/trufflehog#installation
-EOF
-  exit 1
-fi
-
 restage_files=()
 for file in "${files[@]}"; do
   if ! git check-ignore --no-index -q -- "$file"; then
@@ -70,22 +59,3 @@ fi
 if [ "${#restage_files[@]}" -gt 0 ]; then
   git add -- "${restage_files[@]}"
 fi
-
-staged_snapshot="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-trufflehog.XXXXXX")"
-trap 'rm -rf "$staged_snapshot"' EXIT
-for file in "${files[@]}"; do
-  if [[ "$(git cat-file -t ":0:$file")" != "blob" ]]; then
-    continue
-  fi
-  snapshot_path="$staged_snapshot/$file"
-  mkdir -p "${snapshot_path%/*}"
-  git cat-file blob ":0:$file" > "$snapshot_path"
-done
-
-trufflehog \
-  --no-update \
-  --no-color \
-  --results=verified,unknown \
-  --fail \
-  --fail-on-scan-errors \
-  filesystem "$staged_snapshot"

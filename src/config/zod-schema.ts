@@ -1,5 +1,7 @@
 import { z } from "zod";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 import { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
 
 // zod@4 ships "sideEffects": false, so bundlers tree-shake the classic entry's
@@ -13,12 +15,40 @@ function installZodDefaultLocale(): void {
 installZodDefaultLocale();
 
 export const OpenClawSchema = z.strictObject(OpenClawSchemaShape).superRefine((cfg, ctx) => {
-  const agents = cfg.agents?.list ?? [];
+  const agents = listAgentEntries(cfg as OpenClawConfig);
+  const agentIds = new Set(agents.map((agent) => agent.id));
+  const effectiveAgentIds = new Set(agents.map((agent) => normalizeAgentId(agent.id)));
+  if (agents.length === 0) {
+    effectiveAgentIds.add("main");
+  }
+
+  const explicitTargets = [
+    {
+      path: ["agents", "defaults", "heartbeat", "agentId"],
+      agentId: cfg.agents?.defaults?.heartbeat?.agentId,
+    },
+    {
+      path: ["agents", "defaults", "systemAgent", "agentId"],
+      agentId: cfg.agents?.defaults?.systemAgent?.agentId,
+    },
+    { path: ["talk", "agentId"], agentId: cfg.talk?.agentId },
+  ] as const;
+  for (const target of explicitTargets) {
+    if (
+      typeof target.agentId === "string" &&
+      !effectiveAgentIds.has(normalizeAgentId(target.agentId))
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [...target.path],
+        message: `Unknown agent id "${target.agentId}" (not in agents.entries).`,
+      });
+    }
+  }
+
   if (agents.length === 0) {
     return;
   }
-  const agentIds = new Set(agents.map((agent) => agent.id));
-  const effectiveAgentIds = new Set(agents.map((agent) => normalizeAgentId(agent.id)));
 
   // Bindings referencing a missing agent id silently misroute at gateway
   // load time. Match routing's normalized id semantics; otherwise valid
@@ -31,11 +61,15 @@ export const OpenClawSchema = z.strictObject(OpenClawSchemaShape).superRefine((c
         continue;
       }
       const agentId = (binding as { agentId?: unknown }).agentId;
-      if (typeof agentId === "string" && !effectiveAgentIds.has(normalizeAgentId(agentId))) {
+      if (
+        typeof agentId === "string" &&
+        agentId !== DEFAULT_AGENT_ID &&
+        !effectiveAgentIds.has(normalizeAgentId(agentId))
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["bindings", idx, "agentId"],
-          message: `Unknown agent id "${agentId}" (not in agents.list).`,
+          message: `Unknown agent id "${agentId}" (not in agents.entries).`,
         });
       }
     }
@@ -58,7 +92,7 @@ export const OpenClawSchema = z.strictObject(OpenClawSchemaShape).superRefine((c
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["broadcast", peerId, idx],
-          message: `Unknown agent id "${agentId}" (not in agents.list).`,
+          message: `Unknown agent id "${agentId}" (not in agents.entries).`,
         });
       }
     }

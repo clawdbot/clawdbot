@@ -11,7 +11,12 @@ import {
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
+import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
+import {
+  resolveSqliteTranscriptReadScope,
+  runExclusiveSqliteSessionWrite,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
 import { deleteOrphanedTranscriptIndexRowsInTransaction } from "./session-transcript-index.js";
 import {
   appendPreparedSessionTranscriptProjectionChunkInTransaction,
@@ -386,4 +391,12 @@ export async function waitForSessionTranscriptIndexReconcile(
   params: OpenClawAgentDatabaseOptions,
 ): Promise<void> {
   await runningReconciles.get(reconcileKey(params))?.promise;
+}
+
+/** Waits for a projection rebuild already scheduled by a failed transcript read. */
+export async function waitForSessionTranscriptProjection(
+  scope: SessionTranscriptReadScope,
+): Promise<void> {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  await waitForSessionTranscriptIndexReconcile(toDatabaseOptions(resolved));
 }

@@ -2,6 +2,10 @@ import { html } from "lit";
 import { state } from "lit/decorators.js";
 import type { BoardOp, BoardSnapshot } from "../lib/board/types.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+// The fixture page renders outside the app shell, so it must load the app
+// stylesheet itself (Web Awesome theme included) or dropdown menus render
+// theme-less: dark item text on the fixture's dark panels.
+import "../styles.css";
 import "../components/board/board-view.ts";
 
 const initialSnapshot: BoardSnapshot = {
@@ -154,6 +158,10 @@ function frameUrl(name: string): string {
       font-weight:650;letter-spacing:-.06em;margin-top:16px}.detail{color:#77cdb5;font-size:11px;margin-top:9px}
     .ticks{display:flex;align-items:end;gap:5px;height:52px;margin-top:20px}.ticks i{display:block;flex:1;
       min-width:4px;border-radius:2px 2px 0 0;background:#39434d}.ticks i:nth-child(3n){background:#4ec9a8}
+    @media(prefers-color-scheme:light){:root{color-scheme:light}body{color:#403c35;background:
+      radial-gradient(circle at 85% 5%,rgba(20,184,166,.12),transparent 38%),#f4f1ec}
+      .eyebrow{color:#6e6960}.detail{color:#0f766e}.ticks i{background:#d8d1c7}
+      .ticks i:nth-child(3n){background:#14b8a6}}
   </style><div class="eyebrow">${copy.eyebrow}</div><div class="value">${copy.value}</div>
   <div class="detail">${copy.detail}</div><div class="ticks">${[28, 52, 37, 68, 44, 81, 59, 72]
     .map((height) => `<i style="height:${height}%"></i>`)

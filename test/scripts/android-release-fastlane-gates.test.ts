@@ -34,6 +34,13 @@ function laneBody(source: string, name: string): string {
 }
 
 describe("Android Fastlane release upload gates", () => {
+  it("publishes Wear releases to the matching form-factor track", () => {
+    const wearTrack = functionBody(readFastfile(), "wear_play_track");
+
+    expect(wearTrack).toContain('"wear:#{play_track}"');
+    expect(wearTrack).not.toContain('"qa"');
+  });
+
   it("preflights and records mobile release refs around Play build upload", () => {
     const fastfile = readFastfile();
     const uploadBuild = functionBody(fastfile, "upload_play_store_build!");

@@ -39,6 +39,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   activeContextEngine?: SessionManagerInput["activeContextEngine"];
   agentDir: string;
   effectiveCwd: string;
+  effectiveFsWorkspaceOnly: boolean;
   effectiveWorkspace: string;
   initialSystemPrompt: string;
   isRawModelRun: boolean;
@@ -167,6 +168,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     attempt,
     computerContextEpoch: input.contextGuards.computerContextEpoch,
     effectiveCwd: input.effectiveCwd,
+    effectiveFsWorkspaceOnly: input.effectiveFsWorkspaceOnly,
     effectiveWorkspace: input.effectiveWorkspace,
     getPrePromptMessageCount: () => state.prePromptMessageCount,
     getPromptCache: () => state.promptCache,
@@ -177,6 +179,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sessionAgentId: input.sessionManager.sessionAgentId,
     sessionManager,
     settingsManager,
+    sandbox: input.transport.sandbox,
   });
   input.lifecycle.onContextGuardsInstalled(contextGuards.remove);
 

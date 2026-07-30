@@ -2,6 +2,7 @@
 identifier = "allow-quickchat"
 description = "Enables Quick Chat agents, shortcut settings, send, hide, isolated widget, and dashboard commands."
 commands.allow = [
+  "quickchat_activate",
   "quickchat_agents",
   "quickchat_hide",
   "quickchat_identity",

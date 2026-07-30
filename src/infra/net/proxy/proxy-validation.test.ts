@@ -29,74 +29,6 @@ describe("proxy validation", () => {
     return caFile;
   }
 
-  it("reports disabled proxy config when a config URL is present but proxy routing is disabled", async () => {
-    const fetchCheck = vi.fn();
-
-    const result = await runProxyValidation({
-      config: {
-        enabled: false,
-        proxyUrl: "http://config-proxy.example:3128",
-      },
-      env: {},
-      fetchCheck,
-    });
-
-    expect(fetchCheck).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      ok: false,
-      config: {
-        enabled: false,
-        proxyUrl: "http://config-proxy.example:3128",
-        source: "config",
-        errors: ["proxy validation requires proxy.enabled to be true for configured proxy URLs"],
-      },
-      checks: [],
-    });
-  });
-
-  it("reports disabled proxy config when only OPENCLAW_PROXY_URL is present", async () => {
-    const fetchCheck = vi.fn();
-
-    const result = await runProxyValidation({
-      config: {},
-      env: {
-        OPENCLAW_PROXY_URL: "http://env-proxy.example:3128",
-      },
-      fetchCheck,
-    });
-
-    expect(fetchCheck).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      ok: false,
-      config: {
-        enabled: false,
-        proxyUrl: "http://env-proxy.example:3128",
-        source: "env",
-        errors: ["proxy validation requires proxy.enabled to be true for OPENCLAW_PROXY_URL"],
-      },
-      checks: [],
-    });
-  });
-
-  it("allows explicit proxy URL overrides even when config proxy routing is disabled", async () => {
-    const fetchCheck = vi.fn().mockResolvedValueOnce({ ok: true, status: 200 });
-
-    const result = await runProxyValidation({
-      proxyUrlOverride: "http://override-proxy.example:3128",
-      config: {
-        enabled: false,
-        proxyUrl: "http://config-proxy.example:3128",
-      },
-      env: {},
-      allowedUrls: ["https://example.com/"],
-      deniedUrls: [],
-      fetchCheck,
-    });
-
-    expect(result.ok).toBe(true);
-    expect(fetchCheck).toHaveBeenCalled();
-  });
-
   it("preserves the validated response when discarded body cancellation rejects", async () => {
     const unhandledRejections: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => {
@@ -152,7 +84,6 @@ describe("proxy validation", () => {
 
     const result = await runProxyValidation({
       config: {
-        enabled: true,
         proxyUrl: "http://config-proxy.example:3128",
       },
       env: {
@@ -176,27 +107,32 @@ describe("proxy validation", () => {
     });
   });
 
-  it("reports a missing effective URL when proxy validation is enabled", async () => {
+  it("honors an explicit opt-out for an environment proxy URL", async () => {
     const fetchCheck = vi.fn();
+
     const result = await runProxyValidation({
-      config: { enabled: true },
-      env: {},
-      allowedUrls: [],
-      deniedUrls: [],
+      config: { enabled: false },
+      env: { OPENCLAW_PROXY_URL: "http://env-proxy.example:3128" },
       fetchCheck,
     });
 
     expect(fetchCheck).not.toHaveBeenCalled();
-    expect(result.config).toMatchObject({ enabled: true, source: "missing" });
-    expect(result.config.errors).toEqual([
-      "proxy validation requires proxy.proxyUrl, --proxy-url, or OPENCLAW_PROXY_URL",
-    ]);
+    expect(result).toEqual({
+      ok: false,
+      config: {
+        enabled: false,
+        proxyUrl: "http://env-proxy.example:3128",
+        source: "env",
+        errors: ["proxy validation is disabled by proxy.enabled=false"],
+      },
+      checks: [],
+    });
   });
 
   it("rejects unsupported proxy URL protocols before probing", async () => {
     const fetchCheck = vi.fn();
     const result = await runProxyValidation({
-      config: { enabled: true, proxyUrl: "socks5://proxy.example:1080" },
+      config: { proxyUrl: "socks5://proxy.example:1080" },
       env: {},
       allowedUrls: [],
       deniedUrls: [],
@@ -222,9 +158,7 @@ describe("proxy validation", () => {
       config: {
         enabled: false,
         source: "disabled",
-        errors: [
-          "proxy validation requires proxy.enabled=true with proxy.proxyUrl or OPENCLAW_PROXY_URL, or --proxy-url",
-        ],
+        errors: ["proxy validation requires proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url"],
       },
       checks: [],
     });
@@ -233,7 +167,6 @@ describe("proxy validation", () => {
   it("fails the default loopback denied canary on successful ambiguous responses", async () => {
     const result = await runProxyValidation({
       config: {
-        enabled: true,
         proxyUrl: "http://127.0.0.1:3128",
       },
       env: {},
@@ -261,7 +194,6 @@ describe("proxy validation", () => {
   it("passes the default loopback denied canary when the proxy returns a denial response", async () => {
     const result = await runProxyValidation({
       config: {
-        enabled: true,
         proxyUrl: "http://127.0.0.1:3128",
       },
       env: {},
@@ -280,7 +212,6 @@ describe("proxy validation", () => {
   it("fails denied checks when the destination returns HTTP 403", async () => {
     const result = await runProxyValidation({
       config: {
-        enabled: true,
         proxyUrl: "http://127.0.0.1:3128",
       },
       env: {},
@@ -304,7 +235,6 @@ describe("proxy validation", () => {
   it("fails denied checks when the destination returns a non-2xx HTTP status", async () => {
     const result = await runProxyValidation({
       config: {
-        enabled: true,
         proxyUrl: "http://127.0.0.1:3128",
       },
       env: {},
@@ -328,7 +258,6 @@ describe("proxy validation", () => {
   it("fails custom denied checks on ambiguous transport errors", async () => {
     const result = await runProxyValidation({
       config: {
-        enabled: true,
         proxyUrl: "http://127.0.0.1:3128",
       },
       env: {},
@@ -353,7 +282,6 @@ describe("proxy validation", () => {
 
     const result = await runProxyValidation({
       config: {
-        enabled: true,
         proxyUrl: "http://127.0.0.1:3128",
       },
       env: {},
@@ -379,7 +307,6 @@ describe("proxy validation", () => {
 
     const result = await runProxyValidation({
       config: {
-        enabled: true,
         proxyUrl: "http://127.0.0.1:3128",
       },
       env: {},
@@ -403,7 +330,6 @@ describe("proxy validation", () => {
   it("fails validation when a denied destination succeeds", async () => {
     const result = await runProxyValidation({
       config: {
-        enabled: true,
         proxyUrl: "http://127.0.0.1:3128",
       },
       env: {},
@@ -438,7 +364,6 @@ describe("proxy validation", () => {
 
     const result = await runProxyValidation({
       config: {
-        enabled: true,
         proxyUrl: "http://127.0.0.1:3128",
       },
       env: {},
@@ -515,7 +440,6 @@ describe("proxy validation", () => {
     const result = await runProxyValidation({
       proxyUrlOverride: "https://override-proxy.example:8443",
       config: {
-        enabled: true,
         proxyUrl: "https://config-proxy.example:8443",
         tls: { caFile: configCaFile },
       },
@@ -559,7 +483,6 @@ describe("proxy validation", () => {
 
     await runProxyValidation({
       config: {
-        enabled: true,
         proxyUrl: "https://proxy.example:8443",
         tls: { caFile },
       },
@@ -601,7 +524,6 @@ describe("proxy validation", () => {
   it("accepts APNs 403 reachability with InvalidProviderToken when apns-id is unavailable", async () => {
     const result = await runProxyValidation({
       config: {
-        enabled: true,
         proxyUrl: "http://127.0.0.1:3128",
       },
       env: {},
@@ -625,7 +547,6 @@ describe("proxy validation", () => {
   it("fails APNs reachability when bare 403 has no APNs proof", async () => {
     const result = await runProxyValidation({
       config: {
-        enabled: true,
         proxyUrl: "http://127.0.0.1:3128",
       },
       env: {},
@@ -646,7 +567,6 @@ describe("proxy validation", () => {
   it("fails APNs reachability when non-403 response has no apns-id (proxy intercept)", async () => {
     const result = await runProxyValidation({
       config: {
-        enabled: true,
         proxyUrl: "http://127.0.0.1:3128",
       },
       env: {},
@@ -667,7 +587,6 @@ describe("proxy validation", () => {
   it("fails APNs reachability when the proxy blocks CONNECT", async () => {
     const result = await runProxyValidation({
       config: {
-        enabled: true,
         proxyUrl: "http://127.0.0.1:3128",
       },
       env: {},

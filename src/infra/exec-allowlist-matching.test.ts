@@ -73,6 +73,14 @@ describe("exec allowlist matching", () => {
       expect(matchAllowlist(entries, resolution, ["python3"])).toBe(entry);
     });
 
+    it("ignores legacy generated path-only allow-always entries", () => {
+      const legacyGenerated = { pattern: "/usr/bin/python3", source: "allow-always" as const };
+      const manual = { pattern: "/usr/bin/python3" };
+
+      expect(matchAllowlist([legacyGenerated], resolution, ["python3", "b.py"])).toBeNull();
+      expect(matchAllowlist([manual], resolution, ["python3", "b.py"])).toBe(manual);
+    });
+
     it("matches argPattern entries with regex", () => {
       const entry = { pattern: "/usr/bin/python3", argPattern: "^a\\.py$" };
       const entries: ExecAllowlistEntry[] = [entry];

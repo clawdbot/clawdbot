@@ -154,7 +154,11 @@ async function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
     server
       .listen(CALLBACK_PORT, CALLBACK_HOST, () => {
         resolve({
-          close: () => server.close(),
+          close: () => {
+            server.close();
+            // Force-close preconnected sockets so they cannot pin the CLI process.
+            server.closeAllConnections();
+          },
           cancelWait: () => {
             settleWait?.(null);
           },

@@ -39,6 +39,9 @@ type MatrixQaToolConfigOverrides = {
 type MatrixQaAudioConfigOverrides = NonNullable<
   NonNullable<NonNullable<OpenClawConfig["tools"]>["media"]>["audio"]
 >;
+type MatrixQaMediaModelsOverrides = NonNullable<
+  NonNullable<NonNullable<OpenClawConfig["tools"]>["media"]>["models"]
+>;
 type MatrixQaGroupConfigOverrides = {
   allowBots?: MatrixQaAllowBotsMode;
   enabled?: boolean;
@@ -93,6 +96,7 @@ export type MatrixQaConfigOverrides = {
   threadBindings?: MatrixQaThreadBindingsConfigOverrides;
   threadReplies?: MatrixQaThreadRepliesMode;
   audio?: MatrixQaAudioConfigOverrides;
+  mediaModels?: MatrixQaMediaModelsOverrides;
   toolProfile?: "coding" | "messaging" | "minimal";
 };
 
@@ -435,11 +439,10 @@ function buildMatrixQaChannelAccountConfig(params: {
   // their scalar/boolean vocabulary and normalize here before config write.
   const streamingSlots = {
     ...(params.overrides?.streaming !== undefined
-      ? { mode: resolveMatrixQaStreamingMode(params.overrides.streaming) }
-      : {}),
-    ...(isMatrixQaStreamingConfig(params.overrides?.streaming) &&
-    params.overrides.streaming.preview?.toolProgress !== undefined
-      ? { preview: { toolProgress: params.overrides.streaming.preview.toolProgress } }
+      ? {
+          mode: resolveMatrixQaStreamingMode(params.overrides.streaming),
+          preview: { toolProgress: params.snapshot.streamingPreviewToolProgress },
+        }
       : {}),
     ...(params.snapshot.chunkMode !== undefined ? { chunkMode: params.snapshot.chunkMode } : {}),
     ...(params.overrides?.blockStreaming !== undefined
@@ -597,7 +600,7 @@ export function buildMatrixQaConfig(
       : {};
 
   const toolsConfig =
-    params.overrides?.toolProfile || params.overrides?.audio
+    params.overrides?.toolProfile || params.overrides?.audio || params.overrides?.mediaModels
       ? {
           ...baseCfg.tools,
           ...(params.overrides?.toolProfile
@@ -605,14 +608,19 @@ export function buildMatrixQaConfig(
                 profile: params.overrides.toolProfile,
               }
             : {}),
-          ...(params.overrides?.audio
+          ...(params.overrides?.audio || params.overrides?.mediaModels
             ? {
                 media: {
                   ...baseCfg.tools?.media,
-                  audio: {
-                    ...baseCfg.tools?.media?.audio,
-                    ...params.overrides.audio,
-                  },
+                  ...(params.overrides.mediaModels ? { models: params.overrides.mediaModels } : {}),
+                  ...(params.overrides.audio
+                    ? {
+                        audio: {
+                          ...baseCfg.tools?.media?.audio,
+                          ...params.overrides.audio,
+                        },
+                      }
+                    : {}),
                 },
               }
             : {}),

@@ -199,7 +199,11 @@ export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]>
         const id = readGatewayModelId(rawEntry);
         try {
           const entry = asGatewayModelEntry(rawEntry);
-          if (!id || discoveredIds.has(id)) {
+          if (
+            !id ||
+            discoveredIds.has(id) ||
+            entry.architecture?.output_modalities?.includes("image")
+          ) {
             continue;
           }
           models.push(toModelDefinition(entry));

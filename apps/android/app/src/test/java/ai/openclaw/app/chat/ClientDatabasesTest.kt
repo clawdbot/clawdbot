@@ -15,6 +15,29 @@ import java.util.UUID
 @RunWith(RobolectricTestRunner::class)
 class ClientDatabasesTest {
   @Test
+  fun deferredOutboxPersistsAtomicMutationDemotion() =
+    runTest {
+      val names = databaseNames()
+      val databases = open(names, registeredGatewayIds = setOf("gateway-a"))
+      try {
+        val outbox = databases.commandOutbox()
+        val scope = ChatOutboxScope("main", "main")
+        val lease = requireNotNull(outbox.beginSessionMutation("gateway-a", scope, nowMs = 1_000))
+
+        val state = requireNotNull(outbox.demoteSessionMutationToReconciliationState("gateway-a", scope, lease))
+
+        assertTrue(state.needsReconciliation)
+        assertNull(state.switchPendingSinceMs)
+        val persisted = requireNotNull(outbox.branchState("gateway-a", scope))
+        assertTrue(persisted.needsReconciliation)
+        assertNull(persisted.switchPendingSinceMs)
+      } finally {
+        databases.close()
+        delete(names)
+      }
+    }
+
+  @Test
   fun v2DurableRowsImportIntoClientStateWhileLegacyCacheIsDiscarded() =
     runTest {
       val names = databaseNames()
@@ -24,7 +47,7 @@ class ClientDatabasesTest {
       val databases = open(names, registeredGatewayIds = setOf("gateway-test"))
       try {
         assertEquals(
-          1,
+          2,
           databases
             .gatewayCacheDatabase()
             .openHelper.writableDatabase.version,

@@ -5,6 +5,39 @@
     "onStartup": true,
     "onCommands": ["workboard"]
   },
+  "dashboard": {
+    "dataBindings": [
+      {
+        "id": "cards.list",
+        "method": "workboard.cards.list",
+        "description": "List Workboard cards and statuses."
+      },
+      {
+        "id": "stats",
+        "method": "workboard.cards.stats",
+        "description": "Read Workboard card statistics."
+      },
+      {
+        "id": "boards.list",
+        "method": "workboard.boards.list",
+        "description": "List Workboard boards."
+      }
+    ],
+    "actionVerbs": [
+      {
+        "id": "dispatch",
+        "method": "workboard.cards.dispatch",
+        "description": "Dispatch ready Workboard cards.",
+        "paramShape": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "boardId": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    ]
+  },
   "name": "Workboard",
   "description": "Dashboard workboard for agent-owned issues and sessions.",
   "catalog": { "featured": true, "order": 10 },

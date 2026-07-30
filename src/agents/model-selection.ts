@@ -27,14 +27,13 @@ import {
   type ModelManifestNormalizationContext,
   type ModelRef,
   findNormalizedProviderKey,
-  findNormalizedProviderValue,
   legacyModelKey,
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
   normalizeProviderIdForAuth,
-  parseModelRef,
-} from "./model-selection-normalize.js";
+} from "./model-ref-shared.js";
+import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
 import {
   buildAllowedModelSetWithFallbacks,
   buildConfiguredAllowlistKeys,
@@ -50,6 +49,7 @@ import {
   resolveConfiguredModelRef,
   resolveConfiguredOpenRouterCompatAlias,
   resolveHooksGmailModel,
+  resolveModelAliasFromPair,
   resolveModelRefFromString,
   type ModelAliasIndex,
   type ModelRefStatus,
@@ -79,6 +79,7 @@ export {
   resolveBareModelDefaultProvider,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
+  resolveModelAliasFromPair,
   resolveModelRefFromString,
 };
 export { isCliProvider } from "./model-selection-cli.js";
@@ -402,6 +403,7 @@ export function getModelRefStatus(
     ref: ModelRef;
     defaultProvider: string;
     defaultModel?: string;
+    agentId?: string;
   } & ModelManifestNormalizationContext,
 ): ModelRefStatus {
   return getModelRefStatusWithFallbackModels({
@@ -410,8 +412,10 @@ export function getModelRefStatus(
     ref: params.ref,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    agentId: params.agentId,
     fallbackModels: resolveAllowedFallbacks({
       cfg: params.cfg,
+      agentId: params.agentId,
     }),
     manifestPlugins: params.manifestPlugins,
   });
@@ -423,6 +427,7 @@ function getModelRefStatusForResolve(
     catalog: ModelCatalogEntry[];
     defaultProvider: string;
     defaultModel?: string;
+    agentId?: string;
   } & ModelManifestNormalizationContext,
   ref: ModelRef,
 ): ModelRefStatus {
@@ -432,6 +437,7 @@ function getModelRefStatusForResolve(
     ref,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    agentId: params.agentId,
     manifestPlugins: params.manifestPlugins,
   });
 }
@@ -443,6 +449,7 @@ export function resolveAllowedModelRef(
     raw: string;
     defaultProvider: string;
     defaultModel?: string;
+    agentId?: string;
   } & ModelManifestNormalizationContext,
 ):
   | { ref: ModelRef; key: string }
@@ -457,6 +464,7 @@ export function resolveAllowedModelRef(
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
+    agentId: params.agentId,
     manifestPlugins: params.manifestPlugins,
   });
 

@@ -13,15 +13,16 @@ export async function resolveSetupWorkspaceSelection(params: {
   requestedWorkspaceDir: string;
   prompter: WizardPrompter;
   canConfirmMove?: boolean;
+  hasAuthoredRoster?: boolean;
 }): Promise<{
   workspaceDir: string;
   allowWorkspaceChange: boolean;
   conflict?: OnboardingWorkspaceConflict;
 }> {
-  const conflict = resolveOnboardingWorkspaceConflict(
-    params.baseConfig,
-    params.requestedWorkspaceDir,
-  );
+  const conflict =
+    params.hasAuthoredRoster === false
+      ? undefined
+      : resolveOnboardingWorkspaceConflict(params.baseConfig, params.requestedWorkspaceDir);
   if (!conflict) {
     return { workspaceDir: params.requestedWorkspaceDir, allowWorkspaceChange: false };
   }

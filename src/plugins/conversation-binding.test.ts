@@ -7,6 +7,7 @@ import type {
   SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import * as openClawStateDb from "../state/openclaw-state-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -606,6 +607,36 @@ describe("plugin conversation binding approvals", () => {
     expect(differentAccount.status).toBe("pending");
   });
 
+  it("does not leak an in-memory auto-approval when persisting an allow-always grant fails", async () => {
+    const pendingRequest = await requestPendingBinding(
+      createDiscordCodexBindRequest("channel:persist-fail-1", "Bind Codex thread persist-fail-1."),
+    );
+
+    const writeSpy = vi
+      .spyOn(openClawStateDb, "runOpenClawStateWriteTransaction")
+      .mockImplementationOnce(() => {
+        throw new Error("SQLITE_BUSY: database is locked");
+      });
+
+    // A failed persist must propagate; the grant was never durably recorded.
+    await expect(approveBindingRequest(pendingRequest.approvalId, "allow-always")).rejects.toThrow(
+      "SQLITE_BUSY",
+    );
+
+    writeSpy.mockRestore();
+
+    // Nothing reached disk.
+    expect(readPluginBindingApprovalRows()).toEqual([]);
+
+    // No in-memory grant leaked: the next same-scope request still prompts instead of
+    // silently auto-approving from a cache entry that was never persisted.
+    const sameScope = await requestPluginConversationBinding(
+      createDiscordCodexBindRequest("channel:persist-fail-2", "Bind Codex thread persist-fail-2."),
+    );
+
+    expect(sameScope.status).toBe("pending");
+  });
+
   it("persists overlapping always-allow approvals", async () => {
     const firstRequest = await requestPendingBinding(
       createDiscordCodexBindRequest(
@@ -651,6 +682,19 @@ describe("plugin conversation binding approvals", () => {
         plugin_root: "/plugins/codex-a",
       },
     ]);
+
+    // Both grants must stay live in the in-memory cache: publishing the cache only after
+    // the persist await must recompute from the latest cache, not clobber a concurrently
+    // approved scope with a stale pre-await snapshot. Follow-up binds auto-approve from cache.
+    const firstFollowUp = await requestPluginConversationBinding(
+      createDiscordCodexBindRequest("channel:race-1b", "Rebind Codex thread race-1.", "default"),
+    );
+    const secondFollowUp = await requestPluginConversationBinding(
+      createDiscordCodexBindRequest("channel:race-2b", "Rebind Codex thread race-2.", "work"),
+    );
+
+    expect(firstFollowUp.status).toBe("bound");
+    expect(secondFollowUp.status).toBe("bound");
   });
 
   it("does not remove approval rows written outside the process cache", async () => {

@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { repoInstallSpec } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loggingState } from "../../logging/state.js";
+import { isConfigSetJsonParseOnly } from "../config-output-mode.js";
 import { setCommandJsonMode } from "./json-mode.js";
 import { applyParentDefaultHelpAction } from "./parent-default-help.js";
 
@@ -81,6 +82,8 @@ let observedProcessTitle: string;
 let originalNodeNoWarnings: string | undefined;
 let originalHideBanner: string | undefined;
 let originalForceStderr: boolean;
+let originalEarlyConsoleRoutingRestore: boolean | null;
+let observedMachineOutputStdoutIsTTY: boolean | undefined;
 
 beforeAll(async () => {
   ({ registerPreActionHooks } = await import("./preaction.js"));
@@ -95,6 +98,8 @@ beforeEach(() => {
   originalNodeNoWarnings = process.env.NODE_NO_WARNINGS;
   originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
   originalForceStderr = loggingState.forceConsoleToStderr;
+  originalEarlyConsoleRoutingRestore = loggingState.earlyConsoleRoutingRestore;
+  observedMachineOutputStdoutIsTTY = undefined;
   // Worker-thread Vitest runs do not reliably mutate the real process title,
   // so capture writes at the property boundary instead.
   Object.defineProperty(process, "title", {
@@ -106,6 +111,7 @@ beforeEach(() => {
     },
   });
   loggingState.forceConsoleToStderr = false;
+  loggingState.earlyConsoleRoutingRestore = null;
   delete process.env.NODE_NO_WARNINGS;
   delete process.env.OPENCLAW_HIDE_BANNER;
 });
@@ -123,6 +129,7 @@ afterEach(() => {
     process.title = originalProcessTitle;
   }
   loggingState.forceConsoleToStderr = originalForceStderr;
+  loggingState.earlyConsoleRoutingRestore = originalEarlyConsoleRoutingRestore;
   if (originalNodeNoWarnings === undefined) {
     delete process.env.NODE_NO_WARNINGS;
   } else {
@@ -143,10 +150,15 @@ describe("registerPreActionHooks", () => {
 
   function buildProgram() {
     const programLocal = new Command().name("openclaw");
-    programLocal
+    const agent = programLocal
       .command("agent")
       .requiredOption("-m, --message <text>")
       .option("--local")
+      .option("--json")
+      .action(() => {});
+    agent
+      .command("exec")
+      .argument("[message]")
       .option("--json")
       .action(() => {});
     programLocal
@@ -189,6 +201,14 @@ describe("registerPreActionHooks", () => {
       .action(() => {});
     programLocal.command("completion").action(() => {});
     programLocal.command("secrets").action(() => {});
+    const skills = programLocal.command("skills");
+    for (const skillCommand of ["install", "verify"]) {
+      skills
+        .command(skillCommand)
+        .argument("<skill-ref>")
+        .option("--version <version>")
+        .action(() => {});
+    }
     programLocal
       .command("qa")
       .command("suite")
@@ -223,13 +243,20 @@ describe("registerPreActionHooks", () => {
       .command("send")
       .option("--json")
       .action(() => {});
+    setCommandJsonMode(programLocal.command("machine"), "output", ({ argv, stdoutIsTTY }) => {
+      observedMachineOutputStdoutIsTTY = stdoutIsTTY;
+      return argv.includes("--machine-output");
+    }).action(() => {});
     const config = programLocal.command("config");
     config.option("--section <section>");
-    setCommandJsonMode(config.command("set"), "parse-only")
+    setCommandJsonMode(config.command("set"), "parse-only", ({ argv }) =>
+      isConfigSetJsonParseOnly(argv),
+    )
       .argument("<path>")
       .argument("<value>")
       .option("--json")
       .action(() => {});
+    config.command("file").action(() => {});
     config
       .command("validate")
       .option("--json")
@@ -367,6 +394,32 @@ describe("registerPreActionHooks", () => {
     );
   });
 
+  it("allows invalid config for update migration commands", async () => {
+    await runPreAction({
+      parseArgv: ["update"],
+      processArgv: ["node", "openclaw", "update", "--json"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["update"],
+      allowInvalid: true,
+    });
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["update", "status"],
+      processArgv: ["node", "openclaw", "update", "status", "--json"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["update", "status"],
+      allowInvalid: true,
+      suppressDoctorStdout: true,
+    });
+  });
+
   it("loads plugins for text local agent runs", async () => {
     await runPreAction({
       parseArgv: ["agent"],
@@ -375,7 +428,7 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
-      commandPath: ["agent", "hi"],
+      commandPath: ["agent"],
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
@@ -390,12 +443,24 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
-      commandPath: ["agent", "hi"],
+      commandPath: ["agent"],
       suppressDoctorStdout: true,
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
     });
+  });
+
+  it("bypasses operator config and plugin startup for agent exec", async () => {
+    await runPreAction({
+      parseArgv: ["agent", "exec", "fix it"],
+      processArgv: ["node", "openclaw", "agent", "exec", "fix it"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+    expect(routeLogsToStderrMock).toHaveBeenCalled();
+    expect(emitCliBannerMock).not.toHaveBeenCalled();
   });
 
   it("keeps setup alias and channels add manifest-first", async () => {
@@ -598,6 +663,51 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    {
+      name: "version-pinned skill install",
+      action: "install",
+      argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version", "1.2.3"],
+    },
+    {
+      name: "version-pinned skill verification",
+      action: "verify",
+      argv: ["node", "openclaw", "skills", "verify", "@owner/weather", "--version", "1.2.3"],
+    },
+    {
+      name: "equals-form version-pinned skill install",
+      action: "install",
+      argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version=1.2.3"],
+    },
+    {
+      name: "profiled version-pinned skill verification",
+      action: "verify",
+      argv: [
+        "node",
+        "openclaw",
+        "--profile",
+        "work",
+        "skills",
+        "verify",
+        "@owner/weather",
+        "--version",
+        "1.2.3",
+      ],
+    },
+  ])("runs the execution bootstrap for $name", async ({ action, argv }) => {
+    await runPreAction({
+      parseArgv: ["skills", action],
+      processArgv: argv,
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtime: runtimeMock,
+        commandPath: ["skills", action],
+      }),
+    );
+  });
+
   it("applies --json stdout suppression only for explicit JSON output commands", async () => {
     await runPreAction({
       parseArgv: ["status"],
@@ -620,6 +730,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["update", "status"],
+      allowInvalid: true,
       suppressDoctorStdout: true,
     });
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
@@ -646,13 +757,37 @@ describe("registerPreActionHooks", () => {
 
     vi.clearAllMocks();
 
-    // config set --json is parse-only (not JSON output mode), should not route
+    // Early argv detection routes literal --json conservatively until Commander metadata resolves.
+    loggingState.forceConsoleToStderr = true;
+    loggingState.earlyConsoleRoutingRestore = false;
     await runPreAction({
       parseArgv: ["config", "set", "gateway.auth.mode", "local", "--json"],
       processArgv: ["node", "openclaw", "config", "set", "gateway.auth.mode", "local", "--json"],
     });
 
     expect(routeLogsToStderrMock).not.toHaveBeenCalled();
+    expect(loggingState.forceConsoleToStderr).toBe(false);
+
+    vi.clearAllMocks();
+
+    loggingState.forceConsoleToStderr = true;
+    loggingState.earlyConsoleRoutingRestore = false;
+    await runPreAction({
+      parseArgv: ["config", "set", "gateway.auth.mode", "local", "--dry-run", "--json"],
+      processArgv: [
+        "node",
+        "openclaw",
+        "config",
+        "set",
+        "gateway.auth.mode",
+        "local",
+        "--dry-run",
+        "--json",
+      ],
+    });
+
+    expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(loggingState.forceConsoleToStderr).toBe(true);
 
     vi.clearAllMocks();
 
@@ -663,6 +798,31 @@ describe("registerPreActionHooks", () => {
     });
 
     expect(routeLogsToStderrMock).not.toHaveBeenCalled();
+  });
+
+  it("routes logs when command-owned metadata selects machine output", async () => {
+    const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: undefined });
+    try {
+      await runPreAction({
+        parseArgv: ["machine"],
+        processArgv: ["node", "openclaw", "machine", "--machine-output"],
+      });
+    } finally {
+      if (stdoutDescriptor) {
+        Object.defineProperty(process.stdout, "isTTY", stdoutDescriptor);
+      } else {
+        Reflect.deleteProperty(process.stdout, "isTTY");
+      }
+    }
+
+    expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(observedMachineOutputStdoutIsTTY).toBe(false);
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["machine"],
+      suppressDoctorStdout: true,
+    });
   });
 
   it("uses the Commander action path for protocol stdout ownership", async () => {
@@ -721,6 +881,19 @@ describe("registerPreActionHooks", () => {
     });
 
     expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["default profile", ["node", "openclaw", "config", "file"]],
+    ["named profile", ["node", "openclaw", "--profile", "work", "config", "file"]],
+  ])("bypasses config guard for a %s config path query", async (_name, processArgv) => {
+    await runPreAction({
+      parseArgv: ["config", "file"],
+      processArgv,
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 

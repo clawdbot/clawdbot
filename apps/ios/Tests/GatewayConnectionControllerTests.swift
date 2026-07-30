@@ -609,6 +609,29 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         #expect(fleet.statuses.isEmpty)
     }
 
+    @Test @MainActor func `operator fleet preserves auth pause across same-config reconciles`() {
+        let fleet = GatewayOperatorFleet()
+        let config = Self.makeGatewayConnectConfig(stableID: "bonjour|approval-required")
+        defer { fleet.stopAll() }
+
+        fleet.reconcile(
+            desiredStableIDs: [config.stableID],
+            configs: [(config: config, name: "Approval Required")])
+        fleet._test_pauseRuntimeForAttention(stableID: config.stableID)
+
+        fleet.reconcile(
+            desiredStableIDs: [config.stableID],
+            configs: [(config: config, name: "Renamed While Paused")])
+
+        #expect(fleet.statuses == [
+            GatewayOperatorFleet.Status(
+                stableID: config.stableID,
+                name: "Renamed While Paused",
+                state: .needsAttention,
+                detail: "Approval required"),
+        ])
+    }
+
     @Test @MainActor func `same target retry unpauses retained pairing problem`() {
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }

@@ -285,6 +285,14 @@ describe("runDoctorStateSqliteCompact", () => {
   it("treats a busy truncating checkpoint as failure", async () => {
     const env = createStateEnv();
     const sqlitePath = seedStateDatabase({ env });
+    expect(
+      recordOpenClawDatabaseQuarantine({
+        env,
+        kind: "state",
+        path: sqlitePath,
+        reason: "busy checkpoint",
+      }),
+    ).toBe(true);
     const sqlite = requireNodeSqlite();
     const reader = new sqlite.DatabaseSync(sqlitePath);
     const writer = new sqlite.DatabaseSync(sqlitePath);
@@ -297,6 +305,7 @@ describe("runDoctorStateSqliteCompact", () => {
         /checkpoint remained busy/,
       );
       expect(readPragma(writer, "auto_vacuum")).toBe(0);
+      expect(readOpenClawDatabaseQuarantine(sqlitePath, { env })?.reason).toBe("busy checkpoint");
     } finally {
       reader.exec("ROLLBACK;");
       reader.close();

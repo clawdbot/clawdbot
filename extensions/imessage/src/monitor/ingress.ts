@@ -1,10 +1,12 @@
 // iMessage plugin module owns raw-row durable admission and replay.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -14,12 +16,6 @@ import type { IMessagePayload } from "./types.js";
 
 const IMESSAGE_INGRESS_PAYLOAD_VERSION = 1;
 const IMESSAGE_INGRESS_DRAIN_INTERVAL_MS = 1_000;
-const IMESSAGE_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-// Match or exceed the retired GUID guard's 4h / 10k persistent window.
-const IMESSAGE_INGRESS_COMPLETED_TTL_MS = 4 * 60 * 60 * 1_000;
-const IMESSAGE_INGRESS_COMPLETED_MAX_ENTRIES = 10_000;
-const IMESSAGE_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const IMESSAGE_INGRESS_FAILED_MAX_ENTRIES = 1_000;
 
 type IMessageIngressPayload = {
   version: number;
@@ -56,16 +52,7 @@ type IMessageIngressDispatch = (
   provenance?: { catchup?: boolean },
 ) => Promise<IMessageIngressDispatchResult | void> | IMessageIngressDispatchResult | void;
 
-class IMessageIngressPayloadError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "IMessageIngressPayloadError";
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const IMessageIngressPayloadError = createChannelIngressError("IMessageIngressPayloadError");
 
 function rawMessageRecord(raw: unknown): Record<string, unknown> | null {
   if (!isRecord(raw)) {
@@ -167,74 +154,11 @@ type IMessageDurableIngress = {
   waitForIdle: () => Promise<void>;
 };
 
-export function buildIMessageFlushIngressLifecycle(
-  lifecycles: readonly IMessageIngressLifecycle[],
-): {
-  lifecycle: IMessageIngressLifecycle | undefined;
-  settle: () => Promise<void>;
-  abandon: () => Promise<void>;
-} {
-  const first = lifecycles[0];
-  if (!first) {
-    return { lifecycle: undefined, settle: async () => {}, abandon: async () => {} };
-  }
-  let handedOff = false;
-  const adoptAll = async () => {
-    for (const lifecycle of lifecycles) {
-      await lifecycle.onAdopted();
-    }
-  };
-  const abandonAll = async () => {
-    for (const lifecycle of lifecycles) {
-      await lifecycle.onAbandoned();
-    }
-  };
-  return {
-    lifecycle: {
-      abortSignal:
-        lifecycles.length === 1
-          ? first.abortSignal
-          : AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal)),
-      onAdopted: async () => {
-        handedOff = true;
-        await adoptAll();
-      },
-      onDeferred: () => {
-        handedOff = true;
-        for (const lifecycle of lifecycles) {
-          lifecycle.onDeferred();
-        }
-      },
-      onAdoptionFinalizing: () => {
-        for (const lifecycle of lifecycles) {
-          lifecycle.onAdoptionFinalizing();
-        }
-      },
-      onAbandoned: async () => {
-        handedOff = true;
-        await abandonAll();
-      },
-    },
-    // Gated/no-dispatch turns still consumed every raw row in the flush.
-    settle: async () => {
-      if (!handedOff) {
-        handedOff = true;
-        await adoptAll();
-      }
-    },
-    abandon: async () => {
-      if (!handedOff) {
-        handedOff = true;
-        await abandonAll();
-      }
-    },
-  };
-}
-
 export function createIMessageDurableIngress(options: {
   accountId: string;
   queue?: ChannelIngressQueue<IMessageIngressPayload>;
   dispatch: IMessageIngressDispatch;
+  dispatchPriority?: IMessageIngressDispatch;
   runtime: Pick<RuntimeEnv, "error" | "log">;
   onDurableEnqueue?: (facts: IMessageIngressFacts) => void | Promise<void>;
   onDurableEnqueueFailure?: (rowid: number | null, error: unknown) => void | Promise<void>;
@@ -247,6 +171,7 @@ export function createIMessageDurableIngress(options: {
     });
   const now = options.now ?? Date.now;
   const dispatchAdmissionQueue = new KeyedAsyncQueue();
+  const priorityDispatchQueue = new KeyedAsyncQueue();
   const monitor = createChannelIngressMonitor<
     IMessageIngressRaw,
     IMessageIngressBody,
@@ -279,30 +204,45 @@ export function createIMessageDurableIngress(options: {
       createClaimError: (_kind, claim) =>
         new IMessageIngressPayloadError(`iMessage ingress payload ${claim.id} is invalid.`),
     },
-    deliver: async (event, lifecycle, record) =>
-      await dispatchAdmissionQueue.enqueue(record.laneKey ?? record.id, async () => {
-        if (!event.message || event.receivedAt === undefined) {
-          throw new IMessageIngressPayloadError(
-            `iMessage ingress payload ${record.id} is invalid.`,
-          );
-        }
-        if (lifecycle.abortSignal.aborted) {
-          throw lifecycle.abortSignal.reason;
-        }
+    deliver: async (event, lifecycle, record) => {
+      if (!event.message || event.receivedAt === undefined) {
+        throw new IMessageIngressPayloadError(`iMessage ingress payload ${record.id} is invalid.`);
+      }
+      const message = event.message;
+      const receivedAt = event.receivedAt;
+      if (lifecycle.abortSignal.aborted) {
+        throw lifecycle.abortSignal.reason;
+      }
+      // Only a priority handler that proves ownership may bypass the chat lane.
+      // Unrelated polls and reactions fall through and retain ordinary ordering.
+      const priorityResult = await priorityDispatchQueue.enqueue(
+        record.laneKey ?? record.id,
+        async () =>
+          await options.dispatchPriority?.(
+            message,
+            lifecycle,
+            receivedAt,
+            event.catchup ? { catchup: true } : {},
+          ),
+      );
+      if (priorityResult) {
+        return priorityResult;
+      }
+      return await dispatchAdmissionQueue.enqueue(record.laneKey ?? record.id, async () => {
         return await options.dispatch(
-          event.message,
+          message,
           lifecycle,
-          event.receivedAt,
+          receivedAt,
           event.catchup ? { catchup: true } : {},
         );
-      }),
+      });
+    },
     pollIntervalMs: IMESSAGE_INGRESS_DRAIN_INTERVAL_MS,
+    // Match or exceed the retired GUID guard's 4h / 10k persistent window.
     retention: {
-      pruneIntervalMs: IMESSAGE_INGRESS_PRUNE_INTERVAL_MS,
-      completedTtlMs: IMESSAGE_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: IMESSAGE_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: IMESSAGE_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: IMESSAGE_INGRESS_FAILED_MAX_ENTRIES,
+      completedTtlMs: 4 * 60 * 60 * 1_000,
+      completedMaxEntries: 10_000,
+      failedMaxEntries: 1_000,
     },
     appendRetryDelaysMs: [0],
     onDurableAdmission: async (event) => {

@@ -7,6 +7,10 @@ export const BoardTabIdSchema = Type.String({ pattern: "^[a-z0-9-]{1,40}$" });
 export const BoardWidgetNameSchema = Type.String({
   pattern: "^[a-z0-9][a-z0-9._-]{0,63}$",
 });
+export const BoardWidgetPluginKindSchema = Type.String({
+  pattern: "^[a-z0-9][a-z0-9-]{0,63}:[a-z0-9][a-z0-9._-]{0,63}$",
+});
+export const BoardWidgetPluginPropsSchema = Type.Record(Type.String(), Type.Unknown());
 export const BoardChatDockSchema = Type.Union([
   Type.Literal("left"),
   Type.Literal("right"),
@@ -34,6 +38,7 @@ export const BOARD_CRON_JOB_ID_MAX_LENGTH = 256;
 export const BOARD_CRON_TRIGGER_PREFIX = "cron.trigger:";
 export const BOARD_WIDGET_TOOL_MAX_LENGTH =
   BOARD_CRON_TRIGGER_PREFIX.length + BOARD_CRON_JOB_ID_MAX_LENGTH;
+export const BOARD_DATA_BINDING_ID_MAX_LENGTH = 64;
 
 export const BoardTabSchema = closedObject({
   tabId: BoardTabIdSchema,
@@ -59,7 +64,9 @@ export const BoardWidgetSchema = closedObject({
   name: BoardWidgetNameSchema,
   tabId: BoardTabIdSchema,
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
-  contentKind: Type.Union([Type.Literal("html"), Type.Literal("mcp-app")]),
+  contentKind: Type.Union([Type.Literal("html"), Type.Literal("mcp-app"), Type.Literal("plugin")]),
+  pluginKind: Type.Optional(BoardWidgetPluginKindSchema),
+  props: Type.Optional(BoardWidgetPluginPropsSchema),
   presentation: Type.Optional(BoardWidgetPresentationSchema),
   heightMode: Type.Optional(BoardWidgetHeightModeSchema),
   sizeW: Type.Integer({ minimum: 1, maximum: 12 }),
@@ -172,14 +179,21 @@ export const BoardWidgetMcpAppPutContentSchema = closedObject({
   kind: Type.Literal("mcp-app"),
   viewId: NonEmptyString,
 });
+export const BoardWidgetPluginContentSchema = closedObject({
+  kind: Type.Literal("plugin"),
+  pluginKind: BoardWidgetPluginKindSchema,
+  props: Type.Optional(BoardWidgetPluginPropsSchema),
+});
 export const BoardWidgetContentSchema = Type.Union([
   BoardWidgetHtmlContentSchema,
   BoardWidgetMcpAppContentSchema,
+  BoardWidgetPluginContentSchema,
 ]);
 export type BoardWidgetContent = Static<typeof BoardWidgetContentSchema>;
 export type BoardWidgetMaterializedContent =
   | Static<typeof BoardWidgetHtmlContentSchema>
-  | (Static<typeof BoardWidgetMcpAppContentSchema> & { interactive: boolean });
+  | (Static<typeof BoardWidgetMcpAppContentSchema> & { interactive: boolean })
+  | Static<typeof BoardWidgetPluginContentSchema>;
 
 export const BoardCanvasDocumentSourceSchema = closedObject({
   kind: Type.Literal("canvas-doc"),
@@ -190,6 +204,7 @@ export type BoardCanvasDocumentSource = Static<typeof BoardCanvasDocumentSourceS
 export const BoardWidgetPutContentSchema = Type.Union([
   BoardWidgetHtmlContentSchema,
   BoardWidgetMcpAppPutContentSchema,
+  BoardWidgetPluginContentSchema,
   BoardCanvasDocumentSourceSchema,
 ]);
 export type BoardWidgetPutContent = Static<typeof BoardWidgetPutContentSchema>;
@@ -263,7 +278,7 @@ export type BoardPromptAuthorizeParams = Static<typeof BoardPromptAuthorizeParam
 
 export const BoardDataReadParamsSchema = closedObject({
   ticket: BoardViewTicketSchema,
-  bindingId: Type.String({ minLength: 1, maxLength: 64 }),
+  bindingId: Type.String({ minLength: 1, maxLength: BOARD_DATA_BINDING_ID_MAX_LENGTH }),
   params: Type.Optional(
     Type.Record(Type.String({ minLength: 1, maxLength: 80 }), Type.Unknown(), {
       maxProperties: 64,
@@ -272,11 +287,24 @@ export const BoardDataReadParamsSchema = closedObject({
 });
 export type BoardDataReadParams = Static<typeof BoardDataReadParamsSchema>;
 
-export const BoardActionParamsSchema = closedObject({
+export const BoardCronActionParamsSchema = closedObject({
   ticket: BoardViewTicketSchema,
   action: Type.Literal("cron.trigger"),
   jobId: Type.String({ minLength: 1, maxLength: BOARD_CRON_JOB_ID_MAX_LENGTH }),
 });
+export const BoardPluginActionParamsSchema = closedObject({
+  ticket: BoardViewTicketSchema,
+  action: Type.String({ minLength: 1, maxLength: BOARD_WIDGET_TOOL_MAX_LENGTH }),
+  params: Type.Optional(
+    Type.Record(Type.String({ minLength: 1, maxLength: 80 }), Type.Unknown(), {
+      maxProperties: 64,
+    }),
+  ),
+});
+export const BoardActionParamsSchema = Type.Union([
+  BoardCronActionParamsSchema,
+  BoardPluginActionParamsSchema,
+]);
 export type BoardActionParams = Static<typeof BoardActionParamsSchema>;
 
 export const BoardChangedEventSchema = closedObject({

@@ -3,16 +3,19 @@ scenario:
   id: slack-approval-plugin-native
   surface: channels
   coverage:
-    primary: [channels.native-approval-prompts]
+    primary:
+      - slack.native-approvals
+    secondary:
+      - channels.channel-native-approval-prompts
   execution:
-    profiles: { "slack:default": 8 }
     kind: flow
     channel: slack
     timeoutMs: 60000
     retryCount: 1
     suiteIsolation: isolated
-    config: { slackScenarioId: slack-approval-plugin-native }
 flow:
   module: ./live-transports/slack/scenario-runtime.js
-  call: runSlackApprovalPluginNativeScenario
-  args: [{ expr: slackScenarioContext }]
+  call: runSlackScenario
+  args:
+    - { expr: slackScenarioContext }
+    - { moduleExport: slackQaApprovalPluginNativeScenario }

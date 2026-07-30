@@ -77,7 +77,7 @@ describe("Zalo polling image handling", () => {
         RawBody: "",
         CommandBody: "",
         BodyForAgent: "",
-        MediaType: "image/jpeg",
+        media: [expect.objectContaining({ contentType: "image/jpeg" })],
       }),
     );
 
@@ -195,7 +195,7 @@ describe("Zalo polling image handling", () => {
         RawBody: "/reset",
         CommandBody: "/reset",
         BodyForAgent: "/reset\n\n[zalo image attachment unavailable]",
-        MediaPath: undefined,
+        media: [expect.objectContaining({ kind: "image" })],
       }),
     );
 
@@ -231,8 +231,7 @@ describe("Zalo polling image handling", () => {
         RawBody: "",
         CommandBody: "",
         BodyForAgent: "[zalo image attachment unavailable]",
-        MediaPath: undefined,
-        MediaType: "image",
+        media: [expect.objectContaining({ kind: "image" })],
       }),
     );
 
@@ -311,7 +310,7 @@ describe("Zalo polling image handling", () => {
     expect(finalizeInboundContextMock).toHaveBeenCalledWith(
       expect.objectContaining({
         BodyForAgent: "stalled photo\n\n[zalo image attachment unavailable]",
-        MediaPath: undefined,
+        media: [expect.objectContaining({ kind: "image" })],
       }),
     );
 

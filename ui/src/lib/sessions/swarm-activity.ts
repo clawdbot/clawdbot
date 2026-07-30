@@ -2,8 +2,10 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 
 // Lifecycle notes are transient UI state, so bound them for long-lived board tabs.
-const MAX_TRACKED_SWARM_GROUPS = 128;
-const MAX_TRACKED_SWARM_CHILDREN = 2_048;
+const MAX_TRACKED_SWARM_GROUPS = 10_000;
+// Completed members stay visible while any group child is active, so retain the
+// supported lifetime membership ceiling rather than only the live-child cap.
+const MAX_TRACKED_SWARM_CHILDREN = 100_000;
 
 type SwarmDisplayCarrier = {
   swarmPhaseRank?: number;
@@ -45,17 +47,16 @@ export class SwarmActivityTracker {
     this.phaseByChild.clear();
   }
 
-  observe(payload: unknown): void {
+  observe(payload: unknown): boolean {
     const event = asNullableRecord(payload);
     if (!event) {
-      return;
+      return false;
     }
     const source = asNullableRecord(event.session) ?? event;
     const groupId = normalizedString(event.swarmGroupId) ?? normalizedString(source.swarmGroupId);
     if (!groupId) {
-      return;
+      return false;
     }
-
     const kind = normalizedString(event.kind);
     const text = normalizedString(event.text);
     if ((kind === "phase" || kind === "log") && text) {
@@ -77,17 +78,17 @@ export class SwarmActivityTracker {
         text,
         MAX_TRACKED_SWARM_GROUPS,
       );
-      return;
+      return true;
     }
 
     const childKey = normalizedString(source.key) ?? normalizedString(event.sessionKey);
     if (!childKey) {
-      return;
+      return true;
     }
     const explicitPhase = normalizedString(source.swarmPhase) ?? normalizedString(event.swarmPhase);
     if (explicitPhase) {
       setBounded(this.phaseByChild, childKey, explicitPhase, MAX_TRACKED_SWARM_CHILDREN);
-      return;
+      return true;
     }
     // Implicit phase assignment is a creation-time fact: only a child ADMITTED
     // after phase('X') belongs to X. Status/completion updates for a child that
@@ -98,6 +99,7 @@ export class SwarmActivityTracker {
         setBounded(this.phaseByChild, childKey, currentPhase, MAX_TRACKED_SWARM_CHILDREN);
       }
     }
+    return true;
   }
 
   decorate(result: SessionsListResult | null): SessionsListResult | null {

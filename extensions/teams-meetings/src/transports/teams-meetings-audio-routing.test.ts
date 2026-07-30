@@ -50,7 +50,7 @@ describe("Microsoft Teams meeting audio routing", () => {
       audioInputRouted: true,
       audioOutputRouted: false,
       audioOutputRouteRetryable: true,
-      manualActionReason: "teams-audio-choice-required",
+      manualAction: { reason: "teams-audio-choice-required" },
     });
   });
 
@@ -89,7 +89,7 @@ describe("Microsoft Teams meeting audio routing", () => {
     expect(result).toMatchObject({
       audioInputRouted: true,
       audioOutputRouted: false,
-      manualActionReason: "teams-audio-choice-required",
+      manualAction: { reason: "teams-audio-choice-required" },
     });
     expect(result.audioOutputRouteError).toBeUndefined();
     expect(window["__openclawTeamsAudioOutputs"]).toEqual([
@@ -232,7 +232,7 @@ describe("Microsoft Teams meeting audio routing", () => {
 
     expect(source.sinkId).toBe("built-in-output");
     expect(source.muted).toBe(true);
-    expect(conflict.result.manualActionReason).toBe("teams-session-conflict");
+    expect(conflict.result.manualAction).toMatchObject({ reason: "teams-session-conflict" });
     expect(conflict.window).not.toHaveProperty("__openclawTeamsAudioOutputs");
   });
 
@@ -912,8 +912,8 @@ describe("Microsoft Teams meeting audio routing", () => {
     expect(result).toMatchObject({
       audioInputRouted: true,
       audioOutputRouted: true,
-      manualActionRequired: false,
     });
+    expect(result.manualAction).toBeUndefined();
   });
 
   it("keeps a loaded non-MediaStream AbortError retryable", async () => {
@@ -948,7 +948,7 @@ describe("Microsoft Teams meeting audio routing", () => {
       audioOutputRouteError: "Cannot route loaded media.",
       audioOutputRouteRetryable: true,
       audioOutputRouted: false,
-      manualActionReason: "teams-audio-choice-required",
+      manualAction: { reason: "teams-audio-choice-required" },
     });
   });
 
@@ -1017,7 +1017,7 @@ describe("Microsoft Teams meeting audio routing", () => {
 
     expect(result).toMatchObject({
       audioInputRouted: false,
-      manualActionReason: "teams-audio-choice-required",
+      manualAction: { reason: "teams-audio-choice-required" },
       micMuted: true,
     });
     expect(microphone.clicks).toBe(1);

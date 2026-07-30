@@ -13,6 +13,19 @@
   --workboard-control-border-hover: color-mix(in srgb, var(--accent) 36%, var(--border-strong));
 }
 
+.workboard-page-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.workboard-board-glyph--header {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
 .workboard-main {
   display: flex;
   flex-direction: column;
@@ -368,11 +381,32 @@
   max-width: 176px;
 }
 
-.workboard-select--toolbar-agent {
+.workboard-agent-select--toolbar {
   width: min(236px, 100%);
   max-width: 236px;
 }
 
+.workboard-select--toolbar-board {
+  width: min(224px, 100%);
+  max-width: 224px;
+}
+
+.workboard-agent-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.workboard-agent-select .agent-select__trigger {
+  min-height: var(--workboard-control-height);
+  border-color: var(--border);
+  border-radius: 7px;
+  background: var(--bg-elevated);
+  font-weight: 600;
+}
+
+.workboard-agent-select--toolbar .agent-select__trigger {
+  height: var(--workboard-control-height);
+}
 .workboard-select::part(form-control-label) {
   position: absolute;
   width: 1px;
@@ -409,6 +443,11 @@
 
 .workboard-select__option {
   color: var(--text);
+}
+
+.workboard-select [slot="start"] {
+  display: inline-flex;
+  align-items: center;
 }
 
 .workboard-select__label {
@@ -1534,6 +1573,7 @@ openclaw-workboard-card-dashboard {
   .workboard-toolbar__filters .input[type="search"],
   .workboard-toolbar__filters .input,
   .workboard-select--toolbar,
+  .workboard-agent-select--toolbar,
   .workboard-draft__meta .input {
     width: 100%;
     max-width: none;

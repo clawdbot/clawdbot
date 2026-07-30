@@ -12,10 +12,26 @@ import {
 const MATTERMOST_STREAM_MAX_CHARS = 4000;
 const DEFAULT_THROTTLE_MS = 1000;
 
+type MattermostDraftPublishedPart = {
+  messageId: string;
+  content: string;
+};
+
 type MattermostFinalTextResolution =
-  | { kind: "full"; text: string }
-  | { kind: "remaining"; text: string }
-  | { kind: "already-delivered" };
+  | {
+      kind: "full";
+      text: string;
+      publishedParts: readonly MattermostDraftPublishedPart[];
+    }
+  | {
+      kind: "remaining";
+      text: string;
+      publishedParts: readonly MattermostDraftPublishedPart[];
+    }
+  | {
+      kind: "already-delivered";
+      publishedParts: readonly MattermostDraftPublishedPart[];
+    };
 
 type MattermostDraftStream = {
   update: (text: string) => void;
@@ -40,6 +56,22 @@ function normalizeMattermostDraftText(text: string, maxChars: number): string {
     return trimmed;
   }
   return `${sliceUtf16Safe(trimmed, 0, Math.max(0, maxChars - 3)).trimEnd()}...`;
+}
+
+function consumeMattermostPublishedChunk(params: {
+  source: string;
+  offset: number;
+  chunk: string;
+}): number | undefined {
+  const chunk = params.chunk.trim();
+  if (!chunk) {
+    return params.offset;
+  }
+  let offset = params.offset;
+  while (offset < params.source.length && /\s/.test(params.source[offset] ?? "")) {
+    offset += 1;
+  }
+  return params.source.startsWith(chunk, offset) ? offset + chunk.length : undefined;
 }
 
 type MattermostDraftPreviewBoundaryController = {
@@ -89,6 +121,7 @@ export function createMattermostDraftStream(params: {
   type DraftGeneration = {
     postId?: string;
     lastSentText: string;
+    lastProviderText?: string;
     // A boundary can arrive after pending text flushed. Keep the full source so sealing can
     // replace the ellipsized preview with lossless chunks instead of retaining truncation.
     latestSourceText: string;
@@ -100,7 +133,11 @@ export function createMattermostDraftStream(params: {
     latestSourceText: "",
     ready: Promise.resolve(),
   };
-  const sealedAssistantTexts: string[] = [];
+  const sealedAssistantTexts: Array<{ text: string; requiresBlockBoundary: boolean }> = [];
+  const publishedAssistantParts = new Map<string, MattermostDraftPublishedPart>();
+  const trackPublishedAssistantPart = (part: MattermostDraftPublishedPart) => {
+    publishedAssistantParts.set(part.messageId, part);
+  };
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     if (streamState.stopped && !streamState.final) {
@@ -121,9 +158,10 @@ export function createMattermostDraftStream(params: {
     }
     try {
       if (target.postId) {
-        await updateMattermostPost(params.client, target.postId, {
+        const updated = await updateMattermostPost(params.client, target.postId, {
           message: normalized,
         });
+        target.lastProviderText = updated.message ?? normalized;
       } else {
         const sent = await createMattermostPost(params.client, {
           channelId: params.channelId,
@@ -137,6 +175,7 @@ export function createMattermostDraftStream(params: {
           return false;
         }
         target.postId = postId;
+        target.lastProviderText = sent.message ?? normalized;
       }
       target.lastSentText = normalized;
       return true;
@@ -185,6 +224,8 @@ export function createMattermostDraftStream(params: {
     const pendingText = loop.takePending();
     const inFlightAtBoundary = loop.waitForInFlight();
     const sealed = currentGeneration;
+    const assistantText = sealed.latestAssistantText?.trim();
+    let publishedAssistantOffset = 0;
     const boundary = (async () => {
       try {
         await sealed.ready;
@@ -203,28 +244,97 @@ export function createMattermostDraftStream(params: {
           return;
         }
         if (sealed.postId) {
+          if (assistantText && (sealed.lastProviderText || sealed.lastSentText)) {
+            const publishedContent = sealed.lastProviderText ?? sealed.lastSentText;
+            // The existing preview remains visible if its lossless boundary edit fails.
+            trackPublishedAssistantPart({
+              messageId: sealed.postId,
+              content: publishedContent,
+            });
+            publishedAssistantOffset =
+              consumeMattermostPublishedChunk({
+                source: assistantText,
+                offset: 0,
+                chunk: publishedContent,
+              }) ?? 0;
+          }
+          let providerFirstChunk = sealed.lastProviderText ?? firstChunk;
           if (firstChunk !== sealed.lastSentText) {
-            await updateMattermostPost(params.client, sealed.postId, { message: firstChunk });
+            const updated = await updateMattermostPost(params.client, sealed.postId, {
+              message: firstChunk,
+            });
+            providerFirstChunk = updated.message ?? firstChunk;
+          }
+          if (assistantText) {
+            trackPublishedAssistantPart({
+              messageId: sealed.postId,
+              content: providerFirstChunk,
+            });
+            publishedAssistantOffset =
+              consumeMattermostPublishedChunk({
+                source: assistantText,
+                offset: 0,
+                chunk: providerFirstChunk,
+              }) ?? 0;
           }
         } else {
-          await createMattermostPost(params.client, {
+          const firstPost = await createMattermostPost(params.client, {
             channelId: params.channelId,
             message: firstChunk,
             rootId: params.rootId,
           });
+          const firstPostId = firstPost.id?.trim();
+          if (!firstPostId) {
+            throw new Error("missing post id from boundary create");
+          }
+          if (assistantText) {
+            const publishedContent = firstPost.message ?? firstChunk;
+            trackPublishedAssistantPart({
+              messageId: firstPostId,
+              content: publishedContent,
+            });
+            publishedAssistantOffset =
+              consumeMattermostPublishedChunk({
+                source: assistantText,
+                offset: 0,
+                chunk: publishedContent,
+              }) ?? 0;
+          }
         }
         for (const chunk of chunks.slice(1)) {
-          await createMattermostPost(params.client, {
+          const post = await createMattermostPost(params.client, {
             channelId: params.channelId,
             message: chunk,
             rootId: params.rootId,
           });
+          const postId = post.id?.trim();
+          if (!postId) {
+            throw new Error("missing post id from boundary create");
+          }
+          if (assistantText) {
+            const publishedContent = post.message ?? chunk;
+            trackPublishedAssistantPart({ messageId: postId, content: publishedContent });
+            publishedAssistantOffset =
+              consumeMattermostPublishedChunk({
+                source: assistantText,
+                offset: publishedAssistantOffset,
+                chunk: publishedContent,
+              }) ?? publishedAssistantOffset;
+          }
         }
-        const assistantText = sealed.latestAssistantText?.trim();
         if (assistantText) {
-          sealedAssistantTexts.push(assistantText);
+          sealedAssistantTexts.push({ text: assistantText, requiresBlockBoundary: true });
         }
       } catch (err) {
+        const publishedAssistantPrefix = assistantText?.slice(0, publishedAssistantOffset).trim();
+        if (publishedAssistantPrefix) {
+          // A later physical chunk failed after this exact source prefix became durable.
+          // Strip only that proven prefix; unlike a completed block, its suffix is inline.
+          sealedAssistantTexts.push({
+            text: publishedAssistantPrefix,
+            requiresBlockBoundary: false,
+          });
+        }
         params.warn?.(
           `mattermost stream preview boundary flush failed: ${err instanceof Error ? err.message : String(err)}`,
         );
@@ -272,32 +382,33 @@ export function createMattermostDraftStream(params: {
     await currentGeneration.ready;
   };
   const resolveFinalText = (text: string) => {
+    const publishedParts = [...publishedAssistantParts.values()];
     if (sealedAssistantTexts.length === 0) {
-      return { kind: "full" as const, text };
+      return { kind: "full" as const, text, publishedParts };
     }
 
     let remainingText = text.trim();
     for (const sealedText of sealedAssistantTexts) {
-      const completed = sealedText.trim();
+      const completed = sealedText.text.trim();
       if (!completed || !remainingText.startsWith(completed)) {
-        return { kind: "full" as const, text };
+        return { kind: "full" as const, text, publishedParts };
       }
       const suffix = remainingText.slice(completed.length);
       // Canonical assistant block aggregation uses newline separators. A plain-space
       // suffix can be a block-local final that merely shares the prior block's prefix.
-      if (suffix && !/^\r?\n/.test(suffix)) {
-        return { kind: "full" as const, text };
+      if (sealedText.requiresBlockBoundary && suffix && !/^\r?\n/.test(suffix)) {
+        return { kind: "full" as const, text, publishedParts };
       }
-      remainingText = suffix.replace(/^(?:\r?\n)+/, "");
+      remainingText = suffix.replace(sealedText.requiresBlockBoundary ? /^(?:\r?\n)+/ : /^\s+/, "");
     }
     const currentText = currentGeneration.latestAssistantText?.trim() ?? "";
     const remaining = remainingText.trim();
     if (currentText && !remaining.startsWith(currentText)) {
-      return { kind: "full" as const, text };
+      return { kind: "full" as const, text, publishedParts };
     }
     return remaining
-      ? { kind: "remaining" as const, text: remaining }
-      : { kind: "already-delivered" as const };
+      ? { kind: "remaining" as const, text: remaining, publishedParts }
+      : { kind: "already-delivered" as const, publishedParts };
   };
 
   params.log?.(`mattermost stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);

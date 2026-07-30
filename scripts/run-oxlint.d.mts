@@ -29,3 +29,11 @@ export function filterSparseMissingOxlintTargets(
  * Applies wrapper policy and runs oxlint with the final argument list.
  */
 export function main(argv?: string[], runtimeEnv?: NodeJS.ProcessEnv): Promise<void>;
+/**
+ * CLI entry: converts wrapper crashes into exit 1 and ends every failing run
+ * with a stable `[oxlint] FAILED (exit N)` final line.
+ */
+export function runOxlintCliEntry(
+  run?: () => Promise<void>,
+  log?: (message: unknown) => void,
+): Promise<void>;
