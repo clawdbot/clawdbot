@@ -39,4 +39,26 @@ describe("agents.defaults.mediaLocalRoots config", () => {
     }
     expect(result.issues.some((issue) => issue.path.includes("mediaLocalRoots"))).toBe(true);
   });
+
+  it("rejects relative mediaLocalRoots entries", () => {
+    const result = validateConfigObjectRaw({
+      agents: {
+        defaults: {
+          mediaLocalRoots: ["captures"],
+        },
+        entries: { main: { default: true } },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(
+      result.issues.some(
+        (issue) =>
+          issue.path.includes("mediaLocalRoots") &&
+          issue.message.includes("absolute paths or start with ~/"),
+      ),
+    ).toBe(true);
+  });
 });

@@ -272,6 +272,7 @@ export type AgentDefaultsConfig = {
   /**
    * Extra absolute (or `~/…`) directories outbound MEDIA/local-file delivery may read.
    * Merged into the shared agent-scoped media-root allowlist used by all channels.
+   * Relative paths are rejected; they must not resolve against the gateway cwd.
    */
   mediaLocalRoots?: string[];
   /**

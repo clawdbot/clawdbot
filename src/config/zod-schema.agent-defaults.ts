@@ -1,4 +1,5 @@
 // Defines Zod schema fragments for agent default configuration.
+import path from "node:path";
 import { z } from "zod";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
@@ -198,8 +199,20 @@ export const AgentDefaultsSchema = z
     /**
      * Extra absolute (or `~/…`) directories outbound MEDIA/local-file delivery may read.
      * Merged into the shared agent-scoped media-root allowlist used by all channels.
+     * Relative values are rejected — they must not resolve against the gateway cwd.
      */
-    mediaLocalRoots: z.array(z.string().trim().min(1)).optional(),
+    mediaLocalRoots: z
+      .array(
+        z
+          .string()
+          .trim()
+          .min(1)
+          .refine(
+            (value) => path.isAbsolute(value) || value === "~" || value.startsWith("~/"),
+            "mediaLocalRoots entries must be absolute paths or start with ~/",
+          ),
+      )
+      .optional(),
     imageMaxDimensionPx: z.number().int().positive().optional(),
     imageQuality: z.enum(["auto", "efficient", "balanced", "high"]).optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),

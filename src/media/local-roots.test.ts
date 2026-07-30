@@ -153,6 +153,25 @@ describe("local media roots", () => {
     expectNormalizedRootsContain(roots, [path.join(homeDir, "captures")]);
   });
 
+  it("skips relative mediaLocalRoots instead of resolving against cwd", () => {
+    const stateDir = path.join("/tmp", "openclaw-configured-media-roots-relative");
+    const cwdRelative = path.resolve("captures");
+    const roots = withStateDir(stateDir, () =>
+      getAgentScopedMediaLocalRoots(
+        {
+          agents: {
+            defaults: {
+              mediaLocalRoots: ["captures", "./snapshots"],
+            },
+          },
+        },
+        "ops",
+      ),
+    );
+    expect(roots).not.toContain(cwdRelative);
+    expect(roots.some((root) => root.endsWith(`${path.sep}captures`))).toBe(false);
+  });
+
   it("adds concrete parent roots for local media sources without widening to filesystem root", () => {
     const picturesDir =
       process.platform === "win32" ? "C:\\Users\\peter\\Pictures" : "/Users/peter/Pictures";

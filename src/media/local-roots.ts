@@ -59,7 +59,7 @@ export function getDefaultMediaLocalRoots(): readonly string[] {
   return buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
 }
 
-/** Normalizes configured media roots; skips empty / unresolved `~` prefixes. */
+/** Normalizes configured media roots; skips empty / relative / unresolved `~` prefixes. */
 function appendConfiguredMediaLocalRoots(
   roots: string[],
   configuredRoots: readonly string[] | undefined,
@@ -69,9 +69,13 @@ function appendConfiguredMediaLocalRoots(
     if (!trimmedRoot) {
       continue;
     }
+    // Keep the declared absolute-or-`~/` contract: never authorize via cwd-relative resolve.
+    if (!(path.isAbsolute(trimmedRoot) || trimmedRoot === "~" || trimmedRoot.startsWith("~/"))) {
+      continue;
+    }
     const expanded = trimmedRoot.startsWith("~") ? expandHomePrefix(trimmedRoot) : trimmedRoot;
     // expandHomePrefix leaves `~` intact when home is unknown — do not trust `<cwd>/~/…`.
-    if (expanded.startsWith("~")) {
+    if (expanded.startsWith("~") || !path.isAbsolute(expanded)) {
       continue;
     }
     const normalizedRoot = path.resolve(expanded);
