@@ -11,7 +11,7 @@ type TokenState = {
   hasAmbiguousAlternation: boolean;
   minLength: number;
   maxLength: number;
-  atoms: string[] | null;
+  paths: string[][] | null;
   signature: string;
 };
 
@@ -24,8 +24,8 @@ type ParseFrame = {
   branchMaxLength: number;
   altMinLength: number | null;
   altMaxLength: number | null;
-  branchAtoms: string[] | null;
-  alternativeAtoms: Array<string[] | null>;
+  branchPaths: string[][] | null;
+  alternativePaths: Array<string[][] | null>;
   branchSignatures: string[];
   alternativeSignatures: string[][];
 };
@@ -39,6 +39,9 @@ type PatternToken =
 
 const SAFE_REGEX_CACHE_MAX = 256;
 const SAFE_REGEX_TEST_WINDOW = 2048;
+// Bound recursive branch expansion; overflow becomes unknown and therefore unsafe
+// when an enclosing repetition needs an overlap verdict.
+const MAX_ALTERNATIVE_PATHS = 64;
 export type SafeRegexRejectReason = "empty" | "unsafe-nested-repetition" | "invalid-regex";
 
 export type SafeRegexCompileResult =
@@ -67,8 +70,8 @@ function createParseFrame(): ParseFrame {
     branchMaxLength: 0,
     altMinLength: null,
     altMaxLength: null,
-    branchAtoms: [],
-    alternativeAtoms: [],
+    branchPaths: [[]],
+    alternativePaths: [],
     branchSignatures: [],
     alternativeSignatures: [],
   };
@@ -89,7 +92,7 @@ function multiplyLength(length: number, factor: number): number {
 }
 
 function recordAlternative(frame: ParseFrame): void {
-  frame.alternativeAtoms.push(frame.branchAtoms);
+  frame.alternativePaths.push(frame.branchPaths);
   frame.alternativeSignatures.push(frame.branchSignatures);
   if (frame.altMinLength === null || frame.altMaxLength === null) {
     frame.altMinLength = frame.branchMinLength;
@@ -270,25 +273,27 @@ function atomsMayOverlap(left: string, right: string, flags: string): boolean {
   }
 }
 
-function alternativesOverlap(alternatives: Array<string[] | null>, flags: string): boolean {
+function pathsMayOverlap(leftPaths: string[][], rightPaths: string[][], flags: string): boolean {
+  return leftPaths.some((left) =>
+    rightPaths.some(
+      (right) =>
+        left.length === right.length &&
+        left.every((atom, index) =>
+          atomsMayOverlap(atom, expectDefined(right[index], "equal-length path atom"), flags),
+        ),
+    ),
+  );
+}
+
+function alternativesOverlap(alternatives: Array<string[][] | null>, flags: string): boolean {
   for (let leftIndex = 0; leftIndex < alternatives.length; leftIndex += 1) {
     const left = alternatives[leftIndex];
     if (!left) {
-      continue;
+      return true;
     }
     for (let rightIndex = leftIndex + 1; rightIndex < alternatives.length; rightIndex += 1) {
       const right = alternatives[rightIndex];
-      if (
-        right &&
-        left.length === right.length &&
-        left.every((atom, index) =>
-          atomsMayOverlap(
-            atom,
-            expectDefined(right[index], "equal-length alternative atom"),
-            flags,
-          ),
-        )
-      ) {
+      if (!right || pathsMayOverlap(left, right, flags)) {
         return true;
       }
     }
@@ -357,8 +362,9 @@ function readQuantifier(source: string, index: number): QuantifierRead | null {
   return { consumed: i - index, minRepeat, maxRepeat };
 }
 
-function tokenizePattern(source: string): PatternToken[] {
+function tokenizePattern(source: string, flags: string): PatternToken[] {
   const tokens: PatternToken[] = [];
+  const unicodeAware = flags.includes("u") || flags.includes("v");
 
   for (let i = 0; i < source.length; i += 1) {
     const ch = source[i];
@@ -367,14 +373,17 @@ function tokenizePattern(source: string): PatternToken[] {
       let atomEnd = i + 2;
       if (
         (source[i + 1] === "p" || source[i + 1] === "P" || source[i + 1] === "u") &&
+        unicodeAware &&
         source[i + 2] === "{"
       ) {
         const closing = source.indexOf("}", i + 3);
         atomEnd = closing < 0 ? atomEnd : closing + 1;
       } else if (source[i + 1] === "u") {
-        atomEnd = Math.min(source.length, i + 6);
+        const hex = source.slice(i + 2, i + 6);
+        atomEnd = /^[\da-f]{4}$/i.test(hex) ? i + 6 : i + 2;
       } else if (source[i + 1] === "x") {
-        atomEnd = Math.min(source.length, i + 4);
+        const hex = source.slice(i + 2, i + 4);
+        atomEnd = /^[\da-f]{2}$/i.test(hex) ? i + 4 : i + 2;
       } else if (source[i + 1] === "k" && source[i + 2] === "<") {
         const closing = source.indexOf(">", i + 3);
         atomEnd = closing < 0 ? atomEnd : closing + 1;
@@ -398,7 +407,7 @@ function tokenizePattern(source: string): PatternToken[] {
           break;
         }
       }
-      tokens.push({ kind: "simple-token", source: source.slice(start, i + 1) });
+      tokens.push({ kind: "simple-token", source: source.slice(start, i + 1), zeroWidth: false });
       continue;
     }
 
@@ -441,8 +450,9 @@ function tokenizePattern(source: string): PatternToken[] {
       continue;
     }
 
-    const codePoint = expectDefined(source.codePointAt(i), "pattern code point");
-    const atom = String.fromCodePoint(codePoint);
+    const atom = unicodeAware
+      ? String.fromCodePoint(expectDefined(source.codePointAt(i), "pattern code point"))
+      : source.charAt(i);
     tokens.push({
       kind: "simple-token",
       source: atom,
@@ -468,10 +478,14 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
     }
     frame.branchMinLength = addLength(frame.branchMinLength, token.minLength);
     frame.branchMaxLength = addLength(frame.branchMaxLength, token.maxLength);
-    if (frame.branchAtoms && token.atoms) {
-      frame.branchAtoms.push(...token.atoms);
+    if (frame.branchPaths && token.paths) {
+      const tokenPaths = token.paths;
+      const paths = frame.branchPaths.flatMap((left) =>
+        tokenPaths.map((right) => left.concat(right)),
+      );
+      frame.branchPaths = paths.length <= MAX_ALTERNATIVE_PATHS ? paths : null;
     } else {
-      frame.branchAtoms = null;
+      frame.branchPaths = null;
     }
     frame.branchSignatures.push(token.signature);
   };
@@ -482,7 +496,7 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
       hasAmbiguousAlternation: zeroWidth,
       minLength: zeroWidth ? 0 : 1,
       maxLength: zeroWidth ? 0 : 1,
-      atoms: zeroWidth ? null : [source],
+      paths: zeroWidth ? [[]] : [[source]],
       signature: source,
     });
   };
@@ -512,6 +526,13 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
         const groupMaxLength = frame.hasAlternation
           ? (frame.altMaxLength ?? 0)
           : frame.branchMaxLength;
+        const alternativePaths = frame.alternativePaths.flatMap((paths) => paths ?? []);
+        const groupPaths = frame.hasAlternation
+          ? frame.alternativePaths.every((paths) => paths !== null) &&
+            alternativePaths.length <= MAX_ALTERNATIVE_PATHS
+            ? alternativePaths
+            : null
+          : frame.branchPaths;
         emitToken({
           containsRepetition: frame.containsRepetition,
           hasAmbiguousAlternation:
@@ -520,11 +541,11 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
               frame.altMinLength !== null &&
               frame.altMaxLength !== null &&
               (frame.altMinLength !== frame.altMaxLength ||
-                alternativesOverlap(frame.alternativeAtoms, flags) ||
+                alternativesOverlap(frame.alternativePaths, flags) ||
                 alternativesRepeatExactly(frame.alternativeSignatures))),
           minLength: groupMinLength,
           maxLength: groupMaxLength,
-          atoms: frame.hasAlternation ? null : frame.branchAtoms,
+          paths: groupPaths,
           signature: JSON.stringify(
             frame.hasAlternation ? frame.alternativeSignatures : frame.branchSignatures,
           ),
@@ -539,7 +560,7 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
       recordAlternative(frame);
       frame.branchMinLength = 0;
       frame.branchMaxLength = 0;
-      frame.branchAtoms = [];
+      frame.branchPaths = [[]];
       frame.branchSignatures = [];
       frame.lastToken = null;
       continue;
@@ -565,9 +586,9 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
         ? Number.POSITIVE_INFINITY
         : multiplyLength(previousToken.maxLength, token.quantifier.maxRepeat);
     previousToken.containsRepetition = true;
-    previousToken.atoms = null;
+    previousToken.paths = null;
     frame.containsRepetition = true;
-    frame.branchAtoms = null;
+    frame.branchPaths = null;
     frame.branchMinLength = frame.branchMinLength - previousMinLength + previousToken.minLength;
 
     const branchMaxBase =
@@ -606,7 +627,7 @@ export function testRegexWithBoundedInput(
 function hasNestedRepetition(source: string, flags: string): boolean {
   // Conservative parser: tokenize first, then check if repeated tokens/groups are repeated again.
   // Non-goal: complete regex AST support; keep strict enough for config safety checks.
-  return analyzeTokensForNestedRepetition(tokenizePattern(source), flags);
+  return analyzeTokensForNestedRepetition(tokenizePattern(source, flags), flags);
 }
 
 export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexCompileResult {
