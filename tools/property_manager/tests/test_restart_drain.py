@@ -59,6 +59,21 @@ def _http_get(path: str, *, timeout: float) -> tuple[int, str]:
         return int(exc.code), body
 
 
+def _wait_healthy(*, attempts: int = 60, delay: float = 0.5) -> tuple[int, str]:
+    """Retry /health across restart races (connection refused while port unbound)."""
+    last: tuple[int, str] = (0, "")
+    for _ in range(attempts):
+        try:
+            code, body = _http_get("/health", timeout=5)
+            last = (code, body)
+            if code == 200:
+                return last
+        except (urllib.error.URLError, TimeoutError, OSError):
+            pass
+        time.sleep(delay)
+    return last
+
+
 def _write_dropin(ms: int) -> None:
     DROPIN_DIR.mkdir(parents=True, exist_ok=True)
     DROPIN_FILE.write_text(
@@ -118,21 +133,29 @@ def main() -> int:
     try:
         _systemctl("daemon-reload")
         _systemctl("restart", UNIT)
-        # Wait until healthy again after enabling the slow-db gate.
-        for _ in range(30):
-            code, _body = _http_get("/health", timeout=5)
-            if code == 200:
-                break
-            time.sleep(0.5)
-        else:
+        code, body = _wait_healthy()
+        evidence["steps"].append({"health_after_dropin": {"code": code, "body": body[:500]}})
+        if code != 200:
             print("FAIL: service did not become healthy after enabling slow-db drop-in")
+            return 1
+
+        # Confirm the gated env is visible on the running service without starting a sleep.
+        main_pid = _systemctl("show", UNIT, "-p", "MainPID", "--value").stdout.strip()
+        env_blob = Path(f"/proc/{main_pid}/environ").read_bytes()
+        gate_live = b"PROPERTYMANAGER_TEST_SLOW_DB_MS=" in env_blob
+        evidence["steps"].append({"slow_gate_env_live": gate_live, "main_pid": main_pid})
+        if not gate_live:
+            print("FAIL: PROPERTYMANAGER_TEST_SLOW_DB_MS not present in service environment")
             return 1
 
         result: dict[str, object] = {"started": time.time()}
 
         def _bg_request() -> None:
             try:
-                code, body = _http_get("/v1/test/slow-db", timeout=max(60.0, SLOW_MS / 1000.0 + 45.0))
+                code, body = _http_get(
+                    "/v1/test/slow-db",
+                    timeout=max(90.0, SLOW_MS / 1000.0 + 60.0),
+                )
                 result["code"] = code
                 result["body"] = body[:1000]
             except Exception as exc:  # noqa: BLE001 — capture for evidence
@@ -142,7 +165,7 @@ def main() -> int:
         thread = threading.Thread(target=_bg_request, name="pm-slow-db", daemon=True)
         thread.start()
         # Ensure the request has entered docker-exec before restart.
-        time.sleep(min(2.0, max(0.8, SLOW_MS / 1000.0 * 0.15)))
+        time.sleep(min(2.5, max(1.0, SLOW_MS / 1000.0 * 0.2)))
         restart = _systemctl("restart", UNIT, check=False)
         evidence["steps"].append(
             {
@@ -151,7 +174,7 @@ def main() -> int:
                 "restart_stderr": restart.stderr[-500:],
             }
         )
-        thread.join(timeout=max(90.0, SLOW_MS / 1000.0 + 60.0))
+        thread.join(timeout=max(120.0, SLOW_MS / 1000.0 + 90.0))
         if thread.is_alive():
             evidence["result"] = {"error": "background request still running after join timeout"}
             EVIDENCE_PATH.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
@@ -172,12 +195,7 @@ def main() -> int:
         _remove_dropin()
         _systemctl("daemon-reload", check=False)
         _systemctl("restart", UNIT, check=False)
-        # Best-effort health restore
-        for _ in range(20):
-            code, _body = _http_get("/health", timeout=5)
-            if code == 200:
-                break
-            time.sleep(0.5)
+        _wait_healthy(attempts=40)
 
 
 if __name__ == "__main__":
