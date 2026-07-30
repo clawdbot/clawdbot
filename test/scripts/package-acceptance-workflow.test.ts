@@ -2587,7 +2587,7 @@ describe("package artifact reuse", () => {
     expect(releaseJob.if).toContain('contains(fromJSON(\'["all","qa","qa-live"]\')');
     expect(releaseJob.with).toMatchObject({
       expected_sha: "${{ needs.resolve_target.outputs.revision }}",
-      fail_fast: "${{ needs.resolve_target.outputs.fail_fast }}",
+      fail_fast: "${{ fromJSON(needs.resolve_target.outputs.fail_fast) }}",
       run_matrix: true,
     });
     for (const lane of ["mock_parity", "telegram", "discord", "whatsapp", "slack"]) {

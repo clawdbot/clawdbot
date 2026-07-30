@@ -693,7 +693,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       type: "boolean",
     });
     expect(releaseChecksWorkflow.jobs.qa_live_release_checks.with.fail_fast).toBe(
-      "${{ needs.resolve_target.outputs.fail_fast }}",
+      "${{ fromJSON(needs.resolve_target.outputs.fail_fast) }}",
     );
     const qaLiveSource = readFileSync(".github/workflows/qa-live-transports-convex.yml", "utf8");
     expect(qaLiveSource).toContain('if [[ "$FAIL_FAST" == "true" ]]');

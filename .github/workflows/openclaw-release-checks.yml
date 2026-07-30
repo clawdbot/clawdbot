@@ -1652,7 +1652,7 @@ jobs:
       ref: ${{ needs.resolve_target.outputs.revision }}
       expected_sha: ${{ needs.resolve_target.outputs.revision }}
       run_matrix: true
-      fail_fast: ${{ needs.resolve_target.outputs.fail_fast }}
+      fail_fast: ${{ fromJSON(needs.resolve_target.outputs.fail_fast) }}
 
   # The dispatched child owns Telegram evidence/status artifacts; this blocking job
   # carries its exact conclusion into the parent summary without copying secrets or artifacts.
