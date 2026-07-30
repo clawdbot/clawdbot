@@ -292,6 +292,161 @@ describe("signal groups schema", () => {
   });
 });
 
+describe("managed-native httpPort inference from url", () => {
+  it("infers httpPort from url when absent on a loopback address", () => {
+    const res = SignalConfigSchema.safeParse({
+      transport: {
+        kind: "managed-native",
+        url: "http://127.0.0.1:8082",
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.transport?.httpPort).toBe(8082);
+    }
+  });
+
+  it("infers httpPort from localhost url", () => {
+    const res = SignalConfigSchema.safeParse({
+      transport: {
+        kind: "managed-native",
+        url: "http://localhost:9090",
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.transport?.httpPort).toBe(9090);
+    }
+  });
+
+  it("infers httpPort from an IPv6 loopback url", () => {
+    const res = SignalConfigSchema.safeParse({
+      transport: {
+        kind: "managed-native",
+        url: "http://[::1]:8181",
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.transport?.httpPort).toBe(8181);
+    }
+  });
+
+  it("does not infer httpPort when it is explicitly set", () => {
+    const res = SignalConfigSchema.safeParse({
+      transport: {
+        kind: "managed-native",
+        url: "http://127.0.0.1:8082",
+        httpPort: 9090,
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      // Explicit httpPort takes precedence
+      expect(res.data.transport?.httpPort).toBe(9090);
+    }
+  });
+
+  it("does not infer httpPort for default port 8080", () => {
+    const res = SignalConfigSchema.safeParse({
+      transport: {
+        kind: "managed-native",
+        url: "http://127.0.0.1:8080",
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.transport?.httpPort).toBeUndefined();
+    }
+  });
+
+  it("does not infer httpPort for non-loopback URLs", () => {
+    const res = SignalConfigSchema.safeParse({
+      transport: {
+        kind: "managed-native",
+        url: "http://signal-proxy:8082",
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.transport?.httpPort).toBeUndefined();
+    }
+  });
+
+  it("does not infer httpPort when url has no explicit port", () => {
+    const res = SignalConfigSchema.safeParse({
+      transport: {
+        kind: "managed-native",
+        url: "http://127.0.0.1",
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.transport?.httpPort).toBeUndefined();
+    }
+  });
+
+  it("infers httpPort for per-account managed-native transports", () => {
+    const res = SignalConfigSchema.safeParse({
+      accounts: {
+        work: {
+          transport: {
+            kind: "managed-native",
+            url: "http://127.0.0.1:8082",
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.accounts?.work?.transport?.httpPort).toBe(8082);
+    }
+  });
+
+  it("preserves explicitly set httpPort on per-account transports", () => {
+    const res = SignalConfigSchema.safeParse({
+      accounts: {
+        work: {
+          transport: {
+            kind: "managed-native",
+            url: "http://127.0.0.1:8082",
+            httpPort: 9090,
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.accounts?.work?.transport?.httpPort).toBe(9090);
+    }
+  });
+
+  it("does not infer httpPort for non-managed-native transports", () => {
+    const res = SignalConfigSchema.safeParse({
+      transport: {
+        kind: "external-native",
+        url: "http://127.0.0.1:8082",
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      // external-native uses url only; httpPort is not a field on external-native
+      expect(res.data.transport?.kind).toBe("external-native");
+      expect("httpPort" in (res.data.transport ?? {})).toBe(false);
+    }
+  });
+});
+
 describe("Signal post-core update schema", () => {
   const legacyConfig = {
     account: "+15555550123",

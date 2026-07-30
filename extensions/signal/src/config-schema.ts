@@ -45,6 +45,110 @@ const SignalTransportUrlSchema = z
     "Expected http:// or https:// URL without embedded credentials",
   );
 
+/** Loopback hostnames where a managed-native daemon's bind port matches the URL endpoint. */
+const MANAGED_NATIVE_LOOPBACK_HOSTS = new Set([
+  "localhost",
+  "127.0.0.1",
+  "::1",
+]);
+const DEFAULT_MANAGED_NATIVE_PORT = 8080;
+
+/**
+ * Infer {@code httpPort} from a managed-native transport's {@code url} when
+ * {@code httpPort} is absent and the URL points to a loopback address with an
+ * explicit non-default port. This ensures the managed daemon binds to the same
+ * port the client probes, matching the inference already done in the legacy
+ * config migration path (buildManagedNativeTransport in config-compat.ts).
+ */
+function inferManagedNativeTransportPort(
+  transport: Record<string, unknown>,
+): Record<string, unknown> {
+  if (transport.httpPort !== undefined) {
+    return transport;
+  }
+  const url = transport.url;
+  if (typeof url !== "string") {
+    return transport;
+  }
+  try {
+    const parsed = new URL(url);
+    if (!parsed.port) {
+      return transport;
+    }
+    const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    if (!MANAGED_NATIVE_LOOPBACK_HOSTS.has(hostname)) {
+      return transport;
+    }
+    const port = Number.parseInt(parsed.port, 10);
+    if (
+      !Number.isInteger(port) ||
+      port < 1 ||
+      port > 65_535 ||
+      port === DEFAULT_MANAGED_NATIVE_PORT
+    ) {
+      return transport;
+    }
+    return { ...transport, httpPort: port };
+  } catch {
+    // Invalid URL — let downstream schema validation surface the error.
+    return transport;
+  }
+}
+
+/**
+ * Apply {@link inferManagedNativeTransportPort} to every managed-native
+ * transport in the signal config (root-level and per-account).
+ */
+function applyInferManagedNativeTransportPort(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+  let modified = false;
+  const next: Record<string, unknown> = {};
+
+  // Root-level transport
+  if (isRecord(value.transport) && value.transport.kind === "managed-native") {
+    const updated = inferManagedNativeTransportPort(value.transport);
+    if (updated !== value.transport) {
+      next.transport = updated;
+      modified = true;
+    }
+  }
+
+  // Per-account transports
+  if (isRecord(value.accounts)) {
+    const accounts: Record<string, unknown> = {};
+    let accountsModified = false;
+    for (const [accountId, account] of Object.entries(value.accounts)) {
+      if (!isRecord(account)) {
+        accounts[accountId] = account;
+        continue;
+      }
+      if (
+        isRecord(account.transport) &&
+        account.transport.kind === "managed-native"
+      ) {
+        const updated = inferManagedNativeTransportPort(account.transport);
+        if (updated !== account.transport) {
+          accounts[accountId] = { ...account, transport: updated };
+          accountsModified = true;
+          continue;
+        }
+      }
+      accounts[accountId] = account;
+    }
+    if (accountsModified) {
+      next.accounts = accounts;
+      modified = true;
+    }
+  }
+
+  if (!modified) {
+    return value;
+  }
+  return { ...value, ...next };
+}
+
 function projectSignalConfigForUpdateValidation(value: unknown): unknown {
   if (process.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1" || !isRecord(value)) {
     return value;
@@ -244,7 +348,7 @@ const CanonicalSignalConfigSchema = SignalConfigSchemaBase.superRefine((value, c
 // During updater-owned migration, validate a projected canonical shape while doctor repairs the
 // untouched source config. Normal runtime validation remains strict and reads only current keys.
 export const SignalConfigSchema = z.preprocess(
-  projectSignalConfigForUpdateValidation,
+  (value) => projectSignalConfigForUpdateValidation(applyInferManagedNativeTransportPort(value)),
   CanonicalSignalConfigSchema,
 );
 
