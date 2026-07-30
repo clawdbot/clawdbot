@@ -1,5 +1,3 @@
-// Delivers ACP turn results through reply payload routing.
-import crypto from "node:crypto";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -23,8 +21,8 @@ import {
 } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
+import { createAcpOperationalReplyPolicyApplier } from "./dispatch-acp-operational-policy.js";
 import {
-  applyOperationalReplyPolicy,
   isOperationalReplyPayload,
   markOperationalReplyPolicyDelivered,
   resolveOperationalReplyPolicy,
@@ -234,38 +232,6 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
   const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
   const deliverySessionKey = normalizeOptionalString(params.sessionKey) ?? params.ctx.SessionKey;
-  const operationalReplySourceEventKey =
-    normalizeOptionalString(params.ctx.MessageSidFull) ??
-    normalizeOptionalString(params.ctx.MessageSid) ??
-    normalizeOptionalString(params.ctx.AmbientTranscriptMessageId) ??
-    normalizeOptionalString(params.ctx.MessageSidLast) ??
-    normalizeOptionalString(params.ctx.MessageSidFirst) ??
-    normalizeOptionalString(params.runId) ??
-    crypto.randomUUID();
-  const applyAcpOperationalReplyPolicy = async (payload: ReplyPayload) =>
-    await applyOperationalReplyPolicy({
-      abortSignal: params.abortSignal,
-      cfg: params.cfg,
-      payload,
-      explicitCommandTurn: false,
-      sendPolicyDenied: params.sendPolicyDenied === true,
-      sourceSessionKey: deliverySessionKey,
-      sourceEventKey: operationalReplySourceEventKey,
-      sourceChannel: params.originatingChannel ?? params.ttsChannel ?? directChannel,
-      sourceConversationKey: JSON.stringify({
-        accountId: params.originatingAccountId ?? resolvedAccountId,
-        channel: params.originatingChannel ?? params.ttsChannel ?? directChannel,
-        from: params.ctx.From,
-        threadId: params.originatingThreadId,
-        to: params.originatingTo ?? params.ctx.To,
-      }),
-      provider: params.ctx.Provider,
-      surface: params.ctx.Surface,
-      chatType: params.originatingChatType ?? params.ctx.ChatType,
-      inboundEventKind: params.ctx.InboundEventKind,
-      messageKey: params.ctx.MessageSidFull ?? params.ctx.MessageSid ?? params.runId,
-      logPrefix: "dispatch-acp",
-    });
   const explicitAccountId =
     normalizeOptionalString(params.originatingAccountId) ??
     normalizeOptionalString(params.ctx.AccountId);
@@ -274,6 +240,12 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     routedChannel ?? directChannel,
     explicitAccountId,
   );
+  const applyAcpOperationalReplyPolicy = createAcpOperationalReplyPolicyApplier({
+    ...params,
+    deliverySessionKey,
+    directChannel,
+    resolvedAccountId,
+  });
   const routedReplyDelivery = params.originatingChannel
     ? createReplyDeliveryContext(
         resolveReplyToMode(

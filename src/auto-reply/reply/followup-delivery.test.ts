@@ -11,6 +11,7 @@ import type { ReplyPayload } from "../types.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
+import { createFollowupAccounting as createAccounting } from "./followup-delivery.test-support.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 
 const deliveryState = vi.hoisted(() => ({
@@ -418,6 +419,15 @@ function createTurn(overrides: Partial<AdmittedFollowupTurn> = {}): AdmittedFoll
   };
 }
 
+const roomEventQueued = {
+  ...createTurn().queued,
+  currentInboundEventKind: "room_event" as const,
+};
+
+function createRoomEventTurn(config: OpenClawConfig = {}) {
+  return createTurn({ config, queued: roomEventQueued });
+}
+
 function createSettledExecution(finalText = ""): AgentTurnExecutionResult {
   return {
     runId: "run-1",
@@ -436,30 +446,9 @@ function createSettledExecution(finalText = ""): AgentTurnExecutionResult {
   };
 }
 
-function createAccounting(
-  payloadArray: ReplyPayload[] = [],
-  overrides: Record<string, unknown> = {},
-) {
-  return {
-    payloadArray,
-    providerUsed: "anthropic",
-    modelUsed: "claude",
-    preserveUserFacingSessionState: false,
-    replyUsageState: {},
-    usage: undefined,
-    terminalFailurePayload: undefined,
-    ...overrides,
-  } as never;
-}
-
 describe("resolveFollowupDeliveryDecision", () => {
   it("keeps ambient room-event finals silent", () => {
-    const turn = createTurn({
-      queued: {
-        ...createTurn().queued,
-        currentInboundEventKind: "room_event",
-      },
-    });
+    const turn = createRoomEventTurn();
 
     expect(
       resolveFollowupDeliveryDecision({
@@ -470,18 +459,12 @@ describe("resolveFollowupDeliveryDecision", () => {
   });
 
   it("keeps room-event operational notices available to redirect policy", () => {
-    const turn = createTurn({
-      config: {
-        messages: {
-          operationalReplies: {
-            policy: "redirect",
-            redirectSessionKey: "agent:main:operator",
-          },
+    const turn = createRoomEventTurn({
+      messages: {
+        operationalReplies: {
+          policy: "redirect",
+          redirectSessionKey: "agent:main:operator",
         },
-      },
-      queued: {
-        ...createTurn().queued,
-        currentInboundEventKind: "room_event",
       },
     });
     const notice = markOperationalReplyPayloadForSourceSuppressionDelivery({
@@ -499,18 +482,12 @@ describe("resolveFollowupDeliveryDecision", () => {
   });
 
   it("keeps late compaction notices available to room-event redirect policy", () => {
-    const turn = createTurn({
-      config: {
-        messages: {
-          operationalReplies: {
-            policy: "redirect",
-            redirectSessionKey: "agent:main:operator",
-          },
+    const turn = createRoomEventTurn({
+      messages: {
+        operationalReplies: {
+          policy: "redirect",
+          redirectSessionKey: "agent:main:operator",
         },
-      },
-      queued: {
-        ...createTurn().queued,
-        currentInboundEventKind: "room_event",
       },
     });
 
@@ -529,15 +506,9 @@ describe("resolveFollowupDeliveryDecision", () => {
   });
 
   it("keeps marked command replies visible in room events under silent policy", () => {
-    const turn = createTurn({
-      config: {
-        messages: {
-          operationalReplies: { policy: "silent" },
-        },
-      },
-      queued: {
-        ...createTurn().queued,
-        currentInboundEventKind: "room_event",
+    const turn = createRoomEventTurn({
+      messages: {
+        operationalReplies: { policy: "silent" },
       },
     });
     const commandReply = markCommandReplyForDelivery({
@@ -555,12 +526,7 @@ describe("resolveFollowupDeliveryDecision", () => {
   });
 
   it("does not append an ambient compaction notice beside a room-event command reply", () => {
-    const turn = createTurn({
-      queued: {
-        ...createTurn().queued,
-        currentInboundEventKind: "room_event",
-      },
-    });
+    const turn = createRoomEventTurn();
     const commandReply = markCommandReplyForDelivery({ text: "command result" }) as ReplyPayload;
 
     expect(

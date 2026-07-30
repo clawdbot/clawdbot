@@ -5,7 +5,6 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { isAskUserPromptPending } from "../../agents/tools/ask-user-tool.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
-import type { BlockReplyContext } from "../get-reply-options.types.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -206,12 +205,10 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       return;
                     }
                     markInboundDedupeReplayUnsafe();
-                    // Buffered commentary preceded this tool; land it before the summary.
                     await flushPendingCommentaryProgress();
                     // When the operator opts into messages.suppressToolErrors, never
                     // surface tool-error tool-result payloads as channel progress,
-                    // regardless of source delivery mode. payloads.ts already drops
-                    // the warning text; this drops the visible progress delivery too.
+                    // regardless of source mode; payloads.ts already drops the warning text.
                     if (
                       payload.isError === true &&
                       replyConfig.messages?.suppressToolErrors === true
@@ -485,7 +482,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   }
                   await maybeSendWorkingStatus(label);
                 },
-                onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
+                onBlockReply: (payload: ReplyPayload, context) => {
                   markProgress();
                   const run = async () => {
                     if (isDispatchOperationAborted()) {
@@ -500,8 +497,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     }
                     // Buffered commentary preceded this block; deliver it first.
                     await flushPendingCommentaryProgress();
-                    // Durable reasoning is a channel-owned lane; generic channels
-                    // keep the historical suppression unless they explicitly opt in.
+                    // Durable reasoning needs an explicit channel-owned lane.
                     if (payload.isReasoning === true && !reasoningPayloadsEnabled) {
                       return;
                     }

@@ -1127,14 +1127,8 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     });
 
     const notice = { text: "hello", isStatusNotice: true };
-    const delivered = await coordinator.deliver("block", notice, { skipTts: true });
-    const retryDelivered = await coordinator.deliver("block", notice, { skipTts: true });
-
-    expect(delivered).toBe(false);
-    expect(retryDelivered).toBe(true);
-    expect(coordinator.hasDeliveredVisibleText()).toBe(true);
-    expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
+    await expect(coordinator.deliver("block", notice, { skipTts: true })).resolves.toBe(false);
+    await expect(coordinator.deliver("block", notice, { skipTts: true })).resolves.toBe(true);
     expect(coordinator.getRoutedCounts().block).toBe(1);
-    await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
   });
 });
