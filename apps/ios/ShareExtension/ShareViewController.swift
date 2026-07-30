@@ -297,6 +297,7 @@ final class ShareViewController: UIViewController {
         var attachmentSummary = ShareAttachmentSummary()
         var attachmentError: ShareImageProcessor.ProcessError?
         let maxImageAttachments = 3
+        var providers: [NSItemProvider] = []
 
         for item in items {
             if title == nil {
@@ -305,41 +306,50 @@ final class ShareViewController: UIViewController {
             if attributedContentText == nil {
                 attributedContentText = item.attributedContentText?.string
             }
+            providers.append(contentsOf: item.attachments ?? [])
+        }
 
-            for provider in item.attachments ?? [] {
-                let providerURL = sharedURL == nil ? await self.loadURL(from: provider) : nil
-                let providerText = sharedText == nil ? await self.loadText(from: provider) : nil
-                if let providerURL {
-                    sharedURL = providerURL
-                }
-                if let providerText {
-                    sharedText = providerText
-                }
+        var providersWithLoadedContent = Set<ObjectIdentifier>()
+        for provider in providers {
+            guard sharedURL == nil else { break }
+            guard let providerURL = await self.loadURL(from: provider) else { continue }
+            sharedURL = providerURL
+            providersWithLoadedContent.insert(ObjectIdentifier(provider))
+        }
 
-                if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
-                    attachmentSummary.selectedImageCount += 1
-                    if attachments.count < maxImageAttachments, attachmentError == nil {
-                        do {
-                            let attachment = try await self.loadImageAttachment(
-                                from: provider,
-                                index: attachments.count)
-                            attachments.append(attachment)
-                        } catch let error as ShareImageProcessor.ProcessError {
-                            attachmentError = error
-                        } catch {
-                            attachmentError = .encodeFailed
-                        }
+        for provider in providers {
+            guard sharedText == nil else { break }
+            guard let providerText = await self.loadText(from: provider) else { continue }
+            providersWithLoadedContent.insert(ObjectIdentifier(provider))
+            sharedText = SharePayloadNormalizer.distinctProviderText(
+                providerText,
+                sharedURL: sharedURL)
+        }
+
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+                attachmentSummary.selectedImageCount += 1
+                if attachments.count < maxImageAttachments, attachmentError == nil {
+                    do {
+                        let attachment = try await self.loadImageAttachment(
+                            from: provider,
+                            index: attachments.count)
+                        attachments.append(attachment)
+                    } catch let error as ShareImageProcessor.ProcessError {
+                        attachmentError = error
+                    } catch {
+                        attachmentError = .encodeFailed
                     }
-                } else if provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
-                    attachmentSummary.videoCount += 1
-                } else if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-                    attachmentSummary.fileCount += 1
-                } else {
-                    // UTI conformance only promises a representation exists; count it as handled
-                    // only after the provider successfully delivers content we can send.
-                    attachmentSummary.recordUnclassifiedProvider(
-                        didLoadContent: providerURL != nil || providerText != nil)
                 }
+            } else if provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
+                attachmentSummary.videoCount += 1
+            } else if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                attachmentSummary.fileCount += 1
+            } else {
+                // UTI conformance only promises a representation exists; count it as handled
+                // only after the provider successfully delivers content we can send.
+                attachmentSummary.recordUnclassifiedProvider(
+                    didLoadContent: providersWithLoadedContent.contains(ObjectIdentifier(provider)))
             }
         }
         attachmentSummary.acceptedImageCount = attachments.count
