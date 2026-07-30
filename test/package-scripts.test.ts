@@ -257,4 +257,10 @@ describe("package scripts", () => {
       "src/agents/bash-tools.exec.script-preflight.test.ts",
     );
   });
+
+  it("runs Windows-only exec allowlist matching coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/infra/exec-allowlist-pattern.test.ts",
+    );
+  });
 });

@@ -85,4 +85,16 @@ describe("detectChangedScope Windows routing", () => {
       });
     }
   });
+
+  it("routes exec allowlist matcher changes and Windows-only coverage to Windows", () => {
+    for (const allowlistPath of [
+      "src/infra/exec-allowlist-pattern.ts",
+      "src/infra/exec-allowlist-pattern.test.ts",
+    ]) {
+      expect(detectChangedScope([allowlistPath]), allowlistPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
 });
