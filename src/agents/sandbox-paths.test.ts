@@ -42,6 +42,7 @@ async function withManagedMediaRoot<T>(run: (ctx: { stateDir: string }) => Promi
     return await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       await fs.mkdir(path.join(stateDir, "media", "outbound"), { recursive: true });
       await fs.mkdir(path.join(stateDir, "media", "tool-image-generation"), { recursive: true });
+      await fs.mkdir(path.join(stateDir, "media", "file-transfer"), { recursive: true });
       return await run({ stateDir });
     });
   } finally {
@@ -267,6 +268,12 @@ describe("resolveSandboxedMediaSource", () => {
     {
       name: "managed tool media",
       relative: path.join("media", "tool-image-generation", "generated.png"),
+    },
+    {
+      // file_fetch/dir_fetch write into FILE_TRANSFER_SUBDIR, so the subdir has
+      // to stay in the managed set or sandboxed replies drop those attachments.
+      name: "managed file-transfer media",
+      relative: path.join("media", "file-transfer", "receipt.png"),
     },
   ])("allows $name outside the sandbox root", async ({ relative }) => {
     await withManagedMediaRoot(async ({ stateDir }) => {
