@@ -33,6 +33,12 @@ type GuardedSessionManager = SessionManager & {
   flushPendingToolResults?: () => void;
   /** Clear pending tool calls without persisting synthetic tool results. Idempotent. */
   clearPendingToolResults?: () => void;
+  /**
+   * Await runner-owned completion of pending tool-result writes, or return
+   * after the timeout so the caller can flush synthetically. Exposed so the
+   * idle-flush boundary can await real results instead of an event-loop tick.
+   */
+  waitForPendingToolResultSettlement?: (timeoutMs: number) => Promise<void>;
   /** Persist the next user message when an earlier canonical entry was removed. */
   clearNextUserMessagePersistenceSuppression?: () => void;
 };
@@ -235,6 +241,8 @@ export function guardSessionManager(
   });
   (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;
   (sessionManager as GuardedSessionManager).clearPendingToolResults = guard.clearPendingToolResults;
+  (sessionManager as GuardedSessionManager).waitForPendingToolResultSettlement =
+    guard.waitForPendingToolResultSettlement;
   (sessionManager as GuardedSessionManager).clearNextUserMessagePersistenceSuppression =
     guard.clearNextUserMessagePersistenceSuppression;
   return sessionManager as GuardedSessionManager;
