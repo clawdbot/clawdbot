@@ -2491,7 +2491,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     ]);
   });
 
-  it("bounds outstanding playback marks while preserving recent acknowledgements", async () => {
+  it("preserves FIFO playback acknowledgements after sustained output", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const onClearAudio = vi.fn();
     const onMark = vi.fn();
@@ -2513,8 +2513,6 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     await connecting;
 
     bridge.setMediaTimestamp(1000);
-    let now = 0;
-    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => ++now);
     for (let index = 0; index < 300; index += 1) {
       socket.emit(
         "message",
@@ -2527,20 +2525,48 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
         ),
       );
     }
-    dateNow.mockRestore();
 
     const marks = onMark.mock.calls.map(([markName]) => String(markName));
     expect(marks).toHaveLength(300);
-    for (const markName of marks.slice(-256)) {
-      bridge.acknowledgeMark(markName);
+    for (let index = 0; index < 299; index += 1) {
+      bridge.acknowledgeMark();
     }
     bridge.setMediaTimestamp(1300);
     bridge.handleBargeIn?.();
 
+    expect(parseSent(socket).slice(-1)).toEqual([
+      {
+        type: "conversation.item.truncate",
+        item_id: "item_1",
+        content_index: 0,
+        audio_end_ms: 300,
+      },
+    ]);
+    expect(onClearAudio).toHaveBeenCalledWith("barge-in");
+
+    for (let index = 0; index < 300; index += 1) {
+      socket.emit(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "response.audio.delta",
+            item_id: "item_1",
+            delta: Buffer.from("assistant audio").toString("base64"),
+          }),
+        ),
+      );
+    }
+    const latestMark = onMark.mock.calls.at(-1)?.[0];
+    if (typeof latestMark !== "string") {
+      throw new Error("expected a playback mark");
+    }
+    bridge.acknowledgeMark(latestMark);
+    bridge.setMediaTimestamp(1600);
+    bridge.handleBargeIn?.();
+
     expect(
       parseSent(socket).filter((event) => event.type === "conversation.item.truncate"),
-    ).toHaveLength(0);
-    expect(onClearAudio).toHaveBeenCalledWith("barge-in");
+    ).toHaveLength(1);
     bridge.close();
   });
 
