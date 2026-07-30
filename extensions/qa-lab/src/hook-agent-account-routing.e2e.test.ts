@@ -110,7 +110,11 @@ describe("hook agent account routing product proof", () => {
       const fixture = await startHookAccountFixture();
 
       try {
-        for (const accountId of ["missing", "disabled", "__proto__"]) {
+        for (const { accountId, expectedError } of [
+          { accountId: "missing", expectedError: 'Unknown account "missing"' },
+          { accountId: "disabled", expectedError: 'Account "disabled"' },
+          { accountId: "__proto__", expectedError: 'Invalid account ID "__proto__"' },
+        ]) {
           const response = await postJson(
             `${fixture.gateway.baseUrl}/hooks/agent`,
             {
@@ -124,6 +128,10 @@ describe("hook agent account routing product proof", () => {
           );
 
           expect(response.status, JSON.stringify(response.json)).toBe(400);
+          expect(response.json).toMatchObject({ ok: false, runId: expect.any(String) });
+          expect((response.json as { error?: unknown }).error).toEqual(
+            expect.stringContaining(expectedError),
+          );
         }
         expect(fixture.lab.state.getSnapshot().messages).toHaveLength(0);
       } finally {
