@@ -610,7 +610,7 @@ describe("qa mock openai server", () => {
     expect(errorOutput.output[0]?.content?.[0]?.text).toBe("TOOL_PROGRESS_ERROR_OK");
   });
 
-  it("uses the latest user prompt path for tool-progress plans", async () => {
+  it("uses the latest user tool-progress prompt kind and target for plans", async () => {
     const server = await startMockServer();
 
     const response = await fetch(`${server.baseUrl}/v1/responses`, {
@@ -639,6 +639,30 @@ describe("qa mock openai server", () => {
     expect(body).toContain('"name":"read"');
     expect(body).toContain("latest-missing-progress-target.txt");
     expect(body).not.toContain("older-progress-target.txt");
+
+    const command = "sleep 2; cat 'current-progress-target.txt'";
+    const currentNormal = await postResponses(server, {
+      stream: true,
+      input: [
+        makeUserInput(
+          "Tool progress error QA check: read `stale-missing-progress-target.txt` before answering. After the read fails, reply exactly `STALE_PROGRESS_OK`.",
+        ),
+        {
+          type: "function_call_output",
+          call_id: "call_stale_progress_read",
+          output: JSON.stringify({ error: "ENOENT: stale turn" }),
+        },
+        makeUserInput(
+          `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`${command}\`. After that command completes, reply exactly \`CURRENT_PROGRESS_OK\`.`,
+        ),
+      ],
+    });
+
+    expect(currentNormal.status).toBe(200);
+    const currentNormalBody = await currentNormal.text();
+    expect(currentNormalBody).toContain('"name":"exec"');
+    expect(currentNormalBody).toContain(command);
+    expect(currentNormalBody).not.toContain("stale-missing-progress-target.txt");
   });
 
   it("prefers path-like refs over generic quoted keys in prompts", async () => {

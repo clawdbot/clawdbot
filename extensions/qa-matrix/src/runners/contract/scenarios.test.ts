@@ -3392,6 +3392,52 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.reply?.tokenMatched).toBe(true);
   });
 
+  it("accepts a final replacement as Matrix command completion", async () => {
+    const previewEventId = "$tool-progress-command-final-replacement-preview";
+    mockMatrixQaRoomClient({
+      driverEventId: "$tool-progress-command-final-replacement-trigger",
+      events: [
+        {
+          event: matrixQaMessageEvent({
+            kind: "notice",
+            eventId: previewEventId,
+            body: "Working\n`🛠️ print text → run sleep 2`",
+          }),
+          since: "driver-sync-preview",
+        },
+        {
+          event: ({ sendTextMessage }) =>
+            matrixQaMessageEvent({
+              kind: "notice",
+              eventId: "$tool-progress-command-final-replacement",
+              body: readMatrixQaReplyDirective(
+                mockMessageBody(sendTextMessage, "sendTextMessage"),
+                "MATRIX_QA_TOOL_PROGRESS_COMMAND",
+              ),
+              relatesTo: {
+                relType: "m.replace",
+                eventId: previewEventId,
+              },
+            }),
+          since: "driver-sync-final",
+        },
+      ],
+    });
+
+    const scenario = requireMatrixQaScenario("matrix-room-tool-progress-command-preview");
+
+    const result = await runMatrixQaScenario(scenario, matrixQaScenarioContext());
+    const artifacts = result.artifacts as {
+      previewBodyPreview?: unknown;
+      previewEventId?: unknown;
+      reply?: { eventId?: unknown; tokenMatched?: unknown };
+    };
+    expect(artifacts.previewBodyPreview).toMatch(/^MATRIX_QA_TOOL_PROGRESS_COMMAND_/);
+    expect(artifacts.previewEventId).toBe(previewEventId);
+    expect(artifacts.reply?.eventId).toBe("$tool-progress-command-final-replacement");
+    expect(artifacts.reply?.tokenMatched).toBe(true);
+  });
+
   it("reports Matrix tool progress preview candidates when the progress wait times out", async () => {
     const previewEvent = matrixQaMessageEvent({
       kind: "notice",
