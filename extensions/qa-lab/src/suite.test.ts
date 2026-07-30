@@ -127,7 +127,7 @@ describe("qa suite", () => {
         state: {} as QaLabServerHandle["state"],
         transportId: "qa-channel",
       }),
-    ).resolves.toMatchObject({ adapter: { id: "qa-channel" } });
+    ).resolves.toMatchObject({ adapter: { id: "qa-channel" }, driver: "qa-channel" });
 
     expect(create).not.toHaveBeenCalled();
   });
@@ -187,7 +187,7 @@ describe("qa suite", () => {
         state: {} as QaLabServerHandle["state"],
         transportId: "qa-channel",
       }),
-    ).resolves.toMatchObject({ adapter });
+    ).resolves.toMatchObject({ adapter, driver: "live" });
 
     expect(create).toHaveBeenCalledTimes(1);
     expect(create).toHaveBeenCalledWith(

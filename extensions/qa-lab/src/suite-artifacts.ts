@@ -9,6 +9,7 @@ import {
 } from "./crabline-artifacts.js";
 import { buildQaSuiteEvidenceSummary, QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
 import type { QaProviderMode } from "./model-selection.js";
+import type { QaTransportDriver } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { renderQaMarkdownReport, type QaReportScenario } from "./report.js";
 import type { RuntimeId } from "./runtime-parity.js";
@@ -36,6 +37,10 @@ export type QaSuiteSummaryJsonParams = {
   fastMode: boolean;
   concurrency: number;
   channelDriver?: QaScorecardChannelDriver | null;
+  // Driver of the transport adapter actually created, surfaced from
+  // createQaSuiteTransportAdapter. Wins over the requested channelDriver so
+  // summary/evidence record the driver that ran (issue #115753).
+  realizedDriver?: QaTransportDriver | null;
   channelDriverSelection?: QaSuiteChannelDriverSelection | null;
   scenarioIds?: readonly string[];
   runtimePair?: [RuntimeId, RuntimeId];
@@ -94,7 +99,11 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
       alternateModelName: alternateSplit?.model ?? null,
       fastMode: params.fastMode,
       concurrency: params.concurrency,
-      channelDriver: params.channelDriver ?? params.channelDriverSelection?.channelDriver ?? null,
+      channelDriver:
+        params.realizedDriver ??
+        params.channelDriver ??
+        params.channelDriverSelection?.channelDriver ??
+        null,
       channel: params.channelDriverSelection?.channel ?? null,
       channelCapabilityMatrixPath: params.channelDriverSelection?.capabilityMatrixPath ?? null,
       channelDriverSmokePath: params.channelDriverSelection?.smokeArtifactPath ?? null,
@@ -125,6 +134,9 @@ export async function writeQaSuiteArtifacts(params: {
   fastMode: boolean;
   concurrency: number;
   channelDriver?: QaScorecardChannelDriver | null;
+  // Driver of the transport adapter actually created; preferred over the
+  // requested channelDriver when recording execution evidence (issue #115753).
+  realizedDriver?: QaTransportDriver | null;
   channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   isolatedWorkers?: boolean;
   scenarioIds?: readonly string[];
@@ -205,7 +217,10 @@ export async function writeQaSuiteArtifacts(params: {
           ],
           evidenceMode: params.evidenceMode,
           channelId: params.channelDriverSelection?.channel ?? params.transport.id,
-          channelDriver: params.channelDriver ?? params.channelDriverSelection?.channelDriver,
+          channelDriver:
+            params.realizedDriver ??
+            params.channelDriver ??
+            params.channelDriverSelection?.channelDriver,
           env: process.env,
           generatedAt: params.finishedAt.toISOString(),
           primaryModel: params.primaryModel,

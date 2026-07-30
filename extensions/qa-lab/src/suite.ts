@@ -21,6 +21,8 @@ import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import {
   createQaTransportAdapter,
   type QaTransportAdapterFactory,
+  type QaTransportAdapterFactoryResult,
+  type QaTransportDriver,
   type QaTransportFactoryContext,
   type QaTransportId,
 } from "./qa-transport-registry.js";
@@ -90,20 +92,26 @@ export async function createQaSuiteTransportAdapter(params: {
   transportPolicy?: NonNullable<QaSuiteRunParams["adapterOptions"]>["transportPolicy"];
   state: QaLabServerHandle["state"];
   transportId: QaTransportId;
-}) {
+}): Promise<QaTransportAdapterFactoryResult & { driver: QaTransportDriver }> {
   try {
     const usesLiveAdapter =
       params.channelDriver === "live" &&
       params.channelId !== undefined &&
       params.adapterFactories !== undefined;
-    return await createQaTransportAdapter(
+    // Realized driver is the adapter that will actually be created: a live
+    // adapter only when a channelId and matching factory are present, crabline
+    // when a selection exists, otherwise the shared qa-channel transport.
+    // Carrying it to artifact writers lets evidence record the driver that ran
+    // instead of the requested one (issue #115753).
+    const realizedDriver: QaTransportDriver = usesLiveAdapter
+      ? "live"
+      : params.channelDriverSelection
+        ? "crabline"
+        : params.transportId;
+    const result = await createQaTransportAdapter(
       {
         channelId: params.channelId ?? params.channelDriverSelection?.channel ?? params.transportId,
-        driver: usesLiveAdapter
-          ? "live"
-          : params.channelDriverSelection
-            ? "crabline"
-            : params.transportId,
+        driver: realizedDriver,
         outputDir: params.outputDir,
         adapterOptions: {
           ...params.adapterOptions,
@@ -120,6 +128,7 @@ export async function createQaSuiteTransportAdapter(params: {
       },
       usesLiveAdapter ? params.adapterFactories : undefined,
     );
+    return { ...result, driver: realizedDriver };
   } catch (error) {
     await params.cleanupOnFailure?.().catch(() => undefined);
     throw error;

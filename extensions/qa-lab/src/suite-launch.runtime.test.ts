@@ -2203,17 +2203,21 @@ describe("qa suite runtime launcher", () => {
     ]);
     const evidence = JSON.parse(await fs.readFile(result.result.evidencePath, "utf8")) as {
       entries?: Array<{
-        execution?: { channel?: { id?: string } };
+        execution?: { channel?: { id?: string; driver?: string; live?: boolean } };
         result?: { status?: string };
         test?: { id?: string };
       }>;
     };
     for (const scenarioId of ["whatsapp-status-command", "whatsapp-access-control-dm-open"]) {
       const blocked = evidence.entries?.find((entry) => entry.test?.id === scenarioId);
+      // No transport adapter was created for a credential-blocked partition, so
+      // evidence must not attest a live channel executed: driver is absent and
+      // live is false, while the per-scenario status stays "blocked" (#115753).
       expect(blocked).toMatchObject({
-        execution: { channel: { id: "whatsapp", driver: "live", live: true } },
+        execution: { channel: { id: "whatsapp", live: false } },
         result: { status: "blocked" },
       });
+      expect(blocked?.execution?.channel?.driver).toBeUndefined();
     }
   });
 
