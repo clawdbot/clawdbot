@@ -60,6 +60,7 @@ export async function dispatchEmbeddedAttemptPrompt(input: {
     | "modelPrompt"
     | "runtimeContextMessage"
     | "runtimeOnly"
+    | "systemPrompt"
     | "toolResultAggregateMaxChars"
     | "toolResultMaxChars"
     | "transcriptPrompt"
@@ -123,6 +124,7 @@ export async function dispatchEmbeddedAttemptPrompt(input: {
         ? { runtimeContextMessage: promptContext.runtimeContextMessageForCurrentTurn }
         : {}),
       runtimeOnly: promptContext.promptSubmission.runtimeOnly === true,
+      systemPrompt: promptContext.systemPromptForHook,
       toolResultAggregateMaxChars: promptContext.promptToolResultAggregateMaxChars,
       toolResultMaxChars: promptContext.promptToolResultMaxChars,
       transcriptPrompt: promptContext.promptForSession,

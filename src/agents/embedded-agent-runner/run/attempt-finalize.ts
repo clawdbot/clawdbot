@@ -70,6 +70,7 @@ export function finalizeEmbeddedAttempt(
     compactionCount: result.compactionCount,
     assistantTexts: result.assistantTexts,
     finalPromptText: result.finalPromptText,
+    messagesSnapshot: result.messagesSnapshot,
   });
   trajectoryRecorder?.recordEvent(
     "trace.artifacts",

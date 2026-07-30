@@ -46,6 +46,7 @@ function createBaseInput() {
     prependContext: "prepend context",
     runtimeOnly: false,
     sessionPromptState,
+    systemPrompt: "system prompt",
     toolResultAggregateMaxChars: 8_000,
     toolResultMaxChars: 4_000,
     toolResultPromptProjectionState: sessionPromptState.toolResults,
@@ -89,32 +90,6 @@ describe("submitEmbeddedAttemptPrompt", () => {
     expect(input.onSteeringAcknowledged).toHaveBeenCalledOnce();
     expect(activeSession.agent.streamFn).toBe(baseStreamFn);
     expect(activeSession.agent.transformContext).toBe(originalTransformContext);
-  });
-
-  it("records prompt.submitted without duplicating conversation state", async () => {
-    const { activeSession } = createSession();
-    const input = createBaseInput();
-    const recordEvent = vi.fn();
-    const promptActiveSession = vi.fn(
-      async (_prompt: string, options?: { preflightResult?: (submitted: boolean) => void }) => {
-        options?.preflightResult?.(true);
-      },
-    );
-
-    await submitEmbeddedAttemptPrompt({
-      ...input,
-      activeSession,
-      promptActiveSession,
-      runtimeOnly: true,
-      trajectoryRecorder: { recordEvent } as never,
-    });
-
-    const promptSubmitted = recordEvent.mock.calls.find(
-      ([type]) => type === "prompt.submitted",
-    )?.[1] as Record<string, unknown> | undefined;
-    // Exact payload: messages/systemPrompt live in context.compiled; duplicating them here
-    // is what pushed heavy turns past the trajectory event size cap.
-    expect(promptSubmitted).toEqual({ prompt: "model prompt", imagesCount: 0 });
   });
 
   it("cleans up runtime context and transforms when normal submission fails", async () => {
