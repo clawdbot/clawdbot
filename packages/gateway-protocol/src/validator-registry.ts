@@ -446,7 +446,26 @@ export const validateNodeInvokeParams = lazyCompile(NodeInvokeParamsSchema);
 export const validateNodeInvokeRequestEvent = lazyCompile(NodeInvokeRequestEventSchema);
 export const validateNodeInvokeInputEvent = lazyCompile(NodeInvokeInputEventSchema);
 export const validateNodeInvokeResultParams = lazyCompile(NodeInvokeResultParamsSchema);
-export const validateNodeInvokeProgressParams = lazyCompile(NodeInvokeProgressParamsSchema);
+export const validateNodeInvokeProgressParams = lazyCompile(
+  NodeInvokeProgressParamsSchema,
+  (data) => {
+    if (
+      typeof data === "object" &&
+      data !== null &&
+      "chunk" in data &&
+      typeof data.chunk === "string" &&
+      new TextEncoder().encode(data.chunk).byteLength > 16 * 1024
+    ) {
+      return {
+        keyword: "maxUtf8Bytes",
+        instancePath: "/chunk",
+        params: { limit: 16 * 1024 },
+        message: "must not exceed 16384 UTF-8 bytes",
+      };
+    }
+    return undefined;
+  },
+);
 export const validateNodeEventParams = lazyCompile(NodeEventParamsSchema);
 export const validateNodePresenceActivityPayload = lazyCompile(NodePresenceActivityPayloadSchema);
 export const validateNodePendingDrainParams = lazyCompile(NodePendingDrainParamsSchema);

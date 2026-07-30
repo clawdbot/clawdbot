@@ -31,10 +31,12 @@ impl ClientErrorClass {
         match error {
             ClientError::InvalidUrl(_) | ClientError::InsecureRemoteGateway => Self::Configuration,
             ClientError::Tls(reason) if is_tls_configuration_error(reason) => Self::Configuration,
-            ClientError::Tls(_) => Self::Transport,
-            ClientError::Transport(_) | ClientError::ChallengeTimeout | ClientError::Closed(_) => {
-                Self::Transport
-            }
+            ClientError::Tls(_)
+            | ClientError::Transport(_)
+            | ClientError::ConnectTimeout
+            | ClientError::ChallengeTimeout
+            | ClientError::WriteTimeout(_)
+            | ClientError::Closed(_) => Self::Transport,
             ClientError::InvalidChallenge(_) | ClientError::InvalidFrame(_) => Self::Protocol,
             ClientError::ConnectParams(_) | ClientError::Identity(_) => Self::Identity,
             ClientError::Gateway { .. } => Self::Gateway,

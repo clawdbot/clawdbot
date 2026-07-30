@@ -138,6 +138,62 @@ async fn duplex_runtime_routes_ordered_input_and_progress() {
 }
 
 #[tokio::test]
+async fn duplex_input_overflow_forces_a_terminal_failure() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(tcp).await.unwrap();
+        send_json(
+            &mut socket,
+            json!({"type":"event","event":"connect.challenge","payload":{"nonce":"node-nonce"}}),
+        )
+        .await;
+        let connect = receive_json(&mut socket).await;
+        send_json(
+            &mut socket,
+            json!({"type":"res","id":connect["id"],"ok":true,
+                "payload":{"type":"hello-ok","protocol":4}}),
+        )
+        .await;
+        send_json(
+            &mut socket,
+            json!({"type":"event","event":"node.invoke.request","payload":{
+                "id":"overflow","nodeId":"node-1","command":"example.duplex","paramsJSON":null
+            }}),
+        )
+        .await;
+        for seq in 0..5 {
+            send_json(
+                &mut socket,
+                json!({"type":"event","event":"node.invoke.input","payload":{
+                    "id":"overflow","nodeId":"node-1","seq":seq,
+                    "payloadJSON":"x".repeat(16 * 1024)
+                }}),
+            )
+            .await;
+        }
+        let result = receive_json(&mut socket).await;
+        assert_eq!(result["method"], "node.invoke.result");
+        assert_eq!(result["params"]["ok"], false);
+        assert_eq!(result["params"]["error"]["code"], "INPUT_BUFFER_OVERFLOW");
+        acknowledge(&mut socket, &result).await;
+        socket.close(None).await.unwrap();
+    });
+
+    let runtime = CommandRuntime::builder()
+        .duplex_command("example.duplex", |_context| async move {
+            std::future::pending().await
+        })
+        .build()
+        .unwrap();
+    let session = connect_with_command(address, "example.duplex").await;
+
+    assert!(runtime.run(session).await.is_err());
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn direct_dispatch_rejects_duplex_without_running_an_event_loop() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();

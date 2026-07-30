@@ -330,7 +330,7 @@ where
             "statusCommand": config.status_command,
         }),
     );
-    let issued_device_token = Arc::new(Mutex::new(None::<String>));
+    let issued_device_token = Arc::new(Mutex::new(credentials.issued_device_token.clone()));
     let identity = credentials.identity.clone();
     let connect = host_connection_factory(
         &config,
@@ -355,37 +355,46 @@ fn host_connection_factory(
     runtime: CommandRuntime,
     issued_device_token: Arc<Mutex<Option<String>>>,
 ) -> impl FnMut() -> HostConnectFuture + Send {
-    let gateway_url = config.gateway_url.clone();
-    let display_name = config.display_name.clone();
-    let instance_id = config.instance_id.clone();
+    let connection_config = config.clone();
     move || {
         let issued_device_token = Arc::clone(&issued_device_token);
         let identity = credentials.identity.clone();
-        let auth = credentials.auth.clone();
+        let configured_auth = credentials.configured_auth.clone();
         let runtime = runtime.clone();
-        let gateway_url = gateway_url.clone();
-        let display_name = display_name.clone();
-        let instance_id = instance_id.clone();
+        let connection_config = connection_config.clone();
         Box::pin(async move {
-            let selected_auth = issued_device_token
+            let adopted_auth = issued_device_token
                 .lock()
                 .map_err(|_| {
                     ClientError::ConnectParams("issued device-token state is unavailable".into())
                 })?
-                .as_ref()
-                .map_or(auth, |token| ConnectAuth::device_token(token.clone()));
-            let mut options = NodeConnectOptions::new(env!("CARGO_PKG_VERSION"), env::consts::OS)
-                .display_name(display_name)
-                .identity(identity)
-                .auth(selected_auth);
-            if let Some(instance_id) = instance_id {
-                options = options.instance_id(instance_id);
+                .clone();
+            if let Some(device_token) = adopted_auth {
+                match connect_host_attempt(
+                    &connection_config,
+                    identity.clone(),
+                    ConnectAuth::device_token(device_token),
+                    runtime.clone(),
+                )
+                .await
+                {
+                    Ok(session) => return Ok(session),
+                    Err(error) if invalidates_adopted_device_token(&error) => {
+                        *issued_device_token.lock().map_err(|_| {
+                            ClientError::ConnectParams(
+                                "issued device-token state is unavailable".into(),
+                            )
+                        })? = None;
+                        emit(
+                            "warn",
+                            "gateway.device_token_rejected",
+                            json!({"action": "retry-configured-auth"}),
+                        );
+                    }
+                    Err(error) => return Err(error),
+                }
             }
-            NodeClient::connect(
-                NodeClientConfig::new(gateway_url),
-                move |_nonce| async move { Ok::<_, Infallible>(runtime.activate(options)) },
-            )
-            .await
+            connect_host_attempt(&connection_config, identity, configured_auth, runtime).await
         })
     }
 }
@@ -479,42 +488,6 @@ fn host_token_handler(issued_device_token: Arc<Mutex<Option<String>>>) -> impl F
             json!({"persistence": "process-memory"}),
         );
     }
-}
-
-async fn connect_host(
-    config: &HostConfig,
-    credentials: &mut HostCredentials,
-    runtime: CommandRuntime,
-) -> Result<crate::NodeSession, ClientError> {
-    if let Some(device_token) = credentials.issued_device_token.clone() {
-        match connect_host_attempt(
-            config,
-            credentials.identity.clone(),
-            ConnectAuth::device_token(device_token),
-            runtime.clone(),
-        )
-        .await
-        {
-            Ok(session) => return Ok(session),
-            Err(error) if invalidates_adopted_device_token(&error) => {
-                credentials.issued_device_token = None;
-                emit(
-                    "warn",
-                    "gateway.device_token_rejected",
-                    json!({"action": "retry-configured-auth"}),
-                );
-            }
-            Err(error) => return Err(error),
-        }
-    }
-
-    connect_host_attempt(
-        config,
-        credentials.identity.clone(),
-        credentials.configured_auth.clone(),
-        runtime,
-    )
-    .await
 }
 
 async fn connect_host_attempt(
@@ -930,16 +903,17 @@ mod tests {
             ConnectAuth::token("configured-token"),
         );
         credentials.issued_device_token = Some("adopted-device-token".into());
-
-        let session = connect_host(
+        let issued_device_token = Arc::new(Mutex::new(credentials.issued_device_token.clone()));
+        let mut connect = host_connection_factory(
             &config,
-            &mut credentials,
+            credentials,
             CommandRuntime::builder().build().unwrap(),
-        )
-        .await
-        .unwrap();
+            Arc::clone(&issued_device_token),
+        );
+
+        let session = connect().await.unwrap();
         assert_eq!(session.hello()["protocol"], 4);
-        assert!(credentials.issued_device_token.is_none());
+        assert!(issued_device_token.lock().unwrap().is_none());
         drop(session);
         server.await.unwrap();
     }

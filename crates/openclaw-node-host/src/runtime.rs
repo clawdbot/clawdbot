@@ -699,6 +699,7 @@ impl CommandRuntime {
             &cancellation,
             &tracking,
         );
+        let input_overflow = tracking.input_overflow.clone();
         let Ok(future) = std::panic::catch_unwind(AssertUnwindSafe(|| {
             (registration.handler)(InvocationContext {
                 invocation: invocation.clone(),
@@ -712,42 +713,78 @@ impl CommandRuntime {
                 tracking,
             );
         };
-        let outcome = match timeout {
-            Some(timeout) => {
-                tokio::time::timeout(timeout, AssertUnwindSafe(future).catch_unwind()).await
-            }
-            None => Ok(AssertUnwindSafe(future).catch_unwind().await),
-        };
+        let result = self
+            .execute_handler(
+                future,
+                timeout,
+                &cancellation,
+                &input_overflow,
+                duplex.io.is_some(),
+            )
+            .await;
 
         duplex.stop().await;
+        Evaluation::tracked(result, tracking)
+    }
 
-        let result = match outcome {
-            Err(_) => {
-                cancellation.cancel();
-                failure("HANDLER_TIMEOUT", "command handler exceeded its deadline")
-            }
-            Ok(Err(_)) => {
-                tracking.cancel();
-                failure("HANDLER_PANIC", "command handler panicked")
-            }
-            Ok(Ok(Err(error))) => handler_failure(
-                error,
-                "HANDLER_ERROR",
-                "command handler failed",
-                self.inner.max_output_bytes,
-            ),
-            Ok(Ok(Ok(result))) => {
-                if serialized_json_within_limit(&result, self.inner.max_output_bytes) {
-                    InvocationResult::success(result)
-                } else {
-                    failure(
-                        "OUTPUT_TOO_LARGE",
-                        "command result exceeds the runtime limit",
-                    )
+    async fn execute_handler(
+        &self,
+        future: HandlerFuture,
+        timeout: Option<Duration>,
+        cancellation: &CancellationToken,
+        input_overflow: &CancellationToken,
+        duplex: bool,
+    ) -> InvocationResult {
+        let handler_result = async {
+            let outcome = match timeout {
+                Some(timeout) => {
+                    tokio::time::timeout(timeout, AssertUnwindSafe(future).catch_unwind()).await
+                }
+                None => Ok(AssertUnwindSafe(future).catch_unwind().await),
+            };
+            match outcome {
+                Err(_) => {
+                    cancellation.cancel();
+                    failure("HANDLER_TIMEOUT", "command handler exceeded its deadline")
+                }
+                Ok(Err(_)) => {
+                    cancellation.cancel();
+                    failure("HANDLER_PANIC", "command handler panicked")
+                }
+                Ok(Ok(Err(error))) => handler_failure(
+                    error,
+                    "HANDLER_ERROR",
+                    "command handler failed",
+                    self.inner.max_output_bytes,
+                ),
+                Ok(Ok(Ok(result))) => {
+                    if serialized_json_within_limit(&result, self.inner.max_output_bytes) {
+                        InvocationResult::success(result)
+                    } else {
+                        failure(
+                            "OUTPUT_TOO_LARGE",
+                            "command result exceeds the runtime limit",
+                        )
+                    }
                 }
             }
         };
-        Evaluation::tracked(result, tracking)
+        tokio::pin!(handler_result);
+        if duplex {
+            tokio::select! {
+                biased;
+                () = input_overflow.cancelled() => {
+                    cancellation.cancel();
+                    failure(
+                        "INPUT_BUFFER_OVERFLOW",
+                        "duplex command input exceeded the pending-byte limit",
+                    )
+                }
+                result = &mut handler_result => result,
+            }
+        } else {
+            handler_result.as_mut().await
+        }
     }
 
     async fn evaluate_admission(
@@ -767,11 +804,31 @@ impl CommandRuntime {
             })
         }))
         .map_err(|_| failure("ADMISSION_PANIC", "command admission policy panicked"))?;
-        let outcome = match timeout {
-            Some(remaining) => {
-                tokio::time::timeout(remaining, AssertUnwindSafe(admission).catch_unwind()).await
+        let outcome = if let Some(remaining) = timeout {
+            tokio::select! {
+                biased;
+                () = cancellation.cancelled() => {
+                    return Err(failure(
+                        "INVOCATION_CANCELLED",
+                        "command invocation was cancelled during admission",
+                    ));
+                }
+                outcome = tokio::time::timeout(
+                    remaining,
+                    AssertUnwindSafe(admission).catch_unwind(),
+                ) => outcome,
             }
-            None => Ok(AssertUnwindSafe(admission).catch_unwind().await),
+        } else {
+            tokio::select! {
+                biased;
+                () = cancellation.cancelled() => {
+                    return Err(failure(
+                        "INVOCATION_CANCELLED",
+                        "command invocation was cancelled during admission",
+                    ));
+                }
+                outcome = AssertUnwindSafe(admission).catch_unwind() => Ok(outcome),
+            }
         };
         match outcome {
             Err(_) => {
@@ -1024,6 +1081,7 @@ struct ActiveInvocation {
     id: String,
     cancellation: CancellationToken,
     input: Option<Arc<InputBuffer>>,
+    input_overflow: CancellationToken,
     cancel_on_drop: bool,
 }
 
@@ -1062,6 +1120,7 @@ struct ActiveInvocationState {
     node_id: String,
     cancellation: CancellationToken,
     input: Option<Arc<InputBuffer>>,
+    input_overflow: CancellationToken,
 }
 
 impl ActiveInvocations {
@@ -1079,16 +1138,19 @@ impl ActiveInvocations {
         match active.entry(id.to_owned()) {
             Entry::Vacant(entry) => {
                 let input = duplex.then(|| InputBuffer::new(DEFAULT_PENDING_INPUT_BYTES));
+                let input_overflow = CancellationToken::new();
                 entry.insert(ActiveInvocationState {
                     node_id: node_id.to_owned(),
                     cancellation: cancellation.clone(),
                     input: input.clone(),
+                    input_overflow: input_overflow.clone(),
                 });
                 Some(ActiveInvocation {
                     active: self.clone(),
                     id: id.to_owned(),
                     cancellation: cancellation.clone(),
                     input,
+                    input_overflow,
                     cancel_on_drop: true,
                 })
             }
@@ -1123,7 +1185,7 @@ impl ActiveInvocations {
     }
 
     fn input(&self, id: &str, node_id: &str, seq: u64, payload: String) -> InputDisposition {
-        let input = {
+        let (input, input_overflow) = {
             let active = self
                 .inner
                 .lock()
@@ -1134,9 +1196,13 @@ impl ActiveInvocations {
             if state.node_id != node_id {
                 return InputDisposition::Ignored;
             }
-            state.input.clone()
+            (state.input.clone(), state.input_overflow.clone())
         };
-        input.map_or(InputDisposition::Ignored, |input| input.push(seq, payload))
+        let disposition = input.map_or(InputDisposition::Ignored, |input| input.push(seq, payload));
+        if disposition == InputDisposition::Overflow {
+            input_overflow.cancel();
+        }
+        disposition
     }
 
     fn cancel_all(&self) {
@@ -1691,6 +1757,56 @@ mod tests {
                     .await
             ),
             Some("ADMISSION_PANIC")
+        );
+        assert!(!handler_ran.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn gateway_cancellation_stops_admission_before_handler_execution() {
+        let admission_entered = Arc::new(Notify::new());
+        let handler_ran = Arc::new(AtomicBool::new(false));
+        let entered = Arc::clone(&admission_entered);
+        let handler_state = Arc::clone(&handler_ran);
+        let runtime = CommandRuntime::builder()
+            .admission_policy(move |_context| {
+                let entered = Arc::clone(&entered);
+                async move {
+                    entered.notify_one();
+                    std::future::pending().await
+                }
+            })
+            .command("example.status", move |_context| {
+                let handler_state = Arc::clone(&handler_state);
+                async move {
+                    handler_state.store(true, Ordering::SeqCst);
+                    Ok(Value::Null)
+                }
+            })
+            .build()
+            .unwrap();
+        let active = ActiveInvocations::default();
+        let task_runtime = runtime.clone();
+        let task_active = active.clone();
+        let task = tokio::spawn(async move {
+            task_runtime
+                .evaluate_with_scope(
+                    invocation("invoke-1", "example.status", Value::Null),
+                    task_active,
+                    None,
+                )
+                .await
+        });
+
+        admission_entered.notified().await;
+        active.cancel("invoke-1");
+        let evaluation = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("cancelled admission returned")
+            .unwrap();
+
+        assert_eq!(
+            failure_code(&evaluation.result),
+            Some("INVOCATION_CANCELLED")
         );
         assert!(!handler_ran.load(Ordering::SeqCst));
     }
