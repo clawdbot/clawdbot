@@ -13,6 +13,7 @@ import {
 import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
+import { isCriticalToolLoopVeto } from "../agent-tools.before-tool-call.types.js";
 import { getAgentDir } from "../config.js";
 import {
   Agent,
@@ -513,6 +514,14 @@ async function createAgentSessionImpl(
       );
     },
     sessionId: sessionManager.getSessionId(),
+    shouldStopAfterTurn: (context) => {
+      // Stop the agent loop when any tool result in the completed turn carries a
+      // critical tool-loop veto. Agent-core's shouldTerminateToolBatch requires
+      // every result in the batch to have terminate: true, which fails for mixed
+      // batches where the model emits the blocked loop tool alongside a normal
+      // tool call. The post-turn check ensures the run stops regardless.
+      return context.toolResults.some((msg) => isCriticalToolLoopVeto(msg.details));
+    },
     transformContext: async (messages) => {
       const runner = extensionRunnerRef.current;
       if (!runner) {

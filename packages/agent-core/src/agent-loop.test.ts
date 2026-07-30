@@ -1872,6 +1872,210 @@ describe("agentLoop tool termination", () => {
     ]);
     expect(events.at(-1)).toMatchObject({ type: "agent_end" });
   });
+
+  it("stops after a mixed batch with one critical veto when shouldStopAfterTurn checks for tool-loop", async () => {
+    const executed: string[] = [];
+    let turn = 0;
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                { type: "toolCall", id: "call-veto", name: "veto_tool", arguments: {} },
+                { type: "toolCall", id: "call-normal", name: "normal_tool", arguments: {} },
+              ])
+            : makeAssistantMessage([{ type: "text", text: "should not reach" }]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const vetoTool: AgentTool = {
+      name: "veto_tool",
+      label: "veto_tool",
+      description: "critical loop veto tool",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => ({
+        content: [{ type: "text", text: "blocked" }],
+        details: { status: "blocked", deniedReason: "tool-loop", reason: "critical loop detected" },
+        terminate: true,
+      }),
+    };
+    const normalTool: AgentTool = {
+      name: "normal_tool",
+      label: "normal_tool",
+      description: "normal tool",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => {
+        executed.push("normal_tool");
+        return { content: [{ type: "text", text: "ok" }], details: {} };
+      },
+    };
+
+    const stream = agentLoop(
+      [{ role: "user", content: "run", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [vetoTool, normalTool] },
+      {
+        ...config,
+        shouldStopAfterTurn: async (context) => {
+          for (const msg of context.toolResults) {
+            const details = msg.details as { deniedReason?: string } | undefined;
+            if (details?.deniedReason === "tool-loop") {
+              return true;
+            }
+          }
+          return false;
+        },
+      },
+      undefined,
+      streamFn,
+    );
+
+    const events = await collectEvents(stream);
+    expect(turn).toBe(1);
+    expect(executed).toEqual(["normal_tool"]);
+    expect(events.filter((e) => e.type === "agent_end")).toHaveLength(1);
+  });
+
+  it("Agent.prompt stops after a single critical tool-loop terminate result", async () => {
+    let providerTurns = 0;
+    const transcript: string[] = [];
+    const streamFn: StreamFn = () => {
+      providerTurns += 1;
+      transcript.push(`provider-turn-${providerTurns}`);
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          providerTurns === 1
+            ? makeAssistantMessage([
+                { type: "toolCall", id: "call-loop", name: "loop_tool", arguments: {} },
+              ])
+            : makeAssistantMessage([{ type: "text", text: "should not reach" }]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+    const loopTool: AgentTool = {
+      name: "loop_tool",
+      label: "loop_tool",
+      description: "critical loop",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => {
+        transcript.push("tool-loop-block");
+        return {
+          content: [{ type: "text", text: "CRITICAL: tool loop" }],
+          details: {
+            status: "blocked",
+            deniedReason: "tool-loop",
+            reason: "CRITICAL: tool loop",
+          },
+          terminate: true,
+        };
+      },
+    };
+    const agent = new Agent({
+      initialState: { model, tools: [loopTool] },
+      streamFn,
+      shouldStopAfterTurn: (context) => {
+        for (const msg of context.toolResults) {
+          const details = msg.details as { deniedReason?: string } | undefined;
+          if (details?.deniedReason === "tool-loop") {
+            transcript.push("should-stop-after-turn");
+            return true;
+          }
+        }
+        return false;
+      },
+    });
+    agent.subscribe(async (event) => {
+      if (event.type === "agent_end") {
+        transcript.push("agent_end");
+      }
+    });
+
+    await agent.prompt("trigger");
+    await agent.waitForIdle();
+
+    expect(providerTurns).toBe(1);
+    expect(transcript).toEqual([
+      "provider-turn-1",
+      "tool-loop-block",
+      "should-stop-after-turn",
+      "agent_end",
+    ]);
+  });
+
+  it("does not stop after a mixed batch when a tool-loop reason lacks blocked status", async () => {
+    // Regression: a finalized result carrying deniedReason: "tool-loop" but not
+    // the canonical status: "blocked" must not terminate the session. details
+    // is hook-overridable structured data, so the post-turn classifier requires
+    // both fields (issue #106231 / ClawSweeper P2 finding).
+    let turn = 0;
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                { type: "toolCall", id: "call-spoof", name: "spoof_tool", arguments: {} },
+              ])
+            : makeAssistantMessage([{ type: "text", text: "continued past spoof" }]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+    const spoofTool: AgentTool = {
+      name: "spoof_tool",
+      label: "spoof_tool",
+      description: "non-blocked result with tool-loop reason",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => ({
+        content: [{ type: "text", text: "spoof" }],
+        // deniedReason is "tool-loop" but status is not "blocked": a hook could
+        // attach this to an unrelated result, so it must not be terminal.
+        details: { status: "error", deniedReason: "tool-loop" },
+      }),
+    };
+
+    const stream = agentLoop(
+      [{ role: "user", content: "run", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [spoofTool] },
+      {
+        ...config,
+        shouldStopAfterTurn: async (context) => {
+          for (const msg of context.toolResults) {
+            const details = msg.details as { status?: unknown; deniedReason?: unknown } | undefined;
+            if (details?.status === "blocked" && details?.deniedReason === "tool-loop") {
+              return true;
+            }
+          }
+          return false;
+        },
+      },
+      undefined,
+      streamFn,
+    );
+
+    const events = await collectEvents(stream);
+    // The non-blocked tool-loop result must not stop the run: the model issues
+    // a second provider turn.
+    expect(turn).toBe(2);
+    expect(events.filter((e) => e.type === "agent_end")).toHaveLength(1);
+  });
 });
 
 describe("Agent next-turn preparation", () => {

@@ -327,6 +327,10 @@ describe("before_tool_call loop detection behavior", () => {
     expect(details.status).toBe("blocked");
     expect(details.deniedReason).toBe("tool-loop");
     expect(String(details.reason)).toContain(expectedReason);
+    // Critical tool-loop veto must terminate the agent run so the model
+    // cannot keep retrying the same blocked tool after the safety breaker
+    // fires (issue #106231).
+    expect(record.terminate).toBe(true);
   }
 
   async function expectUnblockedToolExecution(

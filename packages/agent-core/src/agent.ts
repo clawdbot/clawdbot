@@ -32,6 +32,7 @@ import type {
   BeforeToolCallResult,
   PrepareNextTurnContext,
   QueueMode,
+  ShouldStopAfterTurnContext,
   StreamFn,
   ToolExecutionMode,
 } from "./types.js";
@@ -131,6 +132,8 @@ export interface AgentOptions {
     context: AfterToolCallContext,
     signal?: AbortSignal,
   ) => Promise<AfterToolCallResult | undefined>;
+  /** Hook that may stop the agent loop after a turn completes. */
+  shouldStopAfterTurn?: (context: ShouldStopAfterTurnContext) => boolean | Promise<boolean>;
   /** Hook that may alter any finalized tool outcome, including pre-execution failures. */
   afterToolOutcome?: (
     context: AfterToolOutcomeContext,
@@ -237,6 +240,7 @@ export class Agent {
     context: AfterToolCallContext,
     signal?: AbortSignal,
   ) => Promise<AfterToolCallResult | undefined>;
+  public shouldStopAfterTurn?: (context: ShouldStopAfterTurnContext) => boolean | Promise<boolean>;
   public afterToolOutcome?: (
     context: AfterToolOutcomeContext,
     signal?: AbortSignal,
@@ -272,6 +276,7 @@ export class Agent {
     this.beforeToolCall = options.beforeToolCall;
     this.resolveDeferredTool = options.resolveDeferredTool;
     this.afterToolCall = options.afterToolCall;
+    this.shouldStopAfterTurn = options.shouldStopAfterTurn;
     this.afterToolOutcome = options.afterToolOutcome;
     this.prepareNextTurn = options.prepareNextTurn;
     this.prepareNextTurnWithContext = options.prepareNextTurnWithContext;
@@ -511,6 +516,7 @@ export class Agent {
       beforeToolCall: this.beforeToolCall,
       resolveDeferredTool: this.resolveDeferredTool,
       afterToolCall: this.afterToolCall,
+      shouldStopAfterTurn: this.shouldStopAfterTurn,
       afterToolOutcome: this.afterToolOutcome,
       prepareNextTurn:
         this.prepareNextTurnWithContext || this.prepareNextTurn

@@ -47,6 +47,7 @@ import type {
   HookContext,
   HookOutcome,
 } from "./agent-tools.before-tool-call.types.js";
+import { isCriticalToolLoopVeto } from "./agent-tools.before-tool-call.types.js";
 import { validateToolExecutionParams } from "./agent-tools.execution-validation.js";
 import {
   BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS,
@@ -248,13 +249,25 @@ export function buildBlockedToolResult(params: {
   runId?: string;
 }) {
   recordPreExecutionBlockedToolCall(params.toolCallId, params.runId);
+  const deniedReason = params.deniedReason ?? "plugin-before-tool-call";
+  // tool-loop vetoes must terminate the agent run so the model cannot keep
+  // retrying the blocked tool indefinitely (issue #106231). The per-result
+  // terminate: true flag handles single-tool batches via agent-core's
+  // shouldTerminateToolBatch; a post-turn shouldStopAfterTurn hook in
+  // createAgentSession covers mixed batches where the veto appears alongside
+  // normal tool results. The classifier requires both canonical fields
+  // (status: "blocked" + deniedReason: "tool-loop") so a non-blocked result
+  // carrying the tool-loop reason string cannot become terminal.
+  const details = {
+    status: "blocked" as const,
+    deniedReason,
+    reason: params.reason,
+  };
+  const terminateRun = isCriticalToolLoopVeto(details);
   const result = {
     content: [{ type: "text" as const, text: params.reason }],
-    details: {
-      status: "blocked",
-      deniedReason: params.deniedReason ?? "plugin-before-tool-call",
-      reason: params.reason,
-    },
+    details,
+    ...(terminateRun ? { terminate: true } : {}),
   };
   preExecutionBlockedToolResults.add(result);
   return result;

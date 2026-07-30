@@ -100,6 +100,31 @@ export type HookBlockedReason =
   | "plugin-approval-unavailable"
   | "tool-loop";
 
+/**
+ * Critical tool-loop vetoes must terminate the agent run so the model cannot
+ * keep retrying the blocked tool indefinitely (issue #106231). Other veto
+ * reasons (plugin/approval) stay non-terminating. Shared by
+ * {@link buildBlockedToolResult} (per-result `terminate: true`) and the
+ * session-level `shouldStopAfterTurn` hook (mixed-batch coverage).
+ *
+ * Both canonical fields are required: `details` is hook-overridable structured
+ * data (`AgentToolResult.details`), so `deniedReason: "tool-loop"` alone is not
+ * enough — a non-blocked result carrying that string must not end the session.
+ * This matches the loop detector's own `isLoopVetoResult` classifier
+ * (`tool-loop-detection.ts`), which recognizes a loop veto only when both
+ * `status: "blocked"` and `deniedReason: "tool-loop"` are present.
+ */
+export function isCriticalToolLoopVeto(details: unknown): details is {
+  status: "blocked";
+  deniedReason: "tool-loop";
+} {
+  if (typeof details !== "object" || details === null) {
+    return false;
+  }
+  const { status, deniedReason } = details as { status?: unknown; deniedReason?: unknown };
+  return status === "blocked" && deniedReason === "tool-loop";
+}
+
 type HookBlockedOutcome = {
   blocked: true;
   deniedReason?: HookBlockedReason;
