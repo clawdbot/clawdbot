@@ -71,6 +71,18 @@ describe("cron stream schedule validation", () => {
       await expect(
         cron.add(
           streamJob({
+            schedule: {
+              kind: "stream",
+              command: ["echo"],
+              mode: "match",
+              match: "^(a|a)*!$",
+            },
+          }),
+        ),
+      ).rejects.toThrow("unsafe-nested-repetition");
+      await expect(
+        cron.add(
+          streamJob({
             schedule: { kind: "stream", command: ["echo"], match: "^ready" },
           }),
         ),

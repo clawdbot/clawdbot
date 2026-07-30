@@ -19,7 +19,19 @@ describe("safe regex", () => {
   it.each([
     ["(a+)+$", null],
     ["(a|aa)+$", null],
+    ["(a|a)*$", null],
+    ["(?:a|a)*$", null],
+    ["(\\w|\\w)+$", null],
+    ["(.|.)*$", null],
+    ["(.|a)+$", null],
+    ["(\\w|\\d)*$", null],
+    ["([a-f]|[d-z])+$", null],
+    ["(a|b)*$", RegExp],
+    ["(ab|cd)*$", RegExp],
+    ["(cat|dog)+$", RegExp],
+    ["(\\d|\\s)*$", RegExp],
     ["(a|aa){2}$", RegExp],
+    ["(a|a){2}$", RegExp],
   ] as const)("compiles %s safely", (pattern, expected) => {
     if (expected === null) {
       expect(compileSafeRegex(pattern)).toBeNull();
