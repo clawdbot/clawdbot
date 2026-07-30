@@ -354,6 +354,7 @@ async function stopAcpTasksForRequester(params: {
         cfg: params.cfg,
         taskId: task.taskId,
         reason: "killed",
+        suppressTaskDelivery: true,
       });
       cancelled = result.cancelled;
     } catch (error) {

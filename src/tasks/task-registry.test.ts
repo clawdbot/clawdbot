@@ -4483,6 +4483,36 @@ describe("task-registry", () => {
     });
   });
 
+  it("suppresses terminal delivery when cancellation is requester cleanup", async () => {
+    await withTaskRegistryTempDir(async () => {
+      hoisted.sendMessageMock.mockClear();
+      const task = createTaskFixture("acp", {
+        requesterOrigin: NOTIFYCHAT_ORIGIN,
+        childSessionKey: "agent:codex:acp:requester-cleanup",
+        runId: "run-acp-requester-cleanup",
+        task: "Stop silently",
+        deliveryStatus: "pending",
+      });
+
+      const result = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+        reason: "killed",
+        suppressTaskDelivery: true,
+      });
+      await Promise.resolve();
+
+      expectRecordFields(result, { found: true, cancelled: true });
+      expectRecordFields(getTaskById(task.taskId), {
+        status: "cancelled",
+        error: "killed",
+        deliveryStatus: "not_applicable",
+      });
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
+    });
+  });
+
   it("accepts subagent success that completed before cancellation", async () => {
     await withTaskRegistryTempDir(async () => {
       const task = createTaskFixture("subagent", {

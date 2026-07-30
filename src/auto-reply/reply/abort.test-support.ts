@@ -9,6 +9,8 @@ type AbortTestDeps = {
   getLatestSubagentRunByChildSessionKey: typeof import("../../agents/subagent-registry.js").getLatestSubagentRunByChildSessionKey;
   listSubagentRunsForController: typeof import("../../agents/subagent-registry.js").listSubagentRunsForController;
   markSubagentRunTerminated: typeof import("../../agents/subagent-registry.js").markSubagentRunTerminated;
+  listFreshTasksForOwnerKey: typeof import("../../tasks/runtime-internal.js").listFreshTasksForOwnerKey;
+  cancelTaskById: typeof import("../../tasks/runtime-internal.js").cancelTaskById;
 };
 
 type AbortTestApi = {

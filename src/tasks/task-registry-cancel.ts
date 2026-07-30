@@ -37,6 +37,7 @@ export async function cancelTaskById(params: {
   cfg: OpenClawConfig;
   taskId: string;
   reason?: string;
+  suppressTaskDelivery?: boolean;
 }): Promise<{ found: boolean; cancelled: boolean; reason?: string; task?: TaskRecord }> {
   ensureTaskRegistryReady();
   const task = tasks.get(params.taskId.trim());
@@ -236,12 +237,14 @@ export async function cancelTaskById(params: {
             endedAt,
             lastEventAt: eventAt,
             error: cancellationError,
+            suppressDelivery: params.suppressTaskDelivery,
           }).find((record) => record.taskId === task.taskId) ?? null)
         : updateTask(task.taskId, {
             status: "cancelled",
             endedAt,
             lastEventAt: eventAt,
             error: cancellationError,
+            ...(params.suppressTaskDelivery ? { deliveryStatus: "not_applicable" } : {}),
           });
     if (!updated) {
       return {
@@ -251,7 +254,7 @@ export async function cancelTaskById(params: {
         task: cloneTaskRecord(task),
       };
     }
-    if (updated) {
+    if (!params.suppressTaskDelivery) {
       void maybeDeliverTaskTerminalUpdate(updated.taskId);
     }
     return {

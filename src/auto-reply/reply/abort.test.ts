@@ -1284,6 +1284,7 @@ describe("abort detection", () => {
       cfg,
       taskId: "task-acp-1",
       reason: "killed",
+      suppressTaskDelivery: true,
     });
   });
 
@@ -1334,6 +1335,7 @@ describe("abort detection", () => {
       cfg,
       taskId: "task-acp-stops",
       reason: "killed",
+      suppressTaskDelivery: true,
     });
   });
 
