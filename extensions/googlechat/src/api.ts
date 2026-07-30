@@ -178,6 +178,13 @@ async function fetchBuffer(
   });
 }
 
+// A Chat `thread` must be a same-space `spaces/{space}/threads/{thread}` name. Reply
+// routing also yields bare ids, message names, and foreign-space threads, and the API
+// rejects the whole send with 400 INVALID_ARGUMENT rather than ignoring it (#115742).
+export function isUsableGoogleChatThreadName(thread: string, space: string): boolean {
+  return /^spaces\/[^/]+\/threads\/[^/]+$/.test(thread) && thread.startsWith(`${space}/threads/`);
+}
+
 export async function sendGoogleChatMessage(params: {
   account: ResolvedGoogleChatAccount;
   space: string;
@@ -186,6 +193,9 @@ export async function sendGoogleChatMessage(params: {
   cardsV2?: GoogleChatCardV2[];
 }): Promise<{ messageName?: string; threadName?: string } | null> {
   const { account, space, text, thread, cardsV2 } = params;
+  // Unusable thread names are dropped so the reply still lands in the space as a new
+  // thread instead of failing the send and losing the message entirely.
+  const usableThread = thread && isUsableGoogleChatThreadName(thread, space) ? thread : undefined;
   if (
     text &&
     (!cardsV2 || cardsV2.length === 0) &&
@@ -200,11 +210,11 @@ export async function sendGoogleChatMessage(params: {
   if (cardsV2 && cardsV2.length > 0) {
     body.cardsV2 = cardsV2;
   }
-  if (thread) {
-    body.thread = { name: thread };
+  if (usableThread) {
+    body.thread = { name: usableThread };
   }
   const urlObj = new URL(`${CHAT_API_BASE}/${space}/messages`);
-  if (thread) {
+  if (usableThread) {
     urlObj.searchParams.set("messageReplyOption", "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
   }
   const url = urlObj.toString();
