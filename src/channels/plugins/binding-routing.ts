@@ -3,6 +3,7 @@
  *
  * Applies configured and runtime conversation bindings to agent route resolution.
  */
+import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -126,6 +127,16 @@ export function resolveConfiguredBindingRoute(
   };
 }
 
+/** True when a runtime binding still points at a session the store can resolve. */
+function runtimeBindingTargetSessionExists(sessionKey: string): boolean {
+  try {
+    return Boolean(loadSessionEntryReadOnly({ sessionKey, clone: false }));
+  } catch {
+    // A store read failure must not silently drop an otherwise valid binding.
+    return true;
+  }
+}
+
 /**
  * Rewrites an agent route using a persisted runtime conversation binding, when applicable.
  */
@@ -162,6 +173,19 @@ export function resolveRuntimeConversationBindingRoute(
     // plugin is responsible for its runtime target handoff.
     return {
       bindingRecord,
+      route: params.route,
+    };
+  }
+
+  if (!runtimeBindingTargetSessionExists(boundSessionKey)) {
+    // Callers treat any returned record as authoritative and drop lower-priority configured
+    // bindings, so a record pointing at a deleted session would strand the conversation on a
+    // dead target forever instead of falling back. Same shape as the cron-run guard above.
+    logVerbose(
+      `ignored runtime conversation binding ${bindingRecord.bindingId} to missing session ${boundSessionKey}`,
+    );
+    return {
+      bindingRecord: null,
       route: params.route,
     };
   }

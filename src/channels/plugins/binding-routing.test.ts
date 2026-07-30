@@ -1,5 +1,7 @@
 // Binding routing tests cover channel binding selection and message routing behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   testing,
   registerSessionBindingAdapter,
@@ -12,6 +14,8 @@ import {
   resolveRuntimeConversationBindingRoute,
 } from "./binding-routing.js";
 import { registerStatefulBindingTargetDriver } from "./stateful-target-drivers.js";
+
+vi.mock("../../config/sessions/session-accessor.js", { spy: true });
 
 function createRoute(): ResolvedAgentRoute {
   return {
@@ -60,6 +64,8 @@ function registerAdapter(record: SessionBindingRecord | null): {
 describe("runtime conversation binding route", () => {
   beforeEach(() => {
     testing.resetSessionBindingAdaptersForTests();
+    // Binding targets resolve by default; the stale-target case opts out explicitly.
+    vi.mocked(loadSessionEntryReadOnly).mockReturnValue({} as SessionEntry);
   });
 
   it("rewrites the route to a runtime-bound ACP session and touches the binding", () => {
@@ -140,6 +146,48 @@ describe("runtime conversation binding route", () => {
     expect(result.bindingRecord).toBeNull();
     expect(result.boundSessionKey).toBeUndefined();
     expect(result.route).toBe(route);
+  });
+
+  it("ignores runtime bindings whose target session no longer exists", () => {
+    const route = createRoute();
+    const binding = createBinding();
+    registerAdapter(binding);
+    vi.mocked(loadSessionEntryReadOnly).mockReturnValue(undefined);
+
+    const result = resolveRuntimeConversationBindingRoute({
+      route,
+      conversation: {
+        channel: "demo",
+        accountId: "default",
+        conversationId: "room-1",
+      },
+    });
+
+    // A null record is what lets callers fall back to their configured binding instead of
+    // treating the dead runtime target as authoritative.
+    expect(result.bindingRecord).toBeNull();
+    expect(result.boundSessionKey).toBeUndefined();
+    expect(result.route).toBe(route);
+  });
+
+  it("keeps the runtime binding when the session store read throws", () => {
+    const binding = createBinding();
+    registerAdapter(binding);
+    vi.mocked(loadSessionEntryReadOnly).mockImplementation(() => {
+      throw new Error("session store unavailable");
+    });
+
+    const result = resolveRuntimeConversationBindingRoute({
+      route: createRoute(),
+      conversation: {
+        channel: "demo",
+        accountId: "default",
+        conversationId: "room-1",
+      },
+    });
+
+    expect(result.bindingRecord).toBe(binding);
+    expect(result.boundSessionKey).toBe("agent:review:acp:session-1");
   });
 });
 
