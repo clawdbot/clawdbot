@@ -116,6 +116,15 @@ export async function handleDiscordMessageAction(
     to: string,
     fallbackSessionKey?: string,
   ) => {
+    const details =
+      result.details && typeof result.details === "object" && !Array.isArray(result.details)
+        ? (result.details as { ok?: unknown })
+        : undefined;
+    // Only a positive runtime receipt may suppress the source fallback. A
+    // resolved failure must leave the turn eligible for visible error delivery.
+    if (details?.ok !== true) {
+      return result;
+    }
     let target;
     try {
       target = parseDiscordTarget(to, { defaultKind: "channel" });
@@ -505,15 +514,7 @@ export async function handleDiscordMessageAction(
     if (action === "thread-reply") {
       const threadId = readStringParam(params, "threadId") ?? readTarget();
       notifyVisibleOutbound(threadId);
-      if (
-        notifyDiscordActiveTurnThreadReplyDelivered({
-          sessionKey: ctx.sessionKey,
-          accountId,
-          threadId,
-        })
-      ) {
-        return withCurrentSourceReplyRoute(adminResult);
-      }
+      return withAdoptedThreadReplyRoute(adminResult, threadId);
     }
     return adminResult;
   }
