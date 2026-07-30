@@ -212,7 +212,7 @@ describe("tlon core", () => {
         return "lidlut-replacement-code";
       }
       throw new Error(`Unexpected prompt: ${message}`);
-    }) as WizardPrompter["text"];
+    });
     const confirm = vi.fn(async ({ message }: { message: string }) => {
       if (message.startsWith("Ship name") || message.startsWith("Ship URL")) {
         return true;
@@ -225,7 +225,10 @@ describe("tlon core", () => {
       }
       return false;
     });
-    const prompter = createTestWizardPrompter({ text, confirm });
+    const prompter = createTestWizardPrompter({
+      text: text as WizardPrompter["text"],
+      confirm,
+    });
 
     const result = await runSetupWizardConfigure({
       configure: tlonConfigure,

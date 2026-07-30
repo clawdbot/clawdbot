@@ -159,7 +159,7 @@ describe("synology-chat core", () => {
         return "";
       }
       throw new Error(`Unexpected prompt: ${message}`);
-    }) as WizardPrompter["text"];
+    });
     const confirm = vi.fn(async ({ message }: { message: string }) => {
       if (message === "Synology Chat webhook token already configured. Keep it?") {
         return true;
@@ -169,7 +169,10 @@ describe("synology-chat core", () => {
       }
       throw new Error(`Unexpected confirmation: ${message}`);
     });
-    const prompter = createTestWizardPrompter({ text, confirm });
+    const prompter = createTestWizardPrompter({
+      text: text as WizardPrompter["text"],
+      confirm,
+    });
 
     const result = await runSetupWizardConfigure({
       configure: synologyChatConfigure,
@@ -183,7 +186,7 @@ describe("synology-chat core", () => {
         },
       } as OpenClawConfig,
       prompter,
-      options: { secretInputMode: "plaintext" },
+      options: { secretInputMode: "plaintext" as const },
     });
 
     expect(result.cfg.channels?.["synology-chat"]?.incomingUrl).toBe(replacementIncomingUrl);
