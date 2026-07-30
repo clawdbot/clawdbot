@@ -4,7 +4,7 @@ import { subagentRuns } from "../../agents/subagent-registry-memory.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { createAgentAdmissionController } from "./agent-admission-controller.js";
 import { createAgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
-import { reserveReservedSubagentDedupeEntry } from "./agent-dedupe.js";
+import { reserveReservedSubagentDedupeEntry, setGatewayDedupeEntries } from "./agent-dedupe.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 
 function runPreflight(
@@ -507,5 +507,83 @@ describe("reserved subagent Gateway admission", () => {
       expect.objectContaining({ cached: true, runId }),
     );
     release();
+  });
+
+  it("does not overwrite the accepted result after the reserved marker is adopted", () => {
+    const context = createContext();
+    const ordinaryRespond = vi.fn();
+    const ordinaryRequest = createRequest();
+    const preflight = prepareAgentRequestPreflight({
+      params: ordinaryRequest,
+      respond: ordinaryRespond,
+      context,
+      client: undefined,
+    } as never);
+    expect(preflight).toBeDefined();
+
+    reserveReservedSubagentDedupeEntry({
+      dedupe: context.dedupe,
+      runId,
+      sessionKey,
+      pluginRuntimeOwnerId,
+      claimToken,
+    });
+    const acceptedEntry = {
+      ts: Date.now(),
+      ok: true,
+      payload: {
+        runId,
+        sessionKey,
+        status: "accepted" as const,
+        acceptedAt: Date.now(),
+      },
+    };
+    setGatewayDedupeEntries({
+      dedupe: context.dedupe,
+      keys: preflight!.agentDedupeKeys,
+      entry: acceptedEntry,
+    });
+
+    const dedupeLifecycle = createAgentDedupeLifecycle({
+      cfg: {},
+      request: ordinaryRequest,
+      runId,
+      lifecycleGeneration: preflight!.lifecycleGeneration,
+      agentDedupeKeys: preflight!.agentDedupeKeys,
+      suppressVisibleSessionEffects: false,
+      context,
+      client: undefined,
+      respond: ordinaryRespond,
+    } as never);
+    dedupeLifecycle.reserve(sessionKey);
+    expect(context.dedupe.get(`agent:${runId}`)).toBe(acceptedEntry);
+
+    const controller = createAgentAdmissionController({
+      cfg: {},
+      runId,
+      lifecycleGeneration: preflight!.lifecycleGeneration,
+      agentDedupeKeys: preflight!.agentDedupeKeys,
+      context,
+      respond: ordinaryRespond,
+      dedupeLifecycle,
+      getRequestedSessionKey: () => sessionKey,
+      getResolvedSessionKey: () => sessionKey,
+      getResolvedSessionId: () => "ordinary-session",
+      getResolvedSessionAgentId: () => "worker",
+      getAgentId: () => "worker",
+      getCfgForAgent: () => undefined,
+      getSessionPersisted: () => false,
+      getSupersededSessionId: () => undefined,
+      setAdmittedSessionId: () => {},
+    } as never);
+    controller.assertAllowed();
+    expect(controller.respondToOutcome()).toBe(true);
+    expect(context.dedupe.get(`agent:${runId}`)).toBe(acceptedEntry);
+    expect(ordinaryRespond).toHaveBeenLastCalledWith(
+      true,
+      { runId, status: "in_flight" },
+      undefined,
+      expect.objectContaining({ cached: true, runId }),
+    );
   });
 });

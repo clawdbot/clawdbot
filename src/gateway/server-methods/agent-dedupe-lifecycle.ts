@@ -49,15 +49,15 @@ export function createAgentDedupeLifecycle(params: {
     if (reserved) {
       return;
     }
-    const existingReservation = readReservedSubagentDedupeReservation(
-      readGatewayDedupeEntry({
-        dedupe: params.context.dedupe,
-        keys: params.agentDedupeKeys,
-      }),
-    );
-    if (existingReservation) {
+    const existingEntry = readGatewayDedupeEntry({
+      dedupe: params.context.dedupe,
+      keys: params.agentDedupeKeys,
+    });
+    const existingReservation = readReservedSubagentDedupeReservation(existingEntry);
+    if (existingEntry) {
       reserved = true;
       if (
+        existingReservation &&
         isReservedSubagentDedupeReservationAuthorized({
           reservation: existingReservation,
           runId: params.runId,
