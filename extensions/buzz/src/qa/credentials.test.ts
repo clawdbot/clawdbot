@@ -36,6 +36,31 @@ describe("Buzz QA credentials", () => {
     expect(credentials.driverPublicKey).not.toBe(credentials.sutPublicKey);
   });
 
+  it.each(["ws://localhost:8080", "ws://127.0.0.1:8080", "ws://[::1]:8080"])(
+    "allows plaintext loopback relay URL %s",
+    (relayUrl) => {
+      expect(
+        parseBuzzQaCredentialPayload({
+          relayUrl,
+          roomId: "123e4567-e89b-42d3-a456-426614174000",
+          driverPrivateKey: DRIVER_PRIVATE_KEY,
+          sutPrivateKey: SUT_PRIVATE_KEY,
+        }).relayUrl,
+      ).toBe(relayUrl);
+    },
+  );
+
+  it("rejects plaintext remote relay URLs", () => {
+    expect(() =>
+      parseBuzzQaCredentialPayload({
+        relayUrl: "ws://relay.qa.example",
+        roomId: "123e4567-e89b-42d3-a456-426614174000",
+        driverPrivateKey: DRIVER_PRIVATE_KEY,
+        sutPrivateKey: SUT_PRIVATE_KEY,
+      }),
+    ).toThrow("Buzz QA credentials are missing or malformed.");
+  });
+
   it("never includes credential values in validation errors", () => {
     const privateKey = "not-a-private-key-value";
     const authTag = "not-an-auth-tag-value";

@@ -152,7 +152,7 @@ For `kind: "telegram"`, broker `admin/add` validates that payload includes:
 
 For `kind: "buzz"`, broker `admin/add` validates that payload includes:
 
-- `relayUrl` as a `ws://` or `wss://` URL
+- `relayUrl` as a `wss://` URL, or `ws://` only for a loopback relay
 - `roomId` as a channel UUID
 - valid, distinct `driverPrivateKey` and `sutPrivateKey` values in nsec or
   64-character hex form

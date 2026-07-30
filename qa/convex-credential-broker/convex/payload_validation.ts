@@ -132,16 +132,20 @@ function normalizeBuzzCredentialPayload(
 ) {
   const kind = "buzz";
   const relayUrl = requirePayloadString(payload, "relayUrl", kind, createFailure);
-  let relayProtocol: string;
+  let parsedRelayUrl: URL | undefined;
   try {
-    relayProtocol = new URL(relayUrl).protocol;
+    parsedRelayUrl = new URL(relayUrl);
   } catch {
-    relayProtocol = "";
+    parsedRelayUrl = undefined;
   }
-  if (relayProtocol !== "ws:" && relayProtocol !== "wss:") {
+  const relayProtocol = parsedRelayUrl?.protocol;
+  const relayUsesSafeTransport =
+    relayProtocol === "wss:" ||
+    (relayProtocol === "ws:" && isBuzzLoopbackHostname(parsedRelayUrl?.hostname ?? ""));
+  if (!relayUsesSafeTransport) {
     throwPayloadError(
       createFailure,
-      'Credential payload for kind "buzz" must include "relayUrl" as a WebSocket URL.',
+      'Credential payload for kind "buzz" must include "relayUrl" using wss:// (ws:// is allowed only for loopback).',
     );
   }
   const roomId = requirePayloadString(payload, "roomId", kind, createFailure).toLowerCase();
@@ -176,6 +180,20 @@ function normalizeBuzzCredentialPayload(
     ...(driverAuthTag ? { driverAuthTag } : {}),
     ...(sutAuthTag ? { sutAuthTag } : {}),
   } satisfies Record<string, unknown>;
+}
+
+function isBuzzLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/gu, "");
+  if (normalized === "localhost" || normalized === "::1") {
+    return true;
+  }
+  const ipv4 = normalized.startsWith("::ffff:") ? normalized.slice("::ffff:".length) : normalized;
+  const octets = ipv4.split(".");
+  return (
+    octets.length === 4 &&
+    octets[0] === "127" &&
+    octets.every((octet) => /^\d{1,3}$/u.test(octet) && Number(octet) <= 255)
+  );
 }
 
 function normalizeTelegramCredentialPayload(

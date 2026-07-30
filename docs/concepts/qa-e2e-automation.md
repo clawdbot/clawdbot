@@ -502,7 +502,8 @@ a model-provider credential.
 Local runs use `--credential-file <path>` with a private JSON file containing
 `relayUrl`, `roomId`, `driverPrivateKey`, and `sutPrivateKey`. Closed relays may
 also need `driverAuthTag` and `sutAuthTag`. Relative paths resolve from
-`--repo-root`.
+`--repo-root`. Hosted relays must use `wss://`; plaintext `ws://` is accepted
+only for loopback development relays.
 
 Both identities must be members of the dedicated room, and the SUT public key
 must have the **Bot** role. A hosted closed relay may also require both public
@@ -1071,8 +1072,9 @@ Payload shapes the broker validates on `admin/add`:
 
 - Buzz (`kind: "buzz"`): `{ relayUrl: string, roomId: string,
 driverPrivateKey: string, sutPrivateKey: string, driverAuthTag?: string,
-sutAuthTag?: string }` - `relayUrl` must use WebSocket transport, `roomId` must
-  be a channel UUID, and the identities must be distinct.
+sutAuthTag?: string }` - `relayUrl` must use `wss://`, with `ws://` allowed only
+  for loopback relays; `roomId` must be a channel UUID, and the identities must
+  be distinct.
 - Discord (`kind: "discord"`): `{ guildId: string, channelId: string,
 driverBotToken: string, sutBotToken: string, sutApplicationId: string }`.
 - Telegram (`kind: "telegram"`): `{ groupId: string, driverToken: string,

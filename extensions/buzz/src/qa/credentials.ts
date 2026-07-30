@@ -1,16 +1,28 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
 import { parseBuzzAuthTag } from "../relay-auth.js";
 import { parseBuzzTarget } from "../target.js";
 import { resolveBuzzPublicKey } from "../types.js";
 
+function isSafeBuzzQaRelayUrl(value: string): boolean {
+  try {
+    const relayUrl = new URL(value);
+    return (
+      relayUrl.protocol === "wss:" ||
+      (relayUrl.protocol === "ws:" && isLoopbackHost(relayUrl.hostname))
+    );
+  } catch {
+    return false;
+  }
+}
+
 const buzzQaCredentialPayloadSchema = z
   .object({
-    relayUrl: z
-      .string()
-      .url()
-      .regex(/^[wW][sS][sS]?:\/\//u),
+    // QA credentials may contain relay auth tags, so plaintext WebSockets must
+    // stay on loopback and never cross a network boundary.
+    relayUrl: z.string().url().refine(isSafeBuzzQaRelayUrl),
     roomId: z.string().min(1),
     driverPrivateKey: z.string().min(1),
     sutPrivateKey: z.string().min(1),

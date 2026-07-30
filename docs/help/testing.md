@@ -405,7 +405,8 @@ gh workflow run package-acceptance.yml --ref main \
     and SUT identities.
   - Local runs use `--credential-file <path>` with `relayUrl`, `roomId`,
     `driverPrivateKey`, and `sutPrivateKey`. Closed relays may also need
-    `driverAuthTag` and `sutAuthTag`.
+    `driverAuthTag` and `sutAuthTag`. Hosted relays require `wss://`; `ws://` is
+    accepted only for loopback development relays.
   - Defaults to `mock-openai` and runs canary and mention-gating scenarios
     through the real Buzz plugin path.
   - Supports `--credential-source convex` with a pooled `kind: "buzz"` row.

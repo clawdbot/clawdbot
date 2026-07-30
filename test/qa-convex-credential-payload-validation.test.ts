@@ -26,6 +26,31 @@ describe("QA Convex credential payload validation", () => {
     });
   });
 
+  it.each(["ws://localhost:8080", "ws://127.0.0.1:8080", "ws://[::1]:8080"])(
+    "allows plaintext loopback Buzz relay URL %s",
+    (relayUrl) => {
+      expect(
+        normalizeCredentialPayloadForKind("buzz", {
+          relayUrl,
+          roomId: "123e4567-e89b-42d3-a456-426614174000",
+          driverPrivateKey: BUZZ_DRIVER_PRIVATE_KEY,
+          sutPrivateKey: BUZZ_SUT_PRIVATE_KEY,
+        }),
+      ).toMatchObject({ relayUrl });
+    },
+  );
+
+  it("rejects plaintext remote Buzz relay URLs", () => {
+    expect(() =>
+      normalizeCredentialPayloadForKind("buzz", {
+        relayUrl: "ws://relay.qa.example",
+        roomId: "123e4567-e89b-42d3-a456-426614174000",
+        driverPrivateKey: BUZZ_DRIVER_PRIVATE_KEY,
+        sutPrivateKey: BUZZ_SUT_PRIVATE_KEY,
+      }),
+    ).toThrow(/wss:\/\//u);
+  });
+
   it("rejects malformed Buzz credential payloads without echoing values", () => {
     const privateKey = BUZZ_DRIVER_PRIVATE_KEY;
     const invalidRelay = "https://relay.qa.example/private-path";
@@ -36,7 +61,7 @@ describe("QA Convex credential payload validation", () => {
         driverPrivateKey: privateKey,
         sutPrivateKey: privateKey,
       }),
-    ).toThrow(/WebSocket URL/u);
+    ).toThrow(/wss:\/\//u);
     try {
       normalizeCredentialPayloadForKind("buzz", {
         relayUrl: "wss://relay.qa.example",
