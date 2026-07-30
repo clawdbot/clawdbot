@@ -11,6 +11,10 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import { getMatrixRuntime } from "../../runtime.js";
+import {
+  applyMatrixPresentationPayload,
+  resolveMatrixExtraContent,
+} from "../presentation-content.js";
 import type { MatrixClient } from "../sdk.js";
 import { chunkMatrixText, sendMessageMatrix } from "../send.js";
 import type { MatrixSendResult } from "../send/types.js";
@@ -138,14 +142,18 @@ export async function deliverMatrixReplies(params: {
   const hasRepliedRef = params.hasRepliedRef ?? { value: false };
   const acceptedResults: MatrixSendResult[] = [];
   try {
-    for (const reply of params.replies) {
+    for (const sourceReply of params.replies) {
+      // Inbound delivery never runs the core renderPresentation hook, so encode
+      // the portable presentation here or buttons/selects reach nobody.
+      const reply = applyMatrixPresentationPayload(sourceReply);
+      const presentationExtraContent = resolveMatrixExtraContent(reply);
       const visibleText = resolveVisibleMatrixReplyText(reply.text);
       const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
       if (reply.isReasoning === true || (!hasMedia && reply.text && visibleText === undefined)) {
         logVerbose("matrix reply suppressed as reasoning-only");
         continue;
       }
-      if (!reply?.text && !hasMedia) {
+      if (!reply?.text && !hasMedia && !presentationExtraContent) {
         if (reply?.audioAsVoice) {
           logVerbose("matrix reply has audioAsVoice without media/text; skipping");
           continue;
@@ -184,18 +192,23 @@ export async function deliverMatrixReplies(params: {
           tableMode,
           preserveWhitespace: true,
         });
+        let isFirstChunk = true;
         for (const chunk of chunks) {
           if (!chunk.trim()) {
             continue;
           }
+          // Controls belong to one event; repeating them per chunk would render
+          // duplicate button rows in the room.
           await sendMessageMatrix(params.roomId, chunk, {
             client: params.client,
             cfg: params.cfg,
             replyToId: replyToIdForReply,
             threadId: params.threadId,
             accountId: params.accountId,
+            extraContent: isFirstChunk ? presentationExtraContent : undefined,
             onDeliveryResult,
           });
+          isFirstChunk = false;
         }
         continue;
       }
@@ -212,6 +225,7 @@ export async function deliverMatrixReplies(params: {
           threadId: params.threadId,
           audioAsVoice: reply.audioAsVoice,
           accountId: params.accountId,
+          extraContent: first ? presentationExtraContent : undefined,
           onDeliveryResult,
         });
         first = false;

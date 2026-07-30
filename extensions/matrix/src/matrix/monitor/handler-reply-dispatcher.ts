@@ -5,6 +5,10 @@ import {
   type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
+  hasMessagePresentationBlocks,
+  normalizeMessagePresentation,
+} from "openclaw/plugin-sdk/interactive-runtime";
+import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
 } from "openclaw/plugin-sdk/reply-payload";
@@ -171,9 +175,15 @@ export function createMatrixReplyDispatcher(config: {
           !threadTarget &&
           payloadReplyToId !== draftController.currentReplyToId();
         let mustDeliverFinalNormally = draftStream.mustDeliverFinalNormally();
+        // Finalizing edits the draft event in place, which cannot attach the
+        // presentation controls; normal delivery owns that encoding.
+        const carriesPresentationControls = hasMessagePresentationBlocks(
+          normalizeMessagePresentation(payload.presentation),
+        );
         const canPotentiallyFinalizeDraft =
           Boolean(payload.text?.trim()) &&
           !payload.isError &&
+          !carriesPresentationControls &&
           !payloadReplyMismatch &&
           !mustDeliverFinalNormally;
 
@@ -198,6 +208,7 @@ export function createMatrixReplyDispatcher(config: {
           payload.text &&
           !payload.isError &&
           !hasMedia &&
+          !carriesPresentationControls &&
           !payloadReplyMismatch &&
           !mustDeliverFinalNormally &&
           !draftFinalTextNeedsNormalMentionDelivery
