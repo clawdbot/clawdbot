@@ -1,3 +1,4 @@
+import type { SessionToolOverrides } from "../../config/sessions/types.js";
 // Shared get-reply type contracts for command, directive, and runtime layers.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ReplyOptionsWithHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
@@ -28,6 +29,7 @@ type InternalReplySessionOptions = {
   queueModeOverride?: QueueMode;
   /** Dispatch-owned operation used to defer hooks until durable run admission. */
   replyOperation?: ReplyOperation;
+  skillOverrides?: SessionToolOverrides["skills"];
 };
 
 export type InternalGetReplyOptions = GetReplyOptions &

@@ -98,10 +98,7 @@ import {
   runQaSuiteWithInfraRetry,
 } from "./suite-launch.runtime.js";
 import { resolveQaSuiteScenarioChannel, resolveQaSuiteScenarioChannels } from "./suite-planning.js";
-import {
-  isQaSuiteReportOnlyOptionalScenario,
-  readQaSuiteFailedOrSkippedScenarioCountFromFile,
-} from "./suite-summary.js";
+import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
 import {
   buildTokenEfficiencyReport,
   renderTokenEfficiencyMarkdownReport,
@@ -279,22 +276,18 @@ function parseQaRuntimePair(value: string | undefined): [RuntimeId, RuntimeId] |
   if (!value?.trim()) {
     return undefined;
   }
-  const runtimes = value
-    .split(",")
-    .map((part) => part.trim().toLowerCase())
-    .filter(Boolean)
-    .map(normalizeQaRuntimeId);
-  if (runtimes.length !== 2) {
+  const runtimeNames = value.split(",");
+  if (runtimeNames.length !== 2) {
     throw new Error('--runtime-pair must use exactly two runtimes, e.g. "openclaw,codex".');
   }
-  const [left, right] = runtimes;
+  const [left, right] = runtimeNames.map((part) => normalizeQaRuntimeId(part.trim().toLowerCase()));
   if (!left || !right) {
     throw new Error('--runtime-pair only supports "openclaw" and "codex".');
   }
   if (left === right) {
     throw new Error("--runtime-pair must compare two different runtimes.");
   }
-  return ["openclaw", "codex"];
+  return [left, right];
 }
 
 function parseQaRuntimePairLaneFilters(input: string[] | undefined): QaRuntimePairLane[] {
@@ -652,22 +645,20 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     (opts.scenarioIds ?? []).map((scenarioId) => scenarioId.trim()).filter(Boolean),
   );
   const taxonomyScenarios = membership.selectedScenarios;
-  if (requestedScenarioIds.length > 0 && taxonomyScenarios.length === 0) {
-    throw new Error(
-      `qa run did not find taxonomy scenarios for ${formatQaRunProfileFilterList(opts)} --scenario ${requestedScenarioIds.join(",")}.`,
-    );
-  }
   const missingScenarioIds = membership.excludedScenarioIds;
-  if (missingScenarioIds.length > 0) {
-    throw new Error(
-      `qa run did not find taxonomy scenarios for ${formatQaRunProfileFilterList(opts)} --scenario ${missingScenarioIds.join(",")}.`,
-    );
-  }
   const providerMode = opts.providerMode ?? defaultQaRunProfileProviderMode(profile);
   const normalizedProviderMode = normalizeQaProviderMode(providerMode);
   const primaryModel = opts.primaryModel?.trim() || defaultQaModelForMode(normalizedProviderMode);
+  const missingScenarioIdSet = new Set(missingScenarioIds);
+  const executionScenarios =
+    missingScenarioIds.length > 0
+      ? [
+          ...taxonomyScenarios,
+          ...scenarioPack.scenarios.filter((scenario) => missingScenarioIdSet.has(scenario.id)),
+        ]
+      : taxonomyScenarios;
   const executionSelection = resolveQaRunProfileExecutionSelection({
-    scenarios: taxonomyScenarios,
+    scenarios: executionScenarios,
     providerMode: normalizedProviderMode,
     primaryModel,
     channelDriver: profileReport.channelDriver,
@@ -682,6 +673,16 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
       .join(", ");
     throw new Error(
       `qa run --qa-profile ${profile} cannot run explicitly selected scenario(s): ${exclusions}.`,
+    );
+  }
+  if (requestedScenarioIds.length > 0 && taxonomyScenarios.length === 0) {
+    throw new Error(
+      `qa run did not find taxonomy scenarios for ${formatQaRunProfileFilterList(opts)} --scenario ${requestedScenarioIds.join(",")}.`,
+    );
+  }
+  if (missingScenarioIds.length > 0) {
+    throw new Error(
+      `qa run did not find taxonomy scenarios for ${formatQaRunProfileFilterList(opts)} --scenario ${missingScenarioIds.join(",")}.`,
     );
   }
   const scenarios = executionSelection.selectedScenarios;
@@ -1049,17 +1050,16 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
       process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
       if (!allowFailures) {
-        const optionalScenarioNames = resolveQaReportOnlyOptionalScenarioNames({
-          scenarioIds,
-          explicitScenarioSelection: opts.explicitScenarioSelection,
-        });
-        if (
-          result.scenarios.some(
-            (scenario) =>
-              scenario.status !== "pass" &&
-              !isQaSuiteReportOnlyOptionalScenario(scenario, optionalScenarioNames),
-          )
-        ) {
+        const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
+          result.summaryPath,
+          {
+            optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
+              scenarioIds,
+              explicitScenarioSelection: opts.explicitScenarioSelection,
+            }),
+          },
+        );
+        if (blockingScenarioCount > 0) {
           process.exitCode = 1;
         }
       }

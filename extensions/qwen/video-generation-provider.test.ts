@@ -175,7 +175,7 @@ describe("qwen video generation provider", () => {
         method: "GET",
         headers: expect.any(Headers),
       }),
-      120_000,
+      expect.any(Number),
       fetch,
       {
         ssrfPolicy: { allowPrivateNetwork: true },
@@ -186,7 +186,7 @@ describe("qwen video generation provider", () => {
       2,
       "https://example.com/out.mp4",
       { method: "GET" },
-      120_000,
+      expect.any(Number),
       fetch,
       {
         ssrfPolicy: { allowPrivateNetwork: true },

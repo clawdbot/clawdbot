@@ -8,9 +8,10 @@ import type {
   SystemAgentSetupActivateResult,
   SystemAgentSetupDetectResult,
 } from "../../api/types.ts";
-import { titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -34,6 +35,8 @@ import { renderModelSetup, resolveSetupBrandIcon } from "./view.ts";
 import { ModelSetupWizardRunner } from "./wizard-runner.ts";
 import type { ModelSetupWizardStartMethod } from "./wizard-runner.ts";
 
+const MODEL_SETUP_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers";
+
 type Candidate = SystemAgentSetupDetectResult["candidates"][number];
 type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number];
 
@@ -53,6 +56,11 @@ function errorMessage(error: unknown): string {
 type BoundModelResult<T> =
   | { client: GatewayBrowserClient; value: T }
   | { client: GatewayBrowserClient; error: unknown };
+
+type ActivationTaskResult = {
+  result: SystemAgentSetupActivateResult;
+  refreshError: string | null;
+};
 
 async function captureModelResult<T>(
   client: GatewayBrowserClient,
@@ -138,19 +146,37 @@ export class ModelSetupPage extends OpenClawLightDomElement {
 
   private readonly activationTask = new Task<
     readonly [GatewayBrowserClient | null, SystemAgentSetupActivateParams | null],
-    BoundModelResult<SystemAgentSetupActivateResult>
+    BoundModelResult<ActivationTaskResult>
   >(this, {
     autoRun: false,
     args: () => [null, null],
-    task: ([client, params], { signal }) =>
-      client && params
-        ? captureModelResult(client, () =>
-            client.request<SystemAgentSetupActivateResult>("openclaw.setup.activate", params, {
+    task: ([client, params], { signal }) => {
+      if (!client || !params) {
+        return initialState;
+      }
+      return captureModelResult(client, async () => {
+        const mutation = await this.context.runtimeConfig.runExternalMutation((mutationClient) => {
+          if (mutationClient !== client) {
+            throw new Error("Connection changed before model activation started.");
+          }
+          return mutationClient.request<SystemAgentSetupActivateResult>(
+            "openclaw.setup.activate",
+            params,
+            {
               timeoutMs: activationTimeoutForKind(params.kind),
               signal,
-            }),
-          )
-        : initialState,
+            },
+          );
+        });
+        if (!mutation.ok) {
+          throw new Error(mutation.error);
+        }
+        return {
+          result: mutation.value,
+          refreshError: mutation.refresh.ok ? null : mutation.refresh.error,
+        };
+      });
+    },
     onComplete: (outcome) => {
       const current = this.activationState;
       if (current.phase !== "testing" || this.context.gateway.snapshot.client !== outcome.client) {
@@ -165,11 +191,15 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         };
         return;
       }
-      this.activationState = mapActivationResult({
-        result: outcome.value,
+      const activationState = mapActivationResult({
+        result: outcome.value.result,
         targetId: current.targetId,
         fallbackError: t("modelSetup.errors.activationFailed"),
       });
+      this.activationState =
+        activationState.phase === "success" && outcome.value.refreshError
+          ? { ...activationState, warning: outcome.value.refreshError }
+          : activationState;
       if (this.activationState.phase === "success") {
         this.manualApiKey = "";
       }
@@ -268,6 +298,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     return new Set(
       [
         ...result.candidates,
+        ...(result.unavailableCandidates ?? []),
         ...result.manualProviders,
         ...(result.authOptions ?? []),
         ...(result.recommendedInstalls ?? []),
@@ -461,6 +492,24 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     );
   }
 
+  private selectManualProvider(providerId: string): void {
+    if (providerId !== this.manualProviderId) {
+      this.manualApiKey = "";
+    }
+    this.manualProviderId = providerId;
+    this.manualError = null;
+  }
+
+  private async useManualProvider(providerId: string): Promise<void> {
+    this.selectManualProvider(providerId);
+    await this.updateComplete;
+    const input = this.renderRoot.querySelector<HTMLInputElement>(
+      '.model-setup__manual input[type="password"]',
+    );
+    input?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    input?.focus();
+  }
+
   private async handleWizardDone(startMethod: ModelSetupWizardStartMethod): Promise<void> {
     const result = await this.detect();
     if (!result) {
@@ -519,6 +568,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       manualApiKey: this.manualApiKey,
       manualError: this.manualError,
       moreSignInOpen: this.moreSignInOpen,
+      firstRun: this.routeData?.firstRun === true,
       iconUrls: this.iconUrls,
       onDetect: () => void this.detect(),
       onVerify: () => void this.verifyConnection(),
@@ -531,10 +581,8 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         this.wizardMode = "prepare";
         void this.wizard.start(option.id, "openclaw.setup.prepare.start");
       },
-      onManualProviderChange: (providerId) => {
-        this.manualProviderId = providerId;
-        this.manualError = null;
-      },
+      onManualProviderChange: (providerId) => this.selectManualProvider(providerId),
+      onUseManualProvider: (providerId) => void this.useManualProvider(providerId),
       onManualApiKeyChange: (apiKey) => {
         this.manualApiKey = apiKey;
         this.manualError = null;
@@ -549,6 +597,10 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         }
         this.context.navigate("chat");
       },
+      onSuccessClose: () => {
+        this.activationState = { phase: "idle" };
+        void this.detect();
+      },
       onWizardValueChange: (value) => (this.wizardValue = value),
       onWizardAnswer: (value, includeValue) => void this.wizard.answer(value, includeValue),
       onWizardCancel: () => void this.wizard.cancel(),
@@ -556,7 +608,13 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     });
     return html`
       <section class="content-header">
-        <div class="page-title">${titleForRoute("model-setup")}</div>
+        <div>
+          <div class="page-title">${titleForRoute("model-setup")}</div>
+          <div class="page-subtitle">
+            ${subtitleForRoute("model-setup")}
+            ${renderDocsLink(MODEL_SETUP_DOCS_URL, t("common.learnMore"))}
+          </div>
+        </div>
       </section>
       ${renderSettingsWorkspace(body)}
     `;

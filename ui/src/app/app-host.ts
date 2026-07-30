@@ -26,7 +26,7 @@ import "../components/sidebar-update-card.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
 import { isSessionRouteId, workboardBoardIdFromPath } from "../app-route-paths.ts";
-import { APP_ROUTE_IDS, isRouteId, type RouteId } from "../app-routes.ts";
+import { APP_ROUTE_IDS, isRouteId, routeIdFromPath, type RouteId } from "../app-routes.ts";
 import {
   EMPTY_SIDEBAR_WORKBOARD_SNAPSHOT,
   type SidebarWorkboardRenderers,
@@ -60,18 +60,23 @@ import type { BoardFace } from "../lib/board/settings.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
+import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
+  findUiSessionRow,
   resolveSessionPreferredFaceForKey,
+  resolveSessionNavigationAgentId,
   sessionNavigationTarget,
 } from "../lib/sessions/route-navigation.ts";
 import {
+  buildAgentMainSessionKey,
   isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiKnownSelectedGlobalAgentId,
+  uiSessionEventMatches,
 } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
@@ -132,6 +137,7 @@ import {
   setSettingsChangeListener,
 } from "./settings.ts";
 import { isStaleChunkImportError, scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
+import { resolveControlUiRefreshRequiredBanner } from "./update-overlay-helpers.ts";
 
 type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
@@ -679,6 +685,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       .watch(
         () => this.context?.sessions,
         (sessions, notify) => sessions.subscribe(notify),
+        (sessions) => this.recoverDeletedActiveSession(sessions.state),
       )
       .watch(
         () => this.context?.runtimeConfig,
@@ -724,6 +731,20 @@ class OpenClawShell extends OpenClawLightDomElement {
     });
   }
 
+  private reconcileCommittedServerUiPrefs(
+    runtimeConfig: ApplicationContext["runtimeConfig"],
+    needsRefresh: boolean,
+  ) {
+    if (this.context?.runtimeConfig !== runtimeConfig) {
+      return;
+    }
+    if (needsRefresh) {
+      void runtimeConfig.refresh();
+      return;
+    }
+    this.reconcileServerUiPrefs(runtimeConfig);
+  }
+
   override connectedCallback() {
     super.connectedCallback();
     if (this.outboxStoreRuntime) {
@@ -746,6 +767,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     window.addEventListener("openclaw:native-open-search", this.handleNativeOpenSearch);
     window.addEventListener("openclaw:native-toggle-search", this.handleNativeToggleSearch);
     window.addEventListener("openclaw:native-new-session", this.handleNativeNewSession);
+    window.addEventListener("openclaw:native-navigate", this.handleNativeNavigate);
     window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
     window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
@@ -756,15 +778,11 @@ class OpenClawShell extends OpenClawLightDomElement {
         return;
       }
       const prefs = changedServerUiPrefs(previous, next);
-      const snapshot = this.context?.gateway.snapshot;
-      if (prefs && snapshot?.client) {
-        pushServerUiPrefs(snapshot.client, prefs, {
-          afterCommit: () => {
-            const runtimeConfig = this.context?.runtimeConfig;
-            if (runtimeConfig) {
-              void runtimeConfig.refresh();
-            }
-          },
+      const runtimeConfig = this.context?.runtimeConfig;
+      if (prefs && runtimeConfig) {
+        pushServerUiPrefs(runtimeConfig, prefs, {
+          afterCommit: ({ needsRefresh }) =>
+            this.reconcileCommittedServerUiPrefs(runtimeConfig, needsRefresh),
         });
       }
     });
@@ -783,6 +801,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     window.removeEventListener("openclaw:native-open-search", this.handleNativeOpenSearch);
     window.removeEventListener("openclaw:native-toggle-search", this.handleNativeToggleSearch);
     window.removeEventListener("openclaw:native-new-session", this.handleNativeNewSession);
+    window.removeEventListener("openclaw:native-navigate", this.handleNativeNavigate);
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
     window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
@@ -858,6 +877,13 @@ class OpenClawShell extends OpenClawLightDomElement {
   }
   private readonly handleGatewayEvent = (event: GatewayEventFrame) => {
     this.sidebarWorkboardRuntime?.handleGatewayEvent(event.event);
+    if (event.event === "sessions.changed") {
+      const context = this.context;
+      if (context) {
+        this.recoverDeletedActiveSession(context.sessions.state);
+      }
+      return;
+    }
     if (event.event === "session.observer") {
       const context = this.context;
       if (context) {
@@ -1031,7 +1057,86 @@ class OpenClawShell extends OpenClawLightDomElement {
       return;
     }
     const face = this.routeState.routeId === "dashboard" ? "dashboard" : "chat";
-    context.replace(face, this.chatNavigationOptions(face));
+    const sessionWasDeleted = (context.sessions.state.deletedSessions ?? []).some(
+      ({ key, agentId }) =>
+        uiSessionEventMatches(
+          {
+            agentsList: context.agents.state.agentsList,
+            hello: context.gateway.snapshot.hello,
+            sessionKey,
+          },
+          key,
+          agentId,
+        ),
+    );
+    // Session lists are filtered and windowed. Only a failed route for this
+    // active key, or an authoritative deletion, proves it needs replacement.
+    const activeSessionRow = findUiSessionRow(context, sessionKey);
+    const attemptedPathname = this.routeState.location?.pathname;
+    const activeRouteFailed =
+      !attemptedPathname ||
+      attemptedPathname === sessionNavigationTarget({ context, face, sessionKey }).options.pathname;
+    const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+    const knownAgents = context.agents.state.agentsList?.agents;
+    // A parseable retired agent is not a navigable owner; never turn its
+    // deleted session into another permanently unresolvable chat route.
+    const replacementAgentId =
+      parsedAgentId &&
+      (!knownAgents || knownAgents.some((agent) => normalizeAgentId(agent.id) === parsedAgentId))
+        ? parsedAgentId
+        : resolveSessionNavigationAgentId(context);
+    const replacementSessionKey =
+      !sessionWasDeleted && (activeSessionRow?.key || !activeRouteFailed)
+        ? sessionKey
+        : buildAgentMainSessionKey({
+            agentId: replacementAgentId,
+            mainKey: resolveUiConfiguredMainKey({
+              agentsList: context.agents.state.agentsList,
+              hello: context.gateway.snapshot.hello,
+            }),
+          });
+    // Gateway rejects deletion of a live main session. If an orphaned event
+    // still names that fallback, replacing the same route would retry forever.
+    if (sessionWasDeleted && replacementSessionKey === sessionKey) {
+      return;
+    }
+    if (replacementSessionKey !== sessionKey) {
+      // Commit the replacement to both selection owners before navigating;
+      // otherwise a stale Gateway snapshot restores the deleted key and loops.
+      this.activeSessionKey = replacementSessionKey;
+      selectApplicationSession({
+        selection: context.agentSelection,
+        gateway: context.gateway,
+        sessionKey: replacementSessionKey,
+      });
+    }
+    context.replace(
+      face,
+      sessionNavigationTarget({ context, face, sessionKey: replacementSessionKey }).options,
+    );
+  }
+
+  private recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]) {
+    const context = this.context;
+    const routeId = this.routeState.routeId;
+    const sessionKey = this.activeSessionKey.trim();
+    if (!context || !routeId || !isSessionRouteId(routeId) || !sessionKey) {
+      return;
+    }
+    const selectedSessionDeleted = sessionState.deletedSessions.some(({ key, agentId }) =>
+      uiSessionEventMatches(
+        {
+          agentsList: context.agents.state.agentsList,
+          hello: context.gateway.snapshot.hello,
+          sessionKey,
+        },
+        key,
+        agentId,
+      ),
+    );
+    if (selectedSessionDeleted) {
+      this.replaceChatWithCurrentSession();
+    }
   }
 
   private isSettingsTakeover(): boolean {
@@ -1178,6 +1283,26 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.openNewSession(agentId);
   };
 
+  private readonly handleNativeNavigate = (event: Event) => {
+    const path = (event as CustomEvent<{ path?: unknown }>).detail?.path;
+    const schemeCandidate = typeof path === "string" ? path.slice(1) : "";
+    if (
+      typeof path !== "string" ||
+      !path.startsWith("/") ||
+      path.startsWith("//") ||
+      /^[a-z][a-z\d+.-]*:/i.test(schemeCandidate)
+    ) {
+      return;
+    }
+    const routeId = routeIdFromPath(path);
+    if (!routeId || !this.context) {
+      // Leave invalid or unavailable destinations unhandled so the native host can load its URL fallback.
+      return;
+    }
+    event.preventDefault();
+    this.navigate(routeId);
+  };
+
   private readonly handleNativeHistoryState = (event: Event) => {
     const detail = (event as CustomEvent<NativeHistoryState>).detail;
     if (typeof detail?.canGoBack !== "boolean" || typeof detail.canGoForward !== "boolean") {
@@ -1270,11 +1395,11 @@ class OpenClawShell extends OpenClawLightDomElement {
     const settingsModifier = event.metaKey !== event.ctrlKey && !event.altKey;
     if (settingsModifier && event.shiftKey && event.code === "Comma") {
       event.preventDefault();
-      this.navigate("config");
+      this.navigate("appearance");
       return;
     }
     const commandKey = event.metaKey && !event.ctrlKey && !event.altKey;
-    if (!commandKey || event.shiftKey || event.key.toLowerCase() !== "b") {
+    if (!commandKey || event.shiftKey || resolveAsciiShortcutKey(event) !== "b") {
       return;
     }
     event.preventDefault();
@@ -1625,13 +1750,9 @@ class OpenClawShell extends OpenClawLightDomElement {
     }
     this.runtimeConfigClient = snapshot.client;
     this.runtimeConfigSource = runtimeConfig;
-    flushServerUiPrefs(snapshot.client, {
-      afterCommit: () => {
-        const currentRuntimeConfig = this.context?.runtimeConfig;
-        if (currentRuntimeConfig) {
-          void currentRuntimeConfig.refresh();
-        }
-      },
+    flushServerUiPrefs(runtimeConfig, {
+      afterCommit: ({ needsRefresh }) =>
+        this.reconcileCommittedServerUiPrefs(runtimeConfig, needsRefresh),
     });
     void runtimeConfig.ensureLoaded();
   }
@@ -1723,8 +1844,27 @@ class OpenClawShell extends OpenClawLightDomElement {
         }
       }
       if (!pendingDiffers) {
-        persistRoute(committedRouteId, committedPathname, committedSearch);
         const committedSessionKey = routeState.committedSessionKey;
+        const committedSessionDeleted =
+          committedSessionKey !== undefined &&
+          (routeContext.sessions?.state.deletedSessions ?? []).some(({ key, agentId }) =>
+            uiSessionEventMatches(
+              {
+                agentsList: routeContext.agents.state.agentsList,
+                hello: routeContext.gateway.snapshot.hello,
+                sessionKey: committedSessionKey,
+              },
+              key,
+              agentId,
+            ),
+          );
+        if (committedSessionDeleted) {
+          // An older route can commit after deletion recovery has started.
+          // Never let it persist or reselect the session we just retired.
+          this.replaceChatWithCurrentSession();
+          return;
+        }
+        persistRoute(committedRouteId, committedPathname, committedSearch);
         if (committedSessionKey) {
           this.activeSessionKey = committedSessionKey;
           selectApplicationSession({
@@ -1893,7 +2033,7 @@ class OpenClawShell extends OpenClawLightDomElement {
           offline: gatewaySnapshot.offlineStable,
           queuedOutboxCount: storedOutboxes?.total ?? 0,
           lastError: gatewaySnapshot.lastError,
-          version:
+          gatewayVersion:
             context.config.current.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
           updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
           updateRunning: overlaySnapshot.updateRunning,
@@ -1908,6 +2048,21 @@ class OpenClawShell extends OpenClawLightDomElement {
             void this.handleSettingsSearchQueryChange(nextQuery);
           },
           preloadTimers: this.settingsPreloadTimers,
+          saveIndicator: {
+            status: runtimeConfig.configAutoSaveStatus,
+            lastError: runtimeConfig.lastError,
+            needsApply: runtimeConfig.configNeedsApply,
+            applying: runtimeConfig.configApplying,
+            applyDisabled:
+              runtimeConfig.configLoading ||
+              runtimeConfig.configSaving ||
+              (runtimeConfig.configFormDirty && runtimeConfig.configFormMode === "raw") ||
+              overlaySnapshot.updateRunning ||
+              overlaySnapshot.updateReconciliationPending,
+            onRetry: () => void context.runtimeConfig.save(),
+            onReload: () => void context.runtimeConfig.discardDraft(),
+            onApply: () => void context.runtimeConfig.apply(),
+          },
         })
       : this.navigationSidebar;
     // Optional tags stay mounted before definition. Lit replays their properties on upgrade,
@@ -2058,10 +2213,7 @@ class OpenClawShell extends OpenClawLightDomElement {
             : html`<openclaw-update-banner
                 .props=${{
                   statusBanner: overlaySnapshot.controlUiRefreshRequired
-                    ? {
-                        tone: "info",
-                        text: "Server updated — refresh for full capabilities",
-                      }
+                    ? resolveControlUiRefreshRequiredBanner()
                     : null,
                   action: overlaySnapshot.controlUiRefreshRequired
                     ? { label: t("common.refresh"), onClick: this.refreshControlUi }

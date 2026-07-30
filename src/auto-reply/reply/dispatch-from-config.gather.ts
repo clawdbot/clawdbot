@@ -10,8 +10,7 @@ import {
 import { normalizeExplicitSessionKey } from "../../config/sessions/explicit-session-key-normalization.js";
 import {
   deriveInboundMessageHookContext,
-  toPluginInboundClaimContext,
-  toPluginInboundClaimEvent,
+  toPluginInboundClaimPair,
 } from "../../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
@@ -373,14 +372,15 @@ export async function gatherDispatchRequest(
     const nextHookContext = deriveInboundMessageHookContext(sourceCtx, {
       messageId: messageIdForHook,
     });
+    const inboundClaim = toPluginInboundClaimPair(nextHookContext, {
+      commandAuthorized:
+        typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
+      wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
+    });
     return {
       hookContext: nextHookContext,
-      inboundClaimContext: toPluginInboundClaimContext(nextHookContext),
-      inboundClaimEvent: toPluginInboundClaimEvent(nextHookContext, {
-        commandAuthorized:
-          typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
-        wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
-      }),
+      inboundClaimContext: inboundClaim.context,
+      inboundClaimEvent: inboundClaim.event,
     };
   };
   let { hookContext, inboundClaimContext, inboundClaimEvent } = buildHookState(hookCtx);

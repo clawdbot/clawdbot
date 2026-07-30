@@ -30,9 +30,15 @@ import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
 vi.mock("./embedded-agent-mcp.js", () => ({
   loadEmbeddedAgentMcpConfig: (params: {
     cfg?: { mcp?: { servers?: Record<string, unknown> } };
+    toolOverrides?: { mcpServers?: Record<string, boolean> };
   }) => ({
     diagnostics: [],
-    mcpServers: params.cfg?.mcp?.servers ?? {},
+    mcpServers: Object.fromEntries(
+      Object.entries(params.cfg?.mcp?.servers ?? {}).filter(([name]) => {
+        const overrides = params.toolOverrides?.mcpServers;
+        return !(overrides && Object.hasOwn(overrides, name) && overrides[name] === false);
+      }),
+    ),
   }),
 }));
 
@@ -1298,6 +1304,73 @@ describe("session MCP runtime", () => {
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("applies session tool denials to listed and synthetic MCP tools", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-session-deny-");
+    const serverPath = path.join(tempDir, "session-deny.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: { tools: {}, resources: {} },
+      tools: [
+        { name: "search_docs", inputSchema: { type: "object", properties: {} } },
+        { name: "read_docs", inputSchema: { type: "object", properties: {} } },
+      ],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-tool-deny",
+      sessionKey: "agent:test:session-tool-deny",
+      workspaceDir: tempDir,
+      cfg: {
+        mcp: {
+          servers: { docs: { command: process.execPath, args: [serverPath] } },
+        },
+      },
+      toolOverrides: {
+        mcpToolsDeny: { docs: ["read_docs", "resources_read"] },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["search_docs"]);
+      expect(catalog.sessionDeniedTools).toMatchObject([
+        { serverName: "docs", toolName: "read_docs", deniedBySession: true },
+      ]);
+      expect(catalog.servers.docs?.toolCount).toBe(1);
+
+      const materialized = await materializeBundleMcpToolsForRun({ runtime });
+      expect(materialized.tools.map((tool) => tool.name)).toEqual([
+        "docs__resources_list",
+        "docs__search_docs",
+      ]);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("does not read inherited properties as MCP tool denials", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-own-deny-");
+    const serverPath = path.join(tempDir, "own-deny.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({ filePath: serverPath, logPath });
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-own-deny",
+      workspaceDir: tempDir,
+      cfg: { mcp: { servers: { constructor: { command: process.execPath, args: [serverPath] } } } },
+      toolOverrides: { mcpToolsDeny: { docs: ["slow_tool"] } },
+    });
+
+    try {
+      expect((await runtime.getCatalog()).tools.map((tool) => tool.toolName)).toEqual([
+        "slow_tool",
+      ]);
+    } finally {
+      await runtime.dispose();
     }
   });
 
@@ -2983,6 +3056,21 @@ describe("requester-scoped MCP connection resolution", () => {
     expect(
       resolveSessionMcpConfigSummary({ workspaceDir: "/workspace", cfg: cfg as never }).fingerprint,
     ).toBe(staticRuntime.configFingerprint);
+
+    const toolOverrides = { mcpServers: { shared: false } };
+    const overriddenSummary = resolveSessionMcpConfigSummary({
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      toolOverrides,
+    });
+    const overriddenRuntime = await manager.getOrCreate({
+      sessionId: "session-parity-overridden",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      toolOverrides,
+    });
+    expect(overriddenSummary.serverNames).toEqual(["user-mail"]);
+    expect(overriddenSummary.fingerprint).toBe(overriddenRuntime.configFingerprint);
 
     // With a resolver registered, tools.effective peeks the bare static-partition
     // runtime; summary parity keeps it from reporting stale-config forever.

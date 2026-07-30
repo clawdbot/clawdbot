@@ -104,7 +104,7 @@ const getBoardHttpModule = createLazyRuntimeModule(() => import("./board-http.js
 
 const getEmbeddingsHttpModule = createLazyRuntimeModule(() => import("./embeddings-http.js"));
 
-const getManagedImageAttachmentsModule = createLazyRuntimeModule(
+const getManagedMediaAttachmentsModule = createLazyRuntimeModule(
   () => import("./managed-image-attachments.js"),
 );
 
@@ -906,9 +906,9 @@ export function createGatewayHttpServer(opts: {
 
       if (isManagedOutgoingImagePath(scopedRequestPath)) {
         requestStages.push({
-          name: "chat-managed-image-media",
+          name: "chat-managed-media",
           run: async () =>
-            (await getManagedImageAttachmentsModule()).handleManagedOutgoingImageHttpRequest(
+            (await getManagedMediaAttachmentsModule()).handleManagedOutgoingMediaHttpRequest(
               req,
               res,
               {
@@ -985,6 +985,60 @@ export function createGatewayHttpServer(opts: {
   }
 
   return httpServer;
+}
+
+function handleBudgetedGatewayWebSocketUpgrade(params: {
+  req: IncomingMessage;
+  socket: import("node:stream").Duplex;
+  head: Buffer;
+  wss: WebSocketServer;
+  preauthConnectionBudget: PreauthConnectionBudget;
+  preauthBudgetKey: string | undefined;
+  ingressName: "Gateway" | "Worker";
+  prepareSocket?: (socket: GatewayIngressWebSocket) => void;
+}): void {
+  const { req, socket, head, wss, preauthConnectionBudget, preauthBudgetKey, ingressName } = params;
+  if (isGatewayWorkAdmissionClosed()) {
+    writeGatewayUpgradeServiceUnavailable(socket, `${ingressName} websocket admission closed`);
+    socket.destroy();
+    return;
+  }
+  if (wss.listenerCount("connection") === 0) {
+    writeGatewayUpgradeServiceUnavailable(socket, `${ingressName} websocket handlers unavailable`);
+    socket.destroy();
+    return;
+  }
+  if (!preauthConnectionBudget.acquire(preauthBudgetKey)) {
+    writeGatewayUpgradeServiceUnavailable(socket, "Too many unauthenticated sockets");
+    socket.destroy();
+    return;
+  }
+
+  let budgetTransferred = false;
+  // The upgrade owns its budget until the connection handler explicitly claims the socket.
+  const releaseUpgradeBudget = () => {
+    if (!budgetTransferred) {
+      budgetTransferred = true;
+      preauthConnectionBudget.release(preauthBudgetKey);
+    }
+  };
+  socket.once("close", releaseUpgradeBudget);
+  try {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      const ingressSocket = ws as GatewayIngressWebSocket;
+      ingressSocket["__openclawPreauthBudgetKey"] = preauthBudgetKey;
+      params.prepareSocket?.(ingressSocket);
+      wss.emit("connection", ws, req);
+      if (ingressSocket["__openclawPreauthBudgetClaimed"]) {
+        budgetTransferred = true;
+        socket.off("close", releaseUpgradeBudget);
+      }
+    });
+  } catch (error) {
+    socket.off("close", releaseUpgradeBudget);
+    releaseUpgradeBudget();
+    throw error;
+  }
 }
 
 /** Attaches WebSocket and plugin-upgrade routing to an already-created HTTP server. */
@@ -1104,57 +1158,17 @@ export function attachGatewayUpgradeHandler(opts: {
       // Plugin-owned upgrade routes have already had the opportunity to claim the socket.
       // Core Gateway upgrades must stop at the HTTP boundary so a client cannot hold an
       // untracked pre-connect socket after suspension or restart admission closes.
-      if (isGatewayWorkAdmissionClosed()) {
-        writeGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
-        socket.destroy();
-        return;
-      }
-      const preauthBudgetKey = requestClientIp;
-      if (wss.listenerCount("connection") === 0) {
-        writeGatewayUpgradeServiceUnavailable(socket, "Gateway websocket handlers unavailable");
-        socket.destroy();
-        return;
-      }
-      if (!preauthConnectionBudget.acquire(preauthBudgetKey)) {
-        writeGatewayUpgradeServiceUnavailable(socket, "Too many unauthenticated sockets");
-        socket.destroy();
-        return;
-      }
-      let budgetTransferred = false;
-      // The socket owns the preauth budget until the WebSocket connection handler claims it;
-      // close/error paths release here to avoid leaking unauthenticated connection slots.
-      const releaseUpgradeBudget = () => {
-        if (budgetTransferred) {
-          return;
-        }
-        budgetTransferred = true;
-        preauthConnectionBudget.release(preauthBudgetKey);
-      };
-      socket.once("close", releaseUpgradeBudget);
       try {
-        wss.handleUpgrade(req, socket, head, (ws) => {
-          (
-            ws as unknown as import("ws").WebSocket & {
-              __openclawPreauthBudgetClaimed?: boolean;
-              __openclawPreauthBudgetKey?: string;
-            }
-          )["__openclawPreauthBudgetKey"] = preauthBudgetKey;
-          wss.emit("connection", ws, req);
-          const budgetClaimed = Boolean(
-            (
-              ws as unknown as import("ws").WebSocket & {
-                __openclawPreauthBudgetClaimed?: boolean;
-              }
-            )["__openclawPreauthBudgetClaimed"],
-          );
-          if (budgetClaimed) {
-            budgetTransferred = true;
-            socket.off("close", releaseUpgradeBudget);
-          }
+        handleBudgetedGatewayWebSocketUpgrade({
+          req,
+          socket,
+          head,
+          wss,
+          preauthConnectionBudget,
+          preauthBudgetKey: requestClientIp,
+          ingressName: "Gateway",
         });
       } catch {
-        socket.off("close", releaseUpgradeBudget);
-        releaseUpgradeBudget();
         throw new Error("gateway websocket upgrade failed");
       }
     }).catch((err: unknown) => {
@@ -1174,46 +1188,21 @@ export function attachWorkerGatewayUpgradeHandler(params: {
   log?: { warn: (message: string) => void };
 }): void {
   params.httpServer.on("upgrade", (req, socket, head) => {
-    if (isGatewayWorkAdmissionClosed()) {
-      writeGatewayUpgradeServiceUnavailable(socket, "Worker websocket admission closed");
-      socket.destroy();
-      return;
-    }
-    const preauthBudgetKey = req.socket.remoteAddress;
-    if (params.wss.listenerCount("connection") === 0) {
-      writeGatewayUpgradeServiceUnavailable(socket, "Worker websocket handlers unavailable");
-      socket.destroy();
-      return;
-    }
-    if (!params.preauthConnectionBudget.acquire(preauthBudgetKey)) {
-      writeGatewayUpgradeServiceUnavailable(socket, "Too many unauthenticated sockets");
-      socket.destroy();
-      return;
-    }
-    let budgetTransferred = false;
-    const releaseUpgradeBudget = () => {
-      if (budgetTransferred) {
-        return;
-      }
-      budgetTransferred = true;
-      params.preauthConnectionBudget.release(preauthBudgetKey);
-    };
-    socket.once("close", releaseUpgradeBudget);
     try {
-      params.wss.handleUpgrade(req, socket, head, (ws) => {
-        const workerSocket = ws as GatewayIngressWebSocket;
-        workerSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] = "worker";
-        workerSocket[GATEWAY_WS_PREAUTH_BUDGET_PROPERTY] = params.preauthConnectionBudget;
-        workerSocket["__openclawPreauthBudgetKey"] = preauthBudgetKey;
-        params.wss.emit("connection", ws, req);
-        if (workerSocket["__openclawPreauthBudgetClaimed"]) {
-          budgetTransferred = true;
-          socket.off("close", releaseUpgradeBudget);
-        }
+      handleBudgetedGatewayWebSocketUpgrade({
+        req,
+        socket,
+        head,
+        wss: params.wss,
+        preauthConnectionBudget: params.preauthConnectionBudget,
+        preauthBudgetKey: req.socket.remoteAddress,
+        ingressName: "Worker",
+        prepareSocket: (workerSocket) => {
+          workerSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] = "worker";
+          workerSocket[GATEWAY_WS_PREAUTH_BUDGET_PROPERTY] = params.preauthConnectionBudget;
+        },
       });
     } catch (error) {
-      socket.off("close", releaseUpgradeBudget);
-      releaseUpgradeBudget();
       params.log?.warn(
         `worker websocket upgrade failed: ${error instanceof Error ? error.message : String(error)}`,
       );

@@ -713,6 +713,90 @@ describe("mattermostPlugin", () => {
       expect(discovery?.schema).toBeUndefined();
     });
 
+    it("prepares supported sends for the core durable lifecycle", async () => {
+      const prepareSendPayload = mattermostPlugin.actions?.prepareSendPayload;
+      if (!prepareSendPayload) {
+        throw new Error("mattermost actions.prepareSendPayload missing");
+      }
+      const payload = { text: "report" };
+
+      const prepared = await prepareSendPayload({
+        ctx: createMattermostActionContext({
+          params: {
+            to: "channel:CHAN1",
+            message: "report",
+            filePath: "/tmp/workspace/report.md",
+            replyToId: "post-root",
+          },
+        }),
+        to: "channel:CHAN1",
+        payload,
+        replyToId: "post-root",
+      });
+
+      expect(prepared).toEqual({
+        text: "report",
+        mediaUrl: "/tmp/workspace/report.md",
+        mediaUrls: ["/tmp/workspace/report.md"],
+      });
+    });
+
+    it("carries provider attachment text through core payload delivery", async () => {
+      const prepareSendPayload = mattermostPlugin.actions?.prepareSendPayload;
+      if (!prepareSendPayload) {
+        throw new Error("mattermost actions.prepareSendPayload missing");
+      }
+      const prepared = await prepareSendPayload({
+        ctx: createMattermostActionContext({
+          params: {
+            to: "channel:CHAN1",
+            message: "report",
+            attachmentText: "native attachment",
+          },
+        }),
+        to: "channel:CHAN1",
+        payload: { text: "report" },
+      });
+      expect(prepared).toMatchObject({
+        channelData: { mattermost: { attachmentText: "native attachment" } },
+      });
+
+      await requireMattermostSendPayload()({
+        cfg: createMattermostTestConfig(),
+        to: "channel:CHAN1",
+        text: "report",
+        payload: prepared!,
+      });
+
+      const options = expectSingleMattermostSend("channel:CHAN1", "report");
+      expect(options.attachmentText).toBe("native attachment");
+    });
+
+    it.each([
+      ["buffer attachments", { buffer: "cmVwb3J0" }, "buffer/base64 payloads"],
+      [
+        "multiple attachments",
+        { mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"] },
+        "supports one attachment per message",
+      ],
+    ])("rejects unsupported %s before provider dispatch", async (_label, extraParams, error) => {
+      const prepareSendPayload = mattermostPlugin.actions?.prepareSendPayload;
+      if (!prepareSendPayload) {
+        throw new Error("mattermost actions.prepareSendPayload missing");
+      }
+
+      await expect(async () =>
+        prepareSendPayload({
+          ctx: createMattermostActionContext({
+            params: { to: "channel:CHAN1", message: "report", ...extraParams },
+          }),
+          to: "channel:CHAN1",
+          payload: { text: "report" },
+        }),
+      ).rejects.toThrow(error);
+      expect(sendMessageMattermostMock).not.toHaveBeenCalled();
+    });
+
     it("keeps read opt in when reactions are disabled", () => {
       const cfg: OpenClawConfig = {
         channels: {
@@ -1544,6 +1628,72 @@ describe("mattermostPlugin", () => {
   });
 
   describe("outbound", () => {
+    it.each([
+      {
+        name: "text",
+        send: async (onDeliveryResult: MattermostSendTextParams["onDeliveryResult"]) =>
+          await requireMattermostSendText()({
+            cfg: createMattermostTestConfig(),
+            to: "channel:CHAN1",
+            text: "provider-final",
+            onDeliveryResult,
+          }),
+      },
+      {
+        name: "media",
+        send: async (onDeliveryResult: MattermostSendMediaParams["onDeliveryResult"]) =>
+          await requireMattermostSendMedia()({
+            cfg: createMattermostTestConfig(),
+            to: "channel:CHAN1",
+            text: "provider-final",
+            mediaUrl: "https://example.com/report.png",
+            onDeliveryResult,
+          }),
+      },
+      {
+        name: "payload",
+        send: async (onDeliveryResult: MattermostSendTextParams["onDeliveryResult"]) =>
+          await requireMattermostSendPayload()({
+            cfg: createMattermostTestConfig(),
+            to: "channel:CHAN1",
+            text: "provider-final",
+            payload: {
+              text: "provider-final",
+              channelData: {
+                mattermost: {
+                  attachmentText: "attachment",
+                },
+              },
+            },
+            onDeliveryResult,
+          }),
+      },
+    ])("reports $name provider progress before a later bookkeeping failure", async ({ send }) => {
+      const onDeliveryResult = vi.fn();
+      sendMessageMattermostMock.mockImplementationOnce(
+        async (_to: string, _text: string, options: Record<string, unknown>) => {
+          const report = options.onDeliveryResult as
+            | ((result: Record<string, unknown>) => Promise<void>)
+            | undefined;
+          await report?.({
+            messageId: "post-final",
+            channelId: "CHAN1",
+            content: "provider-final",
+          });
+          throw new Error("activity store unavailable");
+        },
+      );
+
+      await expect(send(onDeliveryResult)).rejects.toThrow("activity store unavailable");
+      expect(onDeliveryResult).toHaveBeenCalledTimes(1);
+      expect(onDeliveryResult).toHaveBeenCalledWith({
+        channel: "mattermost",
+        messageId: "post-final",
+        channelId: "CHAN1",
+        content: "provider-final",
+      });
+    });
+
     it("renders presentation buttons for normal reply payload delivery", async () => {
       const renderPresentation = requireMattermostRenderPresentation();
       const sendPayload = requireMattermostSendPayload();

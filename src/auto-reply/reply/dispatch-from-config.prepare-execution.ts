@@ -18,7 +18,10 @@ import type { ReplyPayload } from "../reply-payload.js";
 import type { ChooseDispatchRouteReadyState } from "./dispatch-from-config.choose-route.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import { loadGetReplyFromConfigRuntime } from "./dispatch-from-config.runtime-loaders.js";
-import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
+import {
+  withFullRuntimeReplyConfig,
+  withPublishedRuntimeReplyConfig,
+} from "./get-reply-fast-path.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
@@ -477,14 +480,17 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     params.replyResolver ??
     (await traceReplyPhase("reply.load_reply_resolver", () => loadGetReplyFromConfigRuntime()))
       .getReplyFromConfig;
-  // Channel runtimes can outlive a config reload. Resolve one live snapshot
-  // per turn so reply setup and dispatch callbacks share the same authority.
-  const runtimeReplyConfig = getRuntimeConfigSnapshot() ?? cfg;
-  const replyConfig = withFullRuntimeReplyConfig(
-    params.configOverride
-      ? (applyMergePatch(runtimeReplyConfig, params.configOverride) as OpenClawConfig)
-      : runtimeReplyConfig,
-  );
+  // Channel runtimes can outlive a config reload. Ordinary Gateway turns rebind to the
+  // committed model owner; an explicit per-turn projection stays exact to its caller config.
+  const publishedRuntimeReplyConfig = getRuntimeConfigSnapshot();
+  const runtimeReplyConfig = publishedRuntimeReplyConfig ?? cfg;
+  const replyConfig = params.configOverride
+    ? withFullRuntimeReplyConfig(
+        applyMergePatch(runtimeReplyConfig, params.configOverride) as OpenClawConfig,
+      )
+    : params.usePublishedModelRuntime || publishedRuntimeReplyConfig
+      ? withPublishedRuntimeReplyConfig(runtimeReplyConfig)
+      : withFullRuntimeReplyConfig(cfg);
   recordAgentDispatchStarted();
   const nextState = extendPreparedDispatchState(
     state,

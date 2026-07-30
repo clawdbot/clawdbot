@@ -1839,6 +1839,44 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("forwards an explicit local timeout and leaves omission to the configured default", async () => {
+    await withTempStore(async () => {
+      mockLocalAgentReply();
+
+      await agentCliCommand(
+        {
+          message: "hi",
+          to: "+1555",
+          local: true,
+          timeout: "21600",
+        },
+        runtime,
+      );
+
+      expect(
+        requireRecord(requireFirstCallArg(agentCommand, "embedded agent"), "embedded agent options")
+          .timeout,
+      ).toBe("21600");
+
+      agentCommand.mockClear();
+      mockLocalAgentReply();
+
+      await agentCliCommand(
+        {
+          message: "hi",
+          to: "+1555",
+          local: true,
+        },
+        runtime,
+      );
+
+      expect(
+        requireRecord(requireFirstCallArg(agentCommand, "embedded agent"), "embedded agent options")
+          .timeout,
+      ).toBeUndefined();
+    });
+  });
+
   it("preserves inline message whitespace for local embedded runs", async () => {
     await withTempStore(async () => {
       mockLocalAgentReply();

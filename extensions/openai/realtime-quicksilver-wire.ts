@@ -1,6 +1,10 @@
 // GPT-Live frameless session, call-creation, and sideband event wire contracts.
 import { randomBytes } from "node:crypto";
-import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderTextResponse,
+  readResponseTextLimited,
+  resolveProviderRequestHeaders,
+} from "openclaw/plugin-sdk/provider-http";
 import { z } from "zod";
 import { isOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 
@@ -10,6 +14,9 @@ const OPENAI_QUICKSILVER_CONTEXT_MAX_ITEM_CHARS = 800;
 const OPENAI_QUICKSILVER_CONTEXT_MAX_UTF8_BYTES = 8_000;
 const OPENAI_QUICKSILVER_CALL_URL = "https://api.openai.com/v1/live";
 const OPENAI_REALTIME_CALL_URL = "https://api.openai.com/v1/realtime/calls";
+const OPENAI_REALTIME_ERROR_BODY_MAX_BYTES = 16 * 1024;
+const OPENAI_REALTIME_ERROR_DETAIL_MAX_CHARS = 500;
+const OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES = 256 * 1024;
 const OPENAI_GPT_LIVE_WAITLIST_URL = "https://openai.com/form/gpt-live-1-in-the-api/";
 
 const OPENAI_QUICKSILVER_VOICES = [
@@ -54,6 +61,11 @@ type OpenAIQuicksilverSession = {
   }>;
 };
 
+type OpenAIQuicksilverSessionUpdate = {
+  type: "session.update";
+  session: Omit<OpenAIQuicksilverSession, "model">;
+};
+
 const eventEnvelopeSchema = z.object({ type: z.string() }).passthrough();
 const sessionStartedSchema = z
   .object({
@@ -64,6 +76,12 @@ const sessionStartedSchema = z
 const transcriptAddedSchema = z
   .object({
     item: z.object({ text: z.string() }).passthrough(),
+  })
+  .passthrough();
+const outputAudioDeltaSchema = z
+  .object({
+    type: z.literal("output_audio.delta"),
+    audio: z.string(),
   })
   .passthrough();
 const turnDoneSchema = z
@@ -102,6 +120,7 @@ const delegationSchema = z
 export type OpenAIQuicksilverInboundEvent =
   | { kind: "ignored"; eventType: string }
   | { kind: "session-started"; expiresAt?: number }
+  | { kind: "audio"; data: string }
   | { kind: "transcript-delta"; role: "user" | "assistant"; text: string }
   | { kind: "transcript-done"; role: "user" | "assistant"; text: string }
   | { kind: "delegation"; id: string; prompt: string }
@@ -153,6 +172,26 @@ export function buildOpenAIQuicksilverSession(params: {
     delegation: { type: "client" },
     ...(initialItems && initialItems.length > 0 ? { initial_items: initialItems } : {}),
   };
+}
+
+/** Builds the direct Frameless Bidi WebSocket handshake used by Codex realtime v3. */
+export function buildOpenAIQuicksilverSessionUpdate(params: {
+  instructions?: string;
+  voice?: string;
+  initialItems?: readonly OpenAIQuicksilverInitialItem[];
+}): OpenAIQuicksilverSessionUpdate {
+  const { model: _model, ...session } = buildOpenAIQuicksilverSession({
+    model: "direct-websocket",
+    ...params,
+  });
+  return { type: "session.update", session };
+}
+
+export function buildOpenAIQuicksilverWebSocketUrl(model: string): string {
+  const url = new URL(OPENAI_QUICKSILVER_CALL_URL);
+  url.protocol = "wss:";
+  url.searchParams.set("model", model);
+  return url.toString();
 }
 
 function truncateOpenAIQuicksilverContextText(text: string, maxBytes: number): string {
@@ -377,7 +416,13 @@ export async function createOpenAIQuicksilverCall(params: {
     signal: params.signal,
   });
   if (!response.ok) {
-    const detail = (await response.text().catch(() => "")).trim().slice(0, 500);
+    // Provider failures are untrusted streams. Bound and cancel unread overflow
+    // before retaining the short diagnostic included in the user-facing error.
+    const detail = (
+      await readResponseTextLimited(response, OPENAI_REALTIME_ERROR_BODY_MAX_BYTES).catch(() => "")
+    )
+      .trim()
+      .slice(0, OPENAI_REALTIME_ERROR_DETAIL_MAX_CHARS);
     throw new OpenAIQuicksilverCallError(
       isGptLive
         ? describeOpenAIQuicksilverCallError(response.status, detail)
@@ -385,7 +430,11 @@ export async function createOpenAIQuicksilverCall(params: {
       response.status,
     );
   }
-  const answerSdp = await response.text();
+  const answerSdp = await readProviderTextResponse(
+    response,
+    `${isGptLive ? "GPT-Live" : "OpenAI Realtime"} SDP answer`,
+    { maxBytes: OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES },
+  );
   if (!answerSdp.trim()) {
     throw new OpenAIQuicksilverCallError(
       `${isGptLive ? "GPT-Live" : "OpenAI Realtime"} call creation returned an empty SDP answer`,
@@ -501,7 +550,13 @@ export function parseOpenAIQuicksilverEvent(payload: string): OpenAIQuicksilverI
       ? { kind: "transcript-done", role: turn.data.turn.role, text: turn.data.turn.transcript }
       : { kind: "ignored", eventType };
   }
-  if (eventType === "session.updated" || eventType === "output_audio.delta") {
+  if (eventType === "output_audio.delta") {
+    const audio = outputAudioDeltaSchema.safeParse(decoded);
+    return audio.success
+      ? { kind: "audio", data: audio.data.audio }
+      : { kind: "ignored", eventType };
+  }
+  if (eventType === "session.updated") {
     return { kind: "ignored", eventType };
   }
   if (eventType === "delegation.created") {

@@ -4,6 +4,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveUserTimezone } from "../agents/date-time.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,6 +20,7 @@ import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
 import type { CronJob, CronMessageChannel } from "../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
@@ -47,6 +49,7 @@ type CronFailureAlertParams = {
   webhookToken?: unknown;
   job: CronJob;
   text: string;
+  runAtMs?: number;
   channel: CronMessageChannel;
   to?: string;
   mode?: "announce" | "webhook";
@@ -176,6 +179,20 @@ function buildCronFailureWebhookPayload(params: { evt: CronEvent; job: CronJob }
   };
 }
 
+function appendCronRunStarted(
+  message: string,
+  runAtMs: number | undefined,
+  config: OpenClawConfig,
+): string {
+  if (typeof runAtMs !== "number" || !Number.isFinite(runAtMs)) {
+    return message;
+  }
+  const timestamp = formatZonedTimestamp(new Date(runAtMs), {
+    timeZone: resolveUserTimezone(config.agents?.defaults?.userTimezone),
+  });
+  return timestamp ? `${message}\nRun started: ${timestamp}` : message;
+}
+
 function buildCronFinishedWebhookPayload(evt: CronEvent) {
   if (evt.status !== "error") {
     return evt;
@@ -224,6 +241,11 @@ async function postCronWebhook(params: {
         throw new Error(`Webhook request failed with HTTP ${result.response.status}`);
       }
     } finally {
+      // Guard release closes the dispatcher, not an unread response stream.
+      // Settle the terminal body first so streaming webhooks cannot retain the socket.
+      if (!result.response.bodyUsed) {
+        await result.response.body?.cancel().catch(() => undefined);
+      }
       await result.release();
     }
   } catch (err) {
@@ -294,6 +316,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           jobId: params.job.id,
           jobName: params.job.name,
           message: params.text,
+          runAtMs: params.runAtMs,
         },
         logContext: { jobId: params.job.id },
         blockedLog: "cron: failure alert webhook blocked by SSRF guard",
@@ -332,7 +355,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           accountId: params.accountId,
           sessionKey: resolveCronDeliverySessionKey(params.job),
         },
-        message: params.text,
+        message: appendCronRunStarted(params.text, params.runAtMs, runtimeConfig),
         abortSignal: abortController.signal,
       }),
       new Promise<never>((_resolve, reject) => {
@@ -504,7 +527,7 @@ function dispatchCronFailureDestinationNotifications(params: {
               // session only for context, not for reattaching the primary topic.
               inheritSessionThread: false,
             },
-            `⚠️ ${failurePayload.message}`,
+            appendCronRunStarted(`⚠️ ${failurePayload.message}`, params.evt.runAtMs, runtimeConfig),
           ),
       });
     }
@@ -532,7 +555,7 @@ function dispatchCronFailureDestinationNotifications(params: {
           accountId: primaryPlan.accountId,
           sessionKey: deliverySessionKey,
         },
-        `⚠️ ${failurePayload.message}`,
+        appendCronRunStarted(`⚠️ ${failurePayload.message}`, params.evt.runAtMs, runtimeConfig),
       ),
   });
 }

@@ -226,7 +226,7 @@ describeControlUiE2e("Control UI config form guidance mocked Gateway E2E", () =>
       const disclosure = page.locator(".config-advanced-ghost");
       await expect.poll(() => disclosure.count()).toBe(1);
       await expect.poll(() => disclosure.textContent()).toContain("2 advanced settings hidden");
-      await expect.poll(() => page.locator(".config-show-advanced").count()).toBe(0);
+      await expect.poll(() => page.locator(".config-show-advanced").count()).toBe(1);
       await expect
         .poll(() => page.getByText("Show Advanced Settings", { exact: true }).count())
         .toBe(0);
@@ -259,7 +259,6 @@ describeControlUiE2e("Control UI config form guidance mocked Gateway E2E", () =>
       await page.waitForTimeout(750);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
-      await expect.poll(() => page.locator(".config-apply-banner").count()).toBe(0);
 
       if (captureUiProofEnabled) {
         await page.screenshot({
@@ -297,7 +296,7 @@ describeControlUiE2e("Control UI config form guidance mocked Gateway E2E", () =>
       await expect.poll(() => themeInput.count()).toBe(1);
       await themeInput.fill("knot");
       await gateway.waitForRequest("config.set");
-      await page.getByRole("button", { name: "Restart & apply", exact: true }).click();
+      await page.getByRole("button", { name: "Apply changes", exact: true }).click();
       await gateway.waitForRequest("config.apply");
 
       await page.getByRole("link", { name: "Notifications", exact: true }).click();

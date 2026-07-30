@@ -12,6 +12,7 @@ import {
   DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
   applyDefaultMultiSpecVitestCachePaths,
   applyDefaultVitestNoOutputTimeout,
+  applyFullExtensionsHeapBudget,
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
   buildVitestArgs,
@@ -1314,6 +1315,18 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/plugin-contract-test-plan.test.ts",
         "test/scripts/plugin-prerelease-test-plan.test.ts",
         "test/scripts/verify-pr-hosted-gates.test.ts",
+      ],
+    });
+  });
+
+  it("keeps npm release workflow edits on the preflight cache guard", () => {
+    expect(resolveChangedTestTargetPlan([".github/workflows/openclaw-npm-release.yml"])).toEqual({
+      mode: "targets",
+      targets: [
+        "test/openclaw-npm-postpublish-verify.test.ts",
+        "test/scripts/openclaw-npm-extended-stable-workflow.test.ts",
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
       ],
     });
   });
@@ -4638,6 +4651,57 @@ describe("scripts/test-projects full-suite sharding", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it("gives only the aggregate extension shard an 8 GiB heap floor", () => {
+    const specs = applyFullExtensionsHeapBudget([
+      {
+        config: "test/vitest/vitest.full-extensions.config.ts",
+        env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=4096" },
+      },
+      {
+        config: "test/vitest/vitest.full-core-runtime.config.ts",
+        env: { NODE_OPTIONS: "--max-old-space-size=4096" },
+      },
+    ]);
+
+    expect(specs[0]?.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
+    expect(specs[1]?.env.NODE_OPTIONS).toBe("--max-old-space-size=4096");
+  });
+
+  it("preserves a larger aggregate extension heap override", () => {
+    const specs = applyFullExtensionsHeapBudget([
+      {
+        config: "test/vitest/vitest.full-extensions.config.ts",
+        env: { NODE_OPTIONS: "--max_old_space_size 12288 --trace-warnings" },
+      },
+    ]);
+
+    expect(specs[0]?.env.NODE_OPTIONS).toBe("--max_old_space_size 12288 --trace-warnings");
+  });
+
+  it("preserves inherited Node options when the spec has no override", () => {
+    const specs = applyFullExtensionsHeapBudget(
+      [{ config: "test/vitest/vitest.full-extensions.config.ts", env: {} }],
+      {
+        env: {
+          NODE_OPTIONS: "--require ./test-hook.cjs --max-old-space-size=12288",
+        },
+      },
+    );
+
+    expect(specs[0]?.env.NODE_OPTIONS).toBe("--require ./test-hook.cjs --max-old-space-size=12288");
+  });
+
+  it("raises the effective last aggregate extension heap override", () => {
+    const specs = applyFullExtensionsHeapBudget([
+      {
+        config: "test/vitest/vitest.full-extensions.config.ts",
+        env: { NODE_OPTIONS: "--max-old-space-size=12288 --max_old_space_size=4096" },
+      },
+    ]);
+
+    expect(specs[0]?.env.NODE_OPTIONS).toBe("--max-old-space-size=12288 --max_old_space_size=8192");
   });
 
   it("keeps explicit parallel overrides ahead of the host-aware profile", () => {

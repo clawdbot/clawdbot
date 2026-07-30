@@ -40,7 +40,7 @@ import {
   resolveChannelReactionGuidance,
 } from "../channel-tools.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
-import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
+import { formatDateStamp, resolveUserTimezone } from "../date-time.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import { prepareAgentMemoryPrompt } from "../memory-prompt-prepare.js";
@@ -322,6 +322,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
           workspaceDir: effectiveWorkspace,
           spawnWorkspaceDir,
           config: params.config,
+          webSearchEnabled: params.toolOverrides?.webSearch !== false,
           abortSignal: runAbortController.signal,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           modelProvider: effectiveModel.provider,
@@ -502,8 +503,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       model: effectiveModel,
     });
     const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-    const userTimeFormat = resolveUserTimeFormat(undefined);
-    const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
+    const userDate = formatDateStamp(Date.now(), userTimezone);
     const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
     const promptMode =
       isSubagentSessionKey(params.sessionKey) || isCronSessionKey(params.sessionKey)
@@ -553,9 +553,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       toolNames: effectiveTools.map((tool) => tool.name),
       capabilityToolNames: allowedToolNames,
     });
-    const activeProjectKeys = params.preparedModelRuntime?.projectKey
-      ? [params.preparedModelRuntime.projectKey]
-      : [];
+    const activeProjectKeys = params.preparedModelRuntime?.activeProjectKeys ?? [];
     const buildSystemPromptText = (defaultThinkLevel: ThinkLevel) => {
       const builtSystemPrompt = buildEmbeddedSystemPrompt({
         config: params.config,
@@ -587,8 +585,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
         sandboxInfo,
         tools: effectiveTools,
         userTimezone,
-        userTime,
-        userTimeFormat,
+        userDate,
         contextFiles,
         activeProjectKeys,
         preparedMemoryPrompt,

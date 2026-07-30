@@ -454,6 +454,60 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 
+  it("accepts exact main bindings when agents.entries omits the implicit main agent", () => {
+    const res = validateConfigObject({
+      agents: {
+        entries: { alpha: { model: "anthropic/claude-3-5-sonnet" } },
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects normalized main binding variants when agents.entries omits them", () => {
+    const res = validateConfigObject({
+      agents: {
+        entries: { alpha: { model: "anthropic/claude-3-5-sonnet" } },
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "MAIN",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((iss) => iss.message.includes('Unknown agent id "MAIN"'))).toBe(true);
+    }
+  });
+
+  it("accepts a normalized main binding variant when that agent is explicitly configured", () => {
+    const res = validateConfigObject({
+      agents: {
+        entries: { MAIN: { model: "anthropic/claude-3-5-sonnet" } },
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "MAIN",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects non-default bindings when the implicit-main roster is materialized", () => {
     const res = validateConfigObject({
       bindings: [

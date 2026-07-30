@@ -35,9 +35,9 @@ function createGatewayHarness(client: GatewayBrowserClient) {
         return () => listeners.delete(listener);
       },
     },
-    publish: (connected: boolean) => {
+    publish: (connected: boolean, nextClient: GatewayBrowserClient = client) => {
       snapshot = {
-        client,
+        client: nextClient,
         phase: connected ? "connected" : "reconnecting",
         sessionKey: "main",
       };
@@ -1509,6 +1509,594 @@ describe("config form auto-save", () => {
     runtimeConfig.dispose();
   });
 
+  it("flushes a scheduled autosave when a write barrier runs before the debounce", async () => {
+    vi.useFakeTimers();
+    const setGate = deferred<unknown>();
+    const methods: string[] = [];
+    const request = vi.fn((method: string, params?: unknown) => {
+      methods.push(method);
+      if (method === "config.get") {
+        return Promise.resolve({
+          config: { count: 1 },
+          raw: '{\n  "count": 1\n}\n',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        });
+      }
+      if (method === "config.set") {
+        expect(params).toMatchObject({ baseHash: "hash-1" });
+        return setGate.promise;
+      }
+      return Promise.resolve({});
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    runtimeConfig.patchForm(["count"], 2);
+    let drained = false;
+    const drain = runtimeConfig.waitForPendingWrites().then(() => {
+      drained = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(methods.filter((method) => method === "config.set")).toHaveLength(1);
+    expect(drained).toBe(false);
+
+    setGate.resolve({ hash: "hash-2" });
+    await drain;
+    expect(drained).toBe(true);
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
+    runtimeConfig.dispose();
+  });
+
+  it("adopts config.patch acknowledgements for consecutive queued patches", async () => {
+    const patchBaseHashes: string[] = [];
+    let storedConfig: Record<string, unknown> = { count: 1 };
+    let hashCounter = 1;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.get") {
+        return {
+          config: storedConfig,
+          raw: JSON.stringify(storedConfig),
+          hash: `hash-${hashCounter}`,
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.patch") {
+        const patch = params as { baseHash: string; raw: string };
+        patchBaseHashes.push(patch.baseHash);
+        storedConfig = { ...storedConfig, ...(JSON.parse(patch.raw) as Record<string, unknown>) };
+        hashCounter += 1;
+        return { config: storedConfig, hash: `hash-${hashCounter}` };
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    const first = runtimeConfig.patch({ raw: { first: true }, note: "first test patch" });
+    const second = runtimeConfig.patch({ raw: { second: true }, note: "second test patch" });
+
+    await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
+    expect(patchBaseHashes).toEqual(["hash-1", "hash-2"]);
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
+    expect(runtimeConfig.state.configForm).toEqual({ count: 1, first: true, second: true });
+    runtimeConfig.dispose();
+  });
+
+  it("preserves JSON5 raw text when config.patch reports a no-op", async () => {
+    const originalRaw = "{\n  // keep this operator note\n  count: 1,\n}\n";
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          config: { count: 1 },
+          raw: originalRaw,
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.patch") {
+        return { config: { count: 1 }, noop: true };
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    await expect(
+      runtimeConfig.patch({ raw: { count: 1 }, note: "no-op test patch" }),
+    ).resolves.toBe(true);
+    expect(runtimeConfig.state.configSnapshot?.raw).toBe(originalRaw);
+    expect(runtimeConfig.state.configRaw).toBe(originalRaw);
+    runtimeConfig.dispose();
+  });
+
+  it("keeps a concurrent dirty draft on its pre-patch CAS base", async () => {
+    vi.useFakeTimers();
+    const patchGate = deferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "config.get") {
+        return Promise.resolve({
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        });
+      }
+      if (method === "config.patch") {
+        return patchGate.promise;
+      }
+      return Promise.resolve({});
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    const patch = runtimeConfig.patch({ raw: { patched: true }, note: "concurrent test patch" });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("config.patch", expect.anything()));
+    runtimeConfig.patchForm(["count"], 2);
+    patchGate.resolve({ config: { count: 1, patched: true }, hash: "hash-2" });
+    await expect(patch).resolves.toBe(true);
+
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+    expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-1");
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
+    runtimeConfig.resetDraft();
+    runtimeConfig.dispose();
+  });
+
+  it("orders a patch acknowledgement after an older in-flight config load", async () => {
+    const staleLoad = deferred<ConfigSnapshot>();
+    let getCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        getCalls += 1;
+        if (getCalls === 2) {
+          return staleLoad.promise;
+        }
+        return {
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.patch") {
+        return { config: { count: 1, patched: true }, hash: "hash-2" };
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    const staleRefresh = runtimeConfig.refresh();
+    await vi.waitFor(() => expect(getCalls).toBe(2));
+    await expect(
+      runtimeConfig.patch({ raw: { patched: true }, note: "ordered patch test" }),
+    ).resolves.toBe(true);
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
+
+    staleLoad.resolve({
+      config: { count: 999 },
+      raw: '{"count":999}',
+      hash: "stale-hash",
+      valid: true,
+      issues: [],
+    });
+    await staleRefresh;
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
+    expect(runtimeConfig.state.configForm).toEqual({ count: 1, patched: true });
+    runtimeConfig.dispose();
+  });
+
+  it("refreshes hash-only patch acknowledgements before publishing their revision", async () => {
+    let storedConfig: Record<string, unknown> = { count: 1 };
+    let hash = "hash-1";
+    let getCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        getCalls += 1;
+        return {
+          config: storedConfig,
+          raw: JSON.stringify(storedConfig),
+          hash,
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.patch") {
+        storedConfig = { count: 1, patched: true };
+        hash = "hash-2";
+        return { hash };
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    await expect(
+      runtimeConfig.patch({ raw: { patched: true }, note: "hash-only patch test" }),
+    ).resolves.toBe(true);
+
+    expect(getCalls).toBe(2);
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
+    expect(runtimeConfig.state.configForm).toEqual({ count: 1, patched: true });
+    runtimeConfig.dispose();
+  });
+
+  it("records a committed hash-only patch when its acknowledgement refresh fails", async () => {
+    let getCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        getCalls += 1;
+        if (getCalls > 1) {
+          throw new Error("refresh unavailable");
+        }
+        return {
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.patch") {
+        return { hash: "hash-2" };
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    await expect(
+      runtimeConfig.patch({ raw: { patched: true }, note: "hash-only refresh failure" }),
+    ).resolves.toBe(false);
+
+    expect(runtimeConfig.state.configNeedsApply).toBe(true);
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-1");
+    expect(runtimeConfig.state.lastError).toContain("refresh unavailable");
+    runtimeConfig.dispose();
+  });
+
+  it("serializes external mutations after scheduled drafts and refreshes before resolving", async () => {
+    vi.useFakeTimers();
+    const order: string[] = [];
+    let storedConfig: Record<string, unknown> = { count: 1 };
+    let hash = "hash-1";
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.get") {
+        order.push("config.get");
+        return {
+          config: storedConfig,
+          raw: JSON.stringify(storedConfig),
+          hash,
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.set") {
+        order.push("config.set");
+        storedConfig = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
+        hash = "hash-2";
+        return { hash };
+      }
+      if (method === "plugins.setEnabled") {
+        order.push("plugins.setEnabled");
+        storedConfig = { ...storedConfig, pluginEnabled: true };
+        hash = "hash-3";
+        return { ok: true };
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+    order.length = 0;
+
+    runtimeConfig.patchForm(["count"], 2);
+    const result = await runtimeConfig.runExternalMutation((client) =>
+      client.request("plugins.setEnabled", { pluginId: "memory-core", enabled: true }),
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: { ok: true },
+      refresh: { ok: true },
+    });
+    expect(order).toEqual(["config.set", "plugins.setEnabled", "config.get"]);
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
+    expect(runtimeConfig.state.configForm).toEqual({ count: 2, pluginEnabled: true });
+    runtimeConfig.dispose();
+  });
+
+  it("forces a post-mutation refresh instead of joining a pre-existing config load", async () => {
+    const staleLoad = deferred<ConfigSnapshot>();
+    let getCalls = 0;
+    let storedConfig: Record<string, unknown> = { count: 1 };
+    let hash = "hash-1";
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        getCalls += 1;
+        if (getCalls === 2) {
+          return staleLoad.promise;
+        }
+        return {
+          config: storedConfig,
+          raw: JSON.stringify(storedConfig),
+          hash,
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "plugins.setEnabled") {
+        storedConfig = { count: 1, pluginEnabled: true };
+        hash = "hash-2";
+        return { ok: true };
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    const overlappingRefresh = runtimeConfig.refresh();
+    await vi.waitFor(() => expect(getCalls).toBe(2));
+    const result = await runtimeConfig.runExternalMutation((client) =>
+      client.request("plugins.setEnabled", { pluginId: "memory-core", enabled: true }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(getCalls).toBe(3);
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
+    expect(runtimeConfig.state.configForm).toEqual({ count: 1, pluginEnabled: true });
+
+    staleLoad.resolve({
+      config: { count: 999 },
+      raw: '{"count":999}',
+      hash: "stale-hash",
+      valid: true,
+      issues: [],
+    });
+    await overlappingRefresh;
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
+    runtimeConfig.dispose();
+  });
+
+  it("preserves a committed external mutation when its authoritative refresh fails", async () => {
+    let getCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        getCalls += 1;
+        if (getCalls === 1) {
+          return {
+            config: { count: 1 },
+            raw: '{"count":1}',
+            hash: "hash-1",
+            valid: true,
+            issues: [],
+          };
+        }
+        throw new Error("refresh unavailable");
+      }
+      if (method === "plugins.setEnabled") {
+        return { ok: true };
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    const result = await runtimeConfig.runExternalMutation((client) =>
+      client.request("plugins.setEnabled", { pluginId: "memory-core", enabled: true }),
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: { ok: true },
+      refresh: { ok: false, error: "Error: refresh unavailable" },
+    });
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-1");
+    runtimeConfig.dispose();
+  });
+
+  it("classifies an external mutation interrupted by disconnect as retryable", async () => {
+    const mutation = deferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "config.get") {
+        return Promise.resolve({
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        });
+      }
+      if (method === "plugins.setEnabled") {
+        return mutation.promise;
+      }
+      return Promise.resolve({});
+    });
+    const { runtimeConfig, publish } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    const resultPromise = runtimeConfig.runExternalMutation((client) =>
+      client.request("plugins.setEnabled", { pluginId: "memory-core", enabled: true }),
+    );
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("plugins.setEnabled", expect.anything()),
+    );
+    publish(false);
+    mutation.reject(new Error("socket closed"));
+
+    await expect(resultPromise).resolves.toEqual({
+      ok: false,
+      reason: "unavailable",
+      error: "Connection changed before the configuration update completed.",
+    });
+    runtimeConfig.dispose();
+  });
+
+  it("queues background external mutations until write suspension ends", async () => {
+    const methods: string[] = [];
+    const request = vi.fn(async (method: string) => {
+      methods.push(method);
+      if (method === "config.get") {
+        return {
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      return { ok: true };
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+    methods.length = 0;
+    runtimeConfig.setWritesSuspended(true);
+
+    const resultPromise = runtimeConfig.runExternalMutation(
+      (client) => client.request("config.patch", { raw: '{"ui":{"prefs":{"locale":"de"}}}' }),
+      { waitForWritesResumed: true },
+    );
+    await Promise.resolve();
+    expect(methods).toEqual([]);
+
+    runtimeConfig.setWritesSuspended(false);
+    await expect(resultPromise).resolves.toEqual({
+      ok: true,
+      value: { ok: true },
+      refresh: { ok: true },
+    });
+    expect(methods).toEqual(["config.patch", "config.get"]);
+    runtimeConfig.dispose();
+  });
+
+  it("preserves queued mutation waiters when suspension is repeated", async () => {
+    const methods: string[] = [];
+    const request = vi.fn(async (method: string) => {
+      methods.push(method);
+      if (method === "config.get") {
+        return {
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      return { ok: true };
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+    methods.length = 0;
+    runtimeConfig.setWritesSuspended(true);
+
+    const resultPromise = runtimeConfig.runExternalMutation(
+      (client) => client.request("config.patch", { raw: '{"ui":{"prefs":{"locale":"de"}}}' }),
+      { waitForWritesResumed: true },
+    );
+    await Promise.resolve();
+    runtimeConfig.setWritesSuspended(true);
+    runtimeConfig.setWritesSuspended(false);
+
+    await expect(resultPromise).resolves.toEqual({
+      ok: true,
+      value: { ok: true },
+      refresh: { ok: true },
+    });
+    expect(methods).toEqual(["config.patch", "config.get"]);
+    runtimeConfig.dispose();
+  });
+
+  it("does not retarget a suspended external mutation after the gateway changes", async () => {
+    const requestA = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      return { ok: true };
+    });
+    const requestB = vi.fn(async () => ({ ok: true }));
+    const clientA = { request: requestA } as unknown as GatewayBrowserClient;
+    const clientB = { request: requestB } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(clientA);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    await runtimeConfig.ensureLoaded();
+    requestA.mockClear();
+    runtimeConfig.setWritesSuspended(true);
+
+    const resultPromise = runtimeConfig.runExternalMutation(
+      (client) => client.request("config.patch", { raw: '{"ui":{"prefs":{"locale":"de"}}}' }),
+      { waitForWritesResumed: true },
+    );
+    await Promise.resolve();
+    publish(true, clientB);
+    runtimeConfig.setWritesSuspended(false);
+
+    await expect(resultPromise).resolves.toEqual({
+      ok: false,
+      reason: "unavailable",
+      error: "Connection changed before the configuration update started.",
+    });
+    expect(requestA).not.toHaveBeenCalled();
+    expect(requestB).not.toHaveBeenCalled();
+    runtimeConfig.dispose();
+  });
+
+  it("retries a background mutation when suspension begins during its write drain", async () => {
+    vi.useFakeTimers();
+    const firstSet = deferred<unknown>();
+    const methods: string[] = [];
+    const request = vi.fn((method: string) => {
+      methods.push(method);
+      if (method === "config.get") {
+        return Promise.resolve({
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: methods.filter((entry) => entry === "config.set").length ? "hash-2" : "hash-1",
+          valid: true,
+          issues: [],
+        });
+      }
+      if (method === "config.set") {
+        return firstSet.promise;
+      }
+      return Promise.resolve({ ok: true });
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+    methods.length = 0;
+
+    runtimeConfig.patchForm(["count"], 2);
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+    const resultPromise = runtimeConfig.runExternalMutation(
+      (client) => client.request("config.patch", { raw: '{"ui":{"prefs":{"locale":"de"}}}' }),
+      { waitForWritesResumed: true },
+    );
+    runtimeConfig.setWritesSuspended(true);
+    firstSet.resolve({ hash: "hash-2" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(methods).toEqual(["config.set"]);
+
+    runtimeConfig.setWritesSuspended(false);
+    await expect(resultPromise).resolves.toEqual({
+      ok: true,
+      value: { ok: true },
+      refresh: { ok: true },
+    });
+    expect(methods).toEqual(["config.set", "config.patch", "config.get"]);
+    runtimeConfig.dispose();
+  });
+
   it("refreshes applied revision truth after config.patch", async () => {
     vi.useFakeTimers();
     let getCount = 0;
@@ -1659,6 +2247,30 @@ describe("config form auto-save", () => {
     expect(submissions[1]?.baseHash).toBe("hash-2");
     expect(applySubmissions).toHaveLength(1);
     expect(applySubmissions[0]?.baseHash).toBe("hash-3");
+    runtimeConfig.dispose();
+  });
+
+  it("cancels a debounce armed while an explicit save drains another write", async () => {
+    vi.useFakeTimers();
+    const { request, submissions, firstSet } = createDeferredSetServerMock();
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    runtimeConfig.patchForm(["count"], 2);
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+    expect(submissions).toHaveLength(1);
+
+    const save = runtimeConfig.save();
+    runtimeConfig.patchForm(["count"], 3);
+    firstSet.resolve({});
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(save).resolves.toBe(true);
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
+
+    expect(submissions).toEqual([
+      { raw: '{\n  "count": 2\n}\n', baseHash: "hash-1" },
+      { raw: '{\n  "count": 3\n}\n', baseHash: "hash-2" },
+    ]);
     runtimeConfig.dispose();
   });
 

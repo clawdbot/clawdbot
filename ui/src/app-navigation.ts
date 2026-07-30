@@ -178,14 +178,14 @@ export function settingsSearchTextMatches(value: string, query: string): boolean
 // Management surfaces (sessions, worktrees, activity, memory import) are
 // workspace destinations, not settings; model setup is a subpage of Models.
 export const SETTINGS_NAVIGATION_GROUPS = [
-  { labelKey: null, routes: ["custodian", "profile", "config", "appearance", "notifications"] },
+  { labelKey: null, routes: ["custodian", "profile", "appearance", "notifications"] },
   {
     labelKey: "nav.settingsGroupConnections",
     routes: ["connection", "channels", "communications", "talk", "nodes"],
   },
   {
     labelKey: "nav.settingsGroupAgents",
-    routes: ["agents", "ai-agents", "labs", "model-providers", "mcp", "memory", "automation"],
+    routes: ["agents", "labs", "model-providers", "mcp", "memory", "automation"],
   },
   {
     labelKey: "nav.settingsGroupSecurity",
@@ -197,10 +197,21 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
-// Settings subpages render with settings chrome but stay out of the sidebar:
-// model setup is reached from the Models page ("Run setup"). The sidebar
-// highlights nothing for them; search still deep-links via their owning page.
-const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["model-setup", "lobsterdex"];
+// Settings subpages render with settings chrome but stay out of the sidebar.
+// Subpages with a visible owner keep that owner selected so users retain
+// location context while completing the nested flow.
+const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = [
+  "ai-agents",
+  "model-setup",
+  "lobsterdex",
+];
+export const SETTINGS_SEARCHABLE_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["ai-agents"];
+const SETTINGS_SUBPAGE_OWNER_ROUTES: Partial<
+  Readonly<Record<NavigationRouteId, NavigationRouteId>>
+> = {
+  "ai-agents": "agents",
+  "model-setup": "model-providers",
+};
 
 const SETTINGS_NAVIGATION_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
   ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
@@ -255,6 +266,10 @@ const NAVIGATION_ICONS: NavigationItem = {
 
 export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
   return SETTINGS_NAVIGATION_ROUTES.has(routeId);
+}
+
+export function settingsNavigationOwnerRoute(routeId: NavigationRouteId): NavigationRouteId {
+  return SETTINGS_SUBPAGE_OWNER_ROUTES[routeId] ?? routeId;
 }
 
 export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
@@ -397,15 +412,7 @@ export function formatDocumentTitle(options: {
   return base;
 }
 
-/**
- * Sidebar item label inside the settings takeover. The config route is titled
- * "Settings" globally (gear tooltip, palette) but reads "General" next to its
- * sibling sections.
- */
 export function settingsNavigationLabelForRoute(routeId: NavigationRouteId): string {
-  if (routeId === "config") {
-    return t("nav.settingsGeneral");
-  }
   if (routeId === "custodian") {
     return t("nav.askOpenClaw");
   }

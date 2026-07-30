@@ -41,7 +41,6 @@ import {
   buildFullBootstrapPromptLines,
   buildLimitedBootstrapPromptLines,
 } from "./bootstrap-prompt.js";
-import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type {
   EmbeddedFullAccessBlockedReason,
@@ -430,11 +429,23 @@ function buildOwnerIdentityLine(
   return `Allowlisted senders: ${displayOwnerNumbers.join(", ")}. Allowlisted != owner.`;
 }
 
-function buildTimeSection(params: { userTimezone?: string }) {
-  if (!params.userTimezone) {
+function buildTemporalContextSection(params: {
+  userDate?: string;
+  userTimezone?: string;
+  sessionStatusAvailable: boolean;
+}) {
+  const userDate = params.userDate?.trim();
+  const userTimezone = params.userTimezone?.trim();
+  if (!userDate || !userTimezone) {
     return [];
   }
-  return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
+  return [
+    "## Temporal Context",
+    `Current date: ${userDate}`,
+    `Time zone: ${userTimezone}`,
+    ...(params.sessionStatusAvailable ? ["For the exact current time, use `session_status`."] : []),
+    "",
+  ];
 }
 
 function buildAssistantOutputDirectivesSection(params: {
@@ -755,8 +766,7 @@ export function buildAgentSystemPrompt(params: {
   toolSummaries?: Record<string, string>;
   modelAliasLines?: string[];
   userTimezone?: string;
-  userTime?: string;
-  userTimeFormat?: ResolvedTimeFormat;
+  userDate?: string;
   contextFiles?: EmbeddedContextFile[];
   bootstrapMode?: BootstrapMode;
   bootstrapTruncationNotice?: string;
@@ -1004,6 +1014,7 @@ export function buildAgentSystemPrompt(params: {
     : undefined;
   const reasoningLevel = params.reasoningLevel ?? "off";
   const userTimezone = params.userTimezone?.trim();
+  const userDate = params.userDate?.trim();
   const skillsPrompt = params.skillsPrompt?.trim();
   const heartbeatPrompt = params.heartbeatPrompt?.trim();
   const runtimeInfo = params.runtimeInfo;
@@ -1270,7 +1281,6 @@ export function buildAgentSystemPrompt(params: {
         ? params.modelAliasLines.join("\n")
         : "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
-      userTimezone ? "Need date/time/day: `session_status`." : "",
       "## Workspace",
       `Working directory: ${displayWorkspaceDir}`,
       workspaceGuidance,
@@ -1340,9 +1350,6 @@ export function buildAgentSystemPrompt(params: {
             .join("\n")
         : "",
       params.sandboxInfo?.enabled ? "" : "",
-      ...buildTimeSection({
-        userTimezone,
-      }),
       ...bootstrapSystemPromptSections,
       "## Workspace Files (injected)",
       "User-editable; OpenClaw loads below as Project Context.",
@@ -1376,6 +1383,16 @@ export function buildAgentSystemPrompt(params: {
   });
 
   const lines = [stablePrefix];
+
+  // Local date and timezone can change between turns. Keep them at the front of
+  // the volatile suffix so rollover is visible without invalidating the stable prefix.
+  lines.push(
+    ...buildTemporalContextSection({
+      userDate,
+      userTimezone,
+      sessionStatusAvailable: availableTools.has("session_status"),
+    }),
+  );
 
   lines.push(
     ...buildProjectContextSection({

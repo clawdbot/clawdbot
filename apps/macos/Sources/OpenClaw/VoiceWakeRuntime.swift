@@ -8,6 +8,18 @@ import SwabbleKit
 import AppKit
 #endif
 
+enum VoiceWakeRuntimeTaskSupport {
+    static func wait(nanoseconds: UInt64) async -> Bool {
+        guard !Task.isCancelled else { return false }
+        do {
+            try await Task.sleep(nanoseconds: nanoseconds)
+        } catch {
+            return false
+        }
+        return !Task.isCancelled
+    }
+}
+
 /// Background listener that keeps the voice-wake pipeline alive outside the settings test view.
 actor VoiceWakeRuntime {
     static let shared = VoiceWakeRuntime()
@@ -448,7 +460,7 @@ actor VoiceWakeRuntime {
         let lastText = self.lastTranscript
         let windowNanos = UInt64(self.triggerPauseWindow * 1_000_000_000)
         self.triggerOnlyTask = Task { [weak self, lastSeenAt, lastText] in
-            try? await Task.sleep(nanoseconds: windowNanos)
+            guard await VoiceWakeRuntimeTaskSupport.wait(nanoseconds: windowNanos) else { return }
             guard let self else { return }
             await self.triggerOnlyPauseCheck(
                 lastSeenAt: lastSeenAt,
@@ -468,7 +480,7 @@ actor VoiceWakeRuntime {
         let lastText = self.lastTranscript
         let windowNanos = UInt64(self.preDetectSilenceWindow * 1_000_000_000)
         self.preDetectTask = Task { [weak self, lastSeenAt, lastText] in
-            try? await Task.sleep(nanoseconds: windowNanos)
+            guard await VoiceWakeRuntimeTaskSupport.wait(nanoseconds: windowNanos) else { return }
             guard let self else { return }
             await self.preDetectSilenceCheck(
                 lastSeenAt: lastSeenAt,
@@ -632,7 +644,7 @@ actor VoiceWakeRuntime {
                 return
             }
 
-            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard await VoiceWakeRuntimeTaskSupport.wait(nanoseconds: 200_000_000) else { return }
         }
     }
 
@@ -737,7 +749,7 @@ actor VoiceWakeRuntime {
         self.scheduledRestartTask?.cancel()
         self.scheduledRestartTask = Task { [weak self] in
             let nanos = UInt64(max(0, delay) * 1_000_000_000)
-            try? await Task.sleep(nanoseconds: nanos)
+            guard await VoiceWakeRuntimeTaskSupport.wait(nanoseconds: nanos) else { return }
             guard let self else { return }
             await self.consumeScheduledRestart()
             await self.restartRecognizerIfIdleAndOverlayHidden()

@@ -1847,6 +1847,24 @@ afterEach(() => {
 });
 
 describe("per-pane chat presentation state", () => {
+  it("opens thread search from the physical shortcut on a non-Latin layout", () => {
+    const onRequestUpdate = vi.fn();
+    const container = renderChatView({ onRequestUpdate });
+    const chat = requireElement(container, "section.card.chat", "chat view");
+    const event = new KeyboardEvent("keydown", {
+      key: "а",
+      code: "KeyF",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    chat.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(onRequestUpdate).toHaveBeenCalledOnce();
+  });
+
   it("keeps slash menus independent and resets only the targeted pane", () => {
     const paneA = document.createElement("div");
     const paneB = document.createElement("div");
@@ -4167,6 +4185,13 @@ describe("chat attachment picker", () => {
     expect(clickInput).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps attachment-only composers free of capability rows", () => {
+    const container = renderChatView();
+
+    expect(container.querySelectorAll(".agent-chat__attach-menu-option")).toHaveLength(3);
+    expect(container.querySelector(".agent-chat__capability-menu-item")).toBeNull();
+  });
+
   it("opens the camera input from the attachment menu and attaches the captured photo", async () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });
@@ -4217,7 +4242,7 @@ describe("chat attachment picker", () => {
     expect(container.querySelector('button[aria-label="Send message"]')).not.toBeNull();
   });
 
-  it("accepts and previews non-video file attachments", async () => {
+  it("accepts and previews file attachments", async () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });
     const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
@@ -4247,20 +4272,32 @@ describe("chat attachment picker", () => {
     expect(preview.querySelector(".chat-attachment-file__name")?.textContent).toBe("brief.pdf");
   });
 
-  it("filters video file attachments", () => {
+  it("accepts video file attachments with the generic file preview", async () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });
     const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
     const file = new File(["video"], "clip.mp4", { type: "video/mp4" });
 
     expect(input).toBeInstanceOf(HTMLInputElement);
+    expect(input?.accept).toContain("video/*");
     Object.defineProperty(input!, "files", {
       configurable: true,
       value: [file],
     });
     input!.dispatchEvent(new Event("change", { bubbles: true }));
 
-    expect(onAttachmentsChange).not.toHaveBeenCalled();
+    await waitForFast(() => {
+      const attachments = requireFirstAttachmentsChange(onAttachmentsChange);
+      expect(attachments).toHaveLength(1);
+      expect(attachments[0]?.fileName).toBe("clip.mp4");
+      expect(attachments[0]?.mimeType).toBe("video/mp4");
+      expect(attachments[0]?.sizeBytes).toBe(file.size);
+    });
+
+    const nextAttachments = requireFirstAttachmentsChange(onAttachmentsChange);
+    const preview = renderChatView({ attachments: nextAttachments });
+    expect(preview.querySelectorAll(".chat-attachment-thumb--file")).toHaveLength(1);
+    expect(preview.querySelector(".chat-attachment-file__name")?.textContent).toBe("clip.mp4");
   });
 });
 
@@ -4276,6 +4313,8 @@ describe("chat welcome", () => {
     sessionKey?: string;
     sessionHost?: { assistantAgentId?: string | null } | null;
     onOpenSession?: (sessionKey: string) => void;
+    modelSetupRequired?: boolean;
+    onModelSetup?: () => void;
   }) {
     const container = document.createElement("div");
     render(
@@ -4287,6 +4326,8 @@ describe("chat welcome", () => {
         sessionKey: params.sessionKey,
         sessionHost: params.sessionHost,
         onOpenSession: params.onOpenSession,
+        modelSetupRequired: params.modelSetupRequired,
+        onModelSetup: params.onModelSetup,
         onDraftChange: () => undefined,
         onSend: () => undefined,
       }),
@@ -4318,6 +4359,37 @@ describe("chat welcome", () => {
     expect(clawd).not.toBeNull();
     expect(clawd?.querySelector("openclaw-mascot")?.getAttribute("mood")).toBe("idle");
     expect(container.querySelector(".agent-chat__badge")).toBeNull();
+  });
+
+  it("replaces sendable welcome actions with model setup", () => {
+    const onModelSetup = vi.fn();
+    const container = renderWelcome({
+      assistantAvatar: null,
+      modelSetupRequired: true,
+      onModelSetup,
+    });
+
+    expect(container.textContent).toContain("No AI provider configured");
+    expect(container.querySelector(".agent-chat__suggestions")).toBeNull();
+
+    container.querySelector<HTMLButtonElement>(".agent-chat__welcome button")?.click();
+    expect(onModelSetup).toHaveBeenCalledOnce();
+  });
+
+  it("omits the composer footer behind the empty model setup splash", () => {
+    const container = renderChatView({
+      canSend: false,
+      disabledBanner: {
+        kind: "composer-replacement",
+        text: "OpenClaw couldn't find a provider and model configured for this agent. Add one before starting a conversation.",
+        actionLabel: "Configure a provider",
+        onAction: () => undefined,
+      },
+      modelSetupRequired: true,
+    });
+
+    expect(container.querySelector(".agent-chat__welcome--setup")).not.toBeNull();
+    expect(container.querySelector(".agent-chat__composer-shell")).toBeNull();
   });
 
   it("teases and catches file drags with the welcome mascot", () => {
@@ -4489,6 +4561,7 @@ describe("chat model controls", () => {
     expect(container.querySelector(".chat-controls__model-provenance-value--inherit")).toBeNull();
     const reset = container.querySelector<HTMLButtonElement>("[data-chat-model-reset]");
     expect(reset).toBeInstanceOf(HTMLButtonElement);
+    expect(reset?.textContent?.trim()).toBe("Use default");
     reset?.click();
     expect(onModelSelect).toHaveBeenCalledWith("", "main");
   });
@@ -4861,7 +4934,11 @@ describe("chat model controls", () => {
     expect(defaultOption?.dataset.chatModelOption).toBe("openai/gpt-5.5");
     expect(defaultOption?.getAttribute("aria-selected")).toBe("true");
     expect(defaultOption?.textContent).toContain("GPT-5.5");
-    expect(defaultOption?.textContent).toContain("Default");
+    expect(defaultOption?.textContent).toContain("Current");
+    expect(defaultOption?.textContent).not.toContain("Default");
+    expect(
+      defaultOption?.querySelector(".chat-controls__model-state-label--current"),
+    ).not.toBeNull();
     expect(container.querySelector('[data-chat-model-option=""]')).toBeNull();
   });
 
@@ -4903,6 +4980,14 @@ describe("chat model controls", () => {
     );
     expect(defaultOption).toBeInstanceOf(HTMLButtonElement);
     expect(defaultOption?.getAttribute("aria-selected")).toBe(selected);
+    expect(defaultOption?.textContent).toContain(selected === "true" ? "Current" : "Default");
+    expect(defaultOption?.textContent).not.toContain(selected === "true" ? "Default" : "Current");
+    const currentOption = container.querySelector<HTMLButtonElement>('[aria-selected="true"]');
+    expect(currentOption?.textContent).toContain("Current");
+    expect(currentOption?.textContent).not.toContain("Default");
+    expect(
+      currentOption?.querySelector(".chat-controls__model-state-label--current"),
+    ).not.toBeNull();
     defaultOption?.click();
 
     await waitForFast(() => {
@@ -5701,13 +5786,14 @@ describe("right-click Reply", () => {
     section.appendChild(confirmationOwner);
     window.localStorage.removeItem("openclaw:skip-rewind-confirm");
     chatMessage.openChatRewindConfirmation(confirmationTrigger, vi.fn());
+    const confirmation = document.querySelector<HTMLElement>(".chat-delete-confirm");
     const { bubble } = appendChatBubble(container, { text: "open message actions" });
 
     try {
-      expect(confirmationOwner.querySelector(".chat-delete-confirm")).not.toBeNull();
+      expect(confirmation?.isConnected).toBe(true);
       bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
 
-      expect(confirmationOwner.querySelector(".chat-delete-confirm")).toBeNull();
+      expect(confirmation?.isConnected).toBe(false);
       expect(document.querySelector(".chat-reply-context-menu")).not.toBeNull();
     } finally {
       chatMessage.dismissConfirmedActionPopovers(confirmationOwner);
@@ -5857,9 +5943,7 @@ describe("right-click Reply", () => {
     rewindButton!.click();
     flushFrames();
 
-    const cancel = document.querySelector<HTMLButtonElement>(
-      ".chat-reply-context-menu .chat-delete-confirm__cancel",
-    );
+    const cancel = document.querySelector<HTMLButtonElement>(".chat-delete-confirm__cancel");
     expect(cancel).toBeInstanceOf(HTMLButtonElement);
     expect(document.activeElement).toBe(cancel);
     const confirmationEscape = new KeyboardEvent("keydown", {

@@ -504,7 +504,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadDiagnosticsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["controlUi.githubPreview", "controlUi.sessionPullRequests"],
+    methods: ["controlUi.githubPreview", "controlUi.sessionPullRequests.subscribe"],
     loadHandlers: loadControlUiHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -739,6 +739,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.cleanup",
       "sessions.subscribe",
       "sessions.unsubscribe",
+      "sessions.viewers.set",
       "sessions.messages.subscribe",
       "sessions.messages.unsubscribe",
       "sessions.preview",

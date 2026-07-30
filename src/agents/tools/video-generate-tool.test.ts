@@ -53,6 +53,9 @@ const taskExecutorMocks = vi.hoisted(() => ({
   completeTaskRunByRunId: vi.fn(),
   createRunningTaskRun: vi.fn(),
 }));
+const probeMediaFilesWithinBudgetMock = vi.hoisted(() =>
+  vi.fn(async (inputs: readonly unknown[]) => inputs.map(() => ({}))),
+);
 
 const VIDEO_GENERATION_PROVIDER_AUTH_ENV_VARS = [
   "OPENAI_API_KEY",
@@ -84,6 +87,9 @@ const VIDEO_GENERATION_PROVIDER_AUTH_ENV_VARS = [
 
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 vi.mock("../../tasks/detached-task-runtime.js", () => taskExecutorMocks);
+vi.mock("../../media/media-probe.js", () => ({
+  probeMediaFilesWithinBudget: probeMediaFilesWithinBudgetMock,
+}));
 
 const GENERATION_PROVIDER_ENV_VARS = [
   "BYTEPLUS_API_KEY",
@@ -328,6 +334,10 @@ function resetVideoGenerateMocks() {
   );
   taskRuntimeInternalMocks.reloadTaskRegistryFromStore.mockReset();
   resetRecentMediaGenerationDuplicateGuardsForTests();
+  probeMediaFilesWithinBudgetMock.mockReset();
+  probeMediaFilesWithinBudgetMock.mockImplementation(async (inputs: readonly unknown[]) =>
+    inputs.map(() => ({})),
+  );
   taskExecutorMocks.createRunningTaskRun.mockReset();
   taskExecutorMocks.completeTaskRunByRunId.mockReset();
   taskExecutorMocks.failTaskRunByRunId.mockReset();
@@ -649,6 +659,9 @@ describe("createVideoGenerateTool", () => {
       size: 11,
       contentType: "video/mp4",
     });
+    probeMediaFilesWithinBudgetMock.mockResolvedValueOnce([
+      { durationMs: 3250, width: 1280, height: 720 },
+    ]);
 
     const tool = createVideoGenerateTool({
       config: asConfig({
@@ -691,8 +704,16 @@ describe("createVideoGenerateTool", () => {
         path: "/tmp/generated-lobster.mp4",
         mimeType: "video/mp4",
         name: "generated-lobster.mp4",
+        sizeBytes: 11,
+        durationMs: 3250,
+        width: 1280,
+        height: 720,
       },
     ]);
+    expect(probeMediaFilesWithinBudgetMock).toHaveBeenCalledWith(
+      [{ filePath: "/tmp/generated-lobster.mp4", kind: "video" }],
+      { budgetMs: 3000, concurrency: 2, maxProbes: 8 },
+    );
     expect(details.paths).toEqual(["/tmp/generated-lobster.mp4"]);
     expect(details.metadata).toEqual({ taskId: "task-1" });
     expect(taskExecutorMocks.createRunningTaskRun).not.toHaveBeenCalled();

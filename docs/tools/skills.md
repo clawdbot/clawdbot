@@ -154,6 +154,7 @@ before anything changes.
 ```bash
 openclaw skills workshop list
 openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop evaluate <proposal-id>
 openclaw skills workshop apply <proposal-id>
 ```
 

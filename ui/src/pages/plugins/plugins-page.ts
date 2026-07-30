@@ -4,7 +4,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { serializeSidebarEntry, titleForRoute } from "../../app-navigation.ts";
+import { serializeSidebarEntry, subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForPluginsHubTab, pathForRoute } from "../../app-route-paths.ts";
 import {
   applicationContext,
@@ -13,8 +13,9 @@ import {
 } from "../../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { renderHubTabs } from "../../components/hub-tabs.ts";
 import type { McpServerForm } from "../../components/mcp-server-form.ts";
-import { renderPluginsHubTabs, type PluginsHubTab } from "../../components/plugins-hub-tabs.ts";
+import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
@@ -44,6 +45,7 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { fetchPluginIconBlobUrl } from "./icon-loader.ts";
+import { PLUGINS_HUB_PANEL_ID, pluginsHubTabs, type PluginsHubTab } from "./plugins-hub.ts";
 import type { ConnectorSuggestion } from "./presentation.ts";
 import { pluginArtPath } from "./presentation.ts";
 import { canonicalPluginsRouteLocation, pluginsHubTabForRoute } from "./route-data.ts";
@@ -56,6 +58,8 @@ import {
   type PluginsTab,
 } from "./view.ts";
 
+const PLUGINS_DOCS_URL = "https://docs.openclaw.ai/plugins/manage-plugins";
+
 export type PluginsRouteData = {
   gateway: ApplicationContext["gateway"];
   gatewaySnapshot: ApplicationGatewaySnapshot;
@@ -66,6 +70,45 @@ export type PluginsRouteData = {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function runPluginConfigMutation<T>(
+  runtimeConfig: ApplicationContext["runtimeConfig"],
+  expectedClient: GatewayBrowserClient,
+  task: (client: GatewayBrowserClient) => Promise<T>,
+): Promise<{ value: T; refreshError: string | null }> {
+  let taskError: Error | undefined;
+  const mutation = await runtimeConfig.runExternalMutation(async (client) => {
+    if (client !== expectedClient) {
+      throw new Error("Connection changed before the plugin update started.");
+    }
+    try {
+      return await task(client);
+    } catch (error) {
+      // Preserve structured Gateway errors used by the ClawHub risk prompt.
+      taskError = error instanceof Error ? error : new Error(String(error));
+      throw taskError;
+    }
+  });
+  if (mutation.ok) {
+    return {
+      value: mutation.value,
+      refreshError: mutation.refresh.ok ? null : mutation.refresh.error,
+    };
+  }
+  throw taskError ?? new Error(mutation.error);
+}
+
+function committedMutationMessage(success: string, refreshError: string | null): PluginRowMessage {
+  return {
+    kind: "success",
+    text: [
+      success,
+      refreshError ? t("pluginsPage.configRefreshFailed", { error: refreshError }) : null,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  };
 }
 
 function withPlugin(
@@ -697,12 +740,9 @@ class PluginsPage extends OpenClawLightDomElement {
   }
 
   /** Plugin changes can affect both catalog state and route visibility (for example Workboard). */
-  private async refreshAfterMutation(client: GatewayBrowserClient): Promise<void> {
+  private async refreshCatalogAfterMutation(client: GatewayBrowserClient): Promise<void> {
     this.error = null;
-    await Promise.all([
-      this.catalogTask.run([client]),
-      this.configTask.run([client, this.context.runtimeConfig]),
-    ]);
+    await this.catalogTask.run([client]);
   }
 
   private pageError(): string | null {
@@ -712,7 +752,19 @@ class PluginsPage extends OpenClawLightDomElement {
     return errors.length > 0 ? errors.join(" ") : null;
   }
 
-  private async install(rowKey: string, request: PluginInstallRequest) {
+  private async runPluginMutation<Result>(
+    rowKey: string,
+    mutate: (client: GatewayBrowserClient) => Promise<Result>,
+    onSuccess: (
+      result: Result,
+      refreshError: string | null,
+      client: GatewayBrowserClient,
+      isCurrent: () => boolean,
+    ) => Promise<void>,
+    onError: (error: unknown) => void = (error) => {
+      this.setMessage(rowKey, { kind: "error", text: errorMessage(error) });
+    },
+  ): Promise<void> {
     const client = this.client;
     if (!client || !this.canMutate() || this.busy[rowKey]) {
       return;
@@ -726,33 +778,14 @@ class PluginsPage extends OpenClawLightDomElement {
     this.setBusy(rowKey, true);
     this.setMessage(rowKey, null);
     try {
-      const result = await installPlugin(client, request);
+      const mutation = await runPluginConfigMutation(this.context.runtimeConfig, client, mutate);
       if (!isCurrent()) {
         return;
       }
-      this.applyMutationResult(result);
-      this.setMessage(rowKey, {
-        kind: "success",
-        text: mutationSuccessMessage("installed", result),
-      });
-      await this.refreshAfterMutation(client);
+      await onSuccess(mutation.value, mutation.refreshError, client, isCurrent);
     } catch (error) {
-      if (!isCurrent()) {
-        return;
-      }
-      const trust = readPluginInstallTrustError(error);
-      const packageName = request.source === "clawhub" ? request.packageName : null;
-      if (packageName && pluginInstallNeedsRiskAcknowledgement(error)) {
-        this.setMessage(rowKey, {
-          kind: "error",
-          text: trust?.warning ?? t("pluginsPage.defaultRiskWarning"),
-          acknowledge: {
-            packageName,
-            ...(trust?.version ? { version: trust.version } : {}),
-          },
-        });
-      } else {
-        this.setMessage(rowKey, { kind: "error", text: errorMessage(error) });
+      if (isCurrent()) {
+        onError(error);
       }
     } finally {
       if (this.mutationTokens.get(rowKey) === mutationToken) {
@@ -762,91 +795,86 @@ class PluginsPage extends OpenClawLightDomElement {
     }
   }
 
-  private async updateEnabled(pluginId: string, enabled: boolean, key = pluginRowKey(pluginId)) {
-    const client = this.client;
-    if (!client || !this.canMutate() || this.busy[key]) {
-      return;
-    }
-    const sourceGeneration = this.sourceGeneration;
-    const mutationToken = ++this.mutationToken;
-    this.mutationTokens.set(key, mutationToken);
-    const isCurrent = () =>
-      this.isCurrentSource(client, sourceGeneration) &&
-      this.mutationTokens.get(key) === mutationToken;
-    this.setBusy(key, true);
-    this.setMessage(key, null);
-    try {
-      const result = await setPluginEnabled(client, pluginId, enabled);
-      if (!isCurrent()) {
-        return;
-      }
-      this.applyMutationResult(result);
-      this.setMessage(key, {
-        kind: "success",
-        text: mutationSuccessMessage(enabled ? "enabled" : "disabled", result),
-      });
-      if (enabled) {
-        this.pinEnabledPluginRoute(pluginId);
-      }
-      await this.refreshAfterMutation(client);
-      if (isCurrent() && !result.restartRequired) {
-        // Plugin-provided tabs are projected in the connection hello. Re-handshake
-        // after the registry refresh so sidebar navigation reflects this mutation.
-        this.context.gateway.connect();
-      }
-    } catch (error) {
-      if (isCurrent()) {
-        this.setMessage(key, { kind: "error", text: errorMessage(error) });
-      }
-    } finally {
-      if (this.mutationTokens.get(key) === mutationToken) {
-        this.mutationTokens.delete(key);
-        this.setBusy(key, false);
-      }
-    }
+  private async install(rowKey: string, request: PluginInstallRequest): Promise<void> {
+    await this.runPluginMutation(
+      rowKey,
+      (client) => installPlugin(client, request),
+      async (result, refreshError, client) => {
+        this.applyMutationResult(result);
+        this.setMessage(
+          rowKey,
+          committedMutationMessage(mutationSuccessMessage("installed", result), refreshError),
+        );
+        await this.refreshCatalogAfterMutation(client);
+      },
+      (error) => {
+        const trust = readPluginInstallTrustError(error);
+        const packageName = request.source === "clawhub" ? request.packageName : null;
+        if (packageName && pluginInstallNeedsRiskAcknowledgement(error)) {
+          this.setMessage(rowKey, {
+            kind: "error",
+            text: trust?.warning ?? t("pluginsPage.defaultRiskWarning"),
+            acknowledge: {
+              packageName,
+              ...(trust?.version ? { version: trust.version } : {}),
+            },
+          });
+          return;
+        }
+        this.setMessage(rowKey, { kind: "error", text: errorMessage(error) });
+      },
+    );
   }
 
-  private async uninstall(pluginId: string, rowKey: string) {
-    const client = this.client;
-    if (!client || !this.canMutate() || this.busy[rowKey]) {
-      return;
-    }
-    const sourceGeneration = this.sourceGeneration;
-    const mutationToken = ++this.mutationToken;
-    this.mutationTokens.set(rowKey, mutationToken);
-    const isCurrent = () =>
-      this.isCurrentSource(client, sourceGeneration) &&
-      this.mutationTokens.get(rowKey) === mutationToken;
-    this.setBusy(rowKey, true);
-    this.setMessage(rowKey, null);
-    try {
-      const result = await uninstallPlugin(client, pluginId);
-      if (!isCurrent()) {
-        return;
-      }
-      this.setPendingRemoval(rowKey, false);
-      // The uninstalled row disappears after refresh, so the restart reminder
-      // lives in the page-level notice instead of the vanishing row.
-      this.pageNotice = {
-        kind: "success",
-        text: [
-          t("pluginsPage.removedRestart", { name: result.pluginId }),
-          ...(result.warnings ?? []),
-        ]
-          .filter(Boolean)
-          .join("\n"),
-      };
-      await this.refreshAfterMutation(client);
-    } catch (error) {
-      if (isCurrent()) {
-        this.setMessage(rowKey, { kind: "error", text: errorMessage(error) });
-      }
-    } finally {
-      if (this.mutationTokens.get(rowKey) === mutationToken) {
-        this.mutationTokens.delete(rowKey);
-        this.setBusy(rowKey, false);
-      }
-    }
+  private async updateEnabled(
+    pluginId: string,
+    enabled: boolean,
+    key = pluginRowKey(pluginId),
+  ): Promise<void> {
+    await this.runPluginMutation(
+      key,
+      (client) => setPluginEnabled(client, pluginId, enabled),
+      async (result, refreshError, client, isCurrent) => {
+        this.applyMutationResult(result);
+        this.setMessage(
+          key,
+          committedMutationMessage(
+            mutationSuccessMessage(enabled ? "enabled" : "disabled", result),
+            refreshError,
+          ),
+        );
+        if (enabled) {
+          this.pinEnabledPluginRoute(pluginId);
+        }
+        await this.refreshCatalogAfterMutation(client);
+        if (isCurrent() && !result.restartRequired) {
+          // Plugin tabs come from hello; reconnect after the registry refresh.
+          this.context.gateway.connect();
+        }
+      },
+    );
+  }
+
+  private async uninstall(pluginId: string, rowKey: string): Promise<void> {
+    await this.runPluginMutation(
+      rowKey,
+      (client) => uninstallPlugin(client, pluginId),
+      async (result, refreshError, client) => {
+        this.setPendingRemoval(rowKey, false);
+        // Removal hides its row, so keep the restart reminder on the page.
+        this.pageNotice = {
+          kind: "success",
+          text: [
+            t("pluginsPage.removedRestart", { name: result.pluginId }),
+            ...(result.warnings ?? []),
+            refreshError ? t("pluginsPage.configRefreshFailed", { error: refreshError }) : null,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        };
+        await this.refreshCatalogAfterMutation(client);
+      },
+    );
   }
 
   private async mutateMcpServers(params: {
@@ -969,13 +997,23 @@ class PluginsPage extends OpenClawLightDomElement {
       <section class="content-header content-header--page plugins-content-header">
         <div>
           <h1 class="page-title">${titleForRoute("plugins")}</h1>
+          <div class="page-subtitle">
+            ${subtitleForRoute("plugins")}
+            ${renderDocsLink(PLUGINS_DOCS_URL, t("common.learnMore"))}
+          </div>
         </div>
       </section>
       ${renderSettingsWorkspace(html`
         <div class="plugins-hub-tabs-row">
-          ${renderPluginsHubTabs({
+          ${renderHubTabs({
+            id: "plugins",
             active: this.activeTab,
-            installedCount: this.result?.plugins.filter((plugin) => plugin.installed).length ?? 0,
+            tabs: pluginsHubTabs(
+              this.result?.plugins.filter((plugin) => plugin.installed).length ?? 0,
+            ),
+            ariaLabel: t("pluginsPage.hubTablistLabel"),
+            panelId: PLUGINS_HUB_PANEL_ID,
+            className: "plugins-tabs",
             onSelect: (tab) => this.selectHubTab(tab),
           })}
         </div>

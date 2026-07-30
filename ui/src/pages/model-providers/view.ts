@@ -16,10 +16,8 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { BASE_THINKING_LEVELS } from "../../lib/chat/thinking.ts";
-import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
 import { formatCost, formatTimeMs, formatTokens } from "../../lib/format.ts";
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
-import { renderConfigApplyBanner, renderConfigAutoSaveStatus } from "../config/view.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
 import type {
@@ -49,14 +47,6 @@ type ModelProvidersViewProps = {
   thinkingLevel: string;
   fastMode: FastMode | undefined;
   configBusy: boolean;
-  configConnected: boolean;
-  configLoading: boolean;
-  configSaving: boolean;
-  configApplying: boolean;
-  configUpdating: boolean;
-  configNeedsApply: boolean;
-  configRawDraftPending: boolean;
-  configAutoSaveStatus: ConfigAutoSaveStatus;
   unconfiguredProviders: ProviderOption[];
   canMutate: boolean;
   mutationBlockedReason: string | null;
@@ -92,9 +82,7 @@ type ModelProvidersViewProps = {
   onDefaultModelsReset: () => void;
   onThinkingChange: (level: string) => void;
   onFastModeChange: (mode: FastMode) => void;
-  onApplyConfig: () => void;
-  onRetrySaveConfig: () => void;
-  onDiscardConfig: () => void;
+  onOpenModelSetup: () => void;
 };
 
 // The global default intentionally omits "minimal"; the full list stays
@@ -103,31 +91,6 @@ const THINKING_LEVELS = BASE_THINKING_LEVELS.filter((level) => level !== "minima
 
 function fastModeOptionValue(value: "auto" | "on" | "off"): FastMode {
   return value === "auto" ? "auto" : value === "on";
-}
-
-function renderModelConfigWorkflow(props: ModelProvidersViewProps) {
-  const status = renderConfigAutoSaveStatus({
-    status: props.configAutoSaveStatus,
-    onRetry: props.onRetrySaveConfig,
-    onReload: props.onDiscardConfig,
-  });
-  return html`
-    ${status === nothing
-      ? nothing
-      : html`<div class="config-toolbar__status" role="status" aria-live="polite">${status}</div>`}
-    ${renderConfigApplyBanner({
-      needsApply: props.configNeedsApply,
-      applying: props.configApplying,
-      busy:
-        props.configSaving ||
-        props.configLoading ||
-        props.configUpdating ||
-        props.configAutoSaveStatus === "saving" ||
-        props.configRawDraftPending,
-      connected: props.configConnected,
-      onApply: props.onApplyConfig,
-    })}
-  `;
 }
 
 function renderModelBehavior(props: ModelProvidersViewProps) {
@@ -199,6 +162,38 @@ function renderAuthStatus(card: ModelProviderCard) {
       ${renderSettingsStatus({ kind: AUTH_KIND_STATUS[auth.kind], label })}
     </span>
   `;
+}
+
+function hasProviderCredentials(card: ModelProviderCard): boolean {
+  return card.hasConfigApiKey || Boolean(card.apiKey) || card.profiles.length > 0;
+}
+
+function hasValidProviderSignIn(card: ModelProviderCard): boolean {
+  return card.auth?.kind === "ok";
+}
+
+function renderProviderStatus(card: ModelProviderCard) {
+  if (card.auth?.kind === "expired" || card.auth?.kind === "missing") {
+    return renderAuthStatus(card);
+  }
+  if (card.auth?.kind === "expiring") {
+    return renderAuthStatus(card);
+  }
+  if (!hasProviderCredentials(card)) {
+    return renderAuthStatus(card);
+  }
+  if (card.availableModelCount > 0 && (hasValidProviderSignIn(card) || !card.auth)) {
+    return renderSettingsStatus({
+      kind: "ok",
+      label: t("modelProviders.status.ready"),
+    });
+  }
+  return hasValidProviderSignIn(card)
+    ? renderSettingsStatus({
+        kind: "muted",
+        label: t("modelProviders.status.ok"),
+      })
+    : renderAuthStatus(card);
 }
 
 function modelsText(card: ModelProviderCard): string | null {
@@ -466,7 +461,7 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
         </div>
         <div class="settings-row__control">
           ${card.usage?.plan ? renderSettingsValue(card.usage.plan) : nothing}
-          ${renderAuthStatus(card)}
+          ${renderProviderStatus(card)}
         </div>
       </div>
       ${renderCredentialSummary(card, props.credentialAgentLabel)}
@@ -559,6 +554,34 @@ function renderAddProvider(props: ModelProvidersViewProps) {
   );
 }
 
+function renderModelReadiness(props: ModelProvidersViewProps) {
+  const signedIn = props.cards.some(hasValidProviderSignIn);
+  return html`
+    <div class="model-providers__setup" data-model-readiness="model-required">
+      ${renderSettingsSection(
+        { title: t("modelProviders.readiness.title") },
+        renderSettingsRow({
+          title: t("modelProviders.readiness.heading"),
+          description: signedIn
+            ? t("modelProviders.readiness.signedInNoModels")
+            : t("modelProviders.readiness.notConfigured"),
+          control: html`
+            ${renderSettingsStatus({
+              kind: "warn",
+              label: signedIn
+                ? t("modelProviders.readiness.noModels")
+                : t("modelProviders.readiness.modelRequired"),
+            })}
+            <button class="btn primary" @click=${props.onOpenModelSetup}>
+              ${signedIn ? t("modelProviders.readiness.chooseProvider") : t("modelSetup.heading")}
+            </button>
+          `,
+        }),
+      )}
+    </div>
+  `;
+}
+
 export function renderModelProviders(props: ModelProvidersViewProps) {
   if (!props.connected) {
     return renderSettingsPage(
@@ -567,7 +590,7 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
   }
   if (props.loading) {
     return renderSettingsPage(html`
-      ${renderModelConfigWorkflow(props)} ${renderModelBehavior(props)}
+      ${renderModelBehavior(props)}
       <div aria-busy="true">${renderSettingsGroup(renderSettingsEmpty(t("common.loading")))}</div>
     `);
   }
@@ -589,23 +612,26 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
         )
       : props.cards.map((card) => renderProviderRow(card, props))}
   `;
+  const needsModelSetup = !props.configuredModels.some((model) => model.available !== false);
   return renderSettingsPage(html`
-    ${renderDefaultModels({
-      models: props.configuredModels,
-      selection: props.defaultModels,
-      dirty: props.defaultModelsDirty,
-      canMutate: props.canMutate,
-      mutationBlockedReason: props.mutationBlockedReason,
-      busy: props.busy,
-      message: props.messages.defaults,
-      onPrimaryChange: props.onPrimaryChange,
-      onFallbackAdd: props.onFallbackAdd,
-      onFallbackRemove: props.onFallbackRemove,
-      onUtilityChange: props.onUtilityChange,
-      onSave: props.onDefaultModelsSave,
-      onReset: props.onDefaultModelsReset,
-    })}
-    ${renderModelConfigWorkflow(props)} ${renderModelBehavior(props)}
+    ${needsModelSetup
+      ? renderModelReadiness(props)
+      : renderDefaultModels({
+          models: props.configuredModels,
+          selection: props.defaultModels,
+          dirty: props.defaultModelsDirty,
+          canMutate: props.canMutate,
+          mutationBlockedReason: props.mutationBlockedReason,
+          busy: props.busy,
+          message: props.messages.defaults,
+          onPrimaryChange: props.onPrimaryChange,
+          onFallbackAdd: props.onFallbackAdd,
+          onFallbackRemove: props.onFallbackRemove,
+          onUtilityChange: props.onUtilityChange,
+          onSave: props.onDefaultModelsSave,
+          onReset: props.onDefaultModelsReset,
+        })}
+    ${renderModelBehavior(props)}
     ${renderSettingsSection(
       {
         title: t("modelProviders.title"),

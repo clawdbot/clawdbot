@@ -265,6 +265,7 @@ describe("openshell backend manager", () => {
     const first = await createBackend("agent:main");
     const repeated = await createBackend("agent:main");
     const other = await createBackend("agent:other");
+    const workspaceScoped = await createBackend(`agent:main:workspace:${"a".repeat(32)}`);
     const legacyRuntimeId = "openclaw-agent-main-25bffc4d";
     const adoptedLegacy = await createBackend("agent:main", [legacyRuntimeId]);
     const punctuationLegacyRuntimeId = "openclaw-agent-foo-bar-baz-ab401a99";
@@ -278,6 +279,9 @@ describe("openshell backend manager", () => {
     expect(first.runtimeId).toHaveLength(19);
     expect(repeated.runtimeId).toBe(first.runtimeId);
     expect(other.runtimeId).not.toBe(first.runtimeId);
+    expect(workspaceScoped.runtimeId).toMatch(/^oc-[a-z0-9]{16}$/u);
+    expect(workspaceScoped.runtimeId).toHaveLength(19);
+    expect(workspaceScoped.runtimeId).not.toBe(first.runtimeId);
     expect(adoptedLegacy.runtimeId).toBe(legacyRuntimeId);
     expect(adoptedPunctuationLegacy.runtimeId).toBe(punctuationLegacyRuntimeId);
     expect(ignoresUnknown.runtimeId).toBe(first.runtimeId);
@@ -941,6 +945,61 @@ describe("openshell fs bridges", () => {
     );
   });
 
+  it("creates mirror files exclusively before syncing them", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    const createFileExclusive = bridge.createFileExclusive?.bind(bridge);
+    expect(createFileExclusive).toBeTypeOf("function");
+
+    await expect(
+      createFileExclusive!({ filePath: "nested/file.txt", data: "first" }),
+    ).resolves.toBe("created");
+    await expect(
+      createFileExclusive!({ filePath: "nested/file.txt", data: "replacement" }),
+    ).resolves.toBe("exists");
+    await expect(fs.readFile(path.join(workspaceDir, "nested", "file.txt"), "utf8")).resolves.toBe(
+      "first",
+    );
+    expect(backend["syncLocalPathToRemote"]).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the canonical local exclusive create when mirror sync fails", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const backend = createMirrorBackendMock();
+    backend["syncLocalPathToRemote"] = vi.fn().mockRejectedValue(new Error("remote rejected"));
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    const createFileExclusive = bridge.createFileExclusive?.bind(bridge);
+    expect(createFileExclusive).toBeTypeOf("function");
+
+    await expect(createFileExclusive!({ filePath: "file.txt", data: "canonical" })).rejects.toThrow(
+      "remote rejected",
+    );
+    await expect(fs.readFile(path.join(workspaceDir, "file.txt"), "utf8")).resolves.toBe(
+      "canonical",
+    );
+  });
+
   it("creates remote mirror directories through the pinned backend operation", async () => {
     const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
     const backend = createMirrorBackendMock();
@@ -1453,6 +1512,12 @@ describe("openshell fs bridges", () => {
 
     await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).resolves.toEqual(
       Buffer.from("inside"),
+    );
+    await expect(bridge.readFile({ filePath: "subdir/secret.txt", maxBytes: 6 })).resolves.toEqual(
+      Buffer.from("inside"),
+    );
+    await expect(bridge.readFile({ filePath: "subdir/secret.txt", maxBytes: 5 })).rejects.toThrow(
+      "Sandbox boundary checks failed",
     );
   });
 

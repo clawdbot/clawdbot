@@ -8,7 +8,7 @@ import type {
   UsersSetDisplayNameResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -18,6 +18,7 @@ import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { resolveCurrentSelfUser, userProfileAvatarUrl } from "../../app/user-profile.ts";
 import { icons } from "../../components/icons.ts";
 import {
+  renderDocsLink,
   renderSettingsEmpty,
   renderSettingsGroup,
   renderSettingsNavRow,
@@ -32,6 +33,8 @@ import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import "../../styles/profile.css";
 import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
 import { renderIdentitySection } from "./identity-section.ts";
+
+const PROFILE_DOCS_URL = "https://docs.openclaw.ai/concepts/user-model";
 
 function toIdentityErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim()) {
@@ -371,6 +374,10 @@ export class ProfilePage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("profile")}</div>
+          <div class="page-subtitle">
+            ${subtitleForRoute("profile")}
+            ${renderDocsLink(PROFILE_DOCS_URL, t("common.learnMore"))}
+          </div>
         </div>
         ${this.selfUser
           ? html`<button class="btn profile-refresh" @click=${() => this.refreshManually()}>

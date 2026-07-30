@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import {
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
@@ -426,6 +427,7 @@ export async function runReplyAgent(
     originatingAccountId: followupRun.originatingAccountId,
     agentAccountId: followupRun.run.agentAccountId,
   });
+  followupRun.run.agentId ??= resolveDefaultAgentId(followupRun.run.config);
 
   const replyToChannel = resolveOriginMessageProvider({
     originatingChannel: sessionCtx.OriginatingChannel,

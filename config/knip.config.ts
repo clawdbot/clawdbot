@@ -52,6 +52,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs!",
   "scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs!",
   "scripts/e2e/lib/run-with-pty.mjs!",
+  "scripts/e2e/lib/sandbox-browser-sidecar/scenario.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
@@ -100,6 +101,8 @@ const rootEntries = [
   "openclaw.mjs!",
   "src/index.ts!",
   "src/entry.ts!",
+  // Shipped compatibility facade for statusCommand and getStatusSummary.
+  "src/commands/status.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
   // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
@@ -108,6 +111,7 @@ const rootEntries = [
   // Workflow/package-script entrypoints are not imported from production modules.
   "scripts/openclaw-cross-os-release-checks.ts!",
   "scripts/bench-transcript-cursors.ts!",
+  "scripts/bench-codex-transcript-mirror.ts!",
   "scripts/bench-sqlite-reliability.ts!",
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
   "scripts/e2e/*.{js,mjs,ts}!",
@@ -358,6 +362,11 @@ const config = {
     // the full-tree companion config still audits their actual consumers.
     "src/commitments/runtime.ts": ["exports"],
     "src/gateway/board-view-ticket.ts": ["exports"],
+    // Focused startup tests consume this explicit seam; production imports only the bootstrap.
+    "src/gateway/server-startup-bootstrap.ts": ["exports"],
+    // Focused media tests consume these explicit seams; production uses the helpers in-module.
+    "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
+    "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
     // GatewayBoardProvider and boardExists are constructed/asserted by the
     // focused Control UI provider tests, not by a separate production module.
     "ui/src/lib/board/provider.ts": ["exports"],

@@ -20,6 +20,7 @@ import {
 } from "../../auto-reply/reply/source-turn-id.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
+import { acquireOwnedSessionTranscriptWriteLock } from "../../config/sessions/transcript-write-context.js";
 import { readTailAssistantTextFromSessionTranscript } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -70,11 +71,16 @@ import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
-import type { AgentRunSessionTarget } from "../run-session-target.js";
+import { resolveAgentRunSessionTarget, type AgentRunSessionTarget } from "../run-session-target.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { withLocalSessionPlacementTurnAdmission } from "../session-placement-admission.js";
+import {
+  acquireSessionWriteLock,
+  resolveSessionWriteLockOptions,
+  resolveSessionWriteLockTargetKey,
+} from "../session-write-lock.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import { isSubagentAnnounceCompletionHandoff } from "../subagent-announce-handoff.js";
 import {
@@ -415,30 +421,65 @@ export async function persistCliTurnTranscript(params: {
   const gapFill = params.embeddedAssistantGapFill ?? false;
   const skipUserTurn = gapFill || params.skipUserTurn === true;
 
-  return await persistTextTurnTranscript({
-    body: skipUserTurn ? "" : params.body,
-    transcriptBody: skipUserTurn ? undefined : params.transcriptBody,
-    ...(!skipUserTurn && params.userMessage ? { userMessage: params.userMessage } : {}),
-    finalText: replyText,
+  const persist = async () =>
+    await persistTextTurnTranscript({
+      body: skipUserTurn ? "" : params.body,
+      transcriptBody: skipUserTurn ? undefined : params.transcriptBody,
+      ...(!skipUserTurn && params.userMessage ? { userMessage: params.userMessage } : {}),
+      finalText: replyText,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionFile: params.sessionFile,
+      sessionEntry: params.sessionEntry,
+      sessionStore: params.sessionStore,
+      storePath: params.storePath,
+      sessionAgentId: params.sessionAgentId,
+      threadId: params.threadId,
+      sessionCwd: params.sessionCwd,
+      config: params.config,
+      embeddedAssistantGapFill: gapFill,
+      assistant: {
+        api: "cli",
+        provider,
+        model,
+        usage: params.result.meta.agentMeta?.usage,
+      },
+      skipAssistantTurn: params.skipAssistantTurn,
+    });
+  if (!gapFill) {
+    return await persist();
+  }
+
+  const sessionTarget = await resolveAgentRunSessionTarget({
+    agentId: params.sessionAgentId,
+    config: params.config,
+    sessionFile: params.sessionFile,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    sessionFile: params.sessionFile,
-    sessionEntry: params.sessionEntry,
-    sessionStore: params.sessionStore,
-    storePath: params.storePath,
-    sessionAgentId: params.sessionAgentId,
-    threadId: params.threadId,
-    sessionCwd: params.sessionCwd,
-    config: params.config,
-    embeddedAssistantGapFill: gapFill,
-    assistant: {
-      api: "cli",
-      provider,
-      model,
-      usage: params.result.meta.agentMeta?.usage,
+    sessionTarget: {
+      agentId: params.sessionAgentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      ...(params.storePath ? { storePath: params.storePath } : {}),
+      ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
     },
-    skipAssistantTurn: params.skipAssistantTurn,
   });
+  const sessionLock =
+    (await acquireOwnedSessionTranscriptWriteLock({
+      sessionFile: params.sessionFile,
+      sessionKey: params.sessionKey,
+      sessionTarget,
+    })) ??
+    (await acquireSessionWriteLock({
+      sessionFile: resolveSessionWriteLockTargetKey(sessionTarget),
+      targetKind: "session-key",
+      ...resolveSessionWriteLockOptions(params.config),
+    }));
+  try {
+    return await persist();
+  } finally {
+    await sessionLock.release();
+  }
 }
 
 export function runAgentAttempt(params: {
@@ -978,6 +1019,7 @@ export function runAgentAttempt(params: {
     bashElevated: params.opts.bashElevated,
     approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
     timeoutMs: params.timeoutMs,
+    runTimeoutOverrideMs: params.runTimeoutOverrideMs,
     runId: params.runId,
     lifecycleGeneration: params.lifecycleGeneration,
     lane: params.opts.lane,

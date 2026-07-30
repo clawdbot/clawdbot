@@ -23,6 +23,7 @@ class CustodianSurface extends OpenClawLightDomElement {
   @property({ attribute: false }) store: CustodianSessionStore = custodianSessionStore;
   @property({ attribute: false }) onboarding = false;
   @property({ attribute: false }) newAgentIntent = false;
+  @property({ attribute: false }) showChannelOnboardingNudge = false;
   @property({ attribute: false }) compact = false;
   @property({ attribute: false }) historyContent: TemplateResult | typeof nothing = nothing;
 
@@ -92,9 +93,59 @@ class CustodianSurface extends OpenClawLightDomElement {
   override render() {
     const store = this.store;
     const assistantAvatar = controlUiPublicAssetPath("favicon.svg", this.context.basePath);
+    if (store.setupRequired) {
+      const unavailable = store.setupIssue === "unavailable";
+      return html`
+        <section
+          class="custodian-surface custodian-surface--setup-required ${this.compact
+            ? "custodian-surface--panel"
+            : ""}"
+        >
+          <div class="custodian__setup-state" role="alert">
+            <openclaw-mascot mood="idle" .size=${this.compact ? 72 : 96}></openclaw-mascot>
+            <h2>
+              ${t(unavailable ? "modelSetup.connectionFailure.title" : "modelSetup.required.title")}
+            </h2>
+            <p>
+              ${t(unavailable ? "modelSetup.connectionFailure.body" : "modelSetup.required.body")}
+            </p>
+            <div class="custodian__setup-actions">
+              <button class="btn primary" type="button" @click=${() => store.openModelSetup()}>
+                ${t(
+                  unavailable
+                    ? "modelSetup.connectionFailure.action"
+                    : "modelSetup.required.action",
+                )}
+              </button>
+              ${store.activeClient && store.chatAvailable && store.canRetry()
+                ? html`<button
+                    class="btn"
+                    type="button"
+                    ?disabled=${store.sending}
+                    @click=${() => store.retry()}
+                  >
+                    ${t("common.retry")}
+                  </button>`
+                : nothing}
+            </div>
+          </div>
+        </section>
+      `;
+    }
+    const emptyError = store.messages.length === 0 && store.error !== null && !store.sending;
     return html`
-      <section class="custodian-surface ${this.compact ? "custodian-surface--panel" : ""}">
+      <section
+        class="custodian-surface ${this.compact ? "custodian-surface--panel" : ""} ${emptyError
+          ? "custodian-surface--empty-error"
+          : ""}"
+      >
         <div class="custodian__messages" aria-live="polite">
+          ${this.showChannelOnboardingNudge
+            ? eventNudgeState.renderCustodianChannelOnboardingNudge({
+                onOpenChannels: () => store.openChannelsFromOnboarding(),
+                onDismiss: () => store.dismissChannelOnboardingNudge(),
+              })
+            : nothing}
           ${!this.onboarding && store.eventNudge && !store.eventNudgePending
             ? eventNudgeState.renderCustodianEventNudge({
                 nudge: store.eventNudge,
@@ -165,7 +216,10 @@ class CustodianSurface extends OpenClawLightDomElement {
                       autocomplete="off"
                       placeholder=${t("custodian.sensitivePlaceholder")}
                       aria-label=${t("custodian.sensitivePlaceholder")}
-                      ?disabled=${!store.activeClient || !store.chatAvailable || store.sending}
+                      ?disabled=${!store.activeClient ||
+                      !store.chatAvailable ||
+                      store.sending ||
+                      store.setupRequired}
                       @input=${(event: Event) =>
                         store.setInput((event.target as HTMLInputElement).value)}
                       @keydown=${(event: KeyboardEvent) => this.handleComposerKeydown(event)}
@@ -176,7 +230,10 @@ class CustodianSurface extends OpenClawLightDomElement {
                       autocomplete="on"
                       placeholder=${t("custodian.placeholder")}
                       aria-label=${t("custodian.placeholder")}
-                      ?disabled=${!store.activeClient || !store.chatAvailable || store.sending}
+                      ?disabled=${!store.activeClient ||
+                      !store.chatAvailable ||
+                      store.sending ||
+                      store.setupRequired}
                       @input=${(event: Event) =>
                         store.setInput((event.target as HTMLTextAreaElement).value)}
                       @keydown=${(event: KeyboardEvent) => this.handleComposerKeydown(event)}
@@ -190,7 +247,8 @@ class CustodianSurface extends OpenClawLightDomElement {
                   ?disabled=${!store.input.trim() ||
                   !store.activeClient ||
                   !store.chatAvailable ||
-                  store.sending}
+                  store.sending ||
+                  store.setupRequired}
                   @click=${() => void store.send()}
                 >
                   ${icons.arrowUp}

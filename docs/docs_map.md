@@ -85,7 +85,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Webhooks
   - H3: Authentication
   - H2: Gmail PubSub integration
-  - H3: Wizard setup (recommended)
+  - H3: Configure a restricted Gmail reader (recommended)
+  - H3: Authenticate the reader model
+  - H3: Connect Gmail transport
+  - H3: Verify the reader boundary
   - H3: Gateway auto-start
   - H3: Manual one-time setup
   - H3: Gmail model override
@@ -3139,8 +3142,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Three timezone surfaces
   - H2: Setting the user timezone
-  - H2: Envelope timezone values
-  - H2: When to override
   - H2: Related
 
 ## concepts/typebox.md
@@ -3209,10 +3210,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Message envelopes (local by default)
   - H3: Examples
-  - H2: System prompt: current date and time
+  - H2: System prompt: temporal context
   - H2: System event lines (local by default)
-  - H3: Configure user timezone + format
-  - H2: Time format detection (auto)
+  - H3: Configure user timezone
+  - H2: Time format detection
   - H2: Tool payloads + connectors (raw provider time + normalized fields)
   - H2: Related docs
 
@@ -3417,7 +3418,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: agents.defaults.imageMaxDimensionPx
   - H3: agents.defaults.imageQuality
   - H3: agents.defaults.userTimezone
-  - H3: agents.defaults.timeFormat
   - H3: agents.defaults.model
   - H3: Runtime policy
   - H3: CLI backend selection
@@ -3715,6 +3715,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Multiple gateways (same host)
   - H2: Remote access
   - H2: Supervision and service lifecycle
+  - H3: Existing system LaunchDaemons
   - H2: Dev profile quick path
   - H2: Protocol quick reference (operator view)
   - H2: Operational checks
@@ -3911,6 +3912,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: API surface (gateway protocol)
   - H2: Node command gating (2026.3.31+)
   - H2: Node event trust boundaries (2026.3.31+)
+  - H2: Silent local pairing
   - H2: SSH-verified device auto-approval (default)
   - H2: Auto-approval (macOS app)
   - H2: Trusted-CIDR device auto-approval
@@ -5143,6 +5145,23 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: UX copy (suggested)
   - H2: Related
 
+## nodes/media-playback.md
+
+- Route: /nodes/media-playback
+- Headings:
+  - H2: Client support
+  - H2: Portable formats
+  - H2: Lazy playback renditions
+  - H2: Managed attachments and access
+  - H2: Metadata and limits
+  - H2: Troubleshooting
+  - H3: Duration or dimensions are missing
+  - H3: A recognized format downloads instead of playing
+  - H3: Playback stays in preparing state
+  - H3: Linux reports a codec error
+  - H3: Android shows a media row while offline
+  - H2: Related
+
 ## nodes/media-understanding.md
 
 - Route: /nodes/media-understanding
@@ -5842,6 +5861,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Minimal backend plugin
   - H2: Config shape
   - H2: Advanced backend hooks
+  - H3: parseJsonlEvent: provider-specific JSONL streams
   - H3: ownsNativeCompaction: opting out of OpenClaw compaction
   - H2: MCP tool bridge
   - H2: Selecting the backend
@@ -5861,7 +5881,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Marketplace choices
   - H2: Bundled macOS marketplace
   - H3: Shared plugin cache
-  - H2: Remote catalog limit
+  - H2: Remote marketplaces
   - H2: Configuration reference
   - H2: What OpenClaw checks
   - H2: macOS permissions
@@ -5894,6 +5914,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Supervision and safe continuation
   - H2: Visible replies and heartbeats
   - H2: Hook boundaries
+  - H2: Experimental sandbox process streaming
   - H2: V1 support contract
   - H2: Native permissions and MCP elicitations
   - H2: Queue steering
@@ -6062,6 +6083,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Quick start
   - H2: Hook catalog
+  - H3: Skill lifecycle and evaluation
   - H3: Channel pairing requests
   - H2: Debug runtime hooks
   - H2: Tool call policy
@@ -6217,6 +6239,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Dashboards and health reports
   - H2: Search and retrieval
   - H2: Agent tools
+  - H2: Browsing the wiki in the Control UI
   - H2: Prompt and context behavior
   - H2: Configuration
   - H3: Per-agent vaults
@@ -6711,6 +6734,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/reference/fireworks
 - Headings:
   - H1: Fireworks plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
+## plugins/reference/fish-audio.md
+
+- Route: /plugins/reference/fish-audio
+- Headings:
+  - H1: Fish Audio plugin
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
@@ -7604,6 +7636,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Terminal outcome classification
   - H3: Agent-end side effects
   - H3: User input and tool surfaces
+  - H3: Native MCP inventory
   - H3: Native Codex harness mode
   - H2: Runtime strictness
   - H2: Native sessions and transcript mirror
@@ -8228,6 +8261,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Built-in catalog
   - H2: Custom Fireworks model ids
   - H2: Related
+
+## providers/fish-audio.md
+
+- Route: /providers/fish-audio
+- Headings:
+  - H2: Hosted S2.1
+  - H3: Hosted models
+  - H3: Expressive speech
+  - H3: Voice selection and cloning
+  - H2: Local S2 Pro on macOS
+  - H3: Local reference voice
+  - H2: Troubleshooting
 
 ## providers/github-copilot.md
 
@@ -10311,6 +10356,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /tools/mcp
 - Headings:
   - H2: Add a server from Settings
+  - H2: Add a server from the composer
   - H2: Add a server from the CLI
   - H2: Configure a server directly
   - H2: Troubleshooting
@@ -10527,6 +10573,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Chat
   - H3: Learn from recent work
   - H2: CLI
+  - H2: Plugin evaluation and lifecycle hooks
   - H2: Proposal content
   - H2: Support files
   - H2: Agent tool
@@ -10869,6 +10916,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Activity tab
   - H2: Operator terminal
   - H2: Browser panel
+  - H2: Composer capability menu
   - H2: Chat behavior
   - H2: Connection loss and reconnect
   - H2: PWA install and web push

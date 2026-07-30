@@ -177,6 +177,7 @@ function setup(entry: SessionEntry = sessionEntry) {
   } = {};
   const preparedModelRuntime = {
     agentDir: "/gateway-agent",
+    activeProjectKeys: [],
     workspaceDir: WORKSPACE,
     config,
     metadataSnapshot: { plugins: [] } as never,

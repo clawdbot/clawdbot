@@ -168,6 +168,7 @@ exports[`config tier coverage > keeps the curated common leaf set reviewable 1`]
   "gateway.mode",
   "gateway.nodes.allowSkills",
   "gateway.nodes.pairing.autoApproveCidrs.*",
+  "gateway.nodes.pairing.autoApproveLocal",
   "gateway.nodes.pluginTools.enabled",
   "gateway.port",
   "gateway.remote.password",

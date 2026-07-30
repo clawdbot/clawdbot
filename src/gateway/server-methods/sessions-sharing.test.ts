@@ -344,23 +344,93 @@ describe("session sharing handlers", () => {
           } as unknown as GatewayRequestContext,
           respond: (...response: Parameters<RespondFn>) => responses.push(response),
         } as never);
-        return (responses[0]?.[1] as { sessions?: Array<{ key: string }> } | undefined)?.sessions;
+        return responses[0]?.[1] as
+          | {
+              count: number;
+              totalCount: number;
+              nextOffset: number | null;
+              hasMore: boolean;
+              creators: Array<{ id: string }>;
+              sessions: Array<{ key: string }>;
+            }
+          | undefined;
       };
 
       // Non-owner must not receive the now-draft row (no preview/metadata leak).
-      expect((await listWith(outsider))?.some((session) => session.key === sessionKey)).toBe(false);
+      const outsiderList = await listWith(outsider);
+      expect(outsiderList?.sessions.some((session) => session.key === sessionKey)).toBe(false);
+      expect(outsiderList).toMatchObject({
+        count: 0,
+        totalCount: 0,
+        nextOffset: null,
+        hasMore: false,
+        creators: [],
+      });
       // A member also loses a draft (owner+admin only).
       expect(
-        (await listWith(identifiedClient("member@example.com")))?.some(
+        (await listWith(identifiedClient("member@example.com")))?.sessions.some(
           (session) => session.key === sessionKey,
         ),
       ).toBe(false);
       // The owner still sees their own draft.
       expect(
-        (await listWith(identifiedClient("owner@example.com")))?.some(
+        (await listWith(identifiedClient("owner@example.com")))?.sessions.some(
           (session) => session.key === sessionKey,
         ),
       ).toBe(true);
+    });
+  });
+
+  it("refills a paged session list after its first row becomes a draft", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const hiddenKey = "agent:main:mid-await-paged-draft";
+      const visibleKey = "agent:main:mid-await-paged-visible";
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: hiddenKey },
+        {
+          sessionId: "session-mid-await-paged-draft",
+          updatedAt: 2,
+          createdActor: { type: "human", id: "hidden-owner@example.com" },
+          visibility: "shared",
+        },
+      );
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: visibleKey },
+        {
+          sessionId: "session-mid-await-paged-visible",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "visible-owner@example.com" },
+          visibility: "shared",
+        },
+      );
+      const responses: Parameters<RespondFn>[] = [];
+
+      await sessionReadHandlers["sessions.list"]?.({
+        params: { agentId: "main", limit: 1 },
+        client: identifiedClient("outsider@example.com"),
+        context: {
+          ...context(vi.fn()),
+          loadGatewayModelCatalog: async () => {
+            await patchSessionEntry({ agentId: "main", sessionKey: hiddenKey }, () => ({
+              visibility: "draft",
+            }));
+            invalidateSessionSharingSnapshot(hiddenKey);
+            return [];
+          },
+        } as unknown as GatewayRequestContext,
+        respond: (...response: Parameters<RespondFn>) => responses.push(response),
+      } as never);
+
+      expect(responses[0]?.[0]).toBe(true);
+      expect(responses[0]?.[1]).toMatchObject({
+        count: 1,
+        totalCount: 1,
+        limitApplied: 1,
+        nextOffset: null,
+        hasMore: false,
+        creators: [{ id: "visible-owner@example.com" }],
+        sessions: [{ key: visibleKey }],
+      });
     });
   });
 

@@ -1,4 +1,7 @@
+import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
+import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { detectInferenceBackends } from "../commands/onboard-inference.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -27,6 +30,31 @@ import {
   toProviderAutoSetupKind,
 } from "./setup-inference-core.js";
 import { parseRef } from "./setup-inference-plan-helpers.js";
+
+function resolveConfiguredCandidateKind(
+  config: Parameters<typeof resolveModelRuntimePolicy>[0]["config"],
+  modelRef: string | undefined,
+): SetupInferenceCandidate["kind"] | undefined {
+  if (!modelRef) {
+    return undefined;
+  }
+  const ref = parseRef(modelRef);
+  const runtime = normalizeOptionalAgentRuntimeId(
+    resolveModelRuntimePolicy({
+      config,
+      provider: ref.provider,
+      modelId: ref.model,
+      agentId: resolveDefaultAgentId(config ?? {}),
+    }).policy?.id,
+  );
+  if (runtime === "codex") {
+    return "codex-cli";
+  }
+  if (runtime === "claude-cli") {
+    return "claude-cli";
+  }
+  return undefined;
+}
 
 /**
  * Manual setup options only — no CLI probing, no credential discovery. Used
@@ -78,18 +106,8 @@ export async function detectSetupInference(
   }
   const cfg = snapshot.runtimeConfig ?? snapshot.config;
   const detected = await (deps.detectInferenceBackends ?? detectInferenceBackends)({ config: cfg });
-  // Gemini CLI has no hard tool-off mode: wildcard exclusions can be
-  // overridden by admin policy and do not stop discovery or MCP startup.
-  // Keep normal agent support, but never offer it for the setup safety probe.
-  const unavailableCandidates: SetupInferenceUnavailableCandidate[] = detected
-    .filter((candidate) => candidate.kind === "gemini-cli")
-    .map((candidate) => ({
-      id: candidate.kind,
-      label: candidate.label,
-      detail: candidate.detail,
-      reason:
-        "Can't be auto-tested safely here. Use 'Gemini CLI OAuth' or a Gemini API key instead.",
-    }));
+  const unavailableCandidates: SetupInferenceUnavailableCandidate[] = [];
+  const deferredUnavailableCandidates: SetupInferenceUnavailableCandidate[] = [];
   const probe = deps.probeLocalCommand ?? probeLocalCommand;
   const [antigravity, pi, opencode] = await Promise.all([
     probe("agy"),
@@ -97,7 +115,7 @@ export async function detectSetupInference(
     probe("opencode"),
   ]);
   if (antigravity.found && !antigravity.timedOut) {
-    unavailableCandidates.push({
+    deferredUnavailableCandidates.push({
       id: "antigravity-cli",
       label: "Antigravity CLI",
       detail: "installed",
@@ -106,7 +124,7 @@ export async function detectSetupInference(
     });
   }
   if (pi.found && !pi.timedOut) {
-    unavailableCandidates.push({
+    deferredUnavailableCandidates.push({
       id: "pi-cli",
       label: "Pi CLI",
       detail: "installed",
@@ -115,7 +133,7 @@ export async function detectSetupInference(
     });
   }
   if (opencode.found && !opencode.timedOut) {
-    unavailableCandidates.push({
+    deferredUnavailableCandidates.push({
       id: "opencode-cli",
       label: "OpenCode CLI",
       detail: "installed",
@@ -123,7 +141,19 @@ export async function detectSetupInference(
         "OpenCode CLI is installed, but its ACP harness requires separate setup and is not a reusable guided-setup inference route.",
     });
   }
-  const raw = detected.filter((candidate) => candidate.kind !== "gemini-cli");
+  const configuredModel = detected.find(
+    (candidate) => candidate.kind === "existing-model",
+  )?.modelRef;
+  const configuredCandidateKind = resolveConfiguredCandidateKind(cfg, configuredModel);
+  const raw = detected.filter(
+    (candidate) =>
+      candidate.kind !== "gemini-cli" &&
+      !(
+        candidate.kind === configuredCandidateKind &&
+        configuredModel &&
+        areRuntimeModelRefsEquivalent(candidate.modelRef, configuredModel, { config: cfg })
+      ),
+  );
   const { workspace } = await resolveSetupInferenceWorkspace({
     configExists: snapshot.exists,
     configValid: snapshot.valid,
@@ -138,6 +168,43 @@ export async function detectSetupInference(
   }).filter(
     (choice) => (deps.enablePluginInConfig ?? enablePluginInConfig)(cfg, choice.pluginId).enabled,
   );
+  const manualProviders = listSetupInferenceManualProviders(authChoices);
+  const authOptions = listSetupInferenceAuthOptions(authChoices);
+  const manualProviderIds = new Set(manualProviders.map((provider) => provider.id));
+  const authOptionIds = new Set(authOptions.map((option) => option.id));
+  // Gemini CLI has no hard tool-off mode: wildcard exclusions can be
+  // overridden by admin policy and do not stop discovery or MCP startup.
+  // Keep normal agent support, but route setup through provider-owned methods
+  // that OpenClaw can verify without inspecting Gemini's private auth store.
+  for (const candidate of detected.filter((entry) => entry.kind === "gemini-cli")) {
+    const providerId = parseRef(candidate.modelRef).provider;
+    const ownerChoice = authChoices.find(
+      (choice) => normalizeProviderId(choice.providerId) === normalizeProviderId(providerId),
+    );
+    const ownerGroup = ownerChoice?.groupId ?? ownerChoice?.providerId ?? providerId;
+    const relatedChoices = authChoices.filter(
+      (choice) => (choice.groupId ?? choice.providerId) === ownerGroup,
+    );
+    const authOptionId = relatedChoices.find((choice) =>
+      authOptionIds.has(choice.choiceId),
+    )?.choiceId;
+    const manualProviderId = relatedChoices.find((choice) =>
+      manualProviderIds.has(choice.choiceId),
+    )?.choiceId;
+    unavailableCandidates.push({
+      id: candidate.kind,
+      brandId: providerId,
+      label: candidate.label,
+      detail: candidate.detail,
+      reason:
+        "OpenClaw cannot confirm whether this private Gemini CLI login works without starting a session that may expose tools. Sign in through OpenClaw or use a Gemini API key to create a connection it can verify.",
+      ...(authOptionId ? { authOptionId } : {}),
+      ...(manualProviderId ? { manualProviderId } : {}),
+      ...(ownerChoice?.icon ? { icon: ownerChoice.icon } : {}),
+      ...(ownerChoice?.website ? { website: ownerChoice.website } : {}),
+    });
+  }
+  unavailableCandidates.push(...deferredUnavailableCandidates);
   const candidates: SetupInferenceCandidate[] = raw.map((candidate) =>
     // Released macOS clients require this field. Keep it false so the wire
     // contract remains decodable without expressing a provider preference.
@@ -147,9 +214,6 @@ export async function detectSetupInference(
       resolveCandidatePresentation(candidate, authChoices),
     ),
   );
-  const configuredModel = candidates.find(
-    (candidate) => candidate.kind === "existing-model",
-  )?.modelRef;
   const discoveryChoices = authChoices.filter(
     (choice) =>
       choice.appGuidedDiscovery === true && supportsSetupTextInference(choice.onboardingScopes),
@@ -231,8 +295,8 @@ export async function detectSetupInference(
   return {
     candidates,
     unavailableCandidates,
-    manualProviders: listSetupInferenceManualProviders(authChoices),
-    authOptions: listSetupInferenceAuthOptions(authChoices),
+    manualProviders,
+    authOptions,
     recommendedInstalls: listRecommendedToolInstalls(),
     workspace,
     ...(configuredModel ? { configuredModel } : {}),

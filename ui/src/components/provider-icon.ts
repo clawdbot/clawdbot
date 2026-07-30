@@ -76,6 +76,7 @@ const PROVIDER_ICON_ALIASES: Readonly<Record<string, string>> = {
   moonshot: "kimi",
   "opencode-go": "opencodego",
   "opencode-zen": "opencode",
+  qwen: "alibaba",
   xai: "grok",
   "vertex-ai": "vertexai",
   "z-ai": "zai",
@@ -90,6 +91,8 @@ const PROVIDER_DISPLAY_LABELS: Readonly<Record<string, string>> = {
   moonshot: "Moonshot AI",
   opencode: "OpenCode",
   openrouter: "OpenRouter",
+  qwen: "Qwen Cloud",
+  zai: "Z.AI",
 };
 
 /** Title-cased fallback label built from the provider id ("z-ai" → "Z Ai"). */

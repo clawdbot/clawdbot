@@ -4558,6 +4558,30 @@ describe("handleSendChat", () => {
     expect(host.chatMessages).toStrictEqual([]);
   });
 
+  it("coalesces duplicate queued local commands while the first command is running", async () => {
+    const command = createDeferred<{ content: string }>();
+    executeSlashCommandMock.mockImplementation(() => command.promise);
+    const host = makeHost({
+      requestHandlers: {
+        "chat.history": () => idleChatHistory(),
+      },
+    });
+
+    const first = handleSendChat(host, "/compact");
+    await waitForFast(() => expect(executeSlashCommandMock).toHaveBeenCalledOnce());
+    const duplicate = handleSendChat(host, "/compact");
+
+    try {
+      expect(host.chatQueue.filter((item) => item.localCommandName === "compact")).toHaveLength(1);
+      expect(executeSlashCommandMock).toHaveBeenCalledOnce();
+    } finally {
+      command.resolve({ content: "Compaction complete." });
+      await Promise.all([first, duplicate]);
+    }
+
+    expect(executeSlashCommandMock).toHaveBeenCalledOnce();
+  });
+
   it("keeps normal prompt text visible as pending until chat.send is acknowledged", async () => {
     const sent = createDeferred<unknown>();
 
