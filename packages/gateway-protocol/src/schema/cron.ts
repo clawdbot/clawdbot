@@ -432,6 +432,7 @@ const CronFailureNotificationDeliverySchema = closedObject({
 /** Scheduler-maintained state for the latest run/delivery outcome. */
 export const CronJobStateSchema = closedObject({
   nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  scheduleActivatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   runningAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   lastRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   lastRunStatus: Type.Optional(CronRunStatusSchema),

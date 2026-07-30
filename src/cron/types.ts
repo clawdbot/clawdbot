@@ -486,7 +486,9 @@ export type CronStoreFile = {
   jobs: CronJob[];
 };
 
-type CronJobStateInput = Partial<Omit<CronJobState, "streamSourceIdentity">>;
+type CronJobStateInput = Partial<
+  Omit<CronJobState, "scheduleActivatedAtMs" | "streamSourceIdentity">
+>;
 
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<

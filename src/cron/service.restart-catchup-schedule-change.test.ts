@@ -57,6 +57,17 @@ describe("CronService restart catch-up after a schedule change", () => {
       await editor.update(jobId, {
         schedule: { kind: "cron", expr: "0 21 * * *", tz: "Europe/Istanbul" },
       });
+      const activatedAtMs = Date.parse("2026-07-28T07:18:00.000Z");
+      expect(editor.getJob(jobId)?.state.scheduleActivatedAtMs).toBe(activatedAtMs);
+
+      vi.setSystemTime(new Date("2026-07-28T08:18:00.000Z"));
+      await editor.update(jobId, { name: "renamed daily briefing" });
+      await editor.update(jobId, {
+        schedule: { kind: "cron", expr: "0 21 * * *", tz: "Europe/Istanbul" },
+      });
+      const idempotentlyUpdated = editor.getJob(jobId);
+      expect(idempotentlyUpdated?.state.scheduleActivatedAtMs).toBe(activatedAtMs);
+      expect(idempotentlyUpdated?.updatedAtMs).toBe(Date.parse("2026-07-28T08:18:00.000Z"));
     } finally {
       editor.stop();
     }
@@ -76,6 +87,110 @@ describe("CronService restart catch-up after a schedule change", () => {
       expect(job?.state.nextRunAtMs).toBe(Date.parse("2026-07-28T18:00:00.000Z"));
     } finally {
       restarted.stop();
+      await store.cleanup();
+    }
+  });
+
+  it("runs a genuine missed slot that occurred after schedule activation", async () => {
+    const store = await makeStorePath();
+    const runCommandJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
+    const now = Date.parse("2026-07-30T13:18:00.000Z");
+    await writeCronStoreSnapshot({
+      storePath: store.storePath,
+      jobs: [
+        {
+          id: "restart-post-activation-slot",
+          name: "daily briefing",
+          enabled: true,
+          createdAtMs: Date.parse("2026-07-01T12:00:00.000Z"),
+          updatedAtMs: Date.parse("2026-07-29T08:00:00.000Z"),
+          schedule: { kind: "cron", expr: "0 12 * * *", tz: "UTC" },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "command", argv: ["echo", "FIRED"] },
+          state: {
+            nextRunAtMs: Date.parse("2026-07-31T12:00:00.000Z"),
+            lastRunAtMs: Date.parse("2026-07-28T12:00:00.000Z"),
+            lastStatus: "ok",
+            scheduleActivatedAtMs: Date.parse("2026-07-29T08:00:00.000Z"),
+          },
+        },
+      ],
+    });
+    const service = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      runCommandJob: runCommandJob as never,
+    });
+
+    try {
+      await service.start();
+
+      expect(runCommandJob).toHaveBeenCalledTimes(1);
+      expect(service.getJob("restart-post-activation-slot")?.state.lastRunAtMs).toBe(now);
+    } finally {
+      service.stop();
+      await store.cleanup();
+    }
+  });
+
+  it("preserves one legacy catch-up for an unstamped pre-upgrade job", async () => {
+    const store = await makeStorePath();
+    const runCommandJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
+    const now = Date.parse("2026-07-30T13:18:00.000Z");
+    await writeCronStoreSnapshot({
+      storePath: store.storePath,
+      jobs: [
+        {
+          id: "restart-legacy-unstamped-slot",
+          name: "legacy daily briefing",
+          enabled: true,
+          createdAtMs: Date.parse("2026-07-01T12:00:00.000Z"),
+          updatedAtMs: Date.parse("2026-07-29T08:00:00.000Z"),
+          schedule: { kind: "cron", expr: "0 12 * * *", tz: "UTC" },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "command", argv: ["echo", "FIRED"] },
+          state: {
+            nextRunAtMs: Date.parse("2026-07-31T12:00:00.000Z"),
+            lastRunAtMs: Date.parse("2026-07-28T12:00:00.000Z"),
+            lastStatus: "ok",
+          },
+        },
+      ],
+    });
+    const createService = () =>
+      new CronService({
+        storePath: store.storePath,
+        cronEnabled: true,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+        runCommandJob: runCommandJob as never,
+      });
+
+    const firstRestart = createService();
+    try {
+      await firstRestart.start();
+      expect(runCommandJob).toHaveBeenCalledTimes(1);
+      expect(firstRestart.getJob("restart-legacy-unstamped-slot")?.state.lastRunAtMs).toBe(now);
+    } finally {
+      firstRestart.stop();
+    }
+
+    const secondRestart = createService();
+    try {
+      await secondRestart.start();
+      expect(runCommandJob).toHaveBeenCalledTimes(1);
+    } finally {
+      secondRestart.stop();
       await store.cleanup();
     }
   });
