@@ -102,14 +102,16 @@ function resolveEffectiveAgentDir(
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.agentDir;
   const trimmed = configured?.trim();
-  if (trimmed) {
-    return resolveUserPath(trimmed);
-  }
   const env = deps?.env ?? process.env;
-  const root = resolveStateDir(
-    env,
-    deps?.homedir ?? (() => resolveRequiredHomeDir(env, os.homedir)),
-  );
+  const homedir = deps?.homedir ?? (() => resolveRequiredHomeDir(env, os.homedir));
+  if (trimmed) {
+    // Forward the caller's env/homedir so a ~/$VAR-relative configured agentDir expands the same
+    // way as the default branch below (and every other resolveUserPath caller); otherwise it falls
+    // back to process.env/os.homedir and can diverge from the intended directory -- e.g. a
+    // false-negative in the duplicate-agentDir guard when deps.env differs from process.env.
+    return resolveUserPath(trimmed, env, homedir);
+  }
+  const root = resolveStateDir(env, homedir);
   return path.join(root, "agents", id, "agent");
 }
 
