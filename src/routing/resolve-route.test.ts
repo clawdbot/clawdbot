@@ -117,10 +117,10 @@ describe("resolveAgentRoute", () => {
     });
   });
 
-  test("preserves explicit main bindings when agents.list has other agents", () => {
+  test("preserves explicit main bindings when agents.entries has other agents", () => {
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "alpha" }],
+        entries: { alpha: {} },
       },
       bindings: [
         {
@@ -146,15 +146,17 @@ describe("resolveAgentRoute", () => {
     });
   });
 
-  test("resolves an explicitly configured normalized main-like agent id through the roster", () => {
+  test("resolves exact main bindings through a configured normalized main-like roster entry", () => {
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "MAIN", model: "anthropic/claude-3-5-sonnet" }],
+        entries: {
+          MAIN: { model: "anthropic/claude-3-5-sonnet" },
+        },
       },
       bindings: [
         {
           type: "route",
-          agentId: "MAIN",
+          agentId: "main",
           match: { channel: "discord", accountId: "default" },
         },
       ],
