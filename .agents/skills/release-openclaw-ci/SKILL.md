@@ -30,10 +30,9 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   entitlement. Mandatory live providers must pass a real completion probe
   before release dispatch. Fix the credential first; do not add an alternate
   auth path merely to bypass a failed release credential.
-- Full Release Validation parent monitors fail fast: once a required child job
-  fails, the parent cancels the remaining child matrix and prints the failed
-  job summary. Inspect that first red job instead of waiting for unrelated
-  matrix tails.
+- Full Release Validation collects independent child failures to terminal
+  completion by default. Pass `fail_fast=true` only when the shorter
+  first-failure cancellation path is preferable.
 - For regular beta/stable releases, treat the product-complete pre-changelog
   commit as the Code SHA. Full product validation and performance evidence bind
   to that SHA. The later Release SHA may reuse those results only when it is a

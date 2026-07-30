@@ -2587,6 +2587,7 @@ describe("package artifact reuse", () => {
     expect(releaseJob.if).toContain('contains(fromJSON(\'["all","qa","qa-live"]\')');
     expect(releaseJob.with).toMatchObject({
       expected_sha: "${{ needs.resolve_target.outputs.revision }}",
+      fail_fast: "${{ fromJSON(needs.resolve_target.outputs.fail_fast) }}",
       run_matrix: true,
     });
     for (const lane of ["mock_parity", "telegram", "discord", "whatsapp", "slack"]) {
@@ -2607,6 +2608,7 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).not.toContain("Run QA Lab live Matrix lane");
     expect(releaseWorkflow).not.toContain("pnpm openclaw qa matrix");
     expect(qaWorkflow).toContain("pnpm openclaw qa matrix");
+    expect(qaWorkflow).toContain('if [[ "$FAIL_FAST" == "true" ]]');
     expect(qaWorkflow).toContain('trusted_reason="repository-branch"');
     expect(qaWorkflow).toContain('"${selected_revision}" != "${EXPECTED_SHA}"');
     expect(qaWorkflow).toContain("EXPECTED_SHA: ${{ inputs.expected_sha }}");
@@ -2633,6 +2635,7 @@ describe("package artifact reuse", () => {
     expect(matrixJob["continue-on-error"]).toBeUndefined();
     expect(matrixJob.strategy).toBeUndefined();
     expect(workflowStep(matrixJob, "Run Matrix live lane").env).toEqual({
+      FAIL_FAST: "${{ inputs.fail_fast }}",
       OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1",
     });
     expect(releaseTelegramWorkflow).toContain(
@@ -3058,6 +3061,7 @@ describe("package artifact reuse", () => {
     expect(npmTelegramJob.if).not.toContain("inputs.rerun_group == 'all'");
     expect(dispatchStep.env).toEqual({
       CHILD_WORKFLOW_REF: "${{ github.ref_name }}",
+      FAIL_FAST: "${{ inputs.fail_fast }}",
       GH_TOKEN: "${{ github.token }}",
       PACKAGE_SPEC: "${{ inputs.npm_telegram_package_spec || inputs.release_package_spec }}",
       PARENT_WORKFLOW_SHA: "${{ github.sha }}",

@@ -7,6 +7,7 @@ export const INTERNAL_AGENT_PATH_PARAM = "__openclawAgentPath";
 export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
 export const INTERNAL_MEMORY_PATH_PARAM = "__openclawMemoryPath";
 export const INTERNAL_PLUGINS_PATH_PARAM = "__openclawPluginsPath";
+export const INTERNAL_WORKBOARD_PATH_PARAM = "__openclawWorkboardPath";
 
 export type MemoryRouteTab = "overview" | "memories" | "dreams" | "settings";
 export type PluginsHubRouteTab = "installed" | "discover";

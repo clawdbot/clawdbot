@@ -7,6 +7,7 @@ import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  type DiagnosticEventMetadata,
   type DiagnosticExecProcessCompletedEvent,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
@@ -130,8 +131,10 @@ test("exec emits bounded process diagnostics without command text", async () => 
     createSuccessfulRun(input),
   );
   const events: DiagnosticEventPayload[] = [];
-  const unsubscribe = onInternalDiagnosticEvent((event) => {
+  const metadataByEvent = new Map<DiagnosticEventPayload, DiagnosticEventMetadata>();
+  const unsubscribe = onInternalDiagnosticEvent((event, metadata) => {
     events.push(event);
+    metadataByEvent.set(event, metadata);
   });
   try {
     const command = "printf super-secret-value";
@@ -158,6 +161,10 @@ test("exec emits bounded process diagnostics without command text", async () => 
       throw new Error("Expected exec process completed event");
     }
     expect(event.type).toBe("exec.process.completed");
+    // The payload stays untrusted, but exporters need the ambient trace context marked
+    // OpenClaw-owned or the exec span cannot be nested under the run that spawned it.
+    expect(metadataByEvent.get(event)?.trusted).toBe(false);
+    expect(metadataByEvent.get(event)?.trustedTraceContext).toBe(true);
     expect(event.target).toBe("host");
     expect(event.mode).toBe("child");
     expect(event.outcome).toBe("completed");
