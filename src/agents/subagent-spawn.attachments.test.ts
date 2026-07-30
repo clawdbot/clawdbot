@@ -256,7 +256,7 @@ describe("spawnSubagentDirect filename validation", () => {
     expect(JSON.stringify(result)).not.toContain("MATERIALIZER_SECRET");
   });
 
-  it("keeps an attachment filename out of a private receipt write failure", async () => {
+  async function spawnWithForcedMaterializationFailure(params: { continuation: boolean }) {
     const attachmentId = "00000000-0000-4000-8000-000000000001";
     const attachmentName = "MATERIALIZATION_FILENAME_MUST_NOT_ECHO.txt";
     const randomUuid = vi.spyOn(crypto, "randomUUID").mockReturnValue(attachmentId);
@@ -270,15 +270,53 @@ describe("spawnSubagentDirect filename validation", () => {
         {
           task: "test materialization failure redaction",
           attachments: [{ name: attachmentName, content: "snapshot" }],
+          ...(params.continuation
+            ? {
+                drainsContinuationDelegateQueue: true,
+                continuationChainState: {
+                  count: 1,
+                  startedAt: Date.now(),
+                  tokens: 0,
+                  chainId: "materialization-failure",
+                },
+              }
+            : {}),
         },
         ctx,
       );
-
-      expect(result).toEqual({ status: "error", error: "attachments_materialization_failed" });
-      expect(JSON.stringify(result)).not.toContain(attachmentName);
+      return { result, attachmentId, attachmentName };
     } finally {
       randomUuid.mockRestore();
     }
+  }
+
+  it("keeps ordinary materialization failures actionable without exposing paths", async () => {
+    const { result, attachmentId, attachmentName } = await spawnWithForcedMaterializationFailure({
+      continuation: false,
+    });
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringMatching(
+        /^attachments_materialization_failed \(.+must be a regular file\.\)$/,
+      ),
+    });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain(attachmentName);
+    expect(serialized).not.toContain(attachmentId);
+    expect(serialized).not.toContain(workspaceDirOverride);
+  });
+
+  it("fully redacts continuation materialization failures", async () => {
+    const { result, attachmentId, attachmentName } = await spawnWithForcedMaterializationFailure({
+      continuation: true,
+    });
+
+    expect(result).toEqual({ status: "error", error: "attachments_materialization_failed" });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain(attachmentName);
+    expect(serialized).not.toContain(attachmentId);
+    expect(serialized).not.toContain(workspaceDirOverride);
   });
 
   it("materializes attachments under explicit cwd when native subagent cwd is provided", async () => {

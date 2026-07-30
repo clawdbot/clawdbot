@@ -451,6 +451,74 @@ describe("continue_delegate tool", () => {
     expect(consumePendingDelegates("test-session")).toEqual([]);
   });
 
+  it.each([
+    {
+      label: "invalid name",
+      attachments: [
+        { name: "safe.txt", content: "12" },
+        { name: "../PRIVATE_INVALID_NAME.txt", content: "34" },
+      ],
+      expected: "attachments_invalid_name (attachmentIndex=1)",
+    },
+    {
+      label: "duplicate name",
+      attachments: [
+        { name: "PRIVATE_DUPLICATE_NAME.txt", content: "12" },
+        { name: "private_duplicate_name.TXT", content: "34" },
+      ],
+      expected: "attachments_duplicate_name (attachmentIndex=1)",
+    },
+    {
+      label: "per-file size",
+      attachments: [
+        { name: "safe.txt", content: "12" },
+        { name: "PRIVATE_OVERSIZED_NAME.txt", content: "12345" },
+      ],
+      expected: "attachments_file_bytes_exceeded (attachmentIndex=1 maxFileBytes=4)",
+    },
+    {
+      label: "aggregate size",
+      attachments: [
+        { name: "safe.txt", content: "1234" },
+        { name: "PRIVATE_AGGREGATE_NAME.txt", content: "123" },
+      ],
+      expected: "attachments_total_bytes_exceeded (attachmentIndex=1 maxTotalBytes=6)",
+    },
+  ])(
+    "returns safe multi-attachment discriminators for $label errors",
+    async ({ attachments, expected }) => {
+      setRuntimeConfigSnapshot({
+        tools: {
+          sessions_spawn: {
+            attachments: { enabled: true, maxFileBytes: 4, maxTotalBytes: 6 },
+          },
+        },
+      });
+      const tool = createContinueDelegateTool({ agentSessionKey: "test-session" });
+      const mountPath = "PRIVATE_MOUNT_DESTINATION";
+      let caught: unknown;
+
+      try {
+        await tool.execute(`call-safe-discriminator-${expected}`, {
+          task: "reject private attachment safely",
+          attachments,
+          attachAs: { mountPath },
+        });
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(String(caught)).toContain(expected);
+      const serialized = String(caught);
+      for (const attachment of attachments) {
+        expect(serialized).not.toContain(attachment.name);
+        expect(serialized).not.toContain(attachment.content);
+      }
+      expect(serialized).not.toContain(mountPath);
+      expect(consumePendingDelegates("test-session")).toEqual([]);
+    },
+  );
+
   it("clamps configured admission limits to durable snapshot ceilings", async () => {
     setRuntimeConfigSnapshot({
       tools: {

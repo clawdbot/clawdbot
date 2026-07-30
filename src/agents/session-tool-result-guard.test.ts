@@ -122,6 +122,40 @@ describe("installSessionToolResultGuard", () => {
     expect(serialized).toContain("use durable input");
   });
 
+  it("removes legacy attachment names from already-redacted continuation persistence", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+    const attachmentName = "LEGACY_REDACTED_NAME_MUST_NOT_PERSIST.md";
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_continue_delegate_legacy",
+            name: "continue_delegate",
+            arguments: {
+              task: "use legacy redacted input",
+              attachments: [
+                {
+                  name: attachmentName,
+                  content: "__OPENCLAW_REDACTED__",
+                  encoding: "utf8",
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+
+    const serialized = JSON.stringify(getPersistedMessages(sm));
+    expect(serialized).not.toContain(attachmentName);
+    expect(serialized).toContain('"content":"__OPENCLAW_REDACTED__"');
+    expect(serialized).toContain('"encoding":"utf8"');
+  });
+
   it("does not persist malformed continue_delegate attachment secrets", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);

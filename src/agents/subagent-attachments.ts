@@ -133,12 +133,47 @@ function prepareSubagentAttachments(params: {
 
 /**
  * Delegate input is private parent-to-child state. Its model-visible errors
- * retain a stable structural category but never interpolate caller metadata.
+ * retain safe structural discriminators but never interpolate caller metadata.
  */
-function redactContinuationAttachmentValidationError(error: unknown): string {
+function redactContinuationAttachmentValidationError(params: {
+  error: unknown;
+  limits: AttachmentLimits;
+}): string {
+  const { error, limits } = params;
   const message = typeof error === "string" ? error : error instanceof Error ? error.message : "";
   const code = message.match(/^(attachments_[a-z0-9_]+)/)?.[1];
-  return code ?? "attachments_validation_failed";
+  if (!code) {
+    return "attachments_validation_failed";
+  }
+  if (code === "attachments_file_count_exceeded") {
+    return `${code} (maxFiles=${limits.maxFiles})`;
+  }
+  const attachmentIndex = message.match(/\battachmentIndex=(\d+)\b/)?.[1];
+  const fields = attachmentIndex === undefined ? [] : [`attachmentIndex=${attachmentIndex}`];
+  if (
+    code === "attachments_file_bytes_exceeded" ||
+    code === "attachments_invalid_base64_or_too_large"
+  ) {
+    fields.push(`maxFileBytes=${limits.maxFileBytes}`);
+  } else if (code === "attachments_total_bytes_exceeded") {
+    fields.push(`maxTotalBytes=${limits.maxTotalBytes}`);
+  }
+  return fields.length > 0 ? `${code} (${fields.join(" ")})` : code;
+}
+
+function formatAttachmentMaterializationError(params: {
+  error: unknown;
+  absDir: string;
+  attachmentNames: string[];
+}): string {
+  if (!(params.error instanceof Error) || !params.error.message.trim()) {
+    return "attachments_materialization_failed";
+  }
+  let reason = params.error.message.replaceAll(params.absDir, "[redacted]");
+  for (const attachmentName of params.attachmentNames) {
+    reason = reason.replaceAll(attachmentName, "[redacted]");
+  }
+  return `attachments_materialization_failed (${reason})`;
 }
 
 export function validateSubagentAttachments(params: {
@@ -158,7 +193,10 @@ export function validateSubagentAttachments(params: {
     limits: request.limits,
   });
   return params.redactContinuationErrorDetails && error
-    ? redactContinuationAttachmentValidationError(error)
+    ? redactContinuationAttachmentValidationError({
+        error,
+        limits: request.limits,
+      })
     : error;
 }
 
@@ -234,7 +272,10 @@ export async function materializeSubagentAttachments(params: {
     return {
       status: "error",
       error: params.redactContinuationErrorDetails
-        ? redactContinuationAttachmentValidationError(err)
+        ? redactContinuationAttachmentValidationError({
+            error: err,
+            limits: request.limits,
+          })
         : err instanceof Error
           ? err.message
           : "attachments_validation_failed",
@@ -280,7 +321,7 @@ export async function materializeSubagentAttachments(params: {
         `In this sandbox, they are available at: ${relDir} (relative to workspace).\n` +
         (params.mountPathHint ? `Requested mountPath hint: ${params.mountPathHint}.\n` : ""),
     };
-  } catch {
+  } catch (error) {
     try {
       await fs.rm(absDir, { recursive: true, force: true });
     } catch {
@@ -288,7 +329,13 @@ export async function materializeSubagentAttachments(params: {
     }
     return {
       status: "error",
-      error: "attachments_materialization_failed",
+      error: params.redactContinuationErrorDetails
+        ? "attachments_materialization_failed"
+        : formatAttachmentMaterializationError({
+            error,
+            absDir,
+            attachmentNames: prepared.attachments.map((attachment) => attachment.name),
+          }),
     };
   }
 }

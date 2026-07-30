@@ -141,7 +141,11 @@ function isReplaySafeThinkingAssistantTurn(
       return false;
     }
     seenToolCallIds.add(toolCallId);
-    if (sanitizeTranscriptToolCallBlock(block) !== block) {
+    if (
+      sanitizeTranscriptToolCallBlock(block, {
+        preserveLegacyContinueDelegateAttachmentName: true,
+      }) !== block
+    ) {
       return false;
     }
   }

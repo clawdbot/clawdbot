@@ -409,6 +409,12 @@ describe("sanitizeToolCallInputs redacts continue_delegate snapshots", () => {
       },
     ]);
 
+    const repaired = sanitizeToolCallInputs(input);
+    const repairedBytes = JSON.stringify(repaired);
+    expect(repaired).not.toBe(input);
+    expect(repairedBytes).not.toContain('"name":"brief.md"');
+    expect(repairedBytes).toContain('"content":"__OPENCLAW_REDACTED__"');
+
     const out = sanitizeToolCallInputs(input, {
       allowedToolNames: ["continue_delegate"],
       allowProviderOwnedThinkingReplay: true,
