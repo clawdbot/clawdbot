@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 usage() {
   echo "usage: $0 [--open | --refresh] <session> <cwd> <title> <command> <title> <command> [<title> <command> ...] (2-6 variants)" >&2
@@ -13,8 +13,8 @@ configure_tmux_session() {
   tmux set-option -t "$session_id" mouse on
   tmux set-option -t "$session_id" status-left " TUI PROTOTYPES "
   tmux set-option -t "$session_id" status-right "Ctrl-b z: zoom"
-  tmux set-option -t "$session_id" pane-border-status top
-  tmux set-option -t "$session_id" pane-border-format ' #[bold]#{pane_title} #[default]'
+  tmux set-window-option -t "$window_id" pane-border-status top
+  tmux set-window-option -t "$window_id" pane-border-format ' #[bold]#{pane_title} #[default]'
   tmux set-window-option -t "$window_id" allow-rename off
   tmux set-window-option -t "$window_id" automatic-rename off
   tmux set-window-option -t "$window_id" remain-on-exit on
@@ -275,36 +275,54 @@ pane_command_prefix=(/bin/sh -c)
 if [[ ${TERM:-} == "dumb" && -n ${NO_COLOR:-} ]]; then
   pane_command_prefix=(env -u NO_COLOR /bin/sh -c)
 fi
+placeholder_command=(/bin/sh -c 'while :; do sleep 3600; done')
 
 if [[ $refresh_session == true ]]; then
   session_id=$(tmux display-message -p -t "=$session_name" '#{session_id}')
-  window_id=""
+  previous_window_id=""
   while read -r candidate_id candidate_name; do
     if [[ $candidate_name == prototypes ]]; then
-      window_id=$candidate_id
+      previous_window_id=$candidate_id
       break
     fi
   done < <(tmux list-windows -t "$session_id" -F '#{window_id} #{window_name}')
-  if [[ -z $window_id ]]; then
+  if [[ -z $previous_window_id ]]; then
     echo "tmux session has no prototypes window: $session_name" >&2
     exit 1
   fi
-  configure_tmux_session "$session_id" "$window_id"
 
-  pane_ids=()
-  while IFS= read -r pane_id; do
-    pane_ids[${#pane_ids[@]}]=$pane_id
-  done < <(tmux list-panes -t "$window_id" -F '#{pane_id}')
-  first_pane=${pane_ids[0]}
-  tmux select-pane -t "$first_pane"
-  for ((index = ${#pane_ids[@]} - 1; index >= 1; index--)); do
-    tmux kill-pane -t "${pane_ids[index]}"
-  done
+  refresh_window_created=false
+  previous_window_renamed=false
+  cleanup_failed_refresh() {
+    if [[ $previous_window_renamed == true ]]; then
+      tmux rename-window -t "$previous_window_id" prototypes 2>/dev/null || true
+    fi
+    if [[ $refresh_window_created == true ]]; then
+      tmux kill-window -t "$window_id" 2>/dev/null || true
+    fi
+  }
+  trap cleanup_failed_refresh ERR
+
+  first_pane=$(tmux new-window -d -P -F '#{pane_id}' \
+    -t "$session_id:" -n "prototypes-refresh-$$" -c "$prototype_cwd" \
+    "${placeholder_command[@]}")
+  refresh_window_created=true
+  window_id=$(tmux display-message -p -t "$first_pane" '#{window_id}')
+  configure_tmux_session "$session_id" "$window_id"
 
   tmux respawn-pane -k -t "$first_pane" -c "$prototype_cwd" \
     "${pane_command_prefix[@]}" "${pane_commands[0]}"
   tmux select-pane -t "$first_pane" -T "${pane_titles[0]}"
   build_comparison_grid "$window_id" "$first_pane"
+
+  tmux rename-window -t "$previous_window_id" "prototypes-previous-$$"
+  previous_window_renamed=true
+  tmux rename-window -t "$window_id" prototypes
+  tmux select-window -t "$window_id"
+  tmux kill-window -t "$previous_window_id"
+  previous_window_renamed=false
+  refresh_window_created=false
+  trap - ERR
 else
   created_session=false
   cleanup_partial_session() {
@@ -316,11 +334,13 @@ else
 
   first_pane=$(tmux new-session -d -P -F '#{pane_id}' \
     -s "$session_name" -n prototypes -c "$prototype_cwd" \
-    "${pane_command_prefix[@]}" "${pane_commands[0]}")
+    "${placeholder_command[@]}")
   created_session=true
   session_id=$(tmux display-message -p -t "$first_pane" '#{session_id}')
   window_id=$(tmux display-message -p -t "$first_pane" '#{window_id}')
   configure_tmux_session "$session_id" "$window_id"
+  tmux respawn-pane -k -t "$first_pane" -c "$prototype_cwd" \
+    "${pane_command_prefix[@]}" "${pane_commands[0]}"
   tmux select-pane -t "$first_pane" -T "${pane_titles[0]}"
   if [[ $open_external == true ]]; then
     if open_external_terminal "$session_name"; then
