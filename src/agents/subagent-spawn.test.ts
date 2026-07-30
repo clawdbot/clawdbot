@@ -1423,7 +1423,7 @@ describe("spawnSubagentDirect seam flow", () => {
     );
   });
 
-  it("keeps reserved spawn pending until ambiguous in-process cleanup succeeds", async () => {
+  it("returns reserved cleanup indeterminate after bounded in-process deletion failures", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     hoisted.configOverride = createConfigOverride({
       agents: {
@@ -1435,7 +1435,6 @@ describe("spawnSubagentDirect seam flow", () => {
       },
     });
     hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
-    let allowDelete = false;
     let deleteAttempts = 0;
     hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
       if (method === "agent") {
@@ -1443,17 +1442,136 @@ describe("spawnSubagentDirect seam flow", () => {
       }
       if (method === "sessions.delete") {
         deleteAttempts += 1;
-        if (!allowDelete) {
+        throw new Error("cleanup unavailable");
+      }
+      return { ok: true };
+    });
+
+    await expect(
+      spawnSubagentDirect(
+        {
+          task: "retain the reserved identities during ambiguous cleanup",
+          agentId: "worker",
+          expectsCompletionMessage: false,
+        },
+        {
+          agentSessionKey: "agent:main:main",
+          authorizedTargetAgentId: "worker",
+          preallocatedChildSessionKey: "agent:worker:subagent:ambiguous-reserved-child",
+          preallocatedRunId: "ambiguous-reserved-run",
+          pluginOwnerId: "agentic-os",
+          reservedSubagentClaimToken: "ambiguous-reserved-claim",
+        },
+      ),
+    ).resolves.toMatchObject({
+      status: "error",
+      error: "gateway request timeout for agent",
+      childSessionKey: "agent:worker:subagent:ambiguous-reserved-child",
+      runId: "ambiguous-reserved-run",
+      reservedCleanup: { sessionDeletion: "indeterminate" },
+    });
+    expect(deleteAttempts).toBe(3);
+  });
+
+  it("reports confirmed reserved cleanup when deletion succeeds within the bound", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir() },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    let deleteAttempts = 0;
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "agent") {
+        throw new Error("gateway request timeout for agent");
+      }
+      if (method === "sessions.delete") {
+        deleteAttempts += 1;
+        if (deleteAttempts < 3) {
           throw new Error("cleanup unavailable");
         }
       }
       return { ok: true };
     });
 
-    let settled = false;
-    const spawn = spawnSubagentDirect(
+    await expect(
+      spawnSubagentDirect(
+        {
+          task: "release the reserved identities after confirmed cleanup",
+          agentId: "worker",
+          expectsCompletionMessage: false,
+        },
+        {
+          agentSessionKey: "agent:main:main",
+          authorizedTargetAgentId: "worker",
+          preallocatedChildSessionKey: "agent:worker:subagent:eventual-delete-child",
+          preallocatedRunId: "eventual-delete-run",
+          pluginOwnerId: "agentic-os",
+          reservedSubagentClaimToken: "eventual-delete-claim",
+        },
+      ),
+    ).resolves.toMatchObject({
+      status: "error",
+      error: "gateway request timeout for agent",
+      childSessionKey: "agent:worker:subagent:eventual-delete-child",
+      runId: "eventual-delete-run",
+      reservedCleanup: { sessionDeletion: "deleted" },
+    });
+    expect(deleteAttempts).toBe(3);
+  });
+
+  it("returns reserved cleanup indeterminate at the deletion timeout boundary", async () => {
+    const cleanupApi = await import("./subagent-spawn-cleanup.js");
+    hoisted.callGatewayMock.mockRejectedValue(new Error("gateway unavailable"));
+
+    const result = await cleanupApi.cleanupFailedSpawnBeforeAgentStart({
+      childSessionKey: "agent:worker:subagent:timeout-boundary",
+      deleteTranscript: true,
+      waitForSessionDeletion: { maxAttempts: 10, maxElapsedMs: 0, retryDelayMs: 0 },
+    });
+
+    expect(result.sessionDeletion).toBe("indeterminate");
+    expect(hoisted.callGatewayMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the reserved cleanup claim fail-closed until confirmed deletion", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    const store: Record<string, Record<string, unknown>> = {};
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir() },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    hoisted.loadSessionStoreMock.mockImplementation(() => store);
+    hoisted.updateSessionStoreMock.mockImplementation(async (_storePath, mutator) => {
+      await mutator(store);
+      return store;
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    let deleteAttempts = 0;
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "agent") {
+        throw new Error("gateway request timeout for agent");
+      }
+      if (method === "sessions.delete") {
+        deleteAttempts += 1;
+        throw new Error("cleanup unavailable");
+      }
+      return { ok: true };
+    });
+
+    const first = await spawnSubagentDirect(
       {
-        task: "retain the reserved identities during ambiguous cleanup",
+        task: "retain the reserved identities after indeterminate cleanup",
         agentId: "worker",
         expectsCompletionMessage: false,
       },
@@ -1465,21 +1583,32 @@ describe("spawnSubagentDirect seam flow", () => {
         pluginOwnerId: "agentic-os",
         reservedSubagentClaimToken: "ambiguous-reserved-claim",
       },
-    ).finally(() => {
-      settled = true;
-    });
-
-    await vi.waitFor(() => expect(deleteAttempts).toBeGreaterThan(0));
-    expect(settled).toBe(false);
-
-    allowDelete = true;
-    await expect(spawn).resolves.toMatchObject({
+    );
+    expect(first).toMatchObject({
       status: "error",
-      error: "gateway request timeout for agent",
-      childSessionKey: "agent:worker:subagent:ambiguous-reserved-child",
-      runId: "ambiguous-reserved-run",
+      reservedCleanup: { sessionDeletion: "indeterminate" },
     });
-    expect(deleteAttempts).toBeGreaterThan(1);
+    expect(deleteAttempts).toBe(3);
+
+    const duplicate = await spawnSubagentDirect(
+      {
+        task: "duplicate should still be rejected by the undeleted child session",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: "agent:worker:subagent:ambiguous-reserved-child",
+        preallocatedRunId: "ambiguous-reserved-run",
+        pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "ambiguous-reserved-claim-2",
+      },
+    );
+    expect(duplicate).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("reserved childSessionKey already exists"),
+    });
   });
 
   it.each(inheritedSpawnPreferenceCases)(

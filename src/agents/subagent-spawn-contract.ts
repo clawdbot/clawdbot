@@ -86,6 +86,9 @@ export type SpawnSubagentResult = {
   resolvedProvider?: string;
   modelApplied?: boolean;
   error?: string;
+  reservedCleanup?: {
+    sessionDeletion: "deleted" | "not_deleted" | "indeterminate";
+  };
   attachments?: {
     count: number;
     totalBytes: number;

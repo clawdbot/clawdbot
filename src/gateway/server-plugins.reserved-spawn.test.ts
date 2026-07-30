@@ -1,5 +1,5 @@
 // Gateway plugin reserved-spawn tests lock the narrow Plugin SDK to core seam.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   withPluginRuntimeGatewayRequestScope,
   withPluginRuntimePluginIdScope,
@@ -7,12 +7,16 @@ import {
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 const spawnSubagentDirect = vi.hoisted(() => vi.fn());
+const cleanupProvisionalSession = vi.hoisted(() => vi.fn());
 const getAgentRunContext = vi.hoisted(() => vi.fn());
 const hasSubagentRunIdentity = vi.hoisted(() => vi.fn());
 const getLatestSubagentRunByChildSessionKey = vi.hoisted(() => vi.fn());
 
 vi.mock("../agents/subagent-spawn.js", () => ({
   spawnSubagentDirect,
+}));
+vi.mock("../agents/subagent-spawn-cleanup.js", () => ({
+  cleanupProvisionalSession,
 }));
 vi.mock("../agents/subagent-registry.js", () => ({
   getLatestSubagentRunByChildSessionKey,
@@ -49,6 +53,7 @@ function withReservedPluginScope<T>(
 describe("createGatewaySubagentRuntime.spawnReserved", () => {
   beforeEach(() => {
     spawnSubagentDirect.mockReset();
+    cleanupProvisionalSession.mockReset().mockResolvedValue(false);
     getAgentRunContext.mockReset().mockReturnValue(undefined);
     hasSubagentRunIdentity.mockReset().mockReturnValue(false);
     getLatestSubagentRunByChildSessionKey.mockReset().mockReturnValue(undefined);
@@ -58,6 +63,11 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
       runId: reservation.runId,
       mode: "run",
     });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
   });
 
   it("requires an active plugin scope", async () => {
@@ -273,5 +283,45 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
     await expect(
       withReservedPluginScope(() => createGatewaySubagentRuntime().spawnReserved(reservation)),
     ).rejects.toThrow("returned different child or run identities");
+  });
+
+  it("retains reserved claims after indeterminate cleanup until deletion is confirmed", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.useFakeTimers();
+    const runtime = createGatewaySubagentRuntime();
+    const dedupe: GatewayRequestContext["dedupe"] = new Map();
+    spawnSubagentDirect.mockResolvedValueOnce({
+      status: "error",
+      error: "gateway request timeout for agent",
+      childSessionKey: reservation.childSessionKey,
+      runId: reservation.runId,
+      reservedCleanup: { sessionDeletion: "indeterminate" },
+    });
+
+    await expect(
+      withReservedPluginScope(() => runtime.spawnReserved(reservation), dedupe),
+    ).rejects.toThrow("gateway request timeout for agent");
+    expect(dedupe.has(`agent:${reservation.runId}`)).toBe(true);
+
+    await expect(
+      withReservedPluginScope(() => runtime.spawnReserved(reservation), dedupe),
+    ).rejects.toThrow("already claimed");
+    expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
+
+    cleanupProvisionalSession.mockResolvedValueOnce(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(cleanupProvisionalSession).toHaveBeenCalledWith(reservation.childSessionKey, {
+      emitLifecycleHooks: false,
+      deleteTranscript: true,
+    });
+    expect(dedupe.has(`agent:${reservation.runId}`)).toBe(false);
+
+    await expect(
+      withReservedPluginScope(() => runtime.spawnReserved(reservation), dedupe),
+    ).resolves.toMatchObject({
+      childSessionKey: reservation.childSessionKey,
+      runId: reservation.runId,
+    });
+    expect(spawnSubagentDirect).toHaveBeenCalledTimes(2);
   });
 });

@@ -32,7 +32,7 @@ import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note
 import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
 import {
   cleanupFailedSpawnBeforeAgentStart,
-  cleanupProvisionalSession,
+  type ProvisionalSessionDeletionOutcome,
   terminateAcceptedCollectorRun,
 } from "./subagent-spawn-cleanup.js";
 import {
@@ -168,6 +168,40 @@ export async function spawnSubagentDirect(
     let { childSessionOrigin } = childPlan.resolved;
     const spawnedByKey = requesterInternalKey;
     const { resolvedModel, thinkingOverride } = plan;
+    let reservedFailureCleanupOutcome: ProvisionalSessionDeletionOutcome | undefined;
+    const recordReservedCleanupOutcome = (outcome: ProvisionalSessionDeletionOutcome) => {
+      if (ctx.preallocatedRunId) {
+        reservedFailureCleanupOutcome = outcome;
+      }
+    };
+    const cleanupProvisionedSessionForFailedSpawn = async (options?: {
+      attachmentAbsDir?: string;
+      emitLifecycleHooks?: boolean;
+      deleteTranscript?: boolean;
+    }) => {
+      const cleanupResult = await cleanupFailedSpawnBeforeAgentStart({
+        childSessionKey,
+        ...(options?.attachmentAbsDir ? { attachmentAbsDir: options.attachmentAbsDir } : {}),
+        emitLifecycleHooks: options?.emitLifecycleHooks,
+        deleteTranscript: options?.deleteTranscript,
+        waitForSessionDeletion: Boolean(ctx.preallocatedRunId),
+      });
+      recordReservedCleanupOutcome(cleanupResult.sessionDeletion);
+      return cleanupResult;
+    };
+    const withReservedCleanupResult = (result: SpawnSubagentResult): SpawnSubagentResult => {
+      if (
+        !ctx.preallocatedRunId ||
+        !reservedFailureCleanupOutcome ||
+        result.status === "accepted"
+      ) {
+        return result;
+      }
+      return {
+        ...result,
+        reservedCleanup: { sessionDeletion: reservedFailureCleanupOutcome },
+      };
+    };
     const initialSession = await createInitialSubagentSession({
       cfg,
       targetAgentId,
@@ -203,15 +237,15 @@ export async function spawnSubagentDirect(
       childSessionKey,
     });
     if (preparedSpawnContext.status === "error") {
-      await cleanupProvisionalSession(childSessionKey, {
+      await cleanupProvisionedSessionForFailedSpawn({
         emitLifecycleHooks: false,
         deleteTranscript: true,
       });
-      return {
+      return withReservedCleanupResult({
         status: "error",
         error: preparedSpawnContext.error,
         childSessionKey,
-      };
+      });
     }
     if (resolvedModel) {
       const runtimeModelPersistError = await persistInitialChildSessionRuntimeModel({
@@ -220,15 +254,15 @@ export async function spawnSubagentDirect(
         resolvedModel,
       });
       if (runtimeModelPersistError) {
-        await cleanupProvisionalSession(childSessionKey, {
+        await cleanupProvisionedSessionForFailedSpawn({
           emitLifecycleHooks: false,
           deleteTranscript: true,
         });
-        return {
+        return withReservedCleanupResult({
           status: "error",
           error: runtimeModelPersistError,
           childSessionKey,
-        };
+        });
       }
       modelApplied = true;
     }
@@ -248,15 +282,15 @@ export async function spawnSubagentDirect(
         },
       });
       if (bindResult.status === "error") {
-        await cleanupProvisionalSession(childSessionKey, {
+        await cleanupProvisionedSessionForFailedSpawn({
           emitLifecycleHooks: false,
           deleteTranscript: true,
         });
-        return {
+        return withReservedCleanupResult({
           status: "error",
           error: bindResult.error,
           childSessionKey,
-        };
+        });
       }
       threadBindingReady = true;
       hasBoundThreadDeliveryOrigin = hasRoutableDeliveryOrigin(bindResult.deliveryOrigin);
@@ -305,14 +339,15 @@ export async function spawnSubagentDirect(
       mountPathHint,
     });
     if (materializedAttachments && materializedAttachments.status !== "ok") {
-      await cleanupProvisionalSession(childSessionKey, {
+      await cleanupProvisionedSessionForFailedSpawn({
         emitLifecycleHooks: threadBindingReady,
         deleteTranscript: true,
       });
-      return {
+      return withReservedCleanupResult({
         status: materializedAttachments.status,
         error: materializedAttachments.error,
-      };
+        childSessionKey,
+      });
     }
     if (materializedAttachments?.status === "ok") {
       retainOnSessionKeep = materializedAttachments.retainOnSessionKeep;
@@ -421,8 +456,7 @@ export async function spawnSubagentDirect(
       },
       async cleanupOnFailure({ phase, state }) {
         if (phase === "initialize") {
-          await cleanupFailedSpawnBeforeAgentStart({
-            childSessionKey,
+          await cleanupProvisionedSessionForFailedSpawn({
             attachmentAbsDir,
             emitLifecycleHooks: threadBindingReady,
             deleteTranscript: true,
@@ -466,7 +500,7 @@ export async function spawnSubagentDirect(
           }
           emitLifecycleHooks = !endedHookEmitted;
         }
-        await cleanupFailedSpawnBeforeAgentStart({
+        const cleanupResult = await cleanupFailedSpawnBeforeAgentStart({
           childSessionKey,
           emitLifecycleHooks,
           deleteTranscript: true,
@@ -474,6 +508,7 @@ export async function spawnSubagentDirect(
           // cannot be released until deletion proves no accepted child survives.
           waitForSessionDeletion: Boolean(ctx.preallocatedRunId),
         });
+        recordReservedCleanupOutcome(cleanupResult.sessionDeletion);
       },
     };
     const pipelineResult = await runSpawnPipeline({
@@ -534,7 +569,7 @@ export async function spawnSubagentDirect(
         pipelineResult.error && typeof pipelineResult.error === "object"
           ? (pipelineResult.error as { spawnStatus?: unknown }).spawnStatus
           : undefined;
-      return {
+      return withReservedCleanupResult({
         status: spawnStatus === "forbidden" ? "forbidden" : "error",
         error:
           pipelineResult.phase === "register" && spawnStatus !== "forbidden"
@@ -542,7 +577,7 @@ export async function spawnSubagentDirect(
             : summarizeSpawnError(pipelineResult.error),
         childSessionKey,
         ...(pipelineResult.phase === "initialize" ? {} : { runId }),
-      };
+      });
     }
     childRunId = pipelineResult.runId;
     let collectorSessionKey: string | undefined;

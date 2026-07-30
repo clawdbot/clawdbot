@@ -5,7 +5,10 @@ import {
   getLatestSubagentRunByChildSessionKey,
   hasSubagentRunIdentity,
 } from "../agents/subagent-registry.js";
+import { cleanupProvisionalSession } from "../agents/subagent-spawn-cleanup.js";
+import type { SpawnSubagentResult } from "../agents/subagent-spawn-contract.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
+import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { isValidAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -19,9 +22,82 @@ type ReservedSubagentIdentityClaims = {
   childSessionKeys: Set<string>;
 };
 
+type ReservedSubagentCleanupHolder = {
+  timer?: ReturnType<typeof setTimeout>;
+  release: () => void;
+};
+
 const RESERVED_SUBAGENT_IDENTITY_CLAIMS_KEY: unique symbol = Symbol.for(
   "openclaw.pluginRuntime.reservedSubagentIdentityClaims",
 );
+const RESERVED_SUBAGENT_CLEANUP_HOLDERS_KEY: unique symbol = Symbol.for(
+  "openclaw.pluginRuntime.reservedSubagentCleanupHolders",
+);
+
+function reservedSubagentCleanupHolderKey(params: {
+  runId: string;
+  childSessionKey: string;
+}): string {
+  return `${params.runId}\0${params.childSessionKey}`;
+}
+
+function retainReservedSubagentCleanupHolder(params: {
+  runId: string;
+  childSessionKey: string;
+  releaseGatewayDedupeReservation: () => void;
+  releaseIdentityClaim: () => void;
+}): void {
+  const holders = resolveGlobalSingleton<Map<string, ReservedSubagentCleanupHolder>>(
+    RESERVED_SUBAGENT_CLEANUP_HOLDERS_KEY,
+    () => new Map(),
+  );
+  const key = reservedSubagentCleanupHolderKey(params);
+  if (holders.has(key)) {
+    return;
+  }
+  let released = false;
+  const holder: ReservedSubagentCleanupHolder = {
+    release: () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      if (holder.timer) {
+        clearTimeout(holder.timer);
+      }
+      holders.delete(key);
+      params.releaseGatewayDedupeReservation();
+      params.releaseIdentityClaim();
+    },
+  };
+  const retryDelayMs = isFastTestRuntimeEnv() ? 1 : 1_000;
+  const retryDeletion = async () => {
+    if (released) {
+      return;
+    }
+    const deleted = await cleanupProvisionalSession(params.childSessionKey, {
+      emitLifecycleHooks: false,
+      deleteTranscript: true,
+    });
+    if (deleted) {
+      holder.release();
+      return;
+    }
+    holder.timer = setTimeout(() => {
+      void retryDeletion();
+    }, retryDelayMs);
+    holder.timer.unref?.();
+  };
+  holders.set(key, holder);
+  holder.timer = setTimeout(() => {
+    void retryDeletion();
+  }, retryDelayMs);
+  holder.timer.unref?.();
+}
+
+function hasIndeterminateReservedCleanup(result: SpawnSubagentResult): boolean {
+  return result.reservedCleanup?.sessionDeletion === "indeterminate";
+}
 
 function claimReservedSubagentIdentities(params: { runId: string; childSessionKey: string }): {
   claimToken: string;
@@ -120,6 +196,7 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
     childSessionKey,
   });
   let releaseGatewayDedupeReservation = () => {};
+  let releaseClaimsOnReturn = true;
   try {
     assertReservedSubagentIdentitiesAvailable({
       runId,
@@ -155,6 +232,15 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
       },
     );
     if (result.status !== "accepted") {
+      if (hasIndeterminateReservedCleanup(result)) {
+        retainReservedSubagentCleanupHolder({
+          runId,
+          childSessionKey,
+          releaseGatewayDedupeReservation,
+          releaseIdentityClaim: identityClaim.release,
+        });
+        releaseClaimsOnReturn = false;
+      }
       throw new Error(result.error?.trim() || `reserved subagent spawn ${result.status}`);
     }
     if (result.childSessionKey !== childSessionKey || result.runId !== runId) {
@@ -166,10 +252,9 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
       mode: "run",
     };
   } finally {
-    // Reserved dispatch failures stay pending in spawnSubagentDirect until
-    // session deletion proves that no accepted child survives. That keeps both
-    // claims live throughout an ambiguous timeout or cleanup outage.
-    releaseGatewayDedupeReservation();
-    identityClaim.release();
+    if (releaseClaimsOnReturn) {
+      releaseGatewayDedupeReservation();
+      identityClaim.release();
+    }
   }
 };
