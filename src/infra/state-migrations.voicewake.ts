@@ -12,7 +12,6 @@ import {
 } from "./kysely-sync.js";
 import {
   legacyMigrationSourceContentMatches,
-  legacyMigrationSourceOrClaimMayExist,
   legacyMigrationSourceSnapshotsMatch,
   readLegacyMigrationSourceSnapshot,
   resolveLegacyMigrationRelativePath,
@@ -409,20 +408,6 @@ async function migrateVoiceWakeSource<Value>(params: {
     }
     params.warnings.push(`Failed migrating legacy ${params.source.label}: ${String(error)}`);
   }
-}
-
-export function detectLegacyVoiceWake(params: {
-  stateDir: string;
-}): LegacyStateDetection["voiceWake"] {
-  const triggersPath = resolveLegacyVoiceWakeTriggersPath(params.stateDir);
-  const routingPath = resolveLegacyVoiceWakeRoutingPath(params.stateDir);
-  return {
-    triggersPath,
-    routingPath,
-    hasLegacy:
-      legacyMigrationSourceOrClaimMayExist(triggersPath) ||
-      legacyMigrationSourceOrClaimMayExist(routingPath),
-  };
 }
 
 export async function migrateLegacyVoiceWakeSettings(params: {
