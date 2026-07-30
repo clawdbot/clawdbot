@@ -2890,6 +2890,26 @@ describe("systemd service control", () => {
     expect(requireFirstWrite(write)).toContain("Started systemd service");
   });
 
+  it("tolerates reset-failed as a no-op on a healthy start", async () => {
+    // reset-failed is idempotent: on a non-failed unit systemd returns success
+    // and leaves the unit untouched, so prepending it to start cannot regress a
+    // healthy gateway. Assert the start still proceeds and succeeds when
+    // reset-failed exits 0 with no failed state to clear.
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "reset-failed", GATEWAY_SERVICE);
+        cb(null, "", ""); // healthy unit: no failed state, exit 0
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "start", GATEWAY_SERVICE);
+        cb(null, "", "");
+      });
+    const { write, stdout } = createWritableStreamMock();
+    await startSystemdService({ stdout, env: {} });
+    expect(requireFirstWrite(write)).toContain("Started systemd service");
+  });
+
   it("surfaces stop failures with systemctl detail", async () => {
     execFileMock
       .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
