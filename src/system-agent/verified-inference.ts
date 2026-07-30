@@ -39,6 +39,7 @@ import {
   resolveOwningPluginIdsForModelRefs,
   resolveOwningPluginIdsForProviderRef,
 } from "../plugins/providers.js";
+import { resolveAppliedSnapshotConfig } from "./applied-snapshot-config.js";
 import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
@@ -834,7 +835,7 @@ export async function hasCurrentSystemAgentOwnerPluginArtifacts(
   if (!snapshot.exists || !snapshot.valid) {
     return false;
   }
-  const config = snapshot.runtimeConfig ?? snapshot.config;
+  const config = resolveAppliedSnapshotConfig(snapshot);
   try {
     const ownerPluginIds = resolveRouteOwnerPluginIds(config, binding.execution);
     if (!isDeepStrictEqual(ownerPluginIds, binding.ownerPluginIds)) {
@@ -870,7 +871,7 @@ async function resolveSystemAgentVerifiedInferenceStateInternal(
   if (!snapshot.exists || !snapshot.valid) {
     return null;
   }
-  const config = snapshot.runtimeConfig ?? snapshot.config;
+  const config = resolveAppliedSnapshotConfig(snapshot);
   const currentRoute = await resolveSystemAgentConfiguredRouteFromConfig(
     config,
     binding.execution.agentId,

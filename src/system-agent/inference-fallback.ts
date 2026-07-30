@@ -6,6 +6,7 @@ import { hasAvailableAuthForProvider } from "../agents/model-auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveAppliedSnapshotConfig } from "./applied-snapshot-config.js";
 import {
   resolveSystemAgentConfiguredRouteFromConfig,
   type SystemAgentConfiguredRoute,
@@ -46,7 +47,7 @@ async function readCurrentConfig(): Promise<OpenClawConfig> {
   if (!snapshot.exists || !snapshot.valid) {
     return {};
   }
-  return snapshot.runtimeConfig ?? snapshot.config;
+  return resolveAppliedSnapshotConfig(snapshot);
 }
 
 /** Requester first. Other configured, authenticated providers: provider-id order. */

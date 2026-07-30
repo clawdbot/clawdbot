@@ -10,6 +10,7 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveAppliedSnapshotConfig } from "./applied-snapshot-config.js";
 import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
@@ -82,7 +83,7 @@ export async function verifySetupInference(
       error: invalidSetupConfigError(snapshot),
     };
   }
-  const cfg: OpenClawConfig = snapshot.runtimeConfig ?? snapshot.config;
+  const cfg: OpenClawConfig = resolveAppliedSnapshotConfig(snapshot);
   const baselineRoute = await projectInferenceRoute(cfg, params.agentId);
   let verifiedBinding: SystemAgentVerifiedInferenceBinding | undefined;
   const verification = await verifySetupInferenceConfig({
@@ -107,9 +108,11 @@ export async function verifySetupInference(
     return verification;
   }
   const latestSnapshot = await readSnapshot().catch(() => null);
+  // Same selection as the baseline: comparing a resolved runtime config against a
+  // freshly materialized one would report unresolved SecretRefs as route drift.
   const latestConfig =
     latestSnapshot?.exists && latestSnapshot.valid
-      ? (latestSnapshot.runtimeConfig ?? latestSnapshot.config)
+      ? resolveAppliedSnapshotConfig(latestSnapshot)
       : undefined;
   const latestRoute = latestConfig
     ? await projectInferenceRoute(latestConfig, params.agentId)
@@ -480,7 +483,7 @@ export async function completeSetupInference(params: {
     return { ok: false, status: "format", error: invalidSetupConfigError(snapshot) };
   }
   return await completeSetupInferenceConfig({
-    config: snapshot.runtimeConfig ?? snapshot.config,
+    config: resolveAppliedSnapshotConfig(snapshot),
     prompt: params.prompt,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     runtime: params.runtime,

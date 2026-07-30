@@ -7,6 +7,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { resolveAppliedSnapshotConfig } from "./applied-snapshot-config.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
 import {
   SYSTEM_AGENT_CONFIG_WRITE_DENYLIST,
@@ -394,7 +395,7 @@ async function verifyCurrentSetupInference(
       "OpenClaw setup requires a valid configured inference route. Run `openclaw onboard` on the machine running OpenClaw, then retry.",
     );
   }
-  const beforeConfig = before.runtimeConfig ?? before.config;
+  const beforeConfig = resolveAppliedSnapshotConfig(before);
   const beforeRoute = await projectDefaultInferenceRoute(beforeConfig);
   if (!beforeRoute.route) {
     throw new Error(
