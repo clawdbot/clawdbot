@@ -32,7 +32,13 @@ class WearProxyListenerManifestTest {
     assertTrue(
       resolvesToBridgeService(
         action = ChannelClient.ACTION_CHANNEL_EVENT,
-        path = WearProtocol.REALTIME_AUDIO_CHANNEL_PATH,
+        path = WearProtocol.realtimeAudioChannelPath("attempt-7"),
+      ),
+    )
+    assertFalse(
+      resolvesToBridgeService(
+        action = ChannelClient.ACTION_CHANNEL_EVENT,
+        path = WearProtocol.REALTIME_AUDIO_CHANNEL_PATH_PREFIX.removeSuffix("/"),
       ),
     )
   }

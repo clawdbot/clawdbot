@@ -67,7 +67,7 @@
                 <data
                     android:scheme="wear"
                     android:host="*"
-                    android:path="/openclaw/wear/v1/realtime/audio" />
+                    android:pathPrefix="/openclaw/wear/v1/realtime/audio/" />
             </intent-filter>
         </service>
         <service

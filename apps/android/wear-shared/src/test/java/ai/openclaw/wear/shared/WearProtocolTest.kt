@@ -10,7 +10,9 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WearProtocolTest {
@@ -103,7 +105,15 @@ class WearProtocolTest {
     assertEquals("/openclaw/wear/v1/request", WearProtocol.REQUEST_PATH)
     assertEquals("/openclaw/wear/v1/response", WearProtocol.RESPONSE_PATH)
     assertEquals("/openclaw/wear/v1/event", WearProtocol.EVENT_PATH)
-    assertEquals("/openclaw/wear/v1/realtime/audio", WearProtocol.REALTIME_AUDIO_CHANNEL_PATH)
+    val realtimePath = WearProtocol.realtimeAudioChannelPath("attempt-7")
+    assertEquals(
+      "/openclaw/wear/v1/realtime/audio/9804dc90c374fd8e83c9b95a75611f9bec6e0c6ecdcbed5319d6491208417521",
+      realtimePath,
+    )
+    assertEquals(realtimePath, WearProtocol.realtimeAudioChannelPath("attempt-7"))
+    assertTrue(WearProtocol.isRealtimeAudioChannelPath(realtimePath))
+    assertFalse(WearProtocol.isRealtimeAudioChannelPath("/openclaw/wear/v1/realtime/audio"))
+    assertFalse(WearProtocol.isRealtimeAudioChannelPath("$realtimePath/extra"))
     assertEquals("openclaw_phone_proxy_v1", WearProtocol.PHONE_CAPABILITY)
     assertEquals("openclaw_wear_companion_v1", WearProtocol.WATCH_CAPABILITY)
     assertEquals("gateway_offline", WearConnectionFailure.GatewayOffline.wireValue)
