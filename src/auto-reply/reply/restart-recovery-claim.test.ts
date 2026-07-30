@@ -7,6 +7,7 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type {
   UserTurnTranscriptRecorder,
   UserTurnTranscriptTarget,
@@ -145,6 +146,97 @@ describe("createReplyRestartRecoveryClaimController", () => {
       model: "gpt-5.6-luna",
       restartRecoveryDeliverySourceRunId: sourceTurnId,
       status: "running",
+    });
+  });
+
+  it("rejects claim adoption when a recovery cycle starts after the snapshot", async () => {
+    const root = tempDirs.make("openclaw-reply-admission-cycle-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:telegram:group:chat:topic:thread";
+    const sessionId = "channel-session-id";
+    const sourceTurnId = "telegram-update-new";
+    const deliveryContext = {
+      channel: "telegram",
+      to: "chat",
+      accountId: "default",
+      threadId: "thread",
+    };
+    let entry: SessionEntry = {
+      sessionId,
+      updatedAt: 10,
+      abortedLastRun: false,
+      restartRecoveryDeliveryContext: deliveryContext,
+      restartRecoveryDeliveryRunId: "orphaned-run",
+      restartRecoveryDeliverySourceRunId: "telegram-update-old",
+      status: "done",
+    };
+    await replaceSessionEntry({ storePath, sessionKey }, entry);
+    const sourceMessage = {
+      role: "user" as const,
+      content: "continue",
+      idempotencyKey: sourceTurnId,
+      timestamp: Date.now(),
+    };
+    const recorder = {
+      message: undefined,
+      getPersistedMessage: () => sourceMessage,
+      resolveMessage: async () => sourceMessage,
+      markRuntimePersistencePending: () => {},
+      markRuntimePersisted: () => {},
+      markBlocked: () => {},
+      hasPersisted: () => false,
+      isBlocked: () => false,
+      hasRuntimePersistencePending: () => false,
+      waitForRuntimePersistence: async () => {},
+      persistApproved: async (
+        options?: Parameters<UserTurnTranscriptRecorder["persistApproved"]>[0],
+      ) => {
+        await updateSessionEntry({ storePath, sessionKey }, () => ({
+          mainRestartRecovery: {
+            cycleId: "cycle-new",
+            revision: 1,
+            chargedAttempts: 0,
+          },
+        }));
+        return await createUserTurnTranscriptRecorder({
+          message: sourceMessage,
+          target: {
+            agentId: "main",
+            sessionEntry: entry,
+            sessionId,
+            sessionKey,
+            storePath,
+          },
+          updateMode: "none",
+        }).persistApproved(options);
+      },
+      persistBlocked: async () => undefined,
+      persistFallback: async () => undefined,
+    } satisfies UserTurnTranscriptRecorder;
+    const controller = createReplyRestartRecoveryClaimController({
+      getEntry: () => entry,
+      getSessionId: () => sessionId,
+      isRestartAbort: () => false,
+      resolveDeliveryContext: () => deliveryContext,
+      sessionKey,
+      setEntry: (next) => {
+        entry = next;
+      },
+      sourceTurnId,
+      storePath,
+    });
+
+    await expect(controller.admitUserTurn(recorder)).rejects.toThrow(
+      "session changed before durable user-turn admission",
+    );
+    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+      mainRestartRecovery: {
+        cycleId: "cycle-new",
+        revision: 1,
+      },
+      restartRecoveryDeliveryRunId: "orphaned-run",
+      restartRecoveryDeliverySourceRunId: "telegram-update-old",
+      status: "done",
     });
   });
 });

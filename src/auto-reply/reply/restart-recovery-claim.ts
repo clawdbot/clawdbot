@@ -86,12 +86,8 @@ export async function retireTerminalRestartRecoverySourceClaim(params: {
 function buildExpectedSessionState(entry: SessionEntry): SessionTranscriptTurnExpectedState {
   return {
     abortedLastRun: entry.abortedLastRun,
-    ...(entry.mainRestartRecovery
-      ? {
-          mainRestartRecoveryCycleId: entry.mainRestartRecovery.cycleId,
-          mainRestartRecoveryRevision: entry.mainRestartRecovery.revision,
-        }
-      : {}),
+    mainRestartRecoveryCycleId: entry.mainRestartRecovery?.cycleId,
+    mainRestartRecoveryRevision: entry.mainRestartRecovery?.revision,
     restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
     restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
     restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
@@ -116,10 +112,8 @@ function matchesExpectedSessionState(
   return (
     entry.sessionId === sessionId &&
     entry.abortedLastRun === expected.abortedLastRun &&
-    (expected.mainRestartRecoveryCycleId === undefined ||
-      entry.mainRestartRecovery?.cycleId === expected.mainRestartRecoveryCycleId) &&
-    (expected.mainRestartRecoveryRevision === undefined ||
-      entry.mainRestartRecovery?.revision === expected.mainRestartRecoveryRevision) &&
+    entry.mainRestartRecovery?.cycleId === expected.mainRestartRecoveryCycleId &&
+    entry.mainRestartRecovery?.revision === expected.mainRestartRecoveryRevision &&
     entry.restartRecoveryBeforeAgentReplyState === expected.restartRecoveryBeforeAgentReplyState &&
     entry.restartRecoveryDeliveryReceiptState === expected.restartRecoveryDeliveryReceiptState &&
     entry.restartRecoveryDeliveryToolCallId === expected.restartRecoveryDeliveryToolCallId &&

@@ -3175,6 +3175,8 @@ describe("session accessor seam", () => {
       expectedSessionId: scope.sessionId,
       expectedSessionState: {
         abortedLastRun: retryable.abortedLastRun,
+        mainRestartRecoveryCycleId: retryable.mainRestartRecovery?.cycleId,
+        mainRestartRecoveryRevision: retryable.mainRestartRecovery?.revision,
         restartRecoveryBeforeAgentReplyState: retryable.restartRecoveryBeforeAgentReplyState,
         restartRecoveryDeliveryReceiptState: retryable.restartRecoveryDeliveryReceiptState,
         restartRecoveryDeliveryToolCallId: retryable.restartRecoveryDeliveryToolCallId,

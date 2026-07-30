@@ -35,12 +35,8 @@ export function buildRestartRecoveryExpectedState(
   const expectedMainRestartRecovery = mainRestartRecovery ?? entry.mainRestartRecovery;
   return {
     abortedLastRun: entry.abortedLastRun,
-    ...(expectedMainRestartRecovery
-      ? {
-          mainRestartRecoveryCycleId: expectedMainRestartRecovery.cycleId,
-          mainRestartRecoveryRevision: expectedMainRestartRecovery.revision,
-        }
-      : {}),
+    mainRestartRecoveryCycleId: expectedMainRestartRecovery?.cycleId,
+    mainRestartRecoveryRevision: expectedMainRestartRecovery?.revision,
     restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
     restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
     restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
