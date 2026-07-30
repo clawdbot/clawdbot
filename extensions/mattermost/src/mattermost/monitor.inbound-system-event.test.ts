@@ -482,6 +482,7 @@ async function emitMattermostChannelPost(
     rootId?: string;
     senderId?: string;
     senderName?: string;
+    createAt?: number;
   },
 ) {
   const senderId = params.senderId ?? "user-1";
@@ -498,7 +499,7 @@ async function emitMattermostChannelPost(
         user_id: senderId,
         message: params.message,
         root_id: params.rootId,
-        create_at: 1_714_000_000_000,
+        create_at: params.createAt ?? 1_714_000_000_000,
       }),
     },
     broadcast: {
@@ -593,6 +594,68 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.MessageSid).toBe("post-inbound-system-event-regular");
     expect(ctx?.OriginatingChannel).toBe("mattermost");
     expect(ctx?.Provider).toBe("mattermost");
+  });
+
+  it("formats current and pending-history timestamps in the configured user timezone", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          envelopeTimezone: "user",
+          userTimezone: "Asia/Jakarta",
+        },
+      },
+      messages: { groupChat: { historyLimit: 1 } },
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "open",
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["allowed-user"],
+        },
+      },
+    };
+    mockState.runtimeCore = createRuntimeCore(config);
+
+    const monitor = monitorMattermostProvider({
+      config,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "timezone-history",
+      message: "history in Jakarta",
+      senderId: "denied-user",
+      senderName: "mallory",
+      createAt: 1_714_000_000_000,
+    });
+    await emitMattermostChannelPost(socket, {
+      id: "timezone-current",
+      message: "current in Jakarta",
+      senderId: "allowed-user",
+      senderName: "alice",
+      createAt: 1_714_003_600_000,
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    const ctx = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx;
+    expect(ctx?.Body).toContain("Thu 2024-04-25 06:06:40");
+    expect(ctx?.Body).toContain("Thu 2024-04-25 07:06:40");
+    expect(ctx?.Body).toContain("history in Jakarta");
+    expect(ctx?.Body).toContain("current in Jakarta");
   });
 
   it.each([
