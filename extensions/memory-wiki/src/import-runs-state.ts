@@ -11,9 +11,10 @@ import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 
 const LEGACY_IMPORT_RUN_READ_CONCURRENCY = 16;
 
-type ChatGptImportRunEntry = {
+export type ChatGptImportRunEntry = {
   path: string;
   snapshotPath?: string;
+  contentHash?: string;
 };
 
 export type ChatGptImportRunRecord = {
@@ -27,7 +28,7 @@ export type ChatGptImportRunRecord = {
   createdCount: number;
   updatedCount: number;
   skippedCount: number;
-  createdPaths: string[];
+  createdPaths: ChatGptImportRunEntry[];
   updatedPaths: ChatGptImportRunEntry[];
   rolledBackAt?: string;
 };
@@ -54,6 +55,7 @@ type MemoryWikiImportRunPathStateRecord = {
   index: number;
   path: string;
   snapshotPath?: string;
+  contentHash?: string;
 };
 
 type MemoryWikiImportRunStateRecord =
@@ -96,7 +98,7 @@ function resolvePathStateEntryKey(params: {
 function cloneImportRunRecord(record: ChatGptImportRunRecord): ChatGptImportRunRecord {
   return {
     ...record,
-    createdPaths: [...record.createdPaths],
+    createdPaths: record.createdPaths.map((entry) => ({ ...entry })),
     updatedPaths: record.updatedPaths.map((entry) => ({ ...entry })),
   };
 }
@@ -108,13 +110,39 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-function asStringArray(value: unknown): string[] {
+function normalizeImportRunEntries(value: unknown): ChatGptImportRunEntry[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.filter(
-    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-  );
+  return value.flatMap((raw): ChatGptImportRunEntry[] => {
+    if (typeof raw === "string") {
+      const entryPath = raw.trim();
+      return entryPath ? [{ path: entryPath }] : [];
+    }
+    const entry = asRecord(raw);
+    if (!entry) {
+      return [];
+    }
+    const entryPath = typeof entry.path === "string" ? entry.path.trim() : "";
+    if (!entryPath) {
+      return [];
+    }
+    const snapshotPath =
+      typeof entry.snapshotPath === "string" && entry.snapshotPath.trim()
+        ? entry.snapshotPath.trim()
+        : undefined;
+    const contentHash =
+      typeof entry.contentHash === "string" && entry.contentHash.trim()
+        ? entry.contentHash.trim()
+        : undefined;
+    return [
+      {
+        path: entryPath,
+        ...(snapshotPath ? { snapshotPath } : {}),
+        ...(contentHash ? { contentHash } : {}),
+      },
+    ];
+  });
 }
 
 function asNonNegativeInteger(value: unknown): number {
@@ -140,22 +168,6 @@ function normalizeMemoryWikiImportRunRecord(raw: unknown): ChatGptImportRunRecor
   ) {
     return null;
   }
-  const updatedPaths = Array.isArray(record.updatedPaths)
-    ? record.updatedPaths
-        .map((entry) => asRecord(entry))
-        .filter((entry): entry is Record<string, unknown> => entry !== null)
-        .flatMap((entry): ChatGptImportRunEntry[] => {
-          const entryPath = typeof entry.path === "string" ? entry.path.trim() : "";
-          if (!entryPath) {
-            return [];
-          }
-          const snapshotPath =
-            typeof entry.snapshotPath === "string" && entry.snapshotPath.trim()
-              ? entry.snapshotPath.trim()
-              : undefined;
-          return [{ path: entryPath, ...(snapshotPath ? { snapshotPath } : {}) }];
-        })
-    : [];
   const rolledBackAt =
     typeof record.rolledBackAt === "string" && record.rolledBackAt.trim()
       ? record.rolledBackAt.trim()
@@ -171,8 +183,8 @@ function normalizeMemoryWikiImportRunRecord(raw: unknown): ChatGptImportRunRecor
     createdCount: asNonNegativeInteger(record.createdCount),
     updatedCount: asNonNegativeInteger(record.updatedCount),
     skippedCount: asNonNegativeInteger(record.skippedCount),
-    createdPaths: asStringArray(record.createdPaths),
-    updatedPaths,
+    createdPaths: normalizeImportRunEntries(record.createdPaths),
+    updatedPaths: normalizeImportRunEntries(record.updatedPaths),
     ...(rolledBackAt ? { rolledBackAt } : {}),
   };
 }
@@ -214,6 +226,10 @@ function normalizePathRecord(raw: unknown): MemoryWikiImportRunPathStateRecord |
     typeof record.snapshotPath === "string" && record.snapshotPath.trim()
       ? record.snapshotPath.trim()
       : undefined;
+  const contentHash =
+    typeof record.contentHash === "string" && record.contentHash.trim()
+      ? record.contentHash.trim()
+      : undefined;
   return {
     kind: record.kind,
     vaultRootKey: record.vaultRootKey,
@@ -221,6 +237,7 @@ function normalizePathRecord(raw: unknown): MemoryWikiImportRunPathStateRecord |
     index: Math.max(0, Math.floor(record.index)),
     path: record.path,
     ...(snapshotPath ? { snapshotPath } : {}),
+    ...(contentHash ? { contentHash } : {}),
   };
 }
 
@@ -228,20 +245,19 @@ function composeImportRunRecord(
   meta: MemoryWikiImportRunMetaStateRecord,
   pathRows: MemoryWikiImportRunPathStateRecord[],
 ): ChatGptImportRunRecord {
+  const toEntry = (row: MemoryWikiImportRunPathStateRecord): ChatGptImportRunEntry => ({
+    path: row.path,
+    ...(row.snapshotPath ? { snapshotPath: row.snapshotPath } : {}),
+    ...(row.contentHash ? { contentHash: row.contentHash } : {}),
+  });
   const createdPaths = pathRows
     .filter((row) => row.kind === "created-path")
     .toSorted((left, right) => left.index - right.index)
-    .map((row) => row.path);
+    .map(toEntry);
   const updatedPaths = pathRows
     .filter((row) => row.kind === "updated-path")
     .toSorted((left, right) => left.index - right.index)
-    .map((row) => {
-      const entry: ChatGptImportRunEntry = { path: row.path };
-      if (row.snapshotPath) {
-        entry.snapshotPath = row.snapshotPath;
-      }
-      return entry;
-    });
+    .map(toEntry);
   return {
     version: 1,
     runId: meta.runId,
@@ -286,12 +302,13 @@ function toPathRecords(
 ): MemoryWikiImportRunPathStateRecord[] {
   return [
     ...record.createdPaths.map(
-      (entryPath, index): MemoryWikiImportRunPathStateRecord => ({
+      (entry, index): MemoryWikiImportRunPathStateRecord => ({
         kind: "created-path",
         vaultRootKey,
         runId: record.runId,
         index,
-        path: entryPath,
+        path: entry.path,
+        ...(entry.contentHash ? { contentHash: entry.contentHash } : {}),
       }),
     ),
     ...record.updatedPaths.map(
@@ -302,6 +319,7 @@ function toPathRecords(
         index,
         path: entry.path,
         ...(entry.snapshotPath ? { snapshotPath: entry.snapshotPath } : {}),
+        ...(entry.contentHash ? { contentHash: entry.contentHash } : {}),
       }),
     ),
   ];

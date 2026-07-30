@@ -36,7 +36,7 @@ describe("memory-wiki import runs", () => {
       createdCount: 1,
       updatedCount: 0,
       skippedCount: 0,
-      createdPaths: ["sources/old.md"],
+      createdPaths: [{ path: "sources/old.md" }],
       updatedPaths: [],
       rolledBackAt: "2026-04-09T11:00:00.000Z",
     });
@@ -51,7 +51,7 @@ describe("memory-wiki import runs", () => {
       createdCount: 1,
       updatedCount: 1,
       skippedCount: 0,
-      createdPaths: ["sources/new.md"],
+      createdPaths: [{ path: "sources/new.md" }],
       updatedPaths: [{ path: "sources/current.md", snapshotPath: "snapshots/current.md" }],
     });
 

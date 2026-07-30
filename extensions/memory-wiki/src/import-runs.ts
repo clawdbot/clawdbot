@@ -33,13 +33,19 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-function asStringArray(value: unknown): string[] {
+function asImportRunPagePaths(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.filter(
-    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-  );
+  return value
+    .map((entry) => {
+      if (typeof entry === "string") {
+        return entry.trim();
+      }
+      const record = asRecord(entry);
+      return typeof record?.path === "string" ? record.path.trim() : "";
+    })
+    .filter((entry) => entry.length > 0);
 }
 
 function normalizeImportRunSummary(raw: unknown): MemoryWikiImportRunSummary | null {
@@ -56,13 +62,8 @@ function normalizeImportRunSummary(raw: unknown): MemoryWikiImportRunSummary | n
     return null;
   }
 
-  const createdPaths = asStringArray(record.createdPaths);
-  const updatedPaths = Array.isArray(record.updatedPaths)
-    ? record.updatedPaths
-        .map((entry) => asRecord(entry))
-        .map((entry) => (typeof entry?.path === "string" ? entry.path.trim() : ""))
-        .filter((entry): entry is string => entry.length > 0)
-    : [];
+  const createdPaths = asImportRunPagePaths(record.createdPaths);
+  const updatedPaths = asImportRunPagePaths(record.updatedPaths);
   const pagePaths = uniqueStrings([...createdPaths, ...updatedPaths]);
   const conversationCount =
     typeof record.conversationCount === "number" && Number.isFinite(record.conversationCount)

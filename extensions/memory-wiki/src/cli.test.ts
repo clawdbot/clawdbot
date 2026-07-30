@@ -774,13 +774,97 @@ cli note
 
     const rollback = JSON.parse(
       await runRegisteredWikiCommand(config, ["chatgpt", "rollback", applied.runId, "--json"]),
-    ) as { alreadyRolledBack: boolean };
+    ) as { alreadyRolledBack: boolean; preservedPaths: unknown[] };
     expect(rollback.alreadyRolledBack).toBe(false);
+    expect(rollback.preservedPaths).toStrictEqual([]);
     await expect(
       fs
         .readdir(path.join(rootDir, "sources"))
         .then((entries) => entries.filter((entry) => entry !== "index.md")),
     ).resolves.toStrictEqual([]);
+  });
+
+  it("preserves user edits made after import when rolling back a created page", async () => {
+    const { rootDir, config } = await createCliVault({ initialize: true });
+    const exportDir = await createChatGptExport(rootDir);
+    const applied = JSON.parse(
+      await runRegisteredWikiCommand(config, [
+        "chatgpt",
+        "import",
+        "--export",
+        exportDir,
+        "--json",
+      ]),
+    ) as { runId?: string };
+    const runId = expectDefined(applied.runId, "ChatGPT import runId");
+    const sourceFiles = (await fs.readdir(path.join(rootDir, "sources"))).filter(
+      (entry) => entry !== "index.md",
+    );
+    const sourceFile = expectDefined(sourceFiles[0], "imported ChatGPT source file");
+    const pagePath = path.join(rootDir, "sources", sourceFile);
+    const edited = `${await fs.readFile(pagePath, "utf8")}\nUser note added after import.\n`;
+    await fs.writeFile(pagePath, edited, "utf8");
+
+    const rollback = JSON.parse(
+      await runRegisteredWikiCommand(config, ["chatgpt", "rollback", runId, "--json"]),
+    ) as { preservedPaths: Array<{ path: string; recoveryPath: string }> };
+
+    await expect(fs.stat(pagePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(rollback.preservedPaths).toHaveLength(1);
+    const preserved = expectDefined(rollback.preservedPaths[0], "preserved rollback page");
+    expect(preserved.path).toBe(`sources/${sourceFile}`);
+    await expect(fs.readFile(path.join(rootDir, preserved.recoveryPath), "utf8")).resolves.toBe(
+      edited,
+    );
+  });
+
+  it("preserves user edits made after a re-import when rolling back an updated page", async () => {
+    const { rootDir, config } = await createCliVault({ initialize: true });
+    const exportDir = await createChatGptExport(rootDir);
+    await runRegisteredWikiCommand(config, ["chatgpt", "import", "--export", exportDir, "--json"]);
+    const sourceFiles = (await fs.readdir(path.join(rootDir, "sources"))).filter(
+      (entry) => entry !== "index.md",
+    );
+    const sourceFile = expectDefined(sourceFiles[0], "imported ChatGPT source file");
+    const pagePath = path.join(rootDir, "sources", sourceFile);
+    const firstImportContent = await fs.readFile(pagePath, "utf8");
+
+    const conversationsPath = path.join(exportDir, "conversations.json");
+    const conversationsText = await fs.readFile(conversationsPath, "utf8");
+    await fs.writeFile(
+      conversationsPath,
+      conversationsText.replace(
+        "Noted. I will keep travel options close to the airport.",
+        "Noted. I will keep hotel options within a short ride of the airport.",
+      ),
+      "utf8",
+    );
+    const secondApplied = JSON.parse(
+      await runRegisteredWikiCommand(config, [
+        "chatgpt",
+        "import",
+        "--export",
+        exportDir,
+        "--json",
+      ]),
+    ) as { runId?: string; updatedCount: number };
+    expect(secondApplied.updatedCount).toBe(1);
+    const secondRunId = expectDefined(secondApplied.runId, "second ChatGPT import runId");
+    const edited = `${await fs.readFile(pagePath, "utf8")}\nUser note added after re-import.\n`;
+    await fs.writeFile(pagePath, edited, "utf8");
+
+    const rollback = JSON.parse(
+      await runRegisteredWikiCommand(config, ["chatgpt", "rollback", secondRunId, "--json"]),
+    ) as { restoredCount: number; preservedPaths: Array<{ path: string; recoveryPath: string }> };
+
+    expect(rollback.restoredCount).toBe(1);
+    await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(firstImportContent);
+    expect(rollback.preservedPaths).toHaveLength(1);
+    const preserved = expectDefined(rollback.preservedPaths[0], "preserved rollback page");
+    expect(preserved.path).toBe(`sources/${sourceFile}`);
+    await expect(fs.readFile(path.join(rootDir, preserved.recoveryPath), "utf8")).resolves.toBe(
+      edited,
+    );
   });
 
   it("imports ChatGPT exports with out-of-range Unix timestamps", async () => {
