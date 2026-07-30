@@ -11,11 +11,15 @@ describe("splitMediaFromOutput", () => {
       mediaUrls?: string[];
       text?: string;
       audioAsVoice?: boolean;
+      segments?: ReturnType<typeof splitMediaFromOutput>["segments"];
     },
     options?: SplitMediaFromOutputOptions,
   ) {
     const result = splitMediaFromOutput(input, options);
     expect(result.text).toBe(expected.text ?? "");
+    if ("segments" in expected) {
+      expect(result.segments).toEqual(expected.segments);
+    }
     if ("audioAsVoice" in expected) {
       expect(result.audioAsVoice).toBe(expected.audioAsVoice);
     } else {
@@ -397,6 +401,120 @@ describe("splitMediaFromOutput", () => {
         mediaUrls: [
           "https://img.shields.io/badge/status-passing-green",
           "https://example.com/photo.png",
+        ],
+      },
+      extractMarkdownImages,
+    );
+  });
+
+  it("preserves code indentation and paragraph breaks around media directives", () => {
+    const input = [
+      "Here is the config you asked for.",
+      "",
+      "```yaml",
+      "server:",
+      "  host: 0.0.0.0",
+      "  ports:",
+      "    - 80",
+      "    - 443",
+      "```",
+      "",
+      "MEDIA:https://example.com/chart.png",
+    ].join("\n");
+
+    expectParsedMediaOutputCase(input, {
+      text: [
+        "Here is the config you asked for.",
+        "",
+        "```yaml",
+        "server:",
+        "  host: 0.0.0.0",
+        "  ports:",
+        "    - 80",
+        "    - 443",
+        "```",
+      ].join("\n"),
+      mediaUrls: ["https://example.com/chart.png"],
+      segments: [
+        {
+          type: "text",
+          text: [
+            "Here is the config you asked for.",
+            "",
+            "```yaml",
+            "server:",
+            "  host: 0.0.0.0",
+            "  ports:",
+            "    - 80",
+            "    - 443",
+            "```",
+          ].join("\n"),
+        },
+        { type: "media", url: "https://example.com/chart.png" },
+      ],
+    });
+  });
+
+  it("preserves code indentation and paragraph breaks around extracted markdown images", () => {
+    const input = [
+      "Rendered the chart, and here is the code behind it.",
+      "",
+      "```python",
+      "def summarize(rows):",
+      "    totals = {}",
+      "    for row in rows:",
+      "        key = row['bucket']",
+      "        if key not in totals:",
+      "            totals[key] = 0",
+      "        totals[key] += row['value']",
+      "    return totals",
+      "```",
+      "",
+      "![chart](https://example.com/chart.png)",
+      "",
+      "Let me know if you want it grouped differently.",
+    ].join("\n");
+
+    expectParsedMediaOutputCase(
+      input,
+      {
+        text: [
+          "Rendered the chart, and here is the code behind it.",
+          "",
+          "```python",
+          "def summarize(rows):",
+          "    totals = {}",
+          "    for row in rows:",
+          "        key = row['bucket']",
+          "        if key not in totals:",
+          "            totals[key] = 0",
+          "        totals[key] += row['value']",
+          "    return totals",
+          "```",
+          "",
+          "Let me know if you want it grouped differently.",
+        ].join("\n"),
+        mediaUrls: ["https://example.com/chart.png"],
+        segments: [
+          {
+            type: "text",
+            text: [
+              "Rendered the chart, and here is the code behind it.",
+              "",
+              "```python",
+              "def summarize(rows):",
+              "    totals = {}",
+              "    for row in rows:",
+              "        key = row['bucket']",
+              "        if key not in totals:",
+              "            totals[key] = 0",
+              "        totals[key] += row['value']",
+              "    return totals",
+              "```",
+            ].join("\n"),
+          },
+          { type: "media", url: "https://example.com/chart.png" },
+          { type: "text", text: "Let me know if you want it grouped differently." },
         ],
       },
       extractMarkdownImages,

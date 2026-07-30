@@ -12,7 +12,16 @@ import {
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
+import { normalizeDirectiveWhitespace } from "../utils/directive-whitespace.js";
 import { parseAudioTag } from "./audio-tags.js";
+
+function normalizeMediaVisibleWhitespace(text: string): string {
+  const normalized = normalizeDirectiveWhitespace(text);
+  const withoutLeadingBlankLines = normalized.replace(/^\n+/, "");
+  return /^(?: {4}|\t)/.test(withoutLeadingBlankLines)
+    ? withoutLeadingBlankLines
+    : normalized.trimStart();
+}
 
 /** Captures legacy MEDIA: attachment directives from model/tool output. */
 const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
@@ -521,6 +530,27 @@ export function splitMediaFromOutput(
     }
   };
 
+  const normalizeTextSegments = () => {
+    const normalizedSegments: ParsedMediaOutputSegment[] = [];
+    for (const segment of segments) {
+      if (segment.type === "media") {
+        normalizedSegments.push(segment);
+        continue;
+      }
+      const text = normalizeMediaVisibleWhitespace(segment.text);
+      if (!text.trim()) {
+        continue;
+      }
+      const last = normalizedSegments[normalizedSegments.length - 1];
+      if (last?.type === "text") {
+        last.text = normalizeMediaVisibleWhitespace(`${last.text}\n${text}`);
+        continue;
+      }
+      normalizedSegments.push({ type: "text", text });
+    }
+    return normalizedSegments;
+  };
+
   // Parse fenced code blocks to avoid extracting MEDIA tokens from inside them
   const hasFenceMarkers = mayContainFenceMarkers(trimmedRaw);
   const fenceSpans = hasFenceMarkers ? parseFenceSpans(trimmedRaw) : [];
@@ -685,10 +715,14 @@ export function splitMediaFromOutput(
     lineOffset += line.length + 1; // +1 for newline
   }
 
-  const visibleText = keptLines.join("\n").replace(/^(?:[ \t]*\n)+/, "");
-  const audioTagResult = parseAudioTag(visibleText);
-  const cleanedText = audioTagResult.text.trimEnd();
+  let cleanedText = normalizeMediaVisibleWhitespace(keptLines.join("\n"));
+
+  // Detect and strip [[audio_as_voice]] tag
+  const audioTagResult = parseAudioTag(cleanedText);
   const hasAudioAsVoice = audioTagResult.audioAsVoice;
+  if (audioTagResult.hadTag) {
+    cleanedText = normalizeMediaVisibleWhitespace(audioTagResult.text);
+  }
 
   if (media.length === 0) {
     const parsedText = foundMediaToken || hasAudioAsVoice ? cleanedText : trimmedRaw;
@@ -705,7 +739,7 @@ export function splitMediaFromOutput(
   return {
     text: cleanedText,
     mediaUrls: media,
-    segments: segments.length > 0 ? segments : [{ type: "text", text: cleanedText }],
+    segments: normalizeTextSegments(),
     ...(hasAudioAsVoice ? { audioAsVoice: true } : {}),
   };
 }
