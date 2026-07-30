@@ -64,10 +64,10 @@ function isAlwaysCredentialHeaderName(value: string): boolean {
  * Returns whether an operator-configured header name is credential material that
  * must not be forwarded to a model-chosen host.
  *
- * Credential suffixes cover vendor spellings such as Fastly-Key, X-Auth-Key,
- * X-RapidAPI-Key, X-Akamai-ACS-Auth-Sign, and X-Plivo-Signature-V2. The
- * narrow exception list preserves established metadata headers without
- * reopening loose substring matching as a refusal rule.
+ * Credential shapes cover vendor spellings such as Fastly-Key, X-Auth-Key,
+ * X-RapidAPI-Key, X-Akamai-ACS-Auth-Sign, and X-Plivo-Signature-V2. The narrow
+ * exception list preserves established metadata headers without reopening
+ * loose substring matching as a refusal rule.
  */
 export function isOutboundCredentialHeaderName(value: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(value);
@@ -90,7 +90,7 @@ export function isLikelySensitiveModelProviderHeaderName(value: string): boolean
   if (!normalized) {
     return false;
   }
-  if (isAlwaysCredentialHeaderName(normalized)) {
+  if (isOutboundCredentialHeaderName(normalized)) {
     return true;
   }
   return SENSITIVE_MODEL_PROVIDER_HEADER_NAME_FRAGMENTS.some((fragment) =>
