@@ -1,11 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { CONTROL_UI_LOCALE_ENTRIES } from "../../../../scripts/lib/control-ui-i18n-config.ts";
+import { CONTROL_UI_LOCALE_ENTRIES } from "../../../scripts/lib/control-ui-i18n-config.ts";
 import {
   flattenTranslations,
   type TranslationMap,
-} from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
-import { en } from "./en.ts";
+} from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
+import { en } from "./locales/en.ts";
 
 // Feature-name keys renamed by RFC 0026. Schedule-syntax strings ("Cron
 // schedule {expr}", cron expression help) intentionally keep the word cron
@@ -48,7 +48,7 @@ describe("automations rename locale catalogs", () => {
       if (entry.locale === "en") {
         continue;
       }
-      const mod = (await import(`./${entry.fileName.replace(/\.ts$/, "")}.ts`)) as Record<
+      const mod = (await import(`./locales/${entry.fileName.replace(/\.ts$/, "")}.ts`)) as Record<
         string,
         TranslationMap
       >;
