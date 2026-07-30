@@ -1285,53 +1285,29 @@ export function formatChannelProgressDraftText(params: {
   const statusHeadline = narration ? formatLine(narration) : "";
   const bullet = params.bullet ?? "•";
   const toolLineBudget = planLines.length > 0 ? Math.max(0, maxLines - planLines.length) : maxLines;
-  const visibleToolLines =
-    planLines.length === 0
-      ? params.lines
-      : toolLineBudget === 0
-        ? []
-        : params.lines.slice(-toolLineBudget);
-  const rawLines: Array<string | ChannelProgressDraftLine | { draftLabel: string }> = resolvedLabel
-    ? [{ draftLabel: resolvedLabel }, ...visibleToolLines]
-    : visibleToolLines;
-  const rollingLineLimit =
-    planLines.length > 0 ? toolLineBudget + (resolvedLabel ? 1 : 0) : maxLines;
-  const lines = rawLines
+  const renderedToolLines = params.lines
     .map((line) => {
-      const isLabelLine = typeof line === "object" && line !== null && "draftLabel" in line;
-      const prefix =
-        !isLabelLine && typeof line === "object" && line !== null ? line.prefix !== false : true;
-      const rawText = isLabelLine
-        ? line.draftLabel
-        : typeof line === "string"
-          ? line
-          : getProgressDraftLineText(line);
-      const text = compactChannelProgressDraftLine(rawText, maxLineChars);
-      return text ? { text, isLabelLine, prefix } : undefined;
+      const text = compactChannelProgressDraftLine(
+        typeof line === "string" ? line : getProgressDraftLineText(line),
+        maxLineChars,
+      );
+      if (!text) {
+        return undefined;
+      }
+      const prefix = typeof line === "object" && line !== null ? line.prefix !== false : true;
+      const formatted = formatLine(text);
+      return prefix && shouldPrefixProgressLine(text) ? `${bullet} ${formatted}` : formatted;
     })
-    .filter((line): line is { text: string; isLabelLine: boolean; prefix: boolean } =>
-      Boolean(line),
-    )
-    .slice(-rollingLineLimit)
-    .map(({ text, isLabelLine, prefix }) => {
-      const formatted = isLabelLine ? text : formatLine(text);
-      return {
-        text:
-          !isLabelLine && prefix && shouldPrefixProgressLine(text)
-            ? `${bullet} ${formatted}`
-            : formatted,
-        isLabelLine,
-      };
-    });
-  const renderedLines = lines.map((line) => line.text).filter((line) => Boolean(line));
-  if (planLines.length > 0) {
-    renderedLines.push(...planLines);
-  }
-  // The label keeps its own block above the headline, and stays inside the
-  // rolling list so it still scrolls away once enough work lines accumulate.
-  const hasLabelBlock = lines[0]?.isLabelLine === true;
-  const labelBlock = hasLabelBlock ? renderedLines[0] : undefined;
-  const rollingBlock = (hasLabelBlock ? renderedLines.slice(1) : renderedLines).join("\n");
+    .filter((line): line is string => Boolean(line));
+  // Budget 0 is handled before the slice: slice(-0) returns every line.
+  const rollingLines = toolLineBudget === 0 ? [] : renderedToolLines.slice(-toolLineBudget);
+  // The label is a block, not a line: it yields its slot once real work lines
+  // fill the window, which is why a busy draft shows work instead of a title.
+  const labelBlock =
+    resolvedLabel && (planLines.length > 0 || rollingLines.length < maxLines)
+      ? compactChannelProgressDraftLine(resolvedLabel, maxLineChars)
+      : undefined;
+  const rollingBlock = [...rollingLines, ...planLines].join("\n");
   return [labelBlock, statusHeadline, rollingBlock].filter(Boolean).join("\n\n");
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -219,6 +219,21 @@ describe("progress narration", () => {
     ).toBe("• tool three\n▸ Active\n▢ Next");
   });
 
+  it("drops every tool line when the checklist consumes the whole budget", () => {
+    expect(
+      formatChannelProgressDraftText({
+        entry: {
+          streaming: { mode: "progress", progress: { label: false, maxLines: 2 } },
+        },
+        lines: ["tool one", "tool two"],
+        plan: [
+          { step: "Active", status: "in_progress" },
+          { step: "Next", status: "pending" },
+        ],
+      }),
+    ).toBe("▸ Active\n▢ Next");
+  });
+
   it("omits the implicit progress label when narration is available", () => {
     const text = formatChannelProgressDraftText({
       entry: { streaming: { mode: "progress" } },
