@@ -2084,7 +2084,7 @@ class NodeRuntime private constructor(
         },
         onForceCloseWatchChannel = { owner ->
           scope.launch {
-            (appContext as? NodeApp)?.wearRealtimeChannels?.close(owner, ::stopWearRealtimeTalk)
+            (appContext as? NodeApp)?.wearRealtimeChannels?.close(owner)
           }
         },
       )

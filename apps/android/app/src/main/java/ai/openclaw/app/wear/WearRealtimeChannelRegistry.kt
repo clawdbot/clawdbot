@@ -11,6 +11,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -21,6 +22,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.InputStream
 import java.io.OutputStream
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -79,7 +81,35 @@ private class GoogleWearRealtimeChannelTransport(
 internal class WearRealtimeChannelRegistry(
   private val scope: CoroutineScope,
   private val transport: WearRealtimeChannelTransport,
+  private val connectionReadyTimeoutMillis: Long = DEFAULT_CONNECTION_READY_TIMEOUT_MILLIS,
+  private val pendingConnectionTimeoutMillis: Long = DEFAULT_PENDING_CONNECTION_TIMEOUT_MILLIS,
+  private val retireCallbackTimeoutMillis: Long = DEFAULT_RETIRE_CALLBACK_TIMEOUT_MILLIS,
 ) {
+  private data class ChannelKey(
+    val nodeId: String,
+    val path: String,
+  )
+
+  private data class ChannelPromotion(
+    val connection: Connection,
+    val displaced: Connection?,
+    val claimSequence: Long,
+  )
+
+  private sealed interface ChannelClaimSelection {
+    data class Claimed(
+      val claim: WearRealtimeChannelClaim,
+    ) : ChannelClaimSelection
+
+    data class Promote(
+      val promotion: ChannelPromotion,
+    ) : ChannelClaimSelection
+
+    data object Wait : ChannelClaimSelection
+
+    data object Superseded : ChannelClaimSelection
+  }
+
   constructor(context: Context, scope: CoroutineScope) : this(
     scope,
     GoogleWearRealtimeChannelTransport(context),
@@ -87,7 +117,14 @@ internal class WearRealtimeChannelRegistry(
 
   private val lifecycleMutex = Mutex()
   private val channelGeneration = AtomicLong()
+  private val claimSequence = AtomicLong()
   private val connections = mutableMapOf<String, Connection>()
+  private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+  // Channel receipt is not attempt order. Stage exact paths until a start claim reserves promotion.
+  private val pendingConnections = mutableMapOf<ChannelKey, Connection>()
+  private val promotingConnections = mutableMapOf<ChannelKey, Connection>()
+  private val latestClaimSequences = mutableMapOf<String, Long>()
 
   fun accept(
     channel: ChannelClient.Channel,
@@ -101,33 +138,61 @@ internal class WearRealtimeChannelRegistry(
     val generation = channelGeneration.incrementAndGet()
     scope.launch(Dispatchers.IO) {
       val resources = transport.open(channel) ?: return@launch
-      val connection = Connection(channel, resources, generation)
+      val connection = Connection(channel, resources, generation, stopTalk)
       var published = false
-      val displaced =
+      var activated = false
+      var displacedActive: Connection? = null
+      val displacedPending =
         lifecycleMutex.withLock {
-          val current = connections[channel.nodeId]
-          if (current != null && current.generation > generation) {
-            null
+          val active = connections[channel.nodeId]
+          val pending = pendingConnections[connection.key]
+          if (
+            active?.generation?.let { it > generation } == true ||
+            pending?.generation?.let { it > generation } == true
+          ) {
+            return@withLock null
+          }
+          published = true
+          connection.ready = true
+          if (
+            active?.takeIf { it.ready && !it.retirementStarted.get() }?.channel?.path == channel.path
+          ) {
+            // A same-attempt reconnect inherits the live owner before the old reader reports EOF.
+            active.ready = false
+            connection.owner = active.owner
+            connection.claimSequence = active.claimSequence
+            active.owner = null
+            connections[channel.nodeId] = connection
+            displacedActive = active
+            activated = true
+            pendingConnections.remove(connection.key)
           } else {
-            published = true
-            connection.predecessor = current
-            connections.put(channel.nodeId, connection)
+            pendingConnections.put(connection.key, connection)
           }
         }
       if (!published) {
-        connection.retire(transport, stopTalk)
+        connection.retire(transport)
         return@launch
       }
-      displaced?.retire(transport, stopTalk)
-      connection.predecessor = null
-      lifecycleMutex.withLock {
-        if (connections[channel.nodeId] === connection) connection.ready = true
+      displacedPending?.retire(transport)
+      displacedActive?.retire(transport)
+      if (activated) {
+        connection.activation.complete(true)
+      } else {
+        schedulePendingExpiry(connection)
       }
       try {
-        while (isCurrent(connection)) {
+        // The Watch starts capture after the start RPC; do not consume its PCM before that claim owns this path.
+        if (!connection.activation.await()) return@launch
+        while (isKnown(connection)) {
           val frame = WearRealtimeAudioFraming.read(resources.input) ?: break
           if (frame.type != WearRealtimeAudioFrameType.INPUT_PCM) break
-          val owner = lifecycleMutex.withLock { connection.owner.takeIf { connections[channel.nodeId] === connection } }
+          val owner =
+            lifecycleMutex.withLock {
+              connection.owner.takeIf {
+                connection.ready && connections[channel.nodeId] === connection
+              }
+            }
           if (owner != null) appendAudio(owner, frame.payload)
         }
       } catch (err: CancellationException) {
@@ -135,7 +200,7 @@ internal class WearRealtimeChannelRegistry(
       } catch (_: Throwable) {
         // A malformed frame or transport failure owns this channel only.
       } finally {
-        retireCurrentConnection(connection, stopTalk)
+        retireKnownConnection(connection)
       }
     }
   }
@@ -143,28 +208,138 @@ internal class WearRealtimeChannelRegistry(
   suspend fun claim(
     nodeId: String,
     attemptId: String,
-  ): WearRealtimeChannelClaim? =
-    withTimeoutOrNull(CONNECTION_READY_TIMEOUT_MILLIS) {
-      val expectedPath = WearProtocol.realtimeAudioChannelPath(attemptId)
-      while (true) {
-        lifecycleMutex.withLock {
-          connections[nodeId]?.let { connection ->
-            if (!connection.ready || connection.channel.path != expectedPath) return@withLock
-            val current = connection.owner
-            if (current == null) {
-              val owner = WearRealtimeAttemptOwner(nodeId, attemptId, connection.generation)
-              connection.owner = owner
-              return@withTimeoutOrNull WearRealtimeChannelClaim(owner, newlyAcquired = true)
-            }
-            if (current.attemptId == attemptId) {
-              return@withTimeoutOrNull WearRealtimeChannelClaim(current, newlyAcquired = false)
-            }
+  ): WearRealtimeChannelClaim? {
+    val expectedPath = WearProtocol.realtimeAudioChannelPath(attemptId)
+    val key = ChannelKey(nodeId, expectedPath)
+    val sequence = claimSequence.incrementAndGet()
+    lifecycleMutex.withLock {
+      latestClaimSequences[nodeId] = sequence
+    }
+    val deadlineNanos =
+      System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(connectionReadyTimeoutMillis)
+    while (true) {
+      currentCoroutineContext().ensureActive()
+      when (val selection = reserveClaim(nodeId, attemptId, expectedPath, key, sequence)) {
+        is ChannelClaimSelection.Claimed -> return selection.claim
+        is ChannelClaimSelection.Promote ->
+          return completePromotion(nodeId, attemptId, key, selection.promotion)
+        ChannelClaimSelection.Superseded -> return null
+        ChannelClaimSelection.Wait -> {
+          val remainingNanos = deadlineNanos - System.nanoTime()
+          if (remainingNanos <= 0L) return null
+          val waitMillis =
+            TimeUnit.NANOSECONDS
+              .toMillis(remainingNanos)
+              .coerceIn(1L, CONNECTION_POLL_MILLIS)
+          delay(waitMillis)
+        }
+      }
+    }
+  }
+
+  private suspend fun reserveClaim(
+    nodeId: String,
+    attemptId: String,
+    expectedPath: String,
+    key: ChannelKey,
+    sequence: Long,
+  ): ChannelClaimSelection =
+    lifecycleMutex.withLock {
+      if (latestClaimSequences[nodeId] != sequence) return@withLock ChannelClaimSelection.Superseded
+      if (promotingConnections.keys.any { promotingKey -> promotingKey.nodeId == nodeId }) {
+        return@withLock ChannelClaimSelection.Wait
+      }
+      connections[nodeId]?.let { active ->
+        if (active.claimSequence > sequence) return@withLock ChannelClaimSelection.Superseded
+        val current = active.owner
+        if (active.ready && active.channel.path == expectedPath) {
+          if (current?.attemptId == attemptId) {
+            active.claimSequence = sequence
+            return@withLock ChannelClaimSelection.Claimed(
+              WearRealtimeChannelClaim(current, newlyAcquired = false),
+            )
+          }
+          if (current == null) {
+            val owner = WearRealtimeAttemptOwner(nodeId, attemptId, active.generation)
+            active.owner = owner
+            active.claimSequence = sequence
+            return@withLock ChannelClaimSelection.Claimed(
+              WearRealtimeChannelClaim(owner, newlyAcquired = true),
+            )
           }
         }
-        delay(CONNECTION_POLL_MILLIS)
       }
-      null
+      val connection = pendingConnections.remove(key) ?: return@withLock ChannelClaimSelection.Wait
+      val displaced = connections[nodeId]
+      // Reservation is the ordering boundary. Later claims wait for this bounded handoff, then may replace it.
+      connection.ready = false
+      displaced?.ready = false
+      promotingConnections[key] = connection
+      ChannelClaimSelection.Promote(
+        ChannelPromotion(
+          connection = connection,
+          displaced = displaced,
+          claimSequence = sequence,
+        ),
+      )
     }
+
+  private suspend fun completePromotion(
+    nodeId: String,
+    attemptId: String,
+    key: ChannelKey,
+    promotion: ChannelPromotion,
+  ): WearRealtimeChannelClaim? {
+    var connection = promotion.connection
+    var promoted = false
+    try {
+      // Discovery already succeeded, so finish this bounded handoff even if the polling deadline has elapsed.
+      promotion.displaced?.let { retireCurrentConnection(it) }
+      while (true) {
+        currentCoroutineContext().ensureActive()
+        var superseded: Connection? = null
+        var owner: WearRealtimeAttemptOwner? = null
+        val valid =
+          lifecycleMutex.withLock {
+            if (promotingConnections[key] !== connection || connection.retirementStarted.get()) {
+              return@withLock false
+            }
+            val replacement =
+              pendingConnections[key]?.takeIf {
+                it.generation > connection.generation && !it.retirementStarted.get()
+              }
+            if (replacement != null) {
+              pendingConnections.remove(key, replacement)
+              replacement.ready = false
+              promotingConnections[key] = replacement
+              superseded = connection
+              connection = replacement
+            } else {
+              promotingConnections.remove(key, connection)
+              owner = WearRealtimeAttemptOwner(nodeId, attemptId, connection.generation)
+              connection.owner = owner
+              connection.claimSequence = promotion.claimSequence
+              connection.ready = true
+              connections[nodeId] = connection
+              promoted = true
+            }
+            true
+          }
+        if (!valid) return null
+        val retired = superseded
+        if (retired != null) {
+          // A reconnect can arrive while owner cleanup runs. Publish the newest exact-path channel.
+          retired.retire(transport)
+          continue
+        }
+        val committedOwner = checkNotNull(owner)
+        connection.activation.complete(true)
+        return WearRealtimeChannelClaim(committedOwner, newlyAcquired = true)
+      }
+    } finally {
+      if (!promoted) retirePromotingConnection(connection)
+    }
+  }
 
   suspend fun send(
     owner: WearRealtimeAttemptOwner,
@@ -195,54 +370,106 @@ internal class WearRealtimeChannelRegistry(
       } == true
     }
 
-  suspend fun close(
-    owner: WearRealtimeAttemptOwner,
-    stopTalk: suspend (owner: WearRealtimeAttemptOwner) -> Unit,
-  ) {
+  suspend fun close(owner: WearRealtimeAttemptOwner) {
     val connection =
       lifecycleMutex.withLock {
         connections[owner.nodeId]
           ?.takeIf { it.owner == owner }
           ?.also { it.ready = false }
       }
-    connection?.let { retireCurrentConnection(it, stopTalk) }
+    connection?.let { retireCurrentConnection(it) }
   }
 
-  private suspend fun isCurrent(item: Connection): Boolean = lifecycleMutex.withLock { isCurrentLocked(item) }
+  private fun schedulePendingExpiry(connection: Connection) {
+    scope.launch {
+      delay(pendingConnectionTimeoutMillis)
+      val expired =
+        lifecycleMutex.withLock {
+          pendingConnections.remove(connection.key, connection)
+        }
+      if (expired) connection.retire(transport)
+    }
+  }
+
+  private suspend fun isKnown(item: Connection): Boolean = lifecycleMutex.withLock { isKnownLocked(item) }
+
+  private fun isKnownLocked(item: Connection): Boolean =
+    connections[item.channel.nodeId] === item ||
+      pendingConnections[item.key] === item ||
+      promotingConnections[item.key] === item
 
   private fun isCurrentLocked(item: Connection): Boolean = connections[item.channel.nodeId] === item
 
-  private suspend fun retireCurrentConnection(
-    connection: Connection,
-    stopTalk: suspend (owner: WearRealtimeAttemptOwner) -> Unit,
-  ) {
-    lifecycleMutex.withLock {
-      if (isCurrentLocked(connection)) connection.ready = false
-    }
-    connection.retire(transport, stopTalk)
-    lifecycleMutex.withLock {
-      if (isCurrentLocked(connection)) connections.remove(connection.channel.nodeId)
+  private suspend fun retireCurrentConnection(connection: Connection) {
+    withContext(NonCancellable) {
+      lifecycleMutex.withLock {
+        if (isCurrentLocked(connection)) connection.ready = false
+      }
+      connection.retire(transport)
+      lifecycleMutex.withLock {
+        if (isCurrentLocked(connection)) connections.remove(connection.channel.nodeId)
+      }
     }
   }
 
-  private suspend fun Connection.retire(
-    transport: WearRealtimeChannelTransport,
-    stopTalk: suspend (owner: WearRealtimeAttemptOwner) -> Unit,
-  ) {
+  private suspend fun retirePromotingConnection(connection: Connection) {
+    withContext(NonCancellable) {
+      lifecycleMutex.withLock {
+        promotingConnections.remove(connection.key, connection)
+      }
+      connection.retire(transport)
+    }
+  }
+
+  private suspend fun retireKnownConnection(connection: Connection) {
+    withContext(NonCancellable) {
+      lifecycleMutex.withLock {
+        if (isCurrentLocked(connection)) connection.ready = false
+        pendingConnections.remove(connection.key, connection)
+        promotingConnections.remove(connection.key, connection)
+      }
+      connection.retire(transport)
+      lifecycleMutex.withLock {
+        if (isCurrentLocked(connection)) connections.remove(connection.channel.nodeId)
+      }
+    }
+  }
+
+  private suspend fun Connection.retire(transport: WearRealtimeChannelTransport) {
     if (retirementStarted.compareAndSet(false, true)) {
       val retiringOwner = owner
       withContext(NonCancellable) {
         try {
-          predecessor?.retire(transport, stopTalk)
-          predecessor = null
-          close(transport)
-          retiringOwner?.let { runCatching { stopTalk(it) } }
+          activation.complete(false)
+          retiringOwner?.let { owner ->
+            val stopJob =
+              cleanupScope.launch {
+                runCatching { stopTalk(owner) }
+              }
+            withTimeoutOrNull(retireCallbackTimeoutMillis) {
+              stopJob.join()
+            }
+          }
+          val closedWithinHandoff =
+            withTimeoutOrNull(retireCallbackTimeoutMillis) {
+              runCatching { close(transport) }.isSuccess
+            } == true
+          if (!closedWithinHandoff) {
+            // Keep transport cleanup alive after the bounded owner handoff returns.
+            cleanupScope.launch {
+              runCatching { close(transport) }
+            }
+          }
         } finally {
           retirementComplete.complete(Unit)
         }
       }
     } else {
-      retirementComplete.await()
+      withContext(NonCancellable) {
+        withTimeoutOrNull(RETIRE_COMPLETION_TIMEOUT_MILLIS) {
+          retirementComplete.await()
+        }
+      }
     }
   }
 
@@ -250,15 +477,19 @@ internal class WearRealtimeChannelRegistry(
     val channel: ChannelClient.Channel,
     val resources: WearRealtimeChannelResources,
     val generation: Long,
+    val stopTalk: suspend (owner: WearRealtimeAttemptOwner) -> Unit,
   ) {
+    val key = ChannelKey(channel.nodeId, channel.path)
     private val writeMutex = Mutex()
-    private val closed = AtomicBoolean()
+    private val closeMutex = Mutex()
+    private var closed = false
     val retirementStarted = AtomicBoolean()
     val retirementComplete = CompletableDeferred<Unit>()
-
-    @Volatile var predecessor: Connection? = null
+    val activation = CompletableDeferred<Boolean>()
 
     @Volatile var owner: WearRealtimeAttemptOwner? = null
+
+    @Volatile var claimSequence: Long = 0L
 
     @Volatile var ready: Boolean = false
 
@@ -274,14 +505,20 @@ internal class WearRealtimeChannelRegistry(
     }
 
     suspend fun close(transport: WearRealtimeChannelTransport) {
-      if (!closed.compareAndSet(false, true)) return
-      transport.close(channel, resources)
+      closeMutex.withLock {
+        if (closed) return
+        transport.close(channel, resources)
+        closed = true
+      }
     }
   }
 
   private companion object {
     const val CONNECTION_POLL_MILLIS = 25L
-    const val CONNECTION_READY_TIMEOUT_MILLIS = 3_000L
+    const val DEFAULT_CONNECTION_READY_TIMEOUT_MILLIS = 3_000L
+    const val DEFAULT_PENDING_CONNECTION_TIMEOUT_MILLIS = 3_000L
+    const val DEFAULT_RETIRE_CALLBACK_TIMEOUT_MILLIS = 1_000L
+    const val RETIRE_COMPLETION_TIMEOUT_MILLIS = 2_500L
   }
 }
 

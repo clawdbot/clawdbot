@@ -8,7 +8,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -47,13 +49,16 @@ class WearRealtimeChannelRegistryTest {
 
         registry.accept(second, appendAudio = { _, _ -> }, stopTalk = stopTalk)
         transport.awaitOpened(second)
+        assertTrue(registry.isCurrent(firstOwner))
+        assertTrue(synchronized(stoppedOwners) { stoppedOwners.isEmpty() })
+
+        val secondClaim = checkNotNull(registry.claim("watch-a", "attempt-b"))
         withTimeout(2_000L) {
           while (transport.closeCount(first) != 1 || synchronized(stoppedOwners) { stoppedOwners.size } != 1) {
             kotlinx.coroutines.yield()
           }
         }
 
-        val secondClaim = checkNotNull(registry.claim("watch-a", "attempt-b"))
         val secondOwner = secondClaim.owner
         assertTrue(secondClaim.newlyAcquired)
         assertEquals(listOf(firstOwner), synchronized(stoppedOwners) { stoppedOwners.toList() })
@@ -74,7 +79,7 @@ class WearRealtimeChannelRegistryTest {
         assertTrue(retryClaim.newlyAcquired)
         assertEquals(secondOwner.channelGeneration, retryOwner.channelGeneration)
 
-        registry.close(retryOwner, stopTalk)
+        registry.close(retryOwner)
         assertEquals(listOf(firstOwner, retryOwner), synchronized(stoppedOwners) { stoppedOwners.toList() })
       } finally {
         scope.cancel()
@@ -127,9 +132,10 @@ class WearRealtimeChannelRegistryTest {
 
         registry.accept(second, appendAudio = { _, _ -> }, stopTalk = stopTalk)
         transport.awaitOpened(second)
+        val secondClaim = async { registry.claim("watch-a", "attempt-b") }
         withTimeout(1_000L) { closeStarted.await() }
 
-        val secondOwner = withTimeout(1_000L) { registry.claim("watch-a", "attempt-b") }?.owner
+        val secondOwner = withTimeout(1_000L) { secondClaim.await() }?.owner
         assertNotNull(secondOwner)
         assertFalse(releaseClose.isCompleted)
         assertEquals(WearRealtimeTalkStatus.OFF, controller.snapshot.value.status)
@@ -149,7 +155,7 @@ class WearRealtimeChannelRegistryTest {
 
         releaseClose.complete(Unit)
         withTimeout(1_000L) { closeFinished.await() }
-        registry.close(checkNotNull(secondOwner), stopTalk)
+        registry.close(checkNotNull(secondOwner))
       } finally {
         releaseClose.complete(Unit)
         scope.cancel()
@@ -186,7 +192,7 @@ class WearRealtimeChannelRegistryTest {
 
         releaseStop.complete(Unit)
         val replacementOwner = checkNotNull(withTimeout(1_000L) { replacementClaim.await() }).owner
-        registry.close(replacementOwner, stopTalk)
+        registry.close(replacementOwner)
       } finally {
         releaseStop.complete(Unit)
         scope.cancel()
@@ -216,18 +222,550 @@ class WearRealtimeChannelRegistryTest {
 
         registry.accept(second, appendAudio = { _, _ -> }, stopTalk = stopTalk)
         transport.awaitOpened(second)
-        withTimeout(1_000L) { stopStarted.await() }
         registry.accept(third, appendAudio = { _, _ -> }, stopTalk = stopTalk)
         transport.awaitOpened(third)
         val newestClaim = async { registry.claim("watch-a", "attempt-c") }
+        withTimeout(1_000L) { stopStarted.await() }
         delay(100L)
         assertFalse(newestClaim.isCompleted)
 
         releaseStop.complete(Unit)
         val newestOwner = checkNotNull(withTimeout(1_000L) { newestClaim.await() }).owner
-        registry.close(newestOwner, stopTalk)
+        registry.close(newestOwner)
       } finally {
         releaseStop.complete(Unit)
+        scope.cancel()
+      }
+    }
+
+  @Test
+  fun `delayed unclaimed channel cannot retire the active attempt`() =
+    runBlocking {
+      val scope = kotlinx.coroutines.CoroutineScope(SupervisorJob() + Dispatchers.IO)
+      val transport = FakeChannelTransport()
+      val registry = WearRealtimeChannelRegistry(scope, transport)
+      val stoppedOwners = mutableListOf<WearRealtimeAttemptOwner>()
+      val stopTalk: suspend (WearRealtimeAttemptOwner) -> Unit = { owner ->
+        synchronized(stoppedOwners) { stoppedOwners += owner }
+      }
+      val active = FakeChannel("watch-a", "channel-b", "attempt-b")
+      val delayed = FakeChannel("watch-a", "channel-a", "attempt-a")
+
+      try {
+        registry.accept(active, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(active)
+        val activeClaim = checkNotNull(registry.claim("watch-a", "attempt-b"))
+
+        registry.accept(delayed, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(delayed)
+        delay(100L)
+
+        assertTrue(registry.isCurrent(activeClaim.owner))
+        assertTrue(synchronized(stoppedOwners) { stoppedOwners.isEmpty() })
+        val repeated = checkNotNull(registry.claim("watch-a", "attempt-b"))
+        assertFalse(repeated.newlyAcquired)
+        assertSame(activeClaim.owner, repeated.owner)
+        registry.close(activeClaim.owner)
+      } finally {
+        scope.cancel()
+      }
+    }
+
+  @Test
+  fun `same path reconnect inherits the active attempt owner`() =
+    runBlocking {
+      val scope = kotlinx.coroutines.CoroutineScope(SupervisorJob() + Dispatchers.IO)
+      val transport = FakeChannelTransport()
+      val registry = WearRealtimeChannelRegistry(scope, transport)
+      val stoppedOwners = mutableListOf<WearRealtimeAttemptOwner>()
+      val stopTalk: suspend (WearRealtimeAttemptOwner) -> Unit = { owner ->
+        synchronized(stoppedOwners) { stoppedOwners += owner }
+      }
+      val active = FakeChannel("watch-a", "channel-a", "attempt-a")
+      val reconnect = FakeChannel("watch-a", "channel-a-reconnect", "attempt-a")
+
+      try {
+        registry.accept(active, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(active)
+        val owner = checkNotNull(registry.claim("watch-a", "attempt-a")).owner
+
+        registry.accept(reconnect, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(reconnect)
+        withTimeout(1_000L) {
+          while (transport.closeCount(active) != 1 || !transport.hasStartedReading(reconnect)) yield()
+        }
+
+        val repeated = checkNotNull(registry.claim("watch-a", "attempt-a"))
+        assertFalse(repeated.newlyAcquired)
+        assertSame(owner, repeated.owner)
+        assertTrue(registry.isCurrent(owner))
+        assertTrue(synchronized(stoppedOwners) { stoppedOwners.isEmpty() })
+        registry.close(owner)
+      } finally {
+        scope.cancel()
+      }
+    }
+
+  @Test
+  fun `missing stale claim does not block a valid attempt on the same watch`() =
+    runBlocking {
+      val scope = kotlinx.coroutines.CoroutineScope(SupervisorJob() + Dispatchers.IO)
+      val transport = FakeChannelTransport()
+      val registry = WearRealtimeChannelRegistry(scope, transport)
+      val current = FakeChannel("watch-a", "channel-b", "attempt-b")
+
+      try {
+        registry.accept(current, appendAudio = { _, _ -> }, stopTalk = {})
+        transport.awaitOpened(current)
+        val missingClaim = async { registry.claim("watch-a", "attempt-a") }
+        delay(100L)
+
+        val currentOwner =
+          withTimeout(1_000L) {
+            checkNotNull(registry.claim("watch-a", "attempt-b")).owner
+          }
+        assertFalse(missingClaim.isCompleted)
+        missingClaim.cancel()
+        registry.close(currentOwner)
+      } finally {
+        scope.cancel()
+      }
+    }
+
+  @Test
+  fun `replacement claim bounds a stalled owner stop callback`() =
+    runBlocking {
+      val scope = kotlinx.coroutines.CoroutineScope(SupervisorJob() + Dispatchers.IO)
+      val transport = FakeChannelTransport()
+      val registry = WearRealtimeChannelRegistry(scope, transport)
+      val first = FakeChannel("watch-a", "channel-a", "attempt-a")
+      val second = FakeChannel("watch-a", "channel-b", "attempt-b")
+      val stopStarted = CompletableDeferred<Unit>()
+      val releaseStop = CompletableDeferred<Unit>()
+      val stopFinished = CompletableDeferred<Unit>()
+      val stopTalk: suspend (WearRealtimeAttemptOwner) -> Unit = { owner ->
+        if (owner.attemptId == "attempt-a") {
+          stopStarted.complete(Unit)
+          releaseStop.await()
+          stopFinished.complete(Unit)
+        }
+      }
+
+      try {
+        registry.accept(first, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(first)
+        checkNotNull(registry.claim("watch-a", "attempt-a"))
+        registry.accept(second, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(second)
+
+        val replacementClaim = async { registry.claim("watch-a", "attempt-b") }
+        withTimeout(1_000L) { stopStarted.await() }
+        val replacement = checkNotNull(withTimeout(2_500L) { replacementClaim.await() }).owner
+        assertFalse(stopFinished.isCompleted)
+        releaseStop.complete(Unit)
+        withTimeout(1_000L) { stopFinished.await() }
+        registry.close(replacement)
+      } finally {
+        releaseStop.complete(Unit)
+        scope.cancel()
+      }
+    }
+
+  @Test
+  fun `retirement timeout keeps transport cleanup running`() =
+    runBlocking {
+      val scope = kotlinx.coroutines.CoroutineScope(SupervisorJob() + Dispatchers.IO)
+      val transport = FakeChannelTransport()
+      val registry =
+        WearRealtimeChannelRegistry(
+          scope = scope,
+          transport = transport,
+          retireCallbackTimeoutMillis = 100L,
+        )
+      val channel = FakeChannel("watch-a", "channel-a", "attempt-a")
+      val releaseClose = transport.holdClose(channel)
+
+      try {
+        registry.accept(channel, appendAudio = { _, _ -> }, stopTalk = {})
+        transport.awaitOpened(channel)
+        val owner = checkNotNull(registry.claim("watch-a", "attempt-a")).owner
+
+        withTimeout(1_000L) { registry.close(owner) }
+        assertEquals(0, transport.closeCount(channel))
+        scope.cancel()
+        releaseClose.complete(Unit)
+        withTimeout(1_000L) {
+          while (transport.closeCount(channel) != 1) yield()
+        }
+      } finally {
+        releaseClose.complete(Unit)
+        scope.cancel()
+      }
+    }
+
+  @Test
+  fun `old path reconnect cannot inherit an owner reserved for retirement`() =
+    runBlocking {
+      val scope = kotlinx.coroutines.CoroutineScope(SupervisorJob() + Dispatchers.IO)
+      val transport = FakeChannelTransport()
+      val registry =
+        WearRealtimeChannelRegistry(
+          scope = scope,
+          transport = transport,
+          pendingConnectionTimeoutMillis = 100L,
+        )
+      val stopStarted = CompletableDeferred<Unit>()
+      val releaseStop = CompletableDeferred<Unit>()
+      val stoppedOwners = mutableListOf<WearRealtimeAttemptOwner>()
+      val active = FakeChannel("watch-a", "channel-a", "attempt-a")
+      val replacement = FakeChannel("watch-a", "channel-b", "attempt-b")
+      val staleReconnect = FakeChannel("watch-a", "channel-a-reconnect", "attempt-a")
+      val stopTalk: suspend (WearRealtimeAttemptOwner) -> Unit = { owner ->
+        stopStarted.complete(Unit)
+        releaseStop.await()
+        synchronized(stoppedOwners) { stoppedOwners += owner }
+      }
+
+      try {
+        registry.accept(active, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(active)
+        val activeOwner = checkNotNull(registry.claim("watch-a", "attempt-a")).owner
+        registry.accept(replacement, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(replacement)
+        val replacementClaim = async { registry.claim("watch-a", "attempt-b") }
+        withTimeout(1_000L) { stopStarted.await() }
+
+        registry.accept(staleReconnect, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(staleReconnect)
+        releaseStop.complete(Unit)
+
+        val replacementOwner = checkNotNull(withTimeout(1_000L) { replacementClaim.await() }).owner
+        assertEquals(listOf(activeOwner), synchronized(stoppedOwners) { stoppedOwners.toList() })
+        assertTrue(registry.isCurrent(replacementOwner))
+        withTimeout(1_000L) {
+          while (transport.closeCount(staleReconnect) != 1) yield()
+        }
+        registry.close(replacementOwner)
+      } finally {
+        releaseStop.complete(Unit)
+        scope.cancel()
+      }
+    }
+
+  @Test
+  fun `promotion reserved before discovery timeout commits after bounded cleanup`() =
+    runBlocking {
+      val scope = kotlinx.coroutines.CoroutineScope(SupervisorJob() + Dispatchers.IO)
+      val transport = FakeChannelTransport()
+      val registry =
+        WearRealtimeChannelRegistry(
+          scope = scope,
+          transport = transport,
+          connectionReadyTimeoutMillis = 200L,
+          pendingConnectionTimeoutMillis = 1_000L,
+          retireCallbackTimeoutMillis = 100L,
+        )
+      val first = FakeChannel("watch-a", "channel-a", "attempt-a")
+      val replacement = FakeChannel("watch-a", "channel-b", "attempt-b")
+      val releaseReplacement = transport.holdOpen(replacement)
+      val stopTalk: suspend (WearRealtimeAttemptOwner) -> Unit = { owner ->
+        if (owner.attemptId == "attempt-a") awaitCancellation()
+      }
+
+      try {
+        registry.accept(first, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(first)
+        checkNotNull(registry.claim("watch-a", "attempt-a"))
+        registry.accept(replacement, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        val replacementClaim = async { registry.claim("watch-a", "attempt-b") }
+        delay(150L)
+        releaseReplacement.complete(Unit)
+        transport.awaitOpened(replacement)
+
+        val replacementOwner =
+          withTimeout(1_000L) {
+            checkNotNull(replacementClaim.await()).owner
+          }
+        assertTrue(registry.isCurrent(replacementOwner))
+        registry.close(replacementOwner)
+      } finally {
+        releaseReplacement.complete(Unit)
+        scope.cancel()
+      }
+    }
+
+  @Test
+  fun `claim keeps polling after an unclaimed channel expires`() =
+    runBlocking {
+      val scope = kotlinx.coroutines.CoroutineScope(SupervisorJob() + Dispatchers.IO)
+      val transport = FakeChannelTransport()
+      val registry =
+        WearRealtimeChannelRegistry(
+          scope = scope,
+          transport = transport,
+          connectionReadyTimeoutMillis = 1_000L,
+          pendingConnectionTimeoutMillis = 100L,
+        )
+      val expired = FakeChannel("watch-a", "channel-a-expired", "attempt-a")
+      val replacement = FakeChannel("watch-a", "channel-a-replacement", "attempt-a")
+
+      try {
+        registry.accept(expired, appendAudio = { _, _ -> }, stopTalk = {})
+        transport.awaitOpened(expired)
+        withTimeout(1_000L) {
+          while (transport.closeCount(expired) != 1) yield()
+        }
+
+        val claim = async { registry.claim("watch-a", "attempt-a") }
+        delay(100L)
+        assertFalse(claim.isCompleted)
+        registry.accept(replacement, appendAudio = { _, _ -> }, stopTalk = {})
+        transport.awaitOpened(replacement)
+
+        val owner = checkNotNull(withTimeout(1_000L) { claim.await() }).owner
+        assertTrue(registry.isCurrent(owner))
+        registry.close(owner)
+      } finally {
+        scope.cancel()
+      }
+    }
+
+  @Test
+  fun `older polling claim cannot replace a newer active attempt`() =
+    runBlocking {
+      val scope = kotlinx.coroutines.CoroutineScope(SupervisorJob() + Dispatchers.IO)
+      val transport = FakeChannelTransport()
+      val registry = WearRealtimeChannelRegistry(scope, transport)
+      val stoppedOwners = mutableListOf<WearRealtimeAttemptOwner>()
+      val stopTalk: suspend (WearRealtimeAttemptOwner) -> Unit = { owner ->
+        synchronized(stoppedOwners) { stoppedOwners += owner }
+      }
+      val newer = FakeChannel("watch-a", "channel-b", "attempt-b")
+      val delayedOlder = FakeChannel("watch-a", "channel-a", "attempt-a")
+
+      try {
+        val olderClaim = async { registry.claim("watch-a", "attempt-a") }
+        delay(100L)
+        registry.accept(newer, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(newer)
+        val newerOwner = checkNotNull(registry.claim("watch-a", "attempt-b")).owner
+
+        registry.accept(delayedOlder, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(delayedOlder)
+
+        assertEquals(null, withTimeout(1_000L) { olderClaim.await() })
+        assertTrue(registry.isCurrent(newerOwner))
+        assertTrue(synchronized(stoppedOwners) { stoppedOwners.isEmpty() })
+        registry.close(newerOwner)
+      } finally {
+        scope.cancel()
+      }
+    }
+
+  @Test
+  fun `newer waiting channel survives an older promotion`() =
+    runBlocking {
+      val scope = kotlinx.coroutines.CoroutineScope(SupervisorJob() + Dispatchers.IO)
+      val transport = FakeChannelTransport()
+      val registry = WearRealtimeChannelRegistry(scope, transport)
+      val stopStarted = CompletableDeferred<Unit>()
+      val releaseStop = CompletableDeferred<Unit>()
+      val first = FakeChannel("watch-a", "channel-a", "attempt-a")
+      val second = FakeChannel("watch-a", "channel-b", "attempt-b")
+      val third = FakeChannel("watch-a", "channel-c", "attempt-c")
+      val stopTalk: suspend (WearRealtimeAttemptOwner) -> Unit = { owner ->
+        if (owner.attemptId == "attempt-a") {
+          stopStarted.complete(Unit)
+          releaseStop.await()
+        }
+      }
+
+      try {
+        registry.accept(first, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(first)
+        checkNotNull(registry.claim("watch-a", "attempt-a"))
+        registry.accept(second, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(second)
+        val secondClaim = async { registry.claim("watch-a", "attempt-b") }
+        withTimeout(1_000L) { stopStarted.await() }
+
+        registry.accept(third, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(third)
+        val thirdClaim = async { registry.claim("watch-a", "attempt-c") }
+        releaseStop.complete(Unit)
+
+        assertNotNull(withTimeout(1_000L) { secondClaim.await() })
+        val thirdOwner = checkNotNull(withTimeout(1_000L) { thirdClaim.await() }).owner
+        assertTrue(registry.isCurrent(thirdOwner))
+        registry.close(thirdOwner)
+      } finally {
+        releaseStop.complete(Unit)
+        scope.cancel()
+      }
+    }
+
+  @Test
+  fun `same path reconnect replaces a reserved channel before promotion`() =
+    runBlocking {
+      val scope = kotlinx.coroutines.CoroutineScope(SupervisorJob() + Dispatchers.IO)
+      val transport = FakeChannelTransport()
+      val registry = WearRealtimeChannelRegistry(scope, transport)
+      val stopStarted = CompletableDeferred<Unit>()
+      val releaseStop = CompletableDeferred<Unit>()
+      val active = FakeChannel("watch-a", "channel-a", "attempt-a")
+      val reserved = FakeChannel("watch-a", "channel-b-reserved", "attempt-b")
+      val reconnect = FakeChannel("watch-a", "channel-b-reconnect", "attempt-b")
+      val stopTalk: suspend (WearRealtimeAttemptOwner) -> Unit = { owner ->
+        if (owner.attemptId == "attempt-a") {
+          stopStarted.complete(Unit)
+          releaseStop.await()
+        }
+      }
+
+      try {
+        registry.accept(active, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(active)
+        checkNotNull(registry.claim("watch-a", "attempt-a"))
+        registry.accept(reserved, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(reserved)
+        val replacementClaim = async { registry.claim("watch-a", "attempt-b") }
+        withTimeout(1_000L) { stopStarted.await() }
+
+        registry.accept(reconnect, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(reconnect)
+        releaseStop.complete(Unit)
+
+        val owner = checkNotNull(withTimeout(1_000L) { replacementClaim.await() }).owner
+        assertEquals(3L, owner.channelGeneration)
+        assertEquals(1, transport.closeCount(reserved))
+        assertEquals(0, transport.closeCount(reconnect))
+        assertTrue(registry.isCurrent(owner))
+        registry.close(owner)
+      } finally {
+        releaseStop.complete(Unit)
+        scope.cancel()
+      }
+    }
+
+  @Test
+  fun `latest reconnect wins while an older promotion candidate retires`() =
+    runBlocking {
+      val scope = kotlinx.coroutines.CoroutineScope(SupervisorJob() + Dispatchers.IO)
+      val transport = FakeChannelTransport()
+      val registry = WearRealtimeChannelRegistry(scope, transport)
+      val stopStarted = CompletableDeferred<Unit>()
+      val releaseStop = CompletableDeferred<Unit>()
+      val active = FakeChannel("watch-a", "channel-a", "attempt-a")
+      val reserved = FakeChannel("watch-a", "channel-b-reserved", "attempt-b")
+      val firstReconnect = FakeChannel("watch-a", "channel-b-first-reconnect", "attempt-b")
+      val latestReconnect = FakeChannel("watch-a", "channel-b-latest-reconnect", "attempt-b")
+      val releaseReservedClose = transport.holdClose(reserved)
+      val stopTalk: suspend (WearRealtimeAttemptOwner) -> Unit = { owner ->
+        if (owner.attemptId == "attempt-a") {
+          stopStarted.complete(Unit)
+          releaseStop.await()
+        }
+      }
+
+      try {
+        registry.accept(active, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(active)
+        checkNotNull(registry.claim("watch-a", "attempt-a"))
+        registry.accept(reserved, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(reserved)
+        val replacementClaim = async { registry.claim("watch-a", "attempt-b") }
+        withTimeout(1_000L) { stopStarted.await() }
+
+        registry.accept(firstReconnect, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(firstReconnect)
+        releaseStop.complete(Unit)
+        transport.awaitCloseStarted(reserved)
+
+        registry.accept(latestReconnect, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(latestReconnect)
+        releaseReservedClose.complete(Unit)
+
+        val owner = checkNotNull(withTimeout(1_000L) { replacementClaim.await() }).owner
+        assertEquals(4L, owner.channelGeneration)
+        assertEquals(1, transport.closeCount(reserved))
+        assertEquals(1, transport.closeCount(firstReconnect))
+        assertEquals(0, transport.closeCount(latestReconnect))
+        assertTrue(registry.isCurrent(owner))
+        registry.close(owner)
+      } finally {
+        releaseStop.complete(Unit)
+        releaseReservedClose.complete(Unit)
+        scope.cancel()
+      }
+    }
+
+  @Test
+  fun `cancelled promotion retires its reserved channel before retry`() =
+    runBlocking {
+      val scope = kotlinx.coroutines.CoroutineScope(SupervisorJob() + Dispatchers.IO)
+      val transport = FakeChannelTransport()
+      val registry =
+        WearRealtimeChannelRegistry(
+          scope = scope,
+          transport = transport,
+          connectionReadyTimeoutMillis = 500L,
+          pendingConnectionTimeoutMillis = 1_000L,
+          retireCallbackTimeoutMillis = 100L,
+        )
+      val stopStarted = CompletableDeferred<Unit>()
+      val first = FakeChannel("watch-a", "channel-a", "attempt-a")
+      val cancelled = FakeChannel("watch-a", "channel-b", "attempt-b")
+      val retry = FakeChannel("watch-a", "channel-b-retry", "attempt-b")
+      val stopTalk: suspend (WearRealtimeAttemptOwner) -> Unit = { owner ->
+        if (owner.attemptId == "attempt-a") {
+          stopStarted.complete(Unit)
+          awaitCancellation()
+        }
+      }
+
+      try {
+        registry.accept(first, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(first)
+        checkNotNull(registry.claim("watch-a", "attempt-a"))
+        registry.accept(cancelled, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(cancelled)
+
+        val cancelledClaim = async { registry.claim("watch-a", "attempt-b") }
+        withTimeout(1_000L) { stopStarted.await() }
+        cancelledClaim.cancelAndJoin()
+        withTimeout(1_000L) {
+          while (transport.closeCount(cancelled) != 1) yield()
+        }
+
+        registry.accept(retry, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(retry)
+        val retryOwner = checkNotNull(withTimeout(1_000L) { registry.claim("watch-a", "attempt-b") }).owner
+        registry.close(retryOwner)
+      } finally {
+        scope.cancel()
+      }
+    }
+
+  @Test
+  fun `pending channel does not read pcm before promotion`() =
+    runBlocking {
+      val scope = kotlinx.coroutines.CoroutineScope(SupervisorJob() + Dispatchers.IO)
+      val transport = FakeChannelTransport()
+      val registry = WearRealtimeChannelRegistry(scope, transport)
+      val channel = FakeChannel("watch-a", "channel-a", "attempt-a")
+
+      try {
+        registry.accept(channel, appendAudio = { _, _ -> }, stopTalk = {})
+        transport.awaitOpened(channel)
+        delay(100L)
+        assertFalse(transport.hasStartedReading(channel))
+
+        val owner = checkNotNull(registry.claim("watch-a", "attempt-a")).owner
+        withTimeout(1_000L) {
+          while (!transport.hasStartedReading(channel)) yield()
+        }
+        registry.close(owner)
+      } finally {
         scope.cancel()
       }
     }
@@ -257,7 +795,7 @@ class WearRealtimeChannelRegistryTest {
         val repeated = checkNotNull(registry.claim("watch-a", "attempt-b"))
         assertFalse(repeated.newlyAcquired)
         assertSame(secondOwner, repeated.owner)
-        registry.close(secondOwner, stopTalk = {})
+        registry.close(secondOwner)
       } finally {
         releaseFirst.complete(Unit)
         scope.cancel()
@@ -268,6 +806,8 @@ class WearRealtimeChannelRegistryTest {
 private class FakeChannelTransport : WearRealtimeChannelTransport {
   private val opened = ConcurrentHashMap<ChannelClient.Channel, CompletableDeferred<Unit>>()
   private val openGates = ConcurrentHashMap<ChannelClient.Channel, CompletableDeferred<Unit>>()
+  private val closeGates = ConcurrentHashMap<ChannelClient.Channel, CompletableDeferred<Unit>>()
+  private val closeStarted = ConcurrentHashMap<ChannelClient.Channel, CompletableDeferred<Unit>>()
   private val closeCounts = ConcurrentHashMap<ChannelClient.Channel, Int>()
   private val openedResources = ConcurrentHashMap<ChannelClient.Channel, WearRealtimeChannelResources>()
 
@@ -283,6 +823,8 @@ private class FakeChannelTransport : WearRealtimeChannelTransport {
     channel: ChannelClient.Channel,
     resources: WearRealtimeChannelResources?,
   ) {
+    closeStarted.computeIfAbsent(channel) { CompletableDeferred() }.complete(Unit)
+    closeGates[channel]?.await()
     resources?.input?.close()
     resources?.output?.close()
     closeCounts.compute(channel) { _, count -> (count ?: 0) + 1 }
@@ -298,17 +840,31 @@ private class FakeChannelTransport : WearRealtimeChannelTransport {
     return gate
   }
 
+  fun holdClose(channel: ChannelClient.Channel): CompletableDeferred<Unit> {
+    val gate = CompletableDeferred<Unit>()
+    closeGates[channel] = gate
+    return gate
+  }
+
+  suspend fun awaitCloseStarted(channel: ChannelClient.Channel) {
+    closeStarted.computeIfAbsent(channel) { CompletableDeferred() }.await()
+  }
+
   fun finishInput(channel: ChannelClient.Channel) {
     openedResources[channel]?.input?.close()
   }
 
   fun closeCount(channel: ChannelClient.Channel): Int = closeCounts[channel] ?: 0
+
+  fun hasStartedReading(channel: ChannelClient.Channel): Boolean = (openedResources[channel]?.input as? ClosingInputStream)?.hasStartedReading() == true
 }
 
 private class ClosingInputStream : InputStream() {
+  private val started = CountDownLatch(1)
   private val closed = CountDownLatch(1)
 
   override fun read(): Int {
+    started.countDown()
     closed.await()
     return -1
   }
@@ -316,6 +872,8 @@ private class ClosingInputStream : InputStream() {
   override fun close() {
     closed.countDown()
   }
+
+  fun hasStartedReading(): Boolean = started.count == 0L
 }
 
 private data class FakeChannel(
