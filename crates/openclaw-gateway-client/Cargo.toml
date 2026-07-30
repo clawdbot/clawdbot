@@ -1,0 +1,22 @@
+[package]
+name = "openclaw-gateway-client"
+version = "0.1.0"
+description = "Reusable Rust transport and policy for OpenClaw Gateway clients"
+edition = "2021"
+rust-version = "1.93"
+publish = false
+
+[dependencies]
+futures-util = { version = "0.3.32", features = ["sink"] }
+serde = { version = "1.0.228", features = ["derive"] }
+thiserror = "2.0.19"
+tokio = { version = "1.52.3", features = ["macros", "net", "rt", "sync", "time"] }
+tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
+url = "2.5.8"
+rustls = { version = "0.23.42", default-features = false, features = ["ring", "std", "tls12"] }
+serde_json = "1.0.150"
+sha2 = "0.11.0"
+subtle = "2.6.1"
+
+[dev-dependencies]
+tokio = { version = "1.52.3", features = ["macros", "net", "rt-multi-thread"] }

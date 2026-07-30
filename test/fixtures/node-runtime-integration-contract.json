@@ -1,0 +1,52 @@
+{
+  "version": 2,
+  "declaredCapabilities": [" location ", "camera", "camera"],
+  "expectedCapabilities": ["camera", "location"],
+  "declaredCommands": [
+    " example.allowed ",
+    "example.local-denied",
+    "example.gateway-denied"
+  ],
+  "expectedCommands": [
+    "example.allowed",
+    "example.gateway-denied",
+    "example.local-denied"
+  ],
+  "gatewayPolicy": {
+    "allow": [
+      "example.allowed",
+      "example.local-denied",
+      "example.gateway-denied",
+      "example.not-declared"
+    ],
+    "deny": ["example.gateway-denied"]
+  },
+  "invocations": [
+    {
+      "command": "example.allowed",
+      "gatewayDelivery": "deliver",
+      "localAdmission": "allow",
+      "expected": "success"
+    },
+    {
+      "command": "example.local-denied",
+      "gatewayDelivery": "deliver",
+      "localAdmission": "deny",
+      "expected": "failure",
+      "errorCode": "LOCAL_POLICY_DENIED",
+      "errorMessage": "command is outside the embedding's current local policy"
+    },
+    {
+      "command": "example.gateway-denied",
+      "gatewayDelivery": "reject",
+      "gatewayReason": "command not allowlisted",
+      "localAdmission": "not-evaluated"
+    },
+    {
+      "command": "example.not-declared",
+      "gatewayDelivery": "reject",
+      "gatewayReason": "command not declared by node",
+      "localAdmission": "not-evaluated"
+    }
+  ]
+}

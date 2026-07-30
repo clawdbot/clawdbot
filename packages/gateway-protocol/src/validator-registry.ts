@@ -82,6 +82,8 @@ import {
   NodePendingAckParamsSchema,
   NodeDescribeParamsSchema,
   NodeInvokeParamsSchema,
+  NodeInvokeRequestEventSchema,
+  NodeInvokeInputEventSchema,
   NodeInvokeResultParamsSchema,
   NodeInvokeProgressParamsSchema,
   NodeEventParamsSchema,
@@ -307,6 +309,24 @@ import {
 import type { ValidationError } from "./validation-errors.js";
 
 // Validator names mirror schemas so callers can pair them with wire contracts.
+function utf8FieldLimitPrecheck(field: string, limit: number) {
+  return (data: unknown) => {
+    if (typeof data !== "object" || data === null || !(field in data)) {
+      return undefined;
+    }
+    const value = (data as Record<string, unknown>)[field];
+    if (typeof value !== "string" || new TextEncoder().encode(value).byteLength <= limit) {
+      return undefined;
+    }
+    return {
+      keyword: "maxUtf8Bytes",
+      instancePath: `/${field}`,
+      params: { limit },
+      message: `must not exceed ${limit} UTF-8 bytes`,
+    };
+  };
+}
+
 export const validateCommandsListParams = lazyCompile(CommandsListParamsSchema);
 export const validateConnectParams = lazyCompile(ConnectParamsSchema);
 export const validateWorkerAdmissionHandshake = lazyCompile(WorkerAdmissionHandshakeSchema);
@@ -441,8 +461,16 @@ export const validateSystemInfoResult = lazyCompile(SystemInfoResultSchema);
 export const validateNodePendingAckParams = lazyCompile(NodePendingAckParamsSchema);
 export const validateNodeDescribeParams = lazyCompile(NodeDescribeParamsSchema);
 export const validateNodeInvokeParams = lazyCompile(NodeInvokeParamsSchema);
+export const validateNodeInvokeRequestEvent = lazyCompile(NodeInvokeRequestEventSchema);
+export const validateNodeInvokeInputEvent = lazyCompile(
+  NodeInvokeInputEventSchema,
+  utf8FieldLimitPrecheck("payloadJSON", 16 * 1024),
+);
 export const validateNodeInvokeResultParams = lazyCompile(NodeInvokeResultParamsSchema);
-export const validateNodeInvokeProgressParams = lazyCompile(NodeInvokeProgressParamsSchema);
+export const validateNodeInvokeProgressParams = lazyCompile(
+  NodeInvokeProgressParamsSchema,
+  utf8FieldLimitPrecheck("chunk", 16 * 1024),
+);
 export const validateNodeEventParams = lazyCompile(NodeEventParamsSchema);
 export const validateNodePresenceActivityPayload = lazyCompile(NodePresenceActivityPayloadSchema);
 export const validateNodePendingDrainParams = lazyCompile(NodePendingDrainParamsSchema);

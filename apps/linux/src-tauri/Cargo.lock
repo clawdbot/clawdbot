@@ -2792,16 +2792,14 @@ dependencies = [
  "base64 0.23.0",
  "cairo-rs",
  "ed25519-dalek",
- "futures-util",
  "getrandom 0.4.3",
  "image",
  "libc",
  "mdns-sd",
- "rustls",
+ "openclaw-gateway-client",
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "subtle",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",
@@ -2814,10 +2812,25 @@ dependencies = [
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
  "tokio",
- "tokio-tungstenite",
  "uuid",
  "webkit2gtk",
  "zeroize",
+]
+
+[[package]]
+name = "openclaw-gateway-client"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "subtle",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-tungstenite",
+ "url",
 ]
 
 [[package]]
