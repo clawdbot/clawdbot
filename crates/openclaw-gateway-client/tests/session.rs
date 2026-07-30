@@ -124,6 +124,118 @@ async fn idle_disconnect_unblocks_the_retained_event_receiver() {
 }
 
 #[tokio::test]
+async fn raw_event_subscription_closes_with_the_session() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(tcp).await.unwrap();
+        send_json(
+            &mut socket,
+            json!({
+                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-subscribe"}
+            }),
+        )
+        .await;
+        let connect = receive_json(&mut socket).await;
+        send_json(
+            &mut socket,
+            json!({
+                "type":"res", "id":connect["id"], "ok":true,
+                "payload":{"type":"hello-ok","protocol":4}
+            }),
+        )
+        .await;
+        socket.close(None).await.unwrap();
+    });
+
+    let session = GatewayClient::connect(
+        GatewayClientConfig::new(format!("ws://{address}")).unwrap(),
+        |_| async { Ok::<_, io::Error>(json!({"role":"node"})) },
+    )
+    .await
+    .unwrap();
+    let mut events = session.subscribe();
+    assert!(matches!(
+        session.wait_closed().await,
+        Err(ClientError::Closed(_))
+    ));
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(1), events.recv())
+            .await
+            .expect("subscription must terminate"),
+        Err(tokio::sync::broadcast::error::RecvError::Closed)
+    ));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn abandoned_request_releases_its_in_flight_permit() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (first_seen_tx, first_seen_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(tcp).await.unwrap();
+        send_json(
+            &mut socket,
+            json!({
+                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-abandon"}
+            }),
+        )
+        .await;
+        let connect = receive_json(&mut socket).await;
+        send_json(
+            &mut socket,
+            json!({
+                "type":"res", "id":connect["id"], "ok":true,
+                "payload":{"type":"hello-ok","protocol":4}
+            }),
+        )
+        .await;
+        let first = receive_json(&mut socket).await;
+        assert_eq!(first["method"], "node.first");
+        first_seen_tx.send(()).unwrap();
+        let second = receive_json(&mut socket).await;
+        assert_eq!(second["method"], "node.second");
+        send_json(
+            &mut socket,
+            json!({
+                "type":"res", "id":second["id"], "ok":true,
+                "payload":{"ok":true}
+            }),
+        )
+        .await;
+    });
+
+    let config = GatewayClientConfig::new(format!("ws://{address}"))
+        .unwrap()
+        .request_timeout(Duration::from_millis(250))
+        .max_in_flight(1);
+    let session = GatewayClient::connect(config, |_| async {
+        Ok::<_, io::Error>(json!({"role":"node"}))
+    })
+    .await
+    .unwrap();
+    let first_session = session.clone();
+    let first = tokio::spawn(async move { first_session.request("node.first", json!({})).await });
+    first_seen_rx.await.unwrap();
+    first.abort();
+
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            session.request("node.second", json!({}))
+        )
+        .await
+        .expect("second request must acquire the released permit")
+        .unwrap(),
+        json!({"ok":true})
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn drains_a_queued_event_before_reporting_disconnect() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -264,6 +376,26 @@ async fn connect_response_uses_the_request_timeout() {
     .expect("connect response may outlive the challenge timeout");
     assert_eq!(session.hello()["protocol"], 4);
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn websocket_establishment_uses_the_connect_timeout() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (_tcp, _) = listener.accept().await.unwrap();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    });
+
+    let config = GatewayClientConfig::new(format!("ws://{address}"))
+        .unwrap()
+        .connect_timeout(Duration::from_millis(25));
+    let result = GatewayClient::connect(config, |_| async {
+        Ok::<_, io::Error>(json!({"role":"node"}))
+    })
+    .await;
+    assert!(matches!(result, Err(ClientError::ConnectTimeout)));
+    server.abort();
 }
 
 #[tokio::test]

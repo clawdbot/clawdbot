@@ -18,18 +18,24 @@ use crate::identity::{IdentityError, NodeIdentity};
 
 const PROTOCOL_VERSION: u32 = 4;
 const MINIMUM_NODE_PROTOCOL_VERSION: u32 = 3;
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_CHALLENGE_TIMEOUT: Duration = Duration::from_secs(15);
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+const DEFAULT_MAX_EVENT_BUFFER_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct NodeClientConfig {
     gateway_url: String,
     tls_trust: TlsTrust,
     headers: Vec<(String, String)>,
+    connect_timeout: Duration,
     challenge_timeout: Duration,
     request_timeout: Duration,
+    write_timeout: Duration,
     max_message_bytes: usize,
+    max_event_buffer_bytes: usize,
     event_capacity: usize,
     max_in_flight: usize,
 }
@@ -41,9 +47,12 @@ impl NodeClientConfig {
             gateway_url: gateway_url.into(),
             tls_trust: TlsTrust::SystemRoots,
             headers: Vec::new(),
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             challenge_timeout: DEFAULT_CHALLENGE_TIMEOUT,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            write_timeout: DEFAULT_WRITE_TIMEOUT,
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
+            max_event_buffer_bytes: DEFAULT_MAX_EVENT_BUFFER_BYTES,
             event_capacity: 256,
             max_in_flight: 64,
         }
@@ -68,14 +77,32 @@ impl NodeClientConfig {
     }
 
     #[must_use]
+    pub fn connect_timeout(mut self, timeout: Duration) -> Self {
+        self.connect_timeout = timeout;
+        self
+    }
+
+    #[must_use]
     pub fn request_timeout(mut self, timeout: Duration) -> Self {
         self.request_timeout = timeout;
         self
     }
 
     #[must_use]
+    pub fn write_timeout(mut self, timeout: Duration) -> Self {
+        self.write_timeout = timeout;
+        self
+    }
+
+    #[must_use]
     pub fn max_message_bytes(mut self, bytes: usize) -> Self {
         self.max_message_bytes = bytes;
+        self
+    }
+
+    #[must_use]
+    pub fn max_event_buffer_bytes(mut self, bytes: usize) -> Self {
+        self.max_event_buffer_bytes = bytes;
         self
     }
 
@@ -466,6 +493,8 @@ pub enum ClientError {
     Transport(String),
     #[error("Gateway TLS validation failed: {0}")]
     Tls(String),
+    #[error("Gateway connection timed out")]
+    ConnectTimeout,
     #[error("Gateway connect challenge timed out")]
     ChallengeTimeout,
     #[error("Gateway connect challenge was invalid: {0}")]
@@ -485,6 +514,8 @@ pub enum ClientError {
     },
     #[error("Gateway request timed out: {0}")]
     RequestTimeout(String),
+    #[error("Gateway write timed out: {0}")]
+    WriteTimeout(String),
     #[error("Gateway session is closed: {0}")]
     Closed(String),
     #[error("Gateway frame was invalid: {0}")]
@@ -514,9 +545,12 @@ impl NodeClient {
         let mut gateway_config = GatewayClientConfig::new(&config.gateway_url)
             .map_err(map_gateway_error)?
             .tls_trust(config.tls_trust)
+            .connect_timeout(config.connect_timeout)
             .challenge_timeout(config.challenge_timeout)
             .request_timeout(config.request_timeout)
+            .write_timeout(config.write_timeout)
             .max_message_bytes(config.max_message_bytes)
+            .max_event_buffer_bytes(config.max_event_buffer_bytes)
             .event_capacity(config.event_capacity)
             .max_in_flight(config.max_in_flight);
         for (name, value) in config.headers {
@@ -696,6 +730,7 @@ fn map_gateway_error(error: GatewayClientError) -> ClientError {
         GatewayClientError::InsecureRemoteGateway => ClientError::InsecureRemoteGateway,
         GatewayClientError::Transport(error) => ClientError::Transport(error),
         GatewayClientError::Tls(error) => ClientError::Tls(error),
+        GatewayClientError::ConnectTimeout => ClientError::ConnectTimeout,
         GatewayClientError::ChallengeTimeout => ClientError::ChallengeTimeout,
         GatewayClientError::InvalidChallenge(error) => ClientError::InvalidChallenge(error),
         GatewayClientError::ConnectParams(error) => ClientError::ConnectParams(error),
@@ -715,6 +750,7 @@ fn map_gateway_error(error: GatewayClientError) -> ClientError {
             retry_after_ms,
         },
         GatewayClientError::RequestTimeout(method) => ClientError::RequestTimeout(method),
+        GatewayClientError::WriteTimeout(operation) => ClientError::WriteTimeout(operation),
         GatewayClientError::Closed(error) => ClientError::Closed(error),
         GatewayClientError::InvalidFrame(error) => ClientError::InvalidFrame(error),
         GatewayClientError::EventLagged(count) => ClientError::EventLagged(count),
