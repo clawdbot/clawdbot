@@ -113,6 +113,11 @@ export function createCodexAppServerAgentHarness(options: {
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
       });
     },
+    loadMcpToolCatalog: async (params) => {
+      const { loadCodexEffectiveMcpCatalog } =
+        await import("./src/app-server/effective-mcp-catalog.js");
+      return await loadCodexEffectiveMcpCatalog(params, { bindingStore: options.bindingStore });
+    },
     supports: (ctx) => {
       const provider = ctx.provider.trim().toLowerCase();
       if (!providerIds.has(provider)) {

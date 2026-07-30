@@ -177,13 +177,16 @@ instead of being overwritten in one editable draft.
 
 ### Channel mapping
 
-| Channel    | `off` | `partial` | `block` | `progress`              |
-| ---------- | ----- | --------- | ------- | ----------------------- |
-| Telegram   | Yes   | Yes       | Yes     | editable progress draft |
-| Discord    | Yes   | Yes       | Yes     | editable progress draft |
-| Slack      | Yes   | Yes       | Yes     | Yes                     |
-| Mattermost | Yes   | Yes       | Yes     | Yes                     |
-| MS Teams   | Yes   | Yes       | Yes     | native progress stream  |
+Discord and Telegram default to `progress` when `streaming` is unset; Slack,
+Mattermost, and MS Teams default to `partial`.
+
+| Channel    | `off` | `partial` | `block` | `progress`                        |
+| ---------- | ----- | --------- | ------- | --------------------------------- |
+| Telegram   | Yes   | Yes       | Yes     | editable progress draft (default) |
+| Discord    | Yes   | Yes       | Yes     | editable progress draft (default) |
+| Slack      | Yes   | Yes       | Yes     | Yes                               |
+| Mattermost | Yes   | Yes       | Yes     | Yes                               |
+| MS Teams   | Yes   | Yes       | Yes     | native progress stream            |
 
 Preview chunk config (`streaming.preview.chunk.*`, e.g. under
 `channels.discord.streaming` or `channels.telegram.streaming`) defaults to
@@ -325,8 +328,9 @@ Supported surfaces:
   messages, while approval prompts, media payloads, and errors still route
   normally.
 - To keep preview streaming but hide tool-progress lines, set
-  `streaming.preview.toolProgress` to `false` for that channel (default
-  `true`). To keep tool-progress lines visible while hiding command/exec text,
+  `streaming.preview.toolProgress` or `streaming.progress.toolProgress` to
+  `false` for that channel (both default `true`, and both are honored in every
+  mode). To keep tool-progress lines visible while hiding command/exec text,
   set `streaming.preview.commandText` to `"status"` or
   `streaming.progress.commandText` to `"status"`; the default is `"raw"` to
   preserve released behavior. This policy is shared by draft/progress channels

@@ -116,6 +116,7 @@ export function registerNativeHookRelay(
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
     ...(params.requester ? { requester: params.requester } : {}),
+    ...(params.approvalContext ? { approvalContext: params.approvalContext } : {}),
     allowedEvents,
     preToolUseLoopDetection: params.preToolUseLoopDetection !== false,
     expiresAtMs,

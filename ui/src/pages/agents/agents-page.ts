@@ -667,10 +667,11 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     const agentIdentity = this.context.agentIdentity;
     void saveIdentityDraft({
       host: this,
-      client,
+      expectedClient: client,
       agentId,
       agents,
       agentIdentity,
+      runtimeConfig: this.context.runtimeConfig,
       isCurrent: () =>
         this.isCurrentRequest(client, generation, agentId, { agents, agentIdentity }),
       onSaved: () => this.syncAgentState(agents),

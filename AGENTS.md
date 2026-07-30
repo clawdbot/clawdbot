@@ -28,12 +28,13 @@ Skills own workflows; root owns hard policy and routing. Product direction and m
 
 - Judge from the operator's chair: a competent person following the docs must end with a working, comprehensible bot. Code correctness is table stakes, not the verdict.
 - Severity order: silent failure > crash > missing feature. Every user or agent action ends in a visible outcome or a recorded, intentional non-outcome. An action that produces nothing, with nothing explaining why, is the worst bug class in this repo.
-- Defaults are the product. Most operators never change them; a regression on a default path outranks feature work and config-path bugs.
+- Defaults are the product. Most operators never change them, so the out-of-box path gets the best experience we can ship, not the most conservative one; a regression on a default path outranks feature work and config-path bugs.
 - Record facts where they happen; read them where they are needed. Answering "did X happen?" by combining several indirect signals rots as sibling paths evolve; prefer a recorded fact at the boundary that owns it.
 - The model's experience is the product. Capability that prompt/tool text does not mention — or contradicts — does not exist for users. Tool results are prompts: return what the model needs next, not a bare ack. Review prompt and description text with the same rigor as code.
 - Latency is model round-trips, not milliseconds. Collapse act-then-observe pairs into one tool result; keep expensive resources warm across a session.
 - Never dead-end the agent: failure text states what to try next; unavailable tools are hidden by gating, not left to fail; missing pieces provision automatically where safe — within the fallback rules in Architecture.
 - A capability shipped off by default needs a named enablement path (onboarding, doctor hint, preset, or docs surfacing) in the same change. Dark-shipped features are a review smell.
+- Security is a calibrated tradeoff, not a veto. Strong defaults are required; a change that protects a path by deleting the capability, or by making the normal flow unusable, is not the fix — gate it, scope it, or make the risky step explicit and operator-owned. Refusing a capability outright needs a concrete exploit path, not a hypothetical one.
 
 ## ClawSweeper Review Policy
 

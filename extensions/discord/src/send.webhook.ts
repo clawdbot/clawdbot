@@ -77,12 +77,14 @@ async function throwWebhookResponseError(
   response: Response,
   signal: AbortSignal | undefined,
 ): Promise<never> {
-  const raw = await readResponseTextLimited(response, DISCORD_WEBHOOK_ERROR_BODY_LIMIT_BYTES).catch(
-    () => {
-      throwIfWebhookDeadlineExpired(signal);
-      return "";
-    },
-  );
+  const raw = await readResponseTextLimited(response, DISCORD_WEBHOOK_ERROR_BODY_LIMIT_BYTES, {
+    // The request deadline owns every body read; a shorter shared idle bound
+    // would turn a stalled Discord response into the wrong error class.
+    chunkTimeoutMs: DISCORD_WEBHOOK_TIMEOUT_MS,
+  }).catch(() => {
+    throwIfWebhookDeadlineExpired(signal);
+    return "";
+  });
   const parsed = coerceWebhookErrorBody(raw);
   if (response.status === 429) {
     throw new RateLimitError(response, {

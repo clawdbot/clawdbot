@@ -51,6 +51,28 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
   return {
     ...actual,
     deliverInboundReplyWithMessageSendContext: deliverInboundReplyWithMessageSendContextMock,
+    resolveChannelMessageSourceReplyDeliveryMode: (params: {
+      cfg: {
+        messages?: {
+          visibleReplies?: "automatic" | "message_tool";
+          groupChat?: { visibleReplies?: "automatic" | "message_tool" };
+        };
+      };
+      ctx: {
+        ChatType?: string;
+        CommandSource?: "native" | "text";
+        CommandAuthorized?: boolean;
+      };
+    }) => {
+      sourceReplyDeliveryModeContexts.push(params.ctx);
+      return params.ctx.CommandSource === "native" ||
+        (params.ctx.CommandSource === "text" && params.ctx.CommandAuthorized === true)
+        ? "automatic"
+        : (params.cfg.messages?.groupChat?.visibleReplies ??
+              params.cfg.messages?.visibleReplies) === "automatic"
+          ? "automatic"
+          : "message_tool_only";
+    },
   };
 });
 
@@ -63,32 +85,6 @@ vi.mock("./runtime-api.js", async () => {
       return phone ? `+${phone}` : null;
     },
     logVerbose: () => {},
-    resolveChannelMessageSourceReplyDeliveryMode: ({
-      cfg,
-      ctx,
-    }: {
-      cfg: {
-        messages?: {
-          visibleReplies?: "automatic" | "message_tool";
-          groupChat?: { visibleReplies?: "automatic" | "message_tool" };
-        };
-      };
-      ctx: { ChatType?: string; CommandSource?: "native" | "text"; CommandAuthorized?: boolean };
-    }) => {
-      sourceReplyDeliveryModeContexts.push(ctx);
-      if (
-        ctx.CommandSource === "native" ||
-        (ctx.CommandSource === "text" && ctx.CommandAuthorized === true)
-      ) {
-        return "automatic";
-      }
-      if (ctx.ChatType === "group" || ctx.ChatType === "channel") {
-        const configuredMode =
-          cfg.messages?.groupChat?.visibleReplies ?? cfg.messages?.visibleReplies;
-        return configuredMode === "automatic" ? "automatic" : "message_tool_only";
-      }
-      return cfg.messages?.visibleReplies === "message_tool" ? "message_tool_only" : "automatic";
-    },
     resolveChunkMode: () => "length",
     resolveIdentityNamePrefix: (cfg: {
       agents?: { list?: Array<{ id?: string; default?: boolean; identity?: { name?: string } }> };
@@ -115,20 +111,20 @@ vi.mock("./runtime-api.js", async () => {
     },
     resolveTextChunkLimit: () => 4000,
     shouldLogVerbose: () => false,
-    toLocationContext: () => ({}),
   };
 });
 
 import {
-  buildWhatsAppInboundContext,
+  buildWhatsAppInboundTransportContext,
   createWhatsAppReplyPlan,
+  prepareWhatsAppInboundContext,
   resolveWhatsAppDmRouteTarget,
   resolveWhatsAppResponsePrefix,
   updateWhatsAppMainLastRoute,
 } from "./inbound-dispatch.js";
 
-type TestRoute = Parameters<typeof buildWhatsAppInboundContext>[0]["route"];
-type TestMsg = Parameters<typeof buildWhatsAppInboundContext>[0]["msg"];
+type TestRoute = Parameters<typeof prepareWhatsAppInboundContext>[0]["route"];
+type TestMsg = Parameters<typeof prepareWhatsAppInboundContext>[0]["msg"];
 type TestMsgOverrides = NonNullable<Parameters<typeof createTestWebInboundMessage>[0]>;
 type TestAdmissionOverride = NonNullable<TestMsgOverrides["admission"]>;
 
@@ -186,6 +182,72 @@ function makeMsg(overrides: TestMsgOverrides = {}): TestMsg {
   });
 }
 
+function collectNonPortablePaths(
+  value: unknown,
+  path = "inbound",
+  seen = new Set<object>(),
+): string[] {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") {
+    return [];
+  }
+  if (typeof value === "function") {
+    return [path];
+  }
+  if (seen.has(value)) {
+    return [];
+  }
+  seen.add(value);
+  const record = value as Record<string, unknown>;
+  const symbolPaths = Object.getOwnPropertySymbols(record).map(
+    (symbol) => `${path}.${String(symbol)}`,
+  );
+  return [
+    ...symbolPaths,
+    ...Object.entries(record).flatMap(([key, child]) =>
+      collectNonPortablePaths(child, `${path}.${key}`, seen),
+    ),
+  ];
+}
+
+type PrepareWhatsAppInboundParams = Parameters<typeof prepareWhatsAppInboundContext>[0];
+type LegacyTestCommand = Omit<
+  NonNullable<PrepareWhatsAppInboundParams["command"]>,
+  "authorization"
+> & {
+  authorized?: boolean;
+  authorization?: NonNullable<PrepareWhatsAppInboundParams["command"]>["authorization"];
+};
+
+async function buildWhatsAppInboundContext(
+  params: Omit<PrepareWhatsAppInboundParams, "command"> & {
+    command?: LegacyTestCommand;
+  },
+) {
+  const { command: legacyCommand, ...preparedParams } = params;
+  const command = legacyCommand
+    ? {
+        ...legacyCommand,
+        authorization:
+          legacyCommand.authorization ??
+          (legacyCommand.authorized === undefined
+            ? { kind: "not_checked" as const }
+            : legacyCommand.authorized
+              ? { kind: "authorized" as const }
+              : { kind: "denied" as const }),
+      }
+    : undefined;
+  if (!command) {
+    return (await prepareWhatsAppInboundContext(preparedParams)).ctxPayload;
+  }
+  const { authorized: _legacyAuthorized, ...preparedCommand } = command;
+  return (
+    await prepareWhatsAppInboundContext({
+      ...preparedParams,
+      command: preparedCommand,
+    })
+  ).ctxPayload;
+}
+
 function directAdmission(conversationId: string): TestAdmissionOverride {
   return {
     conversation: {
@@ -209,6 +271,141 @@ function groupAdmission(conversationId: string): TestAdmissionOverride {
     },
   };
 }
+
+describe("prepared WhatsApp inbound boundary", () => {
+  it("separates portable facts from WhatsApp transport callbacks", async () => {
+    const msg = makeMsg({
+      event: { id: "current-1", timestamp: 1_710_000_000 },
+      payload: {
+        body: "agent body",
+        commandBody: "/status",
+        media: {
+          path: "/tmp/photo.jpg",
+          type: "image/jpeg",
+          kind: "image",
+        },
+      },
+      admission: groupAdmission("120363000000000000@g.us"),
+      groupMention: {
+        wasMentioned: false,
+        requireMention: false,
+      },
+      group: {
+        subject: "Boundary Room",
+        participants: ["15550001111@s.whatsapp.net"],
+      },
+    });
+    const prepared = await prepareWhatsAppInboundContext({
+      bodyForAgent: "agent body",
+      combinedBody: "formatted agent body",
+      command: {
+        kind: "text-slash",
+        body: "/status",
+        authorization: { kind: "denied", reason: "sender_not_allowed" },
+      },
+      msg,
+      route: makeRoute({
+        sessionKey: "agent:main:whatsapp:group:120363000000000000@g.us",
+      }),
+      sender: {
+        id: "+15550001111",
+        name: "Alice",
+        e164: "+15550001111",
+      },
+      transcript: "prepared transcript",
+      mediaTranscribedIndexes: [0],
+      visibleReplyTo: {
+        id: "quoted-1",
+        body: "quoted body",
+        sender: { label: "Bob" },
+      },
+      replyThreading: { implicitCurrentMessage: "allow" },
+      suppressMessageReceivedHooks: true,
+    });
+
+    expect(prepared.inbound).toMatchObject({
+      event: {
+        id: "current-1",
+        timestamp: 1_710_000_000,
+      },
+      message: {
+        body: "formatted agent body",
+        bodyForAgent: "agent body",
+        rawBody: "agent body",
+        commandBody: "/status",
+      },
+      conversation: {
+        kind: "group",
+        id: "120363000000000000@g.us",
+        label: "120363000000000000@g.us",
+      },
+      reply: {
+        replyToId: "quoted-1",
+      },
+      command: {
+        kind: "text-slash",
+        body: "/status",
+        authorization: { kind: "denied", reason: "sender_not_allowed" },
+      },
+      media: [
+        {
+          path: "/tmp/photo.jpg",
+          contentType: "image/jpeg",
+          kind: "image",
+          transcribed: true,
+        },
+      ],
+      context: {
+        transcript: "prepared transcript",
+        groupSubject: "Boundary Room",
+        senderE164: "+15550001111",
+        replyThreading: { implicitCurrentMessage: "allow" },
+      },
+    });
+    expect(prepared.ctxPayload).toMatchObject({
+      ConversationLabel: "120363000000000000@g.us",
+      GroupSubject: "Boundary Room",
+    });
+    expect(collectNonPortablePaths(prepared.inbound)).toEqual([]);
+    expect(prepared.inbound).not.toHaveProperty("platform");
+    expect(prepared.inbound).not.toHaveProperty("admission");
+    expect(prepared.control).toEqual({ messageReceivedHooks: "channel" });
+
+    const transport = buildWhatsAppInboundTransportContext(msg);
+    expect(transport).toMatchObject({
+      accountId: "default",
+      conversationId: "120363000000000000@g.us",
+      conversationKind: "group",
+      chatJid: "+1000",
+      recipientJid: "+2000",
+      correlationId: "current-1",
+    });
+    expect(transport.reply).toBe(msg.platform.reply);
+    expect(transport.sendMedia).toBe(msg.platform.sendMedia);
+    expect(transport.sendComposing).toBe(msg.platform.sendComposing);
+    expect(transport).not.toHaveProperty("wasMentioned");
+  });
+
+  it("assigns unique portable identities without inventing native message IDs", async () => {
+    const msg = makeMsg({
+      event: { id: undefined, timestamp: 1_710_000_000 },
+    });
+    const params = {
+      combinedBody: "hi",
+      msg,
+      route: makeRoute(),
+      sender: { id: "+15550001111" },
+    };
+
+    const [first, second] = await Promise.all([
+      prepareWhatsAppInboundContext(params),
+      prepareWhatsAppInboundContext(params),
+    ]);
+
+    expect(first.inbound.event.id).not.toBe(second.inbound.event.id);
+    expect(buildWhatsAppInboundTransportContext(msg).correlationId).toBeUndefined();
+  });
+});
 
 function getCapturedDeliver() {
   return (capturedDispatchParams as CapturedDispatchParams)?.dispatcherOptions?.deliver;
@@ -276,8 +473,9 @@ function expectRememberSentContextFields(
 }
 
 type BufferedReplyParams = Parameters<typeof createWhatsAppReplyPlan>[0];
-type BufferedReplyOverrides = Partial<Omit<BufferedReplyParams, "context">> & {
+type BufferedReplyOverrides = Partial<Omit<BufferedReplyParams, "context" | "transport">> & {
   context?: Partial<BufferedReplyParams["context"]>;
+  msg?: TestMsg;
   cancelAfterPrepare?: (payload: CapturedReplyPayload) => boolean;
 };
 
@@ -319,8 +517,37 @@ function unacceptedDeliveryResult() {
   };
 }
 
+function makePreparedInbound(msg: TestMsg): BufferedReplyParams["inbound"] {
+  const admission = msg.admission;
+  return {
+    channel: "whatsapp",
+    event: { id: msg.event.id ?? "msg1", timestamp: msg.event.timestamp },
+    from: admission.conversation.id,
+    sender: { id: admission.sender.id },
+    conversation: {
+      kind: admission.conversation.kind,
+      id: admission.conversation.id,
+    },
+    route: {
+      agentId: "main",
+      accountId: admission.accountId,
+      routeSessionKey: makeRoute().sessionKey,
+    },
+    reply: {
+      to: msg.platform.recipientJid,
+      originatingTo: admission.conversation.id,
+    },
+    message: {
+      body: msg.payload.body,
+      bodyForAgent: msg.payload.body,
+      rawBody: msg.payload.commandBody ?? msg.payload.body,
+      commandBody: msg.payload.commandBody ?? msg.payload.body,
+    },
+  };
+}
+
 async function dispatchBufferedReply(overrides: BufferedReplyOverrides = {}) {
-  const { cancelAfterPrepare, ...paramOverrides } = overrides;
+  const { cancelAfterPrepare, msg = makeMsg(), ...paramOverrides } = overrides;
   const params: BufferedReplyParams = {
     cfg: { channels: { whatsapp: { streaming: { block: { enabled: true } } } } } as never,
     connectionId: "conn",
@@ -329,13 +556,14 @@ async function dispatchBufferedReply(overrides: BufferedReplyOverrides = {}) {
     groupHistories: new Map(),
     groupHistoryKey: "+1000",
     maxMediaBytes: 1,
-    msg: makeMsg(),
+    inbound: makePreparedInbound(msg),
     rememberSentText: () => {},
     replyLogger: makeReplyLogger(),
     replyPipeline: {} as never,
     replyResolver: (async () => undefined) as never,
     route: makeRoute(),
     shouldClearGroupHistory: false,
+    transport: buildWhatsAppInboundTransportContext(msg),
   };
 
   return runWhatsAppReplyPlan(
@@ -1135,6 +1363,47 @@ describe("whatsapp inbound dispatch", () => {
     expect(deliverReply).not.toHaveBeenCalled();
   });
 
+  it("does not use a synthetic portable event ID as a WhatsApp reply target", async () => {
+    deliverInboundReplyWithMessageSendContextMock.mockResolvedValueOnce({
+      status: "handled_visible",
+      delivery: {
+        messageIds: ["wa-1"],
+        visibleReplySent: true,
+      },
+    });
+    const msg = makeMsg({
+      event: { id: undefined, timestamp: 1_710_000_000 },
+    });
+
+    await dispatchBufferedReply({
+      context: {
+        Body: "incoming",
+        ReplyToId: "quoted-bot-message",
+      },
+      msg,
+      inbound: {
+        ...makePreparedInbound(msg),
+        event: {
+          id: "120363000000000000@g.us:1710000000",
+          timestamp: 1_710_000_000,
+        },
+      },
+    });
+
+    const deliver = getCapturedDeliver();
+    await deliver?.({ text: "final payload" }, { kind: "final" });
+
+    const durableParams = requireMockArg(
+      deliverInboundReplyWithMessageSendContextMock,
+      0,
+      0,
+      "durable delivery params",
+    );
+    expectRecordFields(durableParams, {
+      replyToId: null,
+    });
+  });
+
   it("does not fall back when durable WhatsApp delivery suppresses a send", async () => {
     deliverInboundReplyWithMessageSendContextMock.mockResolvedValueOnce({
       status: "handled_no_send",
@@ -1583,7 +1852,7 @@ describe("whatsapp inbound dispatch", () => {
 
   it("suppresses typing for message-tool-only group chat without mention", async () => {
     await dispatchBufferedReply({
-      context: { Body: "hi", ChatType: "group" },
+      context: { Body: "hi", ChatType: "group", WasMentioned: false },
       msg: makeMsg({
         admission: groupAdmission("120363000000000000@g.us"),
         wasMentioned: false,
@@ -1595,7 +1864,7 @@ describe("whatsapp inbound dispatch", () => {
 
   it("does not suppress typing for group chat when mentioned", async () => {
     await dispatchBufferedReply({
-      context: { Body: "@bot hi", ChatType: "group" },
+      context: { Body: "@bot hi", ChatType: "group", WasMentioned: true },
       msg: makeMsg({
         admission: groupAdmission("120363000000000000@g.us"),
         wasMentioned: true,
@@ -1700,6 +1969,7 @@ describe("whatsapp inbound dispatch", () => {
   it("returns true for tool-only media turns after delivering media", async () => {
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
     const rememberSentText = vi.fn();
+    const msg = makeMsg();
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
       async (params: CapturedDispatchParams) => {
         capturedDispatchParams = params;
@@ -1720,8 +1990,8 @@ describe("whatsapp inbound dispatch", () => {
         deliverReply,
         groupHistories: new Map(),
         groupHistoryKey: "+1000",
+        inbound: makePreparedInbound(msg),
         maxMediaBytes: 1,
-        msg: makeMsg(),
         rememberSentText,
         replyLogger: {
           info: () => {},
@@ -1733,6 +2003,7 @@ describe("whatsapp inbound dispatch", () => {
         replyResolver: (async () => undefined) as never,
         route: makeRoute(),
         shouldClearGroupHistory: false,
+        transport: buildWhatsAppInboundTransportContext(msg),
       }),
     ).resolves.toBe(true);
 

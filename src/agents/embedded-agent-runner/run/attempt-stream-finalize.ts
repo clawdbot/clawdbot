@@ -1,4 +1,5 @@
 /** Settles the provider stream and completes the post-turn lifecycle phase. */
+import { isRunnerAbortError } from "../abort.js";
 import { completeEmbeddedAttemptAfterTurn } from "./attempt-after-turn.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 
@@ -70,7 +71,16 @@ export async function finalizeEmbeddedAttemptStreamPhase(input: {
     if (input.repairedRejectedThinkingReplay && !rewoundBeforeAgentFinalizeRevision) {
       activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
     }
-    await sessionLockController.releaseForPrompt();
+    try {
+      await sessionLockController.releaseForPrompt();
+    } catch (err) {
+      // An aborted attempt never submits another prompt, so a submission-blocked
+      // release is expected teardown noise. Rethrowing would skip settle and
+      // after-turn, silently starving every agent_end consumer for aborted runs.
+      if (!input.settle.readLifecycleState().aborted || !isRunnerAbortError(err)) {
+        throw err;
+      }
+    }
 
     const currentState = input.getState();
     const streamSettleState = {

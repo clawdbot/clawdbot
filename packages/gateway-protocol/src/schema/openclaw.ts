@@ -232,6 +232,8 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
       id: NonEmptyString,
       /** Canonical provider identity for clients with bundled brand artwork. */
       brandId: Type.Optional(NonEmptyString),
+      /** Provider family shown above the specific credential method. */
+      groupLabel: Type.Optional(NonEmptyString),
       label: NonEmptyString,
       hint: Type.Optional(Type.String()),
       icon: Type.Optional(SetupInferenceHttpsUrl),

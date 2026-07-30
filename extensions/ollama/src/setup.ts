@@ -96,12 +96,12 @@ const HOST_BACKED_OLLAMA_MODE_CONFIG: Record<
   },
 };
 
-function buildOllamaUnreachableLines(baseUrl: string): string[] {
+function buildOllamaUnreachableLines(baseUrl: string, retry: boolean): string[] {
   return [
     `Ollama could not be reached at ${baseUrl}.`,
-    "Download it at https://ollama.com/download",
-    "",
-    "Start Ollama and re-run setup.",
+    "Start or restart the Ollama server for this address.",
+    "If Ollama is not installed on that machine, download it at https://ollama.com/download",
+    ...(retry ? ["", "Continue when it is running. OpenClaw will retry this address."] : []),
   ];
 }
 
@@ -283,23 +283,40 @@ async function promptAndConfigureHostBackedOllama(params: {
   signal?: AbortSignal;
 }): Promise<OllamaSetupResult> {
   const baseUrl = await promptForOllamaBaseUrl(params.prompter, params.env);
-  const {
-    reachable,
-    models,
-    inspectedModels,
-    discoveredModelsByName,
-    inspectionFailures,
-    hasToolsCapableModel,
-  } = await discoverOllamaModelsForSetup({
+  let discovery = await discoverOllamaModelsForSetup({
     baseUrl,
     inspectTools: true,
     ...(params.signal ? { signal: params.signal } : {}),
   });
 
-  if (!reachable) {
-    await params.prompter.note(buildOllamaUnreachableLines(baseUrl).join("\n"), "Ollama");
-    throw new WizardCancelledError("Ollama not reachable");
+  if (!discovery.reachable) {
+    await params.prompter.note(buildOllamaUnreachableLines(baseUrl, true).join("\n"), "Ollama");
+    const shouldRetry = await params.prompter.confirm({
+      message: "Retry this Ollama address now?",
+      initialValue: true,
+    });
+    if (!shouldRetry) {
+      throw new WizardCancelledError("Ollama setup cancelled");
+    }
+    params.signal?.throwIfAborted();
+    discovery = await discoverOllamaModelsForSetup({
+      baseUrl,
+      inspectTools: true,
+      ...(params.signal ? { signal: params.signal } : {}),
+    });
   }
+
+  if (!discovery.reachable) {
+    throw new WizardCancelledError(`Ollama is still not reachable at ${baseUrl}`);
+  }
+
+  const {
+    models,
+    inspectedModels,
+    discoveredModelsByName,
+    inspectionFailures,
+    hasToolsCapableModel,
+  } = discovery;
 
   if (inspectionFailures.length > 0) {
     await params.prompter.note(
@@ -449,7 +466,7 @@ export async function configureOllamaNonInteractive(params: {
   const explicitModel = normalizeOllamaModelName(params.opts.customModelId);
 
   if (!reachable) {
-    params.runtime.error(buildOllamaUnreachableLines(baseUrl).slice(0, 2).join("\n"));
+    params.runtime.error(buildOllamaUnreachableLines(baseUrl, false).join("\n"));
     params.runtime.exit(1);
     return params.nextConfig;
   }

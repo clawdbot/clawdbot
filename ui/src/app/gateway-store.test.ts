@@ -18,6 +18,7 @@ vi.mock("../build-info.ts", () => ({
     builtAt: null,
     branch: null,
     dirty: null,
+    release: false,
     buildId: "test",
   },
 }));

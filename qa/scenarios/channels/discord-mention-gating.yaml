@@ -11,8 +11,9 @@ scenario:
     timeoutMs: 8000
     retryCount: 1
     suiteIsolation: isolated
-    config: { discordScenarioId: discord-mention-gating }
 flow:
   module: ./live-transports/discord/scenario-runtime.js
-  call: runDiscordMentionGatingScenario
-  args: [{ expr: discordScenarioContext }]
+  call: runDiscordScenario
+  args:
+    - { expr: discordScenarioContext }
+    - { moduleExport: discordQaMentionGatingScenario }

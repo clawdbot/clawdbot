@@ -10,6 +10,7 @@ import {
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
   editMessageTelegram,
+  emitTelegramMessageSentHooks,
   expectDeliveredReply,
   expectDeliverRepliesParams,
   expectRecordFields,
@@ -187,6 +188,11 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     expect(answerDraftStream.update).toHaveBeenCalledWith("Photo");
     expectDeliverRepliesParams({ mediaMaxBytes });
     expectDeliveredReply(0, { text: undefined, mediaUrl: "https://example.com/a.png" });
+    expect(emitTelegramMessageSentHooks).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), {
+      content: "Photo",
+      messageId: 2001,
+    });
   });
 
   it("sends standalone MEDIA directive final replies as media", async () => {

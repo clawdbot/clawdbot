@@ -293,11 +293,17 @@ export function createBeamMirrorRunner(params: {
       },
       body: JSON.stringify(payload),
     });
-    if (!response.ok) {
-      warnThrottled(`beam mirror upload failed (${response.status}) for ${payload.source}`);
-      return false;
+    try {
+      if (!response.ok) {
+        warnThrottled(`beam mirror upload failed (${response.status}) for ${payload.source}`);
+        return false;
+      }
+      return true;
+    } finally {
+      // The mirror uses only the status; cancel the ignored payload so slow
+      // receiver responses cannot retain connection slots across poll retries.
+      await response.body?.cancel().catch(() => undefined);
     }
-    return true;
   };
 
   const buildUpload = async (

@@ -540,6 +540,66 @@ describe("applyPatch", () => {
     expect(memory.files.get("/sandbox/source.txt")).toBe("foo\nbaz\n");
   });
 
+  it("keeps context line bytes when the hunk drops trailing whitespace", async () => {
+    const memory = createMemoryPatchSandbox({
+      "notes.md": "# Notes\nfirst line  \nsecond line  \nold value\ntail\n",
+    });
+    const patch = `*** Begin Patch
+*** Update File: notes.md
+@@
+ first line
+ second line
+-old value
++new value
+ tail
+*** End Patch`;
+
+    await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/notes.md")).toBe(
+      "# Notes\nfirst line  \nsecond line  \nnew value\ntail\n",
+    );
+  });
+
+  it("keeps context line punctuation when the hunk uses normalized quotes", async () => {
+    const memory = createMemoryPatchSandbox({
+      "notes.md": "It\u2019s done\nold value\n",
+    });
+    const patch = `*** Begin Patch
+*** Update File: notes.md
+@@
+ It's done
+-old value
++new value
+*** End Patch`;
+
+    await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/notes.md")).toBe("It\u2019s done\nnew value\n");
+  });
+
+  it("keeps tab indentation on context lines when the hunk uses spaces", async () => {
+    const memory = createMemoryPatchSandbox({
+      "run.py":
+        "def run(x):\n\tif x:\n\t\tprepare()\n\t\tvalue = 1\n\t\treturn value\n\treturn 0\n",
+    });
+    const patch = `*** Begin Patch
+*** Update File: run.py
+@@
+     if x:
+         prepare()
+-        value = 1
++        value = 2
+         return value
+*** End Patch`;
+
+    await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/run.py")).toBe(
+      "def run(x):\n\tif x:\n\t\tprepare()\n        value = 2\n\t\treturn value\n\treturn 0\n",
+    );
+  });
+
   it("does not normalize mixed line endings outside the changed hunk", async () => {
     const memory = createMemoryPatchSandbox({
       "source.txt": "first\r\nsecond\nthird\r\n",

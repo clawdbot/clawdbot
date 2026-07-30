@@ -2,6 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -142,6 +143,45 @@ describe("before_dispatch hook", () => {
     expect(routeCall?.payload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
     expect(routeCall?.payload?.audioAsVoice).toBe(true);
     expect(result.queuedFinal).toBe(true);
+  });
+
+  it("passes canonical requester lineage to the before_dispatch runner", async () => {
+    sessionStoreMocks.currentEntry = {
+      sessionId: "canonical-session-id",
+      sessionKey: "agent:main:telegram:direct:canonical",
+      updatedAt: 0,
+    };
+    hookMocks.runner.runBeforeDispatch.mockImplementation(async (event, context) => {
+      (event as { sessionKey?: string }).sessionKey = "agent:plugin:forged";
+      (context as { sessionKey?: string }).sessionKey = "agent:plugin:forged";
+      return { handled: true };
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: createHookCtx({
+        SessionKey: "agent:main:telegram:direct:fallback",
+        OriginatingChannel: " Telegram ",
+        OriginatingTo: " telegram:999 ",
+        AccountId: " Work ",
+        MessageThreadId: 42,
+      }),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+    });
+
+    const requester = firstMockCall(
+      hookMocks.runner.runBeforeDispatch,
+      "before dispatch hook",
+    )[2] as PluginSubagentRequesterContext | undefined;
+    expect(requester).toEqual({
+      sessionKey: "agent:main:telegram:direct:fallback",
+      origin: {
+        channel: "telegram",
+        to: "telegram:999",
+        accountId: "work",
+        threadId: 42,
+      },
+    });
   });
 
   it("passes inbound reply metadata to before_dispatch event and context", async () => {

@@ -21,6 +21,7 @@ import {
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
+import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentDir,
@@ -33,11 +34,15 @@ import {
   type ModelsJsonReadyState,
 } from "./models-config-state.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
+import { repairPluginModelCatalogTransportMetadata } from "./plugin-model-catalog-repair.js";
 import {
+  decodePluginModelCatalogRelativePathPluginId,
   isGeneratedPluginModelCatalog,
   loadPersistedPluginModelCatalogs,
+  loadPersistedPluginModelCatalogsReadOnly,
   replacePersistedPluginModelCatalogs,
   resolvePluginModelCatalogOwnerPluginId,
+  type PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.js";
 import { stableStringify } from "./stable-stringify.js";
 
@@ -49,11 +54,18 @@ type PreparedOpenClawModelsJsonSource = ModelsJsonReadyResult & {
 type EnsureOpenClawModelsJsonOptions = {
   env?: NodeJS.ProcessEnv;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+  preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
   workspaceDir?: string;
   providerDiscoveryProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
 };
+
+type PlannedOpenClawModelsJsonSource = Readonly<{
+  agentDir: string;
+  modelsJsonContents: string | null;
+  pluginCatalogs: readonly PersistedPluginModelCatalog[];
+}>;
 
 function listPreparedPluginModelCatalogs(agentDir: string) {
   const { catalogs, warnings } = loadPersistedPluginModelCatalogs(agentDir);
@@ -167,14 +179,14 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 async function mergeGeneratedPluginCatalogProvidersIntoExistingParsed(params: {
   agentDir: string;
   existingParsed: unknown;
+  pluginCatalogs?: readonly PersistedPluginModelCatalog[];
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "owners">;
 }): Promise<unknown> {
   const root = isRecord(params.existingParsed) ? params.existingParsed : {};
   const providers = isRecord(root.providers) ? { ...root.providers } : {};
   let changed = false;
-  for (const { pluginId: catalogPluginId, contents } of listPreparedPluginModelCatalogs(
-    params.agentDir,
-  )) {
+  const pluginCatalogs = params.pluginCatalogs ?? listPreparedPluginModelCatalogs(params.agentDir);
+  for (const { pluginId: catalogPluginId, contents } of pluginCatalogs) {
     let catalog: unknown;
     try {
       catalog = JSON.parse(contents) as unknown;
@@ -204,6 +216,23 @@ async function mergeGeneratedPluginCatalogProvidersIntoExistingParsed(params: {
     return params.existingParsed;
   }
   return { ...root, providers };
+}
+
+function materializePlannedPluginCatalogs(
+  pluginCatalogWrites: Readonly<Record<string, string>>,
+): PersistedPluginModelCatalog[] {
+  return Object.entries(pluginCatalogWrites)
+    .map(([relativePath, contents]) => {
+      const pluginId = decodePluginModelCatalogRelativePathPluginId(relativePath);
+      if (!pluginId) {
+        throw new Error(`Invalid generated plugin model catalog key: ${relativePath}`);
+      }
+      return {
+        pluginId,
+        contents: repairPluginModelCatalogTransportMetadata(contents).contents,
+      };
+    })
+    .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
 }
 
 function writePluginCatalogsForModelsJson(params: {
@@ -360,6 +389,9 @@ async function prepareOpenClawModelsJsonSource(
       existingRaw: existingModelsFile.raw,
       existingParsed: existingParsedForMerge,
       ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+      ...(options.preparedStaticProviderCatalog
+        ? { preparedStaticProviderCatalog: options.preparedStaticProviderCatalog }
+        : {}),
       ...(options.providerDiscoveryProviderIds
         ? { providerDiscoveryProviderIds: options.providerDiscoveryProviderIds }
         : {}),
@@ -440,6 +472,75 @@ async function prepareOpenClawModelsJsonSource(
     }
     throw error;
   }
+}
+
+/**
+ * Plans the complete root/plugin catalog generation without mutating agent-owned state.
+ * Control-plane inventory reads use this when their lifecycle generation may be superseded.
+ */
+export async function planOpenClawModelsJsonSource(
+  config?: OpenClawConfig,
+  agentDirOverride?: string,
+  options: EnsureOpenClawModelsJsonOptions = {},
+): Promise<PlannedOpenClawModelsJsonSource> {
+  const resolved = resolveModelsConfigInput(config);
+  const cfg = resolved.config;
+  const workspaceDir =
+    options.workspaceDir ??
+    (agentDirOverride?.trim()
+      ? undefined
+      : resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)));
+  const providerScopedDiscovery = Boolean(options.providerDiscoveryProviderIds?.length);
+  const pluginMetadataSnapshot =
+    options.pluginMetadataSnapshot ??
+    resolvePluginMetadataSnapshot({
+      config: cfg,
+      env: createConfigRuntimeEnv(cfg, options.env),
+      ...(workspaceDir ? { workspaceDir } : {}),
+      ...(providerScopedDiscovery ? { preferPersisted: false } : {}),
+    });
+  const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveDefaultAgentDir(cfg);
+  const existingModelsFile = await readExistingModelsFile(path.join(agentDir, "models.json"));
+  const existingPluginCatalogs = loadPersistedPluginModelCatalogsReadOnly(agentDir);
+  const existingParsedForMerge = await mergeGeneratedPluginCatalogProvidersIntoExistingParsed({
+    agentDir,
+    existingParsed: existingModelsFile.parsed,
+    pluginCatalogs: existingPluginCatalogs,
+    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+  });
+  const env = createConfigRuntimeEnv(cfg, options.env);
+  const plan = await planOpenClawModelsJson({
+    cfg,
+    sourceConfigForSecrets: resolved.sourceConfigForSecrets,
+    agentDir,
+    env,
+    ...(workspaceDir ? { workspaceDir } : {}),
+    existingRaw: existingModelsFile.raw,
+    existingParsed: existingParsedForMerge,
+    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+    ...(options.preparedStaticProviderCatalog
+      ? { preparedStaticProviderCatalog: options.preparedStaticProviderCatalog }
+      : {}),
+    ...(options.providerDiscoveryProviderIds
+      ? { providerDiscoveryProviderIds: options.providerDiscoveryProviderIds }
+      : {}),
+    ...(options.providerDiscoveryTimeoutMs !== undefined
+      ? { providerDiscoveryTimeoutMs: options.providerDiscoveryTimeoutMs }
+      : {}),
+    ...(options.providerDiscoveryEntriesOnly === true
+      ? { providerDiscoveryEntriesOnly: true }
+      : {}),
+  });
+  return {
+    agentDir,
+    modelsJsonContents: plan.action === "write" ? plan.contents : existingModelsFile.raw || null,
+    // Planned writes share the writer's complete-replacement contract, including intentional
+    // stale-catalog deletion. Only a non-authoritative plan omits this field.
+    pluginCatalogs:
+      plan.pluginCatalogWrites === undefined
+        ? existingPluginCatalogs
+        : materializePlannedPluginCatalogs(plan.pluginCatalogWrites),
+  };
 }
 
 /** Ensures models.json and the agent SQLite catalog cache are current. */

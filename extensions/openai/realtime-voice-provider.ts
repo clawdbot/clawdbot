@@ -575,6 +575,8 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private static readonly MAX_RECONNECT_ATTEMPTS = 5;
   private static readonly BASE_RECONNECT_DELAY_MS = 1000;
   private static readonly CONNECT_TIMEOUT_MS = 10_000;
+  private static readonly MAX_PENDING_AUDIO_CHUNKS = 320;
+  private static readonly MAX_PENDING_AUDIO_BYTES = 1024 * 1024;
   readonly supportsToolResultContinuation = true;
   readonly supportsToolResultSuppression = true;
 
@@ -583,6 +585,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private connectPromise: Promise<void> | undefined;
   private readonly lifecycle = new OpenAIRealtimeVoiceLifecycle();
   private pendingAudio: Buffer[] = [];
+  private pendingAudioBytes = 0;
   private markQueue: string[] = [];
   private responseStartTimestamp: number | null = null;
   private responseActive = false;
@@ -633,10 +636,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   sendAudio(audio: Buffer): void {
+    if (this.lifecycle.phase() === "terminal") {
+      return;
+    }
     if (!this.lifecycle.isReady() || this.ws?.readyState !== WebSocket.OPEN) {
-      if (this.pendingAudio.length < 320) {
-        this.pendingAudio.push(audio);
-      }
+      this.enqueuePendingAudio(audio);
       return;
     }
     this.sendEvent({
@@ -704,6 +708,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (!connection || !this.lifecycle.cancel()) {
       return;
     }
+    this.resetTerminalState();
     const ws = this.ws;
     this.ws = null;
     ws?.close(1000, "Bridge closed");
@@ -1061,7 +1066,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         type: "session.reconnect.exhausted",
         detail: `reason=${reason} attempts=${OpenAIRealtimeVoiceBridge.MAX_RECONNECT_ATTEMPTS}`,
       });
-      this.lifecycle.failure(connection);
+      if (this.lifecycle.failure(connection)) {
+        this.resetTerminalState();
+      }
       this.notifyClose(connection, "error");
       return;
     }
@@ -1256,7 +1263,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       case "session.created":
         return;
 
-      case "session.updated":
+      case "session.updated": {
         if (!this.lifecycle.ready(connection)) {
           return;
         }
@@ -1272,10 +1279,13 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           this.sessionReadyFired = true;
           this.config.onReady?.();
         }
-        for (const chunk of this.pendingAudio.splice(0)) {
+        const pendingAudio = this.pendingAudio.splice(0);
+        this.pendingAudioBytes = 0;
+        for (const chunk of pendingAudio) {
           this.sendAudio(chunk);
         }
         return;
+      }
 
       case "response.created":
         this.responseActive = true;
@@ -1591,6 +1601,27 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.deliveredToolCallKeys.clear();
   }
 
+  private enqueuePendingAudio(audio: Buffer): void {
+    if (
+      this.pendingAudio.length >= OpenAIRealtimeVoiceBridge.MAX_PENDING_AUDIO_CHUNKS ||
+      this.pendingAudioBytes + audio.byteLength > OpenAIRealtimeVoiceBridge.MAX_PENDING_AUDIO_BYTES
+    ) {
+      return;
+    }
+    this.pendingAudio.push(audio);
+    this.pendingAudioBytes += audio.byteLength;
+  }
+
+  private clearPendingAudio(): void {
+    this.pendingAudio = [];
+    this.pendingAudioBytes = 0;
+  }
+
+  private resetTerminalState(): void {
+    this.clearPendingAudio();
+    this.resetRealtimeSessionState();
+  }
+
   private failConnection(
     error: OpenAIRealtimeMalformedAudioError,
     ws: WebSocket,
@@ -1601,7 +1632,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
     this.terminalError = error;
     this.lifecycle.failure(connection);
-    this.resetRealtimeSessionState();
+    this.resetTerminalState();
     try {
       this.config.onError?.(error);
     } finally {
@@ -1621,6 +1652,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (!terminalOutcome) {
       return;
     }
+    this.resetTerminalState();
     this.config.onClose?.(terminalOutcome);
   }
 

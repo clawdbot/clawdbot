@@ -17,7 +17,10 @@ import {
 import { clearInternalHooks, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
-import { createWhatsAppReplyPlan } from "./inbound-dispatch.js";
+import {
+  buildWhatsAppInboundTransportContext,
+  createWhatsAppReplyPlan,
+} from "./inbound-dispatch.js";
 
 const sessionKey = "agent:main:whatsapp:direct:+1000";
 type InternalHookEvent = Parameters<Parameters<typeof registerInternalHook>[1]>[0];
@@ -68,7 +71,25 @@ function createPlan(deliverReply: Parameters<typeof createWhatsAppReplyPlan>[0][
     groupHistories: new Map(),
     groupHistoryKey: sessionKey,
     maxMediaBytes: 1024,
-    msg,
+    inbound: {
+      channel: "whatsapp",
+      event: { id: "wa-inbound-1" },
+      from: "+1000",
+      sender: { id: "1000@s.whatsapp.net" },
+      conversation: { kind: "direct", id: "+1000" },
+      route: {
+        agentId: "main",
+        accountId: "default",
+        routeSessionKey: sessionKey,
+      },
+      reply: { to: "+2000", originatingTo: "+1000" },
+      message: {
+        body: "show me the result",
+        bodyForAgent: "show me the result",
+        rawBody: "show me the result",
+        commandBody: "show me the result",
+      },
+    },
     rememberSentText: vi.fn(),
     replyLogger: {
       info: vi.fn(),
@@ -88,6 +109,7 @@ function createPlan(deliverReply: Parameters<typeof createWhatsAppReplyPlan>[0][
       matchedBy: "default",
     },
     shouldClearGroupHistory: false,
+    transport: buildWhatsAppInboundTransportContext(msg),
   });
   return { context, plan };
 }

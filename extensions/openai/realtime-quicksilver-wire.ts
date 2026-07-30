@@ -1,6 +1,7 @@
 // GPT-Live frameless session, call-creation, and sideband event wire contracts.
 import { randomBytes } from "node:crypto";
 import {
+  readProviderTextResponse,
   readResponseTextLimited,
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
@@ -15,6 +16,7 @@ const OPENAI_QUICKSILVER_CALL_URL = "https://api.openai.com/v1/live";
 const OPENAI_REALTIME_CALL_URL = "https://api.openai.com/v1/realtime/calls";
 const OPENAI_REALTIME_ERROR_BODY_MAX_BYTES = 16 * 1024;
 const OPENAI_REALTIME_ERROR_DETAIL_MAX_CHARS = 500;
+const OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES = 256 * 1024;
 const OPENAI_GPT_LIVE_WAITLIST_URL = "https://openai.com/form/gpt-live-1-in-the-api/";
 
 const OPENAI_QUICKSILVER_VOICES = [
@@ -428,7 +430,11 @@ export async function createOpenAIQuicksilverCall(params: {
       response.status,
     );
   }
-  const answerSdp = await response.text();
+  const answerSdp = await readProviderTextResponse(
+    response,
+    `${isGptLive ? "GPT-Live" : "OpenAI Realtime"} SDP answer`,
+    { maxBytes: OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES },
+  );
   if (!answerSdp.trim()) {
     throw new OpenAIQuicksilverCallError(
       `${isGptLive ? "GPT-Live" : "OpenAI Realtime"} call creation returned an empty SDP answer`,

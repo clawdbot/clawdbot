@@ -37,6 +37,13 @@ In a Control UI chat, select **+** → **Connectors** → **Add MCP server…**.
 
 Choose **This session** for session-only enablement or **Everywhere** for global enablement. Either scope saves a global server definition; session policy is the per-session layer. See [Composer capability menu](/web/control-ui#composer-capability-menu) for the complete scope and tool-access behavior.
 
+From an active conversation, open **+ → Connectors → Tool access** to inspect
+or deny individual tools for that session. The view follows the session's
+actual runtime owner: built-in OpenClaw sessions read the in-process MCP
+catalog, while native agent harnesses can contribute their thread-owned
+catalog. Session server and tool denials are enforced by either runtime before
+the next turn starts.
+
 ## Add a server from the CLI
 
 A local stdio server:
@@ -84,7 +91,7 @@ The same `docs` server, written straight into config:
 }
 ```
 
-An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
+An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). The exact server name `__proto__` is reserved; choose a different name. Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
 
 ## Troubleshooting
 

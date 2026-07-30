@@ -3,6 +3,7 @@ import nodePath from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { drainSystemEvents } from "../infra/system-events.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   cronIsolatedRun,
   installGatewayTestHooks,
@@ -10,6 +11,7 @@ import {
   withGatewayServer,
   waitForSystemEvent,
 } from "./test-helpers.js";
+import { setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -47,7 +49,7 @@ async function waitForCronRuns(count: number): Promise<void> {
 
 function cronRunCall(index = 0): {
   sessionKey?: string;
-  job?: { sessionTarget?: string };
+  job?: { sessionTarget?: string; delivery?: { accountId?: string } };
 } {
   const call = cronIsolatedRun.mock.calls.at(index)?.[0];
   if (!call || typeof call !== "object") {
@@ -242,6 +244,55 @@ describe("gateway hook session mode", () => {
 
       expect(cronRunCall(0).job?.sessionTarget).toBe("isolated");
       expect(cronRunCall(1).job?.sessionTarget).toBe("session:hook:mode:42");
+    });
+  });
+
+  test("keeps account id in the idempotency dispatch scope", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+    };
+    await withGatewayServer(async ({ port }) => {
+      setTestPluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "discord",
+            source: "test",
+            plugin: createChannelTestPluginBase({
+              id: "discord",
+              config: {
+                listAccountIds: () => ["work", "personal"],
+                resolveAccount: (_cfg, accountId) => ({ accountId }),
+              },
+            }),
+          },
+        ]),
+      );
+      mockRunsOk();
+      const headers = { "Idempotency-Key": "hook-idem-account-id" };
+      const basePayload = {
+        message: "Do it",
+        channel: "discord",
+        to: "channel-1",
+      };
+      const work = await postHook(
+        port,
+        "/hooks/agent",
+        { ...basePayload, accountId: "work" },
+        headers,
+      );
+      expect(work.status).toBe(200);
+      const personal = await postHook(
+        port,
+        "/hooks/agent",
+        { ...basePayload, accountId: "personal" },
+        headers,
+      );
+      expect(personal.status).toBe(200);
+      await waitForCronRuns(2);
+
+      expect(cronRunCall(0).job?.delivery?.accountId).toBe("work");
+      expect(cronRunCall(1).job?.delivery?.accountId).toBe("personal");
     });
   });
 });

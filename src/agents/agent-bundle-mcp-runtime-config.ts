@@ -292,12 +292,14 @@ export function resolveSessionMcpConfigSummary(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 }): { fingerprint: string; serverNames: string[] } {
   const { loaded, fingerprint } = loadSessionMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
     logDiagnostics: false,
     manifestRegistry: params.manifestRegistry,
+    toolOverrides: params.toolOverrides,
   });
   const serverNames = Object.keys(loaded.mcpServers).toSorted((a, b) => a.localeCompare(b));
   if (serverNames.length === 0) {
@@ -313,6 +315,7 @@ export function resolveSessionMcpConfigSummary(params: {
     cfg: params.cfg,
     logDiagnostics: false,
     manifestRegistry: params.manifestRegistry,
+    toolOverrides: params.toolOverrides,
     ...(requesterScopedServerNames.length > 0
       ? { excludeServerNames: new Set(requesterScopedServerNames) }
       : {}),
