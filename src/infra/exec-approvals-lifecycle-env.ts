@@ -134,10 +134,12 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
     if (inline === null) {
       return false;
     }
-    return splitLifecycleInlineCommands(inline).some((part) => {
-      const nestedArgv = splitShellArgs(part);
-      return nestedArgv ? unresolvedEnvironmentMayHideLifecycle(nestedArgv) : true;
-    });
+    return splitLifecycleInlineCommands(inline, executable === "cmd" ? "cmd" : "posix").some(
+      (part) => {
+        const nestedArgv = splitShellArgs(part);
+        return nestedArgv ? unresolvedEnvironmentMayHideLifecycle(nestedArgv) : true;
+      },
+    );
   }
   if (LIFECYCLE_RUNNERS.has(executable)) {
     return /\b(?:add|daemon|gateway|install|remove|restart|rm|start|stop|uninstall|update|upgrade)\b/iu.test(

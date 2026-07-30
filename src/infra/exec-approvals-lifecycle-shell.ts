@@ -1,7 +1,10 @@
 // Splits compound shell text without treating quoted separators as commands.
+export type LifecycleShellDialect = "cmd" | "posix" | "powershell";
+
 export function splitLifecycleCommandText(
   command: string,
   delimiters: ReadonlySet<string>,
+  dialect: LifecycleShellDialect = "posix",
 ): string[] {
   const parts: string[] = [];
   let start = 0;
@@ -19,7 +22,11 @@ export function splitLifecycleCommandText(
       escaped = false;
       continue;
     }
-    if (char === "\\" || char === "^" || char === "`") {
+    if (
+      (dialect === "posix" && char === "\\") ||
+      (dialect === "cmd" && char === "^") ||
+      (dialect === "powershell" && char === "`")
+    ) {
       escaped = true;
       continue;
     }
@@ -53,6 +60,10 @@ export function splitLifecycleCommandText(
 
 function normalizeCompoundFragment(fragment: string): string {
   let normalized = fragment.trim().replace(/^[(){}\s]+|[(){}\s]+$/gu, "");
+  normalized = normalized.replace(
+    /^(?:(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*\s*(?:\(\s*\))?\s*\{\s*)/u,
+    "",
+  );
   if (/^case\b[\s\S]*\bin\b/iu.test(normalized) && normalized.includes(")")) {
     normalized = normalized.slice(normalized.lastIndexOf(")") + 1).trim();
   }
@@ -63,8 +74,11 @@ function normalizeCompoundFragment(fragment: string): string {
 }
 
 /** Split shell command lists and pipelines into executable text fragments. */
-export function splitLifecycleInlineCommands(command: string): string[] {
-  return splitLifecycleCommandText(command, new Set([";", "|", "&", "\n", "\r"]))
+export function splitLifecycleInlineCommands(
+  command: string,
+  dialect: LifecycleShellDialect = "posix",
+): string[] {
+  return splitLifecycleCommandText(command, new Set([";", "|", "&", "\n", "\r"]), dialect)
     .map(normalizeCompoundFragment)
     .filter(Boolean);
 }

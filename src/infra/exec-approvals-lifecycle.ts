@@ -4,6 +4,7 @@ import { resolveCarrierCommandArgv } from "./command-carriers.js";
 import { unwrapKnownDispatchWrapperInvocation } from "./dispatch-wrapper-resolution.js";
 import { resolveLifecycleXargsArgv } from "./exec-approvals-lifecycle-carriers.js";
 import { classifyOpenClawConfigArgv } from "./exec-approvals-lifecycle-config.js";
+import { classifyOpenClawDoctorArgv } from "./exec-approvals-lifecycle-doctor.js";
 import {
   expandKnownLifecycleEnvironmentCommand,
   expandLifecycleEnvironmentArgv,
@@ -253,6 +254,8 @@ function classifyOpenClawArgv(argv: readonly string[]): boolean {
       );
     case "update":
       return classifyUpdateArgv(argv, index + 1);
+    case "doctor":
+      return classifyOpenClawDoctorArgv(argv, index + 1);
     case "configure":
     case "onboard":
     case "setup":
@@ -464,7 +467,7 @@ function isPowerShellPipelineMutation(argv: readonly string[]): boolean {
 }
 
 function commandHasPowerShellLifecyclePipeline(command: string): boolean {
-  const stages = splitLifecycleCommandText(command, new Set(["|"]));
+  const stages = splitLifecycleCommandText(command, new Set(["|"]), "powershell");
   if (stages.length < 2) {
     return false;
   }
@@ -496,7 +499,10 @@ function commandHasLifecycleSubstitution(
     return true;
   }
   return scan.commands.some((nested) =>
-    splitLifecycleInlineCommands(nested).some((part) => {
+    splitLifecycleInlineCommands(
+      nested,
+      shellContext === "powershell" ? "powershell" : "posix",
+    ).some((part) => {
       const argv = splitShellArgs(part);
       return argv ? classifyArgv(argv, part, depth + 1, shellContext, cwd) : true;
     }),
@@ -545,7 +551,9 @@ function classifyArgv(
       return true;
     }
     const positionalArgv = resolveLifecyclePosixShellPositionals(argv);
-    return splitLifecycleInlineCommands(inline).some((part) => {
+    const nestedDialect =
+      wrapper === "cmd" ? "cmd" : nestedShellContext === "powershell" ? "powershell" : "posix";
+    return splitLifecycleInlineCommands(inline, nestedDialect).some((part) => {
       const nestedArgv = splitShellArgs(part);
       if (!nestedArgv) {
         return false;
@@ -667,7 +675,10 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
   if (params.segments.length > 0) {
     return false;
   }
-  return splitLifecycleInlineCommands(expandedCommand).some((part) => {
+  return splitLifecycleInlineCommands(
+    expandedCommand,
+    shellContext === "powershell" ? "powershell" : "posix",
+  ).some((part) => {
     const argv = splitShellArgs(part);
     return argv ? classifyArgv(argv, part, 0, shellContext, params.cwd) : false;
   });

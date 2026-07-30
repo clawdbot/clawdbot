@@ -20,6 +20,7 @@ const NODE_OPTIONS_WITH_VALUE = new Set([
   "--input-type",
   "--inspect-port",
   "--localstorage-file",
+  "--loader",
   "--max-http-header-size",
   "--openssl-config",
   "--redirect-warnings",

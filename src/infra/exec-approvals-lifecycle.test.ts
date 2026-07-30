@@ -32,6 +32,7 @@ const mutationCases: Array<[string, string[]]> = [
   ["openclaw gateway --password health", ["openclaw", "gateway", "--password", "health"]],
   ["openclaw daemon stop", ["openclaw", "daemon", "stop"]],
   ["/usr/bin/opencla? gateway restart", ["/usr/bin/opencla?", "gateway", "restart"]],
+  ["open{c..c}law gateway restart", ["open{c..c}law", "gateway", "restart"]],
   ["openclaw gateway call update.run", ["openclaw", "gateway", "call", "update.run"]],
   [
     "openclaw gateway call --url ws://127.0.0.1:18789 update.run",
@@ -45,6 +46,9 @@ const mutationCases: Array<[string, string[]]> = [
   ],
   ["openclaw config patch --stdin", ["openclaw", "config", "patch", "--stdin"]],
   ["openclaw config unset gateway.port", ["openclaw", "config", "unset", "gateway.port"]],
+  ["openclaw doctor --fix", ["openclaw", "doctor", "--fix"]],
+  ["openclaw doctor --repair", ["openclaw", "doctor", "--repair"]],
+  ["openclaw doctor --generate-gateway-token", ["openclaw", "doctor", "--generate-gateway-token"]],
   ["openclaw update --yes", ["openclaw", "update", "--yes"]],
   ["openclaw uninstall --all --yes", ["openclaw", "uninstall", "--all", "--yes"]],
   ["openclaw onboard --install-daemon", ["openclaw", "onboard", "--install-daemon"]],
@@ -144,6 +148,11 @@ const mutationCases: Array<[string, string[]]> = [
     "sh -c 'if true; then openclaw gateway restart; fi'",
     ["sh", "-c", "if true; then openclaw gateway restart; fi"],
   ],
+  ["sh -c 'true ^; openclaw gateway restart'", ["sh", "-c", "true ^; openclaw gateway restart"]],
+  [
+    "sh -c 'f(){ openclaw gateway restart; }; f'",
+    ["sh", "-c", "f(){ openclaw gateway restart; }; f"],
+  ],
   [
     `sh -c 'openclaw gateway "$1"' sh restart`,
     ["sh", "-c", `openclaw gateway "$1"`, "sh", "restart"],
@@ -238,6 +247,10 @@ const mutationCases: Array<[string, string[]]> = [
     ],
   ],
   [
+    "node --loader ./loader.mjs /opt/openclaw/dist/entry.js gateway restart",
+    ["node", "--loader", "./loader.mjs", "/opt/openclaw/dist/entry.js", "gateway", "restart"],
+  ],
+  [
     `powershell -NoProfile -Command "kill openclaw"`,
     ["powershell", "-NoProfile", "-Command", "kill openclaw"],
   ],
@@ -288,6 +301,8 @@ const nonMutationCases: Array<[string, string[]]> = [
   ["openclaw config file", ["openclaw", "config", "file"]],
   ["openclaw config schema", ["openclaw", "config", "schema"]],
   ["openclaw config validate", ["openclaw", "config", "validate"]],
+  ["openclaw doctor --lint", ["openclaw", "doctor", "--lint"]],
+  ["openclaw doctor --post-upgrade", ["openclaw", "doctor", "--post-upgrade"]],
   [
     "openclaw config set gateway.port 19001 --dry-run",
     ["openclaw", "config", "set", "gateway.port", "19001", "--dry-run"],
@@ -716,6 +731,13 @@ describe("OpenClaw lifecycle exec approvals", () => {
           },
         ],
       }),
+    ).toBe(false);
+    expect(
+      requiresApproval(
+        `cmd.exe /C "echo ^& openclaw gateway restart"`,
+        ["cmd.exe", "/C", "echo ^& openclaw gateway restart"],
+        "win32",
+      ),
     ).toBe(false);
   });
 

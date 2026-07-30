@@ -22,6 +22,26 @@ function globPatternToRegExp(pattern: string): RegExp {
         continue;
       }
     }
+    if (char === "{") {
+      const end = pattern.indexOf("}", index + 1);
+      if (end !== -1) {
+        const body = pattern.slice(index + 1, end);
+        const range = /^([a-z])\.\.([a-z])$/iu.exec(body);
+        const choices = range
+          ? Array.from(
+              { length: Math.abs(range[1]!.charCodeAt(0) - range[2]!.charCodeAt(0)) + 1 },
+              (_unused, offset) =>
+                String.fromCharCode(
+                  range[1]!.charCodeAt(0) +
+                    offset * (range[1]!.charCodeAt(0) <= range[2]!.charCodeAt(0) ? 1 : -1),
+                ),
+            )
+          : body.split(",").map((choice) => choice.replace(/[\\^$.*+?()[\]{}|]/gu, "\\$&"));
+        source += choices.length === 1 ? (choices[0] ?? "") : `(?:${choices.join("|")})`;
+        index = end;
+        continue;
+      }
+    }
     source += /[\\^$.*+?()[\]{}|]/u.test(char) ? `\\${char}` : char;
   }
   return new RegExp(`${source}$`, "iu");
@@ -38,7 +58,7 @@ export function isOpenClawExecutablePattern(value: string | undefined): boolean 
     return true;
   }
   return (
-    /[*?[]/u.test(executable) &&
+    /[*?[{]/u.test(executable) &&
     ["openclaw", "openclaw.mjs"].some((candidate) =>
       globPatternToRegExp(executable).test(candidate),
     )
