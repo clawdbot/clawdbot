@@ -502,16 +502,19 @@ async function smokeOpenAIAudioRoundtrip(apiKey: string, cycleCount: number): Pr
         },
       });
       bridgeRef.current = bridge;
+      const boundedRoundtrip = withTimeout({
+        label: `OpenAI audio roundtrip cycle ${cycle}`,
+        timeoutMs: OPENAI_AUDIO_ROUNDTRIP_TIMEOUT_MS,
+        run: () => roundtrip,
+      });
+      // Observe failures immediately; the same promise is awaited after input streaming completes.
+      void boundedRoundtrip.catch(() => undefined);
 
       let chunksSent = 0;
       try {
         await bridge.connect();
         chunksSent = await sendPcmAudioInChunks(bridge, inputAudio);
-        await withTimeout({
-          label: `OpenAI audio roundtrip cycle ${cycle}`,
-          timeoutMs: OPENAI_AUDIO_ROUNDTRIP_TIMEOUT_MS,
-          run: () => roundtrip,
-        });
+        await boundedRoundtrip;
       } finally {
         closed = true;
         bridge.close();
