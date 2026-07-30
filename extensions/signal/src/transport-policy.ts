@@ -67,6 +67,20 @@ export function resolveLocalSignalTransportPort(baseUrl: string): number | undef
   }
 }
 
+export function preferredManagedNativePortFromConnectionUrl(
+  transport: SignalTransportConfig,
+): number | undefined {
+  if (transport.kind !== "managed-native" || transport.httpPort !== undefined || !transport.url) {
+    return undefined;
+  }
+  const localPort = resolveLocalSignalTransportPort(transport.url);
+  if (localPort === undefined || !isValidSignalManagedNativePort(localPort)) {
+    return undefined;
+  }
+  const candidate: SignalManagedNativeTransport = { ...transport, httpPort: localPort };
+  return isSignalManagedNativeConnectionUrlForBind(candidate) ? localPort : undefined;
+}
+
 export function isSignalManagedNativeConnectionUrlForBind(
   transport: SignalTransportConfig,
 ): boolean {

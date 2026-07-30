@@ -10,6 +10,7 @@ import {
   DEFAULT_SIGNAL_MANAGED_NATIVE_PORT,
   isSignalManagedNativeConnectionUrlForBind,
   isValidSignalManagedNativePort,
+  preferredManagedNativePortFromConnectionUrl,
   resolveLocalSignalTransportPort,
 } from "./transport-policy.js";
 import { buildSignalTransportHttpUrl, normalizeSignalTransportUrl } from "./transport-url.js";
@@ -226,7 +227,16 @@ function buildManagedNativeTransport(
   const cliPath = optionalString(value("cliPath"));
   const url = resolveManagedConnectionUrl(entry, parent);
   const httpHost = optionalString(value("httpHost"));
-  const httpPort = value("httpPort");
+  const rawHttpPort = value("httpPort");
+  const inferredHttpPort =
+    typeof rawHttpPort !== "number"
+      ? preferredManagedNativePortFromConnectionUrl({
+          kind: "managed-native",
+          ...(url ? { url } : {}),
+          ...(httpHost ? { httpHost } : {}),
+        })
+      : undefined;
+  const httpPort = typeof rawHttpPort === "number" ? rawHttpPort : inferredHttpPort;
   const startupTimeoutMs = value("startupTimeoutMs");
   const receiveMode = value("receiveMode");
   const ignoreStories = value("ignoreStories");

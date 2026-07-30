@@ -403,6 +403,40 @@ describe("signal transport compatibility", () => {
     });
   });
 
+  it("infers a managed bind port from a legacy loopback httpUrl when httpPort is absent", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: signalConfig({
+        apiMode: "native",
+        autoStart: true,
+        account: "+15555550123",
+        httpUrl: "http://127.0.0.1:8082",
+      }),
+    });
+
+    expect(result.config.channels?.signal?.transport).toMatchObject({
+      kind: "managed-native",
+      url: "http://127.0.0.1:8082",
+      httpPort: 8082,
+    });
+  });
+
+  it("does not infer an invalid managed bind port from a legacy loopback httpUrl", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: signalConfig({
+        apiMode: "native",
+        autoStart: true,
+        account: "+15555550123",
+        httpUrl: "http://127.0.0.1:0",
+      }),
+    });
+
+    expect(result.config.channels?.signal?.transport).toMatchObject({
+      kind: "managed-native",
+      url: "http://127.0.0.1:0",
+    });
+    expect(result.config.channels?.signal?.transport).not.toHaveProperty("httpPort");
+  });
+
   it("reserves managed bind and local connection ports during migration", () => {
     const result = normalizeCompatibilityConfig({
       cfg: signalConfig({

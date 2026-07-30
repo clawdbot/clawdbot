@@ -3,7 +3,10 @@
 // sockets whose URLs must survive bind-port reassignment untouched.
 import { describe, expect, it } from "vitest";
 import type { SignalTransportConfig } from "./account-types.js";
-import { assignSignalManagedNativePort } from "./transport-policy.js";
+import {
+  assignSignalManagedNativePort,
+  preferredManagedNativePortFromConnectionUrl,
+} from "./transport-policy.js";
 
 type SignalManagedNativeTransport = Extract<SignalTransportConfig, { kind: "managed-native" }>;
 
@@ -15,6 +18,37 @@ function managedTransport(url: string, httpHost?: string): SignalManagedNativeTr
     httpPort: 8080,
   };
 }
+
+describe("preferredManagedNativePortFromConnectionUrl", () => {
+  it("prefers a local connection URL port when httpPort is omitted", () => {
+    expect(
+      preferredManagedNativePortFromConnectionUrl({
+        kind: "managed-native",
+        url: "http://127.0.0.1:8082",
+      }),
+    ).toBe(8082);
+  });
+
+  it("does not override an explicit managed port", () => {
+    expect(
+      preferredManagedNativePortFromConnectionUrl({
+        kind: "managed-native",
+        url: "http://127.0.0.1:8082",
+        httpPort: 9090,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not infer from a connection URL on a different bind host", () => {
+    expect(
+      preferredManagedNativePortFromConnectionUrl({
+        kind: "managed-native",
+        url: "http://127.0.0.1:8080",
+        httpHost: "127.0.0.2",
+      }),
+    ).toBeUndefined();
+  });
+});
 
 describe("assignSignalManagedNativePort", () => {
   it("rewrites a localhost connection URL aligned with a loopback bind", () => {
