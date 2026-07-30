@@ -366,8 +366,26 @@ function resolvePackageRunnerArgv(argv: readonly string[]): string[] | null {
   if (executable === "corepack") {
     return argv.length > 1 ? argv.slice(1) : null;
   }
+  if (executable === "npm" && ["exec", "x"].includes(normalizedToken(argv[1]))) {
+    const commandFlag = argv.findIndex(
+      (token, index) => index > 1 && ["-c", "--call"].includes(optionName(token)),
+    );
+    if (commandFlag !== -1) {
+      const flag = argv[commandFlag] ?? "";
+      const command = flag.includes("=")
+        ? flag.slice(flag.indexOf("=") + 1)
+        : argv[commandFlag + 1];
+      return command ? ["sh", "-c", command] : null;
+    }
+    const index = scanFirstPositional(argv, 2, new Set(["-p", "--package"]));
+    return index < argv.length ? argv.slice(index) : null;
+  }
   if (executable === "pnpm" && normalizedToken(argv[1]) === "dlx") {
     const index = scanFirstPositional(argv, 2, new Set(["--package"]));
+    return index < argv.length ? [argv[index] ?? "", ...argv.slice(index + 1)] : null;
+  }
+  if (executable === "yarn" && normalizedToken(argv[1]) === "dlx") {
+    const index = scanFirstPositional(argv, 2, new Set(["-p", "--package"]));
     return index < argv.length ? [argv[index] ?? "", ...argv.slice(index + 1)] : null;
   }
   if (["bunx", "npx"].includes(executable)) {
@@ -375,7 +393,11 @@ function resolvePackageRunnerArgv(argv: readonly string[]): string[] | null {
       (token, index) => index > 0 && ["-c", "--call"].includes(optionName(token)),
     );
     if (commandFlag !== -1) {
-      return null;
+      const flag = argv[commandFlag] ?? "";
+      const command = flag.includes("=")
+        ? flag.slice(flag.indexOf("=") + 1)
+        : argv[commandFlag + 1];
+      return command ? ["sh", "-c", command] : null;
     }
     const index = scanFirstPositional(argv, 1, new Set(["-p", "--package"]));
     return index < argv.length ? [argv[index] ?? "", ...argv.slice(index + 1)] : null;
@@ -614,16 +636,22 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
     return true;
   }
   for (const segment of params.segments) {
-    const candidates = [segment.resolution?.effectiveArgv, segment.sourceArgv, segment.argv].filter(
-      (argv): argv is string[] => Array.isArray(argv) && argv.length > 0,
-    );
     const resolvedExecutable =
       segment.resolution?.execution.resolvedRealPath ??
       segment.resolution?.execution.resolvedPath ??
       "";
+    const effectiveArgv = segment.resolution?.effectiveArgv ?? segment.argv;
+    const resolvedArgv = resolvedExecutable
+      ? [resolvedExecutable, ...effectiveArgv.slice(1)]
+      : undefined;
+    const candidates = [
+      resolvedArgv,
+      segment.resolution?.effectiveArgv,
+      segment.sourceArgv,
+      segment.argv,
+    ].filter((argv): argv is string[] => Array.isArray(argv) && argv.length > 0);
     if (resolvedExecutable && isOpenClawExecutable(resolvedExecutable)) {
-      const effective = segment.resolution?.effectiveArgv ?? segment.argv;
-      if (classifyOpenClawArgv(["openclaw", ...effective.slice(1)])) {
+      if (classifyOpenClawArgv(["openclaw", ...effectiveArgv.slice(1)])) {
         return true;
       }
     }

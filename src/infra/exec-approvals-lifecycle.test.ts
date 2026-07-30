@@ -52,6 +52,9 @@ const mutationCases: Array<[string, string[]]> = [
     "npx -p openclaw openclaw gateway restart",
     ["npx", "-p", "openclaw", "openclaw", "gateway", "restart"],
   ],
+  [`npx -c "openclaw gateway restart"`, ["npx", "-c", "openclaw gateway restart"]],
+  ["npm exec -- openclaw gateway restart", ["npm", "exec", "--", "openclaw", "gateway", "restart"]],
+  ["yarn dlx openclaw gateway restart", ["yarn", "dlx", "openclaw", "gateway", "restart"]],
   [
     "pnpm -C repo openclaw gateway restart",
     ["pnpm", "-C", "repo", "openclaw", "gateway", "restart"],
@@ -137,6 +140,33 @@ describe("OpenClaw lifecycle exec approvals", () => {
                 resolvedPath: "/opt/bin/openclaw",
               },
               effectiveArgv: ["oc", "gateway", "restart"],
+            },
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("uses resolved lifecycle utility identities", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: "ctl --user restart openclaw-gateway.service",
+        segments: [
+          {
+            raw: "ctl --user restart openclaw-gateway.service",
+            argv: ["ctl", "--user", "restart", "openclaw-gateway.service"],
+            resolution: {
+              execution: {
+                rawExecutable: "ctl",
+                executableName: "systemctl",
+                resolvedPath: "/usr/bin/systemctl",
+              },
+              policy: {
+                rawExecutable: "ctl",
+                executableName: "systemctl",
+                resolvedPath: "/usr/bin/systemctl",
+              },
+              effectiveArgv: ["ctl", "--user", "restart", "openclaw-gateway.service"],
             },
           },
         ],
