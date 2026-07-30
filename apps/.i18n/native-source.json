@@ -30587,7 +30587,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 148,
+      "line": 147,
       "path": "apps/macos/Sources/OpenClaw/ChannelsStore+Lifecycle.swift",
       "source": "Logged out and cleared credentials.",
       "surface": "apple",
@@ -30595,7 +30595,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 149,
+      "line": 148,
       "path": "apps/macos/Sources/OpenClaw/ChannelsStore+Lifecycle.swift",
       "source": "No WhatsApp session found.",
       "surface": "apple",
@@ -30603,7 +30603,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 173,
+      "line": 172,
       "path": "apps/macos/Sources/OpenClaw/ChannelsStore+Lifecycle.swift",
       "source": "Telegram token cleared.",
       "surface": "apple",
@@ -30611,7 +30611,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 174,
+      "line": 173,
       "path": "apps/macos/Sources/OpenClaw/ChannelsStore+Lifecycle.swift",
       "source": "No Telegram token configured.",
       "surface": "apple",
