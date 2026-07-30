@@ -426,7 +426,7 @@ async function maybeRepairStaleLocalBundledPluginInstallRecords(
 }
 
 /** Removes install records whose persisted source path no longer exists. */
-export async function maybeRepairMissingPluginInstallRecordPaths(
+async function maybeRepairMissingPluginInstallRecordPaths(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<string[]> {
   const missing = await listMissingPluginInstallRecordPaths(params);
