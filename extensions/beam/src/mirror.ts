@@ -293,11 +293,15 @@ export function createBeamMirrorRunner(params: {
       },
       body: JSON.stringify(payload),
     });
-    if (!response.ok) {
-      warnThrottled(`beam mirror upload failed (${response.status}) for ${payload.source}`);
-      return false;
+    try {
+      if (!response.ok) {
+        warnThrottled(`beam mirror upload failed (${response.status}) for ${payload.source}`);
+        return false;
+      }
+      return true;
+    } finally {
+      await response.body?.cancel().catch(() => undefined);
     }
-    return true;
   };
 
   const buildUpload = async (

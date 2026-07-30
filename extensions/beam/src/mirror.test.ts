@@ -87,7 +87,7 @@ function fakeRuntime(config: unknown): PluginRuntime {
 
 type SentRequest = { url: string; auth?: string; payload: BeamMirrorUpload };
 
-function captureFetch(sent: SentRequest[], status = 200): typeof fetch {
+function captureFetch(sent: SentRequest[], status = 200, onCancel?: () => void): typeof fetch {
   return (async (url: unknown, init?: RequestInit) => {
     const headers = (init?.headers ?? {}) as Record<string, string>;
     sent.push({
@@ -95,7 +95,12 @@ function captureFetch(sent: SentRequest[], status = 200): typeof fetch {
       ...(headers.Authorization ? { auth: headers.Authorization } : {}),
       payload: JSON.parse(init?.body as string) as BeamMirrorUpload,
     });
-    return new Response("{}", { status });
+    return new Response(
+      new ReadableStream({
+        cancel: onCancel,
+      }),
+      { status },
+    );
   }) as typeof fetch;
 }
 
@@ -334,6 +339,29 @@ describe("createBeamMirrorRunner", () => {
     // Both ticks retry because the failed upload was never fingerprinted.
     expect(sent).toHaveLength(2);
     expect(warnings.length).toBeGreaterThan(0);
+  });
+
+  it.each([200, 503])("cancels the response body after an upload returns %i", async (status) => {
+    const sent: SentRequest[] = [];
+    let cancelCount = 0;
+    const catalog = fakeCatalog({
+      id: "claude",
+      sessions: [{ threadId: "t1", recencyAt: NOW - 60_000 }],
+    });
+    const runner = createBeamMirrorRunner({
+      runtime: fakeRuntime(mirrorConfig()),
+      logger: silentLogger,
+      fetchFn: captureFetch(sent, status, () => {
+        cancelCount += 1;
+      }),
+      now: () => NOW,
+      listCatalogs: () => [catalog],
+    });
+
+    await runner.tick();
+
+    expect(sent).toHaveLength(1);
+    expect(cancelCount).toBe(1);
   });
 
   it("skips ticks when a configured token cannot be resolved", async () => {
