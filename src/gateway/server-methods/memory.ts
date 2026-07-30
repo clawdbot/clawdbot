@@ -82,15 +82,14 @@ async function buildEntry(
   try {
     stat = await workspaceRoot.stat(params.relativePath);
   } catch (err: unknown) {
-    // ENOENT means the file disappeared between listing and stat (race).
+    // "not-found" means the file disappeared between listing and stat (race).
     // Other errors (EACCES, EIO, ELOOP) should propagate.
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+    if ((err as { code?: string }).code !== "not-found") {
       throw err;
     }
     return null;
   }
-  const kind = (stat as { kind?: unknown }).kind;
-  if (kind !== "file") {
+  if (!stat.isFile) {
     return null;
   }
   const entry: MemoryFileEntry = {
@@ -100,15 +99,30 @@ async function buildEntry(
     updatedAtMs: toUpdatedAtMs((stat as { mtimeMs?: number }).mtimeMs ?? Date.now()),
   };
   if (params.includeContent) {
-    const readResult = await workspaceRoot.read(params.relativePath, {
-      hardlinks: "reject",
-      maxBytes: params.maxContentBytes,
-      nonBlockingRead: true,
-      symlinks: "reject",
-    });
-    entry.content = readResult.buffer.toString("utf8");
-    if (readResult.buffer.length < entry.sizeBytes) {
-      entry.truncated = true;
+    try {
+      const readResult = await workspaceRoot.read(params.relativePath, {
+        hardlinks: "reject",
+        maxBytes: params.maxContentBytes,
+        nonBlockingRead: true,
+        symlinks: "reject",
+      });
+      entry.content = readResult.buffer.toString("utf8");
+      if (readResult.buffer.length < entry.sizeBytes) {
+        entry.truncated = true;
+      }
+    } catch (err: unknown) {
+      // "too-large" means the file exceeds maxContentBytes — truncate instead of failing.
+      if ((err as { code?: string }).code === "too-large") {
+        const readResult = await workspaceRoot.read(params.relativePath, {
+          hardlinks: "reject",
+          nonBlockingRead: true,
+          symlinks: "reject",
+        });
+        entry.content = readResult.buffer.subarray(0, params.maxContentBytes).toString("utf8");
+        entry.truncated = true;
+      } else {
+        throw err;
+      }
     }
   }
   return entry;
@@ -160,18 +174,18 @@ export const memoryHandlers: GatewayRequestHandlers = {
 
       // Newest-first daily file listing; a missing memory directory is an
       // empty result, not an error (startup-safe before any memory exists).
-      // Only ENOENT is treated as absent — other fs errors propagate.
+      // Only "not-found" is treated as absent — other fs errors propagate.
       let entries: Array<{ name: string; kind?: string }>;
       try {
         entries = await workspaceRoot.list("memory", { withFileTypes: true });
       } catch (err: unknown) {
-        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        if ((err as { code?: string }).code !== "not-found") {
           throw err;
         }
         entries = [];
       }
       const dailyNames = entries
-        .filter((entry) => entry.kind === "file" && DAILY_MEMORY_FILE_PATTERN.test(entry.name))
+        .filter((entry) => entry.isFile && DAILY_MEMORY_FILE_PATTERN.test(entry.name))
         .map((entry) => entry.name)
         .toSorted(compareDailyFileNames);
 

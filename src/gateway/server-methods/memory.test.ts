@@ -48,6 +48,9 @@ async function invokeMemoryList(params: Record<string, unknown>) {
 
 function expectOkPayload(calls: ReturnType<typeof createResponder>["calls"]): Record<string, any> {
   expect(calls).toHaveLength(1);
+  if (!calls[0]?.ok) {
+    console.log("ERROR PAYLOAD:", JSON.stringify(calls[0]?.error, null, 2));
+  }
   expect(calls[0]?.ok).toBe(true);
   return calls[0]?.payload as Record<string, any>;
 }
