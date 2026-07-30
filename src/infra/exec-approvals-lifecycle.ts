@@ -8,6 +8,7 @@ import { classifyOpenClawDoctorArgv } from "./exec-approvals-lifecycle-doctor.js
 import {
   expandKnownLifecycleEnvironmentCommand,
   expandLifecycleEnvironmentArgv,
+  lifecycleAssignedEnvironmentKeys,
   unresolvedEnvironmentMayHideLifecycle,
 } from "./exec-approvals-lifecycle-env.js";
 import { classifyOpenClawGatewayArgv } from "./exec-approvals-lifecycle-gateway.js";
@@ -62,6 +63,7 @@ const SYSTEMCTL_MUTATIONS = new Set([
   "add-wants",
   "bind",
   "cancel",
+  "clean",
   "disable",
   "edit",
   "enable",
@@ -656,7 +658,12 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
   segments: LifecycleSegment[];
 }): boolean {
   const envComplete = params.envComplete ?? params.env !== undefined;
-  const expandedCommand = expandKnownLifecycleEnvironmentCommand(params.command, params.env);
+  const shadowedKeys = lifecycleAssignedEnvironmentKeys(params.command);
+  const expandedCommand = expandKnownLifecycleEnvironmentCommand(
+    params.command,
+    params.env,
+    shadowedKeys,
+  );
   const shellContext: ShellContext =
     (params.platform ?? process.platform) === "win32" ? "powershell" : undefined;
   if (
@@ -691,6 +698,7 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
           argv,
           env: params.env,
           envComplete,
+          shadowedKeys,
         });
         return (
           ((expanded.unresolved || expanded.fieldSplitUncertain) &&

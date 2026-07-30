@@ -22,6 +22,8 @@ const CMD_DELAYED_VARIABLE_RE = /!([A-Za-z_][A-Za-z0-9_]*)!/gu;
 const VARIABLE_REFERENCE_RE =
   /\$\{[^}]+\}|\$(?:[A-Za-z_][A-Za-z0-9_]*|env:[A-Za-z_][A-Za-z0-9_]*)|%[A-Za-z_][A-Za-z0-9_]*%|![A-Za-z_][A-Za-z0-9_]*!/iu;
 const POSIX_PARAMETER_OPERATOR_RE = /\$\{(?![A-Za-z_][A-Za-z0-9_]*\})[^}]+\}/u;
+const ASSIGNMENT_TOKEN_RE = /^(?:\$env:)?([A-Za-z_][A-Za-z0-9_]*)=/iu;
+const POWERSHELL_ENV_NAME_RE = /^\$env:([A-Za-z_][A-Za-z0-9_]*)$/iu;
 const OPENCLAW_GLOBAL_FLAGS = new Set(["--dev", "--no-color"]);
 const OPENCLAW_GLOBAL_OPTIONS = new Set(["--container", "--log-level", "--profile"]);
 const UPDATE_OPTIONS_WITH_VALUE = new Set(["--channel", "--tag", "--timeout"]);
@@ -68,6 +70,58 @@ function optionName(token: string): string {
 
 function isVariableReference(value: string | undefined): boolean {
   return VARIABLE_REFERENCE_RE.test(value ?? "");
+}
+
+function collectAssignedEnvironmentKeys(command: string, keys: Set<string>, depth: number): void {
+  if (depth > 8) {
+    return;
+  }
+  for (const part of splitLifecycleInlineCommands(command)) {
+    const argv = splitShellArgs(part);
+    if (!argv?.length) {
+      continue;
+    }
+    const inline = extractShellWrapperInlineCommand(argv);
+    if (inline !== null) {
+      collectAssignedEnvironmentKeys(inline, keys, depth + 1);
+    }
+    let index = 0;
+    const leadingAssignments: string[] = [];
+    for (; index < argv.length; index += 1) {
+      const match = ASSIGNMENT_TOKEN_RE.exec(argv[index] ?? "");
+      if (!match) {
+        break;
+      }
+      leadingAssignments.push((match[1] ?? "").toLowerCase());
+    }
+    if (index === argv.length) {
+      for (const key of leadingAssignments) {
+        keys.add(key);
+      }
+    }
+    const executable = normalizedExecutable(argv[index]);
+    if (["declare", "export", "local", "readonly", "set", "typeset"].includes(executable)) {
+      for (const token of argv.slice(index + 1)) {
+        const match = ASSIGNMENT_TOKEN_RE.exec(token);
+        if (match) {
+          keys.add((match[1] ?? "").toLowerCase());
+        }
+      }
+    }
+    for (let tokenIndex = 0; tokenIndex + 1 < argv.length; tokenIndex += 1) {
+      const match = POWERSHELL_ENV_NAME_RE.exec(argv[tokenIndex] ?? "");
+      if (match && argv[tokenIndex + 1] === "=") {
+        keys.add((match[1] ?? "").toLowerCase());
+      }
+    }
+  }
+}
+
+/** Collect environment names assigned by the command before later references are expanded. */
+export function lifecycleAssignedEnvironmentKeys(command: string): ReadonlySet<string> {
+  const keys = new Set<string>();
+  collectAssignedEnvironmentKeys(command, keys, 0);
+  return keys;
 }
 
 function scanFirstPositional(
@@ -231,9 +285,10 @@ function readEnvironmentValue(env: NodeJS.ProcessEnv | undefined, key: string): 
 function expandKnownEnvironmentReferences(
   value: string,
   env: NodeJS.ProcessEnv | undefined,
+  shadowedKeys: ReadonlySet<string>,
 ): string {
   const replaceKnown = (match: string, key: string): string =>
-    readEnvironmentValue(env, key) ?? match;
+    shadowedKeys.has(key.toLowerCase()) ? match : (readEnvironmentValue(env, key) ?? match);
   return value
     .replace(POWERSHELL_VARIABLE_RE, replaceKnown)
     .replace(POSIX_VARIABLE_RE, (match, braced: string | undefined, bare: string | undefined) =>
@@ -247,10 +302,13 @@ function expandKnownEnvironmentReferences(
 export function expandKnownLifecycleEnvironmentCommand(
   command: string,
   env: NodeJS.ProcessEnv | undefined,
+  shadowedKeys: ReadonlySet<string> = new Set(),
 ): string {
   return command
     .split(/('[^']*')/u)
-    .map((part, index) => (index % 2 === 0 ? expandKnownEnvironmentReferences(part, env) : part))
+    .map((part, index) =>
+      index % 2 === 0 ? expandKnownEnvironmentReferences(part, env, shadowedKeys) : part,
+    )
     .join("");
 }
 
@@ -259,10 +317,15 @@ export function expandLifecycleEnvironmentArgv(params: {
   argv: readonly string[];
   env?: NodeJS.ProcessEnv;
   envComplete: boolean;
+  shadowedKeys?: ReadonlySet<string>;
 }): LifecycleEnvironmentExpansion {
   let fieldSplitUncertain = false;
   let unresolved = params.argv.some((token) => POSIX_PARAMETER_OPERATOR_RE.test(token));
   const replaceVariable = (key: string): string => {
+    if (params.shadowedKeys?.has(key.toLowerCase())) {
+      unresolved = true;
+      return "";
+    }
     const value = readEnvironmentValue(params.env, key);
     if (value !== undefined) {
       fieldSplitUncertain ||= /\s/u.test(value);

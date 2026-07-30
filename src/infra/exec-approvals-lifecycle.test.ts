@@ -124,6 +124,10 @@ const mutationCases: Array<[string, string[]]> = [
     ["systemctl", "force-reload", "openclaw-gateway.service"],
   ],
   [
+    "systemctl clean --what=state openclaw-gateway.service",
+    ["systemctl", "clean", "--what=state", "openclaw-gateway.service"],
+  ],
+  [
     "systemctl -p --help restart openclaw-gateway.service",
     ["systemctl", "-p", "--help", "restart", "openclaw-gateway.service"],
   ],
@@ -159,6 +163,7 @@ const mutationCases: Array<[string, string[]]> = [
   ["taskkill /IM open*.exe", ["taskkill", "/IM", "open*.exe"]],
   ["pkill -TERM openclaw", ["pkill", "-TERM", "openclaw"]],
   ["pkill -f 'open.*claw'", ["pkill", "-f", "open.*claw"]],
+  ["pkill -f 'open[[:alpha:]]law'", ["pkill", "-f", "open[[:alpha:]]law"]],
   ["kill -TERM $(pidof openclaw)", ["kill", "-TERM", "$(pidof openclaw)"]],
   [`kill "$(pidof open''claw)"`, ["kill", "$(pidof openclaw)"]],
   ["kill -TERM $(pgrep -f '[o]penclaw')", ["kill", "-TERM", "$(pgrep -f '[o]penclaw')"]],
@@ -225,6 +230,8 @@ const mutationCases: Array<[string, string[]]> = [
   [`npx -c "openclaw gateway restart"`, ["npx", "-c", "openclaw gateway restart"]],
   ["npm exec -- openclaw gateway restart", ["npm", "exec", "--", "openclaw", "gateway", "restart"]],
   ["npm install -g openclaw@latest", ["npm", "install", "-g", "openclaw@latest"]],
+  ["npm rebuild openclaw", ["npm", "rebuild", "openclaw"]],
+  ["pnpm rebuild openclaw", ["pnpm", "rebuild", "openclaw"]],
   [
     "npm install -g github:openclaw/openclaw#main",
     ["npm", "install", "-g", "github:openclaw/openclaw#main"],
@@ -232,6 +239,10 @@ const mutationCases: Array<[string, string[]]> = [
   ["npm install -g file:../openclaw", ["npm", "install", "-g", "file:../openclaw"]],
   ["npm install -g oc@npm:openclaw@latest", ["npm", "install", "-g", "oc@npm:openclaw@latest"]],
   ["npm install --prefix /tmp openclaw", ["npm", "install", "--prefix", "/tmp", "openclaw"]],
+  [
+    "npm install --registry --help openclaw",
+    ["npm", "install", "--registry", "--help", "openclaw"],
+  ],
   ["npm rm -g openclaw", ["npm", "rm", "-g", "openclaw"]],
   ["npm r -g openclaw", ["npm", "r", "-g", "openclaw"]],
   ["npm unlink -g openclaw", ["npm", "unlink", "-g", "openclaw"]],
@@ -391,6 +402,9 @@ const nonMutationCases: Array<[string, string[]]> = [
     ["env", "env", "env", "env", "env", "env", "env", "env", "echo", "ok"],
   ],
   ["npm install --prefix openclaw lodash", ["npm", "install", "--prefix", "openclaw", "lodash"]],
+  ["npm install --dry-run openclaw", ["npm", "install", "--dry-run", "openclaw"]],
+  ["npm uninstall --dry-run openclaw", ["npm", "uninstall", "--dry-run", "openclaw"]],
+  ["pnpm rebuild --dry-run openclaw", ["pnpm", "rebuild", "--dry-run", "openclaw"]],
 ];
 
 describe("OpenClaw lifecycle exec approvals", () => {
@@ -559,6 +573,50 @@ describe("OpenClaw lifecycle exec approvals", () => {
         ],
       }),
     ).toBe(true);
+  });
+
+  it("does not trust initial environment values shadowed by shell assignments", () => {
+    const cases: Array<{ command: string; argv: string[] }> = [
+      {
+        command: `ACTION=restart; openclaw gateway "$ACTION"`,
+        argv: ["openclaw", "gateway", "$ACTION"],
+      },
+      {
+        command: `sh -c 'ACTION=restart; openclaw gateway "$ACTION"'`,
+        argv: ["sh", "-c", `ACTION=restart; openclaw gateway "$ACTION"`],
+      },
+    ];
+    for (const testCase of cases) {
+      expect(
+        commandRequiresOpenClawLifecycleApproval({
+          command: testCase.command,
+          env: { ACTION: "status" },
+          platform: "linux",
+          segments: [{ raw: testCase.command, argv: testCase.argv }],
+        }),
+        testCase.command,
+      ).toBe(true);
+    }
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `VALUE=hello; echo "$VALUE"`,
+        env: { VALUE: "status" },
+        segments: [{ raw: `echo "$VALUE"`, argv: ["echo", "$VALUE"] }],
+      }),
+    ).toBe(false);
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `ACTION=restart openclaw gateway "$ACTION"`,
+        env: { ACTION: "status" },
+        platform: "linux",
+        segments: [
+          {
+            raw: `ACTION=restart openclaw gateway "$ACTION"`,
+            argv: ["ACTION=restart", "openclaw", "gateway", "$ACTION"],
+          },
+        ],
+      }),
+    ).toBe(false);
   });
 
   it("fails closed when a parameter operator supplies the executable", () => {

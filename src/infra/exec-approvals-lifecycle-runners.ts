@@ -39,6 +39,7 @@ const PACKAGE_MUTATION_ALIASES = new Set([
   "isntall",
   "link",
   "r",
+  "rebuild",
   "remove",
   "rm",
   "un",
@@ -130,12 +131,37 @@ function isOpenClawPackageTarget(token: string): boolean {
   );
 }
 
+function hasEffectivePackageNoExecute(argv: readonly string[], start: number): boolean {
+  for (let index = start; index < argv.length; index += 1) {
+    const token = argv[index]?.trim() ?? "";
+    const name = optionName(token);
+    if (["-h", "-v", "--help", "--version"].includes(name)) {
+      return true;
+    }
+    if (name === "--dry-run") {
+      const value = token.includes("=")
+        ? token.slice(token.indexOf("=") + 1).toLowerCase()
+        : "true";
+      if (!["0", "false", "no", "off"].includes(value)) {
+        return true;
+      }
+    }
+    if (PACKAGE_TARGET_OPTIONS_WITH_VALUE.has(name) && !token.includes("=")) {
+      index += 1;
+    }
+  }
+  return false;
+}
+
 function packageOperationMutatesOpenClaw(
   argv: readonly string[],
   subcommandIndex: number,
 ): boolean {
   const operation = normalizedToken(argv[subcommandIndex]);
-  if (!PACKAGE_MUTATION_ALIASES.has(operation)) {
+  if (
+    !PACKAGE_MUTATION_ALIASES.has(operation) ||
+    hasEffectivePackageNoExecute(argv, subcommandIndex + 1)
+  ) {
     return false;
   }
   return packageTargets(argv, subcommandIndex + 1).some(isOpenClawPackageTarget);
@@ -154,6 +180,9 @@ export function resolveLifecyclePackageRunnerArgv(
     return match
       ? { kind: "argv", argv: [match[1] ?? manager, ...argv.slice(2)] }
       : { kind: "not-runner" };
+  }
+  if (hasEffectivePackageNoExecute(argv, 1)) {
+    return { kind: "not-runner" };
   }
   if (["bunx", "npx"].includes(executable)) {
     const inline = resolveInlineCommand(argv, 1);
@@ -242,6 +271,9 @@ export function unresolvedPackageMutationMayTargetOpenClaw(
   }
   const subcommandIndex = scanFirstPositional(argv, 1, PACKAGE_GLOBAL_OPTIONS_WITH_VALUE);
   const subcommand = normalizedToken(argv[subcommandIndex]);
+  if (hasEffectivePackageNoExecute(argv, subcommandIndex + 1)) {
+    return false;
+  }
   if (isUnresolved(argv[subcommandIndex])) {
     return argv
       .slice(subcommandIndex + 1)

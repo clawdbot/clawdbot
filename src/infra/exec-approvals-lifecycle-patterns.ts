@@ -14,6 +14,12 @@ function globPatternToRegExp(pattern: string): RegExp {
       continue;
     }
     if (char === "[") {
+      const posixClass = /^\[\[:[a-z]+:\]\]/iu.exec(pattern.slice(index));
+      if (posixClass) {
+        source += ".";
+        index += posixClass[0].length - 1;
+        continue;
+      }
       const end = pattern.indexOf("]", index + 1);
       if (end !== -1) {
         // A single-character over-approximation stays safe for malformed or negated classes.
