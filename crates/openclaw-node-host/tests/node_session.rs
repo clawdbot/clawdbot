@@ -96,6 +96,8 @@ async fn node_profile_uses_shared_session_for_invocations() {
 
 #[tokio::test]
 async fn duplex_runtime_routes_ordered_input_and_progress() {
+    let fixture = lifecycle_fixture();
+    let server_fixture = fixture.clone();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -119,14 +121,17 @@ async fn duplex_runtime_routes_ordered_input_and_progress() {
         send_json(
             &mut socket,
             json!({"type":"event", "event":"node.invoke.request",
-                "payload":{"id":"invoke-1","nodeId":"node-1","command":"example.duplex"}}),
+                "payload":server_fixture["request"]["canonical"]}),
         )
         .await;
+        let inputs = server_fixture["input"]["canonical"]
+            .as_array()
+            .expect("canonical input array");
         for payload in [
-            json!({"id":"invoke-1","nodeId":"node-1","seq":0,"payloadJSON":"one"}),
+            inputs[0].clone(),
             json!({"id":"invoke-1","nodeId":"wrong-node","seq":1,"payloadJSON":"wrong"}),
             json!({"id":"invoke-1","nodeId":"node-1","seq":0,"payloadJSON":"duplicate"}),
-            json!({"id":"invoke-1","nodeId":"node-1","seq":2,"payloadJSON":"two"}),
+            inputs[1].clone(),
         ] {
             send_json(
                 &mut socket,
@@ -149,8 +154,7 @@ async fn duplex_runtime_routes_ordered_input_and_progress() {
         .await;
         let second = receive_json(&mut socket).await;
         assert_eq!(second["method"], "node.invoke.progress");
-        assert_eq!(second["params"]["seq"], 1);
-        assert_eq!(second["params"]["chunk"], "é");
+        assert_eq!(second["params"], server_fixture["progress"]["canonical"]);
         send_json(
             &mut socket,
             json!({"type":"res", "id":second["id"], "ok":true, "payload":{"ok":true}}),
@@ -159,7 +163,7 @@ async fn duplex_runtime_routes_ordered_input_and_progress() {
 
         let result = receive_json(&mut socket).await;
         assert_eq!(result["method"], "node.invoke.result");
-        assert_eq!(result["params"]["payload"], json!({"input":["one","two"]}));
+        assert_eq!(result["params"], server_fixture["results"]["success"]);
         send_json(
             &mut socket,
             json!({"type":"res", "id":result["id"], "ok":true, "payload":{"accepted":true}}),
@@ -405,4 +409,11 @@ where
 fn assert_example_connect_surface(connect: &Value) {
     assert_eq!(connect["params"]["caps"], json!(["example"]));
     assert_eq!(connect["params"]["commands"], json!(["example.duplex"]));
+}
+
+fn lifecycle_fixture() -> Value {
+    serde_json::from_str(include_str!(
+        "../../../test/fixtures/node-invoke-lifecycle-contract.json"
+    ))
+    .expect("valid node invocation lifecycle fixture")
 }

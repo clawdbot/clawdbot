@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "request": {
+    "canonical": {
+      "id": "invoke-1",
+      "nodeId": "node-1",
+      "command": "example.duplex",
+      "paramsJSON": null,
+      "timeoutMs": 0,
+      "idempotencyKey": "idem-1",
+      "sessionKey": "agent:main:main"
+    },
+    "invalid": {
+      "id": "invoke-1",
+      "nodeId": "node-1",
+      "command": "example.duplex",
+      "unexpected": true
+    }
+  },
+  "input": {
+    "canonical": [
+      {
+        "id": "invoke-1",
+        "nodeId": "node-1",
+        "seq": 0,
+        "payloadJSON": "one"
+      },
+      {
+        "id": "invoke-1",
+        "nodeId": "node-1",
+        "seq": 1,
+        "payloadJSON": "two"
+      }
+    ],
+    "invalid": {
+      "id": "invoke-1",
+      "nodeId": "node-1",
+      "seq": -1,
+      "payloadJSON": "invalid"
+    }
+  },
+  "progress": {
+    "canonical": {
+      "invokeId": "invoke-1",
+      "nodeId": "node-1",
+      "seq": 1,
+      "chunk": "é"
+    },
+    "invalid": {
+      "invokeId": "invoke-1",
+      "nodeId": "node-1",
+      "seq": -1,
+      "chunk": "invalid"
+    }
+  },
+  "results": {
+    "success": {
+      "id": "invoke-1",
+      "nodeId": "node-1",
+      "ok": true,
+      "payload": {
+        "input": ["one", "two"]
+      }
+    },
+    "failure": {
+      "id": "invoke-2",
+      "nodeId": "node-1",
+      "ok": false,
+      "error": {
+        "code": "LOCAL_POLICY_DENIED",
+        "message": "command is outside the embedding's current local policy"
+      }
+    },
+    "invalid": {
+      "id": "invoke-2",
+      "nodeId": "node-1",
+      "ok": false,
+      "error": {
+        "code": "",
+        "message": "missing error code"
+      }
+    }
+  }
+}

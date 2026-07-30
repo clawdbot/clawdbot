@@ -229,9 +229,11 @@ export const NodeInvokeRequestEventSchema = closedObject({
   id: NonEmptyString,
   nodeId: NonEmptyString,
   command: NonEmptyString,
-  paramsJSON: Type.Optional(Type.String()),
+  paramsJSON: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   idempotencyKey: Type.Optional(NonEmptyString),
+  // Gateway-only agent ownership metadata. Forwarded beside params, never inside them.
+  sessionKey: Type.Optional(NonEmptyString),
 });
 
 /** Ordered input frame sent by the gateway to one long-lived node invoke. */
@@ -255,6 +257,7 @@ export type NodeDescribeParams = Static<typeof NodeDescribeParamsSchema>;
 export type NodeInvokeParams = Static<typeof NodeInvokeParamsSchema>;
 export type NodeInvokeResultParams = Static<typeof NodeInvokeResultParamsSchema>;
 export type NodeInvokeProgressParams = Static<typeof NodeInvokeProgressParamsSchema>;
+export type NodeInvokeRequestEvent = Static<typeof NodeInvokeRequestEventSchema>;
 export type NodeInvokeInputEvent = Static<typeof NodeInvokeInputEventSchema>;
 export type NodeEventParams = Static<typeof NodeEventParamsSchema>;
 export type NodeEventResult = Static<typeof NodeEventResultSchema>;

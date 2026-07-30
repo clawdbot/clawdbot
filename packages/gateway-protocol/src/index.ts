@@ -186,6 +186,7 @@ export {
   NodeSkillsUpdateParamsSchema,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
+  NodeInvokeRequestEventSchema,
   NodeInvokeInputEventSchema,
   NodeInvokeProgressParamsSchema,
   NodeEventResultSchema,
