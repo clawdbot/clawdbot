@@ -499,14 +499,24 @@ export function createMSTeamsReplyDispatcher(params: {
         ...(nativeResult.content !== undefined ? { content: nativeResult.content } : {}),
       };
     }
-    if (
+    const hasPostNativePayloads = Boolean(nativeResult.postNativePayloads?.length);
+    if (nativeResult.logicalContent !== undefined) {
+      nativeDelivery.content = nativeResult.logicalContent;
+    } else if (
       nativeResult.content !== undefined &&
-      (!nativeResult.fallbackPayload || nativeDelivery.content === undefined)
+      ((!nativeResult.fallbackPayload && !hasPostNativePayloads) ||
+        nativeDelivery.content === undefined)
     ) {
       nativeDelivery.content = nativeResult.content;
     }
-    if (nativeResult.fallbackPayload) {
-      nativeDelivery.messages.push(...renderReplyPayload(nativeResult.fallbackPayload));
+    const afterNativePayloads = [
+      ...(nativeResult.fallbackPayload ? [nativeResult.fallbackPayload] : []),
+      ...(nativeResult.postNativePayloads ?? []),
+    ];
+    if (afterNativePayloads.length > 0) {
+      nativeDelivery.messages.push(
+        ...afterNativePayloads.flatMap((payload) => renderReplyPayload(payload)),
+      );
       nativeDelivery.blockSettled = nativeDelivery.messages.length === 0;
     }
     nativeDelivery.nativeSettled = true;

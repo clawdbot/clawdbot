@@ -1,6 +1,7 @@
 // Msteams tests cover reply dispatcher plugin behavior.
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReplyPayload } from "../runtime-api.js";
 
 const createChannelMessageReplyPipelineMock = vi.hoisted(() => vi.fn());
 const getMSTeamsRuntimeMock = vi.hoisted(() => vi.fn());
@@ -199,9 +200,9 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   type DispatcherOptions = {
     onReplyStart?: () => Promise<void> | void;
-    deliver: (payload: {
-      text: string;
-    }) => ReturnType<ReturnType<typeof createMSTeamsReplyDispatcher>["delivery"]["deliver"]>;
+    deliver: (
+      payload: ReplyPayload,
+    ) => ReturnType<ReturnType<typeof createMSTeamsReplyDispatcher>["delivery"]["deliver"]>;
   };
 
   type PipelineArgs = {
@@ -530,9 +531,9 @@ describe("createMSTeamsReplyDispatcher", () => {
   });
 
   it("preserves acknowledged text when a media-only final has no logical text", async () => {
-    renderReplyPayloadsToMessagesMock.mockImplementation(([payload]) =>
-      payload.mediaUrl ? [{ mediaUrl: payload.mediaUrl }] : [],
-    );
+    renderReplyPayloadsToMessagesMock.mockReturnValue([
+      { mediaUrl: "https://example.com/image.png" },
+    ] as never);
     sendMSTeamsMessagesMock.mockResolvedValue(["media-id"] as never);
     const dispatcher = createDispatcher("personal");
     const options = dispatcherOptions();
@@ -882,6 +883,92 @@ describe("createMSTeamsReplyDispatcher", () => {
       messageIds: ["stream-final"],
       content: "streamed final",
     });
+  });
+
+  it.each([
+    {
+      name: "attached media",
+      payloads: [
+        {
+          text: "provider final",
+          mediaUrl: "https://example.test/must-not-send.png",
+        },
+      ],
+    },
+    {
+      name: "media after text",
+      payloads: [
+        { text: "provider final" },
+        { mediaUrl: "https://example.test/must-not-send.png" },
+      ],
+    },
+    {
+      name: "media before text",
+      payloads: [
+        { mediaUrl: "https://example.test/must-not-send.png" },
+        { text: "provider final" },
+      ],
+    },
+  ])("settles a stopped divergent final without $name fallback", async ({ payloads }) => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([
+      { mediaUrl: "https://example.test/must-not-send.png" },
+    ] as never);
+    const dispatcher = createDispatcher("personal");
+    const stream = getStreamMock();
+    stream.close.mockImplementation(async () => {
+      stream.canceled = true;
+      return undefined;
+    });
+
+    dispatcher.replyOptions.onPartialReply?.({ text: "streamed preview" });
+    stream.acknowledge("streamed preview");
+    dispatcher.replyOptions.onPartialReply?.({ text: "provider final" });
+    const results = [];
+    for (const payload of payloads) {
+      results.push(await dispatcher.delivery.deliver(payload, { kind: "final" }));
+    }
+    await dispatcher.dispatcherOptions.onSettled?.();
+
+    const nativeResult = results.find((result) => result?.finalization);
+    await expect(nativeResult?.finalization).resolves.toEqual({
+      visibleReplySent: true,
+      messageIds: ["stream-acknowledged"],
+      content: "streamed preview",
+    });
+    expect(stream.clearText).toHaveBeenCalledTimes(1);
+    expect(stream.close).toHaveBeenCalledTimes(1);
+    expect(renderReplyPayloadsToMessagesMock).not.toHaveBeenCalled();
+    expect(sendMSTeamsMessagesMock).not.toHaveBeenCalled();
+  });
+
+  it("releases later payloads only after divergent native replacement settles", async () => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([{ text: "second payload" }] as never);
+    sendMSTeamsMessagesMock.mockResolvedValue(["post-native-id"] as never);
+    const dispatcher = createDispatcher("personal");
+    const stream = getStreamMock();
+
+    dispatcher.replyOptions.onPartialReply?.({ text: "streamed preview" });
+    stream.acknowledge("streamed preview");
+    dispatcher.replyOptions.onPartialReply?.({ text: "provider final" });
+    const nativeResult = await dispatcher.delivery.deliver(
+      { text: "provider final" },
+      { kind: "final" },
+    );
+    await dispatcher.delivery.deliver({ text: "second payload" }, { kind: "final" });
+
+    expect(sendMSTeamsMessagesMock).not.toHaveBeenCalled();
+    await dispatcher.dispatcherOptions.onSettled?.();
+
+    await expect(nativeResult?.finalization).resolves.toEqual({
+      visibleReplySent: true,
+      messageIds: ["stream-final", "post-native-id"],
+      content: "provider final\nsecond payload",
+    });
+    expect(renderReplyPayloadsToMessagesMock).toHaveBeenCalledWith(
+      [{ text: "second payload" }],
+      expect.any(Object),
+    );
+    expect(sendMSTeamsMessagesMock).toHaveBeenCalledTimes(1);
   });
 
   it("settles delivery when sent-message ID observation throws", async () => {
