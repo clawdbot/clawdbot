@@ -40,7 +40,7 @@ const FRAMING_HEADER_NAMES = new Set([
  * throws when the value reaches `Headers`/undici (every code point above U+00FF
  * is outside ByteString) or enables header injection (CR/LF/NUL).
  */
-export function isSendableHeaderValue(value: unknown): value is string {
+function isSendableHeaderValue(value: unknown): value is string {
   if (typeof value !== "string") {
     return false;
   }
@@ -56,7 +56,7 @@ export function isSendableHeaderValue(value: unknown): value is string {
 }
 
 /** Header names are safe to surface in diagnostics; values are not. */
-export type OperatorRequestHeaderResolution = {
+type OperatorRequestHeaderResolution = {
   /** Sorted so callers get a stable cache fingerprint across config orderings. */
   headers?: Record<string, string>;
   /** Names whose value or spelling a request cannot carry. */

@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  isSendableHeaderValue,
-  resolveOperatorRequestHeaders,
-} from "./operator-request-headers.js";
+import { resolveOperatorRequestHeaders } from "./operator-request-headers.js";
 
 const RESERVED = ["accept", "user-agent"];
 
@@ -10,28 +7,38 @@ function resolve(configured: unknown) {
   return resolveOperatorRequestHeaders({ configured, reservedNames: RESERVED });
 }
 
-describe("isSendableHeaderValue", () => {
+function expectSendableValue(value: string): void {
+  expect(resolve({ "X-Test": value }).headers?.["X-Test"]).toBe(value);
+}
+
+function expectIgnoredValue(value: unknown): void {
+  const { headers, ignored } = resolve({ "X-Test": value });
+  expect(headers).toBeUndefined();
+  expect(ignored).toEqual(["X-Test"]);
+}
+
+describe("operator request header value validation", () => {
   it("accepts visible ASCII, spaces, HTAB, and obs-text", () => {
-    expect(isSendableHeaderValue("staging")).toBe(true);
-    expect(isSendableHeaderValue("Mozilla/5.0 (Macintosh)")).toBe(true);
-    expect(isSendableHeaderValue("a\tb")).toBe(true);
-    expect(isSendableHeaderValue("café")).toBe(true);
+    expectSendableValue("staging");
+    expectSendableValue("Mozilla/5.0 (Macintosh)");
+    expectSendableValue("a\tb");
+    expectSendableValue("café");
   });
 
   it("rejects values Headers cannot encode or that forge headers", () => {
     // Above U+00FF has no single-byte form, so Headers throws instead of encoding.
-    expect(isSendableHeaderValue("staging—eu")).toBe(false);
-    expect(isSendableHeaderValue("東京")).toBe(false);
-    expect(isSendableHeaderValue("a\r\nX-Smuggled: yes")).toBe(false);
-    expect(isSendableHeaderValue("a\0b")).toBe(false);
-    expect(isSendableHeaderValue(42)).toBe(false);
+    expectIgnoredValue("staging—eu");
+    expectIgnoredValue("東京");
+    expectIgnoredValue("a\r\nX-Smuggled: yes");
+    expectIgnoredValue("a\0b");
+    expectIgnoredValue(42);
   });
 
   it("accepts literal environment placeholder text after config escaping", () => {
     // Config's $${VAR} escape resolves to ${VAR} before request normalization.
-    expect(isSendableHeaderValue("${WEB_FETCH_TARGET}")).toBe(true);
-    expect(isSendableHeaderValue("prefix-${TOKEN}-suffix")).toBe(true);
-    expect(isSendableHeaderValue("${lowercase}")).toBe(true);
+    expectSendableValue("${WEB_FETCH_TARGET}");
+    expectSendableValue("prefix-${TOKEN}-suffix");
+    expectSendableValue("${lowercase}");
   });
 });
 
