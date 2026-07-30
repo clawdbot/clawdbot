@@ -35,12 +35,18 @@ import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
 import { resolveTwilioApiBaseUrl, type TwilioRegion } from "./twilio-region.js";
 import type { TwilioProviderOptions } from "./twilio.types.js";
 import { TwilioApiError, twilioApiRequest } from "./twilio/api.js";
+import {
+  buildRealtimeStreamHandoffTwiml,
+  type TwilioRealtimeStreamHandoff,
+  waitForRealtimeStreamEnd,
+} from "./twilio/realtime-dtmf-handoff.js";
 import { decideTwimlResponse, readTwimlRequestView } from "./twilio/twiml-policy.js";
 import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
 export type { TwilioProviderOptions } from "./twilio.types.js";
 
 const TWILIO_CALL_NOT_IN_PROGRESS_CODE = 21220;
 const TWILIO_CALL_UPDATE_RETRY_DELAYS_MS = [250, 750] as const;
+export type { TwilioRealtimeStreamHandoff } from "./twilio/realtime-dtmf-handoff.js";
 
 function isTwilioCallNotInProgressError(err: unknown): boolean {
   return err instanceof TwilioApiError && err.twilioCode === TWILIO_CALL_NOT_IN_PROGRESS_CODE;
@@ -65,6 +71,19 @@ function createTwilioRequestDedupeKey(ctx: WebhookContext, verifiedRequestKey?: 
       `${signature}\n${callSid}\n${callStatus}\n${direction}\n${callId}\n${flow}\n${turnToken}\n${ctx.rawBody}`,
     )
     .digest("hex")}`;
+}
+
+/**
+ * Twilio signs the complete callback URL. Give the post-DTMF redirect a fresh
+ * URL identity so it is not mistaken for a retry of the webhook that created
+ * the realtime stream. The nonce is not trusted by itself; the request still
+ * has to pass Twilio signature verification before the realtime handler uses
+ * it to mint a new stream token.
+ */
+function createDtmfResumeWebhookUrl(webhookUrl: string): string {
+  const url = new URL(webhookUrl);
+  url.searchParams.set("dtmfResume", crypto.randomUUID());
+  return url.toString();
 }
 
 type StreamSendResult = {
@@ -94,6 +113,8 @@ export class TwilioProvider implements VoiceCallProvider {
 
   /** Optional media stream handler for sending audio */
   private mediaStreamHandler: MediaStreamHandler | null = null;
+  /** Optional realtime bridge lifecycle observer for TwiML handoffs. */
+  private realtimeStreamHandoff: TwilioRealtimeStreamHandoff | null = null;
 
   /** Map of call SID to stream SID for media streams */
   private callStreamMap = new Map<string, string>();
@@ -168,6 +189,10 @@ export class TwilioProvider implements VoiceCallProvider {
 
   setMediaStreamHandler(handler: MediaStreamHandler): void {
     this.mediaStreamHandler = handler;
+  }
+
+  setRealtimeStreamHandoff(handoff: TwilioRealtimeStreamHandoff): void {
+    this.realtimeStreamHandoff = handoff;
   }
 
   registerCallStream(callSid: string, streamSid: string): void {
@@ -662,10 +687,40 @@ export class TwilioProvider implements VoiceCallProvider {
       throw new Error("Missing webhook URL for this call (provider state not initialized)");
     }
 
+    // A live bidirectional Media Stream can still have agent audio buffered at
+    // Twilio when a tool requests DTMF.  Updating the call's TwiML alone does
+    // not remove that buffer, so <Play digits> can be heard only after stale
+    // speech (including speech queued after this request).  Treat DTMF as a
+    // barge-in: clear the local queue and ask Twilio to discard buffered media
+    // before redirecting the call to the DTMF TwiML.
+    this.clearTtsQueue(input.providerCallId, "dtmf");
+
+    // Realtime calls use a separate `<Connect><Stream>` bridge, so clearing
+    // the classic MediaStreamHandler cannot release that stream.  Twilio does
+    // not acknowledge a `clear`; its documented lifecycle signal is the
+    // stream `stop`/WebSocket close after a live-call TwiML update replaces the
+    // `<Connect><Stream>` verb.  Park the call, wait for that concrete signal,
+    // then make the DTMF update.  Do not guess with a delay: sending digits
+    // while the realtime stream still owns audio is not recognized reliably by
+    // IVRs even though a human can hear the tones.
+    const streamEnded = this.realtimeStreamHandoff?.waitForStreamEnd(input.providerCallId);
+    if (streamEnded) {
+      const handoffTwiml = buildRealtimeStreamHandoffTwiml(webhookUrl, escapeXml);
+      await this.updateLiveCallTwiml(input.providerCallId, handoffTwiml, "sendDtmf.streamHandoff");
+      await waitForRealtimeStreamEnd(input.providerCallId, streamEnded);
+    }
+
+    // The redirect occurs after Twilio has played the tones. It must not reuse
+    // the original webhook URL: Twilio can send the same call parameters, and
+    // replay protection would correctly return empty TwiML instead of creating
+    // the replacement realtime stream. A fresh, signed callback URL preserves
+    // replay protection for actual duplicate deliveries while identifying this
+    // controlled transition as a new request.
+    const resumeWebhookUrl = createDtmfResumeWebhookUrl(webhookUrl);
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Play digits="${escapeXml(input.digits)}" />
-  <Redirect method="POST">${escapeXml(webhookUrl)}</Redirect>
+  <Redirect method="POST">${escapeXml(resumeWebhookUrl)}</Redirect>
 </Response>`;
 
     await this.updateLiveCallTwiml(input.providerCallId, twiml, "sendDtmf");

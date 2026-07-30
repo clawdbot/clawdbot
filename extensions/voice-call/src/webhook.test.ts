@@ -1165,6 +1165,82 @@ describe("VoiceCallWebhookServer replay handling", () => {
     },
   );
 
+  it("resumes a realtime stream after a DTMF callback without weakening replay protection", async () => {
+    const parseWebhookEvent = vi.fn(() => ({ events: [], statusCode: 200 }));
+    const buildTwiMLPayload = vi.fn(() => ({
+      statusCode: 200,
+      headers: { "Content-Type": "text/xml" },
+      body: '<Response><Connect><Stream url="wss://example.test/voice/stream/realtime/resumed-token" /></Connect></Response>',
+    }));
+    let resumeDeliveries = 0;
+    const twilioProvider: VoiceCallProvider = {
+      ...provider,
+      name: "twilio",
+      verifyWebhook: (ctx) => {
+        const isDtmfResume = Boolean(ctx.query?.dtmfResume);
+        if (isDtmfResume) {
+          resumeDeliveries += 1;
+        }
+        return {
+          ok: true,
+          // A DTMF transition gets a new Twilio-signed URL identity. A retry
+          // of that transition remains a replay and must not mint another
+          // stream token or process call events.
+          isReplay: isDtmfResume ? resumeDeliveries > 1 : true,
+          verifiedRequestKey: isDtmfResume
+            ? "twilio:req:dtmf-resume"
+            : "twilio:req:original-replay",
+        };
+      },
+      parseWebhookEvent,
+    };
+    const { manager, processEvent } = createManager([]);
+    const config = createConfig({
+      provider: "twilio",
+      inboundPolicy: "disabled",
+      realtime: {
+        enabled: true,
+        streamPath: "/voice/stream/realtime",
+        instructions: "Be helpful.",
+        toolPolicy: "safe-read-only",
+        tools: [],
+        providers: {},
+      },
+    });
+    const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
+    server.setRealtimeHandler({
+      buildTwiMLPayload,
+      getStreamPathPattern: () => "/voice/stream/realtime",
+      handleWebSocketUpgrade: () => {},
+      registerToolHandler: () => {},
+      setPublicUrl: () => {},
+    } as unknown as RealtimeCallHandler);
+
+    try {
+      const baseUrl = await server.start();
+      const requestUrl = requireBoundRequestUrl(server, baseUrl);
+      requestUrl.searchParams.set("callId", "call-dtmf");
+      requestUrl.searchParams.set("dtmfResume", "a2a65da8-951a-438e-beb0-25049b33c0af");
+      const body =
+        "CallSid=CA123&Direction=outbound-api&CallStatus=in-progress&From=%2B15550001111&To=%2B15550002222";
+      const headers = {
+        "content-type": "application/x-www-form-urlencoded",
+        "x-twilio-signature": "sig",
+      };
+      const resumed = await fetch(requestUrl.toString(), { method: "POST", headers, body });
+      const replay = await fetch(requestUrl.toString(), { method: "POST", headers, body });
+
+      expect(resumed.status).toBe(200);
+      expect(await resumed.text()).toContain("resumed-token");
+      await expectTwilioReplayTwiML(replay);
+      expect(buildTwiMLPayload).toHaveBeenCalledTimes(1);
+      expect(parseWebhookEvent).not.toHaveBeenCalled();
+      expect(processEvent).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+    }
+  });
+
   it.each(["outbound-api", "outbound-dial"] as const)(
     "does not return realtime TwiML for replayed %s twilio TwiML fetches",
     async (direction) => {

@@ -535,7 +535,7 @@ describe("TwilioProvider", () => {
     }
   });
 
-  it("sends DTMF by updating the call and redirecting back to the webhook", async () => {
+  it("sends DTMF with a unique signed callback URL for realtime resumption", async () => {
     const { provider, apiRequest } = configureTelephonyTwiMlFallback({
       providerCallId: "CA-dtmf",
     });
@@ -554,6 +554,62 @@ describe("TwilioProvider", () => {
     expect(params.Twiml).toContain('<Play digits="ww123#"');
     expect(params.Twiml).toContain("<Redirect");
     expect(params.Twiml).toContain("https://example.ngrok.app/voice/twilio");
+    expect(params.Twiml).toMatch(/dtmfResume=[0-9a-f-]{36}/);
+  });
+
+  it("clears buffered stream audio before redirecting a live call to DTMF", async () => {
+    const { provider, apiRequest } = configureTelephonyTwiMlFallback({
+      providerCallId: "CA-dtmf-stream",
+      streamSid: "MZ-dtmf-stream",
+    });
+    const clearTtsQueue = vi.fn();
+    provider.setMediaStreamHandler({ clearTtsQueue } as never);
+
+    await provider.sendDtmf({
+      callId: "call-dtmf-stream",
+      providerCallId: "CA-dtmf-stream",
+      digits: "5",
+    });
+
+    expect(clearTtsQueue).toHaveBeenCalledWith("MZ-dtmf-stream", "dtmf");
+    expect(apiRequest).toHaveBeenCalledOnce();
+    expect(clearTtsQueue.mock.invocationCallOrder[0]).toBeLessThan(
+      apiRequest.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("waits for the realtime stream lifecycle to end before sending DTMF", async () => {
+    const { provider, apiRequest } = configureTelephonyTwiMlFallback({
+      providerCallId: "CA-dtmf-realtime",
+    });
+    let endStream: (() => void) | undefined;
+    const streamEnded = new Promise<void>((resolve) => {
+      endStream = resolve;
+    });
+    provider.setRealtimeStreamHandoff({
+      waitForStreamEnd: vi.fn(() => streamEnded),
+    });
+
+    const sending = provider.sendDtmf({
+      callId: "call-dtmf-realtime",
+      providerCallId: "CA-dtmf-realtime",
+      digits: "2",
+    });
+
+    await vi.waitFor(() => expect(apiRequest).toHaveBeenCalledOnce());
+    const [, handoffParams] = requireApiRequestCall(apiRequest) as [string, { Twiml?: string }];
+    expect(handoffParams.Twiml).toContain('<Pause length="60"');
+    expect(handoffParams.Twiml).not.toContain("<Play");
+
+    endStream?.();
+    await sending;
+
+    expect(apiRequest).toHaveBeenCalledTimes(2);
+    const [, dtmfParams] = requireApiRequestCall(apiRequest, 1) as [string, { Twiml?: string }];
+    expect(dtmfParams.Twiml).toContain('<Play digits="2"');
+    expect(apiRequest.mock.invocationCallOrder[0]).toBeLessThan(
+      apiRequest.mock.invocationCallOrder[1]!,
+    );
   });
 
   it("retries startListening when Twilio briefly rejects a live-call update as not in progress", async () => {
