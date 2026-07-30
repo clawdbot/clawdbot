@@ -515,16 +515,25 @@ function candidatePackageScripts(candidatePackageRoot) {
   if (!candidatePackageRoot) {
     return undefined;
   }
-  try {
-    const packageJson = JSON.parse(readFileSync(resolve(candidatePackageRoot, "package.json"), "utf8"));
-    return new Set(
-      Object.entries(packageJson.scripts ?? {})
-        .filter(([, command]) => typeof command === "string")
-        .map(([name]) => name),
-    );
-  } catch {
-    return new Set();
+  const packageJson = JSON.parse(
+    readFileSync(resolve(candidatePackageRoot, "package.json"), "utf8"),
+  );
+  if (!packageJson || typeof packageJson !== "object" || Array.isArray(packageJson)) {
+    throw new Error("Candidate package manifest must be an object");
   }
+  if (
+    packageJson.scripts !== undefined &&
+    (!packageJson.scripts ||
+      typeof packageJson.scripts !== "object" ||
+      Array.isArray(packageJson.scripts))
+  ) {
+    throw new Error("Candidate package manifest has an invalid scripts field");
+  }
+  return new Set(
+    Object.entries(packageJson.scripts ?? {})
+      .filter(([, command]) => typeof command === "string")
+      .map(([name]) => name),
+  );
 }
 
 function requiredPackageScripts(poolLane) {

@@ -146,6 +146,27 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes.map((lane) => lane.name)).toEqual(["update-run-package-self-upgrade"]);
   });
 
+  it("fails when the selected candidate package manifest is missing", () => {
+    expect(() =>
+      planFor({
+        candidatePackageRoot: tempDirs.make("openclaw-docker-plan-missing-package-"),
+        selectedLaneNames: ["update-run-package-self-upgrade"],
+      }),
+    ).toThrow(/package\.json/);
+  });
+
+  it("fails when the selected candidate package manifest is malformed", () => {
+    const root = tempDirs.make("openclaw-docker-plan-malformed-package-");
+    writeFileSync(join(root, "package.json"), "{");
+
+    expect(() =>
+      planFor({
+        candidatePackageRoot: root,
+        selectedLaneNames: ["update-run-package-self-upgrade"],
+      }),
+    ).toThrow(SyntaxError);
+  });
+
   it("finds a named lane through the expanded catalog", () => {
     expect(findLaneByName("plugin-binding-command-escape")?.name).toBe(
       "plugin-binding-command-escape",
