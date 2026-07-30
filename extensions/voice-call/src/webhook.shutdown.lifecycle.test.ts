@@ -23,6 +23,13 @@ describe("VoiceCallWebhookServer shutdown lifecycle", () => {
       close: handlerClose,
     } as unknown as RealtimeCallHandler);
     await server.start();
+    const delayedHangup = vi.fn();
+    const pendingDisconnectHangups = (
+      server as unknown as {
+        pendingDisconnectHangups: Map<string, ReturnType<typeof setTimeout>>;
+      }
+    ).pendingDisconnectHangups;
+    pendingDisconnectHangups.set("provider-call", setTimeout(delayedHangup, 5));
 
     const firstStop = server.stop();
     const secondStop = server.stop();
@@ -31,13 +38,18 @@ describe("VoiceCallWebhookServer shutdown lifecycle", () => {
       stopped = true;
     });
 
-    expect(secondStop).toBe(firstStop);
-    expect(handlerClose).toHaveBeenCalledTimes(1);
-    await Promise.resolve();
-    expect(stopped).toBe(false);
-
-    releaseHandlerClose?.();
-    await firstStop;
+    try {
+      expect(secondStop).toBe(firstStop);
+      expect(handlerClose).toHaveBeenCalledTimes(1);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 10);
+      });
+      expect(stopped).toBe(false);
+      expect(delayedHangup).not.toHaveBeenCalled();
+    } finally {
+      releaseHandlerClose?.();
+      await firstStop;
+    }
     expect(stopped).toBe(true);
   });
 });

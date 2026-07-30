@@ -513,7 +513,7 @@ export class RealtimeCallHandler {
     });
   }
 
-  close(): Promise<void> {
+  close(shutdownBarrier: Promise<unknown> = Promise.resolve()): Promise<void> {
     if (this.closePromise) {
       return this.closePromise;
     }
@@ -521,8 +521,9 @@ export class RealtimeCallHandler {
     this.closing = true;
     this.pendingStreamTokens.clear();
     const sockets = [...this.activeSockets];
-    this.closePromise = Promise.all(
-      sockets.map(
+    this.closePromise = Promise.all([
+      shutdownBarrier,
+      ...sockets.map(
         (ws) =>
           new Promise<void>((resolve) => {
             if (ws.readyState === WebSocket.CLOSED) {
@@ -534,8 +535,10 @@ export class RealtimeCallHandler {
             ws.terminate();
           }),
       ),
-    )
-      .then(() => {})
+    ])
+      .then(() => {
+        this.pendingStreamTokens.clear();
+      })
       .finally(() => {
         this.closing = false;
         this.closePromise = null;

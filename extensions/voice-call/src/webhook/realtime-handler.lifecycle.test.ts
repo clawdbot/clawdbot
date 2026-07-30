@@ -99,6 +99,7 @@ describe("RealtimeCallHandler lifecycle", () => {
       },
     });
     let ws: WebSocketType | null = await connectWs(server.url);
+    let releaseShutdownBarrier: (() => void) | undefined;
 
     try {
       ws.send(
@@ -112,23 +113,45 @@ describe("RealtimeCallHandler lifecycle", () => {
       });
 
       const closed = waitForClose(ws);
-      const firstClose = handler.close();
+      const shutdownBarrier = new Promise<void>((resolve) => {
+        releaseShutdownBarrier = resolve;
+      });
+      const firstClose = handler.close(shutdownBarrier);
       const secondClose = handler.close();
+      handler.issueStreamSession();
+      let closeSettled = false;
+      void firstClose.then(() => {
+        closeSettled = true;
+      });
 
       expect(secondClose).toBe(firstClose);
-      await firstClose;
       expect(await closed).toEqual({ code: 1006, reason: "" });
-      expect(bridgeClose).toHaveBeenCalledTimes(1);
-      expect(processEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          callId: "call-shutdown",
-          providerCallId: "CA-shutdown",
-          reason: "completed",
-          type: "call.ended",
-        }),
-      );
+      await vi.waitFor(() => {
+        expect(bridgeClose).toHaveBeenCalledTimes(1);
+        expect(processEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            callId: "call-shutdown",
+            providerCallId: "CA-shutdown",
+            reason: "completed",
+            type: "call.ended",
+          }),
+        );
+      });
+      expect(closeSettled).toBe(false);
+
+      releaseShutdownBarrier?.();
+      await firstClose;
+      expect(closeSettled).toBe(true);
+      expect(
+        (
+          handler as unknown as {
+            pendingStreamTokens: Map<string, unknown>;
+          }
+        ).pendingStreamTokens.size,
+      ).toBe(0);
       ws = null;
     } finally {
+      releaseShutdownBarrier?.();
       if (ws && ws.readyState !== WebSocket.CLOSED) {
         ws.terminate();
       }

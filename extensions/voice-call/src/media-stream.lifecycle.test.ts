@@ -99,6 +99,7 @@ describe("MediaStreamHandler lifecycle", () => {
       },
     });
     const ws = await connectWs(server.url);
+    let releaseShutdownBarrier: (() => void) | undefined;
 
     try {
       ws.send(
@@ -113,16 +114,30 @@ describe("MediaStreamHandler lifecycle", () => {
       });
 
       const closed = waitForClose(ws);
-      const firstClose = handler.close();
+      const shutdownBarrier = new Promise<void>((resolve) => {
+        releaseShutdownBarrier = resolve;
+      });
+      const firstClose = handler.close(shutdownBarrier);
       const secondClose = handler.close();
+      let closeSettled = false;
+      void firstClose.then(() => {
+        closeSettled = true;
+      });
 
       expect(secondClose).toBe(firstClose);
-      await firstClose;
       expect(await closed).toEqual({ code: 1006, reason: "" });
-      expect(closeSession).toHaveBeenCalledTimes(1);
-      expect(onDisconnect).toHaveBeenCalledWith("CA-shutdown", "MZ-shutdown");
-      expect(onDisconnect).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(closeSession).toHaveBeenCalledTimes(1);
+        expect(onDisconnect).toHaveBeenCalledWith("CA-shutdown", "MZ-shutdown");
+        expect(onDisconnect).toHaveBeenCalledTimes(1);
+      });
+      expect(closeSettled).toBe(false);
+
+      releaseShutdownBarrier?.();
+      await firstClose;
+      expect(closeSettled).toBe(true);
     } finally {
+      releaseShutdownBarrier?.();
       ws.terminate();
       await handler.close();
       await server.close();

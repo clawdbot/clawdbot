@@ -586,6 +586,10 @@ export class VoiceCallWebhookServer {
       });
     });
     this.startPromise = null;
+    for (const timer of this.pendingDisconnectHangups.values()) {
+      clearTimeout(timer);
+    }
+    this.pendingDisconnectHangups.clear();
     if (this.stopStaleCallReaper) {
       this.stopStaleCallReaper();
       this.stopStaleCallReaper = null;
@@ -595,8 +599,8 @@ export class VoiceCallWebhookServer {
     this.stopPromise = (async () => {
       const results = await Promise.allSettled([
         serverClosePromise,
-        this.mediaStreamHandler?.close() ?? Promise.resolve(),
-        this.realtimeHandler?.close() ?? Promise.resolve(),
+        this.mediaStreamHandler?.close(serverClosePromise) ?? Promise.resolve(),
+        this.realtimeHandler?.close(serverClosePromise) ?? Promise.resolve(),
       ]);
 
       for (const timer of this.pendingDisconnectHangups.values()) {

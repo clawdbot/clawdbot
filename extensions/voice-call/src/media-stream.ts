@@ -228,7 +228,7 @@ export class MediaStreamHandler {
     }
   }
 
-  close(): Promise<void> {
+  close(shutdownBarrier: Promise<unknown> = Promise.resolve()): Promise<void> {
     if (this.closePromise) {
       return this.closePromise;
     }
@@ -246,6 +246,7 @@ export class MediaStreamHandler {
           ws.terminate();
         }
       });
+      await shutdownBarrier;
     })().finally(() => {
       this.closing = false;
       this.closePromise = null;
