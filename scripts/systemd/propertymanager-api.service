@@ -18,8 +18,8 @@ Environment=PROPERTYMANAGER_POSTGRES_CONTAINER=openclaw-ai-postgres-dev
 Environment=PROPERTYMANAGER_ATTACHMENTS_ROOT=%h/.local/share/openclaw-dev/propertymanager/attachments
 ExecStart=%h/ai/projects/openclaw/tools/property_manager/api/run_wsgi.sh
 ExecReload=/bin/kill -s HUP $MAINPID
-KillSignal=SIGQUIT
-# mixed: SIGQUIT master only so in-flight docker-exec children are not killed early
+# Gunicorn 26: SIGTERM = graceful drain; SIGQUIT = quick worker sys.exit
+KillSignal=SIGTERM
 KillMode=mixed
 TimeoutStopSec=120
 Restart=on-failure

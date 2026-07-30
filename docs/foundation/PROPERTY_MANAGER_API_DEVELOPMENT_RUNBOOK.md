@@ -19,20 +19,20 @@ Do **not** apply this unit or procedure to the production Intel Mini without exp
 
 ### Defaults
 
-| Setting          | Value                                  | Why                                                |
-| ---------------- | -------------------------------------- | -------------------------------------------------- |
-| Bind             | `0.0.0.0:5062`                         | Existing PropertyManager API port                  |
-| Workers          | 2 × `sync`                             | Light API; docker-exec DB blocks per request       |
-| Timeout          | 120s                                   | Manual / meter / mapping ops via docker exec       |
-| Graceful timeout | 90s                                    | Drain in-flight docker-exec queries on stop/reload |
-| PID file         | `/tmp/pm-dev/propertymanager-api.pid`  | Writable without privileges                        |
-| Reloader         | off                                    | systemd owns lifecycle                             |
-| Upload limit     | 32 MiB (`MAX_CONTENT_LENGTH`)          | Intentional ceiling                                |
-| systemd stop     | `TimeoutStopSec=120`, `KillMode=mixed` | SIGQUIT master only; drain tracked docker-exec     |
+| Setting          | Value                                                        | Why                                                 |
+| ---------------- | ------------------------------------------------------------ | --------------------------------------------------- |
+| Bind             | `0.0.0.0:5062`                                               | Existing PropertyManager API port                   |
+| Workers          | 2 × `sync`                                                   | Light API; docker-exec DB blocks per request        |
+| Timeout          | 120s                                                         | Manual / meter / mapping ops via docker exec        |
+| Graceful timeout | 90s                                                          | Drain in-flight docker-exec queries on stop/reload  |
+| PID file         | `/tmp/pm-dev/propertymanager-api.pid`                        | Writable without privileges                         |
+| Reloader         | off                                                          | systemd owns lifecycle                              |
+| Upload limit     | 32 MiB (`MAX_CONTENT_LENGTH`)                                | Intentional ceiling                                 |
+| systemd stop     | `TimeoutStopSec=120`, `KillMode=mixed`, `KillSignal=SIGTERM` | Gunicorn 26 graceful drain; master-only stop signal |
 
 DB access defaults to **docker-exec-per-query** (`PROPERTYMANAGER_DB_VIA_DOCKER=1`). That pattern is process-safe across Gunicorn workers (no shared connections). Migrations are never run on import.
 
-**Drain on full restart:** systemd uses `KillMode=mixed` so `KillSignal=SIGQUIT` hits only the Gunicorn master (not in-flight `docker exec` children). Workers finish the current request; `db.py` tracks active docker-exec `Popen` handles and `gunicorn` `worker_exit` waits up to `graceful_timeout`. After `TimeoutStopSec`, remaining cgroup processes are SIGKILLed — leftover tracked procs are terminate/kill'd so they are not orphaned indefinitely.
+**Drain on full restart:** systemd uses `KillMode=mixed` + `KillSignal=SIGTERM`. On Gunicorn 26, SIGTERM to the master runs a graceful stop (workers finish the current request; `siginterrupt(SIGTERM, False)` keeps `docker exec` waits intact). SIGQUIT is a quick stop that calls `sys.exit` in the worker mid-request and produces HTTP 500. `db.py` tracks active docker-exec `Popen` handles and `worker_exit` waits up to `graceful_timeout`. After `TimeoutStopSec`, remaining cgroup processes are SIGKILLed — leftover tracked procs are terminate/kill'd so they are not orphaned indefinitely.
 
 **Reload vs restart:** prefer `systemctl --user reload` (HUP) for code/config pickup. A full `restart` must still complete in-flight docker-exec requests within the graceful window (see `tests/test_restart_drain.py`).
 

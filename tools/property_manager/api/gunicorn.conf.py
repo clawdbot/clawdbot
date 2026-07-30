@@ -8,8 +8,10 @@ Worker rationale:
 - Graceful timeout defaults to 90s so in-flight ``docker exec … psql`` can finish
   before workers are SIGKILLed on stop/reload. ``worker_exit`` waits on tracked
   docker-exec children via ``db.wait_inflight_docker_execs``. Prefer
-  ``systemctl reload`` (HUP) for near-zero downtime; full restart still drains
-  within graceful_timeout when systemd uses ``KillMode=mixed``.
+  ``systemctl reload`` (HUP) for near-zero downtime. Full restart drains when
+  systemd uses ``KillMode=mixed`` and ``KillSignal=SIGTERM`` (Gunicorn 26
+  graceful path). Do not use SIGQUIT as the unit KillSignal — that is a quick
+  stop that aborts in-flight requests.
 - No autoreloader: systemd owns restarts; reload is ``kill -HUP`` / systemctl reload.
 """
 

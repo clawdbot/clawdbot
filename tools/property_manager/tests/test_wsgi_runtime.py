@@ -92,7 +92,7 @@ class PropertyManagerWsgiConfigurationTests(unittest.TestCase):
         self.assertIn("run_api.sh", unit)
         self.assertIn("Gunicorn", unit)
         self.assertIn("ExecReload=/bin/kill -s HUP $MAINPID", unit)
-        self.assertIn("KillSignal=SIGQUIT", unit)
+        self.assertIn("KillSignal=SIGTERM", unit)
         self.assertIn("KillMode=mixed", unit)
         self.assertIn("TimeoutStopSec=120", unit)
         self.assertIn("Restart=on-failure", unit)
