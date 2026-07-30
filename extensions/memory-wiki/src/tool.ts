@@ -1,6 +1,5 @@
 // Memory Wiki plugin module implements tool behavior.
 import path from "node:path";
-<<<<<<< HEAD
 import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";

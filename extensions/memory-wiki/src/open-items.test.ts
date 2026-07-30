@@ -1,7 +1,13 @@
 // Memory Wiki tests cover open-items enumeration plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { WikiClaim, WikiPageSummary } from "./markdown.js";
-import { deriveMemoryWikiOpenItems } from "./open-items.js";
+import {
+  deriveMemoryWikiOpenItems,
+  type MemoryWikiOpenItem,
+  type MemoryWikiOpenItemCounts,
+  type MemoryWikiOpenItemsResult,
+  type MemoryWikiOpenItemVariant,
+} from "./open-items.js";
 
 function createPage(params: {
   relativePath: string;
@@ -24,6 +30,7 @@ function createPage(params: {
     relationships: [],
     bestUsedFor: [],
     notEnoughFor: [],
+    bridgeAgentIds: [],
     claims: params.claims ?? [],
     contradictions: params.contradictions ?? [],
     questions: params.questions ?? [],
@@ -46,9 +53,14 @@ describe("deriveMemoryWikiOpenItems", () => {
       }),
     ];
 
-    const { items, counts } = deriveMemoryWikiOpenItems(pages);
+    const result: MemoryWikiOpenItemsResult = deriveMemoryWikiOpenItems(pages);
+    const { items, counts } = result;
+    const firstItem: MemoryWikiOpenItem | undefined = items[0];
+    const firstVariant: MemoryWikiOpenItemVariant | undefined = firstItem?.variants?.[0];
+    const typedCounts: MemoryWikiOpenItemCounts = counts;
 
-    expect(counts.total).toBe(4);
+    expect(typedCounts.total).toBe(4);
+    expect(firstVariant).toBeUndefined();
     expect(counts["open-question"]).toBe(1);
     expect(counts["page-contradiction"]).toBe(1);
     expect(counts["low-confidence-page"]).toBe(1);
