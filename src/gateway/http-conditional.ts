@@ -7,8 +7,10 @@ export function matchesHttpIfNoneMatch(
   if (!value) {
     return false;
   }
+  const currentTag = etag.startsWith("W/") ? etag.slice(2) : etag;
   return value.split(",").some((candidate) => {
     const tag = candidate.trim();
-    return tag === "*" || tag === etag || (tag.startsWith("W/") && tag.slice(2) === etag);
+    const candidateTag = tag.startsWith("W/") ? tag.slice(2) : tag;
+    return tag === "*" || candidateTag === currentTag;
   });
 }

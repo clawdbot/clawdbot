@@ -1517,6 +1517,7 @@ export async function handleManagedOutgoingMediaHttpRequest(
   );
   const byteResponse = resolveByteResponse({
     file: opened.stat,
+    validatorStrength: "strong",
     method: req.method,
     request: req,
   });

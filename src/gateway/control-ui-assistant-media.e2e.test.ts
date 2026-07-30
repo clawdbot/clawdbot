@@ -59,8 +59,54 @@ describe("Control UI assistant media e2e", () => {
         expect(ranged.headers.get("accept-ranges")).toBe("bytes");
         expect(ranged.headers.get("content-range")).toBe("bytes 9-15/26");
         expect(ranged.headers.get("content-length")).toBe("7");
-        expect(ranged.headers.get("etag")).toMatch(/^"[A-Za-z0-9_-]+"$/);
+        expect(ranged.headers.get("etag")).toMatch(/^W\/"[A-Za-z0-9_-]+"$/);
         expect(await ranged.text()).toBe("control");
+
+        const mutableFilePath = path.join(mediaDir, "mutable-preview.txt");
+        const preservedTime = new Date("2026-07-01T00:00:00.000Z");
+        await fs.writeFile(mutableFilePath, "AAAA", "utf8");
+        await fs.utimes(mutableFilePath, preservedTime, preservedTime);
+        const mutableUrl = `${route}?source=${encodeURIComponent(mutableFilePath)}`;
+        const initialRange = await fetch(mutableUrl, {
+          headers: {
+            Authorization: `Bearer ${CONTROL_UI_E2E_TOKEN}`,
+            Range: "bytes=0-1",
+          },
+        });
+        expect(initialRange.status).toBe(206);
+        expect(await initialRange.text()).toBe("AA");
+        const initialEtag = initialRange.headers.get("etag");
+        expect(initialEtag).toMatch(/^W\/"[A-Za-z0-9_-]+"$/);
+        const initialLastModified = initialRange.headers.get("last-modified");
+        expect(initialLastModified).toBe(preservedTime.toUTCString());
+
+        await fs.writeFile(mutableFilePath, "BBBB", "utf8");
+        await fs.utimes(mutableFilePath, preservedTime, preservedTime);
+        const resumed = await fetch(mutableUrl, {
+          headers: {
+            Authorization: `Bearer ${CONTROL_UI_E2E_TOKEN}`,
+            Range: "bytes=2-3",
+            "If-Range": initialEtag ?? "",
+          },
+        });
+        expect(resumed.status).toBe(200);
+        expect(resumed.headers.get("etag")).toBe(initialEtag);
+        expect(resumed.headers.get("last-modified")).toBe(initialLastModified);
+        expect(resumed.headers.get("content-range")).toBeNull();
+        expect(await resumed.text()).toBe("BBBB");
+
+        const resumedByDate = await fetch(mutableUrl, {
+          headers: {
+            Authorization: `Bearer ${CONTROL_UI_E2E_TOKEN}`,
+            Range: "bytes=2-3",
+            "If-Range": initialLastModified ?? "",
+          },
+        });
+        expect(resumedByDate.status).toBe(200);
+        expect(resumedByDate.headers.get("etag")).toBe(initialEtag);
+        expect(resumedByDate.headers.get("last-modified")).toBe(initialLastModified);
+        expect(resumedByDate.headers.get("content-range")).toBeNull();
+        expect(await resumedByDate.text()).toBe("BBBB");
 
         const head = await fetch(
           `${route}?source=${sourceParam}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
@@ -78,7 +124,7 @@ describe("Control UI assistant media e2e", () => {
             {
               method,
               headers: {
-                "If-None-Match": `W/${ranged.headers.get("etag")}`,
+                "If-None-Match": ranged.headers.get("etag") ?? "",
                 Range: "bytes=9-15",
                 "If-Range": '"stale"',
               },

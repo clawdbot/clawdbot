@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   createGatewayByteStream,
-  resolveByteResponse,
+  resolveByteResponse as resolveByteResponseImpl,
   writeByteHeaders,
 } from "./http-byte-range.js";
 
@@ -31,6 +31,17 @@ function createByteRequest(
       entries.map(([name, value]) => [name, Array.isArray(value) ? value : [value]]),
     ),
   };
+}
+
+const STRONG_FILE = { file: FILE, validatorStrength: "strong" } as const;
+const WEAK_FILE = { file: FILE, validatorStrength: "weak" } as const;
+
+function resolveByteResponse(
+  params: Omit<Parameters<typeof resolveByteResponseImpl>[0], "validatorStrength"> & {
+    validatorStrength?: "strong" | "weak";
+  },
+) {
+  return resolveByteResponseImpl({ validatorStrength: "strong", ...params });
 }
 
 describe("resolveByteResponse", () => {
@@ -116,11 +127,11 @@ describe("resolveByteResponse", () => {
     },
   );
 
-  it("honors a matching If-Range ETag", () => {
-    const etag = resolveByteResponse({ file: FILE }).etag;
+  it("honors a matching strong If-Range ETag", () => {
+    const etag = resolveByteResponse(STRONG_FILE).etag;
     expect(
       resolveByteResponse({
-        file: FILE,
+        ...STRONG_FILE,
         method: "GET",
         request: createByteRequest({ range: "bytes=1-2", "if-range": etag }),
       }),
@@ -404,10 +415,53 @@ describe("resolveByteResponse", () => {
     ).toMatchObject({ kind: "full", statusCode: 200, contentLength: 10 });
   });
 
+  it("does not use a weak metadata ETag as an If-Range validator", () => {
+    const etag = resolveByteResponse(WEAK_FILE).etag;
+    expect(
+      resolveByteResponse({
+        ...WEAK_FILE,
+        method: "GET",
+        request: createByteRequest({ range: "bytes=1-2", "if-range": etag }),
+      }),
+    ).toMatchObject({ kind: "full", statusCode: 200, contentLength: 10 });
+  });
+
+  it("does not use the strong form of a weak metadata ETag as an If-Range validator", () => {
+    const etag = resolveByteResponse(WEAK_FILE).etag;
+    expect(
+      resolveByteResponse({
+        ...WEAK_FILE,
+        method: "GET",
+        request: createByteRequest({ range: "bytes=1-2", "if-range": etag.slice(2) }),
+      }),
+    ).toMatchObject({ kind: "full", statusCode: 200, contentLength: 10 });
+  });
+
+  it("does not use a weak metadata Last-Modified date as an If-Range validator", () => {
+    const lastModified = resolveByteResponse(WEAK_FILE).lastModified;
+    expect(
+      resolveByteResponse({
+        ...WEAK_FILE,
+        method: "GET",
+        request: createByteRequest({ range: "bytes=1-2", "if-range": lastModified }),
+      }),
+    ).toMatchObject({ kind: "full", statusCode: 200, contentLength: 10 });
+  });
+
+  it("still serves an unconditional range for a weakly validated file", () => {
+    expect(
+      resolveByteResponse({
+        ...WEAK_FILE,
+        method: "GET",
+        request: createByteRequest({ range: "bytes=1-2" }),
+      }),
+    ).toMatchObject({ kind: "partial", statusCode: 206, range: { start: 1, end: 2 } });
+  });
+
   it("falls back to a full response for a mismatched If-Range ETag", () => {
     expect(
       resolveByteResponse({
-        file: FILE,
+        ...STRONG_FILE,
         method: "GET",
         request: createByteRequest({ range: "bytes=1-2", "if-range": '"different"' }),
       }),
@@ -441,6 +495,17 @@ describe("resolveByteResponse", () => {
     expect(setHeader).toHaveBeenCalledWith("ETag", etag);
     expect(setHeader).toHaveBeenCalledWith("Last-Modified", LAST_MODIFIED);
     expect(setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
+  });
+
+  it("weakly compares the strong form of a current weak ETag for If-None-Match", () => {
+    const etag = resolveByteResponse(WEAK_FILE).etag;
+    expect(
+      resolveByteResponse({
+        ...WEAK_FILE,
+        method: "GET",
+        request: createByteRequest({ "if-none-match": etag.slice(2) }),
+      }),
+    ).toMatchObject({ kind: "not-modified", statusCode: 304, etag });
   });
 
   it.each(["GET", "HEAD"])(
@@ -502,14 +567,19 @@ describe("resolveByteResponse", () => {
 });
 
 describe("byte ETag generation", () => {
-  it("is stable for the same file identity and changes with size or mtime", () => {
-    const etag = resolveByteResponse({ file: FILE }).etag;
-    expect(resolveByteResponse({ file: { ...FILE } }).etag).toBe(etag);
-    expect(resolveByteResponse({ file: { ...FILE, size: FILE.size + 1 } }).etag).not.toBe(etag);
-    expect(resolveByteResponse({ file: { ...FILE, mtimeMs: FILE.mtimeMs + 1 } }).etag).not.toBe(
-      etag,
-    );
-    expect(etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
+  it("is stable for the same file identity and reflects the requested strength", () => {
+    const strongEtag = resolveByteResponse(STRONG_FILE).etag;
+    expect(resolveByteResponse({ ...STRONG_FILE, file: { ...FILE } }).etag).toBe(strongEtag);
+    expect(
+      resolveByteResponse({ ...STRONG_FILE, file: { ...FILE, size: FILE.size + 1 } }).etag,
+    ).not.toBe(strongEtag);
+    expect(
+      resolveByteResponse({ ...STRONG_FILE, file: { ...FILE, mtimeMs: FILE.mtimeMs + 1 } }).etag,
+    ).not.toBe(strongEtag);
+    expect(strongEtag).toMatch(/^"[A-Za-z0-9_-]+"$/);
+
+    const weakEtag = resolveByteResponse(WEAK_FILE).etag;
+    expect(weakEtag).toBe(`W/${strongEtag}`);
   });
 });
 

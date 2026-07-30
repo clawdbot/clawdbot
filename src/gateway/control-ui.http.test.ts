@@ -588,14 +588,14 @@ describe("handleControlUiHttpRequest", () => {
           const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
           const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
           const etag = initial.setHeader.mock.calls.find(([name]) => name === "ETag")?.[1];
-          expect(etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
+          expect(etag).toMatch(/^W\/"[A-Za-z0-9_-]+"$/);
 
           const conditional = await runAssistantMediaRequest({
             url,
             method,
             auth,
             headers: {
-              "if-none-match": `W/${String(etag)}`,
+              "if-none-match": String(etag),
               range: "bytes=0-3",
               "if-range": '"stale"',
             },
@@ -682,7 +682,7 @@ describe("handleControlUiHttpRequest", () => {
     },
   );
 
-  it("resumes assistant media only for an exact If-Range HTTP-date", async () => {
+  it("does not resume mutable assistant media for an If-Range HTTP-date", async () => {
     await withAllowedAssistantMediaRoot({
       prefix: "ui-media-if-range-date-",
       fn: async (tmpRoot) => {
@@ -699,18 +699,16 @@ describe("handleControlUiHttpRequest", () => {
         expect(initial.res.statusCode).toBe(200);
         expect(initial.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
 
-        const partial = await runAssistantMediaRequest({
+        const ranged = await runAssistantMediaRequest({
           url,
           method: "GET",
           auth,
           headers: { range: "bytes=0-8", "if-range": lastModified },
         });
-        expect(partial.res.statusCode).toBe(206);
-        expect(partial.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
-        expect(partial.setHeader).toHaveBeenCalledWith(
-          "Content-Range",
-          `bytes 0-8/${body.byteLength}`,
-        );
+        expect(ranged.res.statusCode).toBe(200);
+        expect(ranged.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
+        expect(ranged.setHeader).toHaveBeenCalledWith("Content-Length", String(body.byteLength));
+        expect(ranged.setHeader).not.toHaveBeenCalledWith("Content-Range", expect.anything());
 
         const future = await runAssistantMediaRequest({
           url,
@@ -749,14 +747,15 @@ describe("handleControlUiHttpRequest", () => {
           expect(initial.setHeader).toHaveBeenCalledWith("Last-Modified", expectedLastModified);
           const etag = initial.setHeader.mock.calls.find(([name]) => name === "ETag")?.[1];
 
-          const partial = await runAssistantMediaRequest({
+          const ranged = await runAssistantMediaRequest({
             url,
             method: "GET",
             auth,
             headers: { range: "bytes=0-5", "if-range": expectedLastModified },
           });
-          expect(partial.res.statusCode).toBe(206);
-          expect(partial.setHeader).toHaveBeenCalledWith("Last-Modified", expectedLastModified);
+          expect(ranged.res.statusCode).toBe(200);
+          expect(ranged.setHeader).toHaveBeenCalledWith("Last-Modified", expectedLastModified);
+          expect(ranged.setHeader).not.toHaveBeenCalledWith("Content-Range", expect.anything());
 
           const futureRange = await runAssistantMediaRequest({
             url,

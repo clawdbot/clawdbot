@@ -19,6 +19,8 @@ type FileIdentity = {
   mtimeMs: number;
 };
 
+type ValidatorStrength = "strong" | "weak";
+
 type ByteSlice = {
   start: number;
   end: number;
@@ -115,11 +117,10 @@ function parseConditionalHttpDate(value: string, nowMs: number): number | undefi
   return seconds === 60 ? timestamp + 1_000 : timestamp;
 }
 
-function createByteEtag(file: FileIdentity): string {
-  // Gateway media files are write-once, so size + mtimeMs uniquely version their bytes here.
-  // Serving mutable files with a strong validator would instead require a content hash.
+function createByteEtag(file: FileIdentity, strength: ValidatorStrength): string {
   const digest = createHash("sha256").update(`${file.size}:${file.mtimeMs}`).digest("base64url");
-  return `"${digest}"`;
+  const opaqueTag = `"${digest}"`;
+  return strength === "weak" ? `W/${opaqueTag}` : opaqueTag;
 }
 
 function parseByteRange(value: string, size: number): ByteSlice | "invalid" | "unsatisfiable" {
@@ -159,10 +160,11 @@ function parseByteRange(value: string, size: number): ByteSlice | "invalid" | "u
 export function resolveByteResponse(params: {
   file: FileIdentity;
   nowMs?: number;
+  validatorStrength: ValidatorStrength;
   method?: string;
   request?: Pick<IncomingMessage, "headers" | "headersDistinct">;
 }): ByteResponsePlan {
-  const etag = createByteEtag(params.file);
+  const etag = createByteEtag(params.file, params.validatorStrength);
   const originatedAtMs = params.nowMs ?? Date.now();
   // Filesystem clocks may lead this host; validators cannot postdate message origination.
   const lastModifiedMs = Math.floor(Math.min(params.file.mtimeMs, originatedAtMs) / 1_000) * 1_000;
@@ -199,10 +201,13 @@ export function resolveByteResponse(params: {
   const ifRangeHeader = headers?.["if-range"];
   if (
     ifRangeHeader !== undefined &&
-    ifRangeHeader !== etag &&
-    // If-Range must exactly match the emitted HTTP-date; parsing accepts invalid lookalikes.
-    ifRangeHeader !== lastModified
+    (params.validatorStrength === "weak" ||
+      (ifRangeHeader !== etag &&
+        // If-Range must exactly match the emitted HTTP-date; parsing accepts invalid lookalikes.
+        ifRangeHeader !== lastModified))
   ) {
+    // Mutable files only have weak metadata validators, so neither their ETag nor
+    // Last-Modified date can safely authorize reusing bytes from an earlier response.
     return full;
   }
 
