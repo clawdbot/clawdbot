@@ -113,7 +113,13 @@ function computeReplacements(
       }
     }
     if (!exactMatch) {
-      newSlice = preserveContextLines(originalLines, found, chunk.oldLines, chunk.newLines, newSlice);
+      newSlice = preserveContextLines(
+        originalLines,
+        found,
+        chunk.oldLines,
+        chunk.newLines,
+        newSlice,
+      );
     }
 
     replacements.push([found, pattern.length, newSlice]);
