@@ -199,6 +199,28 @@ describe("qa suite", () => {
     );
   });
 
+  it("rejects a requested live driver whose channel has no matching factory instead of recording live", async () => {
+    // A requested live run with a channelId and supplied factories that none
+    // match must throw at adapter selection rather than fall back to the shared
+    // qa-channel transport while still reporting driver "live". This locks the
+    // realization invariant ClawSweeper flagged on #116192: the realized driver
+    // only becomes "live" when a matching factory actually creates the adapter.
+    const create = vi.fn();
+
+    await expect(
+      qaSuiteProgressTesting.createQaSuiteTransportAdapter({
+        adapterFactories: [{ id: "telegram", matches: () => false, create }],
+        channelDriver: "live",
+        channelId: "whatsapp",
+        outputDir: "/tmp/qa-output",
+        state: {} as QaLabServerHandle["state"],
+        transportId: "qa-channel",
+      }),
+    ).rejects.toThrow("no QA transport factory for live:whatsapp");
+
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it("preserves caller-supplied transport policy without scenario metadata", async () => {
     const adapter = { id: "telegram" } as QaTransportAdapter;
     const create = vi.fn(async () => adapter);
