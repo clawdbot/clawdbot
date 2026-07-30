@@ -313,6 +313,25 @@ describe("HEIC input image normalization", () => {
     await expectResolvedImageContentCase(testCase);
   });
 
+  it("passes the caller abort signal through HEIC conversion", async () => {
+    const controller = new AbortController();
+    const sourceBytes = Buffer.from("heic-source");
+    detectMimeMock.mockResolvedValueOnce("image/heic");
+    convertHeicToJpegMock.mockResolvedValueOnce(Buffer.from("jpeg-normalized"));
+
+    await extractImageContentFromSource(
+      {
+        type: "base64",
+        data: sourceBytes.toString("base64"),
+        mediaType: "image/heic",
+      },
+      createImageSourceLimits(["image/heic", "image/jpeg"]),
+      controller.signal,
+    );
+
+    expect(convertHeicToJpegMock).toHaveBeenCalledWith(sourceBytes, controller.signal);
+  });
+
   it.each([
     {
       name: "rejects spoofed base64 images when detected bytes are not an image",

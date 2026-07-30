@@ -248,6 +248,7 @@ const bundledPluginEntries = [
   "auth-presence.ts!",
   "thread-bindings-runtime.ts!",
   "document-extractor.ts!",
+  "document-extractor.worker.ts!",
   "web-content-extractor.ts!",
   "timeouts.ts!",
   "action-runtime.runtime.ts!",

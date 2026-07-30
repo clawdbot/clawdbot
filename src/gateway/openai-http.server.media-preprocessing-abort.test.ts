@@ -92,13 +92,17 @@ beforeEach(() => {
 describe("OpenAI HTTP media preprocessing disconnects", () => {
   it("aborts blocked image preprocessing when the client disconnects", async () => {
     let preprocessingSignal: AbortSignal | undefined;
-    let releasePreprocessing: (() => void) | undefined;
     extractImageContentFromSourceMock.mockImplementationOnce(
       (_source: unknown, _limits: unknown, signal?: AbortSignal) =>
-        new Promise((resolve) => {
+        new Promise((_resolve, reject) => {
           preprocessingSignal = signal;
-          releasePreprocessing = () =>
-            resolve({ type: "image", data: "aW1hZ2U=", mimeType: "image/png" });
+          const rejectForAbort = () =>
+            reject(signal?.reason instanceof Error ? signal.reason : new Error("request aborted"));
+          if (signal?.aborted) {
+            rejectForAbort();
+            return;
+          }
+          signal?.addEventListener("abort", rejectForAbort, { once: true });
         }),
     );
 
@@ -134,27 +138,34 @@ describe("OpenAI HTTP media preprocessing disconnects", () => {
     await vi.waitFor(() => expect(extractImageContentFromSourceMock).toHaveBeenCalledTimes(1));
     clientReq.destroy();
 
-    try {
-      await vi.waitFor(() => expect(preprocessingSignal?.aborted).toBe(true), {
-        timeout: 1_000,
-        interval: 20,
-      });
-    } finally {
-      releasePreprocessing?.();
-    }
+    await vi.waitFor(() => expect(preprocessingSignal?.aborted).toBe(true), {
+      timeout: 1_000,
+      interval: 20,
+    });
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(agentCommand).not.toHaveBeenCalled();
   });
 
   it("aborts blocked OpenResponses PDF parsing when the client disconnects", async () => {
     let preprocessingSignal: AbortSignal | undefined;
-    let releasePreprocessing: (() => void) | undefined;
     extractPdfDocumentMock.mockImplementationOnce(
       (request: { signal?: AbortSignal }) =>
-        new Promise((resolve) => {
+        new Promise((_resolve, reject) => {
           preprocessingSignal = request.signal;
-          releasePreprocessing = () => resolve({ text: "", images: [] });
+          const rejectForAbort = () =>
+            reject(
+              request.signal?.reason instanceof Error
+                ? request.signal.reason
+                : new Error("request aborted"),
+            );
+          if (request.signal?.aborted) {
+            rejectForAbort();
+            return;
+          }
+          request.signal?.addEventListener("abort", rejectForAbort, { once: true });
         }),
     );
 
@@ -195,16 +206,14 @@ describe("OpenAI HTTP media preprocessing disconnects", () => {
     await vi.waitFor(() => expect(extractPdfDocumentMock).toHaveBeenCalledTimes(1));
     clientReq.destroy();
 
-    try {
-      await vi.waitFor(() => expect(preprocessingSignal?.aborted).toBe(true), {
-        timeout: 1_000,
-        interval: 20,
-      });
-    } finally {
-      releasePreprocessing?.();
-    }
+    await vi.waitFor(() => expect(preprocessingSignal?.aborted).toBe(true), {
+      timeout: 1_000,
+      interval: 20,
+    });
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(agentCommand).not.toHaveBeenCalled();
   });
 });

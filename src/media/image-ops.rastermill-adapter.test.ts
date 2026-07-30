@@ -36,6 +36,27 @@ describe("image ops Rastermill adapter", () => {
     expect(photonModuleFactory).not.toHaveBeenCalled();
   });
 
+  it("passes caller cancellation to HEIC conversion", async () => {
+    const actualRastermill = await vi.importActual<typeof import("rastermill")>("rastermill");
+    const encode = vi.fn(async () => ({ data: Buffer.from("jpeg") }));
+    vi.doMock("rastermill", () => ({
+      ...actualRastermill,
+      createRastermill: vi.fn(() => ({ encode })),
+      readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
+      readImageProbeFromHeader: vi.fn(() => ({ width: 1, height: 1, format: "heif" })),
+    }));
+
+    const { convertHeicToJpeg } = await import("./image-ops.js");
+    const controller = new AbortController();
+    const input = Buffer.from("input");
+
+    await expect(convertHeicToJpeg(input, controller.signal)).resolves.toEqual(Buffer.from("jpeg"));
+    expect(encode).toHaveBeenCalledWith(input, {
+      format: "jpeg",
+      signal: controller.signal,
+    });
+  });
+
   it("configures Rastermill with OpenClaw limits, temp root, and command resolution", async () => {
     const actualRastermill = await vi.importActual<typeof import("rastermill")>("rastermill");
     const encode = vi.fn(async () => ({ data: Buffer.from("jpeg") }));
