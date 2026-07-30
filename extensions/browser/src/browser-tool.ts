@@ -894,19 +894,30 @@ export function createBrowserTool(opts?: {
               };
             }
           } catch (err) {
-            // Fall back to returning the raw image block so the agent loop can
-            // still recover. Provider/runtime error messages are untrusted
-            // input too, so defang line-start final-reply media directives.
+            // A vision/describe model was configured but failed at runtime.
+            // Do NOT fall back to injecting the raw base64 image block here: an
+            // image-bearing tool result persists across turns and forces later
+            // tool results (exec, read, snapshot) into image-analysis framing,
+            // corrupting the session until /new (#106703, #105305). The vision
+            // success path already delivers screenshots as a text description,
+            // so a configured-vision failure stays text-only and keeps the
+            // staged outbound copy available for an explicit message-tool share.
+            // Provider/runtime error messages are untrusted input too, so defang
+            // line-start final-reply media directives.
             const rawReason = err instanceof Error ? err.message : String(err);
             const reason = neutralizeMediaDirectives(rawReason);
-            const extraText = `[browser screenshot vision failed: ${reason}]\n${shareHint}`;
-            return await browserToolDeps.imageResultFromFile({
-              label: "browser:screenshot",
-              path: screenshotPath,
-              extraText,
-              details: screenshotDetails,
-              imageSanitization,
-            });
+            const text = `[browser screenshot vision failed: ${reason}]\n${shareHint}`;
+            return {
+              content: [{ type: "text" as const, text }],
+              details: {
+                ...(result as Record<string, unknown>),
+                // No details.media: the deliverable is a text notice, mirroring
+                // the vision-success path so channel auto-delivery cannot grab
+                // the raw screenshot. Explicit sharing uses the staged outbound
+                // path embedded in the text above.
+                vision: { failed: true, error: reason },
+              },
+            };
           }
           return await browserToolDeps.imageResultFromFile({
             label: "browser:screenshot",
