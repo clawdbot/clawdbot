@@ -593,17 +593,28 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       models,
       methodResponses: {
-        "chat.metadata": {
-          catalogMode: "replace",
-          commands: [],
-          models,
+        "chat.startup": {
+          agentsList: {
+            agents: [{ id: "main", name: "OpenClaw" }],
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+          },
+          messages: [],
+          metadata: {
+            catalogMode: "replace",
+            commands: [],
+            models,
+          },
+          sessionId: "control-ui-e2e-session",
+          thinkingLevel: null,
         },
       },
     });
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.metadata");
+      await gateway.waitForRequest("chat.startup");
 
       const composer = page.locator(".agent-chat__input");
       await composer.locator('[data-chat-model-select="true"]').click();
@@ -613,7 +624,7 @@ suite.define(() => {
         .toBe("Replace mode filters models according to your model settings. Manage models");
       await expect
         .poll(() => hint.getByRole("link", { name: "Manage models" }).getAttribute("href"))
-        .toBe("/settings/ai-agents?section=models#config-section-models");
+        .toBe("/settings/model-providers");
     } finally {
       await context.close();
     }

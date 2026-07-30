@@ -714,6 +714,47 @@ describe("models.list", () => {
     );
   });
 
+  it("omits replace mode metadata when configured view falls back to the full catalog", async () => {
+    const runtimeConfig = {
+      models: {
+        mode: "replace",
+        providers: {
+          test: {
+            api: "openai-completions",
+            apiKey: "test-key",
+            baseUrl: "http://127.0.0.1:8000/v1",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const { request, respond } = requestModelsList({
+      view: "configured",
+      runtimeConfig,
+      loadGatewayModelCatalog: vi.fn(() =>
+        Promise.resolve([{ id: "demo", name: "Demo", provider: "test" }]),
+      ),
+      reqId: "req-models-list-replace-mode-full-catalog-fallback",
+    });
+
+    await request;
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        models: [
+          {
+            id: "demo",
+            name: "Demo",
+            provider: "test",
+            available: true,
+          },
+        ],
+      },
+      undefined,
+    );
+  });
+
   it("does not block the configured view on slow model catalog discovery", async () => {
     await withoutOpenAIEnvAuth(async () => {
       const catalog = createDeferred<never>();

@@ -617,7 +617,6 @@ export async function buildModelsListResult(
   const capableProviders = includeProviderCapabilities
     ? apiKeyProviderCapabilities({ cfg, metadataSnapshot, workspaceDir })
     : undefined;
-  const catalogMode = view !== "all" && cfg.models?.mode === "replace" ? "replace" : undefined;
   if (view === "provider-config") {
     const sourceConfig = getRuntimeConfigSourceSnapshot() ?? cfg;
     const authoredEntries = buildProviderConfigModelCatalogForBrowse({
@@ -648,7 +647,6 @@ export async function buildModelsListResult(
     });
     const inventory = await inventoryProjector.projectCatalog();
     return {
-      ...(catalogMode ? { catalogMode } : {}),
       models: await buildPublicModelsListEntries({
         catalog: inventory,
         cfg,
@@ -716,6 +714,12 @@ export async function buildModelsListResult(
       });
     },
   });
+  const catalogMode =
+    view === "configured" &&
+    cfg.models?.mode === "replace" &&
+    buildProviderConfigModelCatalogForBrowse({ cfg, workspaceDir }).length > 0
+      ? "replace"
+      : undefined;
   return {
     ...(catalogMode ? { catalogMode } : {}),
     models: await buildPublicModelsListEntries({
