@@ -21,7 +21,6 @@ struct AppStateVoiceEarsTests {
         state.triggerVoiceEars(ttl: 60)
         state.triggerVoiceEars(ttl: 0.05)
 
-        try await Task.sleep(for: .milliseconds(20))
         #expect(state.earBoostActive)
 
         try await Task.sleep(for: .milliseconds(60))

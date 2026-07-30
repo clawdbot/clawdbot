@@ -65,6 +65,22 @@ describe("Claude CLI adapter equivalence", () => {
       }),
     ).toEqual({ env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000" } });
   });
+
+  it("privately acknowledges isolated completion preparation", () => {
+    const backend = buildAnthropicCliBackend();
+    const prepared = backend.prepareExecution?.({
+      workspaceDir: "/tmp/openclaw-claude-cli",
+      provider: "claude-cli",
+      modelId: "claude-opus-4-8",
+      isolatedCompletionPrompt: "TASK: return JSON",
+      isolatedCompletionSystemPrompt: "Return JSON.",
+    } as Parameters<NonNullable<typeof backend.prepareExecution>>[0] & {
+      isolatedCompletionPrompt: string;
+      isolatedCompletionSystemPrompt: string;
+    }) as { env?: Record<string, string>; isolatedCompletionEnforced?: true };
+
+    expect(prepared).toEqual({ env: {}, isolatedCompletionEnforced: true });
+  });
 });
 
 describe("resolveClaudeCliAutoCompactEnv", () => {

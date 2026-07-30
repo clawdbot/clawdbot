@@ -210,8 +210,14 @@ export async function attachAuthenticatedGatewayConnect(
     capability: string;
     expiresAtMs: number;
   }> = [];
+  const effectiveNodeCaps = role === "node" ? new Set(connectParams.caps ?? []) : undefined;
   if (pluginSurfaceBaseUrl && !usesLegacyNodeProtocol) {
     for (const pluginCapabilitySurface of Object.values(pluginNodeCapabilitySurfaces)) {
+      // Node reconciliation replaces declared caps with the approved surface.
+      // Issuing a route capability for a withheld cap would bypass node.pair.approve.
+      if (effectiveNodeCaps && !effectiveNodeCaps.has(pluginCapabilitySurface.surface)) {
+        continue;
+      }
       const capability = mintPluginNodeCapabilityToken();
       const expiresAtMs = resolvePluginNodeCapabilityExpiresAtMs(pluginCapabilitySurface);
       if (expiresAtMs === undefined) {

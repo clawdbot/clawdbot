@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { WebSocket } from "ws";
-import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import { type HelloOk, PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import {
@@ -50,6 +50,7 @@ export async function connectGatewayClient(params: {
   instanceId?: string;
   deviceIdentity?: DeviceIdentity;
   onEvent?: (evt: { event?: string; payload?: unknown }) => void;
+  onHelloOk?: (hello: HelloOk) => void;
   connectChallengeTimeoutMs?: number;
   requestTimeoutMs?: number;
   timeoutMs?: number;
@@ -113,7 +114,10 @@ export async function connectGatewayClient(params: {
       instanceId: params.instanceId,
       deviceIdentity,
       onEvent: params.onEvent,
-      onHelloOk: () => stop(undefined, client),
+      onHelloOk: (hello) => {
+        params.onHelloOk?.(hello);
+        stop(undefined, client);
+      },
       onConnectError: (err) => stop(err),
       onClose: (code, reason) =>
         stop(new Error(`gateway closed during connect (${code}): ${reason}`)),
