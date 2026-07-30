@@ -6,6 +6,7 @@
  * yet ship a dedicated provider plugin hook surface.
  */
 
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveNodeRequireFromMeta } from "../../logging/node-require.js";
 import type { FailoverReason } from "./types.js";
 
@@ -14,6 +15,10 @@ type ProviderErrorPattern = {
   test: RegExp;
   /** The failover reason this pattern maps to. */
   reason: FailoverReason;
+  /** Optional list of provider ids to scope the pattern to.
+   *  When set, the pattern only matches for providers whose id includes one of these strings.
+   *  When omitted, the pattern matches for all providers. */
+  providers?: readonly string[];
 };
 
 /**
@@ -72,6 +77,20 @@ const PROVIDER_SPECIFIC_PATTERNS: readonly ProviderErrorPattern[] = [
   {
     test: /model(?:_is)?_deactivated|model has been deactivated/i,
     reason: "model_not_found",
+  },
+  // xAI credit/subscription exhaustion variants (#115853).
+  // Scoped to xAI so the same text from other providers does not get the
+  // xAI override — the shared billing matcher has different semantics for
+  // those providers.
+  {
+    test: /\brun\s+out\s+of\s+credits\b/i,
+    reason: "billing",
+    providers: ["xai"],
+  },
+  {
+    test: /\bneed\s+a\s+\w+\s+subscription\b/i,
+    reason: "billing",
+    providers: ["xai"],
   },
 ];
 
@@ -171,6 +190,17 @@ export function classifyProviderPluginError(
   );
 }
 
+function matchesPatternForProvider(pattern: ProviderErrorPattern, provider?: string): boolean {
+  if (!pattern.providers || pattern.providers.length === 0) {
+    return true;
+  }
+  const normalized = normalizeOptionalLowercaseString(provider);
+  if (!normalized) {
+    return false;
+  }
+  return pattern.providers.some((p) => normalized.includes(p));
+}
+
 /**
  * Try to classify an error using provider-specific patterns.
  * Returns null if no provider-specific pattern matches (fall through to generic classification).
@@ -187,7 +217,10 @@ export function classifyProviderSpecificError(
     }
   }
   for (const pattern of PROVIDER_SPECIFIC_PATTERNS) {
-    if (pattern.test.test(context.errorMessage)) {
+    if (
+      matchesPatternForProvider(pattern, context.provider) &&
+      pattern.test.test(context.errorMessage)
+    ) {
       return pattern.reason;
     }
   }
