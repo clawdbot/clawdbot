@@ -3,7 +3,7 @@ import type {
   HeartbeatRunResult,
   HeartbeatWakeHandler,
   HeartbeatWakeRequest,
-} from "./heartbeat-wake.js";
+} from "./heartbeat-wake-contracts.js";
 
 export type ActiveHeartbeatWakeTarget = {
   generation: number;
