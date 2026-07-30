@@ -2,6 +2,8 @@
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { resolveCarrierCommandArgv } from "./command-carriers.js";
 import { unwrapKnownDispatchWrapperInvocation } from "./dispatch-wrapper-resolution.js";
+import { resolveLifecyclePackageRunnerArgv } from "./exec-approvals-lifecycle-runners.js";
+import { extractShellSubstitutionCommands } from "./exec-approvals-lifecycle-substitutions.js";
 import type { ExecCommandSegment } from "./exec-command-analysis-types.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 import { POSIX_INLINE_COMMAND_FLAGS, resolveInlineCommandMatch } from "./shell-inline-command.js";
@@ -31,7 +33,12 @@ const GATEWAY_READ_ONLY = new Set([
   "status",
   "usage-cost",
 ]);
-const LIFECYCLE_RPC_METHODS = new Set(["gateway.restart.request", "update.run"]);
+const LIFECYCLE_RPC_METHODS = new Set([
+  "config.apply",
+  "config.patch",
+  "gateway.restart.request",
+  "update.run",
+]);
 const LAUNCHCTL_MUTATIONS = new Set([
   "attach",
   "bootstrap",
@@ -263,10 +270,11 @@ function classifyLaunchctl(argv: readonly string[]): boolean {
   return argv.slice(actionIndex + 1).some(looksLikeOpenClaw);
 }
 
-function systemctlUsesSignalZero(argv: readonly string[]): boolean {
+function argvUsesSignalZero(argv: readonly string[]): boolean {
   return argv.some((token, index) => {
     const lower = normalizedToken(token);
     return (
+      lower === "-0" ||
       lower === "-s0" ||
       lower === "--signal=0" ||
       ((lower === "-s" || lower === "--signal") && normalizedToken(argv[index + 1]) === "0")
@@ -283,7 +291,7 @@ function classifySystemctl(argv: readonly string[]): boolean {
   if (!SYSTEMCTL_MUTATIONS.has(action)) {
     return false;
   }
-  if (action === "kill" && systemctlUsesSignalZero(argv)) {
+  if (action === "kill" && argvUsesSignalZero(argv)) {
     return false;
   }
   return argv.slice(actionIndex + 1).some(looksLikeOpenClaw);
@@ -334,7 +342,8 @@ function classifyProcessMutation(
   if (["killall", "pkill"].includes(executable)) {
     if (
       hasHelpOrVersion(argv) ||
-      argv.some((token) => ["-0", "-l", "--list", "--signal=0"].includes(normalizedToken(token)))
+      argvUsesSignalZero(argv) ||
+      argv.some((token) => ["-l", "--list"].includes(normalizedToken(token)))
     ) {
       return false;
     }
@@ -349,7 +358,8 @@ function classifyProcessMutation(
     }
     if (
       hasHelpOrVersion(argv) ||
-      argv.some((token) => ["-0", "-l", "-s0", "--signal=0"].includes(normalizedToken(token)))
+      argvUsesSignalZero(argv) ||
+      argv.some((token) => normalizedToken(token) === "-l")
     ) {
       return false;
     }
@@ -359,54 +369,6 @@ function classifyProcessMutation(
     return argv.slice(1).some(looksLikeOpenClaw);
   }
   return false;
-}
-
-function resolvePackageRunnerArgv(argv: readonly string[]): string[] | null {
-  const executable = normalizeExecutableToken(argv[0] ?? "");
-  if (executable === "corepack") {
-    return argv.length > 1 ? argv.slice(1) : null;
-  }
-  if (executable === "npm" && ["exec", "x"].includes(normalizedToken(argv[1]))) {
-    const commandFlag = argv.findIndex(
-      (token, index) => index > 1 && ["-c", "--call"].includes(optionName(token)),
-    );
-    if (commandFlag !== -1) {
-      const flag = argv[commandFlag] ?? "";
-      const command = flag.includes("=")
-        ? flag.slice(flag.indexOf("=") + 1)
-        : argv[commandFlag + 1];
-      return command ? ["sh", "-c", command] : null;
-    }
-    const index = scanFirstPositional(argv, 2, new Set(["-p", "--package"]));
-    return index < argv.length ? argv.slice(index) : null;
-  }
-  if (executable === "pnpm" && normalizedToken(argv[1]) === "dlx") {
-    const index = scanFirstPositional(argv, 2, new Set(["--package"]));
-    return index < argv.length ? [argv[index] ?? "", ...argv.slice(index + 1)] : null;
-  }
-  if (executable === "yarn" && normalizedToken(argv[1]) === "dlx") {
-    const index = scanFirstPositional(argv, 2, new Set(["-p", "--package"]));
-    return index < argv.length ? [argv[index] ?? "", ...argv.slice(index + 1)] : null;
-  }
-  if (["bunx", "npx"].includes(executable)) {
-    const commandFlag = argv.findIndex(
-      (token, index) => index > 0 && ["-c", "--call"].includes(optionName(token)),
-    );
-    if (commandFlag !== -1) {
-      const flag = argv[commandFlag] ?? "";
-      const command = flag.includes("=")
-        ? flag.slice(flag.indexOf("=") + 1)
-        : argv[commandFlag + 1];
-      return command ? ["sh", "-c", command] : null;
-    }
-    const index = scanFirstPositional(argv, 1, new Set(["-p", "--package"]));
-    return index < argv.length ? [argv[index] ?? "", ...argv.slice(index + 1)] : null;
-  }
-  if (["pnpm", "yarn"].includes(executable)) {
-    const index = scanFirstPositional(argv, 1, new Set(["-c", "--cwd", "--dir"]));
-    return index < argv.length ? argv.slice(index) : null;
-  }
-  return null;
 }
 
 function resolveNodeOpenClawArgv(argv: readonly string[]): string[] | null {
@@ -554,6 +516,19 @@ function commandHasPowerShellLifecyclePipeline(command: string): boolean {
   return false;
 }
 
+function commandHasLifecycleSubstitution(
+  command: string,
+  depth: number,
+  shellContext?: ShellContext,
+): boolean {
+  return extractShellSubstitutionCommands(command).some((nested) =>
+    splitInlineCommands(nested).some((part) => {
+      const argv = splitShellArgs(part);
+      return argv ? classifyArgv(argv, part, depth + 1, shellContext) : true;
+    }),
+  );
+}
+
 function classifyArgv(
   argv: string[],
   raw: string,
@@ -588,6 +563,9 @@ function classifyArgv(
     if (nestedShellContext === "powershell" && commandHasPowerShellLifecyclePipeline(inline)) {
       return true;
     }
+    if (commandHasLifecycleSubstitution(inline, depth, nestedShellContext)) {
+      return true;
+    }
     const positionalArgv = resolvePosixShellPositionals(argv);
     return splitInlineCommands(inline).some((part) => {
       const nestedArgv = splitShellArgs(part);
@@ -602,9 +580,12 @@ function classifyArgv(
     });
   }
 
-  const packageArgv = resolvePackageRunnerArgv(argv);
-  if (packageArgv) {
-    return classifyArgv(packageArgv, packageArgv.join(" "), depth + 1, shellContext);
+  const packageRunner = resolveLifecyclePackageRunnerArgv(argv);
+  if (packageRunner.kind === "approval-required") {
+    return true;
+  }
+  if (packageRunner.kind === "argv") {
+    return classifyArgv(packageRunner.argv, packageRunner.argv.join(" "), depth + 1, shellContext);
   }
   const nodeArgv = resolveNodeOpenClawArgv(argv);
   if (nodeArgv) {
@@ -632,7 +613,10 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
   envComplete?: boolean;
   segments: LifecycleSegment[];
 }): boolean {
-  if (commandHasPowerShellLifecyclePipeline(params.command)) {
+  if (
+    commandHasPowerShellLifecyclePipeline(params.command) ||
+    commandHasLifecycleSubstitution(params.command, 0)
+  ) {
     return true;
   }
   for (const segment of params.segments) {

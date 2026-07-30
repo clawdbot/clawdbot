@@ -14,6 +14,7 @@ const mutationCases: Array<[string, string[]]> = [
   ["openclaw gateway --token secret", ["openclaw", "gateway", "--token", "secret"]],
   ["openclaw daemon stop", ["openclaw", "daemon", "stop"]],
   ["openclaw gateway call update.run", ["openclaw", "gateway", "call", "update.run"]],
+  ["openclaw gateway call config.apply", ["openclaw", "gateway", "call", "config.apply"]],
   ["openclaw update --yes", ["openclaw", "update", "--yes"]],
   ["openclaw uninstall --all --yes", ["openclaw", "uninstall", "--all", "--yes"]],
   ["openclaw onboard --install-daemon", ["openclaw", "onboard", "--install-daemon"]],
@@ -49,11 +50,23 @@ const mutationCases: Array<[string, string[]]> = [
   ],
   ["npx openclaw@latest gateway restart", ["npx", "openclaw@latest", "gateway", "restart"]],
   [
+    "npx --color always openclaw gateway restart",
+    ["npx", "--color", "always", "openclaw", "gateway", "restart"],
+  ],
+  [
     "npx -p openclaw openclaw gateway restart",
     ["npx", "-p", "openclaw", "openclaw", "gateway", "restart"],
   ],
   [`npx -c "openclaw gateway restart"`, ["npx", "-c", "openclaw gateway restart"]],
   ["npm exec -- openclaw gateway restart", ["npm", "exec", "--", "openclaw", "gateway", "restart"]],
+  [
+    "npm --prefix /tmp exec -- openclaw gateway restart",
+    ["npm", "--prefix", "/tmp", "exec", "--", "openclaw", "gateway", "restart"],
+  ],
+  [
+    "pnpm -C repo dlx openclaw gateway restart",
+    ["pnpm", "-C", "repo", "dlx", "openclaw", "gateway", "restart"],
+  ],
   ["yarn dlx openclaw gateway restart", ["yarn", "dlx", "openclaw", "gateway", "restart"]],
   [
     "pnpm -C repo openclaw gateway restart",
@@ -73,6 +86,8 @@ const mutationCases: Array<[string, string[]]> = [
     "env env env env env env env env openclaw gateway restart",
     ["env", "env", "env", "env", "env", "env", "env", "env", "openclaw", "gateway", "restart"],
   ],
+  [`echo "$(openclaw gateway restart)"`, ["echo", "$(openclaw gateway restart)"]],
+  ["echo `openclaw gateway restart`", ["echo", "openclaw gateway restart"]],
 ];
 
 const nonMutationCases: Array<[string, string[]]> = [
@@ -101,11 +116,13 @@ const nonMutationCases: Array<[string, string[]]> = [
   ['schtasks /Query /TN "OpenClaw Gateway"', ["schtasks", "/Query", "/TN", "OpenClaw Gateway"]],
   ["pidof openclaw", ["pidof", "openclaw"]],
   ["pkill -0 openclaw", ["pkill", "-0", "openclaw"]],
+  ["kill -s 0 $(pidof openclaw)", ["kill", "-s", "0", "$(pidof openclaw)"]],
   ["echo openclaw gateway restart", ["echo", "openclaw", "gateway", "restart"]],
   [
     `echo 'Get-Service OpenClaw | Restart-Service'`,
     ["echo", "Get-Service OpenClaw | Restart-Service"],
   ],
+  [`echo '$(openclaw gateway restart)'`, ["echo", "$(openclaw gateway restart)"]],
 ];
 
 describe("OpenClaw lifecycle exec approvals", () => {
