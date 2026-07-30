@@ -33,7 +33,13 @@ type ParseFrame = {
 };
 
 type PatternToken =
-  | { kind: "simple-token"; source: string; zeroWidth: boolean; opaque?: boolean }
+  | {
+      kind: "simple-token";
+      source: string;
+      zeroWidth: boolean;
+      opaque?: boolean;
+      ambiguousWhenRepeated?: boolean;
+    }
   | { kind: "group-open"; zeroWidth: boolean; opaque: boolean }
   | { kind: "group-close" }
   | { kind: "alternation" }
@@ -370,6 +376,18 @@ function readQuantifier(source: string, index: number): QuantifierRead | null {
   return { consumed: i - index, minRepeat, maxRepeat };
 }
 
+function vSetHasStringAlternatives(source: string): boolean {
+  return Array.from(source.matchAll(/\\q\{([^}]*)\}/g)).some((match) =>
+    (match[1] ?? "").includes("|"),
+  );
+}
+
+function vPropertyMayContainStrings(source: string): boolean {
+  return /\\p\{(?:Basic_Emoji|Emoji_Keycap_Sequence|RGI_Emoji(?:_Modifier_Sequence|_Flag_Sequence|_Tag_Sequence|_ZWJ_Sequence)?)\}/.test(
+    source,
+  );
+}
+
 function tokenizePattern(source: string, flags: string): PatternToken[] {
   const tokens: PatternToken[] = [];
   const unicodeAware = flags.includes("u") || flags.includes("v");
@@ -389,6 +407,24 @@ function tokenizePattern(source: string, flags: string): PatternToken[] {
       } else if (source[i + 1] === "u") {
         const hex = source.slice(i + 2, i + 6);
         atomEnd = /^[\da-f]{4}$/i.test(hex) ? i + 6 : i + 2;
+        const codeUnit = Number.parseInt(hex, 16);
+        if (
+          unicodeAware &&
+          atomEnd === i + 6 &&
+          codeUnit >= 0xd800 &&
+          codeUnit <= 0xdbff &&
+          source.slice(atomEnd, atomEnd + 2) === "\\u"
+        ) {
+          const trailingHex = source.slice(atomEnd + 2, atomEnd + 6);
+          const trailingCodeUnit = Number.parseInt(trailingHex, 16);
+          if (
+            /^[\da-f]{4}$/i.test(trailingHex) &&
+            trailingCodeUnit >= 0xdc00 &&
+            trailingCodeUnit <= 0xdfff
+          ) {
+            atomEnd += 6;
+          }
+        }
       } else if (source[i + 1] === "x") {
         const hex = source.slice(i + 2, i + 4);
         atomEnd = /^[\da-f]{2}$/i.test(hex) ? i + 4 : i + 2;
@@ -403,6 +439,7 @@ function tokenizePattern(source: string, flags: string): PatternToken[] {
         source: atom,
         zeroWidth: atom === "\\b" || atom === "\\B",
         opaque: flags.includes("v") && (atom.startsWith("\\p{") || atom.startsWith("\\P{")),
+        ambiguousWhenRepeated: flags.includes("v") && vPropertyMayContainStrings(atom),
       });
       continue;
     }
@@ -424,6 +461,9 @@ function tokenizePattern(source: string, flags: string): PatternToken[] {
         opaque:
           flags.includes("v") &&
           (atom.includes("\\q{") || atom.includes("\\p{") || atom.includes("\\P{")),
+        ambiguousWhenRepeated:
+          flags.includes("v") &&
+          (vSetHasStringAlternatives(atom) || vPropertyMayContainStrings(atom)),
       });
       continue;
     }
@@ -516,10 +556,15 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
     frame.branchSignatures.push(token.signature);
   };
 
-  const emitSimpleToken = (source: string, zeroWidth: boolean, opaque = false) => {
+  const emitSimpleToken = (
+    source: string,
+    zeroWidth: boolean,
+    opaque = false,
+    ambiguousWhenRepeated = false,
+  ) => {
     emitToken({
       containsRepetition: false,
-      hasAmbiguousAlternation: false,
+      hasAmbiguousAlternation: ambiguousWhenRepeated,
       minLength: zeroWidth ? 0 : 1,
       maxLength: zeroWidth ? 0 : 1,
       paths: zeroWidth ? [[]] : opaque ? null : [[source]],
@@ -529,7 +574,7 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
 
   for (const token of tokens) {
     if (token.kind === "simple-token") {
-      emitSimpleToken(token.source, token.zeroWidth, token.opaque);
+      emitSimpleToken(token.source, token.zeroWidth, token.opaque, token.ambiguousWhenRepeated);
       continue;
     }
 
