@@ -1471,14 +1471,14 @@ export class RealtimeCallHandler {
         try {
           await submitWorkingResponse();
           if (state.cancelled) {
-            return;
+            return undefined;
           }
           await Promise.race([
             this.waitForConsultTranscriptSettle(callId, startedAt),
             state.cancellation,
           ]);
           if (state.cancelled) {
-            return;
+            return undefined;
           }
           const context = {
             partialUserTranscript: this.resolveUserTranscriptContext(callId),
