@@ -4,7 +4,12 @@ import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { WizardSession, wizardStepAwaitsInput, type WizardStep } from "../wizard/session.js";
+import {
+  sanitizeWizardStepForClient,
+  WizardSession,
+  wizardStepAwaitsInput,
+  type WizardStep,
+} from "../wizard/session.js";
 import type {
   MemoryImportProviderOutcome,
   SetupMemoryImportOutcome,
@@ -510,21 +515,6 @@ function wizardStepChatQuestion(step: WizardStep | null): SystemAgentChatQuestio
   };
 }
 
-/**
- * A sensitive step's `initialValue` is the secret itself (an existing token being
- * offered for edit). Chat results reach every gateway client, which may log,
- * persist, or relay them, so the value stops here; `sensitive` still tells the
- * client to mask its own input. Mirrors the history redaction in handleSerialized.
- */
-function chatResultWizardStep(step: WizardStep): WizardStep {
-  if (step.sensitive !== true || step.initialValue === undefined) {
-    return step;
-  }
-  const safe = { ...step };
-  delete safe.initialValue;
-  return safe;
-}
-
 function renderWizardStep(step: WizardStep): string {
   const lines: string[] = [];
   if (step.title) {
@@ -781,7 +771,7 @@ export class SystemAgentChatEngine {
     // awaited step is always the question this reply asks.
     const step = this.wizardBridge?.step ?? null;
     const question = wizardStepChatQuestion(step);
-    const clientStep = step ? chatResultWizardStep(step) : null;
+    const clientStep = step ? sanitizeWizardStepForClient(step) : null;
     return {
       ...reply,
       ...(step?.sensitive === true ? { sensitive: true } : {}),

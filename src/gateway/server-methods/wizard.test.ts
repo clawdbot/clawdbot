@@ -8,6 +8,26 @@ import { createWizardSessionTracker } from "../server-wizard-sessions.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { type SetupWizardRunner, wizardHandlers } from "./wizard.js";
 
+function createWizardContext(
+  wizardRunner: NonNullable<GatewayRequestHandlerOptions["context"]>["wizardRunner"],
+) {
+  const wizardSessions = new Map();
+  return {
+    wizardSessions,
+    wizardRunner,
+    findRunningWizard: () => undefined,
+    purgeWizardSession: (sessionId: string) => wizardSessions.delete(sessionId),
+  };
+}
+
+function readSuccessfulResponse(respond: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  expect(respond).toHaveBeenCalledOnce();
+  const [ok, result] = respond.mock.calls[0] ?? [];
+  expect(ok).toBe(true);
+  expect(result).toBeDefined();
+  return result as Record<string, unknown>;
+}
+
 describe("wizard session lookup", () => {
   it.each([
     { method: "wizard.next", params: { sessionId: "expired" } },
@@ -207,6 +227,100 @@ describe("wizard setup ownership", () => {
     expect(respond.mock.calls[0]?.[1]).toMatchObject({ done: false, status: "running" });
 
     for (const session of tracker.wizardSessions.values()) {
+      session.cancel();
+    }
+  });
+});
+
+describe("wizard step serialization", () => {
+  it("strips a sensitive initial value from wizard.start", async () => {
+    const context = createWizardContext(async (_opts, _runtime, prompter) => {
+      await prompter.text({
+        message: "Bot token",
+        sensitive: true,
+        initialValue: "123456:REAL-SECRET",
+      });
+    });
+    const respond = vi.fn();
+    const handler = expectDefined(
+      wizardHandlers["wizard.start"],
+      "wizardHandlers[wizard.start] test invariant",
+    );
+
+    await handler({
+      req: { type: "req", id: "wizard-sensitive-start", method: "wizard.start", params: {} },
+      params: {},
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context,
+    } as unknown as GatewayRequestHandlerOptions);
+
+    const result = readSuccessfulResponse(respond);
+    expect(result.step).toMatchObject({ sensitive: true });
+    expect(result.step).not.toHaveProperty("initialValue");
+    for (const session of context.wizardSessions.values()) {
+      session.cancel();
+    }
+  });
+
+  it("keeps a plain default but strips the next sensitive one from wizard.next", async () => {
+    const context = createWizardContext(async (_opts, _runtime, prompter) => {
+      await prompter.text({
+        message: "Display name",
+        initialValue: "OpenClaw",
+      });
+      await prompter.text({
+        message: "Bot token",
+        sensitive: true,
+        initialValue: "123456:REAL-SECRET",
+      });
+    });
+    const startRespond = vi.fn();
+    const startHandler = expectDefined(
+      wizardHandlers["wizard.start"],
+      "wizardHandlers[wizard.start] test invariant",
+    );
+
+    await startHandler({
+      req: { type: "req", id: "wizard-plain-start", method: "wizard.start", params: {} },
+      params: {},
+      client: null,
+      isWebchatConnect: () => false,
+      respond: startRespond,
+      context,
+    } as unknown as GatewayRequestHandlerOptions);
+
+    const startResult = readSuccessfulResponse(startRespond);
+    expect(startResult.step).toMatchObject({ initialValue: "OpenClaw" });
+    const sessionId = startResult.sessionId;
+    expect(typeof sessionId).toBe("string");
+
+    const nextRespond = vi.fn();
+    const nextHandler = expectDefined(
+      wizardHandlers["wizard.next"],
+      "wizardHandlers[wizard.next] test invariant",
+    );
+    const params = {
+      sessionId,
+      answer: {
+        stepId: (startResult.step as { id: string }).id,
+        value: "Renamed",
+      },
+    };
+    await nextHandler({
+      req: { type: "req", id: "wizard-sensitive-next", method: "wizard.next", params },
+      params,
+      client: null,
+      isWebchatConnect: () => false,
+      respond: nextRespond,
+      context,
+    } as unknown as GatewayRequestHandlerOptions);
+
+    const nextResult = readSuccessfulResponse(nextRespond);
+    expect(nextResult.step).toMatchObject({ sensitive: true });
+    expect(nextResult.step).not.toHaveProperty("initialValue");
+    for (const session of context.wizardSessions.values()) {
       session.cancel();
     }
   });
