@@ -21,6 +21,12 @@ export function textValue(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+export function countCopilotHistoryRequests(
+  gateway: Pick<CopilotTurnIsolationGateway, "requests">,
+): number {
+  return gateway.requests.filter((request) => request.method === "chat.history").length;
+}
+
 export function rawDataText(data: RawData): string {
   if (Array.isArray(data)) {
     return Buffer.concat(data).toString("utf8");
@@ -63,9 +69,7 @@ export async function assertCopilotStaleRunIsolation(params: {
   expect(activeRunId).not.toBe(completedRunId);
   expect(await panel.disabled("#message-input")).toBe(true);
 
-  const historyRequestsBeforeStaleEvents = gateway.requests.filter(
-    (request) => request.method === "chat.history",
-  ).length;
+  const historyRequestsBeforeStaleEvents = countCopilotHistoryRequests(gateway);
   gateway.emitEvent("chat", {
     sessionKey,
     runId: completedRunId,
@@ -84,9 +88,7 @@ export async function assertCopilotStaleRunIsolation(params: {
   // before checking that the active run still owns the composer.
   gateway.emitEvent("session.message", { sessionKey });
   await expect
-    .poll(() => gateway.requests.filter((request) => request.method === "chat.history").length, {
-      timeout: 10_000,
-    })
+    .poll(() => countCopilotHistoryRequests(gateway), { timeout: 10_000 })
     .toBeGreaterThan(historyRequestsBeforeStaleEvents);
   expect(await panel.disabled("#message-input")).toBe(true);
   expect(await panel.allText(".message.assistant")).toEqual(originalAssistantMessages);

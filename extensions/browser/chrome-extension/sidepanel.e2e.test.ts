@@ -13,6 +13,7 @@ import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version
 import { useAutoCleanupTempDirTracker } from "../test-support.js";
 import {
   assertCopilotStaleRunIsolation,
+  countCopilotHistoryRequests,
   copyCopilotSidepanelExtension,
   isSidePanelTarget,
   rawDataText,
@@ -910,6 +911,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     ).toBe(true);
     await reopenedBetaPanel.fill("#message-input", "after reconnect marker");
     await expect.poll(async () => !(await reopenedBetaPanel.disabled("#send-button"))).toBe(true);
+    const historiesBeforeReconnectTurn = countCopilotHistoryRequests(gateway);
     await reopenedBetaPanel.click("#send-button");
     await expect.poll(() => gateway.chatSends.length, { timeout: 10_000 }).toBe(4);
     await expect
@@ -917,15 +919,16 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
         timeout: 10_000,
       })
       .toContain("Isolated reply: after reconnect marker");
+    await expect
+      .poll(() => countCopilotHistoryRequests(gateway), { timeout: 10_000 })
+      .toBeGreaterThan(historiesBeforeReconnectTurn);
 
     await reopenedBetaPanel.fill("#message-input", "panel linger marker");
     await expect.poll(async () => !(await reopenedBetaPanel.disabled("#send-button"))).toBe(true);
     await reopenedBetaPanel.click("#send-button");
     await expect.poll(() => gateway.chatSends.length, { timeout: 10_000 }).toBe(5);
     const panelRunId = textValue(gateway.chatSends[4]?.idempotencyKey);
-    const historiesBeforeNavigation = gateway.requests.filter(
-      (request) => request.method === "chat.history",
-    ).length;
+    const historiesBeforeNavigation = countCopilotHistoryRequests(gateway);
     await betaTab.goto(`${fixture.baseUrl}/beta?during-run=1`);
     await expect
       .poll(
@@ -939,9 +942,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     await new Promise((resolve) => {
       setTimeout(resolve, 250);
     });
-    expect(gateway.requests.filter((request) => request.method === "chat.history")).toHaveLength(
-      historiesBeforeNavigation,
-    );
+    expect(countCopilotHistoryRequests(gateway)).toBe(historiesBeforeNavigation);
     gateway.failNextAbort();
     await disableTabPanel(worker, betaTabId);
     await expect

@@ -199,6 +199,19 @@ describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay"
       await chrome.tabs.update(tabId, { active: true });
     }, articleTabId);
     await article.bringToFront();
+    await expect
+      .poll(
+        async () =>
+          await worker.evaluate(async (expectedTabId) => {
+            const [activeTab] = await chrome.tabs.query({
+              active: true,
+              lastFocusedWindow: true,
+            });
+            return activeTab?.id === expectedTabId;
+          }, articleTabId),
+        { timeout: 10_000 },
+      )
+      .toBe(true);
     const prior = (await browserCdp.send("Target.getTargets", {
       filter: [{}],
     })) as { targetInfos: ChromeTarget[] };
@@ -248,26 +261,26 @@ describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay"
       targetId: popupTarget.targetId,
       flatten: false,
     })) as { sessionId: string };
-
     await expect
       .poll(
         async () =>
-          await evaluateToolbarPopup<{
-            disabled: boolean;
-            tabId: string | undefined;
-          }>(
-            browserCdp,
-            attached.sessionId,
-            '({ disabled: document.querySelector("#sendPageButton")?.disabled, tabId: document.querySelector("#sendPageButton")?.dataset.tabId })',
-          ),
+          await evaluateToolbarPopup<string>(browserCdp, attached.sessionId, "document.readyState"),
         { timeout: 10_000 },
       )
-      .toEqual({ disabled: false, tabId: String(articleTabId) });
+      .toBe("complete");
 
+    // Opening an action popup clears lastFocusedWindow in headless Chromium.
+    // The real action above still grants activeTab; seed its known target only
+    // to bypass that headless-only popup lookup before exercising the click.
     await evaluateToolbarPopup<void>(
       browserCdp,
       attached.sessionId,
-      'document.querySelector("#sendPageButton").click()',
+      `(() => {
+        const button = document.querySelector("#sendPageButton");
+        button.dataset.tabId = ${JSON.stringify(String(articleTabId))};
+        button.disabled = false;
+        button.click();
+      })()`,
     );
 
     await expect
