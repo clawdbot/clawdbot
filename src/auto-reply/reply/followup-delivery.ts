@@ -40,6 +40,7 @@ import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import {
   enqueueFollowupRun,
   isFollowupRunAborted,
+  resolveFollowupAbortSignal,
   resolveQueueSettings,
   type FollowupRun,
 } from "./queue.js";
@@ -425,6 +426,7 @@ async function sendFollowupPayloads(params: {
   });
   const applyFollowupPayloadPolicy = async (payload: ReplyPayload) =>
     await applyOperationalReplyPolicy({
+      abortSignal: resolveFollowupAbortSignal(turn.queued),
       cfg: turn.config,
       payload,
       // commandReply is host-owned metadata. Queued follow-ups no longer carry
@@ -457,6 +459,11 @@ async function sendFollowupPayloads(params: {
   let crossChannelFailure = false;
   let deliveredCrossChannelOrigin = false;
   for (const payload of payloads) {
+    // Redirect policy writes to another session, so cancellation must win
+    // before policy evaluation performs that side effect.
+    if (isFollowupRunAborted(turn.queued)) {
+      continue;
+    }
     if (!originRoutable && !defaults.opts?.onBlockReply) {
       const policyResult = await applyFollowupPayloadPolicy(payload);
       if (policyResult.shouldDeliver) {

@@ -31,6 +31,48 @@ function createContext(inboundEventKind?: "room_event") {
 }
 
 describe("ACP operational reply delivery policy", () => {
+  it("does not apply redirect policy after the ACP run is canceled", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig({
+        messages: { operationalReplies: { policy: "redirect" } },
+      }),
+      ctx: createContext(),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      abortSignal: controller.signal,
+      shouldRouteToOriginating: false,
+    });
+
+    await expect(
+      coordinator.deliver(
+        "final",
+        markOperationalReplyPayloadForSourceSuppressionDelivery({
+          text: "canceled failure",
+          isError: true,
+        }),
+      ),
+    ).resolves.toBe(false);
+  });
+
+  it("does not dispatch an ordinary reply after the ACP run is canceled", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: createContext(),
+      dispatcher,
+      inboundAudio: false,
+      abortSignal: controller.signal,
+      shouldRouteToOriginating: false,
+    });
+
+    await expect(coordinator.deliver("final", { text: "stale reply" })).resolves.toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("enforces send-policy denial without a separate suppression flag", async () => {
     const dispatcher = createDispatcher();
     const coordinator = createAcpDispatchDeliveryCoordinator({

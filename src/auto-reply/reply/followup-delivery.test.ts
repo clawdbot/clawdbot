@@ -1065,6 +1065,35 @@ describe("deliverFollowupDecision", () => {
     ).rejects.toThrow("messages.operationalReplies.redirectSessionKey is required");
   });
 
+  it("does not apply redirect policy after a follow-up is canceled", async () => {
+    deliveryState.routeReply.mockReset();
+    const controller = new AbortController();
+    controller.abort();
+    const turn = createTurn({
+      config: {
+        messages: {
+          operationalReplies: { policy: "redirect" },
+        },
+      },
+    });
+    turn.queued.abortSignal = controller.signal;
+
+    await expect(
+      deliverFollowupDecision({
+        decision: {
+          kind: "deliver",
+          payloads: [{ text: "canceled failure", isError: true }],
+        },
+        turn,
+        defaults: createDefaults(vi.fn(async (_payload: ReplyPayload) => {})),
+        runId: "run-canceled",
+        runFollowup: vi.fn(async () => {}),
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(deliveryState.routeReply).not.toHaveBeenCalled();
+  });
+
   it("does not duplicate a follow-up after a partial route failure delivered it", async () => {
     const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
     deliveryState.routeReply.mockReset();

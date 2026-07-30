@@ -505,6 +505,7 @@ function formatOperationalReplyRedirectText(params: {
 }
 
 async function redirectOperationalReply(params: {
+  abortSignal?: AbortSignal;
   cfg: OpenClawConfig;
   payload: ReplyPayload;
   redirectSessionKey: string;
@@ -512,7 +513,10 @@ async function redirectOperationalReply(params: {
   sourceConversationKey?: string;
   sourceEventKey: string;
   sourceSessionKey?: string;
-}): Promise<void> {
+}): Promise<boolean> {
+  if (params.abortSignal?.aborted) {
+    return false;
+  }
   const idempotencyKey = createOperationalReplyRedirectKey({
     payload: params.payload,
     sourceConversationKey: params.sourceConversationKey,
@@ -522,6 +526,7 @@ async function redirectOperationalReply(params: {
   try {
     // This helper persists an openclaw/delivery-mirror transcript artifact.
     // Embedded runtimes filter that model before provider-history replay.
+    let canceledBeforeWrite = false;
     const result = await appendAssistantMessageToSessionTranscript({
       sessionKey: params.redirectSessionKey,
       agentId: resolveSessionAgentId({
@@ -537,11 +542,28 @@ async function redirectOperationalReply(params: {
       idempotencyKey: `operational-reply:${idempotencyKey}`,
       updateMode: "inline",
       config: params.cfg,
-      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      beforeMessageWrite: (hookParams) => {
+        if (params.abortSignal?.aborted) {
+          canceledBeforeWrite = true;
+          return null;
+        }
+        const message = runAgentHarnessBeforeMessageWriteHook(hookParams);
+        // The hook contract is synchronous. Recheck at the locked append
+        // boundary anyway so cancellation wins before its returned message is used.
+        if (params.abortSignal?.aborted) {
+          canceledBeforeWrite = true;
+          return null;
+        }
+        return message;
+      },
     });
     if (!result.ok) {
+      if (canceledBeforeWrite) {
+        return false;
+      }
       throw new Error(`redirect skipped: ${result.reason}`);
     }
+    return true;
   } catch (error) {
     logVerbose(`operational-reply-policy: redirect failed: ${formatErrorMessage(error)}`);
     throw error;
@@ -577,6 +599,7 @@ function logOperationalReplyPolicySuppression(params: {
 }
 
 export async function applyOperationalReplyPolicy(params: {
+  abortSignal?: AbortSignal;
   cfg: OpenClawConfig;
   payload: ReplyPayload;
   explicitCommandTurn: boolean;
@@ -654,7 +677,8 @@ export async function applyOperationalReplyPolicy(params: {
         "messages.operationalReplies.redirectSessionKey is required for redirect policy",
       );
     }
-    await redirectOperationalReply({
+    const redirected = await redirectOperationalReply({
+      abortSignal: params.abortSignal,
       cfg: params.cfg,
       payload: params.payload,
       redirectSessionKey: operationalReplyPolicy.redirectSessionKey,
@@ -663,6 +687,9 @@ export async function applyOperationalReplyPolicy(params: {
       sourceEventKey: params.sourceEventKey,
       sourceSessionKey: params.sourceSessionKey,
     });
+    if (!redirected) {
+      return { intentionalSilence: true, shouldDeliver: false };
+    }
     logOperationalReplyPolicySuppression({
       ...params,
       reason: "redirected by messages.operationalReplies",

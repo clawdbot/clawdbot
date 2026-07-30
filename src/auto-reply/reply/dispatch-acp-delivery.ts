@@ -244,6 +244,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     crypto.randomUUID();
   const applyAcpOperationalReplyPolicy = async (payload: ReplyPayload) =>
     await applyOperationalReplyPolicy({
+      abortSignal: params.abortSignal,
       cfg: params.cfg,
       payload,
       explicitCommandTurn: false,
@@ -507,14 +508,17 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     ) {
       return false;
     }
+    // Redirect policy writes to another session. Do not evaluate it after the
+    // ACP run has already been canceled.
+    if (isOperationalReply && params.abortSignal?.aborted) {
+      return false;
+    }
     const policyResult = isOperationalReply
       ? await applyAcpOperationalReplyPolicy(visiblePayload)
       : ({ shouldDeliver: true } as const);
     const hasRoutedTarget = Boolean(
       params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo,
     );
-    // Routed delivery owns cancellation and must observe the caller signal.
-    // Returning here would bypass its outcome and leave policy state unproven.
     if (params.abortSignal?.aborted && policyResult.shouldDeliver && !hasRoutedTarget) {
       await markOperationalReplyPolicyDelivered(policyResult, false);
       return false;

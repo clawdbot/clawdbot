@@ -7,6 +7,7 @@ import type {
   SessionEntry,
 } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readLatestAssistantTextFromSessionTranscript } from "../../config/sessions/transcript.js";
 import {
   getReplyPayloadMetadata,
   markOperationalReplyPayloadForSourceSuppressionDelivery,
@@ -191,6 +192,51 @@ describe("operational reply policy", () => {
         sourceEventKey: "event-1",
       }),
     ).rejects.toThrow("redirectSessionKey is required");
+  });
+
+  it("cancels redirect at the final transcript write boundary", async () => {
+    const { sessionKey, storePath } = await createSessionStoreFixture();
+    let abortReads = 0;
+    const abortSignal = {
+      get aborted() {
+        abortReads += 1;
+        return abortReads > 2;
+      },
+    } as AbortSignal;
+
+    await expect(
+      applyOperationalReplyPolicy({
+        abortSignal,
+        cfg: {
+          session: { store: storePath },
+          messages: {
+            operationalReplies: {
+              policy: "redirect",
+              redirectSessionKey: sessionKey,
+            },
+          },
+        } as OpenClawConfig,
+        payload: markOperationalReplyPayloadForSourceSuppressionDelivery({
+          text: "canceled redirect",
+          isError: true,
+        }),
+        explicitCommandTurn: false,
+        sendPolicyDenied: false,
+        sourceEventKey: "event-canceled",
+      }),
+    ).resolves.toMatchObject({
+      intentionalSilence: true,
+      shouldDeliver: false,
+    });
+    expect(abortReads).toBeGreaterThan(1);
+    await expect(
+      readLatestAssistantTextFromSessionTranscript({
+        agentId: "main",
+        sessionId: "s1",
+        sessionKey,
+        storePath,
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("reserves once keys before delivery and releases failed deliveries", async () => {
