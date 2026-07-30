@@ -2471,6 +2471,71 @@ describe("config cli", () => {
       });
     });
 
+    it("removes only the requested array element in config patch", async () => {
+      const resolved = {
+        gateway: {
+          controlUi: {
+            allowedOrigins: [
+              "https://one.example",
+              "https://two.example",
+              "https://three.example",
+              "https://four.example",
+            ],
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      const pathname = writeTempJson5File("openclaw-config-patch-array-delete", {
+        gateway: { controlUi: { allowedOrigins: { "0": null } } },
+      });
+      try {
+        await runConfigCommand(["config", "patch", "--file", pathname]);
+      } finally {
+        fs.rmSync(pathname, { force: true });
+      }
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = firstWrittenConfig() as Record<string, unknown>;
+      expect(
+        ((written.gateway as Record<string, unknown>).controlUi as Record<string, unknown>)
+          .allowedOrigins,
+      ).toEqual(["https://two.example", "https://three.example", "https://four.example"]);
+      expect(firstWriteConfigOptions()?.unsetPaths).toBeUndefined();
+    });
+
+    it("keeps write-level unset paths for object keys in config patch", async () => {
+      const resolved = {
+        channels: {
+          discord: {
+            guilds: {
+              "123": { channels: ["general"] },
+              "456": { channels: ["alerts"] },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      const pathname = writeTempJson5File("openclaw-config-patch-object-delete", {
+        channels: { discord: { guilds: { "123": null } } },
+      });
+      try {
+        await runConfigCommand(["config", "patch", "--file", pathname]);
+      } finally {
+        fs.rmSync(pathname, { force: true });
+      }
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = firstWrittenConfig() as Record<string, unknown>;
+      expect(
+        ((written.channels as Record<string, unknown>).discord as Record<string, unknown>).guilds,
+      ).toEqual({ "456": { channels: ["alerts"] } });
+      expect(firstWriteConfigOptions()?.unsetPaths).toEqual([
+        ["channels", "discord", "guilds", "123"],
+      ]);
+    });
+
     it("treats empty object config patches as recursive merges", async () => {
       const resolved = {
         channels: {
