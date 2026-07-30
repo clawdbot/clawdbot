@@ -9,7 +9,10 @@ import {
   releaseOpenAIQuicksilverSession,
   reserveOpenAIQuicksilverSession,
 } from "./realtime-quicksilver-session-limit.js";
-import { connectOpenAIQuicksilverSideband } from "./realtime-quicksilver-sideband.js";
+import {
+  connectOpenAIQuicksilverSideband,
+  type OpenAIQuicksilverSocketFactory,
+} from "./realtime-quicksilver-sideband.js";
 import {
   createCallResponse,
   emitSideband,
@@ -539,6 +542,36 @@ describe("GPT-Live gateway relay bridge", () => {
 
     await expect(connection).rejects.toThrow("sideband startup stopped");
     expect(socket.closed).toBe(true);
+  });
+
+  it("bounds sideband frames and aggregate pre-open buffering", async () => {
+    const controller = new AbortController();
+    const socket = new FakeSocket("manual");
+    let socketOptions: Parameters<OpenAIQuicksilverSocketFactory>[1] | undefined;
+    socket.once("close", () => controller.abort(new Error("sideband overflow observed")));
+    const connection = connectOpenAIQuicksilverSideband({
+      auth: { type: "api-key", token: "platform-key" },
+      createSocket: (_url, options) => {
+        socketOptions = options;
+        return socket;
+      },
+      requestIds: {
+        realtimeSessionId: "realtime-session",
+        sessionId: "session",
+        threadId: "thread",
+      },
+      signal: controller.signal,
+      url: "wss://api.openai.com/v1/live/rtc_test",
+    });
+
+    expect(socketOptions?.maxPayload).toBe(16 * 1024 * 1024);
+    socket.emit("message", Buffer.alloc(512 * 1024), false);
+    socket.emit("message", Buffer.alloc(512 * 1024), false);
+    socket.emit("message", Buffer.from([0]), false);
+
+    await expect(connection).rejects.toThrow("sideband overflow observed");
+    expect(socket.closeCode).toBe(1009);
+    expect(socket.closeReason).toBe("sideband startup buffer exceeded");
   });
 
   it("does not append failure text when the host cancels a delegation", async () => {
