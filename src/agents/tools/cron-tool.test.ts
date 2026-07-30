@@ -1234,7 +1234,7 @@ describe("cron tool", () => {
           payload: { kind, argv: ["sh", "-lc", "echo ok"] },
         },
       }),
-    ).rejects.toThrow("cron command payloads cannot be created or edited");
+    ).rejects.toThrow("automation command payloads cannot be created or edited");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -1278,7 +1278,7 @@ describe("cron tool", () => {
           payload: { kind: "agentTurn", message: "done" },
         },
       }),
-    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -2496,7 +2496,7 @@ describe("cron tool", () => {
           payload: { kind, argv: ["sh", "-lc", "echo ok"] },
         },
       }),
-    ).rejects.toThrow("cron command payloads cannot be created or edited");
+    ).rejects.toThrow("automation command payloads cannot be created or edited");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -2516,7 +2516,7 @@ describe("cron tool", () => {
           payload: { argv: ["sh", "-lc", "echo bypass"] },
         },
       }),
-    ).rejects.toThrow("cron command payloads cannot be created or edited");
+    ).rejects.toThrow("automation command payloads cannot be created or edited");
 
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(readGatewayCall()).toEqual({
@@ -2556,7 +2556,7 @@ describe("cron tool", () => {
           schedule: { kind: "on-exit", command: "make" },
         },
       }),
-    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
