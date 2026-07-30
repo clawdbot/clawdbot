@@ -129,7 +129,7 @@ export function appendRecentHistoryImageContext(params: {
   const notes = params.images.map((image, index) => {
     const message = image.messageId ? `, message ${image.messageId}` : "";
     const sentAt = formatRecentHistoryImageSentAt(image.sentAtMs);
-    return `[Recent image ${index + 1} from ${image.sender}${message}, sent at ${sentAt}, thread message ${image.messagePosition} of ${image.messageCount}, attached as media.]`;
+    return `[Recent image ${index + 1} from ${image.sender}${message}, sent at ${sentAt}, message ${image.messagePosition} of ${image.messageCount} in available history, attached as media.]`;
   });
   return [params.promptText, notes.join("\n")]
     .filter((part) => part.trim().length > 0)

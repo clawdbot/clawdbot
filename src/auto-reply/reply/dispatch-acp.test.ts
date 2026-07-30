@@ -1270,7 +1270,7 @@ describe("tryDispatchAcpReply", () => {
     expect(text).toContain("what is this?");
     expect(text).toContain("Recent image 1 from @alice, message msg-1");
     expect(text).toContain("sent at 2023-11-14T22:13:20.000Z");
-    expect(text).toContain("thread message 2 of 5");
+    expect(text).toContain("message 2 of 5 in available history");
     expect(text).not.toContain("/tmp/secret.png");
   });
 
@@ -1616,7 +1616,7 @@ describe("tryDispatchAcpReply", () => {
     ]);
   });
 
-  it("annotates recent history images with sent time and thread position in ACP turns", async () => {
+  it("annotates recent history images with sent time and available history position", async () => {
     setReadyAcpResolution();
     const historyPath = "/tmp/openclaw-history-metadata.png";
     const historyImage = Buffer.from("history-image");
@@ -1654,7 +1654,7 @@ describe("tryDispatchAcpReply", () => {
     expect(text).toContain("describe current state");
     expect(text).toContain("Recent image 1 from @bob, message msg-history");
     expect(text).toContain("sent at 2023-11-14T22:13:20.000Z");
-    expect(text).toContain("thread message 2 of 3");
+    expect(text).toContain("message 2 of 3 in available history");
     expect(text).not.toContain(historyPath);
     expect(runTurnCall().attachments).toEqual([
       {
