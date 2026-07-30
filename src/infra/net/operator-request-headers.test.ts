@@ -83,6 +83,9 @@ describe("resolveOperatorRequestHeaders", () => {
       "Private-Token": "gitlab-live",
       "X-Vault-Token": "vault-live",
       "X-Amz-Security-Token": "aws-live",
+      "X-GitHub-Token": "github-live",
+      "X-APIKEY": "generic-live",
+      "X-Trace-Token": "trace-live",
       "X-Fine": "ok",
     });
     expect(Object.keys(headers ?? {})).toEqual(["X-Fine"]);
@@ -103,6 +106,9 @@ describe("resolveOperatorRequestHeaders", () => {
         "Private-Token",
         "X-Vault-Token",
         "X-Amz-Security-Token",
+        "X-GitHub-Token",
+        "X-APIKEY",
+        "X-Trace-Token",
       ]),
     );
   });
@@ -126,9 +132,4 @@ describe("resolveOperatorRequestHeaders", () => {
     expect(ignored).toEqual(expect.arrayContaining(["X Invalid", "X-Unicode"]));
   });
 
-  it("accepts credential-looking names but reports them as suspicious", () => {
-    const { headers, suspicious } = resolve({ "X-Trace-Token": "abc" });
-    expect(headers?.["X-Trace-Token"]).toBe("abc");
-    expect(suspicious).toEqual(["X-Trace-Token"]);
-  });
 });

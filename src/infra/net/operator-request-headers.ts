@@ -63,8 +63,6 @@ export type OperatorRequestHeaderResolution = {
   ignored: string[];
   /** Names refused as tool-owned, connection-level, or credential material. */
   refused: string[];
-  /** Accepted, but the name looks credential-bearing and deserves a warning. */
-  suspicious: string[];
   /** Earlier names replaced by a later entry with the same case-insensitive name. */
   collisions: string[];
 };
@@ -92,10 +90,9 @@ export function resolveOperatorRequestHeaders(params: {
 }): OperatorRequestHeaderResolution {
   const ignored: string[] = [];
   const refused: string[] = [];
-  const suspicious: string[] = [];
   const collisions: string[] = [];
   if (!isRecord(params.configured)) {
-    return { ignored, refused, suspicious, collisions };
+    return { ignored, refused, collisions };
   }
   const reserved = new Set(
     [...(params.reservedNames ?? [])].map((name) => normalizeLowercaseStringOrEmpty(name)),
@@ -126,7 +123,8 @@ export function resolveOperatorRequestHeaders(params: {
     if (
       reserved.has(lowerName) ||
       FRAMING_HEADER_NAMES.has(lowerName) ||
-      isAlwaysCredentialHeaderName(lowerName)
+      isAlwaysCredentialHeaderName(lowerName) ||
+      isLikelySensitiveModelProviderHeaderName(lowerName)
     ) {
       refused.push(name);
       continue;
@@ -134,18 +132,10 @@ export function resolveOperatorRequestHeaders(params: {
     usable.set(lowerName, { name, value });
   }
   if (usable.size === 0) {
-    return { ignored, refused, suspicious, collisions };
+    return { ignored, refused, collisions };
   }
   const entries = [...usable.values()]
     .map(({ name, value }) => [name, value] as const)
     .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
-  // Fragment matching is loose enough to flag innocent names, so this warns
-  // through the result instead of refusing. Derive it from the final entries so
-  // a later rejected case variant cannot leave an inaccurate "is sent" warning.
-  suspicious.push(
-    ...entries
-      .filter(([name]) => isLikelySensitiveModelProviderHeaderName(name))
-      .map(([name]) => name),
-  );
-  return { headers: Object.fromEntries(entries), ignored, refused, suspicious, collisions };
+  return { headers: Object.fromEntries(entries), ignored, refused, collisions };
 }

@@ -137,6 +137,9 @@ describe("web_fetch configured request headers", () => {
       "Private-Token": "gitlab-live-key",
       "X-Vault-Token": "vault-live-key",
       "X-Amz-Security-Token": "aws-live-key",
+      "X-GitHub-Token": "github-live-key",
+      "X-APIKEY": "generic-live-key",
+      "X-Trace-Token": "trace-live-key",
       "X-Routing-Target": "staging",
     });
 
@@ -159,6 +162,9 @@ describe("web_fetch configured request headers", () => {
     expect(names).not.toContain("Private-Token");
     expect(names).not.toContain("X-Vault-Token");
     expect(names).not.toContain("X-Amz-Security-Token");
+    expect(names).not.toContain("X-GitHub-Token");
+    expect(names).not.toContain("X-APIKEY");
+    expect(names).not.toContain("X-Trace-Token");
   });
 
   it("refuses framing headers that undici rejects or ignores", async () => {
