@@ -153,6 +153,8 @@ describe("gateway auth", () => {
     { name: "X-Forwarded-Host", headers: { "x-forwarded-host": "gateway.example" } },
     { name: "X-Forwarded-User", headers: { "x-forwarded-user": "nick@example.com" } },
     { name: "X-Real-IP", headers: { "x-real-ip": "203.0.113.10" } },
+    { name: "empty Forwarded", headers: { forwarded: "" } },
+    { name: "empty X-Real-IP", headers: { "x-real-ip": "" } },
   ])("treats $name as forwarded request evidence", ({ headers }) => {
     const req = {
       socket: { remoteAddress: "127.0.0.1" },
