@@ -183,12 +183,16 @@ describe("delete session command", () => {
 
     const result = await handleDeleteSessionCommand(params, true);
 
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: {
-        text: "Closing this session is taking longer than expected. The deletion may have completed with its cleanup still running; check the session list before retrying.",
-      },
-    });
+    expect(result?.shouldContinue).toBe(false);
+    expect((result?.reply as { text?: string })?.text).toBe(
+      "Closing this session is taking longer than expected. The deletion may have completed with its cleanup still running; check the session list before retrying.",
+    );
+    // The deletion usually committed before the budget expired, so even the
+    // uncertainty reply must stay out of the (likely deleted) transcript.
+    const mirror = getReplyPayloadMetadata(result?.reply as object)?.sourceReplyTranscriptMirror;
+    expect(mirror?.transcriptWriteBlocked).toBe(true);
+    expect(mirror?.sessionKey).toBe(sessionKey);
+    expect(mirror?.expectedSessionId).toBe("delete-me");
     expect(params.sessionStore?.[sessionKey]).toBeDefined();
     expect(takeCommandSessionMetadataChanges(params.ctx)).toBeUndefined();
   });

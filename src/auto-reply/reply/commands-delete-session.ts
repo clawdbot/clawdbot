@@ -43,13 +43,17 @@ function deleteSessionReply(text: string): CommandHandlerResult {
   return { shouldContinue: false, reply: { text } };
 }
 
-// The success reply for a deleted session must not be written to any transcript.
-// When /close arrives through gateway chat.send, finalization would otherwise
-// reload the now-missing entry, fall back to the deleted backing session id, and
-// append this reply with createIfMissing, resurrecting an orphan transcript row
-// immediately after deletion. Marking the reply transcript-write-blocked keeps
-// delivery live while telling finalization to skip that append.
-function deleteSessionSuccessReply(
+// Replies about a deleted (or possibly deleted) session must not be written to
+// any transcript. When /close arrives through gateway chat.send, finalization
+// would otherwise reload the now-missing entry, fall back to the deleted
+// backing session id, and append the reply with createIfMissing, resurrecting
+// an orphan transcript row immediately after deletion. That applies to the
+// success replies and equally to the timeout-uncertainty reply: the RPC
+// commits the deletion before the slow worktree cleanup, so an expired budget
+// usually means the session is already gone. Marking the reply
+// transcript-write-blocked keeps delivery live while telling finalization to
+// skip that append.
+function deleteSessionOutcomeReply(
   text: string,
   transcriptOwner: { sessionKey: string; agentId?: string; expectedSessionId?: string },
 ): CommandHandlerResult {
@@ -152,6 +156,11 @@ export const handleDeleteSessionCommand: CommandHandler = async (params, allowTe
   // client would surface an "aborted" state instead of the deletion success reply.
   // Pass the initiating run id so the server skips it during the session-wide abort.
   const exemptChatRunId = params.opts?.runId;
+  const transcriptOwner = {
+    sessionKey: resolved.normalizedKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(targetEntry?.sessionId ? { expectedSessionId: targetEntry.sessionId } : {}),
+  };
   type SessionDeletionResult = {
     deleted?: boolean;
     archived?: string[];
@@ -188,8 +197,11 @@ export const handleDeleteSessionCommand: CommandHandler = async (params, allowTe
     // uncertainty honestly instead of an error and leave the local store entry
     // untouched; the next sync reconciles it if the deletion committed.
     if (isGatewayTransportError(err) && err.kind === "timeout") {
-      return deleteSessionReply(
+      // The deletion usually committed by now, so this uncertainty reply must
+      // not resurrect the (likely deleted) transcript either.
+      return deleteSessionOutcomeReply(
         "Closing this session is taking longer than expected. The deletion may have completed with its cleanup still running; check the session list before retrying.",
+        transcriptOwner,
       );
     }
     throw err;
@@ -207,11 +219,6 @@ export const handleDeleteSessionCommand: CommandHandler = async (params, allowTe
   params.sessionEntry = undefined;
   markCommandSessionMetadataChanged(params);
   const wasArchived = (deletion.archived?.length ?? 0) > 0;
-  const transcriptOwner = {
-    sessionKey: resolved.normalizedKey,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(targetEntry?.sessionId ? { expectedSessionId: targetEntry.sessionId } : {}),
-  };
   const closedVerb = wasArchived ? "closed and archived" : "closed";
   // The session is gone, but if its managed worktree could not be removed the
   // gateway reports it as preserved: dirty or unpushed work remains in an
@@ -219,7 +226,7 @@ export const handleDeleteSessionCommand: CommandHandler = async (params, allowTe
   // reporting an unconditional success that hides the cleanup failure.
   if (deletion.worktreePreserved) {
     const { branch, path } = deletion.worktreePreserved;
-    return deleteSessionSuccessReply(
+    return deleteSessionOutcomeReply(
       `✅ Session ${closedVerb}.\n⚠️ Its worktree could not be removed and may hold uncommitted or unpushed work: branch “${branch}” at ${path}. Remove it manually when you no longer need it.`,
       transcriptOwner,
     );
@@ -227,7 +234,7 @@ export const handleDeleteSessionCommand: CommandHandler = async (params, allowTe
   // Incognito sessions delete the transcript without archiving it, so only claim
   // an archive when the gateway actually produced one; otherwise reporting
   // "archived" would mislead in the privacy-sensitive delete-without-archive case.
-  return deleteSessionSuccessReply(
+  return deleteSessionOutcomeReply(
     wasArchived
       ? "✅ Session closed and archived."
       : "✅ Session closed. Its transcript was not archived.",
