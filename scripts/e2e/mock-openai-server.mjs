@@ -228,7 +228,7 @@ function preambleThenToolCallEvents(preamble, name, args) {
 /** Two-turn draft scenario: preamble + shell call, then a final answer. */
 function progressDraftEvents(body, bodyText) {
   const allText = collectText(body).join("\n");
-  if (!/OPENCLAW_E2E_DRAFTPROOF/.test(allText)) {
+  if (!allText.includes("OPENCLAW_E2E_DRAFTPROOF")) {
     return null;
   }
   if (!collectFunctionCallOutputText(body)) {
@@ -587,7 +587,7 @@ const server = http.createServer((req, res) => {
       // Progress-draft proof needs assistant content followed by a tool call in
       // one streamed turn: the completions transport tags that leading text as
       // commentary, which channels render as the draft status headline.
-      if (/OPENCLAW_E2E_DRAFTPROOF/.test(bodyText)) {
+      if (bodyText.includes("OPENCLAW_E2E_DRAFTPROOF")) {
         const messages = Array.isArray(body.messages) ? body.messages : [];
         const toolTurnDone = messages.some((message) => message?.role === "tool");
         if (!toolTurnDone) {

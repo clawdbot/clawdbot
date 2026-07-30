@@ -316,6 +316,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 ```json5
 { channels: { telegram: { streaming: { mode: "partial" } } } }
 ```
+
 </Note>
 
 <Note>
