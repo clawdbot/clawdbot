@@ -7,6 +7,7 @@ import {
 } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { NO_VISIBLE_REPLY_FALLBACK_TEXT } from "./dispatch-from-config.payloads.js";
 import {
   createDispatcher,
   emptyConfig,
@@ -798,7 +799,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
-  it("keeps missing-final recovery eligible when silent policy hides only progress", async () => {
+  it("sends missing-final recovery when silent policy hides only progress", async () => {
     setNoAbort();
     const cfg = {
       ...emptyConfig,
@@ -830,10 +831,11 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
+    });
     expect(result).toMatchObject({
-      queuedFinal: false,
-      noVisibleReplyFallbackEligible: true,
+      queuedFinal: true,
     });
   });
 

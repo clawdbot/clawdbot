@@ -113,10 +113,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       await markOperationalReplyPolicyDelivered(policyResult, false);
       throw error;
     }
-    await markOperationalReplyPolicyDelivered(
-      policyResult,
-      Boolean(result?.ok && result.suppressed !== true),
-    );
+    await markOperationalReplyPolicyDelivered(policyResult, result?.delivered === true);
     return result;
   };
   // When automatic source delivery is suppressed, still let the agent process

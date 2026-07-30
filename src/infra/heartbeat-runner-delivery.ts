@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -61,11 +62,11 @@ function resolveHeartbeatOperationalReplySourceEventKey(
   entry: SessionEntry | undefined,
   startedAt: number,
 ): string {
-  const intentId = normalizeOptionalString(entry?.pendingFinalDeliveryIntentId);
+  const intentId = normalizeOptionalString(entry?.pendingFinalDelivery?.intentId);
   if (intentId) {
     return `pending-final:${intentId}`;
   }
-  const createdAt = entry?.pendingFinalDeliveryCreatedAt;
+  const createdAt = entry?.pendingFinalDelivery?.createdAt;
   return typeof createdAt === "number" && Number.isFinite(createdAt)
     ? `pending-final-created:${createdAt}`
     : `heartbeat:${startedAt}`;
@@ -441,6 +442,7 @@ export async function finalizeHeartbeatOutcome(params: {
       sessionKey,
       startedAt,
       capturedEntry: operationalReplySourceEntry,
+      handledText: normalized.text,
     });
     await restoreHeartbeatUpdatedAt({ storePath, sessionKey, updatedAt: previousUpdatedAt });
     emitHeartbeatEvent({
@@ -620,12 +622,16 @@ async function clearHeartbeatPendingFinalDeliveryIfHandled(params: {
   sessionKey: string;
   startedAt: number;
   capturedEntry: SessionEntry | undefined;
+  handledText: string;
 }): Promise<void> {
-  const capturedIntentId = normalizeOptionalString(
-    params.capturedEntry?.pendingFinalDeliveryIntentId,
-  );
-  const capturedCreatedAt = params.capturedEntry?.pendingFinalDeliveryCreatedAt;
-  const capturedText = normalizeOptionalString(params.capturedEntry?.pendingFinalDeliveryText);
+  const capturedPending = params.capturedEntry?.pendingFinalDelivery;
+  const capturedIntentId = normalizeOptionalString(capturedPending?.intentId);
+  const capturedCreatedAt = capturedPending?.createdAt;
+  const capturedText =
+    capturedPending?.kind === "replayable"
+      ? normalizeOptionalString(capturedPending.text)
+      : undefined;
+  const handledText = normalizeOptionalString(params.handledText);
   await patchSessionEntry(
     { storePath: params.storePath, sessionKey: params.sessionKey },
     (current) => {
@@ -633,16 +639,21 @@ async function clearHeartbeatPendingFinalDeliveryIfHandled(params: {
         return CLEARED_PENDING_FINAL_DELIVERY_FIELDS;
       }
       // Silent/redirect can satisfy a recovery from an earlier heartbeat.
-      // Match the captured identity so a newer concurrent final survives.
+      // Match both its captured identity and payload so an unrelated notice
+      // cannot clear a final that is still waiting for delivery.
+      if (!capturedText || capturedText !== handledText) {
+        return null;
+      }
+      const currentPending = current?.pendingFinalDelivery;
       const matchesCapturedIntent =
         capturedIntentId !== undefined &&
-        normalizeOptionalString(current?.pendingFinalDeliveryIntentId) === capturedIntentId;
+        normalizeOptionalString(currentPending?.intentId) === capturedIntentId;
       const matchesCapturedFallback =
         capturedIntentId === undefined &&
         typeof capturedCreatedAt === "number" &&
-        current?.pendingFinalDeliveryCreatedAt === capturedCreatedAt &&
-        capturedText !== undefined &&
-        normalizeOptionalString(current?.pendingFinalDeliveryText) === capturedText;
+        currentPending?.createdAt === capturedCreatedAt &&
+        currentPending?.kind === "replayable" &&
+        normalizeOptionalString(currentPending.text) === capturedText;
       return matchesCapturedIntent || matchesCapturedFallback
         ? CLEARED_PENDING_FINAL_DELIVERY_FIELDS
         : null;

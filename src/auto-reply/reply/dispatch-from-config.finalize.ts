@@ -72,6 +72,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     sessionStoreEntry,
     sessionTtsAuto,
     sourceReplyDeliveryMode,
+    suppressAcpChildUserDelivery,
     suppressDelivery,
     suppressHookUserDelivery,
     suppressUserDeliveryBySourceReplyPolicy,
@@ -382,6 +383,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   const replyAcceptedByActiveRun = replyOperationRunState.admission?.status === "accepted";
   const noVisibleReplyFallbackAllowed = () =>
     noVisibleReplyFallbackDirected &&
+    !suppressAcpChildUserDelivery &&
     !suppressDelivery &&
     !sendPolicyDenied &&
     sourceReplyDeliveryMode !== "message_tool_only" &&

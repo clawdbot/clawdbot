@@ -85,7 +85,7 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
 
       // Seed a stuck pendingFinalDelivery this run owns: createdAt at run start
       // marks it as produced by this heartbeat (the case the original fix
-      // targets). pendingFinalDeliveryText is a heartbeat-ack token so the
+      // targets). The pending final text is a heartbeat-ack token so the
       // pendingFinalDelivery defer gate does not bail before the send.
       const sessionKey = await seedMainSessionStore(storePath, cfg, {
         lastChannel: "telegram",
@@ -142,16 +142,13 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
         lastProvider: "telegram",
         lastTo: TELEGRAM_GROUP,
         updatedAt: NOW - 60_000,
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: operationalText,
-        pendingFinalDeliveryCreatedAt: NOW,
-        pendingFinalDeliveryAttemptCount: 2,
-        pendingFinalDeliveryLastError: "prior-delivery-failure",
-      });
-      await patchEntry(storePath, sessionKey, {
-        pendingFinalDeliveryLastAttemptAt: NOW,
-        pendingFinalDeliveryContext: { channel: "telegram" },
-        pendingFinalDeliveryIntentId: "intent-silenced-operational",
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: operationalText,
+          createdAt: NOW,
+          context: { channel: "telegram" },
+          intentId: "intent-silenced-operational",
+        },
       });
 
       replySpy.mockResolvedValue(
@@ -188,14 +185,12 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
         lastProvider: "telegram",
         lastTo: TELEGRAM_GROUP,
         updatedAt: NOW - 60_000,
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: operationalText,
-        pendingFinalDeliveryCreatedAt: NOW - 30_000,
-        pendingFinalDeliveryAttemptCount: 2,
-        pendingFinalDeliveryLastError: "prior-delivery-failure",
-      });
-      await patchEntry(storePath, sessionKey, {
-        pendingFinalDeliveryIntentId: "intent-older-silenced-operational",
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: operationalText,
+          createdAt: NOW - 30_000,
+          intentId: "intent-older-silenced-operational",
+        },
       });
 
       replySpy.mockResolvedValue(
@@ -211,6 +206,52 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
       expect(result.status).toBe("ran");
       expect(sendTelegram).not.toHaveBeenCalled();
       expectPendingFinalDeliveryCleared(await readEntry(storePath, sessionKey));
+    });
+  });
+
+  it("keeps an unrelated older pending final when a later operational notice is silenced", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = {
+        ...createHeartbeatConfig(storePath),
+        messages: {
+          operationalReplies: { policy: "silent" },
+        },
+      } as unknown as OpenClawConfig;
+      const NOW = Date.now();
+      const pendingText = "older final awaiting retry";
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+        updatedAt: NOW - 60_000,
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: pendingText,
+          createdAt: NOW - 30_000,
+          intentId: "intent-unrelated-final",
+        },
+      });
+
+      replySpy.mockResolvedValue(
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: "new operational notice",
+          isError: true,
+        }),
+      );
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: heartbeatDeps(sendTelegram, replySpy, NOW),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(sendTelegram).not.toHaveBeenCalled();
+      expect((await readEntry(storePath, sessionKey))?.pendingFinalDelivery).toMatchObject({
+        kind: "replayable",
+        text: pendingText,
+        intentId: "intent-unrelated-final",
+      });
     });
   });
 
@@ -262,13 +303,12 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
         lastProvider: "telegram",
         lastTo: TELEGRAM_GROUP,
         updatedAt: NOW - 60_000,
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: operationalText,
-        pendingFinalDeliveryCreatedAt: NOW,
-        pendingFinalDeliveryAttemptCount: 2,
-      });
-      await patchEntry(storePath, sessionKey, {
-        pendingFinalDeliveryIntentId: "intent-once-pending",
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: operationalText,
+          createdAt: NOW,
+          intentId: "intent-once-pending",
+        },
       });
       const payload = markReplyPayloadForSourceSuppressionDelivery({
         text: operationalText,
@@ -295,8 +335,10 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
       expect(result.status).toBe("ran");
       expect(sendTelegram).not.toHaveBeenCalled();
       const entry = await readEntry(storePath, sessionKey);
-      expect(entry?.pendingFinalDelivery).toBe(true);
-      expect(entry?.pendingFinalDeliveryIntentId).toBe("intent-once-pending");
+      expect(entry?.pendingFinalDelivery).toMatchObject({
+        kind: "replayable",
+        intentId: "intent-once-pending",
+      });
       expect(entry?.updatedAt).toBe(NOW - 60_000);
 
       await markOperationalReplyPolicyDelivered(owner, false);
@@ -318,13 +360,12 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
         lastProvider: "telegram",
         lastTo: TELEGRAM_GROUP,
         updatedAt: NOW - 60_000,
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: operationalText,
-        pendingFinalDeliveryCreatedAt: NOW,
-        pendingFinalDeliveryAttemptCount: 1,
-      });
-      await patchEntry(storePath, sessionKey, {
-        pendingFinalDeliveryIntentId: "intent-redirect-retry",
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: operationalText,
+          createdAt: NOW,
+          intentId: "intent-redirect-retry",
+        },
       });
       replySpy.mockResolvedValue(
         markReplyPayloadForSourceSuppressionDelivery({
@@ -345,8 +386,10 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
       });
       expect(sendTelegram).not.toHaveBeenCalled();
       const entry = await readEntry(storePath, sessionKey);
-      expect(entry?.pendingFinalDelivery).toBe(true);
-      expect(entry?.pendingFinalDeliveryIntentId).toBe("intent-redirect-retry");
+      expect(entry?.pendingFinalDelivery).toMatchObject({
+        kind: "replayable",
+        intentId: "intent-redirect-retry",
+      });
       expect(entry?.updatedAt).toBe(NOW - 60_000);
     });
   });
@@ -368,10 +411,12 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
         lastProvider: "telegram",
         lastTo: TELEGRAM_GROUP,
         updatedAt: NOW - 60_000,
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: operationalText,
-        pendingFinalDeliveryCreatedAt: NOW,
-        pendingFinalDeliveryIntentId: "stable-redirect-intent",
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: operationalText,
+          createdAt: NOW,
+          intentId: "stable-redirect-intent",
+        },
       });
       await seedSessionStore(storePath, redirectSessionKey, {
         lastChannel: "telegram",
@@ -394,10 +439,12 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
 
       await patchEntry(storePath, sessionKey, {
         updatedAt: NOW - 60_000,
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: operationalText,
-        pendingFinalDeliveryCreatedAt: NOW + 1_000,
-        pendingFinalDeliveryIntentId: "stable-redirect-intent",
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: operationalText,
+          createdAt: NOW + 1_000,
+          intentId: "stable-redirect-intent",
+        },
       });
       await runHeartbeatOnce({
         cfg,
