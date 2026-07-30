@@ -312,6 +312,35 @@ export function createChannelProgressDraftCompositor(params: {
     clearTimeoutFn,
   });
 
+  /**
+   * Commentary line identity. An explicit item id owns its line. Without one,
+   * providers stream cumulative snapshots ("Checking" → "Checking the
+   * workspace"), so a snapshot that continues the open line reuses its id and
+   * updates in place; anything else starts a new line.
+   */
+  const resolveCommentaryLineId = (params: {
+    itemId?: string;
+    normalized: string;
+    bareNormalized: string;
+  }): string => {
+    if (params.itemId) {
+      return `commentary:${params.itemId}`;
+    }
+    if (!params.normalized) {
+      // Sanitized to nothing (directive-only / NO_REPLY): no line to address, so
+      // it cannot retract the open one. Only an explicit itemId clears a line.
+      return "";
+    }
+    const continuesOpenLine =
+      Boolean(lastIdLessCommentaryBare) &&
+      (params.bareNormalized.startsWith(lastIdLessCommentaryBare) ||
+        lastIdLessCommentaryBare.startsWith(params.bareNormalized));
+    if (continuesOpenLine && lastIdLessCommentaryId) {
+      return lastIdLessCommentaryId;
+    }
+    return `commentary:${params.normalized}`;
+  };
+
   const clearLine = async (lineId: string) => {
     const nextLines = removeChannelProgressDraftLine(lines, lineId);
     if (nextLines === lines) {
@@ -667,22 +696,7 @@ export function createChannelProgressDraftCompositor(params: {
       // Compare bare (de-italicized) text so cumulative snapshots still match
       // after normalizeCommentaryProgressText wraps each line in _…_.
       const bareNormalized = stripLaneItalics(normalized);
-      // Require non-empty bare text so a sanitized-to-empty id-less snapshot
-      // (directive-only / NO_REPLY) cannot match via `prior.startsWith("")`
-      // and clear the remembered line. Only explicit itemId retractions clear.
-      const continuesIdLess =
-        !itemId &&
-        Boolean(bareNormalized) &&
-        Boolean(lastIdLessCommentaryBare) &&
-        (bareNormalized.startsWith(lastIdLessCommentaryBare) ||
-          lastIdLessCommentaryBare.startsWith(bareNormalized));
-      const lineId = itemId
-        ? `commentary:${itemId}`
-        : continuesIdLess && lastIdLessCommentaryId
-          ? lastIdLessCommentaryId
-          : normalized
-            ? `commentary:${normalized}`
-            : "";
+      const lineId = resolveCommentaryLineId({ itemId, normalized, bareNormalized });
       if (!normalized) {
         // Empty commentary with an item id means the producer retracted that
         // item; remove its draft line if it was already rendered.
@@ -695,7 +709,7 @@ export function createChannelProgressDraftCompositor(params: {
         id: lineId,
         // The lane marker (💬, matching 🧠 thinking / 🛠️ tools) is a per-channel
         // presentation choice supplied via commentaryLinePrefix; default none.
-        text: `${commentaryLinePrefix}${commentaryItalics ? normalized : stripLaneItalics(normalized)}`,
+        text: `${commentaryLinePrefix}${commentaryItalics ? normalized : bareNormalized}`,
         kind: "item",
         label: "Commentary",
         prefix: false,
