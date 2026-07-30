@@ -24,11 +24,13 @@ import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { hasAgentRosterProperty } from "./agent-scope-config.js";
 import { listAgentEntries, resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveProviderToolPolicy } from "./provider-tool-policy.js";
+import { runtimeToolPolicyToSandboxPolicy } from "./runtime-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import {
   resolveSubagentCapabilityStore,
+  resolveStoredRuntimeToolPolicy,
   resolveStoredSubagentInheritedToolAllowlist,
   resolveStoredSubagentInheritedToolDenylist,
   resolveStoredSubagentCapabilities,
@@ -133,6 +135,26 @@ export function resolveInheritedToolPolicyForSession(
     ...(inheritedToolAllow.length > 0 ? { allow: inheritedToolAllow } : {}),
     ...(inheritedToolDeny.length > 0 ? { deny: inheritedToolDeny } : {}),
   };
+}
+
+/**
+ * Resolve the immutable per-spawn runtime tool policy from the session entry.
+ * Returns a `SandboxToolPolicy` for the tool pipeline, or `undefined` when no
+ * policy is set. Corrupted persisted data fail-closes to deny-all via
+ * `runtimeToolPolicyToSandboxPolicy`.
+ */
+export function resolveRuntimeToolPolicyForSession(
+  cfg: OpenClawConfig | undefined,
+  sessionKey: string | undefined | null,
+  opts?: {
+    store?: SessionCapabilityStore;
+  },
+): SandboxToolPolicy | undefined {
+  const policy = resolveStoredRuntimeToolPolicy(sessionKey, {
+    cfg,
+    store: opts?.store,
+  });
+  return runtimeToolPolicyToSandboxPolicy(policy);
 }
 
 /** Filter runtime tools by sandbox allow/deny policy. */

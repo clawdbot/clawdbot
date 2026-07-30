@@ -1228,6 +1228,30 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
   });
 
+  it("keeps skill prompt assembly independent from runtime tool filtering", async () => {
+    hoisted.resolveSkillsPromptForRunMock.mockReturnValue("RESTRICTED SESSION SKILL CATALOG");
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    const promptInput = hoisted.embeddedSystemPromptInputs.at(-1) as {
+      skillsPrompt?: string;
+    };
+    expect(promptInput.skillsPrompt).toBe("RESTRICTED SESSION SKILL CATALOG");
+  });
+
   it("keeps before_prompt_build context in the model prompt and out of transcript messages", async () => {
     const runBeforePromptBuild = vi.fn(async () => ({
       prependContext: "dynamic hook context",

@@ -53,6 +53,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "lifecycleRunId",
   "mainRestartRecovery",
   "subagentRecovery",
+  "runtimeToolPolicy",
   "pluginOwnerId",
   "systemSent",
   "abortedLastRun",

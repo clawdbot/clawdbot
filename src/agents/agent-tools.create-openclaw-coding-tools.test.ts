@@ -1567,6 +1567,60 @@ describe("createOpenClawCodingTools", () => {
     ]);
   });
 
+  it("applies a stored per-spawn tool policy after forced tools are assembled", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-runtime-tool-policy-"));
+    try {
+      const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+      const sessionKey = "agent:main:subagent:runtime-limited";
+      await writeSessionStore(storeTemplate, "main", {
+        [sessionKey]: {
+          sessionId: "runtime-limited-session",
+          updatedAt: Date.now(),
+          runtimeToolPolicy: { allow: ["read"] },
+        },
+      });
+
+      const names = toolNameList(
+        createOpenClawCodingTools({
+          sessionKey,
+          config: { session: { store: storeTemplate } },
+          forceMessageTool: true,
+        }),
+      );
+
+      expect(names).toContain("read");
+      expect(names).not.toContain("exec");
+      expect(names).not.toContain("message");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("exposes zero callable tools for a stored none policy", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-runtime-tools-none-"));
+    try {
+      const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+      const sessionKey = "agent:main:subagent:runtime-none";
+      await writeSessionStore(storeTemplate, "main", {
+        [sessionKey]: {
+          sessionId: "runtime-none-session",
+          updatedAt: Date.now(),
+          runtimeToolPolicy: "none",
+        },
+      });
+
+      const tools = createOpenClawCodingTools({
+        sessionKey,
+        config: { session: { store: storeTemplate } },
+        forceMessageTool: true,
+      });
+
+      expect(tools).toEqual([]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("passes effective allow-list-restricted tool surface to spawned sessions", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();

@@ -190,6 +190,7 @@ export async function spawnSubagentDirect(
       swarmGroupId,
       collect: params.collect === true,
       outputSchema: params.outputSchema,
+      runtimeToolPolicy: params.tools,
     });
     if (initialSession.status === "error") {
       return {

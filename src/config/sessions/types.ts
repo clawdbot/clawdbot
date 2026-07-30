@@ -17,6 +17,7 @@ import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
 import type { MainRestartRecoveryState } from "./main-session-recovery.types.js";
 import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
+import type { RuntimeToolPolicy } from "./runtime-tool-policy.types.js";
 import type {
   SessionCreatedActor,
   SessionCreatedVia,
@@ -393,6 +394,12 @@ type SessionEntryCore = SessionRestartRecoveryState &
     inheritedToolDeny?: string[];
     /** Session-scoped tool allow entries inherited from the caller that created this session. */
     inheritedToolAllow?: string[];
+    /**
+     * Immutable per-spawn runtime tool policy for spawned subagent sessions.
+     * Written once by `sessions_spawn`; subsequent turns read it through the
+     * session capability resolver. See `runtime-tool-policy.types.ts`.
+     */
+    runtimeToolPolicy?: RuntimeToolPolicy;
     systemSent?: boolean;
     abortedLastRun?: boolean;
     /** Interrupted run generations whose late lifecycle events must be ignored. */

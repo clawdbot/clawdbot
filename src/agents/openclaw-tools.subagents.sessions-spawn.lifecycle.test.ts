@@ -318,6 +318,34 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(childAgentCall?.timeoutMs).toBe(125_000);
   });
 
+  it("passes tools through to the native child agent run", async () => {
+    const ctx = setupSessionsSpawnGatewayMock({
+      includeChatHistory: true,
+      agentWaitResult: { status: "ok", startedAt: 1000, endedAt: 2000 },
+    });
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    });
+
+    const result = await tool.execute("call-tools-allow", {
+      task: "do thing",
+      tools: { allow: [" read ", "exec"] },
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: expect.any(String),
+    });
+    const childAgentCall = ctx.calls.find((call) => {
+      const params = call.params as { lane?: string } | undefined;
+      return call.method === "agent" && params?.lane === "subagent";
+    });
+    // tools are persisted on the session entry (immutable authority source),
+    // NOT forwarded through the child launch request.
+    expect((childAgentCall?.params as { tools?: unknown } | undefined)?.tools).toBeUndefined();
+  });
+
   it("sessions_spawn retires bundle MCP runtime when run-mode cleanup completes", async () => {
     let resumeAnnounceFlow: ((value: boolean) => void) | undefined;
     let announceFlowStarted: (() => void) | undefined;

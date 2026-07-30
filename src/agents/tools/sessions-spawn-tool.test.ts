@@ -418,7 +418,7 @@ describe("sessions_spawn tool", () => {
     };
 
     expect(schema.properties?.visible?.description).toBe(
-      "Persistent sidebar UI session; use when the user asks to create or open a thread; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+      "Persistent sidebar UI session; use when the user asks to create or open a thread; subagent only; omit mode/thread/thinking/lightContext/tools/attachments/attachAs; unavailable with inherited tool allow/denylist.",
     );
     expect(tool.description).toContain("`visible=true`: persistent sidebar dashboard session");
     expect(tool.description).toContain("when the user asks to create/open a thread");
@@ -712,6 +712,11 @@ describe("sessions_spawn tool", () => {
       "Parameters unavailable with visible=true: lightContext: bootstrap staging is not wired to the sessions.create path",
     ],
     [
+      "tools",
+      { tools: { allow: ["read"] } },
+      "Parameters unavailable with visible=true: tools: runtime tool policies are not wired to the sessions.create path",
+    ],
+    [
       "attachments",
       { attachments: [{ name: "note.txt", content: "hello" }] },
       "Parameters unavailable with visible=true: attachments: attachment staging is not wired to the sessions.create path",
@@ -740,12 +745,13 @@ describe("sessions_spawn tool", () => {
         thread: true,
         mode: "run",
         lightContext: true,
+        tools: { allow: ["read"] },
         attachments: [{ name: "note.txt", content: "hello" }],
         attachAs: { mountPath: "inputs" },
         visible: true,
       }),
     ).rejects.toThrow(
-      'Parameters unavailable with visible=true: runtime: supports runtime="subagent" only; thinking: thinking overrides are not wired to the sessions.create path; thread: visible sessions route to the dashboard, not a channel thread; mode: visible sessions are persistent dashboard sessions; lightContext: bootstrap staging is not wired to the sessions.create path; attachments: attachment staging is not wired to the sessions.create path; attachAs: attachment staging is not wired to the sessions.create path',
+      'Parameters unavailable with visible=true: runtime: supports runtime="subagent" only; thinking: thinking overrides are not wired to the sessions.create path; thread: visible sessions route to the dashboard, not a channel thread; mode: visible sessions are persistent dashboard sessions; lightContext: bootstrap staging is not wired to the sessions.create path; tools: runtime tool policies are not wired to the sessions.create path; attachments: attachment staging is not wired to the sessions.create path; attachAs: attachment staging is not wired to the sessions.create path',
     );
   });
 
@@ -1138,6 +1144,25 @@ describe("sessions_spawn tool", () => {
     expect(tool.description).toContain("thread-bound");
   });
 
+  it("exposes tools as a native subagent tool policy union", () => {
+    const tool = createSessionsSpawnTool();
+    const schema = tool.parameters as {
+      properties?: {
+        tools?: {
+          anyOf?: Array<{ const?: string; type?: string }>;
+          description?: string;
+        };
+      };
+    };
+
+    expect(schema.properties?.tools?.anyOf).toHaveLength(2);
+    expect(schema.properties?.tools?.anyOf?.[0]?.const).toBe("none");
+    expect(schema.properties?.tools?.anyOf?.[1]?.type).toBe("object");
+    expect(schema.properties?.tools?.description).toContain('runtime="subagent"');
+    expect(schema.properties?.tools?.description).toContain("Persistent sessions reuse it");
+    expect(schema.properties?.tools?.description).not.toContain("store the allowlist");
+  });
+
   it("uses subagent runtime by default", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
@@ -1207,6 +1232,44 @@ describe("sessions_spawn tool", () => {
     expect(spawnContext.inheritedToolAllowlist).toEqual(["sessions_spawn", "read"]);
   });
 
+  it("normalizes and forwards tools to native subagent spawns", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-tools-allow", {
+      task: "build feature",
+      tools: { allow: [" read ", "exec", ""] },
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "build feature",
+        tools: { allow: ["read", "exec"] },
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("preserves an explicit empty tools list", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-tools-empty", {
+      task: "build feature",
+      tools: "none",
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "build feature",
+        tools: "none",
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("accepts taskName as a stable subagent handle", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
@@ -1271,6 +1334,66 @@ describe("sessions_spawn tool", () => {
       expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     },
   );
+
+  it("passes tools through for persistent native subagent sessions", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-tools-session", {
+      task: "build feature",
+      mode: "session",
+      thread: true,
+      tools: { allow: ["read"] },
+    });
+
+    await tool.execute("call-tools-thread", {
+      task: "build feature",
+      thread: true,
+      tools: { allow: ["exec"] },
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
+    expect(mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect")).toMatchObject(
+      {
+        mode: "session",
+        thread: true,
+        tools: { allow: ["read"] },
+      },
+    );
+    expect(mockCallArg(hoisted.spawnSubagentDirectMock, 1, 0, "spawnSubagentDirect")).toMatchObject(
+      {
+        thread: true,
+        tools: { allow: ["exec"] },
+      },
+    );
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed tools values before spawning", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await expect(
+      tool.execute("call-tools-scalar", {
+        task: "build feature",
+        tools: "read",
+      }),
+    ).rejects.toThrow(
+      'tools must be "none" or an object with optional "allow" and "deny" string arrays.',
+    );
+
+    await expect(
+      tool.execute("call-tools-number", {
+        task: "build feature",
+        tools: { allow: ["read", 123] },
+      }),
+    ).rejects.toThrow("tools.allow must be an array of strings.");
+
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
 
   it.each(["last", "all"])("rejects reserved taskName %s before spawning", async (taskName) => {
     const tool = createSessionsSpawnTool({
@@ -1426,6 +1549,24 @@ describe("sessions_spawn tool", () => {
         lightContext: true,
       }),
     ).rejects.toThrow("lightContext is only supported for runtime='subagent'.");
+
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects tools when runtime is not "subagent"', async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await expect(
+      tool.execute("call-tools-acp", {
+        runtime: "acp",
+        task: "summarize this",
+        tools: { allow: ["read"] },
+      }),
+    ).rejects.toThrow("tools is only supported for runtime='subagent'.");
 
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();

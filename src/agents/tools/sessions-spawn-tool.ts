@@ -10,8 +10,9 @@ import {
   supportsAutomaticThreadBindingSpawn,
 } from "../../channels/thread-bindings-policy.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import type { RuntimeToolPolicy } from "../../config/sessions/runtime-tool-policy.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveSnakeCaseParamKey } from "../../param-key.js";
+import { readSnakeCaseParamRaw, resolveSnakeCaseParamKey } from "../../param-key.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
@@ -21,6 +22,7 @@ import {
   formatAcpInheritedToolAllowError,
   formatAcpInheritedToolDenyError,
 } from "../inherited-tool-deny.js";
+import { normalizeRuntimeToolPolicy } from "../runtime-tool-policy.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { resolveAcpSessionsSpawnImageAttachments } from "../subagent-attachments.js";
@@ -91,6 +93,41 @@ function addRoleToFailureResult<T extends { status: string }>(
     return result;
   }
   return { ...result, role };
+}
+
+function readToolsParam(params: Record<string, unknown>): RuntimeToolPolicy | undefined {
+  const raw = readSnakeCaseParamRaw(params, "tools");
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (raw === "none") {
+    return "none";
+  }
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new ToolInputError(
+      'tools must be "none" or an object with optional "allow" and "deny" string arrays.',
+    );
+  }
+  const obj = raw as Record<string, unknown>;
+  // Reject unknown keys — a typo like { alow: [...] } must NOT silently become
+  // unrestricted. This is a permissions API.
+  const knownKeys = new Set(["allow", "deny"]);
+  for (const key of Object.keys(obj)) {
+    if (!knownKeys.has(key)) {
+      throw new ToolInputError(
+        `tools has unknown property "${key}". Only "allow" and "deny" are recognized.`,
+      );
+    }
+  }
+  for (const field of ["allow", "deny"] as const) {
+    const value = obj[field];
+    if (value !== undefined) {
+      if (!Array.isArray(value) || value.some((e) => typeof e !== "string")) {
+        throw new ToolInputError(`tools.${field} must be an array of strings.`);
+      }
+    }
+  }
+  return normalizeRuntimeToolPolicy(raw);
 }
 
 type SessionsSpawnThreadAvailability = {
@@ -214,6 +251,34 @@ function createSessionsSpawnToolSchema(params: {
         }
       : {}),
     ...VISIBLE_SESSIONS_SPAWN_SCHEMA,
+    tools: Type.Optional(
+      Type.Union(
+        [
+          Type.Literal("none", {
+            description: "Disable all child tools.",
+          }),
+          Type.Object(
+            {
+              allow: Type.Optional(
+                Type.Array(Type.String(), {
+                  description: "Allowed tool names; groups/globs supported.",
+                }),
+              ),
+              deny: Type.Optional(
+                Type.Array(Type.String(), {
+                  description: "Denied tool names; wins over allow.",
+                }),
+              ),
+            },
+            { additionalProperties: false },
+          ),
+        ],
+        {
+          description:
+            'Immutable tool policy for native runtime="subagent". "none" disables tools; omit for defaults. Persistent sessions reuse it. Visible and ACP spawns reject it; CLI supports allow-only.',
+        },
+      ),
+    ),
 
     // Inline attachments (snapshot-by-value).
     attachments: Type.Optional(
@@ -397,6 +462,7 @@ export function createSessionsSpawnTool(
         params.context === "fork" || params.context === "isolated" ? params.context : undefined;
       const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
       const lightContext = params.lightContext === true;
+      const tools = readToolsParam(params);
       const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
       const deliveryPressure = getSubagentDeliveryBacklogPressure();
       if (deliveryPressure.blocked) {
@@ -453,6 +519,9 @@ export function createSessionsSpawnTool(
       }
       if (runtime === "acp" && lightContext) {
         throw new Error("lightContext is only supported for runtime='subagent'.");
+      }
+      if (runtime === "acp" && tools !== undefined) {
+        throw new ToolInputError("tools is only supported for runtime='subagent'.");
       }
       if (runtime === "acp" && context === "fork") {
         throw new Error('context="fork" is only supported for runtime="subagent".');
@@ -556,6 +625,7 @@ export function createSessionsSpawnTool(
           sandbox,
           context,
           lightContext,
+          tools,
           expectsCompletionMessage,
           attachments,
           attachMountPath:

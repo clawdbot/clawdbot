@@ -34,6 +34,7 @@ import { bindToolExecutionAttribution } from "./agent-tools.before-tool-call.att
 import type { ToolOutcomeObserver } from "./agent-tools.before-tool-call.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
+import { filterToolsByPolicy } from "./agent-tools.policy.js";
 import { wrapToolMemoryFlushAppendOnlyWrite } from "./agent-tools.read.js";
 import {
   getActiveAgentRingZeroTools,
@@ -927,6 +928,17 @@ export function createOpenClawCodingToolsInternal(
   ) {
     // Collector output is a run contract, not an operator-configurable capability.
     authorizedTools.push(swarmStructuredOutputTool);
+  }
+  // Final model-facing gate: the immutable per-spawn session runtime tool policy
+  // must be enforced AFTER all tool sources are merged (ring-zero, forced message,
+  // heartbeat, tool-search, bundle/plugin, structured output) but BEFORE the
+  // inherited/cron allowlist snapshots are taken, so that grandchild sessions
+  // inherit the restricted surface, not the pre-gate one.
+  const sessionRuntimeToolPolicy = capabilityProfile.policy.sessionRuntimeToolPolicy;
+  if (sessionRuntimeToolPolicy) {
+    const gatedTools = filterToolsByPolicy(authorizedTools, sessionRuntimeToolPolicy);
+    authorizedTools.length = 0;
+    authorizedTools.push(...gatedTools);
   }
   if (shouldInheritEffectiveToolAllowlist) {
     // Snapshot exporter only: this copies authorizedTools for descendants and

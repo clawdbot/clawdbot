@@ -1,3 +1,4 @@
+import type { RuntimeToolPolicy } from "../config/sessions/runtime-tool-policy.types.js";
 import type { FastMode } from "../shared/fast-mode.js";
 import type {
   SpawnSubagentContextMode,
@@ -28,6 +29,7 @@ export type SpawnSubagentParams = {
   sandbox?: SpawnSubagentSandboxMode;
   context?: SpawnSubagentContextMode;
   lightContext?: boolean;
+  tools?: RuntimeToolPolicy;
   expectsCompletionMessage?: boolean;
   attachments?: Array<{
     name: string;

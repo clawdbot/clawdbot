@@ -19,6 +19,7 @@ type ResolvedConversationToolPolicies = {
   subagentPolicy?: ToolPolicyLike;
   runtimeToolPolicy?: ToolPolicyLike;
   inheritedToolPolicy?: ToolPolicyLike;
+  sessionRuntimeToolPolicy?: ToolPolicyLike;
 };
 
 function mergePolicyAllowlist<TPolicy extends ToolPolicyLike>(
@@ -69,6 +70,7 @@ export function resolveConversationToolPolicies(params: {
       policy.inheritedToolPolicy,
       params.additionalInheritedAllow,
     ),
+    sessionRuntimeToolPolicy: policy.sessionRuntimeToolPolicy,
   };
 }
 
@@ -121,6 +123,11 @@ export function buildConversationToolPolicyPipelineSteps(params: {
     {
       policy: params.policies.inheritedToolPolicy,
       label: "inherited tools",
+      unavailableCoreToolReason: params.unavailableCoreToolReason,
+    },
+    {
+      policy: params.policies.sessionRuntimeToolPolicy,
+      label: "session runtime tools",
       unavailableCoreToolReason: params.unavailableCoreToolReason,
     },
   ];

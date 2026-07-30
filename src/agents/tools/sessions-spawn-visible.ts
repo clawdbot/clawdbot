@@ -35,7 +35,7 @@ export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
   visible: Type.Optional(
     Type.Boolean({
       description:
-        "Persistent sidebar UI session; use when the user asks to create or open a thread; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+        "Persistent sidebar UI session; use when the user asks to create or open a thread; subagent only; omit mode/thread/thinking/lightContext/tools/attachments/attachAs; unavailable with inherited tool allow/denylist.",
     }),
   ),
   worktree: Type.Optional(Type.Boolean({ description: "Visible session worktree" })),
@@ -140,6 +140,7 @@ export async function maybeSpawnVisibleSession(params: {
       params.raw.lightContext === true ? true : undefined,
       "bootstrap staging is not wired to the sessions.create path",
     ],
+    ["tools", params.raw.tools, "runtime tool policies are not wired to the sessions.create path"],
     [
       "attachments",
       Array.isArray(params.raw.attachments) ? params.raw.attachments : undefined,

@@ -175,6 +175,8 @@ export type ResolvedConversationCapabilityProfile = {
     sandboxPolicy?: SandboxToolPolicy;
     subagentPolicy?: SandboxToolPolicy;
     inheritedToolPolicy?: SandboxToolPolicy;
+    /** Immutable per-spawn runtime tool policy from the session entry. */
+    sessionRuntimeToolPolicy?: SandboxToolPolicy;
     delegated: boolean;
     requesterPolicySource: RequesterToolPolicySource;
     runtimeToolPolicyForInheritance?: ToolPolicyLike;
@@ -237,7 +239,13 @@ export function resolveConversationCapabilityProfile(
     groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
     requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
   });
-  const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
+  const {
+    groupPolicy,
+    senderPolicy,
+    subagentPolicy,
+    inheritedToolPolicy,
+    sessionRuntimeToolPolicy,
+  } = requesterPolicies;
   const profilePolicy = resolveToolProfilePolicy(effective.profile);
   const providerProfilePolicy = resolveToolProfilePolicy(effective.providerProfile);
   const configuredOverridePolicies = [
@@ -370,6 +378,7 @@ export function resolveConversationCapabilityProfile(
       sandboxPolicy: params.sandboxToolPolicy,
       subagentPolicy,
       inheritedToolPolicy,
+      sessionRuntimeToolPolicy,
       delegated: requesterPolicies.delegated,
       requesterPolicySource: requesterPolicies.requesterPolicySource,
       runtimeToolPolicyForInheritance,

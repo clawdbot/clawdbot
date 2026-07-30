@@ -67,7 +67,7 @@ import {
 } from "../cli-execution-auth.js";
 import { runCliAgent } from "../cli-runner.js";
 import { hasClaudeLiveSessionForOwner } from "../cli-runner/claude-live-session.js";
-import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
+import { resolveCliSessionToolsAllow } from "../cli-runner/tool-policy.js";
 import {
   getCliSessionBinding,
   resolveCliSessionClearReason,
@@ -1049,10 +1049,11 @@ export function runAgentAttempt(params: {
             groupChannel: params.runContext.groupChannel,
             groupSpace: params.runContext.groupSpace,
             spawnedBy: params.spawnedBy,
-            toolsAllow: resolveCliRuntimeToolsAllow(
-              runtimeToolsAllow,
-              params.opts.toolsAllowIsDefault,
-            ),
+            toolsAllow: resolveCliSessionToolsAllow({
+              toolsAllow: runtimeToolsAllow,
+              toolsAllowIsDefault: params.opts.toolsAllowIsDefault,
+              sessionPolicy: params.sessionEntry?.runtimeToolPolicy,
+            }),
             scheduledToolPolicy: params.opts.scheduledToolPolicy,
             cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
             cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
@@ -1197,6 +1198,7 @@ export function runAgentAttempt(params: {
     imageOrder: shouldForwardImagesToEmbedded ? params.opts.imageOrder : undefined,
     media: params.opts.media,
     clientTools: params.opts.clientTools,
+    toolsAllow: params.opts.toolsAllow,
     provider: embeddedAgentProvider,
     model: params.modelOverride,
     modelFallbacksOverride: params.modelFallbacksOverride,

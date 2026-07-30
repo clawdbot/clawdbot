@@ -814,6 +814,7 @@ describe("CLI attempt execution", () => {
     runId: string;
     cwd?: string;
     onExecutionStarted?: () => void;
+    opts?: Partial<Parameters<typeof runAgentAttempt>[0]["opts"]>;
   }) {
     await runAgentAttempt({
       providerOverride: "claude-cli",
@@ -824,7 +825,11 @@ describe("CLI attempt execution", () => {
       cwd: params.cwd,
       body: params.body,
       runId: params.runId,
-      opts: { onExecutionStarted: params.onExecutionStarted },
+      opts: {
+        senderIsOwner: false,
+        onExecutionStarted: params.onExecutionStarted,
+        ...params.opts,
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
       agentDir,
       sessionStore: params.sessionStore,
       storePath,
@@ -911,6 +916,36 @@ describe("CLI attempt execution", () => {
       claudeCliSessionId: cliSessionId,
     };
   }
+
+  it.each([
+    { label: "deny-only", runtimeToolPolicy: { deny: ["exec"] } },
+    { label: "allow+deny", runtimeToolPolicy: { allow: ["read"], deny: ["exec"] } },
+  ])(
+    "rejects $label runtime tool policy for CLI-backed native runs",
+    async ({ runtimeToolPolicy }) => {
+      const sessionKey = "agent:main:subagent:cli-tools-allow";
+      const sessionEntry: SessionEntry = {
+        sessionId: "session-cli-tools-allow",
+        updatedAt: Date.now(),
+        runtimeToolPolicy,
+      };
+      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+      await expect(
+        runClaudeCliAttempt({
+          sessionKey,
+          sessionEntry,
+          sessionStore,
+          body: "use only read",
+          runId: "run-cli-tools-allow",
+        }),
+      ).rejects.toThrow("CLI-backed native runs cannot enforce a deny-based runtime tool policy");
+
+      expect(runCliAgentMock).not.toHaveBeenCalled();
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("clears stale Claude CLI session IDs before a fresh retry after session expiration", async () => {
     const sessionKey = "agent:main:subagent:cli-expired";
@@ -2655,7 +2690,7 @@ describe("CLI attempt execution", () => {
     expect(firstRunCliAgentArg().authProfileId).toBeUndefined();
   });
 
-  it("forwards runtime toolsAllow into CLI attempts so the CLI harness can fail closed", async () => {
+  it("forwards the existing runtime toolsAllow into CLI attempts", async () => {
     const sessionKey = "agent:main:direct:claude-tools-allow";
     const sessionEntry = makeSessionEntry("openclaw-session-cli-tools-allow");
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
@@ -2801,6 +2836,53 @@ describe("CLI attempt execution", () => {
       expect(runCliAgentMock).not.toHaveBeenCalled();
     },
   );
+
+  it("forwards a per-spawn runtime tool policy allow-list into CLI attempts", async () => {
+    const sessionKey = "agent:main:subagent:claude-session-tools-allow";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-cli-session-tools-allow",
+      updatedAt: Date.now(),
+      runtimeToolPolicy: { allow: ["read", "web_search"] },
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("restricted cli"));
+
+    await runAgentAttempt({
+      providerOverride: "claude-cli",
+      originalProvider: "claude-cli",
+      modelOverride: "opus",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "route this",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-cli-session-tools-allow",
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "discord",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "claude-cli",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expectMockArgFields(runCliAgentMock, {
+      provider: "claude-cli",
+      toolsAllow: ["read", "web_search"],
+    });
+  });
 
   it("keeps trusted CLI completion handoffs tool-free when inherited policy is restricted", async () => {
     const sessionKey = "agent:main:direct:claude-trusted-announce";
