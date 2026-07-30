@@ -1,12 +1,12 @@
-@testable import OpenClaw
 import Testing
+@testable import OpenClaw
 
 private actor SimpleTaskSignal {
     private var signaled = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
     func signal() {
-        signaled = true
+        self.signaled = true
         let waiters = self.waiters
         self.waiters.removeAll()
         for waiter in waiters {
@@ -15,7 +15,7 @@ private actor SimpleTaskSignal {
     }
 
     func wait() async {
-        if signaled {
+        if self.signaled {
             return
         }
         await withCheckedContinuation { continuation in
@@ -25,14 +25,14 @@ private actor SimpleTaskSignal {
 }
 
 private actor SimpleTaskOperationProbe {
-    private var callCount = 0
+    private var recordedCalls: [String] = []
 
-    func recordCall() {
-        callCount += 1
+    func recordCall(_ value: String) {
+        self.recordedCalls.append(value)
     }
 
-    func calls() -> Int {
-        callCount
+    func calls() -> [String] {
+        self.recordedCalls
     }
 }
 
@@ -52,9 +52,8 @@ struct SimpleTaskSupportTests {
                 try await Task.sleep(nanoseconds: nanoseconds)
             },
             operation: {
-                await operation.recordCall()
-            }
-        )
+                await operation.recordCall("loop")
+            })
 
         await sleepStarted.wait()
         guard let runningTask = task else {
@@ -65,7 +64,51 @@ struct SimpleTaskSupportTests {
         SimpleTaskSupport.stop(task: &task)
         await runningTask.value
 
-        #expect(await operation.calls() == 1)
+        #expect(await operation.calls() == ["loop"])
+        #expect(task == nil)
+    }
+
+    @Test
+    @MainActor
+    func `rescheduling cancels the superseded operation`() async {
+        let firstSleepStarted = SimpleTaskSignal()
+        let operation = SimpleTaskOperationProbe()
+        var task: Task<Void, Never>?
+
+        SimpleTaskSupport.schedule(
+            task: &task,
+            delay: 60,
+            sleep: { nanoseconds in
+                await firstSleepStarted.signal()
+                try await Task.sleep(nanoseconds: nanoseconds)
+            },
+            operation: {
+                await operation.recordCall("first")
+            })
+
+        await firstSleepStarted.wait()
+        guard let firstTask = task else {
+            Issue.record("first scheduled task did not start")
+            return
+        }
+
+        SimpleTaskSupport.schedule(
+            task: &task,
+            delay: 0,
+            sleep: { _ in },
+            operation: {
+                await operation.recordCall("second")
+            })
+        guard let secondTask = task else {
+            Issue.record("replacement task did not start")
+            return
+        }
+
+        await firstTask.value
+        await secondTask.value
+        SimpleTaskSupport.stop(task: &task)
+
+        #expect(await operation.calls() == ["second"])
         #expect(task == nil)
     }
 }

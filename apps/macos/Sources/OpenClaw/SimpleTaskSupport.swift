@@ -18,22 +18,43 @@ enum SimpleTaskSupport {
         task: inout Task<Void, Never>?,
         interval: TimeInterval,
         sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) },
-        operation: @escaping @Sendable () async -> Void
-    ) {
+        operation: @escaping @Sendable () async -> Void)
+    {
         guard task == nil else { return }
         task = Task.detached {
             await operation()
-            while !Task.isCancelled {
-                // Cancellation wakes the sleep. Exit before the next operation so stopped stores
-                // cannot issue one final gateway refresh after their lifecycle has ended.
-                do {
-                    try await sleep(UInt64(interval * 1_000_000_000))
-                } catch {
-                    return
-                }
-                guard !Task.isCancelled else { return }
+            while await self.waitForNextOperation(interval: interval, sleep: sleep) {
                 await operation()
             }
         }
+    }
+
+    static func schedule(
+        task: inout Task<Void, Never>?,
+        delay: TimeInterval,
+        sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) },
+        operation: @escaping @MainActor @Sendable () async -> Void)
+    {
+        task?.cancel()
+        task = Task {
+            guard await self.waitForNextOperation(interval: delay, sleep: sleep) else { return }
+            await operation()
+        }
+    }
+
+    nonisolated static func waitForNextOperation(
+        interval: TimeInterval,
+        sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }) async
+        -> Bool
+    {
+        guard !Task.isCancelled else { return false }
+        // Cancellation wakes the sleep. Report it before the next operation so stopped stores
+        // and superseded debounce tasks cannot issue stale gateway refreshes.
+        do {
+            try await sleep(UInt64(interval * 1_000_000_000))
+        } catch {
+            return false
+        }
+        return !Task.isCancelled
     }
 }
