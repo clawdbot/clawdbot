@@ -42,6 +42,9 @@ const OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDINGS = new Set([
   "@openclaw/acpx:dangerous-exec:dist/mcp-proxy.mjs",
   "@openclaw/acpx:dangerous-exec:dist/service-<hash>.js",
   "@openclaw/codex:dangerous-exec:dist/client-<hash>.js",
+  "@openclaw/codex:dangerous-exec:dist/run-attempt-<hash>.js",
+  "@openclaw/codex:dangerous-exec:dist/session-catalog-<hash>.js",
+  "@openclaw/codex:dangerous-exec:dist/transport-stdio-<hash>.js",
   "@openclaw/google-meet:dangerous-exec:dist/index.js",
   "@openclaw/slack:dynamic-code-execution:dist/outbound-payload.test-harness-<hash>.js",
   "@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js",
@@ -87,7 +90,15 @@ function isScannerWalkedPackedPath(packedPath: string): boolean {
 }
 
 function normalizePackedFindingPath(packedPath: string): string {
-  for (const prefix of ["client", "outbound-payload.test-harness", "runtime-entry", "service"]) {
+  for (const prefix of [
+    "client",
+    "outbound-payload.test-harness",
+    "run-attempt",
+    "runtime-entry",
+    "service",
+    "session-catalog",
+    "transport-stdio",
+  ]) {
     if (packedPath.startsWith(`dist/${prefix}-`) && packedPath.endsWith(".js")) {
       return `dist/${prefix}-<hash>.js`;
     }
@@ -299,6 +310,15 @@ describe("publishable plugin npm package install security scan", () => {
         packages.every((plugin) => toRepoPath(plugin.packageDir).startsWith("extensions/")),
       ).toBe(true);
     });
+  });
+
+  it("does not review unknown Codex dist chunk names", () => {
+    const packedPath = "dist/future-exec-unknown.js";
+
+    expect(normalizePackedFindingPath(packedPath)).toBe(packedPath);
+    expect(expectedOptionalReviewedFindingsForPackedPath("@openclaw/codex", packedPath)).toEqual(
+      [],
+    );
   });
 
   test.concurrent.each(publishablePluginPackages)(
