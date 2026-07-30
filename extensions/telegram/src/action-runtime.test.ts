@@ -2230,6 +2230,75 @@ describe("handleTelegramAction", () => {
     ).rejects.toThrow(expectedMessage);
   });
 
+  it.each([
+    {
+      name: "scope is group and the edited chat is a DM",
+      chatId: "123456",
+      content: "updated",
+      inlineButtons: "group" as const,
+      expectedMessage: /inline buttons are limited to groups/i,
+    },
+    {
+      name: "scope is dm and the edited chat is a group",
+      chatId: "-100123456",
+      content: "updated",
+      inlineButtons: "dm" as const,
+      expectedMessage: /inline buttons are limited to DMs/i,
+    },
+    {
+      name: "scope is group, the edited chat is a DM, and only the keyboard changes",
+      chatId: "123456",
+      content: undefined,
+      inlineButtons: "group" as const,
+      expectedMessage: /inline buttons are limited to groups/i,
+    },
+    {
+      // Same fail-closed treatment sendMessage already applies: a username target
+      // cannot be classified, so a scoped edit must ask for a numeric chat id.
+      name: "the edited chat is a username and the scope needs a known chat type",
+      chatId: "@publicgroup",
+      content: "updated",
+      inlineButtons: "group" as const,
+      expectedMessage: /require a numeric chat id/i,
+    },
+  ])(
+    "blocks editMessage inline buttons when $name",
+    async ({ chatId, content, inlineButtons, expectedMessage }) => {
+      await expect(
+        handleTelegramAction(
+          {
+            action: "editMessage",
+            chatId,
+            messageId: 1,
+            ...(content === undefined ? {} : { content }),
+            presentation: {
+              blocks: [{ type: "buttons", buttons: [{ label: "Ok", value: "cmd:ok" }] }],
+            },
+          },
+          telegramConfig({ capabilities: { inlineButtons } }),
+        ),
+      ).rejects.toThrow(expectedMessage);
+      expect(editMessageTelegram).not.toHaveBeenCalled();
+      expect(editMessageReplyMarkupTelegram).not.toHaveBeenCalled();
+    },
+  );
+
+  it("allows editMessage inline buttons when the edited chat matches the scope", async () => {
+    await handleTelegramAction(
+      {
+        action: "editMessage",
+        chatId: "-100123456",
+        messageId: 1,
+        content: "updated",
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Ok", value: "cmd:ok" }] }],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "group" } }),
+    );
+    expect(editMessageTelegram).toHaveBeenCalled();
+  });
+
   it("allows inline buttons in DMs with tg: prefixed targets", async () => {
     await sendInlineButtonsMessage({
       to: "tg:5232990709",

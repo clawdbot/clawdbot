@@ -342,6 +342,40 @@ function getLastDurableTelegramActionResult(
   };
 }
 
+// Scope constrains the chat an action targets, not a property the message inherited at
+// send time. Both outbound paths must agree: generic callbacks outside the scope are
+// dropped in `bot-handlers.callback.runtime.ts`, so a skipped check ships dead buttons.
+function assertTelegramInlineButtonsAllowed(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+  target: string;
+}): void {
+  const scope = resolveTelegramInlineButtonsScope({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  if (scope === "off") {
+    throw new Error(
+      'Telegram inline buttons are disabled. Set channels.telegram.capabilities.inlineButtons to "dm", "group", "all", or "allowlist".',
+    );
+  }
+  if (scope !== "dm" && scope !== "group") {
+    return;
+  }
+  const targetType = resolveTelegramTargetChatType(params.target);
+  if (targetType === "unknown") {
+    throw new Error(
+      `Telegram inline buttons require a numeric chat id when inlineButtons="${scope}".`,
+    );
+  }
+  if (scope === "dm" && targetType !== "direct") {
+    throw new Error('Telegram inline buttons are limited to DMs when inlineButtons="dm".');
+  }
+  if (scope === "group" && targetType !== "group") {
+    throw new Error('Telegram inline buttons are limited to groups when inlineButtons="group".');
+  }
+}
+
 export async function handleTelegramAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
@@ -500,31 +534,11 @@ export async function handleTelegramAction(
       throw new Error("Telegram video notes require exactly one media attachment.");
     }
     if (buttons) {
-      const inlineButtonsScope = resolveTelegramInlineButtonsScope({
+      assertTelegramInlineButtonsAllowed({
         cfg,
         accountId: accountId ?? undefined,
+        target: to,
       });
-      if (inlineButtonsScope === "off") {
-        throw new Error(
-          'Telegram inline buttons are disabled. Set channels.telegram.capabilities.inlineButtons to "dm", "group", "all", or "allowlist".',
-        );
-      }
-      if (inlineButtonsScope === "dm" || inlineButtonsScope === "group") {
-        const targetType = resolveTelegramTargetChatType(to);
-        if (targetType === "unknown") {
-          throw new Error(
-            `Telegram inline buttons require a numeric chat id when inlineButtons="${inlineButtonsScope}".`,
-          );
-        }
-        if (inlineButtonsScope === "dm" && targetType !== "direct") {
-          throw new Error('Telegram inline buttons are limited to DMs when inlineButtons="dm".');
-        }
-        if (inlineButtonsScope === "group" && targetType !== "group") {
-          throw new Error(
-            'Telegram inline buttons are limited to groups when inlineButtons="group".',
-          );
-        }
-      }
     }
     // Optional threading parameters for forum topics and reply chains
     const replyToMessageId = readTelegramReplyToMessageId(params);
@@ -747,15 +761,13 @@ export async function handleTelegramAction(
       throw new Error("content required.");
     }
     if (buttons !== undefined) {
-      const inlineButtonsScope = resolveTelegramInlineButtonsScope({
+      // Validate against the binding-resolved chat id, not the raw param, so
+      // topic shorthands and aliases are scoped by the chat actually edited.
+      assertTelegramInlineButtonsAllowed({
         cfg,
         accountId: accountId ?? undefined,
+        target: String(authorizedChatId),
       });
-      if (inlineButtonsScope === "off") {
-        throw new Error(
-          'Telegram inline buttons are disabled. Set channels.telegram.capabilities.inlineButtons to "dm", "group", "all", or "allowlist".',
-        );
-      }
     }
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
