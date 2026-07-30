@@ -239,6 +239,131 @@ describe("RealtimeCallHandler lifecycle", () => {
     }
   });
 
+  it("does not start a native consult after teardown during transcript settling", async () => {
+    let onToolCall:
+      | ((event: { itemId: string; callId: string; name: string; args: unknown }) => void)
+      | undefined;
+    let onTranscript:
+      | ((role: "user" | "assistant", text: string, isFinal: boolean) => void)
+      | undefined;
+    const submitToolResult = vi.fn();
+    const createBridgeForCall = vi.fn(
+      (request: {
+        onToolCall?: (event: {
+          itemId: string;
+          callId: string;
+          name: string;
+          args: unknown;
+        }) => void;
+        onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+      }) => {
+        onToolCall = request.onToolCall;
+        onTranscript = request.onTranscript;
+        return createBridge(vi.fn(), {
+          supportsToolResultContinuation: true,
+          submitToolResult,
+        });
+      },
+    );
+    const call: CallRecord = {
+      callId: "call-settling-consult",
+      providerCallId: "CA-settling-consult",
+      provider: "twilio",
+      direction: "inbound",
+      state: "ringing",
+      from: "+15550001111",
+      to: "+15550002222",
+      startedAt: Date.now(),
+      transcript: [],
+      processedEventIds: [],
+    };
+    const handler = new RealtimeCallHandler(
+      createRealtimeConfig(),
+      {
+        processEvent: vi.fn(),
+        getCallByProviderCallId: vi.fn(() => call),
+      } as unknown as CallManager,
+      {
+        name: "twilio",
+        verifyWebhook: vi.fn(),
+        parseWebhookEvent: vi.fn(),
+        initiateCall: vi.fn(),
+        hangupCall: vi.fn(),
+        playTts: vi.fn(),
+        startListening: vi.fn(),
+        stopListening: vi.fn(),
+        getCallStatus: vi.fn(),
+      } as unknown as VoiceCallProvider,
+      {
+        id: "openai",
+        label: "OpenAI",
+        isConfigured: () => true,
+        createBridge: createBridgeForCall,
+      },
+      { apiKey: "test-key" },
+      "/voice/webhook",
+    );
+    const consult = vi.fn(async () => ({ text: "This should not run." }));
+    handler.registerToolHandler("openclaw_agent_consult", consult);
+    const { streamUrl } = handler.issueStreamSession();
+    const server = await startUpgradeWsServer({
+      urlPath: new URL(streamUrl).pathname,
+      onUpgrade: (request, socket, head) => {
+        handler.handleWebSocketUpgrade(request, socket, head);
+      },
+    });
+    const ws = await connectWs(server.url);
+
+    try {
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-settling-consult", callSid: "CA-settling-consult" },
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(createBridgeForCall).toHaveBeenCalledTimes(1);
+      });
+
+      onTranscript?.("user", "Check the deployment", false);
+      onToolCall?.({
+        itemId: "item-settling-consult",
+        callId: "tool-settling-consult",
+        name: "openclaw_agent_consult",
+        args: { question: "Check the deployment." },
+      });
+      const consults = (
+        handler as unknown as {
+          nativeConsultsInFlightByCallId: Map<string, unknown>;
+        }
+      ).nativeConsultsInFlightByCallId;
+      await vi.waitFor(() => {
+        expect(consults.size).toBe(1);
+        expect(submitToolResult).toHaveBeenCalledTimes(1);
+        expect(consult).not.toHaveBeenCalled();
+      });
+
+      const closed = waitForClose(ws);
+      ws.close();
+      await closed;
+      await vi.waitFor(() => {
+        expect(consults.size).toBe(0);
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 400);
+      });
+
+      expect(consult).not.toHaveBeenCalled();
+      expect(submitToolResult).toHaveBeenCalledTimes(1);
+    } finally {
+      if (ws.readyState !== WebSocket.CLOSED) {
+        ws.terminate();
+      }
+      await handler.close();
+      await server.close();
+    }
+  });
+
   it("releases a hung native consult and ignores its late result after stream teardown", async () => {
     let onToolCall:
       | ((event: { itemId: string; callId: string; name: string; args: unknown }) => void)
