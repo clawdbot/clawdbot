@@ -391,7 +391,6 @@ describe("ChatGPT Responses cached transport", () => {
     const handshakes: Array<{ connectionId: number }> = [];
     const receivedConnectionIds: number[] = [];
     const requestBodies: Array<{ connectionId: number; body: Record<string, unknown> }> = [];
-    let seedServerSocket: WebSocket | undefined;
     let holdLoserHandshake: ((res: boolean) => void) | undefined;
     let verifyCount = 0;
     let holdNextReconnect = false;
@@ -420,12 +419,9 @@ describe("ChatGPT Responses cached transport", () => {
     server.on("connection", (socket) => {
       const connectionId = handshakes.length + 1;
       handshakes.push({ connectionId });
-      if (connectionId === 1) {
-        seedServerSocket = socket;
-      }
-      socket.on("message", (raw) => {
+      socket.on("message", (raw: Buffer) => {
         receivedConnectionIds.push(connectionId);
-        const body = JSON.parse(raw.toString()) as Record<string, unknown>;
+        const body = JSON.parse(raw.toString("utf8")) as Record<string, unknown>;
         requestBodies.push({ connectionId, body });
         socket.send(JSON.stringify(completion(`resp_${connectionId}`)));
       });
