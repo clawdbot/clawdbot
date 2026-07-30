@@ -2,6 +2,7 @@
  * Standalone MCP server for selected built-in OpenClaw tools.
  *
  * Run via: node --import tsx src/mcp/openclaw-tools-serve.ts
+import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
  * Or: bun src/mcp/openclaw-tools-serve.ts
  */
 import { pathToFileURL } from "node:url";
@@ -57,7 +58,10 @@ export function resolveOpenClawToolsForMcp(
     if (!agentSessionKey) {
       throw new Error(`${OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV} is required`);
     }
-    return createCronTool({ agentSessionKey, creatorToolAllowlist: [{ name: "automations" }] });
+    return createCronTool({
+      agentSessionKey,
+      creatorToolAllowlist: [{ name: AUTOMATIONS_TOOL_NAME }],
+    });
   });
 }
 
