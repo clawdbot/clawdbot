@@ -218,7 +218,7 @@ async fn default_buffer_retains_256_small_events() {
 }
 
 #[tokio::test]
-async fn oversized_retained_event_closes_the_session() {
+async fn oversized_retained_event_lags_without_closing_the_session() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -244,10 +244,16 @@ async fn oversized_retained_event_closes_the_session() {
             &mut socket,
             json!({
                 "type":"event", "event":"node.large",
-                "payload":{"value":"x".repeat(600)}
+                "payload":{"value":"x".repeat(2000)}
             }),
         )
         .await;
+        send_json(
+            &mut socket,
+            json!({"type":"event", "event":"node.after-large", "seq":2}),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
     });
 
     let config = GatewayClientConfig::new(format!("ws://{address}"))
@@ -261,8 +267,12 @@ async fn oversized_retained_event_closes_the_session() {
     .unwrap();
     assert!(matches!(
         session.next_event().await,
-        Err(ClientError::InvalidFrame(message)) if message.contains("retained-event limit")
+        Err(ClientError::EventLagged(1))
     ));
+    assert_eq!(
+        session.next_event().await.unwrap().event,
+        "node.after-large"
+    );
     server.await.unwrap();
 }
 
