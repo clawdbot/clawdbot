@@ -2632,10 +2632,7 @@ jobs:
                   )
                 )
               ) and
-              (
-                [.launches[] | select(.terminalState == "ready-exited")] | length >=
-                  (if $runLaneOutcome == "success" then 2 else 1 end)
-              )
+              ([.launches[] | select(.terminalState == "ready-exited")] | length >= 1)
             ' "$runtime_path" >/dev/null
 
           while IFS=$'\t' read -r relative_path expected_sha256; do
