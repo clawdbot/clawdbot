@@ -235,9 +235,6 @@ export function resolveFollowupDeliveryDecision(params: {
     );
   }
   payloads = filterRoomEventOperationalPayloads({ payloads, turn });
-  if (payloads.length === 0 && turn.queued.currentInboundEventKind === "room_event") {
-    return { kind: "suppress", reason: "room-event" };
-  }
   const operationalPolicy = resolveOperationalReplyPolicy(turn.config).policy;
   const hasExplicitlyDeliverablePayload = payloads.some(
     (payload) =>
@@ -255,7 +252,7 @@ export function resolveFollowupDeliveryDecision(params: {
           sendPolicyDenied: sourcePolicy.sendPolicyDenied,
           successfulSourceReplyDelivery: completedSourceDelivery,
           isHeartbeat: opts?.isHeartbeat === true,
-          isRoomEvent: false,
+          isRoomEvent: turn.queued.currentInboundEventKind === "room_event",
         });
   if (recovery.kind === "retry") {
     return {
@@ -374,6 +371,9 @@ export function resolveFollowupDeliveryDecision(params: {
   // filter. Reapply it so only explicit command replies or policy-owned notices
   // can reach an ambient group turn.
   payloads = filterRoomEventOperationalPayloads({ payloads, turn });
+  if (payloads.length === 0 && turn.queued.currentInboundEventKind === "room_event") {
+    return { kind: "suppress", reason: "room-event" };
+  }
   if (sourcePolicy.sourceReplyDeliveryMode === "message_tool_only") {
     const explicitlyDeliverable = payloads.filter(
       (payload) =>

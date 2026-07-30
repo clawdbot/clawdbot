@@ -498,6 +498,36 @@ describe("resolveFollowupDeliveryDecision", () => {
     ).toMatchObject({ kind: "deliver", payloads: [{ text: "runtime warning" }] });
   });
 
+  it("keeps late compaction notices available to room-event redirect policy", () => {
+    const turn = createTurn({
+      config: {
+        messages: {
+          operationalReplies: {
+            policy: "redirect",
+            redirectSessionKey: "agent:main:operator",
+          },
+        },
+      },
+      queued: {
+        ...createTurn().queued,
+        currentInboundEventKind: "room_event",
+      },
+    });
+
+    expect(
+      resolveFollowupDeliveryDecision({
+        turn,
+        execution: createSettledExecution("private room final"),
+        accounting: createAccounting([], {
+          compactionNotice: { text: "late compaction", isCompactionNotice: true },
+        }),
+      }),
+    ).toMatchObject({
+      kind: "deliver",
+      payloads: [{ text: "late compaction" }],
+    });
+  });
+
   it("keeps marked command replies visible in room events under silent policy", () => {
     const turn = createTurn({
       config: {
