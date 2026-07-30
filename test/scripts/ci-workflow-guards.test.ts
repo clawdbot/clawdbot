@@ -4687,7 +4687,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Checkout trusted Node shard runner",
     );
     expect(trustedRunnerStep).toMatchObject({
-      if: "hashFiles('scripts/ci-run-node-test-shard.mjs') == ''",
+      if: "${{ hashFiles('scripts/ci-run-node-test-shard.mjs') == '' }}",
       uses: CHECKOUT_V6,
       with: {
         ref: "${{ github.workflow_sha }}",
