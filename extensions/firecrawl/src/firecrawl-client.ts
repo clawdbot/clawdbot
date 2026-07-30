@@ -39,9 +39,21 @@ const SEARCH_CACHE = new Map<
   string,
   { value: Record<string, unknown>; expiresAt: number; insertedAt: number }
 >();
+/**
+ * One cached scrape result plus the provenance the result itself cannot express.
+ *
+ * `finalUrl` carries either a URL Firecrawl reported or the request URL the parser fell back to,
+ * and the two are indistinguishable once stored: Firecrawl may report a source URL whose text
+ * equals the request. Recording which one it was at parse time keeps the cache-hit rebind from
+ * having to guess.
+ */
+type ScrapeCacheEntry = {
+  result: Record<string, unknown>;
+  finalUrlReportedByProvider: boolean;
+};
 const SCRAPE_CACHE = new Map<
   string,
-  { value: Record<string, unknown>; expiresAt: number; insertedAt: number }
+  { value: ScrapeCacheEntry; expiresAt: number; insertedAt: number }
 >();
 const DEFAULT_SEARCH_COUNT = 5;
 const DEFAULT_SCRAPE_MAX_CHARS = 50_000;
@@ -499,6 +511,28 @@ function resolveScrapeData(payload: Record<string, unknown>): Record<string, unk
   return {};
 }
 
+/**
+ * Reads the source URL Firecrawl reported for a scrape, or `undefined` when it reported none.
+ *
+ * The scrape result's `finalUrl` falls back to the request URL when this returns `undefined`, so
+ * callers that must tell a provider statement from an echo of their own input ask here rather than
+ * comparing the stored strings: Firecrawl is free to report a source URL equal to the request.
+ */
+function readFirecrawlReportedSourceUrl(payload: Record<string, unknown>): string | undefined {
+  const data = resolveScrapeData(payload);
+  const metadata =
+    data.metadata && typeof data.metadata === "object"
+      ? (data.metadata as Record<string, unknown>)
+      : undefined;
+  if (typeof metadata?.sourceURL === "string" && metadata.sourceURL) {
+    return metadata.sourceURL;
+  }
+  if (typeof data.url === "string" && data.url) {
+    return data.url;
+  }
+  return undefined;
+}
+
 export function parseFirecrawlScrapePayload(params: {
   payload: Record<string, unknown>;
   url: string;
@@ -540,10 +574,7 @@ export function parseFirecrawlScrapePayload(params: {
       : undefined;
   return {
     url: params.url,
-    finalUrl:
-      (typeof metadata?.sourceURL === "string" && metadata.sourceURL) ||
-      (typeof data.url === "string" && data.url) ||
-      params.url,
+    finalUrl: readFirecrawlReportedSourceUrl(params.payload) ?? params.url,
     ...(status !== undefined ? { status } : {}),
     ...(title ? { title } : {}),
     extractor: "firecrawl",
@@ -568,22 +599,25 @@ export function parseFirecrawlScrapePayload(params: {
  * case-equivalent spelling of the same resource. Two fields in a stored result echo the request
  * that populated it: `url` is the requested URL verbatim, and `finalUrl` falls back to it when
  * Firecrawl reports no source URL of its own. Replaying those would hand a later caller the first
- * caller's spelling, so a field that still equals the stored request URL is re-bound to the current
- * one. A `finalUrl` Firecrawl actually reported differs from the request and is left untouched:
- * that is the provider's statement about the resource, not an echo of the input.
+ * caller's spelling, so both echoes are re-bound to the current request.
+ *
+ * Whether `finalUrl` is such an echo is read from the entry's recorded provenance, not from
+ * `finalUrl === storedUrl`: Firecrawl may report a source URL whose text equals the request that
+ * populated the entry, and that value is the provider's statement about the resource. It is left
+ * untouched.
  */
 function rebindScrapeRequestUrl(
-  value: Record<string, unknown>,
+  entry: ScrapeCacheEntry,
   requestUrl: string,
 ): Record<string, unknown> {
-  const storedUrl = value.url;
+  const storedUrl = entry.result.url;
   if (typeof storedUrl !== "string" || storedUrl === requestUrl) {
-    return value;
+    return entry.result;
   }
   return {
-    ...value,
+    ...entry.result,
     url: requestUrl,
-    ...(value.finalUrl === storedUrl ? { finalUrl: requestUrl } : {}),
+    ...(entry.finalUrlReportedByProvider ? {} : { finalUrl: requestUrl }),
   };
 }
 
@@ -674,7 +708,10 @@ export async function runFirecrawlScrape(
   writeCache(
     SCRAPE_CACHE,
     cacheKey,
-    result,
+    {
+      result,
+      finalUrlReportedByProvider: readFirecrawlReportedSourceUrl(payload) !== undefined,
+    },
     resolveCacheTtlMs(undefined, DEFAULT_CACHE_TTL_MINUTES),
   );
   return result;

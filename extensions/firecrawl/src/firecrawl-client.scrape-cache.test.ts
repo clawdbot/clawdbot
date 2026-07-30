@@ -115,4 +115,27 @@ describe("firecrawl scrape cache across case-equivalent URLs", () => {
     expect(second.url).toBe("https://example.com/Page");
     expect(second.finalUrl).toBe("https://example.com/canonical");
   });
+
+  it("keeps a reported final URL that happens to equal the first caller's request", async () => {
+    const { baseUrl, requestCount } = await startScrapeServer({
+      success: true,
+      data: {
+        markdown: "# Cached page",
+        // Firecrawl reports a source URL of its own that happens to spell the first request.
+        metadata: { statusCode: 200, sourceURL: "HTTPS://EXAMPLE.com/Page" },
+      },
+    });
+    const cfg = configFor(baseUrl);
+
+    await runFirecrawlScrape({ cfg, url: "HTTPS://EXAMPLE.com/Page", extractMode: "markdown" });
+    const second = await runFirecrawlScrape({
+      cfg,
+      url: "https://example.com/Page",
+      extractMode: "markdown",
+    });
+
+    expect(requestCount()).toBe(1);
+    expect(second.url).toBe("https://example.com/Page");
+    expect(second.finalUrl).toBe("HTTPS://EXAMPLE.com/Page");
+  });
 });
