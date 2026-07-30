@@ -237,15 +237,14 @@ export class MediaStreamHandler {
     const wss = this.wss;
     this.wss = null;
     this.closePromise = (async () => {
-      if (!wss) {
-        return;
+      if (wss) {
+        await new Promise<void>((resolve) => {
+          wss.close(() => resolve());
+          for (const ws of wss.clients) {
+            ws.terminate();
+          }
+        });
       }
-      await new Promise<void>((resolve) => {
-        wss.close(() => resolve());
-        for (const ws of wss.clients) {
-          ws.terminate();
-        }
-      });
       await shutdownBarrier;
     })().finally(() => {
       this.closing = false;

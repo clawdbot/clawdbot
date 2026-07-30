@@ -4,6 +4,39 @@ import { MediaStreamHandler } from "./media-stream.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "./websocket-test-support.js";
 
 describe("MediaStreamHandler lifecycle", () => {
+  it("keeps rejecting upgrades through the shutdown barrier without active sockets", async () => {
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: {
+        createSession: () => ({
+          connect: async () => {},
+          sendAudio: () => {},
+          close: () => {},
+          isConnected: () => true,
+        }),
+        id: "openai",
+        label: "OpenAI",
+        isConfigured: () => true,
+      },
+      providerConfig: {},
+    });
+    let releaseShutdownBarrier: (() => void) | undefined;
+    const shutdownBarrier = new Promise<void>((resolve) => {
+      releaseShutdownBarrier = resolve;
+    });
+    const close = handler.close(shutdownBarrier);
+    let closeSettled = false;
+    void close.then(() => {
+      closeSettled = true;
+    });
+
+    await Promise.resolve();
+    expect(closeSettled).toBe(false);
+
+    releaseShutdownBarrier?.();
+    await close;
+    expect(closeSettled).toBe(true);
+  });
+
   it("rejects duplicate start frames without creating another STT session", async () => {
     const closeSession = vi.fn();
     const sttSession: RealtimeTranscriptionSession = {
