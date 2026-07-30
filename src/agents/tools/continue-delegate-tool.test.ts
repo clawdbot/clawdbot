@@ -486,6 +486,30 @@ describe("continue_delegate tool", () => {
       expected: "attachments_file_bytes_exceeded (attachmentIndex=1 maxFileBytes=4)",
     },
     {
+      label: "malformed base64",
+      attachments: [
+        { name: "safe.txt", content: "12" },
+        {
+          name: "PRIVATE_MALFORMED_BASE64_NAME.txt",
+          content: "!BAD",
+          encoding: "base64" as const,
+        },
+      ],
+      expected: "attachments_invalid_base64_or_too_large (attachmentIndex=1 maxFileBytes=4)",
+    },
+    {
+      label: "oversized base64",
+      attachments: [
+        { name: "safe.txt", content: "12" },
+        {
+          name: "PRIVATE_OVERSIZED_BASE64_NAME.txt",
+          content: Buffer.from("12345").toString("base64"),
+          encoding: "base64" as const,
+        },
+      ],
+      expected: "attachments_invalid_base64_or_too_large (attachmentIndex=1 maxFileBytes=4)",
+    },
+    {
       label: "aggregate size",
       attachments: [
         { name: "safe.txt", content: "1234" },

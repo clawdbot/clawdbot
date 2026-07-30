@@ -219,7 +219,9 @@ export function prepareInlineAttachmentSnapshots(params: {
     if (encoding === "base64") {
       const decoded = decodeStrictBase64(content, params.limits.maxFileBytes);
       if (!decoded) {
-        throw new Error("attachments_invalid_base64_or_too_large");
+        throw new Error(
+          `attachments_invalid_base64_or_too_large (attachmentIndex=${attachmentIndex})`,
+        );
       }
       buf = decoded;
       bytes = decoded.byteLength;
