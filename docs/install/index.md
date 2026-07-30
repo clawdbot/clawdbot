@@ -136,11 +136,10 @@ For contributors or anyone who wants to run from a local checkout:
 git clone https://github.com/openclaw/openclaw.git
 cd openclaw
 pnpm install && pnpm build && pnpm ui:build
-pnpm link --global
 openclaw onboard --install-daemon
 ```
 
-`pnpm link --global` is optional one-time setup that puts the `openclaw` command on your PATH. Or skip the link and use `pnpm openclaw ...` from inside the repo, which is the safer default for automation and agent-maintained checkouts: re-running `pnpm link` variants inside the checkout can rewrite `package.json` and `pnpm-workspace.yaml` and break later installs. Never run link commands as part of updating a checkout. See [Setup](/start/setup) for full development workflows.
+For PATH setup, use `pnpm openclaw ...` from inside the repo, which is the safer default for automation and agent-maintained checkouts: re-running `pnpm link` variants inside the checkout can rewrite `package.json` and `pnpm-workspace.yaml` and break later installs. Never run link commands as part of updating a checkout. See [Setup](/start/setup) for full development workflows.
 
 ### Install from the GitHub main checkout
 

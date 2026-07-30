@@ -67,7 +67,7 @@ describe("noteSourceInstallIssues", () => {
         .mock.calls.map(([message]) => String(message))
         .join("\n");
       expect(output).toContain('self-referential "openclaw": "link:" dependency');
-      expect(output).toContain("git checkout -- package.json pnpm-workspace.yaml && pnpm install");
+      expect(output).toContain("Inspect the diff: git diff package.json pnpm-workspace.yaml");
     });
   });
 
@@ -88,7 +88,27 @@ describe("noteSourceInstallIssues", () => {
         .mock.calls.map(([message]) => String(message))
         .join("\n");
       expect(output).toContain('self-referential "openclaw: link:" entry');
-      expect(output).toContain("git checkout -- package.json pnpm-workspace.yaml && pnpm install");
+      expect(output).toContain("Inspect the diff: git diff package.json pnpm-workspace.yaml");
+    });
+  });
+
+  it("warns when pnpm-workspace.yaml uses quoted link: value", async () => {
+    await withTempDir({ prefix: "openclaw-doctor-install-" }, async (root) => {
+      await writeFile(
+        root,
+        "pnpm-workspace.yaml",
+        "packages:\n  - .\noverrides:\n  openclaw: 'link:'\n",
+      );
+      await writeFile(root, "src/entry.ts", "export {};\n");
+      await writeFile(root, "package.json", JSON.stringify({ name: "openclaw" }));
+
+      noteSourceInstallIssues(root);
+
+      const output = vi
+        .mocked(note)
+        .mock.calls.map(([message]) => String(message))
+        .join("\n");
+      expect(output).toContain('self-referential "openclaw: link:" entry');
     });
   });
 

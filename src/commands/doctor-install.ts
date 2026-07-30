@@ -62,7 +62,7 @@ function detectSelfLinkWarnings(root: string): string[] {
       );
       if (selfLink) {
         warnings.push(
-          `- package.json has a self-referential "openclaw": "link:" dependency, which breaks every pnpm install (ERR_PNPM_LOCKFILE_CONFIG_MISMATCH). ${SELF_LINK_RECOVERY}`,
+          `- package.json has a self-referential "openclaw": "link:" dependency, which breaks frozen pnpm installs (ERR_PNPM_LOCKFILE_CONFIG_MISMATCH). ${SELF_LINK_RECOVERY}`,
         );
       }
     } catch {
@@ -73,9 +73,9 @@ function detectSelfLinkWarnings(root: string): string[] {
   const workspacePath = path.join(root, "pnpm-workspace.yaml");
   if (fs.existsSync(workspacePath)) {
     const workspaceYaml = fs.readFileSync(workspacePath, "utf8");
-    if (/^\s*openclaw:\s*link:/m.test(workspaceYaml)) {
+    if (/^\s*openclaw:\s*['"]?link:/m.test(workspaceYaml)) {
       warnings.push(
-        `- pnpm-workspace.yaml contains a self-referential "openclaw: link:" entry, which breaks every pnpm install (ERR_PNPM_LOCKFILE_CONFIG_MISMATCH). ${SELF_LINK_RECOVERY}`,
+        `- pnpm-workspace.yaml contains a self-referential "openclaw: link:" entry, which breaks frozen pnpm installs (ERR_PNPM_LOCKFILE_CONFIG_MISMATCH). ${SELF_LINK_RECOVERY}`,
       );
     }
   }
