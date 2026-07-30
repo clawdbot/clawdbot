@@ -109,12 +109,12 @@ export function buildSlackProgressCommentaryRun(
         message.text.includes(commentaryMarker),
       );
       const commentaryTimestamps = new Set(commentaryMessages.map((message) => message.ts));
-      if (commentaryTimestamps.size !== 1) {
+      const [commentaryTs] = commentaryTimestamps;
+      if (commentaryTimestamps.size !== 1 || commentaryTs === undefined) {
         throw new Error(
           `expected exactly one Slack message identity containing commentary; got ${commentaryTimestamps.size}`,
         );
       }
-      const commentaryTs = [...commentaryTimestamps][0];
       if (commentaryTs === finalMessage.ts) {
         throw new Error("expected Slack progress commentary to stay separate from the fresh final");
       }
