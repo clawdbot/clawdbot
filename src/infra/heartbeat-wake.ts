@@ -740,10 +740,7 @@ function schedulePendingWakes(readyDelayMs: number) {
       continue;
     }
     for (const pending of groupWakes) {
-      if (
-        !pending ||
-        isPostBarrierTargetWake(targetKey, pending, globalBarrierCutoffSequence)
-      ) {
+      if (!pending || isPostBarrierTargetWake(targetKey, pending, globalBarrierCutoffSequence)) {
         continue;
       }
       const nextReadyAtMs = Math.max(pending.readyAtMs ?? 0, pending.notBeforeMs ?? 0);
