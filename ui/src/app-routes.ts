@@ -3,12 +3,13 @@ import type { PageDefinition, Router, RouterHistory } from "@openclaw/uirouter";
 import {
   agentRouteFromPath,
   INTERNAL_AGENT_PATH_PARAM,
-  INTERNAL_SESSION_PATH_PARAM,
   INTERNAL_MEMORY_PATH_PARAM,
   INTERNAL_PLUGINS_PATH_PARAM,
+  INTERNAL_SESSION_PATH_PARAM,
   memoryTabFromPath,
   pathForAgentPanel,
   pathForRoute,
+  pathForWorkboardBoard,
   pluginsHubTabFromPath,
   routeIdFromPath,
   sessionRouteNamespaceFromPath,
@@ -94,7 +95,61 @@ const APP_ROUTE_TREE = [
   pluginPage,
 ] as const;
 
-const appRoutes = APP_ROUTE_TREE as readonly AppRoute[];
+const DYNAMIC_PATH_PARAM_BY_ROUTE: Partial<Record<RouteId, string>> = {
+  agents: INTERNAL_AGENT_PATH_PARAM,
+  chat: INTERNAL_SESSION_PATH_PARAM,
+  dashboard: INTERNAL_SESSION_PATH_PARAM,
+  memory: INTERNAL_MEMORY_PATH_PARAM,
+  plugins: INTERNAL_PLUGINS_PATH_PARAM,
+};
+
+function locationBeforeDynamicRouteBridge(
+  routeId: RouteId,
+  location: ReturnType<RouterHistory["location"]>,
+  basePath: string,
+) {
+  const search = new URLSearchParams(location.search);
+  const pathParam = DYNAMIC_PATH_PARAM_BY_ROUTE[routeId];
+  let pathname = pathParam ? search.get(pathParam) : null;
+  if (pathParam) {
+    search.delete(pathParam);
+  } else if (routeId === "workboard") {
+    const boardId = search.get("board");
+    if (boardId) {
+      try {
+        pathname = pathForWorkboardBoard(boardId, basePath);
+        search.delete("board");
+      } catch {
+        return location;
+      }
+    }
+  }
+  if (!pathname) {
+    return location;
+  }
+  const serializedSearch = search.toString();
+  return {
+    ...location,
+    pathname,
+    search: serializedSearch ? `?${serializedSearch}` : "",
+  };
+}
+
+function bridgeDynamicRouteLoaderDeps(route: AppRoute): AppRoute {
+  const loaderDeps = route.loaderDeps;
+  if (!loaderDeps || (route.id !== "workboard" && !DYNAMIC_PATH_PARAM_BY_ROUTE[route.id])) {
+    return route;
+  }
+  // Router matching uses an exact-path location while dynamic page loaders
+  // consume the real path. Keep one match identity across that startup bridge.
+  return {
+    ...route,
+    loaderDeps: (context, location) =>
+      loaderDeps(context, locationBeforeDynamicRouteBridge(route.id, location, context.basePath)),
+  };
+}
+
+const appRoutes = APP_ROUTE_TREE.map((route) => bridgeDynamicRouteLoaderDeps(route as AppRoute));
 
 export function createApplicationRouter(): ApplicationRouter {
   const router = createRouter<RouteId, ApplicationContext<RouteId>, AppRouteModule>({
@@ -193,12 +248,7 @@ export async function startApplicationRouter(
   if (initialDynamicRoute) {
     // Replace the synthetic exact-match location with the real browser path
     // before the shell renders; the matching loader data is already cached.
-    await router.navigate(
-      initialDynamicRoute[0],
-      context,
-      { history: "none", revalidate: true },
-      location,
-    );
+    await router.navigate(initialDynamicRoute[0], context, { history: "none" }, location);
   }
 }
 
