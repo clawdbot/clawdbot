@@ -191,6 +191,109 @@ const LINE_RULES: LineRule[] = [
   },
 ];
 
+const CHILD_PROCESS_EXEC_METHODS = [
+  "exec",
+  "execSync",
+  "spawn",
+  "spawnSync",
+  "execFile",
+  "execFileSync",
+];
+const CHILD_PROCESS_MODULE_PATTERN = String.raw`["'](?:node:)?child_process["']`;
+const IDENTIFIER_PATTERN = /^[A-Za-z_$][\w$]*$/;
+
+const escapeAliasForPattern = (alias: string) => alias.replace(/\$/g, "\\$");
+
+// Aliased bindings hide the literal method names the dangerous-exec line rule
+// keys on (`spawn as launch`, `{ exec: run }`, cp["spawn"]). Derive extra
+// per-source rules only from bindings proven to come from child_process
+// imports/requires, so unrelated functions (RegExp.exec, custom run()) keep
+// their negative behavior (#116255).
+function buildChildProcessAliasRules(source: string): LineRule[] {
+  const methodAliases = new Set<string>();
+  const namespaceAliases = new Set<string>();
+  const collectAliasedBindings = (list: string, separator: RegExp) => {
+    for (const entry of list.split(",")) {
+      const parts = entry.trim().split(separator);
+      const imported = parts[0]?.trim() ?? "";
+      const alias = parts[1]?.trim() ?? "";
+      if (
+        parts.length === 2 &&
+        CHILD_PROCESS_EXEC_METHODS.includes(imported) &&
+        alias !== imported &&
+        IDENTIFIER_PATTERN.test(alias)
+      ) {
+        methodAliases.add(alias);
+      }
+    }
+  };
+  for (const match of source.matchAll(
+    new RegExp(String.raw`import\s+([^'"]+?)\s*from\s*` + CHILD_PROCESS_MODULE_PATTERN, "g"),
+  )) {
+    const clause = (match[1] ?? "").replace(/^type\s+/, "");
+    const braced = /\{([^}]*)\}/.exec(clause);
+    if (braced) {
+      collectAliasedBindings(braced[1] ?? "", /\s+as\s+/);
+    }
+    const star = /\*\s*as\s+([A-Za-z_$][\w$]*)/.exec(clause);
+    if (star?.[1]) {
+      namespaceAliases.add(star[1]);
+    }
+    const defaultName = clause
+      .replace(/\{[^}]*\}/, "")
+      .replace(/\*\s*as\s+[A-Za-z_$][\w$]*/, "")
+      .replace(/,/g, " ")
+      .trim();
+    if (IDENTIFIER_PATTERN.test(defaultName)) {
+      namespaceAliases.add(defaultName);
+    }
+  }
+  for (const match of source.matchAll(
+    new RegExp(
+      String.raw`(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\s*\(\s*` +
+        CHILD_PROCESS_MODULE_PATTERN +
+        String.raw`\s*\)`,
+      "g",
+    ),
+  )) {
+    collectAliasedBindings(match[1] ?? "", /:/);
+  }
+  for (const match of source.matchAll(
+    new RegExp(
+      String.raw`(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*` +
+        CHILD_PROCESS_MODULE_PATTERN +
+        String.raw`\s*\)`,
+      "g",
+    ),
+  )) {
+    if (match[1]) {
+      namespaceAliases.add(match[1]);
+    }
+  }
+  const rules: LineRule[] = [];
+  if (methodAliases.size > 0) {
+    rules.push({
+      ruleId: "dangerous-exec",
+      severity: "critical",
+      message: "Shell command execution detected (child_process import alias)",
+      pattern: new RegExp(
+        String.raw`\b(?:${[...methodAliases].map(escapeAliasForPattern).join("|")})\s*\(`,
+      ),
+    });
+  }
+  if (namespaceAliases.size > 0) {
+    rules.push({
+      ruleId: "dangerous-exec",
+      severity: "critical",
+      message: "Shell command execution detected (child_process computed member)",
+      pattern: new RegExp(
+        String.raw`\b(?:${[...namespaceAliases].map(escapeAliasForPattern).join("|")})\s*\[\s*["'](?:${CHILD_PROCESS_EXEC_METHODS.join("|")})["']\s*\]\s*\(`,
+      ),
+    });
+  }
+  return rules;
+}
+
 const STANDARD_PORTS = new Set([80, 443, 8080, 8443, 3000]);
 const NETWORK_SEND_CONTEXT_PATTERN = /\bfetch\s*\(|\bpost\s*\(|\.\s*post\s*\(|http\.request\s*\(/i;
 
@@ -395,7 +498,8 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   const heuristicLines = heuristicSource.split("\n");
 
   // --- Line rules ---
-  for (const rule of LINE_RULES) {
+  const lineRules = [...LINE_RULES, ...buildChildProcessAliasRules(source)];
+  for (const rule of lineRules) {
     // Skip rule entirely if context requirement not met
     if (rule.requiresContext && !rule.requiresContext.test(source)) {
       continue;
