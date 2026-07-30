@@ -21,6 +21,14 @@ function optionName(token: string): string {
   return token.trim().toLowerCase().split("=", 1)[0] ?? "";
 }
 
+function resolveOptionName(token: string): string {
+  const name = optionName(token);
+  const matches = [...START_PROCESS_OPTIONS_WITH_VALUE].filter((candidate) =>
+    candidate.startsWith(name),
+  );
+  return matches.length === 1 ? (matches[0] ?? name) : name;
+}
+
 function splitArgumentList(value: string): string[] {
   const normalized = value.replace(/[,@()]/gu, " ");
   return splitShellArgs(normalized) ?? normalized.split(/\s+/u).filter(Boolean);
@@ -37,7 +45,7 @@ export function resolvePowerShellStartProcessOpenClawArgv(
   let argumentList: string[] = [];
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index]?.trim() ?? "";
-    const name = optionName(token);
+    const name = resolveOptionName(token);
     if (name === "-filepath") {
       filePath = token.includes("=") ? token.slice(token.indexOf("=") + 1) : argv[++index];
       continue;

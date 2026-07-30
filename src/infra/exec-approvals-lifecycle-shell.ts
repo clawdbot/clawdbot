@@ -7,7 +7,6 @@ export function splitLifecycleCommandText(
   let start = 0;
   let quote: "'" | '"' | null = null;
   let escaped = false;
-  let parenDepth = 0;
   for (let index = 0; index < command.length; index += 1) {
     const char = command[index] ?? "";
     if (quote === "'") {
@@ -34,15 +33,7 @@ export function splitLifecycleCommandText(
       quote = char;
       continue;
     }
-    if (char === "(") {
-      parenDepth += 1;
-      continue;
-    }
-    if (char === ")" && parenDepth > 0) {
-      parenDepth -= 1;
-      continue;
-    }
-    if (parenDepth === 0 && delimiters.has(char)) {
+    if (delimiters.has(char)) {
       const part = command.slice(start, index).trim();
       if (part) {
         parts.push(part);
@@ -60,7 +51,20 @@ export function splitLifecycleCommandText(
   return parts;
 }
 
+function normalizeCompoundFragment(fragment: string): string {
+  let normalized = fragment.trim().replace(/^[(){}\s]+|[(){}\s]+$/gu, "");
+  if (/^case\b[\s\S]*\bin\b/iu.test(normalized) && normalized.includes(")")) {
+    normalized = normalized.slice(normalized.lastIndexOf(")") + 1).trim();
+  }
+  return normalized
+    .replace(/^(?:!|do|elif|else|if|then|until|while)\s+/u, "")
+    .replace(/\s+(?:do|then)$/u, "")
+    .trim();
+}
+
 /** Split shell command lists and pipelines into executable text fragments. */
 export function splitLifecycleInlineCommands(command: string): string[] {
-  return splitLifecycleCommandText(command, new Set([";", "|", "&", "\n", "\r"]));
+  return splitLifecycleCommandText(command, new Set([";", "|", "&", "\n", "\r"]))
+    .map(normalizeCompoundFragment)
+    .filter(Boolean);
 }

@@ -1,5 +1,6 @@
 // Expands known shell environment references used in lifecycle-sensitive argv.
 import { splitShellArgs } from "../utils/shell-argv.js";
+import { classifyOpenClawGatewayArgv } from "./exec-approvals-lifecycle-gateway.js";
 import { splitLifecycleInlineCommands } from "./exec-approvals-lifecycle-shell.js";
 import { extractShellWrapperInlineCommand } from "./shell-wrapper-resolution.js";
 const POSIX_VARIABLE_RE = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/gu;
@@ -10,6 +11,20 @@ const VARIABLE_REFERENCE_RE =
 const POSIX_PARAMETER_OPERATOR_RE = /\$\{(?![A-Za-z_][A-Za-z0-9_]*\})[^}]+\}/u;
 const OPENCLAW_GLOBAL_FLAGS = new Set(["--dev", "--no-color"]);
 const OPENCLAW_GLOBAL_OPTIONS = new Set(["--container", "--log-level", "--profile"]);
+const LIFECYCLE_RUNNERS = new Set([
+  "bun",
+  "bunx",
+  "node",
+  "npm",
+  "npx",
+  "pnpm",
+  "pnpx",
+  "saps",
+  "start",
+  "start-process",
+  "yarn",
+  "yarnpkg",
+]);
 const SYSTEMCTL_OPTIONS_WITH_VALUE = new Set([
   "-h",
   "-m",
@@ -106,6 +121,9 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
       OPENCLAW_GLOBAL_OPTIONS,
       OPENCLAW_GLOBAL_FLAGS,
     );
+    if (["daemon", "gateway"].includes(tokens[commandIndex] ?? "")) {
+      return classifyOpenClawGatewayArgv(argv, commandIndex + 1);
+    }
     return !["--help", "health", "probe", "status", "update.status"].includes(
       tokens[commandIndex] ?? "",
     );
@@ -119,6 +137,11 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
       const nestedArgv = splitShellArgs(part);
       return nestedArgv ? unresolvedEnvironmentMayHideLifecycle(nestedArgv) : true;
     });
+  }
+  if (LIFECYCLE_RUNNERS.has(executable)) {
+    return /\b(?:add|daemon|gateway|install|remove|restart|rm|start|stop|uninstall|update|upgrade)\b/iu.test(
+      argv.join(" "),
+    );
   }
   return [
     "",

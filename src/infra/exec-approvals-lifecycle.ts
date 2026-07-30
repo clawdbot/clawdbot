@@ -212,6 +212,9 @@ function classifyOpenClawArgv(argv: readonly string[]): boolean {
   for (; index < argv.length; index += 1) {
     const token = argv[index]?.trim() ?? "";
     const lower = normalizedToken(token);
+    if (HELP_OR_VERSION_FLAGS.has(token)) {
+      return false;
+    }
     if (lower === "--update") {
       return classifyUpdateArgv(argv, index + 1);
     }

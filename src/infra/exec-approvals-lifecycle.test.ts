@@ -112,6 +112,18 @@ const mutationCases: Array<[string, string[]]> = [
   ["env -S 'openclaw gateway restart'", ["env", "-S", "openclaw gateway restart"]],
   ['sh -c "openclaw gateway restart"', ["sh", "-c", "openclaw gateway restart"]],
   [
+    "sh -c '(echo ok; openclaw gateway restart)'",
+    ["sh", "-c", "(echo ok; openclaw gateway restart)"],
+  ],
+  [
+    "sh -c '{ echo ok; openclaw gateway restart; }'",
+    ["sh", "-c", "{ echo ok; openclaw gateway restart; }"],
+  ],
+  [
+    "sh -c 'if true; then openclaw gateway restart; fi'",
+    ["sh", "-c", "if true; then openclaw gateway restart; fi"],
+  ],
+  [
     `sh -c 'openclaw gateway "$1"' sh restart`,
     ["sh", "-c", `openclaw gateway "$1"`, "sh", "restart"],
   ],
@@ -235,6 +247,8 @@ const mutationCases: Array<[string, string[]]> = [
 
 const nonMutationCases: Array<[string, string[]]> = [
   ["openclaw gateway status", ["openclaw", "gateway", "status"]],
+  ["openclaw --help gateway restart", ["openclaw", "--help", "gateway", "restart"]],
+  ["openclaw --version gateway restart", ["openclaw", "--version", "gateway", "restart"]],
   ["openclaw gateway --help", ["openclaw", "gateway", "--help"]],
   ["openclaw gateway call health", ["openclaw", "gateway", "call", "health"]],
   ["openclaw update status --json", ["openclaw", "update", "status", "--json"]],
@@ -511,6 +525,13 @@ describe("OpenClaw lifecycle exec approvals", () => {
     ).toBe(true);
     expect(
       requiresApproval(
+        "Start-Process -Arg 'gateway restart' -File openclaw",
+        ["Start-Process", "-Arg", "gateway restart", "-File", "openclaw"],
+        "win32",
+      ),
+    ).toBe(true);
+    expect(
+      requiresApproval(
         "Start-Process notepad -ArgumentList 'openclaw gateway'",
         ["Start-Process", "notepad", "-ArgumentList", "openclaw gateway"],
         "win32",
@@ -593,6 +614,54 @@ describe("OpenClaw lifecycle exec approvals", () => {
         ],
       }),
     ).toBe(true);
+  });
+
+  it("fails closed for unresolved lifecycle runner targets", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `node "$ENTRY" gateway restart`,
+        env: {},
+        envComplete: false,
+        platform: "linux",
+        segments: [
+          {
+            raw: `node "$ENTRY" gateway restart`,
+            argv: ["node", "$ENTRY", "gateway", "restart"],
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `npm install "$PACKAGE"`,
+        env: {},
+        envComplete: false,
+        platform: "linux",
+        segments: [
+          {
+            raw: `npm install "$PACKAGE"`,
+            argv: ["npm", "install", "$PACKAGE"],
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps unresolved gateway option values non-blocking for status", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `openclaw gateway status --token "$TOKEN"`,
+        env: {},
+        envComplete: false,
+        platform: "linux",
+        segments: [
+          {
+            raw: `openclaw gateway status --token "$TOKEN"`,
+            argv: ["openclaw", "gateway", "status", "--token", "$TOKEN"],
+          },
+        ],
+      }),
+    ).toBe(false);
   });
 
   it("does not let a later status token clear an unresolved systemctl action", () => {
