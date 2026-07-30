@@ -522,6 +522,37 @@ describe("resolveClaudeCliExecutionArgs", () => {
     ).toEqual(["-p", "--settings", '{"hooks":{"PreToolUse":[]},"fastMode":true}']);
   });
 
+  it.each([
+    ["split", ["-p", "--settings", "/tmp/claude-settings.json"]],
+    ["equals", ["-p", "--settings=/tmp/claude-settings.json"]],
+  ] as const)("preserves file-backed settings in the %s form when fast mode is off", (_, args) => {
+    expect(
+      resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-opus-5",
+        fastMode: false,
+        useResume: false,
+        baseArgs: args,
+      }),
+    ).toEqual(args);
+  });
+
+  it("rejects file-backed settings only when fast mode is on", () => {
+    expect(() =>
+      resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-opus-5",
+        fastMode: true,
+        useResume: false,
+        baseArgs: ["-p", "--settings", "/tmp/claude-settings.json"],
+      }),
+    ).toThrow(
+      "claude-cli fast mode requires inline JSON when --settings is already configured; use inline JSON or disable fast mode",
+    );
+  });
+
   it("forces isolated no-tool one-shot args for side-question execution", () => {
     expect(
       resolveClaudeCliExecutionArgs({

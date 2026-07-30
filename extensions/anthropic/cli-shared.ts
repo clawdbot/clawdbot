@@ -325,8 +325,11 @@ function resolveClaudeFastModeArgs(
       settings = undefined;
     }
     if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
+      if (!fastMode) {
+        return [...args];
+      }
       throw new Error(
-        "claude-cli fast mode cannot merge a file-backed or malformed --settings value",
+        "claude-cli fast mode requires inline JSON when --settings is already configured; use inline JSON or disable fast mode",
       );
     }
     const normalized = [...args];
