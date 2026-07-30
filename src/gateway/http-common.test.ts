@@ -353,9 +353,9 @@ describe("watchClientDisconnect", () => {
   });
 
   it.each([
-    ["an incomplete request was destroyed", { req: { complete: false, destroyed: true } }],
-    ["the response was destroyed", { res: { destroyed: true } }],
-    ["the response already ended", { res: { writableEnded: true } }],
+    ["an incomplete request was destroyed", { req: { complete: false, destroyed: true }, res: {} }],
+    ["the response was destroyed", { req: {}, res: { destroyed: true } }],
+    ["the response already ended", { req: {}, res: { writableEnded: true } }],
   ])("aborts immediately when %s", (_name, state) => {
     const socket = Object.assign(new EventEmitter(), { destroyed: false });
     const { req, res } = makeMockHttpReqRes(socket, socket);
