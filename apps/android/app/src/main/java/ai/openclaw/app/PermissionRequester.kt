@@ -2,6 +2,7 @@ package ai.openclaw.app
 
 import ai.openclaw.app.i18n.nativeString
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -16,11 +17,15 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import java.util.IdentityHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 
@@ -28,27 +33,77 @@ import kotlin.coroutines.resume
  * Serializes Android runtime-permission prompts behind coroutine-friendly request calls.
  */
 class PermissionRequester internal constructor(
-  private val activity: ComponentActivity,
-  private val permissionRequestLauncher: (Array<String>, Int) -> Unit,
+  context: Context,
   private val requestCodeAllocator: PermissionRequestCodeAllocator = PermissionRequestCodeAllocator(),
 ) {
+  private data class ActivityHost(
+    val activity: ComponentActivity,
+    val permissionRequestLauncher: (Array<String>, Int) -> Unit,
+  )
+
+  private data class ActiveActivityHost(
+    val host: ActivityHost,
+    val activation: Long,
+  )
+
   private data class PendingPermissionRequest(
     val requestCode: Int,
     val permissions: List<String>,
     val deferred: CompletableDeferred<Map<String, Boolean>>,
   )
 
-  constructor(activity: ComponentActivity) : this(
-    activity = activity,
-    permissionRequestLauncher = { permissions, requestCode ->
-      ActivityCompat.requestPermissions(activity, permissions, requestCode)
-    },
-  )
+  private enum class RationaleResult {
+    Proceed,
+    Decline,
+    HostLost,
+  }
 
+  private val appContext = context.applicationContext
   private val mutex = Mutex()
+  private val activityHostLock = Any()
   private val permissionRequestsLock = Any()
   private val mainHandler = Handler(Looper.getMainLooper())
+  private val activityHosts = IdentityHashMap<ComponentActivity, ActivityHost>()
+  private val activeActivitySequences = IdentityHashMap<ComponentActivity, Long>()
+  private val activeActivityHost = MutableStateFlow<ActiveActivityHost?>(null)
+  private var nextActivityActivation = 0L
   private val pendingPermissionRequests = mutableMapOf<Int, PendingPermissionRequest>()
+
+  internal fun attach(
+    activity: ComponentActivity,
+    permissionRequestLauncher: (Array<String>, Int) -> Unit = { permissions, requestCode ->
+      ActivityCompat.requestPermissions(activity, permissions, requestCode)
+    },
+  ) {
+    synchronized(activityHostLock) {
+      activityHosts[activity] = ActivityHost(activity, permissionRequestLauncher)
+      publishActiveActivityHostLocked()
+    }
+  }
+
+  internal fun activate(activity: ComponentActivity) {
+    synchronized(activityHostLock) {
+      check(activityHosts.containsKey(activity)) { "permission Activity must attach before activation" }
+      nextActivityActivation += 1
+      activeActivitySequences[activity] = nextActivityActivation
+      publishActiveActivityHostLocked()
+    }
+  }
+
+  internal fun deactivate(activity: ComponentActivity) {
+    synchronized(activityHostLock) {
+      activeActivitySequences.remove(activity)
+      publishActiveActivityHostLocked()
+    }
+  }
+
+  internal fun detach(activity: ComponentActivity) {
+    synchronized(activityHostLock) {
+      activeActivitySequences.remove(activity)
+      activityHosts.remove(activity)
+      publishActiveActivityHostLocked()
+    }
+  }
 
   /**
    * Request missing Android runtime permissions and return the final grant state for every requested permission.
@@ -61,29 +116,22 @@ class PermissionRequester internal constructor(
       while (true) {
         val missing =
           permissions.filter { perm ->
-            ContextCompat.checkSelfPermission(activity, perm) != PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(appContext, perm) != PackageManager.PERMISSION_GRANTED
           }
         if (missing.isEmpty()) {
           return permissions.associateWith { true }
         }
 
-        val needsRationale =
-          missing.any { ActivityCompat.shouldShowRequestPermissionRationale(activity, it) }
-        if (needsRationale) {
-          val proceed = showRationaleDialog(missing)
-          if (!proceed) {
-            return permissions.associateWith { perm ->
-              ContextCompat.checkSelfPermission(activity, perm) == PackageManager.PERMISSION_GRANTED
-            }
+        if (!confirmRationaleIfNeeded(missing, timeoutMs)) {
+          return permissions.associateWith { perm ->
+            ContextCompat.checkSelfPermission(appContext, perm) == PackageManager.PERMISSION_GRANTED
           }
         }
 
         val deferred = CompletableDeferred<Map<String, Boolean>>()
         val request = reservePermissionRequest(missing, deferred)
         try {
-          withContext(Dispatchers.Main) {
-            permissionRequestLauncher(missing.toTypedArray(), request.requestCode)
-          }
+          launchPermissionRequest(missing, request.requestCode, timeoutMs)
         } catch (err: Throwable) {
           clearPermissionRequest(request)
           throw err
@@ -100,17 +148,11 @@ class PermissionRequester internal constructor(
         val merged =
           permissions.associateWith { perm ->
             val nowGranted =
-              ContextCompat.checkSelfPermission(activity, perm) == PackageManager.PERMISSION_GRANTED
+              ContextCompat.checkSelfPermission(appContext, perm) == PackageManager.PERMISSION_GRANTED
             result[perm] == true || nowGranted
           }
 
-        val denied =
-          merged.filterValues { !it }.keys.filter {
-            !ActivityCompat.shouldShowRequestPermissionRationale(activity, it)
-          }
-        if (denied.isNotEmpty()) {
-          showSettingsDialog(denied)
-        }
+        showSettingsForPermanentDenials(merged, timeoutMs)
 
         return merged
       }
@@ -157,11 +199,117 @@ class PermissionRequester internal constructor(
     }
   }
 
-  private suspend fun showRationaleDialog(permissions: List<String>): Boolean =
-    withContext(Dispatchers.Main) {
-      if (activity.isFinishing || activity.isDestroyed) {
-        return@withContext false
+  private fun publishActiveActivityHostLocked() {
+    val active =
+      activeActivitySequences.entries.maxByOrNull { it.value }?.let { entry ->
+        activityHosts[entry.key]?.let { host ->
+          ActiveActivityHost(host = host, activation = entry.value)
+        }
       }
+    activeActivityHost.value = active
+  }
+
+  private suspend fun awaitActiveActivityHost(timeoutMs: Long): ActiveActivityHost =
+    withTimeout(timeoutMs) {
+      activeActivityHost
+        .filterNotNull()
+        .first { active ->
+          !active.host.activity.isFinishing && !active.host.activity.isDestroyed
+        }
+    }
+
+  private suspend fun launchPermissionRequest(
+    permissions: List<String>,
+    requestCode: Int,
+    timeoutMs: Long,
+  ) {
+    withTimeout(timeoutMs) {
+      var rejected: ActiveActivityHost? = null
+      while (true) {
+        val active =
+          activeActivityHost
+            .filterNotNull()
+            .first { candidate ->
+              candidate != rejected &&
+                !candidate.host.activity.isFinishing &&
+                !candidate.host.activity.isDestroyed
+            }
+        val launched =
+          withContext(Dispatchers.Main) {
+            if (activeActivityHost.value != active) return@withContext false
+            val host = active.host
+            if (host.activity.isFinishing || host.activity.isDestroyed) return@withContext false
+            host.permissionRequestLauncher(permissions.toTypedArray(), requestCode)
+            true
+          }
+        if (launched) return@withTimeout
+        rejected = active
+      }
+    }
+  }
+
+  private suspend fun confirmRationaleIfNeeded(
+    permissions: List<String>,
+    timeoutMs: Long,
+  ): Boolean =
+    withTimeout(timeoutMs) {
+      while (true) {
+        val active = awaitActiveActivityHost(timeoutMs)
+        val needsRationale =
+          withContext(Dispatchers.Main) {
+            if (!isCurrentActiveHost(active)) return@withContext null
+            permissions.any { permission ->
+              ActivityCompat.shouldShowRequestPermissionRationale(active.host.activity, permission)
+            }
+          } ?: continue
+        if (!needsRationale) return@withTimeout true
+        when (showRationaleDialog(active, permissions)) {
+          RationaleResult.Proceed -> return@withTimeout true
+          RationaleResult.Decline -> return@withTimeout false
+          RationaleResult.HostLost -> Unit
+        }
+      }
+      error("unreachable")
+    }
+
+  private suspend fun showSettingsForPermanentDenials(
+    grants: Map<String, Boolean>,
+    timeoutMs: Long,
+  ) {
+    if (grants.values.none { granted -> !granted }) return
+    withTimeout(timeoutMs) {
+      while (true) {
+        val active = awaitActiveActivityHost(timeoutMs)
+        val denied =
+          withContext(Dispatchers.Main) {
+            if (!isCurrentActiveHost(active)) return@withContext null
+            grants
+              .filterValues { granted -> !granted }
+              .keys
+              .filter { permission ->
+                !ActivityCompat.shouldShowRequestPermissionRationale(active.host.activity, permission)
+              }
+          } ?: continue
+        if (denied.isEmpty()) return@withTimeout
+        if (showSettingsDialog(active, denied)) return@withTimeout
+      }
+    }
+  }
+
+  private fun isCurrentActiveHost(active: ActiveActivityHost): Boolean =
+    activeActivityHost.value == active &&
+      !active.host.activity.isFinishing &&
+      !active.host.activity.isDestroyed
+
+  private suspend fun showRationaleDialog(
+    active: ActiveActivityHost,
+    permissions: List<String>,
+  ): RationaleResult =
+    withContext(Dispatchers.Main) {
+      if (!isCurrentActiveHost(active)) {
+        return@withContext RationaleResult.HostLost
+      }
+      val activity = active.host.activity
       suspendCancellableCoroutine { cont ->
         val lifecycle = activity.lifecycle
         var dialog: AlertDialog? = null
@@ -172,7 +320,7 @@ class PermissionRequester internal constructor(
           observer = null
         }
 
-        fun finish(result: Boolean?) {
+        fun finish(result: RationaleResult?) {
           if (!finished.compareAndSet(false, true)) return
           removeObserver()
           dialog?.dismiss()
@@ -183,8 +331,7 @@ class PermissionRequester internal constructor(
         val actualObserver =
           LifecycleEventObserver { _, event ->
             if (event != Lifecycle.Event.ON_DESTROY) return@LifecycleEventObserver
-            // Do not resume a destroyed Activity with a positive result.
-            finish(false)
+            finish(RationaleResult.HostLost)
           }
         observer = actualObserver
         lifecycle.addObserver(actualObserver)
@@ -198,16 +345,20 @@ class PermissionRequester internal constructor(
             .Builder(activity)
             .setTitle(nativeString("Permission required"))
             .setMessage(buildRationaleMessage(permissions))
-            .setPositiveButton(nativeString("Continue")) { _, _ -> finish(true) }
-            .setNegativeButton(nativeString("Not now")) { _, _ -> finish(false) }
-            .setOnCancelListener { finish(false) }
+            .setPositiveButton(nativeString("Continue")) { _, _ -> finish(RationaleResult.Proceed) }
+            .setNegativeButton(nativeString("Not now")) { _, _ -> finish(RationaleResult.Decline) }
+            .setOnCancelListener { finish(RationaleResult.Decline) }
             .show()
       }
     }
 
-  private suspend fun showSettingsDialog(permissions: List<String>) =
+  private suspend fun showSettingsDialog(
+    active: ActiveActivityHost,
+    permissions: List<String>,
+  ): Boolean =
     withContext(Dispatchers.Main) {
-      if (activity.isFinishing || activity.isDestroyed) return@withContext
+      if (!isCurrentActiveHost(active)) return@withContext false
+      val activity = active.host.activity
       val lifecycle = activity.lifecycle
       var dialog: AlertDialog? = null
       var observer: LifecycleEventObserver? = null
@@ -239,6 +390,7 @@ class PermissionRequester internal constructor(
           }.setNegativeButton(nativeString("Cancel"), null)
           .setOnDismissListener { removeObserver() }
           .show()
+      true
     }
 
   private fun buildRationaleMessage(permissions: List<String>): String {

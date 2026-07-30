@@ -32,7 +32,7 @@ class PermissionRequesterTest {
     runTest {
       Dispatchers.setMain(StandardTestDispatcher(testScheduler))
       val requests = FakePermissionRequests()
-      val requester = PermissionRequester(activity(), requests::request)
+      val requester = requester(activity(), requests)
 
       try {
         val first = async { requester.requestIfMissing(listOf(Manifest.permission.CAMERA), timeoutMs = 10) }
@@ -68,7 +68,7 @@ class PermissionRequesterTest {
     runTest {
       Dispatchers.setMain(StandardTestDispatcher(testScheduler))
       val requests = FakePermissionRequests()
-      val requester = PermissionRequester(activity(), requests::request)
+      val requester = requester(activity(), requests)
 
       try {
         repeat(4) { index ->
@@ -103,7 +103,7 @@ class PermissionRequesterTest {
     runTest {
       Dispatchers.setMain(StandardTestDispatcher(testScheduler))
       val requests = FakePermissionRequests()
-      val requester = PermissionRequester(activity(), requests::request)
+      val requester = requester(activity(), requests)
 
       try {
         val cancelled = async { requester.requestIfMissing(listOf(Manifest.permission.CAMERA), timeoutMs = 1_000) }
@@ -132,7 +132,7 @@ class PermissionRequesterTest {
     runTest {
       Dispatchers.setMain(StandardTestDispatcher(testScheduler))
       val requests = FakePermissionRequests()
-      val requester = PermissionRequester(activity(), requests::request)
+      val requester = requester(activity(), requests)
 
       try {
         val pending = async { requester.requestIfMissing(listOf(Manifest.permission.CAMERA), timeoutMs = 1_000) }
@@ -145,6 +145,134 @@ class PermissionRequesterTest {
             intArrayOf(),
           ),
         )
+        runCurrent()
+
+        assertEquals(mapOf(Manifest.permission.CAMERA to false), pending.await())
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun replacementActivityCompletesPendingRequestAndOwnsLaterPrompts() =
+    runTest {
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      val originalActivity = activity()
+      val originalRequests = FakePermissionRequests()
+      val requester = requester(originalActivity, originalRequests)
+
+      try {
+        val pending = async { requester.requestIfMissing(listOf(Manifest.permission.CAMERA), timeoutMs = 1_000) }
+        runCurrent()
+        assertEquals(1, originalRequests.size)
+
+        val replacementActivity = activity()
+        val replacementRequests = FakePermissionRequests()
+        requester.attach(replacementActivity, replacementRequests::request)
+        requester.activate(replacementActivity)
+        requester.deactivate(originalActivity)
+        requester.detach(originalActivity)
+
+        assertTrue(originalRequests.deliver(requester, 0, mapOf(Manifest.permission.CAMERA to true)))
+        runCurrent()
+        assertEquals(mapOf(Manifest.permission.CAMERA to true), pending.await())
+
+        val replacementPrompt =
+          async { requester.requestIfMissing(listOf(Manifest.permission.RECORD_AUDIO), timeoutMs = 1_000) }
+        runCurrent()
+        assertEquals(1, replacementRequests.size)
+        replacementPrompt.cancelAndJoin()
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun requestWaitsForReplacementActivityAcrossRecreationGap() =
+    runTest {
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      val originalActivity = activity()
+      val originalRequests = FakePermissionRequests()
+      val requester = requester(originalActivity, originalRequests)
+
+      try {
+        requester.deactivate(originalActivity)
+        requester.detach(originalActivity)
+
+        val pending = async { requester.requestIfMissing(listOf(Manifest.permission.CAMERA), timeoutMs = 1_000) }
+        runCurrent()
+        assertEquals(0, originalRequests.size)
+        assertFalse(pending.isCompleted)
+
+        val replacementActivity = activity()
+        val replacementRequests = FakePermissionRequests()
+        requester.attach(replacementActivity, replacementRequests::request)
+        requester.activate(replacementActivity)
+        runCurrent()
+
+        assertEquals(1, replacementRequests.size)
+        assertFalse(pending.isCompleted)
+        assertTrue(replacementRequests.deliver(requester, 0, mapOf(Manifest.permission.CAMERA to true)))
+        runCurrent()
+        assertEquals(mapOf(Manifest.permission.CAMERA to true), pending.await())
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun resumedEarlierTaskReclaimsPermissionPromptOwnership() =
+    runTest {
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      val firstActivity = activity()
+      val firstRequests = FakePermissionRequests()
+      val requester = requester(firstActivity, firstRequests)
+      val secondActivity = activity()
+      val secondRequests = FakePermissionRequests()
+
+      try {
+        requester.deactivate(firstActivity)
+        requester.attach(secondActivity, secondRequests::request)
+        requester.activate(secondActivity)
+        requester.deactivate(secondActivity)
+        requester.activate(firstActivity)
+
+        val pending = async { requester.requestIfMissing(listOf(Manifest.permission.CAMERA), timeoutMs = 1_000) }
+        runCurrent()
+
+        assertEquals(1, firstRequests.size)
+        assertEquals(0, secondRequests.size)
+        pending.cancelAndJoin()
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun permanentDenialWaitsForReplacementActivity() =
+    runTest {
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      val originalActivity = activity()
+      val originalRequests = FakePermissionRequests()
+      val requester = requester(originalActivity, originalRequests)
+
+      try {
+        val pending = async { requester.requestIfMissing(listOf(Manifest.permission.CAMERA), timeoutMs = 1_000) }
+        runCurrent()
+        assertTrue(originalRequests.deliver(requester, 0, mapOf(Manifest.permission.CAMERA to false)))
+        requester.deactivate(originalActivity)
+        requester.detach(originalActivity)
+        runCurrent()
+        assertFalse(pending.isCompleted)
+
+        val replacementActivity = activity()
+        val replacementRequests = FakePermissionRequests()
+        requester.attach(replacementActivity, replacementRequests::request)
+        requester.activate(replacementActivity)
         runCurrent()
 
         assertEquals(mapOf(Manifest.permission.CAMERA to false), pending.await())
@@ -172,6 +300,15 @@ class PermissionRequesterTest {
       .buildActivity(ComponentActivity::class.java)
       .setup()
       .get()
+
+  private fun requester(
+    activity: ComponentActivity,
+    requests: FakePermissionRequests,
+  ): PermissionRequester =
+    PermissionRequester(activity.applicationContext).also { requester ->
+      requester.attach(activity, requests::request)
+      requester.activate(activity)
+    }
 }
 
 private class FakePermissionRequest(

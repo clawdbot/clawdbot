@@ -42,7 +42,8 @@ import kotlinx.coroutines.withContext
  */
 class MainActivity : AppCompatActivity() {
   private val viewModel: MainViewModel by viewModels()
-  private lateinit var permissionRequester: PermissionRequester
+  private val permissionRequester: PermissionRequester
+    get() = (application as NodeApp).permissionRequester
   private var initializedViewModel: MainViewModel? = null
   private var didStartViewModelCollectors = false
   private var foreground = false
@@ -54,7 +55,7 @@ class MainActivity : AppCompatActivity() {
     super.onCreate(savedInstanceState)
     pendingIntentRouter.setInitialIntent(intent)
     WindowCompat.setDecorFitsSystemWindows(window, false)
-    permissionRequester = PermissionRequester(this)
+    permissionRequester.attach(this)
     if (BuildConfig.DEBUG) {
       screenshotScene = parseAndroidScreenshotModeIntent(intent)
       if (screenshotScene != null) hideScreenshotModeStatusBar()
@@ -99,16 +100,23 @@ class MainActivity : AppCompatActivity() {
 
   override fun onStart() {
     super.onStart()
+    permissionRequester.activate(this)
     foreground = true
     initializedViewModel?.setForeground(true)
   }
 
   override fun onStop() {
+    permissionRequester.deactivate(this)
     foreground = false
     if (shouldNotifyRuntimeBackgrounded(isChangingConfigurations)) {
       initializedViewModel?.setForeground(false)
     }
     super.onStop()
+  }
+
+  override fun onDestroy() {
+    permissionRequester.detach(this)
+    super.onDestroy()
   }
 
   override fun onNewIntent(intent: android.content.Intent) {
@@ -128,9 +136,7 @@ class MainActivity : AppCompatActivity() {
   ) {
     // AppCompatActivity marks this callback @CallSuper; it preserves Fragment and ActivityResult dispatch.
     super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-    if (::permissionRequester.isInitialized) {
-      permissionRequester.onRequestPermissionsResult(requestCode, permissions, grantResults)
-    }
+    permissionRequester.onRequestPermissionsResult(requestCode, permissions, grantResults)
     initializedViewModel?.refreshNodePermissionSurface()
   }
 
