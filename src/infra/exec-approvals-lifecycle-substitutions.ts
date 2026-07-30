@@ -4,6 +4,36 @@ import { POSIX_INLINE_COMMAND_FLAGS, resolveInlineCommandMatch } from "./shell-i
 import { POSIX_PARSEABLE_SHELL_WRAPPERS } from "./shell-wrapper-resolution.js";
 
 const MAX_SUBSTITUTION_DEPTH = 8;
+const SUBSTITUTION_RESULT_SENSITIVE_EXECUTABLES = new Set([
+  "ash",
+  "bash",
+  "bunx",
+  "doas",
+  "env",
+  "fish",
+  "ksh",
+  "launchctl",
+  "net",
+  "node",
+  "npm",
+  "npx",
+  "pnpm",
+  "powershell",
+  "pwsh",
+  "sc",
+  "schtasks",
+  "service",
+  "sh",
+  "sudo",
+  "systemctl",
+  "taskkill",
+  "xargs",
+  "yarn",
+  "zsh",
+]);
+const LIFECYCLE_MUTATION_HINT_RE =
+  /\b(?:daemon|gateway|install|kill|remove|restart|rm|start|stop|uninstall|update)\b/iu;
+const SUBSTITUTION_TOKEN_RE = /\$\(|`|[<>=]\(/u;
 
 export type ShellSubstitutionScan = {
   commands: string[];
@@ -143,6 +173,28 @@ function extractAtDepth(command: string, depth: number): ShellSubstitutionScan {
 /** Return executable text nested in POSIX-style command or process substitutions. */
 export function extractShellSubstitutionCommands(command: string): ShellSubstitutionScan {
   return extractAtDepth(command, 0);
+}
+
+/** Return true when substitution output can occupy a lifecycle-sensitive argv position. */
+export function lifecycleSubstitutionResultMayHideLifecycle(argv: readonly string[]): boolean {
+  const substitutionIndexes = argv.flatMap((token, index) =>
+    SUBSTITUTION_TOKEN_RE.test(token) ? [index] : [],
+  );
+  if (substitutionIndexes.length === 0) {
+    return false;
+  }
+  if (substitutionIndexes.includes(0)) {
+    return true;
+  }
+  const executable = normalizeExecutableToken(argv[0] ?? "");
+  if (executable === "openclaw" || executable.startsWith("openclaw@")) {
+    return true;
+  }
+  if (!SUBSTITUTION_RESULT_SENSITIVE_EXECUTABLES.has(executable)) {
+    return false;
+  }
+  const text = argv.join(" ");
+  return /opencla(?:w|[?*])/iu.test(text) || LIFECYCLE_MUTATION_HINT_RE.test(text);
 }
 
 /** Return POSIX shell argv bound as $0, $1, ... after an inline command. */

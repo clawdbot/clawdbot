@@ -21,6 +21,7 @@ const mutationCases: Array<[string, string[]]> = [
   ["openclaw gateway", ["openclaw", "gateway"]],
   ["openclaw gateway --token secret", ["openclaw", "gateway", "--token", "secret"]],
   ["openclaw daemon stop", ["openclaw", "daemon", "stop"]],
+  ["/usr/bin/opencla? gateway restart", ["/usr/bin/opencla?", "gateway", "restart"]],
   ["openclaw gateway call update.run", ["openclaw", "gateway", "call", "update.run"]],
   ["openclaw gateway call config.apply", ["openclaw", "gateway", "call", "config.apply"]],
   ["openclaw update --yes", ["openclaw", "update", "--yes"]],
@@ -53,6 +54,10 @@ const mutationCases: Array<[string, string[]]> = [
   [
     "systemctl --job-mode replace restart openclaw-gateway.service",
     ["systemctl", "--job-mode", "replace", "restart", "openclaw-gateway.service"],
+  ],
+  [
+    "systemctl $(printf restart) openclaw-gateway.service",
+    ["systemctl", "$(printf restart)", "openclaw-gateway.service"],
   ],
   [
     "systemctl restart openclaw-gateway.service -- --help",
@@ -145,6 +150,7 @@ const mutationCases: Array<[string, string[]]> = [
     "xargs env -a '' openclaw gateway restart",
     ["xargs", "env", "-a", "", "openclaw", "gateway", "restart"],
   ],
+  ["$(printf openclaw) gateway restart", ["$(printf openclaw)", "gateway", "restart"]],
   [`echo "$(openclaw gateway restart)"`, ["echo", "$(openclaw gateway restart)"]],
   [
     String.raw`echo "$(printf '\'; openclaw gateway restart)"`,
@@ -188,6 +194,8 @@ const nonMutationCases: Array<[string, string[]]> = [
     ["echo", "Get-Service OpenClaw | Restart-Service"],
   ],
   [`echo '$(openclaw gateway restart)'`, ["echo", "$(openclaw gateway restart)"]],
+  ["echo $(date)", ["echo", "$(date)"]],
+  ["systemctl status $(hostname)", ["systemctl", "status", "$(hostname)"]],
 ];
 
 describe("OpenClaw lifecycle exec approvals", () => {
@@ -300,6 +308,21 @@ describe("OpenClaw lifecycle exec approvals", () => {
           {
             raw: "$TOOL gateway restart",
             argv: ["$TOOL", "gateway", "restart"],
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("fails closed when a parameter operator supplies the executable", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: "${TOOL:-openclaw} gateway restart",
+        env: {},
+        segments: [
+          {
+            raw: "${TOOL:-openclaw} gateway restart",
+            argv: ["${TOOL:-openclaw}", "gateway", "restart"],
           },
         ],
       }),

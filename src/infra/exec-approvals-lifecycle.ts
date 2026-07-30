@@ -8,11 +8,13 @@ import {
   unresolvedEnvironmentMayHideLifecycle,
 } from "./exec-approvals-lifecycle-env.js";
 import { resolveNodeOpenClawArgv } from "./exec-approvals-lifecycle-node.js";
+import { isOpenClawExecutablePattern } from "./exec-approvals-lifecycle-patterns.js";
 import { resolveLifecyclePackageRunnerArgv } from "./exec-approvals-lifecycle-runners.js";
 import {
   bindLifecyclePosixShellPositionals,
   extractShellSubstitutionCommands,
   lifecyclePositionalBindingRequiresApproval,
+  lifecycleSubstitutionResultMayHideLifecycle,
   resolveLifecyclePosixShellPositionals,
 } from "./exec-approvals-lifecycle-substitutions.js";
 import type { ExecCommandSegment } from "./exec-command-analysis-types.js";
@@ -140,8 +142,7 @@ function looksLikeOpenClaw(value: string | undefined): boolean {
 }
 
 function isOpenClawExecutable(value: string | undefined): boolean {
-  const executable = normalizeExecutableToken(value ?? "");
-  return executable === "openclaw" || executable.startsWith("openclaw@");
+  return isOpenClawExecutablePattern(value);
 }
 
 function hasHelpOrVersion(argv: readonly string[]): boolean {
@@ -530,6 +531,9 @@ function classifyArgv(
     return false;
   }
   if (depth >= MAX_NESTED_COMMAND_DEPTH) {
+    return true;
+  }
+  if (lifecycleSubstitutionResultMayHideLifecycle(argv)) {
     return true;
   }
   if (isOpenClawExecutable(argv[0])) {

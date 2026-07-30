@@ -3,7 +3,8 @@ const POSIX_VARIABLE_RE = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-
 const POWERSHELL_VARIABLE_RE = /\$env:([A-Za-z_][A-Za-z0-9_]*)/giu;
 const CMD_VARIABLE_RE = /%([A-Za-z_][A-Za-z0-9_]*)%/gu;
 const VARIABLE_REFERENCE_RE =
-  /\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*|env:[A-Za-z_][A-Za-z0-9_]*)|%[A-Za-z_][A-Za-z0-9_]*%/iu;
+  /\$(?:\{[A-Za-z_][A-Za-z0-9_]*[^}]*\}|[A-Za-z_][A-Za-z0-9_]*|env:[A-Za-z_][A-Za-z0-9_]*)|%[A-Za-z_][A-Za-z0-9_]*%/iu;
+const POSIX_PARAMETER_OPERATOR_RE = /\$\{[A-Za-z_][A-Za-z0-9_]*(?::?[-+=?]|:[0-9])[^}]*\}/u;
 
 export type LifecycleEnvironmentExpansion = {
   argv: string[];
@@ -89,7 +90,7 @@ export function expandLifecycleEnvironmentArgv(params: {
   envComplete: boolean;
 }): LifecycleEnvironmentExpansion {
   let fieldSplitUncertain = false;
-  let unresolved = false;
+  let unresolved = params.argv.some((token) => POSIX_PARAMETER_OPERATOR_RE.test(token));
   const replaceVariable = (key: string): string => {
     const value = readEnvironmentValue(params.env, key);
     if (value !== undefined) {
