@@ -25,7 +25,10 @@ function contentBlockTypes(result: ToolResult): string[] {
   if (!Array.isArray(content)) {
     return [];
   }
-  return content.map((block) => String((block as { type?: unknown }).type ?? "unknown"));
+  return content.map((block) => {
+    const type = (block as { type?: unknown }).type;
+    return typeof type === "string" ? type : "unknown";
+  });
 }
 
 function countImageBlocks(result: ToolResult): number {
@@ -65,7 +68,7 @@ function renderResult(label: string, result: ToolResult): string {
   if (details?.vision?.failed) {
     lines.push(`details.vision.failed: true`);
     if (details.vision.error) {
-      lines.push(`details.vision.error: ${redactPaths(String(details.vision.error))}`);
+      lines.push(`details.vision.error: ${redactPaths(details.vision.error)}`);
     }
   }
   if ("media" in (details ?? {})) {
@@ -74,8 +77,7 @@ function renderResult(label: string, result: ToolResult): string {
   return lines.join("\n");
 }
 
-function buildConfig(controlPort: number): OpenClawConfig {
-  const gatewayPort = controlPort - 2;
+function buildConfig(gatewayPort: number): OpenClawConfig {
   const chromePath =
     process.env.BROWSER_EXECUTABLE_PATH?.trim() ||
     (process.platform === "darwin"
@@ -88,11 +90,10 @@ function buildConfig(controlPort: number): OpenClawConfig {
       headless: true,
       noSandbox: process.platform === "linux",
       defaultProfile: "openclaw",
-      controlPort,
       executablePath: chromePath,
       profiles: {
         openclaw: {
-          cdpPort: controlPort + 11,
+          cdpPort: gatewayPort + 11,
           color: "#FF4500",
         },
       },
@@ -109,13 +110,21 @@ function buildConfig(controlPort: number): OpenClawConfig {
 
 const PROOF_PAGE_URL = "https://example.com/";
 
+function readTargetId(result: ToolResult): string | undefined {
+  const details = result?.details;
+  if (!details || typeof details !== "object") {
+    return undefined;
+  }
+  const targetId = (details as { targetId?: unknown }).targetId;
+  return typeof targetId === "string" ? targetId : undefined;
+}
+
 async function main(): Promise<void> {
-  const controlPort = await getFreePort();
+  const gatewayPort = await getFreePort();
   const stateRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-live-handler-proof-"));
-  const cfg = buildConfig(controlPort);
+  const cfg = buildConfig(gatewayPort);
   setRuntimeConfigSnapshot(cfg, cfg);
 
-  let pass = false;
   try {
     const service = await startBrowserControlServiceFromConfig();
     if (!service) {
@@ -145,10 +154,7 @@ async function main(): Promise<void> {
       profile: "openclaw",
       url: PROOF_PAGE_URL,
     });
-    const targetId =
-      typeof (openResult?.details as { targetId?: unknown } | undefined)?.targetId === "string"
-        ? ((openResult?.details as { targetId: string }).targetId ?? undefined)
-        : undefined;
+    const targetId = readTargetId(openResult);
     console.log(`opened tab targetId: ${targetId ?? "(default)"}`);
     console.log(`proof page url: ${PROOF_PAGE_URL}`);
 
@@ -178,7 +184,7 @@ async function main(): Promise<void> {
       (screenshotResult?.details as { vision?: { failed?: boolean } } | undefined)?.vision?.failed,
     );
     const screenshotText = resultText(screenshotResult);
-    pass =
+    const pass =
       screenshotImages === 0 &&
       snapshotImages === 0 &&
       visionFailed &&
