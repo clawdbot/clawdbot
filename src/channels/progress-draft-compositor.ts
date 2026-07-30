@@ -318,27 +318,27 @@ export function createChannelProgressDraftCompositor(params: {
    * workspace"), so a snapshot that continues the open line reuses its id and
    * updates in place; anything else starts a new line.
    */
-  const resolveCommentaryLineId = (params: {
+  const resolveCommentaryLineId = (commentary: {
     itemId?: string;
     normalized: string;
     bareNormalized: string;
   }): string => {
-    if (params.itemId) {
-      return `commentary:${params.itemId}`;
+    if (commentary.itemId) {
+      return `commentary:${commentary.itemId}`;
     }
-    if (!params.normalized) {
+    if (!commentary.normalized) {
       // Sanitized to nothing (directive-only / NO_REPLY): no line to address, so
       // it cannot retract the open one. Only an explicit itemId clears a line.
       return "";
     }
     const continuesOpenLine =
       Boolean(lastIdLessCommentaryBare) &&
-      (params.bareNormalized.startsWith(lastIdLessCommentaryBare) ||
-        lastIdLessCommentaryBare.startsWith(params.bareNormalized));
+      (commentary.bareNormalized.startsWith(lastIdLessCommentaryBare) ||
+        lastIdLessCommentaryBare.startsWith(commentary.bareNormalized));
     if (continuesOpenLine && lastIdLessCommentaryId) {
       return lastIdLessCommentaryId;
     }
-    return `commentary:${params.normalized}`;
+    return `commentary:${commentary.normalized}`;
   };
 
   const clearLine = async (lineId: string) => {
