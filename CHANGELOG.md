@@ -56,6 +56,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Control UI dynamic deep links:** reuse the initial route loader result when publishing real agent, session, dashboard, Workboard, Memory, and Plugins paths, avoiding duplicate Gateway requests during startup. Thanks @shakkernerd.
 - **Linux gateway service ownership:** refuse user-scope systemd publication and activation when the same gateway unit name is already owned or cannot be verified in the system scope, including `--force`, with actionable recovery guidance instead of creating restart-looping dual managers. Fixes #116129.
 - **macOS remote tunnel lifecycle:** prevent cancelled or superseded restart backoffs from recreating SSH tunnels, and join a tunnel create that another caller started while the actor was suspended.
 - **macOS location permission requests:** coalesce concurrent prompts so every caller resumes, and stop cancelled timeouts from opening Settings or completing a newer request.
