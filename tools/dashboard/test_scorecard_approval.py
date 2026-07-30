@@ -539,7 +539,9 @@ class ScorecardDashboardTests(unittest.TestCase):
         with mock.patch.object(dashboard, "REPORT_DIR", telemetry_dir.parent):
             rendered = dashboard.ai_routing_telemetry_panel_html()
 
-        self.assertIn("Report age:", rendered)
+        self.assertIn("Report generation age:", rendered)
+        self.assertIn("Newest telemetry observation age:", rendered)
+        self.assertIn("No request observations in this reporting window", rendered)
         self.assertIn("Updated:", rendered)
         self.assertIn("healthy", rendered)
 

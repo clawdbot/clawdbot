@@ -1,4 +1,5 @@
 import json
+import os
 import redis
 import requests
 import psycopg2
@@ -6,16 +7,19 @@ import subprocess
 
 from datetime import datetime
 
-OLLAMA_URL = "http://192.168.50.233:11434/api/generate"
+OLLAMA_URL = os.environ.get(
+    "OPENCLAW_OLLAMA_GENERATE_URL",
+    "http://192.168.50.117:11434/api/generate",
+)
 
 MODEL = "llama3.2:3b"
 
 DB = {
-    "host": "127.0.0.1",
-    "port": 5432,
-    "dbname": "openclaw",
-    "user": "openclaw",
-    "password": "Krgabg99$",
+    "host": os.environ.get("OPENCLAW_DB_HOST", "127.0.0.1"),
+    "port": int(os.environ.get("OPENCLAW_DB_PORT", "5432")),
+    "dbname": os.environ.get("OPENCLAW_DB_NAME", "openclaw"),
+    "user": os.environ.get("OPENCLAW_DB_USER", "openclaw"),
+    "password": os.environ.get("OPENCLAW_DB_PASSWORD"),
 }
 
 r = redis.Redis(

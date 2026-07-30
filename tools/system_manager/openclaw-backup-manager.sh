@@ -3,7 +3,7 @@ set -euo pipefail
 
 BASE="/home/gravesab/ai/projects/openclaw"
 BACKUP_DIR="/mnt/ai-storage/openclaw-backups"
-MAX_AGE_DAYS="${MAX_AGE_DAYS:-10}"
+MAX_AGE_DAYS="${MAX_AGE_DAYS:-2}"
 
 mkdir -p "$BACKUP_DIR"
 

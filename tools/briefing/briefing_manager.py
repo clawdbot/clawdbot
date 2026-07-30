@@ -1,4 +1,5 @@
 import json
+import os
 import redis
 import psycopg2
 from datetime import datetime
@@ -10,11 +11,11 @@ r = redis.Redis(
 )
 
 DB = {
-    "host": "127.0.0.1",
-    "port": 5432,
-    "dbname": "openclaw",
-    "user": "openclaw",
-    "password": "Krgabg99$",
+    "host": os.environ.get("OPENCLAW_DB_HOST", "127.0.0.1"),
+    "port": int(os.environ.get("OPENCLAW_DB_PORT", "5432")),
+    "dbname": os.environ.get("OPENCLAW_DB_NAME", "openclaw"),
+    "user": os.environ.get("OPENCLAW_DB_USER", "openclaw"),
+    "password": os.environ.get("OPENCLAW_DB_PASSWORD"),
 }
 
 def get_recent_events():

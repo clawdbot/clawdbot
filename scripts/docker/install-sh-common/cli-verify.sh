@@ -39,7 +39,14 @@ verify_installed_cli() {
   installed_version="$(extract_openclaw_semver "$installed_version")"
 
   echo "cli=$cli_name installed=$installed_version expected=$expected_version"
-  if [[ "$installed_version" != "$expected_version" ]]; then
+  # Some published packages carry a numeric npm repack suffix (for example
+  # 2026.7.1-2) while the bundled CLI reports the underlying release version.
+  # Preserve exact checks for prereleases such as -beta.4.
+  local expected_cli_version="$expected_version"
+  if [[ "$expected_cli_version" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-[0-9]+$ ]]; then
+    expected_cli_version="${BASH_REMATCH[1]}"
+  fi
+  if [[ "$installed_version" != "$expected_cli_version" ]]; then
     echo "ERROR: expected ${cli_name}@${expected_version}, got ${cli_name}@${installed_version}" >&2
     return 1
   fi

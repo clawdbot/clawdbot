@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import base64
 from email.mime.text import MIMEText
 from datetime import datetime
@@ -14,7 +15,17 @@ SCOPES = [
 
 MY_EMAIL = "gravesab@gmail.com"
 
-token_file = Path.home() / ".openclaw" / "credentials" / "gmail-token.json"
+token_file = Path(
+    os.environ.get(
+        "OPENCLAW_GMAIL_TOKEN_FILE",
+        str(Path.home() / ".openclaw" / "credentials" / "gmail-token.json"),
+    )
+)
+if not token_file.is_file():
+    raise SystemExit(
+        "MailManager authorization is required. Authorize Gmail, then place the "
+        f"token at {token_file} or set OPENCLAW_GMAIL_TOKEN_FILE."
+    )
 
 creds = Credentials.from_authorized_user_file(str(token_file), SCOPES)
 service = build("gmail", "v1", credentials=creds)

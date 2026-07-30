@@ -891,19 +891,13 @@ def make_chart(title, rows, column_names, filename, ylabel):
 
 
 
-def check_service(name, command):
-    result = run_command(command).lower()
+def check_service(name, command, scope):
+    result = run_command(command).strip().lower()
 
-    if (
-        "active" in result
-        or "running" in result
-        or "healthy" in result
-        or "pong" in result
-        or "ok" in result
-    ):
-        return (name, "Connected", "#16a34a")
+    if result in {"active", "running", "healthy", "pong", "ok"}:
+        return (name, scope, "Connected", "#16a34a")
 
-    return (name, "Offline / Warning", "#b91c1c")
+    return (name, scope, "Offline / Warning", "#b91c1c")
 
 
 def build_system_health():
@@ -912,60 +906,88 @@ def build_system_health():
     checks.append(
         check_service(
             "OpenClaw Gateway",
-            "systemctl --user is-active openclaw-gateway.service"
+            "systemctl --user is-active openclaw-gateway.service",
+            "User service",
         )
     )
 
     checks.append(
         check_service(
             "OpenClaw Listener",
-            "systemctl --user is-active openclaw-listener.service"
+            "systemctl --user is-active openclaw-listener.service",
+            "User service",
         )
     )
 
     checks.append(
         check_service(
             "Docker",
-            "systemctl is-active docker"
+            "systemctl is-active docker",
+            "System service",
         )
     )
 
     checks.append(
         check_service(
             "Redis",
-            "docker ps --format '{{.Names}}' | grep redis"
+            "docker ps --format '{{.Names}}' | grep -q redis && echo healthy",
+            "Container",
         )
     )
 
     checks.append(
         check_service(
             "PostgreSQL",
-            "docker ps --format '{{.Names}}' | grep postgres"
+            "docker ps --format '{{.Names}}' | grep -q postgres && echo healthy",
+            "Container",
         )
     )
 
     checks.append(
         check_service(
             "Home Assistant",
-            "docker ps --format '{{.Names}}' | grep homeassistant"
+            "docker ps --format '{{.Names}}' | grep -q homeassistant && echo healthy",
+            "Container",
         )
     )
 
     checks.append(
         check_service(
             "Scrypted",
-            "docker ps --format '{{.Names}}' | grep scrypted"
+            "docker ps --format '{{.Names}}' | grep -q scrypted && echo healthy",
+            "Container",
         )
     )
 
     checks.append(
         check_service(
             "Ollama API",
-            "curl -s http://127.0.0.1:11434/api/tags"
+            f"curl -fsS {OLLAMA_HOST}/api/tags >/dev/null && echo ok",
+            "HTTP endpoint",
         )
     )
 
     return checks
+
+
+def service_scope_panel_html(services):
+    rows = "".join(
+        f"<tr><td>{html.escape(name)}</td><td>{html.escape(scope)}</td>"
+        f"<td style='color:{color};font-weight:bold'>{html.escape(status)}</td></tr>"
+        for name, scope, status, color in services
+    )
+    return f"""
+    <div class='panel'>
+        <h2>Service Health by Scope</h2>
+        <p>User services, system services, containers, and HTTP endpoints are
+        checked differently. The scope below identifies which control plane owns
+        each item.</p>
+        <table style="width:100%;text-align:left;border-collapse:collapse">
+          <thead><tr><th>Service</th><th>Scope</th><th>Status</th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+    </div>
+    """
 
 
 
@@ -1207,6 +1229,23 @@ def ai_routing_telemetry_panel_html():
     observations = summary.get("recent_observations", [])
     if not isinstance(observations, list):
         observations = []
+    observation_times = []
+    for item in observations:
+        if not isinstance(item, dict):
+            continue
+        raw_time = item.get("observed_at") or item.get("created_at") or item.get("timestamp")
+        if not raw_time:
+            continue
+        try:
+            observation_times.append(
+                datetime.fromisoformat(str(raw_time).replace("Z", "+00:00")).timestamp()
+            )
+        except ValueError:
+            continue
+    observation_age_text = "No request observations in this reporting window"
+    if observation_times:
+        observation_age_minutes = max(0, int((time.time() - max(observation_times)) // 60))
+        observation_age_text = f"{observation_age_minutes} minute(s)"
     failover_observations = [
         item
         for item in observations
@@ -1298,7 +1337,8 @@ def ai_routing_telemetry_panel_html():
             </div>
             <p>{html.escape(operator_summary)}</p>
             <p><b>What to do:</b> {html.escape(action_text)}</p>
-            <b>Report age:</b> {report_age_minutes} minute(s)<br>
+            <b>Report generation age:</b> {report_age_minutes} minute(s)<br>
+            <b>Newest telemetry observation age:</b> {html.escape(observation_age_text)}<br>
             <b>Updated:</b> {html.escape(datetime.fromtimestamp(report_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S'))}
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:14px;">
@@ -6773,6 +6813,7 @@ __OPENCLAW_SHARED_NAVIGATION__
     )
 
     html += system_connectivity_panel_html(drift, m4)
+    html += service_scope_panel_html(services)
 
     # -------------------------------------------------------
     # M4 OLLAMA CONNECTIVITY PANEL

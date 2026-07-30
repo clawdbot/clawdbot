@@ -9,13 +9,16 @@ r = redis.Redis(
     decode_responses=True
 )
 
-def cmd(command):
+def cmd(command, timeout=15):
     try:
         return subprocess.check_output(
             command,
             shell=True,
-            text=True
+            text=True,
+            timeout=timeout,
         ).strip()
+    except subprocess.TimeoutExpired:
+        return f"Command timed out after {timeout} seconds: {command}"
     except Exception as e:
         return str(e)
 

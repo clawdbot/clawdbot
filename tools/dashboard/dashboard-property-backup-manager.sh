@@ -7,7 +7,7 @@ BACKUP_PARENT="${BACKUP_PARENT:-/mnt/ai-storage/openclaw-backups}"
 BACKUP_DIR="${BACKUP_DIR:-$BACKUP_PARENT/dashboard-property-backups}"
 BACKUP_GLOB="dashboard-property-backup-*.tar.gz"
 BACKUP_LOCK_FILE="/tmp/dashboard-property-backup.lock"
-MAX_AGE_DAYS="${MAX_AGE_DAYS:-10}"
+MAX_AGE_DAYS="${MAX_AGE_DAYS:-2}"
 MIN_FREE_GB="${MIN_FREE_GB:-1}"
 BACKUP_LOCK_HELD=0
 

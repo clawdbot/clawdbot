@@ -12,7 +12,7 @@ STATE_FILE="$STATE_DIR/openclaw-backup-watchdog.state"
 ACTION_FILE="$STATE_DIR/backup-watchdog-last-action.txt"
 REPORT_FILE="$BASE/reports/system_manager/openclaw_backup_watchdog_report.txt"
 
-MAX_AGE_DAYS="${MAX_AGE_DAYS:-10}"
+MAX_AGE_DAYS="${MAX_AGE_DAYS:-2}"
 AUTO_BACKUP="${OPENCLAW_BACKUP_WATCHDOG_AUTO:-0}"
 MIN_FREE_GB="${MIN_FREE_GB:-20}"
 

@@ -14,7 +14,7 @@ STATE_FILE="${STATE_FILE:-$STATE_DIR/dashboard-property-backup-watchdog.state}"
 ACTION_STATE="${ACTION_STATE:-$STATE_DIR/dashboard-property-backup-last-action.txt}"
 REPORT_FILE="${REPORT_FILE:-$BASE/reports/system_manager/dashboard_property_backup_watchdog_report.txt}"
 AUTO_ENABLED="${DASHBOARD_PROPERTY_BACKUP_AUTO:-0}"
-MAX_AGE_DAYS="${MAX_AGE_DAYS:-10}"
+MAX_AGE_DAYS="${MAX_AGE_DAYS:-2}"
 
 mkdir -p "$STATE_DIR" "$(dirname "$REPORT_FILE")"
 
