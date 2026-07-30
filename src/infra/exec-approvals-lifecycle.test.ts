@@ -80,6 +80,10 @@ const mutationCases: Array<[string, string[]]> = [
     ["openclaw", "config", "set", "gateway.port", "19001", "--dry-run=0"],
   ],
   [
+    "openclaw config set gateway.port 19001 --dry-run --dry-run=false",
+    ["openclaw", "config", "set", "gateway.port", "19001", "--dry-run", "--dry-run=false"],
+  ],
+  [
     `openclaw config "$(printf set)" gateway.port 19001`,
     ["openclaw", "config", "$(printf set)", "gateway.port", "19001"],
   ],
@@ -114,6 +118,26 @@ const mutationCases: Array<[string, string[]]> = [
     ["openclaw", "reset", "--scope", "full", "--yes", "--non-interactive"],
   ],
   ["openclaw reset --dry-run=false", ["openclaw", "reset", "--dry-run=false"]],
+  [
+    "openclaw reset --dry-run --dry-run=false",
+    ["openclaw", "reset", "--dry-run", "--dry-run=false"],
+  ],
+  [
+    "openclaw gateway call update.run --params '{}' -- --help",
+    ["openclaw", "gateway", "call", "update.run", "--params", "{}", "--", "--help"],
+  ],
+  [
+    "openclaw update --dry-run --dry-run=false",
+    ["openclaw", "update", "--dry-run", "--dry-run=false"],
+  ],
+  [
+    "openclaw uninstall --dry-run --dry-run=false",
+    ["openclaw", "uninstall", "--dry-run", "--dry-run=false"],
+  ],
+  [
+    "npm install --dry-run --dry-run=false openclaw",
+    ["npm", "install", "--dry-run", "--dry-run=false", "openclaw"],
+  ],
   [
     "launchctl stop gui/$UID/com.openclaw.gateway",
     ["launchctl", "stop", "gui/$UID/com.openclaw.gateway"],
@@ -419,6 +443,10 @@ const nonMutationCases: Array<[string, string[]]> = [
     ["openclaw", "config", "set", "gateway.port", "19001", "--dry-run"],
   ],
   [
+    "openclaw config set gateway.port 19001 --dry-run=false --dry-run",
+    ["openclaw", "config", "set", "gateway.port", "19001", "--dry-run=false", "--dry-run"],
+  ],
+  [
     "openclaw config get gateway.port -- --dry-run",
     ["openclaw", "config", "get", "gateway.port", "--", "--dry-run"],
   ],
@@ -460,6 +488,10 @@ const nonMutationCases: Array<[string, string[]]> = [
   ],
   ["npm install --prefix openclaw lodash", ["npm", "install", "--prefix", "openclaw", "lodash"]],
   ["npm install --dry-run openclaw", ["npm", "install", "--dry-run", "openclaw"]],
+  [
+    "npm install --dry-run=false --dry-run openclaw",
+    ["npm", "install", "--dry-run=false", "--dry-run", "openclaw"],
+  ],
   ["npm uninstall --dry-run openclaw", ["npm", "uninstall", "--dry-run", "openclaw"]],
   ["pnpm rebuild --dry-run openclaw", ["pnpm", "rebuild", "--dry-run", "openclaw"]],
   ["npm --help=true install openclaw", ["npm", "--help=true", "install", "openclaw"]],

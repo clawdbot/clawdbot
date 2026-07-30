@@ -1,4 +1,5 @@
 // Resolves package-runner argv without letting supported option layouts hide commands.
+import { lifecycleHasEffectiveBooleanOption } from "./exec-approvals-lifecycle-tokens.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 
 const PACKAGE_GLOBAL_OPTIONS_WITH_VALUE = new Set([
@@ -52,6 +53,9 @@ const PACKAGE_MUTATION_ALIASES = new Set([
   "update",
   "upgrade",
 ]);
+const PACKAGE_DRY_RUN_OPTION = new Set(["--dry-run"]);
+const PACKAGE_HELP_OPTIONS = new Set(["-h", "--help"]);
+const PACKAGE_VERSION_OPTIONS = new Set(["-v", "--version"]);
 
 export type LifecyclePackageRunnerPlan =
   | { kind: "not-runner" }
@@ -165,30 +169,26 @@ function isOpenClawPackageTarget(token: string): boolean {
 }
 
 function hasEffectivePackageNoExecute(argv: readonly string[], start: number): boolean {
-  for (let index = start; index < argv.length; index += 1) {
-    const token = argv[index]?.trim() ?? "";
-    const name = optionName(token);
-    if (["-h", "-v", "--help", "--version"].includes(name)) {
-      const value = token.includes("=")
-        ? token.slice(token.indexOf("=") + 1).toLowerCase()
-        : "true";
-      if (!["0", "false", "no", "off"].includes(value)) {
-        return true;
-      }
-    }
-    if (name === "--dry-run") {
-      const value = token.includes("=")
-        ? token.slice(token.indexOf("=") + 1).toLowerCase()
-        : "true";
-      if (!["0", "false", "no", "off"].includes(value)) {
-        return true;
-      }
-    }
-    if (PACKAGE_TARGET_OPTIONS_WITH_VALUE.has(name) && !token.includes("=")) {
-      index += 1;
-    }
-  }
-  return false;
+  return (
+    lifecycleHasEffectiveBooleanOption(
+      argv,
+      start,
+      PACKAGE_HELP_OPTIONS,
+      PACKAGE_TARGET_OPTIONS_WITH_VALUE,
+    ) ||
+    lifecycleHasEffectiveBooleanOption(
+      argv,
+      start,
+      PACKAGE_VERSION_OPTIONS,
+      PACKAGE_TARGET_OPTIONS_WITH_VALUE,
+    ) ||
+    lifecycleHasEffectiveBooleanOption(
+      argv,
+      start,
+      PACKAGE_DRY_RUN_OPTION,
+      PACKAGE_TARGET_OPTIONS_WITH_VALUE,
+    )
+  );
 }
 
 function packageOperationMutatesOpenClaw(

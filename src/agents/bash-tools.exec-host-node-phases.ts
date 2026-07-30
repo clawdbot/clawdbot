@@ -589,19 +589,18 @@ export async function analyzeNodeApprovalRequirement(params: {
         segments: entry.allowlistEval.segments,
       }),
     ) && !(params.hostSecurity === "full" && params.hostAsk === "off");
-  const requiresOpenClawLifecycleApproval =
-    suppressionCommandEvals.some((entry) =>
-      resolveLifecycleAnalysisPlatforms(params.target.platform).some((platform) =>
-        commandRequiresOpenClawLifecycleApproval({
-          command: entry.command,
-          cwd: entry.cwd,
-          env: analysisEnv,
-          envComplete: false,
-          platform,
-          segments: entry.allowlistEval.segments,
-        }),
-      ),
-    ) && !(params.hostSecurity === "full" && params.hostAsk === "off");
+  const requiresOpenClawLifecycleApproval = suppressionCommandEvals.some((entry) =>
+    resolveLifecycleAnalysisPlatforms(params.target.platform).some((platform) =>
+      commandRequiresOpenClawLifecycleApproval({
+        command: entry.command,
+        cwd: entry.cwd,
+        env: analysisEnv,
+        envComplete: false,
+        platform,
+        segments: entry.allowlistEval.segments,
+      }),
+    ),
+  );
   if (
     (params.hostAsk === "always" ||
       params.hostSecurity === "allowlist" ||

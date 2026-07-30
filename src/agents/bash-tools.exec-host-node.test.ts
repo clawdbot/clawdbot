@@ -2632,6 +2632,57 @@ describe("executeNodeHostCommand", () => {
     );
   });
 
+  it("keeps pending lifecycle commands explicit when policy switches to yolo", async () => {
+    commandRequiresOpenClawLifecycleApprovalMock.mockReturnValue(true);
+    resolveExecHostApprovalContextMock
+      .mockReturnValueOnce({
+        approvals: { allowlist: [], file: { version: 1, agents: {} } },
+        hostSecurity: "allowlist",
+        hostAsk: "always",
+        askFallback: "full",
+      })
+      .mockReturnValue({
+        approvals: { allowlist: [], file: { version: 1, agents: {} } },
+        hostSecurity: "full",
+        hostAsk: "off",
+        askFallback: "full",
+      });
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(null);
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: true },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    enforceStrictInlineEvalApprovalBoundaryMock.mockImplementation((value) =>
+      value.baseDecision.timedOut && value.requiresInlineEvalApproval
+        ? { approvedByAsk: false, deniedReason: "approval-timeout" }
+        : { approvedByAsk: value.approvedByAsk, deniedReason: value.deniedReason },
+    );
+
+    const result = await executeNodeHostCommand(
+      createNodeHostRequest({
+        command: "openclaw gateway restart",
+        security: "allowlist",
+        ask: "always",
+      }),
+    );
+
+    expect(result.details?.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
+        expect.objectContaining({ approvalId: "approval-1" }),
+        "Exec denied (node=node-1 id=approval-1, approval-timeout): openclaw gateway restart",
+      );
+    });
+    expect(
+      callGatewayToolMock.mock.calls.some(
+        ([method, , params]) =>
+          method === "node.invoke" &&
+          (params as MockNodeInvokeParams | undefined)?.command === "system.run",
+      ),
+    ).toBe(false);
+  });
+
   it("requests human approval when node auto-review cannot bind a single parsed command", async () => {
     const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
       decision: "allow-once",

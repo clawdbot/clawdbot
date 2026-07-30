@@ -73,6 +73,9 @@ function hasEffectiveHelpOrVersion(argv: readonly string[], start: number): bool
   ]);
   for (let index = start; index < argv.length; index += 1) {
     const token = argv[index]?.trim() ?? "";
+    if (token === "--") {
+      break;
+    }
     const name = normalizedToken(token).split("=", 1)[0] ?? "";
     if (optionsWithValue.has(name) && !token.includes("=")) {
       index += 1;

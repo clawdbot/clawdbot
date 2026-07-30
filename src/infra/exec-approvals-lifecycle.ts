@@ -39,7 +39,10 @@ import {
   lifecycleSubstitutionResultMayHideLifecycle,
   resolveLifecyclePosixShellPositionals,
 } from "./exec-approvals-lifecycle-substitutions.js";
-import { lifecycleOptionName as optionName } from "./exec-approvals-lifecycle-tokens.js";
+import {
+  lifecycleHasEffectiveBooleanOption,
+  lifecycleOptionName as optionName,
+} from "./exec-approvals-lifecycle-tokens.js";
 import type { ExecCommandSegment } from "./exec-command-analysis-types.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 import { extractShellWrapperInlineCommand } from "./shell-wrapper-resolution.js";
@@ -49,6 +52,7 @@ const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "--version"]);
 const OPENCLAW_GLOBAL_FLAGS = new Set(["--dev", "--no-color"]);
 const OPENCLAW_GLOBAL_OPTIONS = new Set(["--container", "--log-level", "--profile"]);
 const UPDATE_OPTIONS_WITH_VALUE = new Set(["--channel", "--tag", "--timeout"]);
+const DRY_RUN_OPTION = new Set(["--dry-run"]);
 const LAUNCHCTL_MUTATIONS = new Set([
   "attach",
   "bootstrap",
@@ -174,6 +178,9 @@ function hasEffectiveHelpOrVersion(
 ): boolean {
   for (let index = start; index < argv.length; index += 1) {
     const token = argv[index]?.trim() ?? "";
+    if (token === "--") {
+      break;
+    }
     const name = optionName(token);
     if (HELP_OR_VERSION_FLAGS.has(token)) {
       return true;
@@ -216,7 +223,7 @@ function classifyUpdateArgv(argv: readonly string[], start: number): boolean {
     return false;
   }
   if (
-    argv.slice(start).some((token) => normalizedToken(token) === "--dry-run") &&
+    lifecycleHasEffectiveBooleanOption(argv, start, DRY_RUN_OPTION, UPDATE_OPTIONS_WITH_VALUE) &&
     !["finalize", "repair", "wizard"].includes(action)
   ) {
     return false;
@@ -265,7 +272,7 @@ function classifyOpenClawArgv(argv: readonly string[]): boolean {
     case "uninstall":
       return (
         !hasHelpOrVersion(argv.slice(index + 1)) &&
-        !argv.slice(index + 1).some((token) => normalizedToken(token) === "--dry-run")
+        !lifecycleHasEffectiveBooleanOption(argv, index + 1, DRY_RUN_OPTION)
       );
     case "update":
       return classifyUpdateArgv(argv, index + 1);

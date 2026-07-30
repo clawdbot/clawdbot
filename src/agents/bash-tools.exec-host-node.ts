@@ -162,6 +162,8 @@ export async function executeNodeHostCommand(
     autoReviewArgv,
     allowAlwaysPersistence,
   } = approvalAnalysis;
+  const requiresInitialOpenClawLifecycleApproval =
+    requiresOpenClawLifecycleApproval && !(hostSecurity === "full" && hostAsk === "off");
   const approvalDecisionAsk =
     nodeApprovalPolicyKnown && nodeAsk !== undefined ? maxAsk(hostAsk, nodeAsk) : "always";
   const allowedDecisions = resolveExecApprovalAllowedDecisions({
@@ -184,7 +186,7 @@ export async function executeNodeHostCommand(
     }) ||
     inlineEvalHit !== null ||
     requiresSecurityAuditSuppressionApproval ||
-    requiresOpenClawLifecycleApproval;
+    requiresInitialOpenClawLifecycleApproval;
   if (requiresAsk && params.nonInteractiveApproval) {
     const text = `Exec denied (approval_required): ${params.command}`;
     return {
@@ -205,7 +207,7 @@ export async function executeNodeHostCommand(
       "Warning: security audit suppression changes require explicit approval unless exec is running in yolo mode.",
     );
   }
-  if (requiresOpenClawLifecycleApproval) {
+  if (requiresInitialOpenClawLifecycleApproval) {
     params.warnings.push(
       "Warning: OpenClaw lifecycle commands require explicit approval unless exec is running in yolo mode.",
     );
@@ -334,14 +336,14 @@ export async function executeNodeHostCommand(
       autoReviewBlockedByNodePolicy ||
       (params.autoReview === true && hostAsk !== "always" && !autoReviewHasBoundCommand) ||
       requiresSecurityAuditSuppressionApproval ||
-      requiresOpenClawLifecycleApproval;
+      requiresInitialOpenClawLifecycleApproval;
     if (
       params.autoReview === true &&
       hostAsk !== "always" &&
       autoReviewHasBoundCommand &&
       !autoReviewBlockedByNodePolicy &&
       !requiresSecurityAuditSuppressionApproval &&
-      !requiresOpenClawLifecycleApproval
+      !requiresInitialOpenClawLifecycleApproval
     ) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
       const autoReviewReason =
@@ -703,7 +705,7 @@ export async function executeNodeHostCommand(
       }) &&
       inlineEvalHit === null &&
       !requiresSecurityAuditSuppressionApproval &&
-      !requiresOpenClawLifecycleApproval,
+      !requiresInitialOpenClawLifecycleApproval,
   });
   params.signal?.throwIfAborted();
   const raw =
