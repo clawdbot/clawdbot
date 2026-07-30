@@ -243,10 +243,11 @@ describe("config form integrity", () => {
       "config-field-s10-006c00610062006f007200610074006f00720079_s8-00700072006f00760069006400650072-description",
     );
     const apiKey = expectElement(
-      container.querySelector<HTMLInputElement>("input[aria-label='API Key']"),
+      container.querySelector<HTMLInputElement>("input[aria-label='Api Key']"),
       "named secret input",
     );
     expect(apiKey.readOnly).toBe(true);
+    expect(apiKey.classList.contains("cfg-redacted")).toBe(true);
 
     const retryBudget = expectElement(
       container.querySelector<HTMLInputElement>("input[aria-label='Retry Budget']"),
