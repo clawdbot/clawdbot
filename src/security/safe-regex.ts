@@ -12,6 +12,7 @@ type TokenState = {
   minLength: number;
   maxLength: number;
   atoms: string[] | null;
+  signature: string;
 };
 
 type ParseFrame = {
@@ -25,6 +26,8 @@ type ParseFrame = {
   altMaxLength: number | null;
   branchAtoms: string[] | null;
   alternativeAtoms: Array<string[] | null>;
+  branchSignatures: string[];
+  alternativeSignatures: string[][];
 };
 
 type PatternToken =
@@ -66,6 +69,8 @@ function createParseFrame(): ParseFrame {
     altMaxLength: null,
     branchAtoms: [],
     alternativeAtoms: [],
+    branchSignatures: [],
+    alternativeSignatures: [],
   };
 }
 
@@ -85,6 +90,7 @@ function multiplyLength(length: number, factor: number): number {
 
 function recordAlternative(frame: ParseFrame): void {
   frame.alternativeAtoms.push(frame.branchAtoms);
+  frame.alternativeSignatures.push(frame.branchSignatures);
   if (frame.altMinLength === null || frame.altMaxLength === null) {
     frame.altMinLength = frame.branchMinLength;
     frame.altMaxLength = frame.branchMaxLength;
@@ -285,6 +291,18 @@ function alternativesOverlap(alternatives: Array<string[] | null>, flags: string
   return false;
 }
 
+function alternativesRepeatExactly(alternatives: string[][]): boolean {
+  const signatures = new Set<string>();
+  for (const alternative of alternatives) {
+    const signature = JSON.stringify(alternative);
+    if (signatures.has(signature)) {
+      return true;
+    }
+    signatures.add(signature);
+  }
+  return false;
+}
+
 function readQuantifier(source: string, index: number): QuantifierRead | null {
   const ch = source[index];
   const consumed = source[index + 1] === "?" ? 2 : 1;
@@ -428,6 +446,7 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
     } else {
       frame.branchAtoms = null;
     }
+    frame.branchSignatures.push(token.signature);
   };
 
   const emitSimpleToken = (source: string) => {
@@ -437,6 +456,7 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
       minLength: 1,
       maxLength: 1,
       atoms: [source],
+      signature: source,
     });
   };
 
@@ -471,10 +491,14 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
               frame.altMinLength !== null &&
               frame.altMaxLength !== null &&
               (frame.altMinLength !== frame.altMaxLength ||
-                alternativesOverlap(frame.alternativeAtoms, flags))),
+                alternativesOverlap(frame.alternativeAtoms, flags) ||
+                alternativesRepeatExactly(frame.alternativeSignatures))),
           minLength: groupMinLength,
           maxLength: groupMaxLength,
           atoms: frame.hasAlternation ? null : frame.branchAtoms,
+          signature: JSON.stringify(
+            frame.hasAlternation ? frame.alternativeSignatures : frame.branchSignatures,
+          ),
         });
       }
       continue;
@@ -487,6 +511,7 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
       frame.branchMinLength = 0;
       frame.branchMaxLength = 0;
       frame.branchAtoms = [];
+      frame.branchSignatures = [];
       frame.lastToken = null;
       continue;
     }
