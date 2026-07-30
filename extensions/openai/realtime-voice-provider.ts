@@ -722,6 +722,8 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     ) {
       return;
     }
+    // Marks follow ordered playback. Reaching a named mark also acknowledges every
+    // earlier mark, while late acknowledgements from that prefix remain harmless.
     if (acknowledgedSequence === latest) {
       this.oldestOutstandingMarkSequence = null;
       this.latestOutstandingMarkSequence = null;
