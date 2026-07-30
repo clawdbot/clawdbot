@@ -277,6 +277,7 @@ type NativeConsultState = {
   startedAt: number;
   promise: Promise<unknown>;
   cancellation: Promise<void>;
+  cancelled: boolean;
   cancel: () => void;
   partialUserTranscript?: string;
 };
@@ -1078,6 +1079,7 @@ export class RealtimeCallHandler {
     if (!state || state.owner !== owner) {
       return;
     }
+    state.cancelled = true;
     this.nativeConsultsInFlightByCallId.delete(callId);
     state.cancel();
   }
@@ -1457,12 +1459,23 @@ export class RealtimeCallHandler {
         startedAt,
         promise: Promise.resolve(),
         cancellation,
+        cancelled: false,
         cancel,
       };
-      const workingSubmission = submitWorkingResponse();
-      state.promise = workingSubmission.then(async () => {
+      this.nativeConsultsInFlightByCallId.set(callId, state);
+      state.promise = Promise.resolve().then(async () => {
         try {
-          await this.waitForConsultTranscriptSettle(callId, startedAt);
+          await submitWorkingResponse();
+          if (state.cancelled) {
+            return;
+          }
+          await Promise.race([
+            this.waitForConsultTranscriptSettle(callId, startedAt),
+            state.cancellation,
+          ]);
+          if (state.cancelled) {
+            return;
+          }
           const context = {
             partialUserTranscript: this.resolveUserTranscriptContext(callId),
           };
@@ -1480,7 +1493,6 @@ export class RealtimeCallHandler {
           };
         }
       });
-      this.nativeConsultsInFlightByCallId.set(callId, state);
       try {
         const outcome = await waitForNativeConsult(state);
         if (outcome.kind === "cancelled") {
