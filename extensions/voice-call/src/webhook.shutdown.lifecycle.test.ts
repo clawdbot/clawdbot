@@ -26,7 +26,7 @@ describe("VoiceCallWebhookServer shutdown lifecycle", () => {
     const delayedHangup = vi.fn();
     const pendingDisconnectHangups = (
       server as unknown as {
-        pendingDisconnectHangups: Map<string, ReturnType<typeof setTimeout>>;
+        pendingDisconnectHangups: Map<string, unknown>;
       }
     ).pendingDisconnectHangups;
     pendingDisconnectHangups.set("provider-call", setTimeout(delayedHangup, 5));
