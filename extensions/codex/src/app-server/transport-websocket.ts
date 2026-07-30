@@ -87,7 +87,7 @@ export function createWebSocketTransport(
       sendHeartbeatPing();
     }, WEBSOCKET_PONG_TIMEOUT_MS);
     pongTimeout.unref();
-    socket.ping(payload, (error) => {
+    socket.ping(payload, undefined, (error) => {
       if (error) {
         socket.terminate();
       }
