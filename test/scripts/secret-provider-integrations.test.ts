@@ -789,7 +789,8 @@ describe("secret provider integration proof harness", () => {
 
       try {
         const command = proof.runCommand(process.execPath, [scriptPath], {
-          timeoutMs: 150,
+          // Let the nested Node process publish its PID before exercising timeout cleanup.
+          timeoutMs: 1_000,
         });
 
         await waitFor(() => fs.existsSync(descendantPidPath));
