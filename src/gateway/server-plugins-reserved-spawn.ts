@@ -166,6 +166,9 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
       mode: "run",
     };
   } finally {
+    // Reserved dispatch failures stay pending in spawnSubagentDirect until
+    // session deletion proves that no accepted child survives. That keeps both
+    // claims live throughout an ambiguous timeout or cleanup outage.
     releaseGatewayDedupeReservation();
     identityClaim.release();
   }

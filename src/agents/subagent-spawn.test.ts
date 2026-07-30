@@ -1423,6 +1423,65 @@ describe("spawnSubagentDirect seam flow", () => {
     );
   });
 
+  it("keeps reserved spawn pending until ambiguous in-process cleanup succeeds", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir() },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    let allowDelete = false;
+    let deleteAttempts = 0;
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "agent") {
+        throw new Error("gateway request timeout for agent");
+      }
+      if (method === "sessions.delete") {
+        deleteAttempts += 1;
+        if (!allowDelete) {
+          throw new Error("cleanup unavailable");
+        }
+      }
+      return { ok: true };
+    });
+
+    let settled = false;
+    const spawn = spawnSubagentDirect(
+      {
+        task: "retain the reserved identities during ambiguous cleanup",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: "agent:worker:subagent:ambiguous-reserved-child",
+        preallocatedRunId: "ambiguous-reserved-run",
+        pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "ambiguous-reserved-claim",
+      },
+    ).finally(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => expect(deleteAttempts).toBeGreaterThan(0));
+    expect(settled).toBe(false);
+
+    allowDelete = true;
+    await expect(spawn).resolves.toMatchObject({
+      status: "error",
+      error: "gateway request timeout for agent",
+      childSessionKey: "agent:worker:subagent:ambiguous-reserved-child",
+      runId: "ambiguous-reserved-run",
+    });
+    expect(deleteAttempts).toBeGreaterThan(1);
+  });
+
   it.each(inheritedSpawnPreferenceCases)(
     "$name",
     async ({

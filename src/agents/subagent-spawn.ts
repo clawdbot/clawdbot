@@ -466,9 +466,13 @@ export async function spawnSubagentDirect(
           }
           emitLifecycleHooks = !endedHookEmitted;
         }
-        await cleanupProvisionalSession(childSessionKey, {
+        await cleanupFailedSpawnBeforeAgentStart({
+          childSessionKey,
           emitLifecycleHooks,
           deleteTranscript: true,
+          // A timed-out in-process dispatch keeps running. Reserved identities
+          // cannot be released until deletion proves no accepted child survives.
+          waitForSessionDeletion: Boolean(ctx.preallocatedRunId),
         });
       },
     };

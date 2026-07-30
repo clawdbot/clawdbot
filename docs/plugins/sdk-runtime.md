@@ -356,9 +356,15 @@ two-party event loops that do not go through the shared inbound reply runner.
     preallocated child and run identities atomically:
 
     ```typescript
-    // This controller session must already have been created by this plugin,
-    // for example through api.runtime.subagent.run(...).
-    const requesterSessionKey = "agent:main:subagent:my-plugin-controller";
+    // Create a plugin-owned depth-zero controller. Do not include `:subagent:`
+    // in this key: the default maxSpawnDepth allows depth-zero requesters only.
+    const requesterSessionKey = "agent:main:my-plugin-controller";
+    const { runId: controllerRunId } = await api.runtime.subagent.run({
+      sessionKey: requesterSessionKey,
+      message: "Initialize the reserved-spawn controller.",
+      deliver: false,
+    });
+    await api.runtime.subagent.waitForRun({ runId: controllerRunId });
 
     const accepted = await api.runtime.subagent.spawnReserved({
       requesterSessionKey,
