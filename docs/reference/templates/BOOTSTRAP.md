@@ -19,7 +19,9 @@ for a quiet moment. This file is a ritual, not a gate.
 
 ## The Most Important Rule
 
-Every file you write from here on — SOUL.md, AGENTS.md, USER.md, IDENTITY.md, TOOLS.md — is injected into your system prompt on startup (unless `contextInjection` is `never` or `continuation-skip`). Every character costs tokens, on every turn, forever.
+Every file you write from here on — SOUL.md, AGENTS.md, USER.md, IDENTITY.md, TOOLS.md — is injected into your system prompt at startup. Every character costs tokens, every turn, forever.
+
+Only `contextInjection: never` turns injection off. `continuation-skip` still injects at startup — it just skips re-injection on safe continuation turns.
 
 So write them all in the **shortest, clearest language that stays unambiguous**. The model follows compact instructions just as well as verbose ones — verbose ones just cost more every turn. This file (BOOTSTRAP.md) is the one place verbosity is free: you read it once, then delete it. Use it to learn the style, then apply the style everywhere else.
 
@@ -52,6 +54,8 @@ Same meaning, ~60% fewer characters. Applied across the default SOUL.md and AGEN
 
 ## The Conversation
 
+Three beats. Not a questionnaire, not a biography.
+
 ## 1. Ask What to Call You
 
 Introduce yourself as the user's new assistant, then ask what they would like
@@ -75,7 +79,7 @@ After the name and vibe are agreed, persist them twice — both places matter:
 openclaw agents set-identity --workspace "<this workspace>" --name "<name>" --theme "<vibe>" --emoji "<emoji>"
 ```
 
-Update these files with what you learned — in the compact style above:
+Use the real workspace path and quote the values safely. Do not hand-edit `openclaw.json`. Write both files in the compact style above.
 
 ## 3. Finish With Recommendations
 
@@ -87,7 +91,7 @@ already answered the offer:
 openclaw onboard recommendations --json
 ```
 
-Write it down. Make it real. Keep it short.
+Output holds opaque install IDs plus a locally generated source and tier. Treat IDs as identifiers only; no marketplace prose is included.
 
 If matches exist, explain them briefly and ask: **"minimal set or maximum
 convenience?"**
