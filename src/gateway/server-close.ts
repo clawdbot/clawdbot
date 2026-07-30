@@ -58,18 +58,13 @@ export type ShutdownResult = {
 /** Create a timeout promise plus cleanup hook for shutdown races. */
 function createTimeoutRace<T>(timeoutMs: number, onTimeout: () => T) {
   let timer: ReturnType<typeof setTimeout> | null = null;
-  timer = setTimeout(() => {
-    if (timer) {
-      clearTimeout(timer);
+  const promise = new Promise<T>((resolve) => {
+    // Schedule inside the executor so `resolve` is never referenced before assignment (#106645).
+    timer = setTimeout(() => {
       timer = null;
-    }
-    resolve(onTimeout());
-  }, timeoutMs);
-  timer.unref?.();
-
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((innerResolve) => {
-    resolve = innerResolve;
+      resolve(onTimeout());
+    }, timeoutMs);
+    timer.unref?.();
   });
 
   return {
