@@ -35,7 +35,7 @@ const MANAGED_NPM_PROJECT_REBUILD_ARTIFACTS = [
   "npm-shrinkwrap.json",
 ] as const;
 
-export type NpmManagedOverrideCompatibility = {
+type NpmManagedOverrideCompatibility = {
   npmAliases: boolean;
   pnpmParentChildSelectors: boolean;
 };
