@@ -68,6 +68,7 @@ type TestableGatewayBridge = {
     }) => Promise<{ text: string }>;
     signal: AbortSignal;
   }): Promise<void>;
+  startDelegation(delegationId: string, input: string): void;
 };
 
 function createDelegationBridge(
@@ -590,6 +591,54 @@ describe("GPT-Live gateway relay bridge", () => {
     } finally {
       bridge.close();
     }
+  });
+
+  it("keeps only the latest delegation pending while a consult settles", async () => {
+    const resolvers: Array<(value: { text: string }) => void> = [];
+    const signals: AbortSignal[] = [];
+    const runAgentConsult = vi.fn(
+      async ({ signal }: { prompt: string; signal?: AbortSignal }) =>
+        await new Promise<{ text: string }>((resolve) => {
+          signals.push(signal as AbortSignal);
+          resolvers.push(resolve);
+        }),
+    );
+    const { bridge, socket, testBridge } = createDelegationBridge(runAgentConsult);
+    try {
+      testBridge.startDelegation("delegation-1", "first task");
+      testBridge.startDelegation("delegation-2", "second task");
+      testBridge.startDelegation("delegation-3", "latest task");
+
+      expect(runAgentConsult).toHaveBeenCalledOnce();
+      expect(signals[0]?.aborted).toBe(true);
+      resolvers[0]?.({ text: "stale result" });
+      await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(2));
+      expect(runAgentConsult.mock.calls[1]?.[0].prompt).toContain("latest task");
+      expect(runAgentConsult.mock.calls[1]?.[0].prompt).not.toContain("second task");
+
+      resolvers[1]?.({ text: "latest result" });
+      await vi.waitFor(() =>
+        expect(parseSent(socket)).toContainEqual({
+          type: "delegation.context.append",
+          delegation_item_id: "delegation-3",
+          channel: "speakable",
+          content: [{ type: "input_text", text: "latest result" }],
+        }),
+      );
+      expect(socket.sent.some((entry) => entry.includes("stale result"))).toBe(false);
+    } finally {
+      bridge.close();
+    }
+  });
+
+  it("ignores delegation work after the bridge closes", () => {
+    const runAgentConsult = vi.fn(async () => ({ text: "unused" }));
+    const { bridge, testBridge } = createDelegationBridge(runAgentConsult);
+
+    bridge.close();
+    testBridge.startDelegation("delegation-late", "late task");
+
+    expect(runAgentConsult).not.toHaveBeenCalled();
   });
 
   it("bounds peer creation and closes a peer that resolves after the deadline", async () => {
