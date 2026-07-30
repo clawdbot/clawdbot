@@ -8,6 +8,7 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  mockedBuildEmbeddedRunPayloads,
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
@@ -87,6 +88,7 @@ describe("sessions_yield orchestration", () => {
         assistantTexts: ["Answer received."],
       }),
     );
+    mockedBuildEmbeddedRunPayloads.mockReturnValueOnce([{ text: "Answer received." }]);
     const resumed = await runEmbeddedAgent({
       ...overflowBaseRunParams,
       sessionId,
@@ -100,7 +102,7 @@ describe("sessions_yield orchestration", () => {
       yielded: true,
     });
     expect(resumed.meta.yielded).toBeUndefined();
-    expect(resumed.payloads).toBeDefined();
+    expect(resumed.payloads).toEqual([{ text: "Answer received." }]);
     expect(mockedRunEmbeddedAttempt).toHaveBeenLastCalledWith(
       expect.objectContaining({ prompt: "The user answered the question." }),
     );
