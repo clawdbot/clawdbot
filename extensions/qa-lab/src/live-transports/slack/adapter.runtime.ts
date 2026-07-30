@@ -295,7 +295,7 @@ export async function createSlackQaTransportAdapter(
       throw new Error("Slack live QA adapter does not implement transport actions");
     },
     createReportNotes: () => ["Runs through the Slack live adapter and shared QA suite host."],
-    cleanup() {
+    async cleanup() {
       stopped = true;
       // The observer owns its rejection handler, so cancellation must not hold the
       // Gateway shutdown boundary open if the Slack SDK never settles its request.
