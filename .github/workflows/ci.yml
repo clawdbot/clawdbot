@@ -3179,6 +3179,8 @@ jobs:
           # keep the faster first-attempt Blacksmith path parallel.
           if [[ "$SWIFT_TEST_EXECUTION" == "parallel" ]]; then
             swift_test_args+=(--parallel)
+          else
+            swift_test_args+=(--no-parallel)
           fi
           for attempt in 1 2 3; do
             if swift test "${swift_test_args[@]}"; then

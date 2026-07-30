@@ -3595,6 +3595,7 @@ describe("ci workflow guards", () => {
     );
     expect(testStep.run).toContain('if [[ "$SWIFT_TEST_EXECUTION" == "parallel" ]]');
     expect(testStep.run).toContain("swift_test_args+=(--parallel)");
+    expect(testStep.run).toContain("else\n  swift_test_args+=(--no-parallel)");
     expect(testStep.run).toContain('swift test "${swift_test_args[@]}"');
     expect(testStep.run).not.toContain(
       "swift test --package-path apps/macos --parallel --enable-code-coverage",
