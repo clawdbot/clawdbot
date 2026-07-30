@@ -1487,7 +1487,6 @@ describe("gateway session utils", () => {
 
     const groupEntry = {
       chatType: "group",
-      channel: "telegram",
       displayName: "telegram:g-private-token",
     } as SessionEntry;
     const groupRow = buildGatewaySessionRow({

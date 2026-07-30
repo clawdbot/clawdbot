@@ -139,6 +139,7 @@ function fallbackTitle(params: {
     case "custom":
       return "Session";
   }
+  return "Session";
 }
 
 function classifyRest(rest: string): SessionPresentationFamily {
@@ -164,9 +165,10 @@ function classifyRest(rest: string): SessionPresentationFamily {
  * Build the presentation contract without exposing peer ids, transcript text,
  * absolute paths, or other data that is not already a session-list field.
  */
-export function buildGatewaySessionPresentation(params: {
+function buildGatewaySessionPresentation(params: {
   key: string;
   agentId?: string;
+  channel?: string;
   displayName?: string;
   entry?: SessionEntry;
   isMain: boolean;
@@ -219,7 +221,7 @@ export function buildGatewaySessionPresentation(params: {
     family = classifyRest(rest);
   }
 
-  const channel = entry?.channel ?? route?.channel;
+  const channel = params.channel ?? route?.channel;
   const accountId = route?.accountId;
   let peerKind: SessionPresentation["peerKind"];
   if (route?.peerKind === "dm" || hasLegacyDirectPeer) {
@@ -270,10 +272,11 @@ export function sessionPresentationForRow(
   agentId: string,
   displayName?: string,
   entry?: SessionEntry,
+  channel?: string,
 ): SessionPresentation {
   const isMain =
     key === "global"
       ? cfg.session?.scope === "global"
       : key === resolveAgentMainSessionKey({ cfg, agentId });
-  return buildGatewaySessionPresentation({ key, agentId, displayName, entry, isMain });
+  return buildGatewaySessionPresentation({ key, agentId, channel, displayName, entry, isMain });
 }

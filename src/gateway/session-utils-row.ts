@@ -432,7 +432,7 @@ export function buildGatewaySessionRow(params: {
     label: entry?.label,
     category: entry?.category,
     boardFace: entry?.boardFace,
-    presentation: sessionPresentationForRow(cfg, key, sessionAgentId, displayName, entry),
+    presentation: sessionPresentationForRow(cfg, key, sessionAgentId, displayName, entry, channel),
     displayName,
     derivedTitle,
     lastMessagePreview,
