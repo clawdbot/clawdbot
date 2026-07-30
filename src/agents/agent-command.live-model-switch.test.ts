@@ -30,6 +30,7 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "./internal-runtime-context.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
@@ -95,10 +96,12 @@ const state = vi.hoisted(() => ({
   resolveSupportedThinkingLevelMock: vi.fn(({ level }: { level?: string }) => level),
   resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
   loadManifestModelCatalogMock: vi.fn(() => []),
-  loadPreparedModelCatalogSnapshotMock: vi.fn(async () => ({
-    entries: [],
-    routeVariants: [],
-  })),
+  loadPreparedModelCatalogSnapshotMock: vi.fn(
+    async (): Promise<ModelCatalogSnapshot> => ({
+      entries: [],
+      routeVariants: [],
+    }),
+  ),
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]): unknown => ({
     prompt: "",
     skills: [],
@@ -3357,10 +3360,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       ],
       routeVariants: [],
     });
-    state.isThinkingLevelSupportedMock.mockImplementation(
-      ({ catalog, level }: { catalog?: Array<{ reasoning?: boolean }>; level?: string }) =>
-        level === "off" || catalog?.some((entry) => entry.reasoning === true) === true,
-    );
+    state.isThinkingLevelSupportedMock.mockImplementation((args: unknown) => {
+      const { catalog, level } = args as {
+        catalog?: Array<{ reasoning?: boolean }>;
+        level?: string;
+      };
+      return level === "off" || catalog?.some((entry) => entry.reasoning === true) === true;
+    });
     setupSuccessfulAttempt("ollama", "minimax-m3:cloud");
 
     await agentCommand({
