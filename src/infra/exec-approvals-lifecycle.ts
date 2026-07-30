@@ -4,11 +4,16 @@ import { resolveCarrierCommandArgv } from "./command-carriers.js";
 import { unwrapKnownDispatchWrapperInvocation } from "./dispatch-wrapper-resolution.js";
 import { resolveLifecycleXargsArgv } from "./exec-approvals-lifecycle-carriers.js";
 import {
+  expandKnownLifecycleEnvironmentCommand,
   expandLifecycleEnvironmentArgv,
   unresolvedEnvironmentMayHideLifecycle,
 } from "./exec-approvals-lifecycle-env.js";
+import { classifyOpenClawGatewayArgv } from "./exec-approvals-lifecycle-gateway.js";
 import { resolveNodeOpenClawArgv } from "./exec-approvals-lifecycle-node.js";
-import { isOpenClawExecutablePattern } from "./exec-approvals-lifecycle-patterns.js";
+import {
+  isOpenClawExecutablePattern,
+  matchesOpenClawProcessPattern,
+} from "./exec-approvals-lifecycle-patterns.js";
 import { resolveLifecyclePackageRunnerArgv } from "./exec-approvals-lifecycle-runners.js";
 import {
   bindLifecyclePosixShellPositionals,
@@ -25,29 +30,6 @@ const MAX_NESTED_COMMAND_DEPTH = 8;
 const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "--version"]);
 const OPENCLAW_GLOBAL_FLAGS = new Set(["--dev", "--no-color"]);
 const OPENCLAW_GLOBAL_OPTIONS = new Set(["--container", "--log-level", "--profile"]);
-const GATEWAY_OPTIONS = new Set([
-  "--auth",
-  "--bind",
-  "--container",
-  "--log-level",
-  "--port",
-  "--profile",
-]);
-const GATEWAY_READ_ONLY = new Set([
-  "diagnostics",
-  "discover",
-  "health",
-  "probe",
-  "stability",
-  "status",
-  "usage-cost",
-]);
-const LIFECYCLE_RPC_METHODS = new Set([
-  "config.apply",
-  "config.patch",
-  "gateway.restart.request",
-  "update.run",
-]);
 const LAUNCHCTL_MUTATIONS = new Set([
   "attach",
   "bootstrap",
@@ -183,32 +165,6 @@ function scanFirstPositional(
   return argv.length;
 }
 
-function classifyGatewayArgv(argv: readonly string[], start: number): boolean {
-  if (hasHelpOrVersion(argv.slice(start))) {
-    return false;
-  }
-  const actionIndex = scanFirstPositional(argv, start, GATEWAY_OPTIONS);
-  const action = normalizedToken(argv[actionIndex]);
-  if (!action) {
-    // Bare `openclaw gateway` starts the foreground gateway.
-    return true;
-  }
-  if (action === "call") {
-    const methodIndex = scanFirstPositional(
-      argv,
-      actionIndex + 1,
-      new Set(["--params", "--password", "--timeout", "--token", "--url"]),
-    );
-    return LIFECYCLE_RPC_METHODS.has(normalizedToken(argv[methodIndex]));
-  }
-  if (GATEWAY_READ_ONLY.has(action)) {
-    return false;
-  }
-  // Unknown gateway forms stay protected because a value-taking runtime option
-  // can otherwise be mistaken for a subcommand and hide foreground startup.
-  return true;
-}
-
 function classifyUpdateArgv(argv: readonly string[], start: number): boolean {
   if (hasHelpOrVersion(argv.slice(start))) {
     return false;
@@ -259,7 +215,7 @@ function classifyOpenClawArgv(argv: readonly string[]): boolean {
   switch (command) {
     case "daemon":
     case "gateway":
-      return classifyGatewayArgv(argv, index + 1);
+      return classifyOpenClawGatewayArgv(argv, index + 1);
     case "uninstall":
       return (
         !hasHelpOrVersion(argv.slice(index + 1)) &&
@@ -389,14 +345,17 @@ function classifyProcessMutation(
     ) {
       return false;
     }
-    return argv.slice(1).some(looksLikeOpenClaw);
+    return argv.slice(1).some(matchesOpenClawProcessPattern);
   }
   if (executable === "taskkill") {
-    return !argv.some((token) => normalizedToken(token) === "/?") && argv.some(looksLikeOpenClaw);
+    return (
+      !argv.some((token) => normalizedToken(token) === "/?") &&
+      argv.some(matchesOpenClawProcessPattern)
+    );
   }
   if (executable === "kill") {
     if (shellContext === "powershell") {
-      return argv.slice(1).some(looksLikeOpenClaw);
+      return argv.slice(1).some(matchesOpenClawProcessPattern);
     }
     if (
       hasHelpOrVersion(argv) ||
@@ -412,7 +371,7 @@ function classifyProcessMutation(
     );
   }
   if (POWERSHELL_SERVICE_MUTATIONS.has(executable)) {
-    return argv.slice(1).some(looksLikeOpenClaw);
+    return argv.slice(1).some(matchesOpenClawProcessPattern);
   }
   return false;
 }
@@ -528,6 +487,7 @@ function commandHasLifecycleSubstitution(
   command: string,
   depth: number,
   shellContext?: ShellContext,
+  cwd?: string,
 ): boolean {
   const scan = extractShellSubstitutionCommands(command);
   if (scan.uncertain) {
@@ -536,7 +496,7 @@ function commandHasLifecycleSubstitution(
   return scan.commands.some((nested) =>
     splitInlineCommands(nested).some((part) => {
       const argv = splitShellArgs(part);
-      return argv ? classifyArgv(argv, part, depth + 1, shellContext) : true;
+      return argv ? classifyArgv(argv, part, depth + 1, shellContext, cwd) : true;
     }),
   );
 }
@@ -546,6 +506,7 @@ function classifyArgv(
   raw: string,
   depth: number,
   shellContext?: ShellContext,
+  cwd?: string,
 ): boolean {
   if (argv.length === 0) {
     return false;
@@ -562,11 +523,11 @@ function classifyArgv(
 
   const carried = resolveCarrierCommandArgv(argv, depth, { includeExec: true });
   if (carried?.length) {
-    return classifyArgv(carried, carried.join(" "), depth + 1, shellContext);
+    return classifyArgv(carried, carried.join(" "), depth + 1, shellContext, cwd);
   }
   const dispatch = unwrapKnownDispatchWrapperInvocation(argv);
   if (dispatch.kind === "unwrapped" && dispatch.argv.length > 0) {
-    return classifyArgv(dispatch.argv, dispatch.argv.join(" "), depth + 1, shellContext);
+    return classifyArgv(dispatch.argv, dispatch.argv.join(" "), depth + 1, shellContext, cwd);
   }
 
   const inline = extractShellWrapperInlineCommand(argv);
@@ -578,7 +539,7 @@ function classifyArgv(
     if (nestedShellContext === "powershell" && commandHasPowerShellLifecyclePipeline(inline)) {
       return true;
     }
-    if (commandHasLifecycleSubstitution(inline, depth, nestedShellContext)) {
+    if (commandHasLifecycleSubstitution(inline, depth, nestedShellContext, cwd)) {
       return true;
     }
     const positionalArgv = resolveLifecyclePosixShellPositionals(argv);
@@ -597,7 +558,7 @@ function classifyArgv(
         positionalArgv === null
           ? nestedArgv
           : bindLifecyclePosixShellPositionals(nestedArgv, positionalArgv);
-      return classifyArgv(boundArgv, part, depth + 1, nestedShellContext);
+      return classifyArgv(boundArgv, part, depth + 1, nestedShellContext, cwd);
     });
   }
 
@@ -606,7 +567,7 @@ function classifyArgv(
     return true;
   }
   if (xargs.kind === "argv") {
-    return classifyArgv(xargs.argv, xargs.argv.join(" "), depth + 1, shellContext);
+    return classifyArgv(xargs.argv, xargs.argv.join(" "), depth + 1, shellContext, cwd);
   }
 
   const packageRunner = resolveLifecyclePackageRunnerArgv(argv);
@@ -614,9 +575,15 @@ function classifyArgv(
     return true;
   }
   if (packageRunner.kind === "argv") {
-    return classifyArgv(packageRunner.argv, packageRunner.argv.join(" "), depth + 1, shellContext);
+    return classifyArgv(
+      packageRunner.argv,
+      packageRunner.argv.join(" "),
+      depth + 1,
+      shellContext,
+      cwd,
+    );
   }
-  const nodeArgv = resolveNodeOpenClawArgv(argv);
+  const nodeArgv = resolveNodeOpenClawArgv(argv, cwd);
   if (nodeArgv) {
     return classifyOpenClawArgv(nodeArgv);
   }
@@ -644,11 +611,12 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
   segments: LifecycleSegment[];
 }): boolean {
   const envComplete = params.envComplete ?? params.env !== undefined;
+  const expandedCommand = expandKnownLifecycleEnvironmentCommand(params.command, params.env);
   const shellContext: ShellContext =
     (params.platform ?? process.platform) === "win32" ? "powershell" : undefined;
   if (
-    commandHasPowerShellLifecyclePipeline(params.command) ||
-    commandHasLifecycleSubstitution(params.command, 0, shellContext)
+    commandHasPowerShellLifecyclePipeline(expandedCommand) ||
+    commandHasLifecycleSubstitution(expandedCommand, 0, shellContext, params.cwd)
   ) {
     return true;
   }
@@ -682,7 +650,7 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
         return (
           ((expanded.unresolved || expanded.fieldSplitUncertain) &&
             unresolvedEnvironmentMayHideLifecycle(argv)) ||
-          classifyArgv(expanded.argv, segment.raw ?? params.command, 0, shellContext)
+          classifyArgv(expanded.argv, expandedCommand, 0, shellContext, params.cwd)
         );
       })
     ) {
@@ -692,8 +660,8 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
   if (params.segments.length > 0) {
     return false;
   }
-  return splitInlineCommands(params.command).some((part) => {
+  return splitInlineCommands(expandedCommand).some((part) => {
     const argv = splitShellArgs(part);
-    return argv ? classifyArgv(argv, part, 0, shellContext) : false;
+    return argv ? classifyArgv(argv, part, 0, shellContext, params.cwd) : false;
   });
 }

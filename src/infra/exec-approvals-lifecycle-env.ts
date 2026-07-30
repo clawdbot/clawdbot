@@ -145,6 +145,31 @@ function readEnvironmentValue(env: NodeJS.ProcessEnv | undefined, key: string): 
   return matchedKey === undefined ? undefined : env[matchedKey];
 }
 
+function expandKnownEnvironmentReferences(
+  value: string,
+  env: NodeJS.ProcessEnv | undefined,
+): string {
+  const replaceKnown = (match: string, key: string): string =>
+    readEnvironmentValue(env, key) ?? match;
+  return value
+    .replace(POWERSHELL_VARIABLE_RE, replaceKnown)
+    .replace(POSIX_VARIABLE_RE, (match, braced: string | undefined, bare: string | undefined) =>
+      replaceKnown(match, braced ?? bare ?? ""),
+    )
+    .replace(CMD_VARIABLE_RE, replaceKnown);
+}
+
+/** Expand known references in executable command text while preserving single-quoted literals. */
+export function expandKnownLifecycleEnvironmentCommand(
+  command: string,
+  env: NodeJS.ProcessEnv | undefined,
+): string {
+  return command
+    .split(/('[^']*')/u)
+    .map((part, index) => (index % 2 === 0 ? expandKnownEnvironmentReferences(part, env) : part))
+    .join("");
+}
+
 /** Expand variables whose environment value is known and report partial-env uncertainty. */
 export function expandLifecycleEnvironmentArgv(params: {
   argv: readonly string[];

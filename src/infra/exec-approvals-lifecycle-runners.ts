@@ -196,7 +196,7 @@ export function resolveLifecyclePackageRunnerArgv(
     if (resolved?.length) {
       return { kind: "argv", argv: resolved };
     }
-  } else if (executable === "yarn" && subcommand === "run") {
+  } else if (["pnpm", "yarn"].includes(executable) && subcommand === "run") {
     const resolved = packageTarget(argv, subcommandIndex + 1);
     if (resolved?.length) {
       return { kind: "argv", argv: resolved };

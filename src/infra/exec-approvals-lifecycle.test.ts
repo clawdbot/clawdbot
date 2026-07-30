@@ -27,6 +27,8 @@ const mutationCases: Array<[string, string[]]> = [
   ["./opencla?.mjs gateway restart", ["./opencla?.mjs", "gateway", "restart"]],
   ["openclaw gateway", ["openclaw", "gateway"]],
   ["openclaw gateway --token secret", ["openclaw", "gateway", "--token", "secret"]],
+  ["openclaw gateway --token status", ["openclaw", "gateway", "--token", "status"]],
+  ["openclaw gateway --password health", ["openclaw", "gateway", "--password", "health"]],
   ["openclaw daemon stop", ["openclaw", "daemon", "stop"]],
   ["/usr/bin/opencla? gateway restart", ["/usr/bin/opencla?", "gateway", "restart"]],
   ["openclaw gateway call update.run", ["openclaw", "gateway", "call", "update.run"]],
@@ -88,7 +90,9 @@ const mutationCases: Array<[string, string[]]> = [
     ["sc.exe", String.raw`\\localhost`, "delete", "OpenClaw"],
   ],
   ['schtasks /Run /TN "OpenClaw Gateway"', ["schtasks", "/Run", "/TN", "OpenClaw Gateway"]],
+  ["taskkill /IM open*.exe", ["taskkill", "/IM", "open*.exe"]],
   ["pkill -TERM openclaw", ["pkill", "-TERM", "openclaw"]],
+  ["pkill -f 'open.*claw'", ["pkill", "-f", "open.*claw"]],
   ["kill -TERM $(pidof openclaw)", ["kill", "-TERM", "$(pidof openclaw)"]],
   ["kill -TERM $(pgrep -f '[o]penclaw')", ["kill", "-TERM", "$(pgrep -f '[o]penclaw')"]],
   [
@@ -150,6 +154,7 @@ const mutationCases: Array<[string, string[]]> = [
   ],
   ["yarn dlx openclaw gateway restart", ["yarn", "dlx", "openclaw", "gateway", "restart"]],
   ["yarn run openclaw gateway restart", ["yarn", "run", "openclaw", "gateway", "restart"]],
+  ["pnpm run openclaw gateway restart", ["pnpm", "run", "openclaw", "gateway", "restart"]],
   ["bun x openclaw gateway restart", ["bun", "x", "openclaw", "gateway", "restart"]],
   ["bun run openclaw gateway restart", ["bun", "run", "openclaw", "gateway", "restart"]],
   [
@@ -192,6 +197,7 @@ const mutationCases: Array<[string, string[]]> = [
   ],
   ["Get-Process OpenClaw | kill", ["Get-Process", "OpenClaw", "|", "kill"]],
   ["ps OpenClaw | kill", ["ps", "OpenClaw", "|", "kill"]],
+  ["Stop-Process -Name Open*Claw", ["Stop-Process", "-Name", "Open*Claw"]],
   [
     "env env env env env env env env openclaw gateway restart",
     ["env", "env", "env", "env", "env", "env", "env", "env", "openclaw", "gateway", "restart"],
@@ -328,6 +334,58 @@ describe("OpenClaw lifecycle exec approvals", () => {
     ).toBe(true);
   });
 
+  it("resolves relative Node entry scripts against the command cwd", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: "node dist/entry.js gateway restart",
+        cwd: "/opt/openclaw",
+        platform: "linux",
+        segments: [
+          {
+            raw: "node dist/entry.js gateway restart",
+            argv: ["node", "dist/entry.js", "gateway", "restart"],
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("expands known references before scanning compound commands", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: 'echo "$($TOOL gateway restart)"',
+        env: { TOOL: "openclaw" },
+        platform: "linux",
+        segments: [
+          { raw: 'echo "$($TOOL gateway restart)"', argv: ["echo", "$($TOOL gateway restart)"] },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: "Get-Process $env:NAME | Stop-Process",
+        env: { NAME: "OpenClaw" },
+        platform: "win32",
+        segments: [
+          {
+            raw: "Get-Process $env:NAME | Stop-Process",
+            argv: ["Get-Process", "$env:NAME", "|", "Stop-Process"],
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: "echo '$TOOL gateway restart'",
+        env: { TOOL: "openclaw" },
+        platform: "linux",
+        segments: [
+          { raw: "echo '$TOOL gateway restart'", argv: ["echo", "$TOOL gateway restart"] },
+        ],
+      }),
+    ).toBe(false);
+  });
+
   it("expands known lifecycle environment references", () => {
     expect(
       commandRequiresOpenClawLifecycleApproval({
@@ -420,6 +478,9 @@ describe("OpenClaw lifecycle exec approvals", () => {
 
   it("uses PowerShell semantics for the Windows kill alias", () => {
     expect(requiresApproval("kill -Name OpenClaw", ["kill", "-Name", "OpenClaw"], "win32")).toBe(
+      true,
+    );
+    expect(requiresApproval("kill -Name Open*Claw", ["kill", "-Name", "Open*Claw"], "win32")).toBe(
       true,
     );
     expect(requiresApproval("kill -Id 123", ["kill", "-Id", "123"], "win32")).toBe(false);

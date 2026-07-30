@@ -44,3 +44,24 @@ export function isOpenClawExecutablePattern(value: string | undefined): boolean 
     )
   );
 }
+
+/** Return true when a process selector regex or wildcard can select OpenClaw. */
+export function matchesOpenClawProcessPattern(value: string | undefined): boolean {
+  const pattern = (value ?? "").trim().toLowerCase().replace(/["']/gu, "");
+  if (pattern.includes("openclaw")) {
+    return true;
+  }
+  const candidates = ["openclaw", "openclaw.exe", "openclaw gateway", "/opt/openclaw"];
+  if (
+    /[*?[]/u.test(pattern) &&
+    candidates.some((name) => globPatternToRegExp(pattern).test(name))
+  ) {
+    return true;
+  }
+  try {
+    const regex = new RegExp(pattern, "iu");
+    return candidates.some((name) => regex.test(name));
+  } catch {
+    return false;
+  }
+}
