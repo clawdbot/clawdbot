@@ -11,6 +11,7 @@ import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
+  TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "./lib/tsdown-config-groups.mjs";
 import {
   TSDOWN_PACKAGE_OUTPUT_ROOTS,
@@ -262,7 +263,10 @@ export function resolveTsdownCleanOutputRoots(args = []) {
     if (filter === TSDOWN_PACKAGE_CONFIG_GROUP) {
       return packageRoots;
     }
-    if (filter === TSDOWN_UNIFIED_CONFIG_GROUP) {
+    if (
+      filter === TSDOWN_UNIFIED_CONFIG_GROUP ||
+      TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.includes(filter)
+    ) {
       return [...ROOT_TSDOWN_OUTPUT_ROOTS];
     }
     return [...ROOT_TSDOWN_OUTPUT_ROOTS, ...packageRoots];
@@ -270,7 +274,10 @@ export function resolveTsdownCleanOutputRoots(args = []) {
   if (!config && filter === TSDOWN_PACKAGE_CONFIG_GROUP) {
     return [aiRoot, ...packageRoots];
   }
-  if (!config && filter === TSDOWN_UNIFIED_CONFIG_GROUP) {
+  if (
+    !config &&
+    (filter === TSDOWN_UNIFIED_CONFIG_GROUP || TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.includes(filter))
+  ) {
     return [aiRoot, ...ROOT_TSDOWN_OUTPUT_ROOTS];
   }
   return listTsdownOutputRoots();
@@ -683,7 +690,39 @@ export function resolveTsdownBuildInvocations(params = {}) {
     aiArgs.push(arg);
   }
 
+  const forwardedConfig = readForwardedOption(forwardedArgs, ["--config", "-c"]);
+  const forwardedFilter = readForwardedOption(forwardedArgs, ["--filter", "-F"]);
+  const mainConfigPath = path.resolve("tsdown.config.ts");
+  const selectsMainUnifiedBuild =
+    forwardedConfig !== undefined &&
+    path.resolve(forwardedConfig) === mainConfigPath &&
+    forwardedFilter === TSDOWN_UNIFIED_CONFIG_GROUP;
+  const declarationEnv =
+    declarationsEnabled && env[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1"
+      ? { ...env, [RUN_NODE_SKIP_DTS_BUILD_ENV]: "0" }
+      : env;
+
   if (hasForwardedConfig) {
+    if (declarationsEnabled && selectsMainUnifiedBuild) {
+      const argsWithoutFilter = forwardedArgs.filter((arg, index) => {
+        const previous = forwardedArgs[index - 1];
+        return (
+          arg !== "--filter" &&
+          arg !== "-F" &&
+          previous !== "--filter" &&
+          previous !== "-F" &&
+          !arg.startsWith("--filter=") &&
+          !arg.startsWith("-F=")
+        );
+      });
+      return [TSDOWN_UNIFIED_CONFIG_GROUP, ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS].map((group) =>
+        resolveTsdownBuildInvocation({
+          ...params,
+          args: ["--filter", group, ...argsWithoutFilter],
+          env: declarationEnv,
+        }),
+      );
+    }
     return [resolveTsdownBuildInvocation(params)];
   }
 
@@ -695,15 +734,24 @@ export function resolveTsdownBuildInvocations(params = {}) {
   ];
 
   if (!declarationsEnabled || hasForwardedFilter) {
-    invocations.push(resolveTsdownBuildInvocation(params));
+    const mainEnv =
+      !declarationsEnabled && env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1"
+        ? { ...env, [RUN_NODE_SKIP_DTS_BUILD_ENV]: "1" }
+        : env;
+    invocations.push(resolveTsdownBuildInvocation({ ...params, env: mainEnv }));
     return invocations;
   }
 
-  for (const group of [TSDOWN_PACKAGE_CONFIG_GROUP, TSDOWN_UNIFIED_CONFIG_GROUP]) {
+  for (const group of [
+    TSDOWN_PACKAGE_CONFIG_GROUP,
+    TSDOWN_UNIFIED_CONFIG_GROUP,
+    ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+  ]) {
     invocations.push(
       resolveTsdownBuildInvocation({
         ...params,
         args: ["--filter", group, ...forwardedArgs],
+        env: declarationEnv,
       }),
     );
   }

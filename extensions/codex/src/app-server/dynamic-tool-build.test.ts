@@ -27,6 +27,24 @@ import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { createCodexTestModel } from "./test-support.js";
 
+const hoisted = vi.hoisted(() => ({
+  resolveWebSearchToolPolicy: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/agent-harness", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness")>();
+
+  return {
+    ...actual,
+    resolveWebSearchToolPolicy: (
+      ...args: Parameters<(typeof actual)["resolveWebSearchToolPolicy"]>
+    ) => {
+      hoisted.resolveWebSearchToolPolicy(...args);
+      return actual.resolveWebSearchToolPolicy(...args);
+    },
+  };
+});
+
 let tempDir: string;
 
 function setOpenClawCodingToolsFactoryForTests(
@@ -149,6 +167,7 @@ describe("Codex app-server dynamic tool build", () => {
   });
 
   beforeEach(async () => {
+    hoisted.resolveWebSearchToolPolicy.mockClear();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-tools-"));
   });
 
@@ -430,6 +449,46 @@ describe("Codex app-server dynamic tool build", () => {
     expect(webSearchAllowed).toBe(false);
   });
 
+  it("forwards trusted completion and scheduled authority to policy construction", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.inputProvenance = {
+      kind: "inter_session",
+      sourceSessionKey: "agent:main:subagent:codex-child",
+      sourceTool: "subagent_announce",
+    };
+    params.config = {};
+    params.trustedInternalHandoff = true;
+    params.scheduledToolPolicy = {
+      version: 1,
+      mode: "account",
+      ownerSessionKey: "agent:main:discord:group:ops",
+      ownerAccountId: "default",
+    };
+    let receivedOptions: unknown;
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      receivedOptions = options;
+      return [createRuntimeDynamicTool("message")];
+    });
+
+    await buildDynamicToolsForTest(params, workspaceDir);
+
+    expect(receivedOptions).toMatchObject({
+      inputProvenance: params.inputProvenance,
+      trustedInternalHandoff: true,
+      scheduledToolPolicy: params.scheduledToolPolicy,
+    });
+    expect(hoisted.resolveWebSearchToolPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputProvenance: params.inputProvenance,
+        trustedInternalHandoff: true,
+        scheduledToolPolicy: params.scheduledToolPolicy,
+      }),
+    );
+  });
+
   it("keeps persistent search denied when global and sender policy both deny it", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
@@ -506,9 +565,15 @@ describe("Codex app-server dynamic tool build", () => {
   });
 
   it("exposes app-server-owned tools directly for forced private QA Codex runtime", () => {
-    const tools = ["read", "write", "get_goal", "image_generate", "message"].map((name) => ({
-      name,
-    }));
+    const tools = [
+      "read",
+      "write",
+      "apply_patch",
+      "apply-patch",
+      "get_goal",
+      "image_generate",
+      "message",
+    ].map((name) => ({ name }));
     const privateQaCodexEnv = {
       OPENCLAW_BUILD_PRIVATE_QA: "1",
       OPENCLAW_QA_FORCE_RUNTIME: "codex",
@@ -1473,6 +1538,15 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
 
     params.toolsAllow = ["message"];
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+  });
+
+  it("disables Codex native tool surfaces when all tools are disabled", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = true;
+    params.toolsAllow = undefined;
+
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
   });
 

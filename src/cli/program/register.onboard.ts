@@ -16,9 +16,10 @@ import type {
   TailscaleMode,
 } from "../../commands/onboard-types.js";
 import { resolveProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatCliCommand } from "../command-format.js";
-import { parsePort } from "../shared/parse-port.js";
+import { parseGatewayPortOption } from "../gateway-port-option.js";
 
 export function resolveInstallDaemonFlag(command: Command): boolean | undefined {
   // Commander doesn't support option conflicts natively; keep original behavior.
@@ -179,6 +180,18 @@ export function pickOnboardAuthOptionValues(
   };
 }
 
+export function validateOnboardAuthOptionValues(
+  opts: Record<string, unknown>,
+  runtime: RuntimeEnv,
+): boolean {
+  if (opts.customImageInput === true && opts.customTextInput === true) {
+    runtime.error("Use either --custom-image-input or --custom-text-input, not both.");
+    runtime.exit(1);
+    return false;
+  }
+  return true;
+}
+
 export function registerOnboardCommand(program: Command): void {
   const command = program
     .command("onboard")
@@ -331,9 +344,12 @@ export function registerOnboardCommand(program: Command): void {
         );
         return;
       }
+      if (!validateOnboardAuthOptionValues(opts as Record<string, unknown>, defaultRuntime)) {
+        return;
+      }
       const installDaemon = resolveInstallDaemonFlag(commandRuntime);
       const tailscaleResetOnExit = resolveTailscaleResetOnExitFlag(commandRuntime);
-      const gatewayPort = parsePort(opts.gatewayPort);
+      const gatewayPort = parseGatewayPortOption(opts.gatewayPort, "--gateway-port");
       const { setupWizardCommand } = await import("../../commands/onboard.js");
       await setupWizardCommand(
         {
@@ -345,7 +361,7 @@ export function registerOnboardCommand(program: Command): void {
           flow: opts.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
           mode: opts.mode as "local" | "remote" | undefined,
           ...pickOnboardAuthOptionValues(opts as Record<string, unknown>),
-          gatewayPort: gatewayPort ?? undefined,
+          gatewayPort,
           gatewayBind: opts.gatewayBind as GatewayBind | undefined,
           gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,
           gatewayToken: opts.gatewayToken as string | undefined,

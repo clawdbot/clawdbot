@@ -104,8 +104,10 @@ export function buildQaImageGenerationConfigPatch(input: QaImageGenerationPatchI
       : {}),
     agents: {
       defaults: {
-        imageGenerationModel: {
-          primary: imageModelRef,
+        mediaModels: {
+          image: {
+            primary: imageModelRef,
+          },
         },
       },
     },

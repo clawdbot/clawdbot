@@ -4,6 +4,7 @@ import { resolvePrimaryStringValue } from "@openclaw/normalization-core/string-c
 import type { ZodIssue } from "zod";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { CONFIG_PATH } from "../config/config.js";
+import { INCLUDE_KEY } from "../config/includes.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
@@ -110,6 +111,11 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
       issuePath.length === 0 ? undefined : parentKey ? STRIP_PROTECTED_KEYS[parentKey] : undefined;
     for (const key of issue.keys) {
       if (typeof key !== "string" || !(key in record)) {
+        continue;
+      }
+      // $include is authored parser syntax at every object depth, not a schema field.
+      // Doctor validates raw source, so stripping it would destroy include-owned config.
+      if (key === INCLUDE_KEY) {
         continue;
       }
       if (protectedSet?.has(key)) {
@@ -239,6 +245,26 @@ export function noteIncludeConfinementWarning(snapshot: {
       `- $include paths must stay under: ${configRoot}`,
       '- Move shared include files under that directory and update to relative paths like "./shared/common.json".',
       `- Error: ${includeIssue.message}`,
+    ].join("\n"),
+    "Doctor warnings",
+  );
+}
+
+/** Warns when a trusted-proxy gateway has no public sandbox origin for widget/MCP-app frames. */
+export function noteSandboxOriginProxyWarning(cfg: OpenClawConfig): void {
+  // trusted-proxy auth means the Control UI is reached through a reverse proxy
+  // or tunnel. Widget and MCP-app frames load from a separate sandbox listener
+  // (gateway port + 1); without mcp.apps.sandboxOrigin the browser derives that
+  // URL by port substitution, which such proxies do not route, and every
+  // pinned widget fails to render.
+  if (cfg.gateway?.auth?.mode !== "trusted-proxy" || cfg.mcp?.apps?.sandboxOrigin) {
+    return;
+  }
+  note(
+    [
+      '- gateway.auth.mode is "trusted-proxy" but mcp.apps.sandboxOrigin is not set.',
+      "  Dashboard widgets and MCP apps render from a separate sandbox listener (gateway port + 1). If your proxy or tunnel does not also route that port, widget frames cannot load.",
+      "  Check: either route the sandbox port through your proxy, or set mcp.apps.sandboxOrigin to a dedicated public origin routed to the sandbox listener (see the MCP Apps section of docs/cli/mcp.md).",
     ].join("\n"),
     "Doctor warnings",
   );

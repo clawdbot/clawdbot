@@ -16,6 +16,7 @@ import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   requiresClaudeMandatoryAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
@@ -85,6 +86,10 @@ function isClaudeFable5Model(modelId: string): boolean {
 
 function isClaudeSonnet5Model(modelId: string): boolean {
   return resolveClaudeSonnet5ModelIdentity({ id: modelId }) !== undefined;
+}
+
+function isClaudeOpus5Model(modelId: string): boolean {
+  return resolveClaudeOpus5ModelIdentity({ id: modelId }) !== undefined;
 }
 
 function isClaudeMythos5Model(modelId: string): boolean {
@@ -193,7 +198,9 @@ export function createAnthropicVertexStreamFn(
       requestedMaxTokens: options?.maxTokens,
     });
     const contractModelId = resolveClaudeModelIdentity(model);
-    const sonnet5 = isClaudeSonnet5Model(contractModelId);
+    // Sonnet 5 and Opus 5 default thinking on when the caller omits reasoning.
+    const adaptiveDefaultClaude5 =
+      isClaudeSonnet5Model(contractModelId) || isClaudeOpus5Model(contractModelId);
     const mandatoryAdaptiveThinking = requiresClaudeMandatoryAdaptiveThinking({
       id: contractModelId,
     });
@@ -201,7 +208,8 @@ export function createAnthropicVertexStreamFn(
     const reasoning =
       requestedReasoning === "off" && mandatoryAdaptiveThinking
         ? "low"
-        : (requestedReasoning ?? (mandatoryAdaptiveThinking || sonnet5 ? "high" : undefined));
+        : (requestedReasoning ??
+          (mandatoryAdaptiveThinking || adaptiveDefaultClaude5 ? "high" : undefined));
     const adaptiveThinking =
       mandatoryAdaptiveThinking ||
       Boolean(reasoning && reasoning !== "off" && supportsAdaptiveThinking(contractModelId));

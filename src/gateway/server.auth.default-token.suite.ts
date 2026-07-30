@@ -161,6 +161,10 @@ export function registerDefaultAuthTokenSuite(): void {
             type?: unknown;
             features?: { capabilities?: unknown };
             snapshot?: { configPath?: string; stateDir?: string };
+            policy?: {
+              allowedSessionVisibilities?: unknown;
+              hasMultipleSessionSharingIdentities?: unknown;
+            };
           }
         | undefined;
       expect(payload?.type).toBe("hello-ok");
@@ -175,8 +179,35 @@ export function registerDefaultAuthTokenSuite(): void {
       );
       expect(payload?.snapshot?.configPath).toBe(createConfigIO().configPath);
       expect(payload?.snapshot?.stateDir).toBe(STATE_DIR);
+      expect(payload?.policy?.allowedSessionVisibilities).toEqual([
+        "shared",
+        "read-only",
+        "suggest",
+        "draft",
+      ]);
+      expect(payload?.policy?.hasMultipleSessionSharingIdentities).toBe(false);
 
       ws.close();
+    });
+
+    test("hello policy counts canonical session-sharing identities", async () => {
+      const { ensureProfileForEmail, linkEmail } = await import("../state/user-profiles.js");
+      const suffix = `${process.pid}-${Date.now()}`;
+      ensureProfileForEmail(`hello-a-${suffix}@example.invalid`);
+      const target = ensureProfileForEmail(`hello-b-${suffix}@example.invalid`);
+      ensureProfileForEmail(`hello-merged-${suffix}@example.invalid`);
+      linkEmail(`hello-merged-${suffix}@example.invalid`, target.id);
+
+      const ws = await openWs(port);
+      try {
+        const res = await connectReq(ws);
+        const payload = res.payload as
+          | { policy?: { hasMultipleSessionSharingIdentities?: unknown } }
+          | undefined;
+        expect(payload?.policy?.hasMultipleSessionSharingIdentities).toBe(true);
+      } finally {
+        ws.close();
+      }
     });
 
     test("connect (req) handshake resolves server version from runtime precedence", async () => {

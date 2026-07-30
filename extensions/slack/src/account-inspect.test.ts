@@ -9,7 +9,7 @@ describe("inspectSlackAccount", () => {
       cfg: {
         channels: {
           slack: {
-            identity: "user",
+            postAs: "user",
             userToken: "test-user-token",
             appToken: "test-app-token",
           },
@@ -36,7 +36,7 @@ describe("inspectSlackAccount", () => {
       cfg: {
         channels: {
           slack: {
-            identity: "user",
+            postAs: "user",
             mode: "http",
             userToken: "test-user-token",
           },
@@ -81,6 +81,32 @@ describe("inspectSlackAccount", () => {
       appTokenStatus: "available",
       userTokenSource: "none",
       userTokenStatus: "missing",
+    });
+  });
+
+  it("does not fall through an unavailable configured ref to environment tokens", () => {
+    const account = inspectSlackAccount({
+      cfg: {
+        channels: {
+          slack: {
+            botToken: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_TEST_MISSING_SLACK_BOT_TOKEN",
+            },
+            appToken: "test-app-token",
+          },
+        },
+      } as OpenClawConfig,
+      envBotToken: "xoxb-lower-precedence",
+      envAppToken: "",
+      envUserToken: "",
+    });
+
+    expect(account.botToken).toBeUndefined();
+    expect(account).toMatchObject({
+      botTokenSource: "config",
+      botTokenStatus: "configured_unavailable",
     });
   });
 });

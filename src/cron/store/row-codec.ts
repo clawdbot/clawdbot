@@ -2,10 +2,12 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
+import { normalizeCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { CronJob, CronJobState, CronPacing, CronSchedule, CronStoreFile } from "../types.js";
 import { bindDeliveryColumns, deliveryFromRow } from "./delivery-codec.js";
 import { bindFailureAlertColumns, failureAlertFromRow } from "./failure-alert-codec.js";
@@ -62,6 +64,19 @@ function bindScheduleColumns(
       anchor_ms: null,
       schedule_expr: schedule.command,
       schedule_tz: schedule.cwd ?? null,
+      stagger_ms: null,
+    };
+  }
+  if (schedule.kind === "stream") {
+    // argv-shaped stream schedules live in the existing additive job_json
+    // envelope; normalized columns retain only the discriminant (no DDL).
+    return {
+      schedule_kind: "stream",
+      at: null,
+      every_ms: null,
+      anchor_ms: null,
+      schedule_expr: null,
+      schedule_tz: null,
       stagger_ms: null,
     };
   }
@@ -236,6 +251,13 @@ function scheduleFromRow(row: CronJobRow): CronSchedule | null {
       ...(row.schedule_tz ? { cwd: row.schedule_tz } : {}),
     };
   }
+  if (row.schedule_kind === "stream") {
+    const schedule = parseJsonObject<Record<string, unknown>>(row.job_json, {}).schedule;
+    if (!isRecord(schedule) || schedule.kind !== "stream" || !Array.isArray(schedule.command)) {
+      return null;
+    }
+    return structuredClone(schedule) as CronSchedule;
+  }
   return null;
 }
 
@@ -251,12 +273,18 @@ function pacingFromRow(row: CronJobRow): CronPacing | undefined {
 }
 
 function rowToCronJob(row: CronJobRow): CronJob | null {
+  const jobJson = parseJsonObject<Record<string, unknown>>(row.job_json, {});
+  const jsonOwner = isRecord(jobJson.owner) ? jobJson.owner : undefined;
+  const ownerAccountId = normalizeOptionalAccountId(
+    typeof jsonOwner?.accountId === "string" ? jsonOwner.accountId : undefined,
+  );
   const schedule = scheduleFromRow(row);
   const payload = payloadFromRow(row);
   const delivery = deliveryFromRow(row);
   const failureAlert = failureAlertFromRow(row);
   const trigger = triggerFromRow(row);
   const pacing = pacingFromRow(row);
+  const scheduledToolPolicy = normalizeCronScheduledToolPolicy(jobJson.scheduledToolPolicy);
   if (!schedule || !payload) {
     return null;
   }
@@ -265,14 +293,16 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
     id: row.job_id,
     ...(row.declaration_key ? { declarationKey: row.declaration_key } : {}),
     ...(row.display_name ? { displayName: row.display_name } : {}),
-    ...(row.owner_agent_id || row.owner_session_key
+    ...(row.owner_agent_id || row.owner_session_key || ownerAccountId
       ? {
           owner: {
             ...(row.owner_agent_id ? { agentId: row.owner_agent_id } : {}),
             ...(row.owner_session_key ? { sessionKey: row.owner_session_key } : {}),
+            ...(ownerAccountId ? { accountId: ownerAccountId } : {}),
           },
         }
       : {}),
+    ...(scheduledToolPolicy ? { scheduledToolPolicy } : {}),
     name: row.name,
     ...(row.description ? { description: row.description } : {}),
     enabled: row.enabled !== 0,
@@ -324,6 +354,48 @@ export function loadCronRows(db: DatabaseSync, storeKey: string): CronJobRow[] {
   ).rows;
 }
 
+export type CronJobFamilyIdentity = {
+  declarationKey: string;
+  name: string;
+  ownerPluginTag: string;
+};
+
+/** Removes one owned job family from obsolete store partitions. */
+export function deleteStaleCronJobFamilyRows(
+  db: DatabaseSync,
+  activeStoreKey: string,
+  family: CronJobFamilyIdentity,
+): number {
+  const staleRows = executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .selectFrom("cron_jobs")
+      .select(["store_key", "job_id", "declaration_key", "name", "description"])
+      .where("store_key", "!=", activeStoreKey),
+  ).rows.filter(
+    (row) =>
+      row.declaration_key === family.declarationKey ||
+      (row.name === family.name && row.description?.includes(family.ownerPluginTag) === true),
+  );
+  for (const row of staleRows) {
+    executeSqliteQuerySync(
+      db,
+      getCronStoreKysely(db)
+        .deleteFrom("cron_job_scratch")
+        .where("store_key", "=", row.store_key)
+        .where("job_id", "=", row.job_id),
+    );
+    executeSqliteQuerySync(
+      db,
+      getCronStoreKysely(db)
+        .deleteFrom("cron_jobs")
+        .where("store_key", "=", row.store_key)
+        .where("job_id", "=", row.job_id),
+    );
+  }
+  return staleRows.length;
+}
+
 /** Replaces all persisted cron rows for one store key from the config store snapshot. */
 export function replaceCronRows(db: DatabaseSync, storeKey: string, store: CronStoreFile): void {
   executeSqliteQuerySync(
@@ -342,6 +414,27 @@ export function replaceCronRows(db: DatabaseSync, storeKey: string, store: CronS
         .values(bindCronJobRow(storeKey, normalized, index)),
     );
   }
+}
+
+/** Upserts one persisted cron row without rewriting unrelated jobs in its store partition. */
+export function upsertCronJobRow(
+  db: DatabaseSync,
+  storeKey: string,
+  job: CronJob,
+  sortOrder: number,
+): void {
+  const normalized = normalizeCronJobForSqlite(job);
+  if (!normalized) {
+    throw new Error(`Cannot persist invalid cron job ${job.id}`);
+  }
+  const values = bindCronJobRow(storeKey, normalized, sortOrder);
+  executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .insertInto("cron_jobs")
+      .values(values)
+      .onConflict((conflict) => conflict.columns(["store_key", "job_id"]).doUpdateSet(values)),
+  );
 }
 
 /** Updates only mutable runtime columns without rewriting full job config JSON. */

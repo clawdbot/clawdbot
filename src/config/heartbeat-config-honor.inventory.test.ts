@@ -13,9 +13,6 @@ const EXPECTED_HEARTBEAT_KEYS = [
   "every",
   "model",
   "prompt",
-  "includeSystemPromptSection",
-  "ackMaxChars",
-  "suppressToolErrorWarnings",
   "timeoutSeconds",
   "lightContext",
   "isolatedSession",
@@ -23,7 +20,6 @@ const EXPECTED_HEARTBEAT_KEYS = [
   "to",
   "accountId",
   "directPolicy",
-  "includeReasoning",
 ] as const;
 
 describe("heartbeat config-honor inventory", () => {

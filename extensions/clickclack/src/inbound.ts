@@ -216,7 +216,7 @@ export async function handleClickClackInbound(params: {
   if (params.account.agentActivity && (message.channel_id || message.direct_conversation_id)) {
     activity = createClickClackActivityPublisher({
       client: createClickClackClient({
-        baseUrl: params.account.baseUrl,
+        baseUrl: params.account.apiEndpoint,
         token: params.account.token,
         correlationId: params.correlationId,
       }),

@@ -112,7 +112,7 @@ function trackPendingChatSettingsPatch(
 export function patchChatSessionSettings(
   host: ChatPickerPatchHost,
   sessionKey: string,
-  patch: Pick<SessionPatch, "model" | "thinkingLevel" | "fastMode">,
+  patch: Pick<SessionPatch, "model" | "thinkingLevel" | "fastMode" | "toolOverrides">,
   options: {
     agentId?: string;
     reconcile?: (result: SessionsPatchResult) => Promise<void> | void;

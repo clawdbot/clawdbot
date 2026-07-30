@@ -33,6 +33,7 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "image", family: "openclaw" },
   { name: "image_generate", family: "openclaw" },
   { name: "message", family: "openclaw" },
+  { name: "mobile_ui", family: "openclaw" },
   { name: "music_generate", family: "openclaw" },
   { name: "nodes", family: "openclaw" },
   { name: "pdf", family: "openclaw" },
@@ -75,4 +76,14 @@ export type OpenClawCodingToolConstructionPlan = {
 
 export function resolveCoreToolFactoryFamily(name: string): CoreToolFactoryFamily | undefined {
   return CORE_TOOL_FACTORY_FAMILY_BY_NAME.get(name);
+}
+
+/**
+ * Core coding primitives (file + shell families). Tool-search compaction keeps
+ * these directly visible: hiding them behind search adds a lookup round-trip to
+ * nearly every coding turn.
+ */
+export function isCoreCodingSurfaceToolName(name: string): boolean {
+  const family = CORE_TOOL_FACTORY_FAMILY_BY_NAME.get(name);
+  return family === "base-coding" || family === "shell";
 }

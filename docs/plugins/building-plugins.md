@@ -347,6 +347,12 @@ routes that declare `contracts.gatewayMethodDispatch: ["authenticated-request"]`
 
 For the full import map, see [Plugin SDK overview](/plugins/sdk-overview).
 
+OpenClaw SDK compatibility fields carry TypeScript `@deprecated` annotations,
+which editors surface as migration warnings. To enforce them at build time,
+enable a type-aware rule such as
+[`@typescript-eslint/no-deprecated`](https://typescript-eslint.io/rules/no-deprecated/).
+Oxlint is not type-aware, so it cannot enforce these annotations.
+
 ## Pre-submission checklist
 
 <Check>**package.json** has correct `openclaw` metadata</Check>

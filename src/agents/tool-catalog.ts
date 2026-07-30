@@ -160,7 +160,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "sessions",
     label: "sessions",
-    description: "Session settings and groups",
+    description: "Session settings: label, pin, archive, groups",
     sectionId: "sessions",
     profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
@@ -319,7 +319,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "show_widget",
     label: "show_widget",
-    description: "Show an interactive widget on supported chat surfaces",
+    description: "Show an interactive widget on chat or an auto-fitting dashboard",
     sectionId: "ui",
     profiles: [],
     includeInOpenClawGroup: true,
@@ -368,6 +368,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     id: "computer",
     label: "computer",
     description: "Control a paired computer node desktop",
+    sectionId: "nodes",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "mobile_ui",
+    label: "mobile_ui",
+    description: "Observe and control a paired Android app",
     sectionId: "nodes",
     profiles: [],
     includeInOpenClawGroup: true,

@@ -91,8 +91,10 @@ export function resolveHostedPluginSurfaceUrl(params: HostedPluginSurfaceUrlPara
   }
 
   let exposedPort = port;
-  if (!override && (forwardedHost || requestHost) && port === 18789) {
-    // Behind a proxy, expose the public Host header port instead of the gateway's local port.
+  if (!override && (forwardedHost || requestHost)) {
+    // Advertise the port the browser used, not the Gateway listener port. This
+    // keeps plugin surfaces reachable when any custom Gateway port sits behind
+    // a TLS terminator or tunnel on the protocol's default public port.
     if (advertisedHost.port && advertisedHost.port > 0) {
       exposedPort = advertisedHost.port;
     } else if (scheme === "https") {

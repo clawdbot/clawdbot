@@ -74,12 +74,6 @@ function recordChannelHistoryEntry<T extends HistoryEntry>(params: {
   return history;
 }
 
-/**
- * @deprecated Plugin message-turn code should use `createChannelHistoryWindow(...).record(...)`.
- * This helper remains for core internals and older plugin compatibility.
- */
-export const recordPendingHistoryEntry = recordChannelHistoryEntry;
-
 export function recordChannelHistoryEntryIfEnabled<T extends HistoryEntry>(params: {
   historyMap: Map<string, T[]>;
   historyKey: string;
@@ -147,7 +141,9 @@ export function normalizeHistoryMediaEntries(params: {
     out.push({
       path,
       contentType: entry.contentType,
-      kind: "image",
+      // Stickers are image-compatible for history reattachment, but their native kind drives
+      // text-only history rendering and must survive this normalization boundary.
+      kind: entry.kind === "sticker" ? "sticker" : "image",
       messageId: entry.messageId ?? params.messageId,
     });
     if (out.length >= limit) {
@@ -340,11 +336,6 @@ function clearChannelHistory(params: {
 }): void {
   params.historyMap.set(params.historyKey, []);
 }
-
-/**
- * @deprecated Plugin message-turn code should use `createChannelHistoryWindow(...).clear(...)`.
- */
-export const clearHistoryEntries = clearChannelHistory;
 
 export function clearChannelHistoryIfEnabled(params: {
   historyMap: Map<string, HistoryEntry[]>;

@@ -3,11 +3,13 @@ import {
   buildChannelInboundMediaPayload,
   formatInboundMediaUnavailableText,
   formatMediaPlaceholderText,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
   type ChannelInboundMediaPayload,
+  type InboundMediaFacts,
   type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -25,18 +27,13 @@ import {
 } from "./client.js";
 import { buildButtonProps, type MattermostInteractionResponse } from "./interactions.js";
 
-type MattermostMediaKind = "image" | "audio" | "video" | "document" | "unknown";
+type MattermostMediaInfo = Omit<MediaPlaceholderTextFact, "kind" | "url"> & { kind: MediaKind };
 
-type MattermostMediaInfo = {
-  path?: string;
-  contentType?: string;
-  kind: MattermostMediaKind;
-};
-
-export function buildMattermostInboundMediaPayload(
+export async function buildMattermostInboundMediaPayload(
   media: readonly MattermostMediaInfo[],
-): ChannelInboundMediaPayload {
-  return buildChannelInboundMediaPayload(toInboundMediaFacts(media));
+): Promise<ChannelInboundMediaPayload & { media: InboundMediaFacts[] }> {
+  const facts = await toInboundMediaFactsWithMetadata(media);
+  return { ...buildChannelInboundMediaPayload(facts), media: facts };
 }
 
 export function formatMattermostPendingMediaText(params: {
@@ -88,7 +85,7 @@ export function createMattermostMonitorResources(params: {
   logger: { debug?: (...args: unknown[]) => void };
   mediaMaxBytes: number;
   saveRemoteMedia: SaveRemoteMedia;
-  mediaKindFromMime: (contentType?: string) => MattermostMediaKind | null | undefined;
+  mediaKindFromMime: (contentType?: string) => MediaKind | null | undefined;
 }) {
   const {
     accountId,

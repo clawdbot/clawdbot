@@ -1,9 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { nothing } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../../app/context.ts";
+import { i18n } from "../../../i18n/index.ts";
+import type { TranslationMap } from "../../../i18n/lib/types.ts";
+import { en } from "../../../i18n/locales/en.ts";
 import type { DreamingState } from "./dreaming.ts";
 import type { DreamingViewState } from "./view.ts";
 import "./memory-panel.ts";
@@ -13,8 +16,8 @@ type TestMemoryPanel = HTMLElement & {
   agentId: string;
   dreaming: DreamingState;
   viewState: DreamingViewState;
-  restartConfirmOpen: boolean;
-  restartConfirmLoading: boolean;
+  toggleConfirmOpen: boolean;
+  toggleConfirmLoading: boolean;
   pendingEnabled: boolean | null;
   applyAgentId: () => void;
   applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
@@ -24,6 +27,30 @@ type TestMemoryPanel = HTMLElement & {
   requestUpdate: () => void;
   readonly updateComplete: Promise<boolean>;
 };
+
+let restoreTranslations = () => {};
+
+beforeAll(() => {
+  const dreaming =
+    en.dreaming && typeof en.dreaming === "object" ? (en.dreaming as TranslationMap) : {};
+  const wiki =
+    dreaming.wiki && typeof dreaming.wiki === "object" ? (dreaming.wiki as TranslationMap) : {};
+  i18n.registerTranslation("en", {
+    ...en,
+    dreaming: {
+      ...dreaming,
+      wiki: {
+        ...wiki,
+        noContent: "No wiki content available.",
+      },
+    },
+  });
+  restoreTranslations = () => i18n.registerTranslation("en", en);
+});
+
+afterAll(() => {
+  restoreTranslations();
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -36,8 +63,9 @@ function deferred<T>() {
 function contextWithGateway(client: GatewayBrowserClient, connected: boolean): ApplicationContext {
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected,
-    reconnecting: false,
+    phase: connected ? "connected" : "stopped",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -119,8 +147,8 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     page.viewState.wikiPreviewLoading = true;
     page.viewState.wikiPreviewTitle = "Old page";
     page.viewState.wikiPreviewContent = "old wiki";
-    page.restartConfirmOpen = true;
-    page.restartConfirmLoading = true;
+    page.toggleConfirmOpen = true;
+    page.toggleConfirmLoading = true;
     page.pendingEnabled = true;
 
     await replaceContext(page, contextWithGateway(client, false));
@@ -131,19 +159,19 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     expect(page.viewState.wikiPreviewLoading).toBe(false);
     expect(page.viewState.wikiPreviewTitle).toBe("");
     expect(page.viewState.wikiPreviewContent).toBe("");
-    expect(page.restartConfirmOpen).toBe(false);
-    expect(page.restartConfirmLoading).toBe(false);
+    expect(page.toggleConfirmOpen).toBe(false);
+    expect(page.toggleConfirmLoading).toBe(false);
     expect(page.pendingEnabled).toBeNull();
 
     page.viewState.wikiPreviewOpen = true;
-    page.restartConfirmOpen = true;
-    page.restartConfirmLoading = true;
+    page.toggleConfirmOpen = true;
+    page.toggleConfirmLoading = true;
     page.pendingEnabled = false;
     page.remove();
 
     expect(page.viewState.wikiPreviewOpen).toBe(false);
-    expect(page.restartConfirmOpen).toBe(false);
-    expect(page.restartConfirmLoading).toBe(false);
+    expect(page.toggleConfirmOpen).toBe(false);
+    expect(page.toggleConfirmLoading).toBe(false);
     expect(page.pendingEnabled).toBeNull();
   });
 
@@ -174,8 +202,8 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
 
     const previousState = page.dreaming;
     const preview = page.openWikiPage("old.md");
-    page.applyGatewaySnapshot({ client, connected: false } as ApplicationGatewaySnapshot);
-    page.applyGatewaySnapshot({ client, connected: true } as ApplicationGatewaySnapshot);
+    page.applyGatewaySnapshot({ client, phase: "stopped" } as ApplicationGatewaySnapshot);
+    page.applyGatewaySnapshot({ client, phase: "connected" } as ApplicationGatewaySnapshot);
     pending.resolve({ title: "Old", path: "old.md", content: "stale" });
 
     await expect(preview).resolves.toBeNull();
@@ -202,6 +230,19 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
       fromLine: 1,
       lineCount: 5000,
       agentId: "support",
+    });
+  });
+
+  it("uses localized empty content for wiki previews", async () => {
+    const client = {
+      request: vi.fn(async () => ({ title: "Empty", path: "empty.md", content: "" })),
+    } as unknown as GatewayBrowserClient;
+    const page = createPage(contextWithGateway(client, true));
+    document.body.append(page);
+    await page.updateComplete;
+
+    await expect(page.openWikiPage("empty.md")).resolves.toMatchObject({
+      content: "No wiki content available.",
     });
   });
 

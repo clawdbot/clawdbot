@@ -47,6 +47,14 @@ const transcriptStoreMocks = vi.hoisted(() => ({
     (limit: number) => Array<{ role: "user" | "assistant"; text: string; at: number }>
   >(() => []),
 }));
+const greetingMocks = vi.hoisted(() => ({
+  acknowledgeSystemAgentGreetingDelivery: vi.fn(),
+  loadSystemAgentGreetingFacts: vi.fn(),
+  resolveSystemAgentGreeting: vi.fn(),
+}));
+const onboardingWelcomeMocks = vi.hoisted(() => ({
+  buildOnboardingWelcome: vi.fn(),
+}));
 
 vi.mock("../../system-agent/setup-inference.js", () => ({
   activateSetupInference: setupInferenceMocks.activateSetupInference,
@@ -67,6 +75,18 @@ vi.mock("../../system-agent/transcript-store.js", () => ({
   appendTranscriptReset: transcriptStoreMocks.appendTranscriptReset,
   appendTranscriptTurn: transcriptStoreMocks.appendTranscriptTurn,
   readTranscriptTail: transcriptStoreMocks.readTranscriptTail,
+}));
+vi.mock("../../system-agent/greeting.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../system-agent/greeting.js")>();
+  return {
+    ...actual,
+    acknowledgeSystemAgentGreetingDelivery: greetingMocks.acknowledgeSystemAgentGreetingDelivery,
+    loadSystemAgentGreetingFacts: greetingMocks.loadSystemAgentGreetingFacts,
+    resolveSystemAgentGreeting: greetingMocks.resolveSystemAgentGreeting,
+  };
+});
+vi.mock("../../system-agent/onboarding-welcome.js", () => ({
+  buildOnboardingWelcome: onboardingWelcomeMocks.buildOnboardingWelcome,
 }));
 
 type RespondCall = {
@@ -190,6 +210,20 @@ beforeEach(async () => {
   transcriptStoreMocks.appendTranscriptTurn.mockReset();
   transcriptStoreMocks.appendTranscriptReset.mockReset();
   transcriptStoreMocks.readTranscriptTail.mockReset().mockReturnValue([]);
+  greetingMocks.acknowledgeSystemAgentGreetingDelivery.mockReset();
+  greetingMocks.loadSystemAgentGreetingFacts.mockReset().mockReturnValue({
+    updateAvailable: null,
+    channelHealth: { available: true, degraded: [] },
+    recentExternalEdit: false,
+    auditSequence: 0,
+  });
+  greetingMocks.resolveSystemAgentGreeting.mockReset().mockResolvedValue({
+    text: "I'm OpenClaw. All systems nominal.",
+    source: "model",
+  });
+  onboardingWelcomeMocks.buildOnboardingWelcome.mockReset().mockResolvedValue({
+    text: "Inference is ready. Let's finish setup.",
+  });
 });
 
 afterEach(() => {
@@ -201,6 +235,10 @@ afterEach(() => {
   providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider.mockReset();
   setupSharedMocks.readSetupConfigFileSnapshot.mockReset();
   setupSharedMocks.writeWizardConfigFile.mockReset();
+  greetingMocks.loadSystemAgentGreetingFacts.mockReset();
+  greetingMocks.resolveSystemAgentGreeting.mockReset();
+  greetingMocks.acknowledgeSystemAgentGreetingDelivery.mockReset();
+  onboardingWelcomeMocks.buildOnboardingWelcome.mockReset();
   verifiedInference = undefined;
   verifiedInferenceDeps = undefined;
   resetCommandQueueStateForTest();
@@ -437,9 +475,11 @@ describe("openclaw.chat", () => {
       error: {
         code: "UNAVAILABLE",
         message: "OpenClaw requires working inference: no configured model",
+        details: {
+          code: "system_agent_inference_unavailable",
+        },
       },
     });
-    expect(call.error).not.toHaveProperty("details");
     expect(sessions.size).toBe(0);
   });
 
@@ -613,6 +653,60 @@ describe("openclaw.chat", () => {
     expect(call.ok).toBe(false);
   });
 
+  it("trims, canonicalizes, and forwards valid UI context for a user turn", async () => {
+    const engine = makeVerifiedEngine();
+    const handle = vi
+      .spyOn(engine, "handle")
+      .mockResolvedValue({ text: "Everything is healthy.", action: "none" });
+    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
+
+    const call = await callChat(makeContext(sessions), {
+      sessionId: "s1",
+      message: "What about this page?",
+      context: { page: "  /settings/channels  ", source: "client" },
+    });
+
+    expect(call.ok).toBe(true);
+    expect(handle).toHaveBeenCalledWith("What about this page?", {
+      uiContext: { page: "/settings/channels" },
+    });
+  });
+
+  it.each([
+    { name: "unsafe characters", page: "channels?tab=all" },
+    { name: "an overlong id", page: "a".repeat(65) },
+    { name: "a Unicode case-folding character", page: "\u212A" },
+  ])("drops UI context with $name without rejecting the turn", async ({ page }) => {
+    const engine = makeVerifiedEngine();
+    const handle = vi
+      .spyOn(engine, "handle")
+      .mockResolvedValue({ text: "Everything is healthy.", action: "none" });
+    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
+
+    const call = await callChat(makeContext(sessions), {
+      sessionId: "s1",
+      message: "Status please.",
+      context: { page },
+    });
+
+    expect(call.ok).toBe(true);
+    expect(handle).toHaveBeenCalledWith("Status please.");
+  });
+
+  it("does not pass UI context to welcome-only turns", async () => {
+    const engine = makeVerifiedEngine();
+    const handle = vi.spyOn(engine, "handle");
+    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
+
+    const call = await callChat(makeContext(sessions), {
+      sessionId: "s1",
+      context: { page: "custodian" },
+    });
+
+    expect(call.ok).toBe(true);
+    expect(handle).not.toHaveBeenCalled();
+  });
+
   it("persists completed turns from the engine's sanitized history", async () => {
     const engine = new SystemAgentChatEngine({
       verifiedInference: requireVerifiedInferenceFixture(),
@@ -625,6 +719,7 @@ describe("openclaw.chat", () => {
     const call = await callChat(makeContext(sessions), {
       sessionId: "s1",
       message: "How is this machine doing?",
+      context: { page: "dashboard" },
     });
 
     expect(call.payload).toMatchObject({ reply: "Everything is healthy." });
@@ -636,6 +731,9 @@ describe("openclaw.chat", () => {
     expect(transcriptStoreMocks.appendTranscriptTurn).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ role: "assistant", text: "Everything is healthy." }),
+    );
+    expect(JSON.stringify(transcriptStoreMocks.appendTranscriptTurn.mock.calls)).not.toContain(
+      "ui-context",
     );
   });
 
@@ -720,7 +818,9 @@ describe("openclaw.chat", () => {
     const operation = { kind: "config-set" as const, path: "gateway.port", value: "19001" };
     const proposalHash = "a".repeat(64);
     const engine = makeVerifiedEngine();
-    vi.spyOn(engine, "handle").mockResolvedValue({ text: "Approval pending.", action: "none" });
+    const handle = vi
+      .spyOn(engine, "handle")
+      .mockResolvedValue({ text: "Approval pending.", action: "none" });
     vi.spyOn(engine, "getPendingOperatorProposal").mockReturnValue({
       operation,
       hash: proposalHash,
@@ -753,6 +853,7 @@ describe("openclaw.chat", () => {
     const first = await callChat(context, {
       sessionId: "delegate-1",
       message: "Change port.",
+      context: { page: "channels" },
       delegation: { agentId: "main", sessionKey: "agent:main:main" },
     });
     const proposalId = (first.payload as { proposalId?: string }).proposalId;
@@ -773,6 +874,7 @@ describe("openclaw.chat", () => {
       { dropIfSlow: true },
     );
     expect(resolveOperatorApproval).not.toHaveBeenCalled();
+    expect(handle).toHaveBeenNthCalledWith(1, "Change port.");
 
     await callChat(context, {
       sessionId: "delegate-1",

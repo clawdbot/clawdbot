@@ -77,12 +77,14 @@ export const UpdateRunParamsSchema = closedObject({
 const ConfigUiHintSchema = closedObject({
   label: Type.Optional(Type.String()),
   help: Type.Optional(Type.String()),
+  docsUrl: Type.Optional(Type.String()),
   tags: Type.Optional(Type.Array(Type.String())),
   group: Type.Optional(Type.String()),
   order: Type.Optional(Type.Integer()),
   advanced: Type.Optional(Type.Boolean()),
   sensitive: Type.Optional(Type.Boolean()),
   placeholder: Type.Optional(Type.String()),
+  presentation: Type.Optional(Type.Literal("phone-number")),
   itemTemplate: Type.Optional(Type.Unknown()),
 });
 

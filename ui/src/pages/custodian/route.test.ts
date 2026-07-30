@@ -34,8 +34,9 @@ function loadRoute(search: string): CustodianRouteData {
 function createContext(): ApplicationContext {
   const snapshot: ApplicationGatewaySnapshot = {
     client: null,
-    connected: false,
-    reconnecting: false,
+    phase: "stopped",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "main",
@@ -53,7 +54,13 @@ function createContext(): ApplicationContext {
     subscribe: () => () => undefined,
     subscribeEvents: () => () => undefined,
   } as unknown as ApplicationGateway;
-  return { gateway } as unknown as ApplicationContext;
+  return {
+    gateway,
+    agents: {
+      state: { agentsList: null },
+      subscribe: () => () => undefined,
+    },
+  } as unknown as ApplicationContext;
 }
 
 afterEach(() => {

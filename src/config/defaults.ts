@@ -9,9 +9,9 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
-  DEFAULT_AGENT_MAX_CONCURRENT,
   DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
+  resolveAgentMaxConcurrent,
 } from "./agent-limits.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
 import {
@@ -32,7 +32,7 @@ const defaultWarnState: WarnState = { warned: false };
 
 export const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   // Anthropic (shared model runtime catalog uses "latest" ids without date suffix)
-  opus: "anthropic/claude-opus-4-8",
+  opus: "anthropic/claude-opus-5",
   sonnet: "anthropic/claude-sonnet-5",
 
   // OpenAI
@@ -90,15 +90,21 @@ export function resolveNormalizedProviderModelMaxTokens(params: {
   rawMaxTokens: number;
 }): number {
   const clamped = Math.min(params.rawMaxTokens, params.contextWindow);
-  if (normalizeProviderId(params.providerId) !== "mistral" || clamped < params.contextWindow) {
+  if (normalizeProviderId(params.providerId) !== "mistral") {
     return clamped;
   }
 
-  const safeMaxTokens =
-    MISTRAL_SAFE_MAX_TOKENS_BY_MODEL[
-      params.modelId as keyof typeof MISTRAL_SAFE_MAX_TOKENS_BY_MODEL
-    ] ?? DEFAULT_MODEL_MAX_TOKENS;
-  return Math.min(safeMaxTokens, params.contextWindow);
+  const safeMaxTokens = Object.hasOwn(MISTRAL_SAFE_MAX_TOKENS_BY_MODEL, params.modelId)
+    ? MISTRAL_SAFE_MAX_TOKENS_BY_MODEL[
+        params.modelId as keyof typeof MISTRAL_SAFE_MAX_TOKENS_BY_MODEL
+      ]
+    : undefined;
+  if (safeMaxTokens !== undefined) {
+    return Math.min(clamped, safeMaxTokens);
+  }
+  return clamped < params.contextWindow
+    ? clamped
+    : Math.min(DEFAULT_MODEL_MAX_TOKENS, params.contextWindow);
 }
 
 type SessionDefaultsOptions = {
@@ -180,6 +186,15 @@ export function applyModelDefaults(
         continue;
       }
       const providerApi = normalizedProvider.api;
+      const providerContextWindow = isPositiveNumber(normalizedProvider.contextWindow)
+        ? normalizedProvider.contextWindow
+        : undefined;
+      const providerContextTokens = isPositiveNumber(normalizedProvider.contextTokens)
+        ? normalizedProvider.contextTokens
+        : undefined;
+      const providerMaxTokens = isPositiveNumber(normalizedProvider.maxTokens)
+        ? normalizedProvider.maxTokens
+        : undefined;
       const nextProvider = normalizedProvider;
       if (nextProvider !== provider) {
         mutated = true;
@@ -220,12 +235,22 @@ export function applyModelDefaults(
 
         const contextWindow = isPositiveNumber(raw.contextWindow)
           ? raw.contextWindow
-          : DEFAULT_CONTEXT_TOKENS;
+          : (providerContextWindow ?? DEFAULT_CONTEXT_TOKENS);
         if (raw.contextWindow !== contextWindow) {
           modelMutated = true;
         }
 
-        const defaultMaxTokens = Math.min(DEFAULT_MODEL_MAX_TOKENS, contextWindow);
+        const contextTokens = isPositiveNumber(raw.contextTokens)
+          ? raw.contextTokens
+          : providerContextTokens;
+        if (raw.contextTokens !== contextTokens) {
+          modelMutated = true;
+        }
+
+        const defaultMaxTokens = Math.min(
+          providerMaxTokens ?? DEFAULT_MODEL_MAX_TOKENS,
+          contextWindow,
+        );
         const rawMaxTokens = isPositiveNumber(raw.maxTokens) ? raw.maxTokens : defaultMaxTokens;
         const maxTokens = resolveNormalizedProviderModelMaxTokens({
           providerId,
@@ -251,6 +276,7 @@ export function applyModelDefaults(
           input,
           cost,
           contextWindow,
+          contextTokens,
           maxTokens,
           api,
         }) as ModelDefinitionConfig;
@@ -428,7 +454,7 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
   let mutated = false;
   const nextDefaults = defaults ? { ...defaults } : {};
   if (!hasMax) {
-    nextDefaults.maxConcurrent = DEFAULT_AGENT_MAX_CONCURRENT;
+    nextDefaults.maxConcurrent = resolveAgentMaxConcurrent();
     mutated = true;
   }
 
@@ -463,20 +489,7 @@ export function applyCronDefaults(cfg: OpenClawConfig): OpenClawConfig {
 }
 
 export function applyLoggingDefaults(cfg: OpenClawConfig): OpenClawConfig {
-  const logging = cfg.logging;
-  if (!logging) {
-    return cfg;
-  }
-  if (logging.redactSensitive) {
-    return cfg;
-  }
-  return {
-    ...cfg,
-    logging: {
-      ...logging,
-      redactSensitive: "tools",
-    },
-  };
+  return cfg;
 }
 
 function hasAnthropicDefaultSignal(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {

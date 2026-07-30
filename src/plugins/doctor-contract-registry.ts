@@ -246,6 +246,8 @@ function collectMediaProviderIds(root: Record<string, unknown>, ids: Set<string>
   if (!media) {
     return;
   }
+  // Keep legacy lists visible until the doctor migration window closes so
+  // provider-owned repairs can run in the same pass as core consolidation.
   const modelLists = [
     media.models,
     asNullableRecord(media.audio)?.models,
