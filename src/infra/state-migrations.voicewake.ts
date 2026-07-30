@@ -199,9 +199,10 @@ async function claimVoiceWakeSource<Value>(params: {
         sourceRelativePath,
       );
     } catch (restoreError) {
-      throw new Error(`${String(error)}; restore failure: ${String(restoreError)}`, {
-        cause: error,
+      const wrapped = new Error(`${String(error)}; restore failure: ${String(restoreError)}`, {
+        cause: restoreError,
       });
+      throw wrapped;
     }
     throw error;
   }
