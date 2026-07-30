@@ -376,6 +376,7 @@ export async function runQaFlowSuiteStandard(
         fastMode,
         concurrency,
         channelDriver: params?.channelDriver,
+        realizedDriver: transportFactoryResult.driver,
         channelDriverSelection: params?.channelDriverSelection,
         isolatedWorkers: false,
         writeEvidenceFile: params?.writeEvidenceFile,

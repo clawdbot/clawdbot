@@ -252,6 +252,7 @@ export async function runQaRuntimeParitySuite(params: {
         fastMode: params.fastMode,
         concurrency: params.concurrency,
         channelDriver: params.channelDriver,
+        realizedDriver: transportFactoryResult.driver,
         channelDriverSelection: params.channelDriverSelection,
         scenarioIds:
           params.scenarioIds && params.scenarioIds.length > 0

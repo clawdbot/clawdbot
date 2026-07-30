@@ -70,6 +70,19 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.channelDriverSmokePath).toBeNull();
   });
 
+  it("records the realized driver over the requested one when a fallback ran", () => {
+    // channelDriver "live" was requested, but no live adapter was created, so
+    // the shared qa-channel transport ran. The summary must record the driver
+    // that actually executed, not the requested one (issue #115753).
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      channelDriver: "live",
+      realizedDriver: "qa-channel",
+    });
+
+    expect(json.run.channelDriver).toBe("qa-channel");
+  });
+
   it("includes scenarioIds in run metadata when provided", () => {
     const scenarioIds = ["approval-turn-tool-followthrough", "subagent-handoff", "memory-recall"];
     const json = buildQaSuiteSummaryJson({
