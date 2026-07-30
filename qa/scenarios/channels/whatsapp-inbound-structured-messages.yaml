@@ -16,4 +16,4 @@ flow:
   call: runWhatsAppScenario
   args:
     - { expr: whatsappScenarioContext }
-    - expr: "(await qaImport('./live-transports/whatsapp/whatsapp-live.scenario-implementations.capabilities.js')).whatsappQaInboundStructuredMessagesScenario"
+    - { moduleExport: whatsappQaInboundStructuredMessagesScenario }

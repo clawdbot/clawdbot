@@ -24,6 +24,53 @@ import {
 } from "./whatsapp-live.operations.js";
 import { waitForWhatsAppChannelStable } from "./whatsapp-live.setup.js";
 
+export {
+  whatsappQaGroupAudioGatingScenario,
+  whatsappQaGroupOutboundAudioScenario,
+  whatsappQaGroupOutboundMediaScenario,
+  whatsappQaGroupOutboundPollScenario,
+  whatsappQaInboundStructuredMessagesScenario,
+  whatsappQaMessageActionsScenario,
+  whatsappQaOutboundDocumentPreservesFilenameScenario,
+  whatsappQaOutboundPollScenario,
+  whatsappQaOutboundSendSerializationScenario,
+} from "./whatsapp-live.scenario-implementations.capabilities.js";
+export {
+  whatsappQaBroadcastGroupFanoutScenario,
+  whatsappQaCanaryScenario,
+  whatsappQaGroupActivationAlwaysScenario,
+  whatsappQaGroupPendingHistoryContextScenario,
+  whatsappQaGroupReplyToBotTriggersScenario,
+  whatsappQaGroupReplyToMessageScenario,
+  whatsappQaMentionGatingScenario,
+  whatsappQaReplyToMessageScenario,
+  whatsappQaReplyToModeBatchedScenario,
+  whatsappQaTopLevelReplyShapeScenario,
+} from "./whatsapp-live.scenario-implementations.conversation.js";
+export {
+  whatsappQaApprovalExecDenyNativeScenario,
+  whatsappQaApprovalExecGroupReactionNativeScenario,
+  whatsappQaApprovalExecNativeScenario,
+  whatsappQaApprovalExecReactionNativeScenario,
+  whatsappQaApprovalPluginNativeScenario,
+  whatsappQaGroupAllowlistBlockScenario,
+  whatsappQaReplyDeliveryShapeScenario,
+  whatsappQaStatusReactionLifecycleScenario,
+  whatsappQaStatusReactionsScenario,
+  whatsappQaStreamFinalMessageAccountingScenario,
+} from "./whatsapp-live.scenario-implementations.delivery.js";
+export {
+  whatsappQaAgentMessageActionReactScenario,
+  whatsappQaAgentMessageActionUploadFileScenario,
+  whatsappQaAudioPreflightScenario,
+  whatsappQaGroupAgentMessageActionReactScenario,
+  whatsappQaGroupAgentMessageActionUploadFileScenario,
+  whatsappQaInboundImageCaptionScenario,
+  whatsappQaInboundReactionNoTriggerScenario,
+  whatsappQaOutboundMediaMatrixScenario,
+  whatsappQaReplyContextIsolationScenario,
+} from "./whatsapp-live.scenario-implementations.user-path.js";
+
 async function runWhatsAppScenarioAttempt(params: {
   environment: WhatsAppQaScenarioEnvironment;
   implementation: WhatsAppQaScenarioImplementation;

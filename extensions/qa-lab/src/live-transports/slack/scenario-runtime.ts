@@ -16,6 +16,27 @@ import {
   sendSlackChannelMessage,
 } from "./slack-live.observations.js";
 
+export {
+  slackQaAllowlistBlockScenario,
+  slackQaApprovalExecNativeScenario,
+  slackQaApprovalPluginNativeScenario,
+  slackQaCanaryScenario,
+  slackQaChannelDisabledWarningScenario,
+  slackQaChartPresentationNativeScenario,
+  slackQaCodexApprovalExecNativeScenario,
+  slackQaCodexApprovalPluginNativeScenario,
+  slackQaMentionGatingScenario,
+  slackQaMpimAppMentionDedupeScenario,
+  slackQaProgressCommentaryFalseScenario,
+  slackQaProgressCommentaryOmittedScenario,
+  slackQaProgressCommentaryTrueScenario,
+  slackQaProgressCommentaryVerboseDedupeScenario,
+  slackQaReactionGlyphNativeScenario,
+  slackQaTableInvalidBlocksFallbackScenario,
+  slackQaTablePresentationNativeScenario,
+  slackQaTopLevelReplyShapeScenario,
+} from "./slack-live.scenario-implementations.js";
+
 async function runSlackMessageScenario(params: {
   environment: SlackQaScenarioEnvironment;
   run: SlackQaMessageScenarioRun;

@@ -1,22 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { readQaScenarioPack, type QaSeedScenarioWithSource } from "../scenario-catalog.js";
-import * as discordImplementations from "./discord/discord-live.runtime.js";
 import * as discordScenarioRuntime from "./discord/scenario-runtime.js";
 import * as slackScenarioRuntime from "./slack/scenario-runtime.js";
-import * as slackImplementations from "./slack/slack-live.scenario-implementations.js";
 import * as whatsappScenarioRuntime from "./whatsapp/scenario-runtime.js";
-import * as whatsappCapabilities from "./whatsapp/whatsapp-live.scenario-implementations.capabilities.js";
-import * as whatsappConversation from "./whatsapp/whatsapp-live.scenario-implementations.conversation.js";
-import * as whatsappDelivery from "./whatsapp/whatsapp-live.scenario-implementations.delivery.js";
-import * as whatsappUserPath from "./whatsapp/whatsapp-live.scenario-implementations.user-path.js";
 
 const LANES = [
   {
     channel: "discord",
     contextExpression: "discordScenarioContext",
-    implementations: {
-      "./live-transports/discord/discord-live.runtime.js": discordImplementations,
-    },
     modulePath: "./live-transports/discord/scenario-runtime.js",
     runnerName: "runDiscordScenario",
     runtime: discordScenarioRuntime,
@@ -24,9 +15,6 @@ const LANES = [
   {
     channel: "slack",
     contextExpression: "slackScenarioContext",
-    implementations: {
-      "./live-transports/slack/slack-live.scenario-implementations.js": slackImplementations,
-    },
     modulePath: "./live-transports/slack/scenario-runtime.js",
     runnerName: "runSlackScenario",
     runtime: slackScenarioRuntime,
@@ -34,16 +22,6 @@ const LANES = [
   {
     channel: "whatsapp",
     contextExpression: "whatsappScenarioContext",
-    implementations: {
-      "./live-transports/whatsapp/whatsapp-live.scenario-implementations.capabilities.js":
-        whatsappCapabilities,
-      "./live-transports/whatsapp/whatsapp-live.scenario-implementations.conversation.js":
-        whatsappConversation,
-      "./live-transports/whatsapp/whatsapp-live.scenario-implementations.delivery.js":
-        whatsappDelivery,
-      "./live-transports/whatsapp/whatsapp-live.scenario-implementations.user-path.js":
-        whatsappUserPath,
-    },
     modulePath: "./live-transports/whatsapp/scenario-runtime.js",
     runnerName: "runWhatsAppScenario",
     runtime: whatsappScenarioRuntime,
@@ -106,8 +84,8 @@ function readExpression(value: unknown): string | undefined {
 describe("live transport scenario module routing", () => {
   it.each(LANES)(
     "routes every $channel flow through one shared channel runner",
-    ({ channel, contextExpression, implementations, modulePath, runnerName, runtime }) => {
-      expect(Object.keys(runtime)).toEqual([runnerName]);
+    ({ channel, contextExpression, modulePath, runnerName, runtime }) => {
+      expect(Reflect.get(runtime, runnerName)).toBeTypeOf("function");
 
       const bindings = readQaScenarioPack().scenarios.flatMap((scenario) => {
         if (scenario.execution.kind !== "flow" || scenario.execution.channel !== channel) {
@@ -123,15 +101,9 @@ describe("live transport scenario module routing", () => {
         expect(readExpression(call.args?.[0]), scenarioId).toBe(contextExpression);
 
         const implementationExpression = readExpression(call.args?.[1]);
-        const match = implementationExpression?.match(/^\(await qaImport\('([^']+)'\)\)\.(\w+)$/);
+        const match = implementationExpression?.match(/^scenarioModule\["(\w+)"\]$/);
         expect(match, scenarioId).toBeTruthy();
-        const implementationModule = Reflect.get(implementations, match?.[1] ?? "") as
-          | Record<string, unknown>
-          | undefined;
-        expect(implementationModule, scenarioId).toBeDefined();
-        expect(Reflect.get(implementationModule ?? {}, match?.[2] ?? ""), scenarioId).toBeTypeOf(
-          "object",
-        );
+        expect(Reflect.get(runtime, match?.[1] ?? ""), scenarioId).toBeTypeOf("object");
       }
     },
   );

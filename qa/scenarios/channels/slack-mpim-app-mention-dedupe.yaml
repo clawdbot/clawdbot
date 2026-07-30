@@ -18,4 +18,4 @@ flow:
   call: runSlackScenario
   args:
     - { expr: slackScenarioContext }
-    - expr: "(await qaImport('./live-transports/slack/slack-live.scenario-implementations.js')).slackQaMpimAppMentionDedupeScenario"
+    - { moduleExport: slackQaMpimAppMentionDedupeScenario }

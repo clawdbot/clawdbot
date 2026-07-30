@@ -5,6 +5,15 @@ import {
 } from "./discord-live.runtime.js";
 import type { DiscordQaScenarioEnvironment } from "./scenario-environment.js";
 
+export {
+  discordQaCanaryScenario,
+  discordQaMentionGatingScenario,
+  discordQaNativeHelpCommandRegistrationScenario,
+  discordQaStatusReactionsToolOnlyScenario,
+  discordQaThreadReplyFilepathAttachmentScenario,
+  discordQaVoiceAutojoinScenario,
+} from "./discord-live.runtime.js";
+
 export async function runDiscordScenario(
   environment: DiscordQaScenarioEnvironment,
   implementation: DiscordQaScenarioImplementation,

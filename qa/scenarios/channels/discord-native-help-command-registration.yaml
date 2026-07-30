@@ -15,4 +15,4 @@ flow:
   call: runDiscordScenario
   args:
     - { expr: discordScenarioContext }
-    - expr: "(await qaImport('./live-transports/discord/discord-live.runtime.js')).discordQaNativeHelpCommandRegistrationScenario"
+    - { moduleExport: discordQaNativeHelpCommandRegistrationScenario }

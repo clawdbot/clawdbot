@@ -16,4 +16,4 @@ flow:
   call: runWhatsAppScenario
   args:
     - { expr: whatsappScenarioContext }
-    - expr: "(await qaImport('./live-transports/whatsapp/whatsapp-live.scenario-implementations.user-path.js')).whatsappQaGroupAgentMessageActionUploadFileScenario"
+    - { moduleExport: whatsappQaGroupAgentMessageActionUploadFileScenario }

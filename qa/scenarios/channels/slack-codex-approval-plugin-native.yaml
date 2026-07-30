@@ -19,4 +19,4 @@ flow:
   call: runSlackScenario
   args:
     - { expr: slackScenarioContext }
-    - expr: "(await qaImport('./live-transports/slack/slack-live.scenario-implementations.js')).slackQaCodexApprovalPluginNativeScenario"
+    - { moduleExport: slackQaCodexApprovalPluginNativeScenario }
