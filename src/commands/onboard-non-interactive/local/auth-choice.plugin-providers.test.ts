@@ -691,4 +691,34 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       expect(result?.wizard?.localModelLeanAutoModel).toBeUndefined();
     },
   );
+
+  // Unknown-choice validation exempts every value carrying the provider-plugin
+  // prefix, so an empty provider id must fail closed here instead of falling
+  // back to core auth.
+  it.each(["provider-plugin:", "provider-plugin:   ", "provider-plugin::method"])(
+    "rejects %j because it carries the prefix without a provider id",
+    async (authChoice) => {
+      const runtime = createRuntime();
+      const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+
+      const result = await applyNonInteractivePluginProviderChoice({
+        nextConfig,
+        authChoice,
+        opts: {} as never,
+        runtime: runtime as never,
+        baseConfig: nextConfig,
+        target,
+        resolveApiKey: vi.fn() as never,
+        toApiKeyCredential: vi.fn() as never,
+      } as never);
+
+      expect(result).toBeNull();
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expectRuntimeErrorIncludes(runtime, "is missing a provider id");
+      expectRuntimeErrorIncludes(runtime, '"provider-plugin:<provider-id>"');
+      // Rejection happens before provider discovery, so no plugin is resolved.
+      expect(resolvePluginProviders).not.toHaveBeenCalled();
+      expect(resolvePreferredProviderForAuthChoice).not.toHaveBeenCalled();
+    },
+  );
 });

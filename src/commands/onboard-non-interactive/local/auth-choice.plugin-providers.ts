@@ -61,9 +61,23 @@ export async function applyNonInteractivePluginProviderChoice(params: {
 }): Promise<OpenClawConfig | null | undefined> {
   const { agentDir, workspaceDir } = params.target;
   let nextConfig = params.nextConfig;
-  const prefixedProviderId = params.authChoice.startsWith(PROVIDER_PLUGIN_CHOICE_PREFIX)
+  const usesProviderPluginPrefix = params.authChoice.startsWith(PROVIDER_PLUGIN_CHOICE_PREFIX);
+  const prefixedProviderId = usesProviderPluginPrefix
     ? params.authChoice.slice(PROVIDER_PLUGIN_CHOICE_PREFIX.length).split(":", 1)[0]?.trim()
     : undefined;
+  if (usesProviderPluginPrefix && !prefixedProviderId) {
+    // Unknown-choice validation exempts this prefix, and the fail-closed branch
+    // below tests the resolved id rather than the prefix. Without this guard an
+    // empty id skips both and silently falls back to core auth.
+    params.runtime.error(
+      [
+        `Auth choice ${JSON.stringify(params.authChoice)} is missing a provider id.`,
+        `Use "${PROVIDER_PLUGIN_CHOICE_PREFIX}<provider-id>".`,
+      ].join("\n"),
+    );
+    params.runtime.exit(1);
+    return null;
+  }
   const preferredProviderId =
     prefixedProviderId ||
     (await resolvePreferredProviderForAuthChoice({
