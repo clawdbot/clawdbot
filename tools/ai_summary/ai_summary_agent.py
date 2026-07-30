@@ -8,10 +8,10 @@ from datetime import datetime
 
 OLLAMA_URL = os.environ.get(
     "OPENCLAW_OLLAMA_GENERATE_URL",
-    "http://192.168.50.117:11434/api/generate",
+    "http://127.0.0.1:11434/api/generate",
 )
 
-MODEL = "llama3.2:3b"
+MODEL = os.environ.get("OPENCLAW_AI_SUMMARY_MODEL", "llama3.2:3b")
 
 DB_CONTAINER = os.environ.get("OPENCLAW_DB_CONTAINER", "postgres")
 DB_NAME = os.environ.get("OPENCLAW_DB_NAME", "openclaw")
