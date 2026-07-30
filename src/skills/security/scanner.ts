@@ -163,6 +163,95 @@ type SourceRule = {
   requiresContextWindowLines?: number;
 };
 
+const DANGEROUS_CHILD_PROCESS_FNS = new Set([
+  "exec",
+  "execSync",
+  "spawn",
+  "spawnSync",
+  "execFile",
+  "execFileSync",
+]);
+
+interface ChildProcessAliases {
+  /** Maps local alias names to their original child_process function names */
+  directAliases: Map<string, string>;
+  /** Local variable names that reference the child_process module namespace */
+  namespaceVars: Set<string>;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function extractChildProcessAliases(source: string): ChildProcessAliases {
+  const directAliases = new Map<string, string>();
+  const namespaceVars = new Set<string>();
+
+  // ESM: import { spawn as launch } from "node:child_process" / "child_process"
+  const esmDestructuredImportRe =
+    /import\s*\{([^}]*)\}\s*from\s*["'](?:node:)?child_process["']/g;
+  let m: RegExpExecArray | null;
+  while ((m = esmDestructuredImportRe.exec(source)) !== null) {
+    for (const binding of m[1].split(",")) {
+      const trimmed = binding.trim();
+      if (!trimmed) continue;
+      const parts = trimmed.split(/\s+as\s+/i);
+      const originalName = parts[0]?.trim();
+      const aliasName = parts[1]?.trim() ?? originalName;
+      if (
+        originalName &&
+        DANGEROUS_CHILD_PROCESS_FNS.has(originalName) &&
+        aliasName !== originalName
+      ) {
+        directAliases.set(aliasName, originalName);
+      }
+    }
+  }
+
+  // ESM namespace: import * as cp from "node:child_process"
+  const esmNamespaceRe =
+    /import\s+\*\s+as\s+(\w+)\s+from\s*["'](?:node:)?child_process["']/g;
+  while ((m = esmNamespaceRe.exec(source)) !== null) {
+    namespaceVars.add(m[1]);
+  }
+
+  // ESM default: import cp from "node:child_process"
+  const esmDefaultRe =
+    /import\s+(\w+)\s+from\s*["'](?:node:)?child_process["']/g;
+  while ((m = esmDefaultRe.exec(source)) !== null) {
+    namespaceVars.add(m[1]);
+  }
+
+  // CJS destructured: const { exec: run } = require("child_process")
+  const cjsDestructuredRe =
+    /(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
+  while ((m = cjsDestructuredRe.exec(source)) !== null) {
+    for (const binding of m[1].split(",")) {
+      const trimmed = binding.trim();
+      if (!trimmed) continue;
+      const parts = trimmed.split(/\s*:\s*/);
+      const originalName = parts[0]?.trim();
+      const aliasName = parts[1]?.trim() ?? originalName;
+      if (
+        originalName &&
+        DANGEROUS_CHILD_PROCESS_FNS.has(originalName) &&
+        aliasName !== originalName
+      ) {
+        directAliases.set(aliasName, originalName);
+      }
+    }
+  }
+
+  // CJS namespace: const cp = require("child_process")
+  const cjsNamespaceRe =
+    /(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
+  while ((m = cjsNamespaceRe.exec(source)) !== null) {
+    namespaceVars.add(m[1]);
+  }
+
+  return { directAliases, namespaceVars };
+}
+
 const LINE_RULES: LineRule[] = [
   {
     ruleId: "dangerous-exec",
@@ -394,6 +483,9 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   const heuristicSource = stripCommentsForHeuristics(source);
   const heuristicLines = heuristicSource.split("\n");
 
+  // Extract child_process import aliases for the dangerous-exec rule
+  const cpAliases = extractChildProcessAliases(source);
+
   // --- Line rules ---
   for (const rule of LINE_RULES) {
     // Skip rule entirely if context requirement not met
@@ -405,12 +497,41 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
     let omittedMatches = 0;
     let lastOmittedLine: number | undefined;
     for (const [i, line] of lines.entries()) {
-      const matches = line.matchAll(
-        new RegExp(
-          rule.pattern.source,
-          rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`,
+      const matches = Array.from(
+        line.matchAll(
+          new RegExp(
+            rule.pattern.source,
+            rule.pattern.flags.includes("g")
+              ? rule.pattern.flags
+              : `${rule.pattern.flags}g`,
+          ),
         ),
       );
+
+      // For dangerous-exec, also detect aliased calls and computed member access
+      if (rule.ruleId === "dangerous-exec") {
+        for (const [aliasName] of cpAliases.directAliases) {
+          const aliasRe = new RegExp(
+            `\\b${escapeRegex(aliasName)}\\s*\\(`,
+            "g",
+          );
+          for (const aliasM of line.matchAll(aliasRe)) {
+            matches.push(aliasM);
+          }
+        }
+        for (const nsVar of cpAliases.namespaceVars) {
+          const bracketRe = new RegExp(
+            `\\b${escapeRegex(nsVar)}\\s*\\[\\s*["'](exec|execSync|spawn|spawnSync|execFile|execFileSync)["']\\s*\\]\\s*\\(`,
+            "g",
+          );
+          for (const bracketM of line.matchAll(bracketRe)) {
+            matches.push(bracketM);
+          }
+        }
+        // Sort so findings appear in source order
+        matches.sort((a, b) => a.index - b.index);
+      }
+
       for (const match of matches) {
         if (rule.ruleId === "dangerous-exec" && isBenignMemberExecMatch(line, match)) {
           continue;

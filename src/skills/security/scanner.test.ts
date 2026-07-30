@@ -313,6 +313,91 @@ const match = /^keychain:(.+)$/.exec(value);
     expectRulePresence(findings, "dangerous-exec", false);
   });
 
+  it("detects aliased child_process call via ESM import alias", () => {
+    const source = `
+import { spawn as launch } from "node:child_process";
+launch("node", ["server.js"]);
+`;
+    const findings = scanSource(source, "plugin.ts").filter(
+      (c) => c.ruleId === "dangerous-exec",
+    );
+    expect(findings.length).toBeGreaterThanOrEqual(1);
+    expect(findings[0]?.line).toBe(3);
+  });
+
+  it("detects aliased child_process call via CJS destructured require", () => {
+    const source = `
+const { exec: run } = require("child_process");
+run("node server.js");
+`;
+    const findings = scanSource(source, "plugin.ts").filter(
+      (c) => c.ruleId === "dangerous-exec",
+    );
+    expect(findings.length).toBeGreaterThanOrEqual(1);
+    expect(findings[0]?.line).toBe(3);
+  });
+
+  it("detects computed member access on child_process namespace (double quotes)", () => {
+    const source = `
+import cp from "node:child_process";
+cp["spawn"]("node", ["server.js"]);
+`;
+    const findings = scanSource(source, "plugin.ts").filter(
+      (c) => c.ruleId === "dangerous-exec",
+    );
+    expect(findings.length).toBeGreaterThanOrEqual(1);
+    expect(findings[0]?.line).toBe(3);
+  });
+
+  it("detects computed member access on child_process namespace (single quotes)", () => {
+    const source = `
+import * as cp from "node:child_process";
+cp['exec']('node server.js');
+`;
+    const findings = scanSource(source, "plugin.ts").filter(
+      (c) => c.ruleId === "dangerous-exec",
+    );
+    expect(findings.length).toBeGreaterThanOrEqual(1);
+    expect(findings[0]?.line).toBe(3);
+  });
+
+  it("does not flag non-dangerous members from child_process import", () => {
+    const source = `
+import { spawn } from "child_process";
+const x = "just importing, not calling";
+`;
+    // Importing alone with no call should not fire
+    const findings = scanSource(source, "plugin.ts").filter(
+      (c) => c.ruleId === "dangerous-exec",
+    );
+    expect(findings.length).toBe(0);
+  });
+
+  it("works with combined standard + aliased calls on same line", () => {
+    const source = `
+import { exec as run } from "child_process";
+cp.exec("a"); run("b");
+`;
+    const findings = scanSource(source, "plugin.ts").filter(
+      (c) => c.ruleId === "dangerous-exec",
+    );
+    // cp.exec matches the standard pattern
+    // run("b") matches via alias detection
+    expect(findings.length).toBe(2);
+  });
+
+  it("detects CJS namespace computed member access", () => {
+    const source = `
+const cp = require("child_process");
+cp["execSync"]("echo hi");
+`;
+    const findings = scanSource(source, "plugin.ts").filter(
+      (c) => c.ruleId === "dangerous-exec",
+    );
+    expect(findings.length).toBeGreaterThanOrEqual(1);
+    expect(findings[0]?.line).toBe(3);
+  });
+
   it("does not use full-line comments as source-rule context", () => {
     const source = `
 const env = process.env;
