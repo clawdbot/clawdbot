@@ -17,13 +17,21 @@ enum SimpleTaskSupport {
     static func startDetachedLoop(
         task: inout Task<Void, Never>?,
         interval: TimeInterval,
-        operation: @escaping @Sendable () async -> Void)
-    {
+        sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) },
+        operation: @escaping @Sendable () async -> Void
+    ) {
         guard task == nil else { return }
         task = Task.detached {
             await operation()
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                // Cancellation wakes the sleep. Exit before the next operation so stopped stores
+                // cannot issue one final gateway refresh after their lifecycle has ended.
+                do {
+                    try await sleep(UInt64(interval * 1_000_000_000))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
                 await operation()
             }
         }
