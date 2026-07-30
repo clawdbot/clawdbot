@@ -1,13 +1,14 @@
 // Document Extract plugin module implements document extractor behavior.
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { Worker, type WorkerOptions } from "node:worker_threads";
 import type { PdfDocument, PdfEngine, PdfImage } from "clawpdf";
-import type {
-  DocumentExtractedImage,
-  DocumentExtractionRequest,
-  DocumentExtractionResult,
-  DocumentExtractorPlugin,
+import {
+  createDocumentExtractorCapacityError,
+  type DocumentExtractedImage,
+  type DocumentExtractionRequest,
+  type DocumentExtractionResult,
+  type DocumentExtractorPlugin,
 } from "openclaw/plugin-sdk/document-extractor";
 
 const MAX_EXTRACTED_TEXT_CHARS = 200_000;
@@ -32,21 +33,48 @@ export type PdfExtractionWorkerResult =
   | {
       status: "error";
       error: string;
+      imageExtractionErrors: string[];
     };
 
 type PdfExtractionWorker = {
+  on(event: "error", listener: (error: unknown) => void): unknown;
+  on(event: "exit", listener: (code: number) => void): unknown;
   once(event: "message", listener: (message: unknown) => void): unknown;
   once(event: "error", listener: (error: unknown) => void): unknown;
   once(event: "exit", listener: (code: number) => void): unknown;
-  removeAllListeners(): unknown;
+  postMessage(message: PdfExtractionWorkerInput): void;
+  removeListener(event: "message", listener: (message: unknown) => void): unknown;
+  removeListener(event: "error", listener: (error: unknown) => void): unknown;
+  removeListener(event: "exit", listener: (code: number) => void): unknown;
   terminate(): Promise<number>;
+  ref(): unknown;
   unref(): unknown;
 };
 
 type PdfDocumentExtractorOptions = {
   createWorker?: (url: URL, options: WorkerOptions) => PdfExtractionWorker;
+  workerPool?: PdfWorkerPool;
   workerUrl?: URL;
 };
+
+type PdfWorkerLease = {
+  worker: PdfExtractionWorker;
+  release: (reusable: boolean) => Promise<void>;
+};
+
+type PdfWorkerWaiter = {
+  resolve: (lease: PdfWorkerLease) => void;
+  reject: (error: Error) => void;
+  signal: AbortSignal;
+  onAbort: () => void;
+  createWorker: () => PdfExtractionWorker;
+};
+
+// Each PDFium worker owns a WASM engine, a copied input buffer, and render buffers.
+// Match OpenClaw's default bounded media-processing concurrency instead of allowing
+// pre-dispatch HTTP requests to create an unbounded number of those workers.
+const MAX_CONCURRENT_PDF_WORKERS = 2;
+const MAX_PENDING_PDF_REQUESTS = MAX_CONCURRENT_PDF_WORKERS * 2;
 
 let pdfEnginePromise: Promise<PdfEngine> | null = null;
 
@@ -176,15 +204,6 @@ export async function extractPdfContentInProcess(
 
 function resolvePdfExtractionWorkerUrl(currentModuleUrl = import.meta.url): URL {
   const currentPath = fileURLToPath(currentModuleUrl);
-  const normalized = currentPath.replaceAll(path.sep, "/");
-  const distMarker = "/dist/";
-  const distIndex = normalized.lastIndexOf(distMarker);
-  if (distIndex >= 0) {
-    const distRoot = currentPath.slice(0, distIndex + distMarker.length);
-    return pathToFileURL(
-      path.join(distRoot, "extensions", "document-extract", "document-extractor.worker.js"),
-    );
-  }
   const extension = path.extname(currentPath) || ".js";
   return new URL(`./document-extractor.worker${extension}`, currentModuleUrl);
 }
@@ -193,25 +212,237 @@ function toError(value: unknown, fallback: string): Error {
   if (value instanceof Error) {
     return value;
   }
-  return new Error(value === undefined ? fallback : String(value));
+  return new Error(typeof value === "string" ? value : fallback, { cause: value });
 }
+
+class PdfWorkerPool {
+  private total = 0;
+  private readonly failed = new WeakSet<PdfExtractionWorker>();
+  private readonly idle: PdfExtractionWorker[] = [];
+  private readonly leased = new Set<PdfExtractionWorker>();
+  private readonly lifecycleListeners = new Map<
+    PdfExtractionWorker,
+    { onError: (error: unknown) => void; onExit: (code: number) => void }
+  >();
+  private readonly retiring = new WeakSet<PdfExtractionWorker>();
+  private readonly waiters = new Set<PdfWorkerWaiter>();
+
+  constructor(
+    private readonly maxConcurrent: number,
+    private readonly maxPending: number,
+  ) {}
+
+  async run<T>(
+    signal: AbortSignal,
+    createWorker: () => PdfExtractionWorker,
+    task: (worker: PdfExtractionWorker, discard: () => void) => Promise<T>,
+  ): Promise<T> {
+    const lease = await this.acquire(signal, createWorker);
+    let reusable = true;
+    try {
+      signal.throwIfAborted();
+      return await task(lease.worker, () => {
+        reusable = false;
+      });
+    } finally {
+      await lease.release(reusable);
+    }
+  }
+
+  private async acquire(
+    signal: AbortSignal,
+    createWorker: () => PdfExtractionWorker,
+  ): Promise<PdfWorkerLease> {
+    signal.throwIfAborted();
+    const idleWorker = this.idle.pop();
+    if (idleWorker) {
+      return this.createLease(idleWorker);
+    }
+    if (this.total < this.maxConcurrent) {
+      return this.createWorkerLease(createWorker);
+    }
+    if (this.waiters.size >= this.maxPending) {
+      throw createDocumentExtractorCapacityError(
+        `PDF extraction worker queue is full (${this.maxPending} pending requests); retry later`,
+      );
+    }
+    // Keep the caller's input-file deadline active while queued. Otherwise buffered
+    // PDFs could outlive their request budget while waiting for bounded capacity.
+    return await new Promise<PdfWorkerLease>((resolve, reject) => {
+      const waiter: PdfWorkerWaiter = {
+        resolve,
+        reject,
+        signal,
+        createWorker,
+        onAbort: () => {
+          signal.removeEventListener("abort", waiter.onAbort);
+          if (!this.waiters.delete(waiter)) {
+            return;
+          }
+          reject(toError(signal.reason, "PDF extraction aborted while waiting for a worker"));
+        },
+      };
+      this.waiters.add(waiter);
+      signal.addEventListener("abort", waiter.onAbort, { once: true });
+      if (signal.aborted) {
+        waiter.onAbort();
+      }
+    });
+  }
+
+  private createWorkerLease(createWorker: () => PdfExtractionWorker): PdfWorkerLease {
+    const worker = createWorker();
+    this.attachLifecycleListeners(worker);
+    this.total += 1;
+    return this.createLease(worker);
+  }
+
+  private createLease(worker: PdfExtractionWorker): PdfWorkerLease {
+    let released = false;
+    worker.ref();
+    this.leased.add(worker);
+    return {
+      worker,
+      release: async (reusable) => {
+        if (released) {
+          return;
+        }
+        released = true;
+        this.leased.delete(worker);
+        if (reusable && !this.failed.has(worker)) {
+          this.idle.push(worker);
+          worker.unref();
+        } else {
+          // Keep the slot occupied until termination so a replacement cannot
+          // overlap the cancelled worker's PDFium and render allocations.
+          try {
+            await worker.terminate();
+          } catch {
+            // Worker termination is best-effort after the result is already settled.
+          }
+          this.detachLifecycleListeners(worker);
+          this.total = Math.max(0, this.total - 1);
+        }
+        this.drain();
+      },
+    };
+  }
+
+  private attachLifecycleListeners(worker: PdfExtractionWorker): void {
+    const onError = () => {
+      this.failed.add(worker);
+      if (!this.leased.has(worker)) {
+        void this.retireIdleWorker(worker, true);
+      }
+    };
+    const onExit = () => {
+      this.failed.add(worker);
+      if (!this.leased.has(worker)) {
+        void this.retireIdleWorker(worker, false);
+      }
+    };
+    this.lifecycleListeners.set(worker, { onError, onExit });
+    worker.on("error", onError);
+    worker.on("exit", onExit);
+  }
+
+  private detachLifecycleListeners(worker: PdfExtractionWorker): void {
+    const listeners = this.lifecycleListeners.get(worker);
+    if (!listeners) {
+      return;
+    }
+    worker.removeListener("error", listeners.onError);
+    worker.removeListener("exit", listeners.onExit);
+    this.lifecycleListeners.delete(worker);
+  }
+
+  private async retireIdleWorker(worker: PdfExtractionWorker, terminate: boolean): Promise<void> {
+    if (this.retiring.has(worker)) {
+      return;
+    }
+    const index = this.idle.indexOf(worker);
+    if (index < 0) {
+      return;
+    }
+    this.retiring.add(worker);
+    this.idle.splice(index, 1);
+    if (terminate) {
+      // Idle workers are unreferenced; keep a failed worker alive until its
+      // termination releases the pool slot and its native allocations.
+      worker.ref();
+      try {
+        await worker.terminate();
+      } catch {
+        // The worker already failed; eviction still has to release its pool slot.
+      }
+    }
+    this.detachLifecycleListeners(worker);
+    this.total = Math.max(0, this.total - 1);
+    this.drain();
+  }
+
+  private drain(): void {
+    while (this.waiters.size > 0) {
+      if (this.idle.length === 0 && this.total >= this.maxConcurrent) {
+        return;
+      }
+      const waiter = this.waiters.values().next().value;
+      if (!waiter) {
+        return;
+      }
+      this.waiters.delete(waiter);
+      waiter.signal.removeEventListener("abort", waiter.onAbort);
+      if (waiter.signal.aborted) {
+        waiter.reject(
+          toError(waiter.signal.reason, "PDF extraction aborted while waiting for a worker"),
+        );
+        continue;
+      }
+      try {
+        const idleWorker = this.idle.pop();
+        waiter.resolve(
+          idleWorker
+            ? this.createLease(idleWorker)
+            : this.createWorkerLease(waiter.createWorker),
+        );
+      } catch (error) {
+        waiter.reject(toError(error, "PDF extraction worker failed to start"));
+      }
+    }
+  }
+}
+
+// The public artifact module is process-cached, so this pool owns warm PDFium
+// workers for the same lifecycle while still replacing any cancelled worker.
+const sharedPdfWorkerPool = new PdfWorkerPool(
+  MAX_CONCURRENT_PDF_WORKERS,
+  MAX_PENDING_PDF_REQUESTS,
+);
 
 function parseWorkerResult(message: unknown): PdfExtractionWorkerResult | undefined {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return undefined;
   }
   const candidate = message as Record<string, unknown>;
+  if (
+    !Array.isArray(candidate.imageExtractionErrors) ||
+    !candidate.imageExtractionErrors.every((entry) => typeof entry === "string")
+  ) {
+    return undefined;
+  }
   if (candidate.status === "error" && typeof candidate.error === "string") {
-    return { status: "error", error: candidate.error };
+    return {
+      status: "error",
+      error: candidate.error,
+      imageExtractionErrors: candidate.imageExtractionErrors,
+    };
   }
   if (
     candidate.status !== "ok" ||
     !candidate.result ||
     typeof candidate.result !== "object" ||
     typeof (candidate.result as { text?: unknown }).text !== "string" ||
-    !Array.isArray((candidate.result as { images?: unknown }).images) ||
-    !Array.isArray(candidate.imageExtractionErrors) ||
-    !candidate.imageExtractionErrors.every((entry) => typeof entry === "string")
+    !Array.isArray((candidate.result as { images?: unknown }).images)
   ) {
     return undefined;
   }
@@ -221,8 +452,13 @@ function parseWorkerResult(message: unknown): PdfExtractionWorkerResult | undefi
 async function extractPdfContentInWorker(
   request: DocumentExtractionRequest,
   options: PdfDocumentExtractorOptions,
+  workerPool: PdfWorkerPool,
 ): Promise<DocumentExtractionResult> {
-  request.signal?.throwIfAborted();
+  const signal = request.signal;
+  if (!signal) {
+    return await extractPdfContentInProcess(request);
+  }
+  signal.throwIfAborted();
   const workerUrl = options.workerUrl ?? resolvePdfExtractionWorkerUrl();
   const execArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
   const workerInput: PdfExtractionWorkerInput = {
@@ -237,79 +473,104 @@ async function extractPdfContentInWorker(
   const createWorker =
     options.createWorker ??
     ((url: URL, workerOptions: WorkerOptions) => new Worker(url, workerOptions));
-  let worker: PdfExtractionWorker;
-  try {
-    worker = createWorker(workerUrl, {
-      workerData: workerInput,
-      ...(execArgv ? { execArgv } : {}),
-    });
-  } catch (error) {
-    throw toError(error, "PDF extraction worker failed to start");
-  }
-  worker.unref();
-
-  return await new Promise<DocumentExtractionResult>((resolve, reject) => {
-    let settled = false;
-    const cleanup = () => {
-      request.signal?.removeEventListener("abort", abort);
-      worker.removeAllListeners();
-    };
-    const settle = (finish: () => void, terminate: boolean) => {
-      if (settled) {
-        return;
+  return await workerPool.run(
+    signal,
+    () => {
+      let worker: PdfExtractionWorker;
+      try {
+        worker = createWorker(workerUrl, execArgv ? { execArgv } : {});
+      } catch (error) {
+        throw toError(error, "PDF extraction worker failed to start");
       }
-      settled = true;
-      cleanup();
-      if (!terminate) {
-        finish();
-        return;
-      }
-      void worker.terminate().then(finish, finish);
-    };
-    const abort = () => {
-      settle(
-        () => reject(toError(request.signal?.reason, "PDF extraction aborted before completion")),
-        true,
-      );
-    };
+      return worker;
+    },
+    async (worker, discard) =>
+      await new Promise<DocumentExtractionResult>((resolve, reject) => {
+        let settled = false;
+        const cleanup = () => {
+          signal.removeEventListener("abort", onAbort);
+          worker.removeListener("message", onMessage);
+          worker.removeListener("error", onError);
+          worker.removeListener("exit", onExit);
+        };
+        const settle = (finish: () => void, reusable: boolean) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          cleanup();
+          if (!reusable) {
+            discard();
+          }
+          finish();
+        };
+        const onAbort = () => {
+          settle(
+            () => reject(toError(signal.reason, "PDF extraction aborted before completion")),
+            false,
+          );
+        };
+        const onMessage = (message: unknown) => {
+          const result = parseWorkerResult(message);
+          settle(
+            () => {
+              if (!result) {
+                reject(new Error("PDF extraction worker returned an invalid result"));
+                return;
+              }
+              try {
+                for (const error of result.imageExtractionErrors) {
+                  request.onImageExtractionError?.(new Error(error));
+                }
+              } catch (error) {
+                reject(toError(error, "PDF image extraction error callback failed"));
+                return;
+              }
+              if (result.status === "error") {
+                reject(new Error(result.error));
+                return;
+              }
+              resolve(result.result);
+            },
+            Boolean(result),
+          );
+        };
+        const onError = (error: unknown) => {
+          settle(() => reject(toError(error, "PDF extraction worker failed")), false);
+        };
+        const onExit = (code: number) => {
+          const message =
+            code === 0
+              ? "PDF extraction worker exited without a result"
+              : `PDF extraction worker exited with code ${code}`;
+          settle(() => reject(new Error(message)), false);
+        };
 
-    worker.once("message", (message) => {
-      const result = parseWorkerResult(message);
-      settle(() => {
-        if (!result) {
-          reject(new Error("PDF extraction worker returned an invalid result"));
+        worker.once("message", onMessage);
+        worker.once("error", onError);
+        worker.once("exit", onExit);
+        signal.addEventListener("abort", onAbort, { once: true });
+        if (signal.aborted) {
+          onAbort();
           return;
         }
-        if (result.status === "error") {
-          reject(new Error(result.error));
-          return;
+        try {
+          worker.postMessage(workerInput);
+        } catch (error) {
+          settle(() => reject(toError(error, "PDF extraction worker request failed")), false);
         }
-        for (const error of result.imageExtractionErrors) {
-          request.onImageExtractionError?.(new Error(error));
-        }
-        resolve(result.result);
-      }, false);
-    });
-    worker.once("error", (error) => {
-      settle(() => reject(toError(error, "PDF extraction worker failed")), true);
-    });
-    worker.once("exit", (code) => {
-      if (code === 0) {
-        settle(() => reject(new Error("PDF extraction worker exited without a result")), false);
-        return;
-      }
-      settle(() => reject(new Error(`PDF extraction worker exited with code ${code}`)), false);
-    });
-    request.signal?.addEventListener("abort", abort, { once: true });
-    if (request.signal?.aborted) {
-      abort();
-    }
-  });
+      }),
+  );
 }
 
 export function createPdfDocumentExtractor(
   options: PdfDocumentExtractorOptions = {},
 ): DocumentExtractorPlugin {
+  const workerPool =
+    options.workerPool ??
+    (options.createWorker || options.workerUrl
+      ? new PdfWorkerPool(MAX_CONCURRENT_PDF_WORKERS, MAX_PENDING_PDF_REQUESTS)
+      : sharedPdfWorkerPool);
   return {
     id: "pdf",
     label: "PDF",
@@ -317,7 +578,18 @@ export function createPdfDocumentExtractor(
     autoDetectOrder: 10,
     extract: (request) =>
       request.signal
-        ? extractPdfContentInWorker(request, options)
+        ? extractPdfContentInWorker(request, options, workerPool)
         : extractPdfContentInProcess(request),
   };
 }
+
+export const testOnlyDocumentExtractor = {
+  createPdfWorkerPool: (maxConcurrent: number, maxPending = maxConcurrent * 2) =>
+    new PdfWorkerPool(
+      Math.max(1, Math.floor(maxConcurrent)),
+      Math.max(0, Math.floor(maxPending)),
+    ),
+  maxConcurrentPdfWorkers: MAX_CONCURRENT_PDF_WORKERS,
+  maxPendingPdfRequests: MAX_PENDING_PDF_REQUESTS,
+  resolvePdfExtractionWorkerUrl,
+};

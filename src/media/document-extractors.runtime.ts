@@ -1,9 +1,10 @@
 // Document extractor runtime helpers choose lazy extraction adapters by media type.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type {
-  DocumentExtractionRequest,
-  DocumentExtractionResult,
+import {
+  isDocumentExtractorCapacityError,
+  type DocumentExtractionRequest,
+  type DocumentExtractionResult,
 } from "../plugins/document-extractor-types.js";
 import { resolvePluginDocumentExtractors } from "../plugins/document-extractors.runtime.js";
 import { createConfigScopedPromiseLoader } from "../plugins/plugin-cache-primitives.js";
@@ -60,6 +61,12 @@ export async function extractDocumentContent(
     }
   }
   if (errors.length > 0) {
+    // Let matching extractors fall through first, but preserve transient admission
+    // failures when none succeeds so HTTP callers can return a retryable response.
+    const capacityError = errors.find(isDocumentExtractorCapacityError);
+    if (capacityError) {
+      throw capacityError;
+    }
     throw new Error(`Document extraction failed for ${mimeType || "unknown MIME type"}`, {
       cause: errors.length === 1 ? errors[0] : new AggregateError(errors),
     });

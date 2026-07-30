@@ -599,6 +599,7 @@ export function createPdfTool(options?: {
             ...(password ? { password } : {}),
             pageNumbers,
             config: options?.config,
+            ...(signal ? { signal } : {}),
           });
           extractedAll.push(extracted);
         }

@@ -118,4 +118,49 @@ describe("PDF tool prepared-runtime cancellation", () => {
       expect(release).toHaveBeenCalledOnce();
     });
   });
+
+  it("forwards run cancellation into fallback PDF extraction", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const { release } = await stubPdfToolInfra(agentDir, { provider: "openai" });
+      const controller = new AbortController();
+      let markExtractionStarted: (() => void) | undefined;
+      const extractionStarted = new Promise<void>((resolve) => {
+        markExtractionStarted = resolve;
+      });
+      const extractSpy = vi
+        .spyOn(pdfExtractModule, "extractPdfContent")
+        .mockImplementationOnce(async (params) => {
+          expect(params.signal).toBe(controller.signal);
+          markExtractionStarted?.();
+          return await new Promise<never>((_, reject) => {
+            params.signal?.addEventListener(
+              "abort",
+              () => reject(new Error("PDF extraction cancelled", { cause: params.signal?.reason })),
+              { once: true },
+            );
+          });
+        });
+      const cfg = {
+        agents: { defaults: { pdfModel: { primary: "openai/gpt-5.4-mini" } } },
+      } as OpenClawConfig;
+      const tool = (await import("./pdf-tool.js")).createPdfTool({ config: cfg, agentDir });
+      if (!tool) {
+        throw new Error("expected PDF tool");
+      }
+      const execution = tool.execute(
+        "t1",
+        { prompt: "summarize", pdf: "/tmp/a.pdf" },
+        controller.signal,
+      );
+
+      await extractionStarted;
+      const assertion = expect(execution).rejects.toThrow("PDF extraction cancelled");
+      controller.abort(new Error("agent run cancelled"));
+      await assertion;
+
+      expect(extractSpy).toHaveBeenCalledOnce();
+      expect(completeMock).not.toHaveBeenCalled();
+      expect(release).toHaveBeenCalledOnce();
+    });
+  });
 });

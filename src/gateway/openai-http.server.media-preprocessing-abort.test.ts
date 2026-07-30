@@ -31,6 +31,10 @@ vi.mock("../plugins/document-extractors.runtime.js", () => ({
 
 import { resetConfigRuntimeState } from "../config/config.js";
 import {
+  createDocumentExtractorCapacityError,
+  DOCUMENT_EXTRACTOR_CAPACITY_ERROR_CODE,
+} from "../plugins/document-extractor-types.js";
+import {
   agentCommand,
   getFreePort,
   installGatewayTestHooks,
@@ -89,7 +93,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("OpenAI HTTP media preprocessing disconnects", () => {
+describe("OpenAI HTTP media preprocessing", () => {
   it("aborts blocked image preprocessing when the client disconnects", async () => {
     let preprocessingSignal: AbortSignal | undefined;
     extractImageContentFromSourceMock.mockImplementationOnce(
@@ -145,6 +149,51 @@ describe("OpenAI HTTP media preprocessing disconnects", () => {
 
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
+    });
+    expect(agentCommand).not.toHaveBeenCalled();
+  });
+
+  it("returns a retryable service-unavailable response when PDF extraction is saturated", async () => {
+    extractPdfDocumentMock.mockRejectedValueOnce(
+      createDocumentExtractorCapacityError("PDF extraction worker queue is full"),
+    );
+
+    const response = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-openclaw-scopes": "operator.write",
+      },
+      body: JSON.stringify({
+        model: "openclaw",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [
+              {
+                type: "input_file",
+                source: {
+                  type: "base64",
+                  media_type: "application/pdf",
+                  data: Buffer.from("%PDF-1.4 saturated").toString("base64"),
+                  filename: "scan.pdf",
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBe("1");
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        message: "Document extraction is temporarily busy; retry shortly.",
+        type: "service_unavailable",
+        code: DOCUMENT_EXTRACTOR_CAPACITY_ERROR_CODE,
+      },
     });
     expect(agentCommand).not.toHaveBeenCalled();
   });

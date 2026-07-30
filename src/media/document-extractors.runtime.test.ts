@@ -10,6 +10,7 @@ vi.mock("../plugins/document-extractors.runtime.js", () => ({
   resolvePluginDocumentExtractors: resolvePluginDocumentExtractorsMock,
 }));
 
+import { createDocumentExtractorCapacityError } from "../plugins/document-extractor-types.js";
 import { extractDocumentContent } from "./document-extractors.runtime.js";
 
 describe("extractDocumentContent", () => {
@@ -118,6 +119,29 @@ describe("extractDocumentContent", () => {
     expect(resolvePluginDocumentExtractorsMock).toHaveBeenCalledTimes(2);
     expect(oldExtract).toHaveBeenCalledOnce();
     expect(newExtract).toHaveBeenCalledOnce();
+  });
+
+  it("preserves capacity failures after matching extractors are exhausted", async () => {
+    const capacityError = createDocumentExtractorCapacityError("extractor queue is full");
+    resolvePluginDocumentExtractorsMock.mockReturnValue([
+      {
+        id: "pdf",
+        pluginId: "document-extract",
+        label: "PDF",
+        mimeTypes: ["application/pdf"],
+        extract: vi.fn().mockRejectedValue(capacityError),
+      },
+    ]);
+
+    await expect(
+      extractDocumentContent({
+        buffer: Buffer.from("pdf"),
+        mimeType: "application/pdf",
+        maxPages: 1,
+        maxPixels: 100,
+        minTextChars: 10,
+      }),
+    ).rejects.toBe(capacityError);
   });
 
   it("passes caller cancellation to the selected extractor", async () => {
