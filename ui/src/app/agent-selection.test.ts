@@ -21,9 +21,9 @@ function createGateway(assistantAgentId: string | null = "Main", sessionKey = "a
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
-      setSessionKey(sessionKey: string) {
-        setSessionKeyCalls.push(sessionKey);
-        snapshot = { ...snapshot, sessionKey };
+      setSessionKey(nextSessionKey: string) {
+        setSessionKeyCalls.push(nextSessionKey);
+        snapshot = { ...snapshot, sessionKey: nextSessionKey };
       },
     },
     publish(next: Partial<typeof snapshot>) {
