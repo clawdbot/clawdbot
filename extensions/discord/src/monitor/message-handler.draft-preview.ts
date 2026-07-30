@@ -13,6 +13,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Discord plugin module implements message handlerraft preview behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   convertMarkdownTables,
   stripInlineDirectiveTagsForDelivery,
@@ -45,6 +46,13 @@ export function createDiscordDraftPreviewController(params: {
   log: (message: string) => void;
 }) {
   const discordStreamMode = resolveDiscordPreviewStreamMode(params.discordConfig);
+  // Provider drafts are visible before outbound modifiers run. Keep them off whenever a hook
+  // can rewrite or cancel so the original payload cannot flash before durable delivery.
+  const hookRunner = getGlobalHookRunner();
+  const allowProviderPreview = !(
+    (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
+    (hookRunner?.hasHooks("message_sending") ?? false)
+  );
   const draftMaxChars = Math.min(params.textLimit, 2000);
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(params.discordConfig) ??
@@ -52,6 +60,7 @@ export function createDiscordDraftPreviewController(params: {
   const canStreamProgressDraftForToolOnlySource =
     params.sourceRepliesAreToolOnly && discordStreamMode === "progress";
   const canStreamDraft =
+    allowProviderPreview &&
     (!params.sourceRepliesAreToolOnly || canStreamProgressDraftForToolOnlySource) &&
     discordStreamMode !== "off" &&
     !accountBlockStreamingEnabled;
@@ -207,6 +216,31 @@ export function createDiscordDraftPreviewController(params: {
     },
     markPreviewFinalized() {
       finalizedViaPreviewMessage = true;
+    },
+    async retarget(channelId: string) {
+      await draftStream?.retarget(channelId);
+    },
+    async finalizeProgressReceipt(receiptLine: string) {
+      if (!draftStream || discordStreamMode !== "progress") {
+        return false;
+      }
+      const receipt = receiptLine.trim();
+      if (!receipt) {
+        return false;
+      }
+      const progressText = lastPartialText.trimEnd();
+      const maxProgressChars = Math.max(0, draftMaxChars - receipt.length - 1);
+      const fittedProgressText =
+        progressText.length > maxProgressChars
+          ? progressText.slice(progressText.length - maxProgressChars).trimStart()
+          : progressText;
+      draftStream.update(fittedProgressText ? `${fittedProgressText}\n${receipt}` : receipt);
+      await draftStream.stop();
+      if (!draftStream.messageId()) {
+        return false;
+      }
+      finalizedViaPreviewMessage = true;
+      return true;
     },
     disableBlockStreamingForDraft: draftStream ? true : undefined,
     async pushToolProgress(
@@ -379,6 +413,7 @@ export function createDiscordDraftPreviewController(params: {
         if (!finalizedViaPreviewMessage && draftStream?.messageId()) {
           await draftStream.clear();
         }
+        await draftStream?.cleanupRetargeted();
       } catch (err) {
         params.log(`discord: draft cleanup failed: ${String(err)}`);
       }

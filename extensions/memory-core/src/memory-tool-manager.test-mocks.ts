@@ -9,6 +9,7 @@ type SearchImpl = (opts?: {
   maxResults?: number;
   minScore?: number;
   sessionKey?: string;
+  activeProjectKeys?: string[];
   qmdSearchModeOverride?: "query" | "search" | "vsearch";
   onDebug?: (debug: MemorySearchRuntimeDebug) => void;
   signal?: AbortSignal;

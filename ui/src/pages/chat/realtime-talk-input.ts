@@ -9,6 +9,7 @@ export type RealtimeTalkCameraDevice = RealtimeTalkInputDevice;
 
 type RealtimeTalkDeviceDiscovery = {
   devices: RealtimeTalkInputDevice[];
+  permissionRequired: boolean;
   warning: string | null;
 };
 
@@ -57,6 +58,11 @@ function normalizeDevices(
   return normalized;
 }
 
+function deviceDetailsHidden(devices: MediaDeviceInfo[], kind: RealtimeTalkDeviceKind): boolean {
+  const inputs = devices.filter((device) => device.kind === kind);
+  return inputs.length === 0 || inputs.some((device) => !device.deviceId || !device.label);
+}
+
 function describeDeviceError(error: unknown, kind: RealtimeTalkDeviceKind): string {
   const name = error instanceof DOMException ? error.name : "";
   if (name === "NotAllowedError") {
@@ -88,6 +94,10 @@ function describeDeviceError(error: unknown, kind: RealtimeTalkDeviceKind): stri
   );
 }
 
+export function describeRealtimeTalkInputError(error: unknown): string {
+  return describeDeviceError(error, "audioinput");
+}
+
 async function discoverRealtimeTalkDevices(
   requestPermission: boolean,
   kind: RealtimeTalkDeviceKind,
@@ -98,13 +108,15 @@ async function discoverRealtimeTalkDevices(
     devices = mediaDevices(kind);
     entries = await devices.enumerateDevices();
   } catch (error) {
-    return { devices: [], warning: describeDeviceError(error, kind) };
+    return {
+      devices: [],
+      permissionRequired: false,
+      warning: describeDeviceError(error, kind),
+    };
   }
-  const inputs = entries.filter((device) => device.kind === kind);
-  const detailsHidden =
-    inputs.length === 0 || inputs.some((device) => !device.deviceId || !device.label);
-  if (!requestPermission || !detailsHidden || !devices.getUserMedia) {
-    return { devices: normalizeDevices(entries, kind), warning: null };
+  const permissionRequired = deviceDetailsHidden(entries, kind);
+  if (!requestPermission || !permissionRequired || !devices.getUserMedia) {
+    return { devices: normalizeDevices(entries, kind), permissionRequired, warning: null };
   }
 
   try {
@@ -113,10 +125,15 @@ async function discoverRealtimeTalkDevices(
     );
     probe.getTracks().forEach((track) => track.stop());
     entries = await devices.enumerateDevices();
-    return { devices: normalizeDevices(entries, kind), warning: null };
+    return {
+      devices: normalizeDevices(entries, kind),
+      permissionRequired: deviceDetailsHidden(entries, kind),
+      warning: null,
+    };
   } catch (error) {
     return {
       devices: normalizeDevices(entries, kind),
+      permissionRequired,
       warning: describeDeviceError(error, kind),
     };
   }

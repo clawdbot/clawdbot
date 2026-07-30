@@ -317,7 +317,7 @@ function expectPinnedIpv4ConnectDispatcher(args: {
   }
 }
 
-function expectPinnedFallbackIpDispatcher(callIndex: number) {
+async function expectPinnedFallbackIpDispatcher(callIndex: number) {
   const dispatcher = getDispatcherFromUndiciCall(callIndex);
   expect(dispatcher?.options?.connect?.family).toBe(4);
   expect(dispatcher?.options?.connect?.autoSelectFamily).toBe(false);
@@ -328,6 +328,9 @@ function expectPinnedFallbackIpDispatcher(callIndex: number) {
       | ((hostname: string, callback: (err: null, address: string, family: number) => void) => void)
       | undefined
   )?.("api.telegram.org", callback);
+  await new Promise<void>((resolve) => {
+    process.nextTick(resolve);
+  });
   expect(callback).toHaveBeenCalledWith(null, "149.154.167.220", 4);
 }
 
@@ -961,7 +964,7 @@ describe("resolveTelegramFetch", () => {
     expect(thirdDispatcher).toBe(seventhDispatcher);
     expect(eighthDispatcher).toBe(firstDispatcher);
     expect(ninthDispatcher).toBe(firstDispatcher);
-    expectPinnedFallbackIpDispatcher(3);
+    await expectPinnedFallbackIpDispatcher(3);
     expectLoggerMessageContaining(loggerWarn, "fetch fallback: primary connection path failed");
     expectLoggerMessageContaining(
       loggerDebug,
@@ -1027,7 +1030,7 @@ describe("resolveTelegramFetch", () => {
     await resolved("https://api.telegram.org/botx/getMe");
 
     expect(undiciFetch).toHaveBeenCalledTimes(4);
-    expectPinnedFallbackIpDispatcher(3);
+    await expectPinnedFallbackIpDispatcher(3);
     expect(getDispatcherFromUndiciCall(4)).toBe(getDispatcherFromUndiciCall(3));
   });
 

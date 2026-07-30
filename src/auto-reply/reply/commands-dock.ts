@@ -5,6 +5,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
+import {
+  normalizeSessionDeliveryState,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import { resolveTextCommand } from "../commands-registry.js";
 import { resolveCommandSurfaceChannel } from "./channel-context.js";
 import { persistSessionEntry } from "./commands-session-store.js";
@@ -171,13 +175,18 @@ export const handleDockCommand: CommandHandler = async (params, allowTextCommand
     };
   }
 
-  sessionEntry.lastChannel = targetChannel;
-  sessionEntry.lastTo = target.peerId;
-  sessionEntry.lastAccountId = resolveTargetChannelAccountId(params, targetChannel);
+  sessionEntry.delivery = normalizeSessionDeliveryState({
+    context: {
+      channel: targetChannel,
+      to: target.peerId,
+      accountId: resolveTargetChannelAccountId(params, targetChannel),
+    },
+    origin: sessionDeliveryOrigin(sessionEntry),
+  });
   params.sessionEntry = sessionEntry;
   const persisted = await persistSessionEntry({
     ...params,
-    touchedFields: ["lastChannel", "lastTo", "lastAccountId"],
+    touchedFields: ["delivery"],
   });
   if (!persisted) {
     return {

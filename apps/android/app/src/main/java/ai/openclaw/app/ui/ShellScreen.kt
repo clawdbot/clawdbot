@@ -17,6 +17,7 @@ import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.firstGraphemeOrNull
+import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprintInput
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeString
@@ -24,6 +25,7 @@ import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.node.CanvasController
+import ai.openclaw.app.systemagent.SystemAgentChatAccess
 import ai.openclaw.app.ui.design.AgentAvatarSource
 import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawBottomNav
@@ -73,6 +75,7 @@ import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Favorite
@@ -91,6 +94,7 @@ import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.MicNone
@@ -99,6 +103,7 @@ import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -136,6 +141,7 @@ internal enum class Tab(
   Settings(key = "settings", label = nativeText("Settings"), icon = Icons.Outlined.Settings),
   ProvidersModels(key = "providers-models", label = nativeText("Providers"), icon = Icons.Outlined.Inventory2),
   Files(key = "files", label = nativeText("Files"), icon = Icons.Outlined.Folder),
+  Dashboard(key = "dashboard", label = nativeText("Dashboard"), icon = Icons.Outlined.Dashboard),
 }
 
 private val shellNavTabs = listOf(Tab.Overview, Tab.Chat, Tab.Settings)
@@ -252,6 +258,7 @@ fun ShellScreen(
             UnifiedChatShellScreen(
               viewModel = viewModel,
               onOpenSessions = { nav.openDetailTab(Tab.Sessions) },
+              onOpenDashboard = nav::openSessionDashboard,
               onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
             )
           Tab.Voice ->
@@ -274,6 +281,12 @@ fun ShellScreen(
           Tab.Files ->
             WorkspaceFilesScreen(
               viewModel = viewModel,
+              onBack = nav::back,
+            )
+          Tab.Dashboard ->
+            SessionDashboardScreen(
+              viewModel = viewModel,
+              sessionKey = nav.dashboardSessionKey,
               onBack = nav::back,
             )
           Tab.Settings ->
@@ -332,6 +345,7 @@ fun ShellScreen(
           GatewayTrustDialog(
             prompt = prompt,
             onAccept = viewModel::acceptGatewayTrustPrompt,
+            onUseSystemTrust = viewModel::useSystemGatewayTrustPrompt,
             onDecline = viewModel::declineGatewayTrustPrompt,
           )
         }
@@ -374,18 +388,31 @@ private fun CanvasOverlay(
 @Composable
 private fun GatewayTrustDialog(
   prompt: NodeRuntime.GatewayTrustPrompt,
-  onAccept: () -> Unit,
+  onAccept: (String?) -> Unit,
+  onUseSystemTrust: () -> Unit,
   onDecline: () -> Unit,
 ) {
+  val manualEntry = prompt.fingerprintSha256 == null
+  val systemTrustAvailable = prompt.systemTrustAvailable
+  var manualFingerprint by
+    rememberSaveable(prompt.endpoint.stableId, prompt.probeFailure) {
+      mutableStateOf("")
+    }
+  val normalizedManualFingerprint = normalizeGatewayTlsFingerprintInput(manualFingerprint)
   val message =
-    if (prompt.previousFingerprintSha256.isNullOrBlank()) {
-      stringResource(R.string.gateway_trust_first_seen, prompt.fingerprintSha256)
-    } else {
-      stringResource(
-        R.string.gateway_trust_changed,
-        prompt.previousFingerprintSha256,
-        prompt.fingerprintSha256,
-      )
+    when {
+      manualEntry ->
+        nativeString(
+          "The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host.",
+        )
+      prompt.previousFingerprintSha256.isNullOrBlank() ->
+        stringResource(R.string.gateway_trust_first_seen, prompt.fingerprintSha256)
+      else ->
+        stringResource(
+          R.string.gateway_trust_changed,
+          prompt.previousFingerprintSha256,
+          prompt.fingerprintSha256,
+        )
     }
 
   AlertDialog(
@@ -398,15 +425,47 @@ private fun GatewayTrustDialog(
         color = ClawTheme.colors.text,
       )
     },
-    text = { Text(message, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
+    text = {
+      Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(message, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        if (systemTrustAvailable) {
+          Text(
+            nativeString("This gateway now presents a certificate trusted by this device."),
+            style = ClawTheme.type.body,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
+        if (manualEntry) {
+          OutlinedTextField(
+            value = manualFingerprint,
+            onValueChange = { manualFingerprint = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text(nativeString("SHA-256 fingerprint")) },
+            singleLine = true,
+          )
+        }
+      }
+    },
     confirmButton = {
-      TextButton(onClick = onAccept) {
+      TextButton(
+        onClick = {
+          onAccept(if (manualEntry) normalizedManualFingerprint else null)
+        },
+        enabled = !manualEntry || normalizedManualFingerprint != null,
+      ) {
         Text(stringResource(R.string.trust_and_continue))
       }
     },
     dismissButton = {
-      TextButton(onClick = onDecline) {
-        Text(stringResource(R.string.cancel))
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (systemTrustAvailable) {
+          TextButton(onClick = onUseSystemTrust) {
+            Text(nativeString("Use system trust"))
+          }
+        }
+        TextButton(onClick = onDecline) {
+          Text(stringResource(R.string.cancel))
+        }
       }
     },
   )
@@ -1402,7 +1461,7 @@ internal fun overviewRecentSessionRows(
         key = session.key,
         ownerAgentId = session.ownerAgentId,
         title = title,
-        source = sessionSourceLabel(session.key, channelsSummary),
+        source = sessionListSubtitle(session, sessionSourceLabel(session.key, channelsSummary)),
         metadata = (session.lastActivityAt ?: session.updatedAtMs)?.let(::overviewRelativeSessionTime) ?: "",
       )
     }
@@ -1523,6 +1582,7 @@ private fun SettingsShellScreen(
   val displayName by viewModel.displayName.collectAsState()
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
   val isConnected = gatewayConnectionDisplay.isConnected
+  val systemAgentChatState by viewModel.systemAgentChatState.collectAsState()
   val models by viewModel.providerModelCatalog.collectAsState()
   val providers by viewModel.modelAuthProviders.collectAsState()
   val cameraEnabled by viewModel.cameraEnabled.collectAsState()
@@ -1610,6 +1670,18 @@ private fun SettingsShellScreen(
           SettingsRow(nativeText("Nodes & Devices"), verbatimText(nodesDevicesSummaryText(nodesDevicesSummary)), Icons.Default.Cloud, status = nodesDevicesStatus(nodesDevicesSummary), route = SettingsRoute.NodesDevices),
           SettingsRow(nativeText("Channels"), verbatimText(channelsSummaryText(channelsSummary)), Icons.Default.Notifications, status = channelsStatus(channelsSummary), route = SettingsRoute.Channels),
           SettingsRow(nativeText("Agents"), if (agents.isEmpty()) nativeText("Load from gateway") else nativeText("\${agents.size} available", agents.size), Icons.Default.Person, status = agents.isNotEmpty(), route = SettingsRoute.Agents),
+          SettingsRow(
+            nativeText("OpenClaw"),
+            nativeText("Setup, status, and repair"),
+            Icons.Default.Bolt,
+            status =
+              when (systemAgentChatState.access) {
+                SystemAgentChatAccess.Ready -> true
+                SystemAgentChatAccess.CheckingGateway -> null
+                else -> false
+              },
+            route = SettingsRoute.SystemAgent,
+          ),
           SettingsRow(
             nativeText("Providers & Models"),
             when {
@@ -1883,6 +1955,7 @@ internal fun settingsSectionTitleForRoute(route: SettingsRoute): NativeText =
     -> nativeText("Connection")
 
     SettingsRoute.Agents,
+    SettingsRoute.SystemAgent,
     SettingsRoute.ProvidersModels,
     SettingsRoute.Approvals,
     SettingsRoute.CronJobs,

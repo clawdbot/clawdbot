@@ -824,6 +824,7 @@ describe("dispatchAndStartWorkboardCards", () => {
     });
     expect(run.mock.calls[0]?.[0]?.message).toContain("Claim token:");
     expect(run.mock.calls[0]?.[0]?.message).toContain("workboard_complete with the card id");
+    expect(run.mock.calls[0]?.[0]?.message).toContain("returned proofId");
     expect(run.mock.calls[0]?.[0]?.message).not.toContain("ownerId and token");
     await expect(store.get(first.id)).resolves.toMatchObject({
       status: "running",
@@ -845,6 +846,108 @@ describe("dispatchAndStartWorkboardCards", () => {
       metadata: { automation: { dispatchCount: 1 } },
     });
   });
+
+  it("shares one worker slot across cards dispatched with the same explicit owner", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const first = await store.create({
+      title: "First shared worker",
+      status: "ready",
+      priority: "urgent",
+      agentId: "alpha",
+      workspaceAccess: { unrestricted: true },
+    });
+    const second = await store.create({
+      title: "Second shared worker",
+      status: "ready",
+      agentId: "beta",
+      workspaceAccess: { unrestricted: true },
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "run-shared" });
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { now: 10, maxStarts: 3, ownerId: " shared-worker " },
+    });
+
+    expect(result.started).toEqual([
+      expect.objectContaining({ cardId: first.id, runId: "run-shared" }),
+    ]);
+    expect(run).toHaveBeenCalledOnce();
+    await expect(store.get(first.id)).resolves.toMatchObject({
+      status: "running",
+      metadata: { claim: { ownerId: "shared-worker" } },
+    });
+    await expect(store.get(second.id)).resolves.toMatchObject({ status: "ready" });
+  });
+
+  it("counts the active claim owner when checking worker capacity", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const running = await store.create({
+      title: "Already claimed worker",
+      status: "running",
+      agentId: "alpha",
+      workspaceAccess: { unrestricted: true },
+    });
+    await store.claim(running.id, { ownerId: "shared-worker", token: "shared-token" });
+    const ready = await store.create({
+      title: "Waiting for the shared owner",
+      status: "ready",
+      agentId: "beta",
+      workspaceAccess: { unrestricted: true },
+    });
+    const run = vi.fn();
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { now: 10, maxStarts: 3, ownerId: "shared-worker" },
+    });
+
+    expect(result.started).toEqual([]);
+    expect(run).not.toHaveBeenCalled();
+    await expect(store.get(ready.id)).resolves.toMatchObject({ status: "ready" });
+  });
+
+  it.each(["worker", "other-worker"])(
+    "starts recoverable work after a higher-priority worker fails (next owner: %s)",
+    async (nextOwner) => {
+      const store = new WorkboardStore(createMemoryStore());
+      const failed = await store.create({
+        title: "Unavailable urgent worker",
+        status: "ready",
+        priority: "urgent",
+        agentId: "worker",
+        workspaceAccess: { unrestricted: true },
+      });
+      const recovered = await store.create({
+        title: "Recoverable queued worker",
+        status: "ready",
+        agentId: nextOwner,
+        workspaceAccess: { unrestricted: true },
+      });
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("model unavailable"))
+        .mockResolvedValueOnce({ runId: "run-recovered" });
+
+      const result = await dispatchAndStartWorkboardCards({
+        store,
+        subagent: { run },
+        options: { now: 10, maxStarts: 1 },
+      });
+
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(result.started).toEqual([
+        expect.objectContaining({ cardId: recovered.id, runId: "run-recovered" }),
+      ]);
+      expect(result.startFailures).toEqual([
+        expect.objectContaining({ cardId: failed.id, error: "model unavailable" }),
+      ]);
+      await expect(store.get(failed.id)).resolves.toMatchObject({ status: "blocked" });
+      await expect(store.get(recovered.id)).resolves.toMatchObject({ status: "running" });
+    },
+  );
 
   it("does not let review cards consume an agent running slot", async () => {
     const store = new WorkboardStore(createMemoryStore());

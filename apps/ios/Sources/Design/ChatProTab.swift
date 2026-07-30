@@ -1,3 +1,4 @@
+import AVFAudio
 import OpenClawChatUI
 import OpenClawProtocol
 import SwiftUI
@@ -26,6 +27,11 @@ struct ChatProTab: View {
         let fileURL: URL
     }
 
+    private struct SessionDashboardPresentation: Identifiable {
+        let id = UUID()
+        let sessionKey: String
+    }
+
     @Environment(NodeAppModel.self) private var appModel
     @AppStorage("openclaw.webchat.showAssistantTrace")
     private var showsAssistantTrace = true
@@ -35,6 +41,8 @@ struct ChatProTab: View {
     @State private var showsTranscriptExportError = false
     @State private var showsBackgroundTasks = false
     @State private var showsSessions = false
+    @State private var showsNewSessionOptions = false
+    @State private var sessionDashboardPresentation: SessionDashboardPresentation?
     // Transport can start unscoped while the UI uses its "main" fallback.
     // Track the real agent so gateway metadata replaces the captured transport.
     @State private var viewModelTransportAgentID = ""
@@ -45,20 +53,20 @@ struct ChatProTab: View {
     @State private var viewModelHasVerifiedOfflineRoutingIdentity = false
     @State private var speech: OpenClawChatSpeechController?
     @State private var isGatewayStatusManuallyExpanded = false
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
     let headerTitle: String?
     let showsAgentBadge: Bool
     let ownsNavigationStack: Bool
     let openSettings: (() -> Void)?
 
     init(
-        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
         headerTitle: String? = nil,
         showsAgentBadge: Bool = true,
         ownsNavigationStack: Bool = true,
         openSettings: (() -> Void)? = nil)
     {
-        self.headerLeadingAction = headerLeadingAction
+        self.headerSidebarAction = headerSidebarAction
         self.headerTitle = headerTitle
         self.showsAgentBadge = showsAgentBadge
         self.ownsNavigationStack = ownsNavigationStack
@@ -80,6 +88,7 @@ struct ChatProTab: View {
         .task {
             await self.appModel.restoreChatSessionRoutingIdentityIfNeeded()
             self.syncChatViewModel()
+            await self.handleNewChatRequest(self.appModel.newChatRequestID)
             if self.speech == nil {
                 let gateway = self.appModel.operatorSession
                 self.speech = OpenClawChatSpeechController { text in
@@ -123,6 +132,9 @@ struct ChatProTab: View {
             self.syncChatViewModel()
             self.viewModel?.refresh()
         }
+        .onChange(of: self.appModel.newChatRequestID) { _, requestID in
+            Task { await self.handleNewChatRequest(requestID) }
+        }
     }
 
     private var content: some View {
@@ -131,10 +143,10 @@ struct ChatProTab: View {
             .navigationTitle(self.showsAgentBadge ? "" : self.headerDisplayTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if let headerLeadingAction {
-                    ToolbarItem(placement: .topBarLeading) {
-                        OpenClawSidebarRevealButton(action: headerLeadingAction)
-                    }
+                if let headerSidebarAction {
+                    OpenClawSidebarToolbarItem(
+                        action: headerSidebarAction,
+                        placement: .topBarLeading)
                 }
                 if self.showsAgentBadge {
                     if #available(iOS 26.0, *) {
@@ -163,10 +175,22 @@ struct ChatProTab: View {
                 BackgroundTasksScreen(agentID: self.currentAgentID)
             }
             .sheet(isPresented: self.$showsSessions) {
+                if let viewModel {
+                    ChatSessionsSheet(viewModel: viewModel)
+                }
+            }
+            .sheet(isPresented: self.$showsNewSessionOptions) {
+                if let viewModel {
+                    ChatNewSessionOptionsPopover(viewModel: viewModel) {
+                        self.showsNewSessionOptions = false
+                    }
+                    .presentationDetents([.medium])
+                    .presentationDragIndicator(.visible)
+                }
+            }
+            .sheet(item: self.$sessionDashboardPresentation) { presentation in
                 NavigationStack {
-                    CommandSessionsScreen(
-                        usesNativeNavigationChrome: true,
-                        openChat: { self.showsSessions = false })
+                    SessionDashboardScreen(sessionKey: presentation.sessionKey)
                 }
             }
             .alert(
@@ -211,16 +235,21 @@ struct ChatProTab: View {
                     ? self.dictationControl
                     : nil,
                 voiceNoteControl: self.voiceNoteControl,
-                speech: self.speech)
+                speech: self.speech,
+                mediaPlaybackAllowed: {
+                    !self.appModel.talkMode.isEnabled &&
+                        !self.appModel.talkMode.hasActivePushToTalkSession &&
+                        !self.appModel.voiceNoteRecorder.ownsPendingChatAttachment
+                })
                 // iMessage-style grey bubbles for agent replies in the clean chrome.
-                    .environment(\.openClawAssistantBubblesInCleanChrome, true)
-                    .id(ObjectIdentifier(viewModel))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .environment(\.openClawAssistantBubblesInCleanChrome, true)
+                .id(ObjectIdentifier(viewModel))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
             ContentUnavailableView(
                 "Preparing Chat",
                 systemImage: "bubble.left.and.bubble.right",
-                description: Text("The thread attaches once the gateway is ready.")
+                description: Text("The session attaches once the gateway is ready.")
                     .font(OpenClawType.body))
         }
     }
@@ -261,12 +290,12 @@ struct ChatProTab: View {
     }
 
     private var headerAgentIdentity: some View {
-        HStack {
-            self.headerAgentIdentityControl
-        }
-        .frame(minHeight: 44)
-        .accessibilityIdentifier("chat-agent-identity")
-        .animation(.snappy(duration: 0.24), value: self.showsExpandedGatewayStatus)
+        HStack { self.headerAgentIdentityControl }
+            .frame(minHeight: 44)
+            .accessibilityElement(children: .contain) // Keep the parent reachable and its child actionable.
+            .accessibilityIdentifier("chat-agent-identity")
+            .accessibilityValue(self.showsExpandedGatewayStatus ? "Expanded" : "Collapsed")
+            .animation(.snappy(duration: 0.24), value: self.showsExpandedGatewayStatus)
     }
 
     @ViewBuilder
@@ -448,6 +477,13 @@ struct ChatProTab: View {
         }
     }
 
+    private func handleNewChatRequest(_ requestID: Int) async {
+        guard let viewModel,
+              self.appModel.consumeNewChatRequest(requestID)
+        else { return }
+        _ = await viewModel.startNewSession()
+    }
+
     private func captureCurrentPresentationIdentity() {
         self.viewModelPresentationAgentID = self.currentAgentID
         self.viewModelPresentationAgentName = self.currentAgentDisplayName
@@ -456,8 +492,8 @@ struct ChatProTab: View {
     }
 
     private func makeChatViewModel(sessionKey: String) -> OpenClawChatViewModel {
-        // One store instance backs both seams so the transcript cache and the
-        // offline outbox share a single SQLite connection.
+        // One gateway facade backs both seams while routing cache and outbox
+        // operations to their separate installation-wide databases.
         let offlineStore = self.appModel.makeChatOfflineStore()
         let voiceNoteRecorder = self.appModel.voiceNoteRecorder
         return OpenClawChatViewModel(
@@ -499,10 +535,32 @@ struct ChatProTab: View {
             statusText: self.appModel.talkMode.statusText,
             providerLabel: self.appModel.talkMode.gatewayTalkProviderLabel,
             level: self.talkLevel,
+            inputDevices: self.talkInputDevices,
+            selectedInputDeviceID: self.selectedTalkInputDeviceID,
+            selectInputDevice: { deviceID in
+                self.appModel.talkMode.selectInputDevice(deviceID)
+            },
+            cameraFacing: self.appModel.preferredCameraFacing == .front ? .front : .back,
+            flipCamera: {
+                self.appModel.flipPreferredCameraFacing()
+            },
             toggle: { sessionKey in
                 self.appModel.focusChatSession(sessionKey)
                 self.appModel.setTalkEnabled(!self.appModel.talkMode.isEnabled)
             })
+    }
+
+    private var talkInputDevices: [OpenClawChatAudioInputDevice] {
+        (AVAudioSession.sharedInstance().availableInputs ?? []).map { input in
+            OpenClawChatAudioInputDevice(id: input.uid, name: input.portName)
+        }
+    }
+
+    private var selectedTalkInputDeviceID: String? {
+        guard let preferredID = self.appModel.talkMode.preferredInputDeviceID,
+              self.talkInputDevices.contains(where: { $0.id == preferredID })
+        else { return nil }
+        return preferredID
     }
 
     private var dictationControl: OpenClawChatDictationControl {
@@ -565,17 +623,47 @@ struct ChatProTab: View {
             }
 
             Button {
+                self.showsNewSessionOptions = true
+            } label: {
+                Label {
+                    Text("New Session Options…")
+                        .font(OpenClawType.body)
+                } icon: {
+                    Image(systemName: "slider.horizontal.3")
+                }
+            }
+            .disabled(self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
+
+            Button {
                 self.showsSessions = true
             } label: {
                 Label {
-                    Text(String(localized: "Threads…"))
+                    Text(String(localized: "Sessions…"))
                         .font(OpenClawType.body)
                 } icon: {
                     Image(systemName: "rectangle.stack")
                 }
             }
 
+            Button {
+                guard let sessionKey = self.viewModel?.sessionKey else { return }
+                self.sessionDashboardPresentation = SessionDashboardPresentation(sessionKey: sessionKey)
+            } label: {
+                Label {
+                    Text("Dashboard")
+                        .font(OpenClawType.body)
+                } icon: {
+                    Image(systemName: "rectangle.grid.2x2")
+                }
+            }
+            .disabled(self.viewModel == nil)
+
             Divider()
+
+            if let viewModel {
+                ChatModelControlsMenuItems(viewModel: viewModel)
+                Divider()
+            }
 
             Button {
                 self.showsBackgroundTasks = true

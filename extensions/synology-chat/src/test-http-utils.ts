@@ -45,17 +45,29 @@ export function makeStalledReq(
   return makeBaseReq(method, opts);
 }
 
-export function makeRes(): ServerResponse & { status: number; body: string } {
+export function makeRes(): ServerResponse & {
+  status: number;
+  body: string;
+  headers: Record<string, string>;
+} {
   const res = {
     status: 0,
     body: "",
-    writeHead(statusCode: number, _headers: Record<string, string>) {
+    headers: {} as Record<string, string>,
+    setHeader(name: string, value: string) {
+      res.headers[name.toLowerCase()] = value;
+    },
+    writeHead(statusCode: number, _headers?: Record<string, string>) {
       res.status = statusCode;
     },
     end(body?: string) {
       res.body = body ?? "";
     },
-  } as unknown as ServerResponse & { status: number; body: string };
+  } as unknown as ServerResponse & {
+    status: number;
+    body: string;
+    headers: Record<string, string>;
+  };
   Object.defineProperty(res, "statusCode", {
     configurable: true,
     enumerable: true,

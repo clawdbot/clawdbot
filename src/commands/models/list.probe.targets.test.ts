@@ -19,8 +19,8 @@ const resolveAuthProfileEligibilityMock = vi.fn<
 }));
 const resolveSecretRefStringMock = vi.fn(async () => "resolved-secret");
 
-vi.mock("../../agents/model-catalog.js", () => ({
-  loadModelCatalog: loadModelCatalogMock,
+vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: loadModelCatalogMock,
 }));
 vi.mock("../../agents/model-auth.js", () => ({
   hasUsableCustomProviderApiKey: (cfg: OpenClawConfig, provider: string) => {
@@ -772,6 +772,46 @@ describe("buildProbeTargets reason codes", () => {
         provider: "byteplus-plan",
         profileId: "byteplus-plan:saved",
         source: "profile",
+      }),
+    );
+  });
+
+  it("keeps no_model when a credential has no account-visible catalog model", async () => {
+    mockStore = {
+      version: 1,
+      profiles: {
+        "provider:account": {
+          type: "oauth",
+          provider: "provider",
+          access: "account-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+      order: { provider: ["provider:account"] },
+    };
+    mockAllowedProfiles = ["provider:account"];
+    resolveAuthProfileEligibilityMock.mockReturnValue({ eligible: true, reasonCode: "ok" });
+    loadModelCatalogMock.mockResolvedValueOnce([]);
+
+    const plan = await buildProbeTargets({
+      cfg: {} as OpenClawConfig,
+      providers: ["provider"],
+      modelCandidates: [],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+
+    expect(plan.targets).toStrictEqual([]);
+    expect(plan.results).toContainEqual(
+      expect.objectContaining({
+        provider: "provider",
+        profileId: "provider:account",
+        status: "no_model",
+        reasonCode: "no_model",
       }),
     );
   });

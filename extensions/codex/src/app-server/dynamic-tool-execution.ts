@@ -47,7 +47,10 @@ const CODEX_DYNAMIC_COMPUTER_COMPLETION_GRACE_MS = 30_000;
 /** Timeout for image-understanding style dynamic tool calls. */
 const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 /** Timeout for message-delivery dynamic tool calls. */
-const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS;
+const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = 600_000;
+/** Outer default for collector waits: full swarm budget plus completion grace. */
+const CODEX_DYNAMIC_AGENTS_WAIT_TOOL_TIMEOUT_MS =
+  CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS;
 const LOG_FIELD_MAX_LENGTH = 160;
 
 type DynamicToolTimeoutDetails = {
@@ -331,13 +334,25 @@ export function toCodexDynamicToolProtocolResponse(
 export function toCodexDynamicToolProgressResponse(
   response: CodexDynamicToolRuntimeResponse,
   protocolResponse: CodexDynamicToolCallResponse,
-): CodexDynamicToolCallResponse & { details?: { async: true; status: "started" } } {
-  if (response.asyncStarted !== true) {
+): CodexDynamicToolCallResponse & {
+  details?: { async: true; status: "started" } | { mcpAppPreview: unknown };
+} {
+  const transcriptDetails = response.transcriptDetails;
+  if (response.asyncStarted !== true && transcriptDetails === undefined) {
     return protocolResponse;
   }
   return {
     ...protocolResponse,
-    details: { async: true, status: "started" },
+    ...(transcriptDetails ? { details: transcriptDetails } : {}),
+    ...(response.asyncStarted === true
+      ? {
+          details: {
+            ...transcriptDetails,
+            async: true as const,
+            status: "started" as const,
+          },
+        }
+      : {}),
   };
 }
 
@@ -488,6 +503,24 @@ export function resolveDynamicToolCallTimeoutMs(params: {
   if (params.call.tool === "message") {
     return CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS;
   }
+  if (params.call.tool === "agents_wait") {
+    // Collector waits default to the full swarm budget, but an operator's
+    // configured per-tool timeout still wins over that default. The outer
+    // watchdog must outlive the tool's own 600s deadline (cap + grace) so a
+    // full-budget wait returns its structured timeout result instead of
+    // being aborted by the harness first.
+    const requestedMs =
+      readDynamicToolCallTimeoutMs(params.call.arguments) ??
+      readConfiguredDynamicToolTimeoutMs(params.call.tool, params.config) ??
+      CODEX_DYNAMIC_AGENTS_WAIT_TOOL_TIMEOUT_MS;
+    return Math.max(
+      1,
+      Math.min(
+        CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
+        Math.floor(requestedMs),
+      ),
+    );
+  }
   return clampDynamicToolTimeoutMs(
     readDynamicToolCallTimeoutMs(params.call.arguments) ??
       readConfiguredDynamicToolTimeoutMs(params.call.tool, params.config) ??
@@ -533,20 +566,29 @@ function readConfiguredDynamicToolTimeoutMs(
   config: EmbeddedRunAttemptParams["config"],
 ): number | undefined {
   if (toolName === "image_generate") {
-    const imageGenerationModel = config?.agents?.defaults?.imageGenerationModel;
-    if (!imageGenerationModel || typeof imageGenerationModel !== "object") {
+    const imageModel = config?.agents?.defaults?.mediaModels?.image;
+    if (!imageModel || typeof imageModel !== "object") {
       return CODEX_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS;
     }
     return (
-      readPositiveFiniteTimeoutMs(imageGenerationModel.timeoutMs) ??
+      readPositiveFiniteTimeoutMs(imageModel.timeoutMs) ??
       CODEX_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS
     );
   }
 
   if (toolName === "image") {
-    return (
-      readTimeoutSecondsAsMs(config?.tools?.media?.image?.timeoutSeconds) ??
-      CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS
+    const candidates = (config?.tools?.media?.models ?? []).filter(
+      (entry) => !entry.capabilities || entry.capabilities.includes("image"),
+    );
+    const capabilityTimeoutMs = readTimeoutSecondsAsMs(config?.tools?.media?.image?.timeoutSeconds);
+    return Math.max(
+      capabilityTimeoutMs ?? CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS,
+      ...candidates.map(
+        (entry) =>
+          readTimeoutSecondsAsMs(entry.timeoutSeconds) ??
+          capabilityTimeoutMs ??
+          CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS,
+      ),
     );
   }
 

@@ -192,6 +192,7 @@ describeControlUiE2e("Control UI browser Talk", () => {
       methodResponses: {
         "talk.client.create": {
           provider: "google",
+          voiceSessionId: "voice-browser-talk-e2e",
           transport: "provider-websocket",
           protocol: "google-live-bidi",
           clientSecret: "auth_tokens/browser-talk-e2e",
@@ -373,6 +374,7 @@ describeControlUiE2e("Control UI browser Talk", () => {
       methodResponses: {
         "talk.client.create": {
           provider: "google",
+          voiceSessionId: "voice-controls-e2e",
           transport: "provider-websocket",
           protocol: "google-live-bidi",
           // Fake harness token, assembled so secret scanners do not flag it.
@@ -491,6 +493,7 @@ describeControlUiE2e("Control UI browser Talk", () => {
         "talk.catalog": videoTalkCatalog("openai"),
         "talk.client.create": {
           provider: "openai",
+          voiceSessionId: "voice-openai-video-e2e",
           transport: "webrtc",
           clientSecret: "test-client-secret",
           offerUrl: "https://api.openai.com/v1/realtime/calls",
@@ -717,6 +720,7 @@ describeControlUiE2e("Control UI browser Talk", () => {
         "talk.catalog": videoTalkCatalog("google"),
         "talk.client.create": {
           provider: "google",
+          voiceSessionId: "voice-google-video-e2e",
           transport: "provider-websocket",
           protocol: "google-live-bidi",
           // Fake harness token, assembled so secret scanners do not flag it.
@@ -862,6 +866,7 @@ describeControlUiE2e("Control UI browser Talk", () => {
         "talk.catalog": videoTalkCatalog("google"),
         "talk.client.create": {
           provider: "google",
+          voiceSessionId: "voice-blocked-camera-e2e",
           transport: "provider-websocket",
           protocol: "google-live-bidi",
           // Fake harness token, assembled so secret scanners do not flag it.

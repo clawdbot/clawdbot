@@ -145,9 +145,7 @@ describe("runtime snapshot state", () => {
     const scopedResolvedConfig: OpenClawConfig = {
       ...runtimeConfig,
       tools: {
-        experimental: {
-          planTool: true,
-        },
+        updatePlan: true,
       },
     };
 

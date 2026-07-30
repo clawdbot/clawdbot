@@ -15,6 +15,7 @@ import { resolveSessionAgentIds } from "../agent-scope.js";
 import type { ToolOutcomeObservation } from "../agent-tools.before-tool-call.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
+import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
@@ -23,6 +24,7 @@ import {
   createPostCompactionLoopGuard,
   PostCompactionLoopPersistedError,
 } from "./post-compaction-loop-guard.js";
+import { clearProviderPromptState } from "./provider-prompt-state.js";
 import { createEmbeddedRunReplayState } from "./replay-state.js";
 import { handleEmbeddedAssistantFailure } from "./run/assistant-failure.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run/attempt-dispatch-preparation.js";
@@ -44,10 +46,11 @@ import {
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { prepareEmbeddedRunRuntime } from "./run/runtime-preparation.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
-import { prepareEmbeddedRunTerminal } from "./run/terminal-preparation.js";
+import { prepareTerminalWithSettledTurnFinalization } from "./run/settled-turn-finalization.js";
 import { resolveEmbeddedRunTerminal } from "./run/terminal-resolution.js";
 import { createEmbeddedRunTerminalRetryState } from "./run/terminal-retry-state.js";
 import { resolveEmbeddedRunTerminalTimeout } from "./run/terminal-timeout.js";
+import { createAgentTurnTaintState } from "./run/turn-taint-state.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 import { createUsageAccumulator } from "./usage-accumulator.js";
 
@@ -86,6 +89,7 @@ export async function runPreparedEmbeddedLoop(
     markStartupStage: (stage) => startupStages.mark(stage),
     notifyExecutionPhase,
     fallbackConfigured,
+    preparedModelRuntime: input.preparedModelRuntime,
   });
   provider = preparedRuntime.provider;
   modelId = preparedRuntime.modelId;
@@ -164,11 +168,7 @@ export async function runPreparedEmbeddedLoop(
   const maxReasoningOnlyRetryAttempts = DEFAULT_REASONING_ONLY_RETRY_LIMIT;
   const maxEmptyResponseRetryAttempts = DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT;
 
-  const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(
-    profileCandidates.length,
-    params.config,
-    sessionAgentId,
-  );
+  const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   let bootstrapPromptWarningSignaturesSeen =
     params.bootstrapPromptWarningSignaturesSeen ??
@@ -193,10 +193,9 @@ export async function runPreparedEmbeddedLoop(
     cfg: params.config,
     agentId: sessionAgentId,
   });
-  const postCompactionGuard = createPostCompactionLoopGuard(
-    resolvedLoopDetectionConfig?.postCompactionGuard,
-    { enabled: resolvedLoopDetectionConfig?.enabled !== false },
-  );
+  const postCompactionGuard = createPostCompactionLoopGuard({
+    enabled: resolvedLoopDetectionConfig?.enabled !== false,
+  });
   let postCompactionAbortController: AbortController | undefined;
   let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
   const attemptTerminalToolPresentation = {
@@ -207,6 +206,7 @@ export async function runPreparedEmbeddedLoop(
   const allocateToolOutcomeOrdinal = (): number => nextToolOutcomeOrdinal++;
   const readAttemptTerminalToolPresentation = (): string | undefined =>
     attemptTerminalToolPresentation.value;
+  const turnTaintState = createAgentTurnTaintState();
   const observeToolOutcome = (observation: ToolOutcomeObservation): void => {
     const observationOrdinal =
       observation.toolCallOrdinal ?? attemptTerminalToolPresentation.ordinal + 1;
@@ -214,6 +214,7 @@ export async function runPreparedEmbeddedLoop(
       attemptTerminalToolPresentation.ordinal = observationOrdinal;
       attemptTerminalToolPresentation.value = observation.terminalPresentation;
     }
+    turnTaintState.observe(observation);
     if (observation.presentationOnly) {
       return;
     }
@@ -270,6 +271,7 @@ export async function runPreparedEmbeddedLoop(
     });
     let authRetryPending = false;
     let accumulatedReplayState = createEmbeddedRunReplayState();
+    let latestMcpAppChannelView: McpAppChannelView | undefined;
     // Hoisted so the retry-limit error path can use the most recent API total.
     let lastTurnTotal: number | undefined;
     while (true) {
@@ -331,6 +333,7 @@ export async function runPreparedEmbeddedLoop(
         bootstrapPromptWarningSignaturesSeen,
         resolveRuntimeFallbackReason,
         observeToolOutcome,
+        isTurnTainted: turnTaintState.isTainted,
         allocateToolOutcomeOrdinal,
         getPostCompactionAbortError: () => postCompactionAbortError,
         setPostCompactionAbortController: (controller) => {
@@ -377,30 +380,21 @@ export async function runPreparedEmbeddedLoop(
       accumulatedReplayState = normalizedAttempt.replayState;
       const {
         attempt,
-        aborted,
-        externalAbort,
-        promptError,
-        timedOut,
-        idleTimedOut,
-        timedOutDuringCompaction,
-        timedOutDuringToolExecution,
-        timedOutByRunBudget,
         sessionIdUsed,
         sessionFileUsed,
         currentAttemptAssistant,
         currentAttemptCompletedAssistant,
         attemptAssistant,
-        terminalOutcome,
-        terminalAborted,
-        terminalTimedOut,
-        terminalInterrupted,
-        signalOwnedInterruption,
+        terminalState,
         setTerminalLifecycleMeta,
         attemptCompactionCount,
         activeErrorContext,
         resolveReplayInvalidForAttempt,
         canRestartForLiveSwitch,
       } = normalizedAttempt;
+      // Continuation retries remain one user turn, so keep the newest launch target.
+      latestMcpAppChannelView = attempt.latestMcpAppChannelView ?? latestMcpAppChannelView;
+      attempt.latestMcpAppChannelView = latestMcpAppChannelView;
       const recovery = await recoverEmbeddedRunAttempt({
         runInput: input,
         preparedRuntime,
@@ -441,9 +435,7 @@ export async function runPreparedEmbeddedLoop(
         attempt,
         attemptAssistant,
         currentAttemptAssistant,
-        terminalProviderStarted: terminalOutcome.providerStarted === true,
-        terminalInterrupted,
-        promptError,
+        terminalState,
         activeErrorContext,
         provider,
         modelId,
@@ -451,14 +443,6 @@ export async function runPreparedEmbeddedLoop(
         thinkLevel,
         getThinkLevel: () => preparedRuntime.snapshot().thinkLevel,
         attemptedThinking,
-        timedOut,
-        idleTimedOut,
-        timedOutDuringCompaction,
-        timedOutDuringToolExecution,
-        timedOutByRunBudget,
-        signalOwnedInterruption,
-        externalAbort,
-        aborted,
         fallbackConfigured,
         pluginHarnessOwnsTransport,
         canRestartForLiveSwitch,
@@ -500,7 +484,55 @@ export async function runPreparedEmbeddedLoop(
       if (assistantFailureOutcome.action === "retry") {
         continue;
       }
-      const assistantProfileFailureReason = assistantFailureOutcome.assistantProfileFailureReason;
+      let assistantProfileFailureReason = assistantFailureOutcome.assistantProfileFailureReason;
+      const terminalToolPresentation = readAttemptTerminalToolPresentation();
+      const finalizedTerminal = await prepareTerminalWithSettledTurnFinalization({
+        initial: {
+          attempt,
+          attemptAssistant,
+          currentAttemptCompletedAssistant,
+          sessionIdUsed,
+          sessionFileUsed,
+          terminalState,
+          attemptCompactionCount,
+        },
+        terminalBase: {
+          runParams: params,
+          provider,
+          model: model.id,
+          activeErrorContext,
+          authProfileStore: attemptAuthProfileStore,
+          authProfileId: lastProfileId,
+          outerContextTokenMeta,
+          usageAccumulator,
+          contextRecoveryState,
+          resolvedToolResultFormat,
+        },
+        lastRunPromptUsage,
+        lastTurnTotal,
+        finalization: {
+          preparedAttempt: dispatchedAttempt.preparedAttempt,
+          harness: agentHarness,
+          modelApi: effectiveModel.api,
+          executionContract,
+          hasTerminalToolPresentation: Boolean(terminalToolPresentation),
+          noteLaneTaskProgress: input.laneController.noteLaneTaskProgress,
+        },
+      });
+      const {
+        attempt: terminalAttempt,
+        attemptAssistant: terminalAttemptAssistant,
+        terminalState: resolvedTerminalState,
+        attemptCompactionCount: terminalAttemptCompactionCount,
+        prepared: terminalPrepared,
+        finalizationAttempted: settledTurnFinalizationAttempted,
+      } = finalizedTerminal;
+      lastRunPromptUsage = finalizedTerminal.lastRunPromptUsage;
+      lastTurnTotal = finalizedTerminal.lastTurnTotal;
+      if (finalizedTerminal.finalizationSucceeded) {
+        assistantProfileFailureReason = null;
+      }
+
       const {
         agentMeta,
         reportedModelRef,
@@ -514,41 +546,17 @@ export async function runPreparedEmbeddedLoop(
         hasPartialAssistantTextAfterPromptTimeout,
         attemptToolSummary,
         failureSignal,
-      } = prepareEmbeddedRunTerminal({
-        runParams: params,
-        attempt,
-        currentAttemptCompletedAssistant,
-        provider,
-        model: model.id,
-        activeErrorContext,
-        authProfileStore: attemptAuthProfileStore,
-        authProfileId: lastProfileId,
-        sessionIdUsed,
-        sessionFileUsed,
-        outerContextTokenMeta,
-        usageAccumulator,
-        lastRunPromptUsage,
-        lastTurnTotal,
-        contextRecoveryState,
-        resolvedToolResultFormat,
-        terminalInterrupted,
-        terminalTimedOut,
-        timedOutDuringCompaction,
-        timedOutDuringToolExecution,
-      });
+      } = terminalPrepared;
 
       const terminalTimeoutResult = resolveEmbeddedRunTerminalTimeout({
         timedOutDuringPrompt,
         hasSuccessfulFinalAssistantAfterPromptTimeout,
         shouldSurfaceCodexCompletionTimeout,
-        idleTimedOut,
-        attempt,
+        attempt: terminalAttempt,
         hasPartialAssistantTextAfterPromptTimeout,
         payloads,
         payloadsWithToolMedia,
-        terminalAborted,
-        terminalTimedOut,
-        terminalOutcome,
+        terminalState: resolvedTerminalState,
         resolveReplayInvalid: resolveReplayInvalidForAttempt,
         setTerminalLifecycleMeta,
         startedAtMs: started,
@@ -565,17 +573,12 @@ export async function runPreparedEmbeddedLoop(
       const terminalResolution = await resolveEmbeddedRunTerminal({
         runParams: params,
         retryState: terminalRetryState,
-        attempt,
-        attemptAssistant,
+        attempt: terminalAttempt,
+        attemptAssistant: terminalAttemptAssistant,
         activeErrorContext,
         modelApi: effectiveModel.api,
         executionContract,
-        terminalAborted,
-        terminalTimedOut,
-        terminalInterrupted,
-        externalAbort,
-        signalOwnedInterruption,
-        promptError,
+        terminalState: resolvedTerminalState,
         payloadsWithToolMedia,
         recoveredFinalAssistantPayloadsAfterPromptTimeout,
         finalAssistantVisibleText,
@@ -585,7 +588,7 @@ export async function runPreparedEmbeddedLoop(
         failureSignal,
         maxReasoningOnlyRetryAttempts,
         maxEmptyResponseRetryAttempts,
-        attemptCompactionCount,
+        attemptCompactionCount: terminalAttemptCompactionCount,
         replayState: accumulatedReplayState,
         activePromptPersisted: sessionPromptState.activePrompt.persisted,
         activateInternalPrompt: sessionPromptState.activateInternalPrompt,
@@ -593,7 +596,7 @@ export async function runPreparedEmbeddedLoop(
           sessionPromptState.suppressNextUserMessagePersistence = value;
         },
         armPostCompactionGuard: () => postCompactionGuard.armPostCompaction(),
-        readTerminalToolPresentation: readAttemptTerminalToolPresentation,
+        readTerminalToolPresentation: () => terminalToolPresentation,
         resolveReplayInvalid: resolveReplayInvalidForAttempt,
         setTerminalLifecycleMeta,
         maybeMarkAuthProfileFailure: failoverRetryController.maybeMarkAuthProfileFailure,
@@ -601,11 +604,14 @@ export async function runPreparedEmbeddedLoop(
         startedAtMs: started,
         provider,
         modelId,
+        modelTransportId: effectiveModel.id ?? modelId,
+        modelTransportApi: effectiveModel.api ?? model.api,
         authProfileId: lastProfileId,
         profileFailureStore,
         attemptAuthProfileStore,
         apiKeyInfo: getApiKeyInfo(),
         agentHarnessId: agentHarness.id,
+        settledTurnFinalizationAttempted,
         pluginHarnessOwnsTransport,
         pluginHarnessOwnsAuthBootstrap,
         reportedModelRef,
@@ -624,6 +630,7 @@ export async function runPreparedEmbeddedLoop(
       await maybeEmitFastModeAutoResetBestEffort();
     }
     forgetPromptBuildDrainCacheForRun(params.runId);
+    clearProviderPromptState(params.runId);
     stopRuntimeAuthRefreshTimer();
     await runAgentCleanupStep({
       runId: params.runId,

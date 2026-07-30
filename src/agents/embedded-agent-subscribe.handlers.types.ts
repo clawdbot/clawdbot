@@ -6,6 +6,7 @@
 import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
 import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
+import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import type { HookRunner } from "../plugins/hooks.js";
@@ -23,6 +24,7 @@ import type {
   BlockReplyChunking,
   SubscribeEmbeddedAgentSessionParams,
 } from "./embedded-agent-subscribe.types.js";
+import type { McpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
@@ -84,7 +86,13 @@ export type EmbeddedAgentSubscribeState = {
   itemActiveIds: Set<string>;
   itemStartedCount: number;
   itemCompletedCount: number;
+  /**
+   * Completed assistant round trips in this attempt. Survives compaction-retry
+   * presentation resets, matching how usage totals keep counting model calls.
+   */
+  assistantTurnCount: number;
   lastToolError?: ToolErrorSummary;
+  latestMcpAppChannelView?: McpAppChannelView;
 
   blockReplyBreak: "text_end" | "message_end";
   reasoningMode: ReasoningLevel;
@@ -172,8 +180,10 @@ export type EmbeddedAgentSubscribeState = {
   successfulCronAdds: number;
   pendingMessagingMediaUrls: Map<string, string[]>;
   pendingToolMediaUrls: string[];
+  pendingToolMediaAttachments?: ReplyMediaAttachment[];
+  /** Per-URL local-media trust; keys are normalized pending media URLs. */
+  pendingToolMediaTrustByUrl: Map<string, boolean>;
   pendingToolAudioAsVoice: boolean;
-  pendingToolTrustedLocalMedia: boolean;
   hasToolMediaBlockReply: boolean;
   visibleBlockReplyCount: number;
   pendingAssistantReplyDirectives?: Pick<
@@ -254,6 +264,7 @@ export type EmbeddedAgentSubscribeContext = {
   incrementCompactionCount: () => void;
   noteCompactionTokensAfter: (value: unknown) => void;
   getUsageTotals: () => NormalizedUsage | undefined;
+  getLastAssistantUsage: () => NormalizedUsage | undefined;
   getCompactionCount: () => number;
   getLastCompactionTokensAfter: () => number | undefined;
   emitAssistantStreamData: (
@@ -315,12 +326,13 @@ type ToolHandlerState = Pick<
   | "itemStartedCount"
   | "itemCompletedCount"
   | "lastToolError"
+  | "latestMcpAppChannelView"
   | "pendingMessagingTargets"
   | "pendingMessagingTexts"
   | "pendingMessagingMediaUrls"
   | "pendingToolMediaUrls"
+  | "pendingToolMediaTrustByUrl"
   | "pendingToolAudioAsVoice"
-  | "pendingToolTrustedLocalMedia"
   | "deterministicApprovalPromptPending"
   | "hadDeterministicSideEffect"
   | "replayState"

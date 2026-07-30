@@ -15,6 +15,7 @@ import {
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
   onAgentRuntimeEvent,
+  releaseAgentRunContext,
   sweepStaleRunContexts,
   type AgentEventRuntimePayload as Event,
 } from "../../infra/agent-events.js";
@@ -316,6 +317,27 @@ describe("worker live events", () => {
     expect(deltas()).toEqual(["first", "second", "new", "current"]);
   });
 
+  it("retires completed process fences when a new turn reuses its durable run id", () => {
+    ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
+    ack(live(2, lifecycle({ phase: "end", startedAt: 100, endedAt: 200 })));
+    const credentialHash = ["next", "process", "credential"].join("-");
+
+    expect(
+      rx.rotateCredential({
+        credentialHash,
+        environmentId: ID.environmentId,
+        newProcessTurn: true,
+        previousCredentialHash: ID.credentialHash,
+        runEpoch: EPOCH,
+        sessionId: SID,
+      }),
+    ).toBe(true);
+
+    const nextProcess = { ...ID, credentialHash };
+    ack(live(3, lifecycle({ phase: "start", startedAt: 300 })), 3, nextProcess);
+    expect(events.map((event) => event.data.phase)).toEqual(["start", "end", "start"]);
+  });
+
   it("ACKs before buffered failure", () => {
     const first = msg(1, "first", 0, "run-prefix");
     const second = msg(2, "second", 0, "run-buffered");
@@ -577,6 +599,51 @@ describe("worker live events", () => {
     });
     expect(deltas()).toEqual(["worker"]);
     expect(events[0]?.controlUiVisible).toBe(true);
+  });
+
+  it("shares a compatible non-exclusive Gateway run owner", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const gatewayClaim = claimAgentRunContext(
+      RUN,
+      {
+        sessionId: LOCAL.sessionId,
+        sessionKey: LOCAL.sessionKey,
+        isControlUiVisible: false,
+        lifecycleGeneration,
+      },
+      { ownsContext: true, trackOwner: true },
+    );
+    expect(gatewayClaim).toBeDefined();
+
+    ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
+
+    expect(getAgentRunContext(RUN)).toMatchObject({
+      ...LOCAL,
+      isControlUiVisible: false,
+      lifecycleGeneration,
+      projectSessionActive: true,
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]?.controlUiVisible).toBe(false);
+
+    rx.clear();
+    expect(getAgentRunContext(RUN)).toBeDefined();
+    releaseAgentRunContext(RUN, gatewayClaim);
+  });
+
+  it("rejects a compatible context held by an exclusive Gateway owner", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const gatewayClaim = claimAgentRunContext(
+      RUN,
+      { ...LOCAL, lifecycleGeneration },
+      { exclusive: true, ownsContext: true, trackOwner: true },
+    );
+    expect(gatewayClaim).toBeDefined();
+
+    fail(msg(1, "blocked"), "invalid-event");
+    expect(events).toEqual([]);
+
+    releaseAgentRunContext(RUN, gatewayClaim);
   });
 
   it("rejects pre-registered gateway run contexts with mismatched identity", () => {

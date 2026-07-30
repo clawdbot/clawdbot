@@ -9,7 +9,9 @@ struct ChatToolActivityItem: Identifiable, Equatable {
     let id: String
     let name: String?
     let arguments: AnyCodable?
+    let details: AnyCodable?
     let resultText: String?
+    let isError: Bool
     let isPending: Bool
 }
 
@@ -29,7 +31,9 @@ enum ChatToolActivity {
                 id: call.id ?? "call-\(index)",
                 name: call.name,
                 arguments: call.arguments,
+                details: result?.details,
                 resultText: result?.text,
+                isError: result?.isError ?? false,
                 isPending: false)
         }
 
@@ -38,7 +42,9 @@ enum ChatToolActivity {
                 id: result.id ?? "result-\(index)",
                 name: result.name,
                 arguments: nil,
+                details: result.details,
                 resultText: result.text,
+                isError: result.isError ?? false,
                 isPending: false)
         })
         return items
@@ -47,6 +53,7 @@ enum ChatToolActivity {
 
 struct ChatToolActivityRow: View {
     let item: ChatToolActivityItem
+    private let resolvedDiff: (lines: [ChatToolDiffLine], stat: ChatToolDiffStat?)?
     @State private var expanded = false
     @State private var showsFullResult = false
 
@@ -68,7 +75,7 @@ struct ChatToolActivityRow: View {
     }
 
     private var expandable: Bool {
-        !self.formattedResult.isEmpty
+        self.resolvedDiff != nil || !self.formattedResult.isEmpty
     }
 
     private var accessibilityValue: String {
@@ -77,18 +84,35 @@ struct ChatToolActivityRow: View {
         return self.detailLine.map { "\(running), \($0)" } ?? running
     }
 
-    private var resultLineCount: Int {
-        self.formattedResult.components(separatedBy: .newlines).count
+    private var expandedLineCount: Int {
+        self.resolvedDiff?.lines.count ?? self.formattedResult.components(separatedBy: .newlines).count
     }
 
     private var isResultTruncated: Bool {
-        self.resultLineCount > Self.expandedLineLimit
+        self.expandedLineCount > Self.expandedLineLimit
     }
 
     private var expandedResult: String {
         guard self.isResultTruncated, !self.showsFullResult else { return self.formattedResult }
         let lines = self.formattedResult.components(separatedBy: .newlines)
         return lines.prefix(Self.expandedLineLimit - 1).joined(separator: "\n") + "\n…"
+    }
+
+    private var expandedDiffLines: [ChatToolDiffLine] {
+        guard let lines = self.resolvedDiff?.lines else { return [] }
+        guard self.isResultTruncated, !self.showsFullResult else { return lines }
+        return Array(lines.prefix(Self.expandedLineLimit - 1)) + [
+            ChatToolDiffLine(kind: .skip, text: ""),
+        ]
+    }
+
+    init(item: ChatToolActivityItem) {
+        self.item = item
+        self.resolvedDiff = ChatToolDiff.resolveDiff(
+            name: item.name,
+            arguments: item.arguments,
+            details: item.details,
+            isError: item.isError)
     }
 
     var body: some View {
@@ -116,10 +140,25 @@ struct ChatToolActivityRow: View {
 
             if self.expanded, self.expandable {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(self.expandedResult)
-                        .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
+                    if self.resolvedDiff != nil {
+                        self.diffRows
+                        // The result text carries the outcome (success summary or the
+                        // error diagnostic); hiding it would misrepresent failed edits
+                        // as applied changes. Bounded so foreign harness output cannot
+                        // dwarf the diff.
+                        if !self.formattedResult.isEmpty {
+                            Text(self.formattedResult)
+                                .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .lineLimit(Self.expandedLineLimit)
+                        }
+                    } else {
+                        Text(self.expandedResult)
+                            .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
 
                     if self.isResultTruncated {
                         Button {
@@ -130,7 +169,7 @@ struct ChatToolActivityRow: View {
                                     ? String(localized: "Show less")
                                     : String(
                                         format: String(localized: "Show all %lld lines"),
-                                        Int64(self.resultLineCount)))
+                                        Int64(self.expandedLineCount)))
                                 .font(OpenClawChatTypography.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -167,11 +206,12 @@ struct ChatToolActivityRow: View {
 
             Image(systemName: Self.symbol(forToolName: self.item.name))
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : Color.secondary)
 
             Text(self.display.title)
                 .font(OpenClawChatTypography.footnoteSemiBold)
-                .foregroundStyle(OpenClawChatTheme.assistantText)
+                .foregroundStyle(
+                    self.item.isError ? OpenClawChatTheme.danger : OpenClawChatTheme.assistantText)
                 .lineLimit(1)
 
             if let detailLine = self.detailLine {
@@ -182,9 +222,110 @@ struct ChatToolActivityRow: View {
                     .truncationMode(.tail)
             }
 
+            if let stat = self.resolvedDiff?.stat {
+                Text(verbatim: "+\(stat.added)")
+                    .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
+                    .foregroundStyle(OpenClawChatTheme.success.opacity(0.9))
+                    .lineLimit(1)
+                Text(verbatim: "−\(stat.removed)")
+                    .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
+                    .foregroundStyle(OpenClawChatTheme.danger.opacity(0.9))
+                    .lineLimit(1)
+            }
+
             Spacer(minLength: 0)
         }
         .padding(.vertical, 3)
+    }
+
+    private var diffRows: some View {
+        // The orthogonal nested scroll keeps long diff lines reachable without
+        // competing with the transcript's vertical gesture.
+        ScrollView(.horizontal, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(self.expandedDiffLines.indices, id: \.self) { index in
+                    self.diffRow(self.expandedDiffLines[index])
+                }
+            }
+            .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func diffRow(_ line: ChatToolDiffLine) -> some View {
+        if line.kind == .file {
+            Text(verbatim: String(line.text.unicodeScalars.prefix(2000)))
+                .font(OpenClawChatTypography.mono(size: 11, relativeTo: .caption))
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.top, 6)
+        } else if line.kind == .skip {
+            Text("⋯")
+                .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
+                .foregroundStyle(.secondary.opacity(0.6))
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 2)
+                // Reuses the existing localized "Collapsed" key so omitted
+                // preview rows stay announced to assistive tech.
+                .accessibilityLabel(Text("Collapsed"))
+        } else {
+            HStack(spacing: 6) {
+                if let lineNo = line.lineNo {
+                    Text(verbatim: "\(lineNo)")
+                        .font(OpenClawChatTypography.mono(size: 10, relativeTo: .caption2))
+                        .foregroundStyle(.secondary.opacity(0.6))
+                        .frame(minWidth: 34, alignment: .trailing)
+                }
+                // Bound per-line render work; generated/minified payloads can put
+                // megabytes on a single line.
+                Text(verbatim: String(line.text.unicodeScalars.prefix(2000)))
+                    .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
+                    .foregroundStyle(self.diffTextColor(line.kind))
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .background(self.diffBackground(line.kind))
+            // Color alone must not carry add/del semantics for assistive tech.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(verbatim: Self.accessibilityText(for: line)))
+        }
+    }
+
+    private static func accessibilityText(for line: ChatToolDiffLine) -> String {
+        let lineNo = line.lineNo.map { "\($0) " } ?? ""
+        return lineNo + self.accessibilityMarker(line.kind) + String(line.text.unicodeScalars.prefix(2000))
+    }
+
+    private static func accessibilityMarker(_ kind: ChatToolDiffLineKind) -> String {
+        switch kind {
+        case .add:
+            "+ "
+        case .del:
+            "\u{2212} "
+        case .ctx, .file, .skip:
+            ""
+        }
+    }
+
+    private func diffTextColor(_ kind: ChatToolDiffLineKind) -> Color {
+        switch kind {
+        case .add:
+            OpenClawChatTheme.assistantText
+        case .del, .ctx, .file, .skip:
+            .secondary
+        }
+    }
+
+    private func diffBackground(_ kind: ChatToolDiffLineKind) -> Color {
+        switch kind {
+        case .add:
+            OpenClawChatTheme.success.opacity(0.14)
+        case .del:
+            OpenClawChatTheme.danger.opacity(0.12)
+        case .ctx, .file, .skip:
+            .clear
+        }
     }
 
     private static func symbol(forToolName name: String?) -> String {
@@ -197,7 +338,9 @@ struct ChatToolActivityRow: View {
             "clock": "clock",
             "command": "terminal",
             "cron": "clock",
+            "create_file": "square.and.pencil",
             "edit": "pencil.line",
+            "edit_file": "pencil.line",
             "exec": "terminal",
             "fetch": "globe",
             "find": "magnifyingglass",
@@ -209,7 +352,13 @@ struct ChatToolActivityRow: View {
             "ls": "magnifyingglass",
             "memory": "brain",
             "message": "bubble.left",
+            "multi_edit": "pencil.line",
+            "multiedit": "pencil.line",
+            "notebook_edit": "pencil.line",
+            "notebookedit": "pencil.line",
             "node": "server.rack",
+            "apply_patch": "pencil.line",
+            "applypatch": "pencil.line",
             "patch": "pencil.line",
             "photo": "photo",
             "read": "doc.text",
@@ -223,6 +372,9 @@ struct ChatToolActivityRow: View {
             "terminal": "terminal",
             "web": "globe",
             "write": "square.and.pencil",
+            "write_file": "square.and.pencil",
+            "str_replace_based_edit_tool": "pencil.line",
+            "str_replace_editor": "pencil.line",
         ]
         if let symbol = exact[normalized] { return symbol }
 

@@ -1,4 +1,5 @@
 /** Materializes connected node-hosted plugin tools for agent runs. */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { listConnectedNodePluginTools } from "../gateway/node-plugin-tool-snapshot.js";
 import {
   NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS,
@@ -16,15 +17,12 @@ import { callGatewayTool } from "./tools/gateway.js";
 
 const NODE_PLUGIN_TOOL_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const NODE_PLUGIN_TOOL_NAME_MAX_LENGTH = 64;
+const NODE_MCP_PLUGIN_ID = "node-mcp";
 
 type MaterializedNodeToolEntry = ReturnType<typeof listConnectedNodePluginTools>[number] & {
   command: string;
   normalizedName: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function isAgentToolResult(value: unknown): value is AgentToolResult<unknown> {
   return isRecord(value) && Array.isArray(value.content);
@@ -230,7 +228,7 @@ export function createNodePluginTools(params: {
       }),
       parameters: descriptor.parameters as never,
       ...(mcpTool ? { executionMode: "sequential" as const } : {}),
-      execute: async (toolCallId, toolParams) => {
+      execute: async (toolCallId, toolParams, signal) => {
         const raw = await callGatewayTool(
           "node.invoke",
           mcpTool ? { timeoutMs: NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS } : {},
@@ -248,7 +246,7 @@ export function createNodePluginTools(params: {
             idempotencyKey: toolCallId,
             ...(params.agentSessionKey ? { sessionKey: params.agentSessionKey } : {}),
           },
-          { scopes: ["operator.write"] },
+          { scopes: ["operator.write"], ...(signal ? { signal } : {}) },
         );
         const payload = readNodeInvokePayload(raw);
         if (mcpTool) {
@@ -267,6 +265,16 @@ export function createNodePluginTools(params: {
               safeServerName: sanitizeServerName(descriptor.mcp.server, new Set<string>()),
               toolName: descriptor.mcp.tool,
               operation: "tool",
+              ...(descriptor.pluginId === NODE_MCP_PLUGIN_ID && mcpTool
+                ? {
+                    node: {
+                      id: entry.nodeId,
+                      ...(entry.displayName?.trim()
+                        ? { displayName: entry.displayName.trim() }
+                        : {}),
+                    },
+                  }
+                : {}),
             },
           }
         : {}),

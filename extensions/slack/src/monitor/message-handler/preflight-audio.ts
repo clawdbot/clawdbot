@@ -77,8 +77,7 @@ export async function resolveSlackPreflightAudioTranscript(params: {
     const { transcribeFirstAudio } = await loadSlackPreflightAudioRuntime();
     const transcript = await transcribeFirstAudio({
       ctx: {
-        MediaPaths: params.media.map((entry) => entry.path),
-        MediaTypes: params.media.map((entry) => entry.contentType ?? ""),
+        media: [...params.media],
         Provider: "slack",
         Surface: "slack",
         OriginatingChannel: "slack",

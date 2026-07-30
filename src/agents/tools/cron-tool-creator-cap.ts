@@ -136,6 +136,11 @@ export function planCronJobUpdatePatch(params: {
 }): CronJobUpdatePatchPlan {
   const patch = structuredClone(params.patch);
   const payload = isRecord(patch.payload) ? patch.payload : undefined;
+  if (payload === undefined && !Object.hasOwn(patch, "trigger")) {
+    // Schedule, delivery, naming, and enabled-state edits do not reauthorize
+    // legacy jobs. Only tool-runtime changes may synthesize durable authority.
+    return { kind: "ready", patch };
+  }
   const explicitPayloadKind = readCronPayloadKind(payload);
   if (
     params.creatorToolAllowlist &&

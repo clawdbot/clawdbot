@@ -13,6 +13,16 @@ describe("MCP App sandbox security", () => {
     expect(buildMcpAppHostCapabilities()).toMatchObject({ sandbox: { csp: {} } });
   });
 
+  it("advertises update-model-context text support only when the handler path exists", () => {
+    expect(buildMcpAppHostCapabilities(undefined, true, true)).toMatchObject({
+      message: { text: {} },
+      updateModelContext: { text: {} },
+    });
+    expect(buildMcpAppHostCapabilities(undefined, true, false)).not.toHaveProperty(
+      "updateModelContext",
+    );
+  });
+
   it("accepts only the dedicated-origin sandbox endpoint", () => {
     expect(
       resolveMcpAppSandboxUrl(

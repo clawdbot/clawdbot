@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearMemoryPluginState,
   registerMemoryPromptPreparation,
-  registerMemoryPromptSection,
+  registerTestMemoryPromptBuilder,
 } from "../plugins/memory-state.test-fixtures.js";
 import { prepareAgentMemoryPrompt } from "./memory-prompt-prepare.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
@@ -15,7 +15,7 @@ describe("buildAgentSystemPrompt memory guidance", () => {
   });
 
   it("can suppress base memory guidance so context engines own memory prompt assembly", () => {
-    registerMemoryPromptSection(() => ["## Memory Recall", "Use memory carefully.", ""]);
+    registerTestMemoryPromptBuilder(() => ["## Memory Recall", "Use memory carefully.", ""]);
 
     const promptWithMemory = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -33,7 +33,7 @@ describe("buildAgentSystemPrompt memory guidance", () => {
     let observedContext:
       | { agentId?: string; agentSessionKey?: string; sandboxed?: boolean }
       | undefined;
-    registerMemoryPromptSection((context) => {
+    registerTestMemoryPromptBuilder((context) => {
       observedContext = context;
       return [
         "## Agent Memory",

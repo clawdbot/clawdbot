@@ -82,14 +82,19 @@ export async function promptAuthChoiceGrouped(
         options: group.options.filter((option) => params.allowedChoices?.has(option.value)),
       }))
     : groups;
-  const availableGroups = [...filteredGroups, ...(params.additionalGroups ?? [])].filter(
+  const availableBuiltInGroups = filteredGroups.filter((group) => group.options.length > 0);
+  const additionalGroups = (params.additionalGroups ?? []).filter(
     (group) => group.options.length > 0,
   );
+  const availableGroups = [...availableBuiltInGroups, ...additionalGroups];
   const groupById = new Map(availableGroups.map((group) => [group.value, group] as const));
-  const featuredGroups = availableGroups
-    .filter(isFeaturedAuthChoiceGroup)
-    .toSorted(compareAuthChoiceGroups);
-  const moreGroups = availableGroups
+  // Caller-supplied groups carry pre-vetted context such as detected onboarding routes.
+  // Keep them ahead of the generic catalog instead of demoting them under More.
+  const featuredGroups = [
+    ...additionalGroups,
+    ...availableBuiltInGroups.filter(isFeaturedAuthChoiceGroup).toSorted(compareAuthChoiceGroups),
+  ];
+  const moreGroups = availableBuiltInGroups
     .filter((group) => !isFeaturedAuthChoiceGroup(group))
     .toSorted(compareAuthChoiceGroups);
   const configuredModelRef = resolveConfiguredModelRef(params.config);
@@ -109,7 +114,7 @@ export async function promptAuthChoiceGrouped(
       return expectDefined(group.options[0], "options entry at 0").value;
     }
     return (await params.prompter.select({
-      message: `${group.label} auth method`,
+      message: group.methodMessage ?? `${group.label} auth method`,
       options: [
         ...(keepCurrentOption ? [keepCurrentOption] : []),
         ...group.options,

@@ -44,6 +44,17 @@
         "screenIndex"
       ]
     },
+    "mobile_ui": {
+      "emoji": "📱",
+      "title": "Mobile UI",
+      "detailKeys": [
+        "action",
+        "mobileAction",
+        "snapshotId",
+        "node",
+        "nodeId"
+      ]
+    },
     "screen": {
       "emoji": "🖥️",
       "title": "Screen",
@@ -684,6 +695,21 @@
         "thinking",
         "runTimeoutSeconds",
         "cleanup"
+      ]
+    },
+    "agents_wait": {
+      "emoji": "⏳",
+      "title": "Wait for Agents",
+      "detailKeys": [
+        "ids",
+        "timeoutSeconds"
+      ]
+    },
+    "structured_output": {
+      "emoji": "🧾",
+      "title": "Structured Output",
+      "detailKeys": [
+        "result"
       ]
     },
     "subagents": {

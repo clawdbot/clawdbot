@@ -139,6 +139,7 @@ run_flow() {
 
   echo "== Flow: $name =="
   openclaw_test_state_create "switch-${name}" empty
+  unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH
   export USER="testuser"
 
   if ! openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$install_cmd" >"$install_log" 2>&1; then

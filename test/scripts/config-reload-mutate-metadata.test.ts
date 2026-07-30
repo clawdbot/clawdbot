@@ -23,17 +23,15 @@ function runMutateMetadata(configPath: string) {
 }
 
 describe("config reload metadata mutator", () => {
-  it("updates the config reload gateway metadata knob without dropping existing config", () => {
+  it("updates config display metadata without dropping existing config", () => {
     const root = makeTempDir(tempDirs, "openclaw-config-reload-metadata-");
     const configPath = path.join(root, "openclaw.json");
     writeFileSync(
       configPath,
       `${JSON.stringify(
         {
-          gateway: {
-            channelHealthCheckMinutes: 1,
-            port: 18789,
-          },
+          gateway: { port: 18789 },
+          ui: { seamColor: "#ff4500" },
           plugins: {
             entries: {
               demo: { enabled: true },
@@ -51,10 +49,8 @@ describe("config reload metadata mutator", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({
-      gateway: {
-        channelHealthCheckMinutes: 2,
-        port: 18789,
-      },
+      gateway: { port: 18789 },
+      ui: { seamColor: "#ff6600" },
       plugins: {
         entries: {
           demo: { enabled: true },

@@ -59,6 +59,7 @@ title: "Features"
 **Media:**
 
 - Images, audio, video, and documents in and out
+- [Inline audio and video playback](/nodes/media-playback) across the Control UI, iOS/macOS, Android, and the Linux companion
 - Shared image generation and video generation capability surfaces
 - Voice note transcription
 - Text-to-speech with multiple providers

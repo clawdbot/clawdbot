@@ -17,7 +17,6 @@ type MockManifestRegistry = {
     enabledByDefault?: boolean;
     kind?: "memory" | "context-engine" | Array<"memory" | "context-engine">;
     providers?: string[];
-    providerAuthEnvVars?: Record<string, string[]>;
     providerUsageAuthEnvVars?: Record<string, string[]>;
     providerAuthAliases?: Record<string, string>;
     setup?: {
@@ -115,8 +114,8 @@ describe("provider env vars dynamic manifest metadata", () => {
         {
           id: "external-fireworks",
           origin: "global",
-          providerAuthEnvVars: {
-            fireworks: ["FIREWORKS_ALT_API_KEY"],
+          setup: {
+            providers: [{ id: "fireworks", envVars: ["FIREWORKS_ALT_API_KEY"] }],
           },
           providerAuthAliases: {
             "fireworks-plan": "fireworks",
@@ -345,8 +344,8 @@ describe("provider env vars dynamic manifest metadata", () => {
         {
           id: "load-path-provider",
           origin: "global",
-          providerAuthEnvVars: {
-            "load-path-provider": ["LOAD_PATH_PROVIDER_API_KEY"],
+          setup: {
+            providers: [{ id: "load-path-provider", envVars: ["LOAD_PATH_PROVIDER_API_KEY"] }],
           },
         },
       ],
@@ -443,20 +442,17 @@ describe("provider env vars dynamic manifest metadata", () => {
     ]);
   });
 
-  it("appends setup provider env vars after explicit provider auth env vars", () => {
+  it("deduplicates setup provider env vars in declaration order", () => {
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [
         {
           id: "external-fireworks",
           origin: "global",
-          providerAuthEnvVars: {
-            fireworks: ["FIREWORKS_API_KEY"],
-          },
           setup: {
             providers: [
               {
                 id: "fireworks",
-                envVars: ["FIREWORKS_SETUP_KEY", "FIREWORKS_API_KEY"],
+                envVars: ["FIREWORKS_API_KEY", "FIREWORKS_SETUP_KEY", "FIREWORKS_API_KEY"],
               },
             ],
           },
@@ -477,8 +473,8 @@ describe("provider env vars dynamic manifest metadata", () => {
         {
           id: "external-fireworks",
           origin: "global",
-          providerAuthEnvVars: {
-            fireworks: ["FIREWORKS_ALT_API_KEY"],
+          setup: {
+            providers: [{ id: "fireworks", envVars: ["FIREWORKS_ALT_API_KEY"] }],
           },
         },
       ],
@@ -505,8 +501,8 @@ describe("provider env vars dynamic manifest metadata", () => {
         {
           id: "workspace-audio",
           origin: "workspace",
-          providerAuthEnvVars: {
-            whisperx: ["WHISPERX_API_KEY"],
+          setup: {
+            providers: [{ id: "whisperx", envVars: ["WHISPERX_API_KEY"] }],
           },
         },
       ],
@@ -526,11 +522,12 @@ describe("provider env vars dynamic manifest metadata", () => {
         {
           id: "workspace-audio",
           origin: "workspace",
-          providerAuthEnvVars: {
-            whisperx: ["AWS_SECRET_ACCESS_KEY"],
-          },
           setup: {
             providers: [
+              {
+                id: "whisperx",
+                envVars: ["AWS_SECRET_ACCESS_KEY"],
+              },
               {
                 id: "workspace-setup",
                 envVars: ["WORKSPACE_SETUP_SECRET"],
@@ -576,8 +573,8 @@ describe("provider env vars dynamic manifest metadata", () => {
         {
           id: "workspace-audio",
           origin: "workspace",
-          providerAuthEnvVars: {
-            whisperx: ["WHISPERX_API_KEY"],
+          setup: {
+            providers: [{ id: "whisperx", envVars: ["WHISPERX_API_KEY"] }],
           },
         },
       ],
@@ -604,8 +601,8 @@ describe("provider env vars dynamic manifest metadata", () => {
         {
           id: "workspace-audio",
           origin: "workspace",
-          providerAuthEnvVars: {
-            whisperx: ["AWS_SECRET_ACCESS_KEY"],
+          setup: {
+            providers: [{ id: "whisperx", envVars: ["AWS_SECRET_ACCESS_KEY"] }],
           },
         },
       ],
@@ -635,8 +632,8 @@ describe("provider env vars dynamic manifest metadata", () => {
           id: "workspace-engine",
           origin: "workspace",
           kind: "context-engine",
-          providerAuthEnvVars: {
-            whisperx: ["WHISPERX_API_KEY"],
+          setup: {
+            providers: [{ id: "whisperx", envVars: ["WHISPERX_API_KEY"] }],
           },
         },
       ],
@@ -665,8 +662,8 @@ describe("provider env vars dynamic manifest metadata", () => {
         {
           id: "external-fireworks",
           origin: "global",
-          providerAuthEnvVars: {
-            fireworks: ["FIREWORKS_ALT_API_KEY"],
+          setup: {
+            providers: [{ id: "fireworks", envVars: ["FIREWORKS_ALT_API_KEY"] }],
           },
           providerAuthAliases: {
             "fireworks-plan": "fireworks",
@@ -690,9 +687,6 @@ describe("provider env vars dynamic manifest metadata", () => {
         {
           id: "external-fireworks",
           origin: "global",
-          providerAuthEnvVars: {
-            fireworks: ["FIREWORKS_ALT_API_KEY"],
-          },
           providerAuthAliases: {
             "fireworks-plan": "fireworks",
           },
@@ -700,6 +694,7 @@ describe("provider env vars dynamic manifest metadata", () => {
             providers: [
               {
                 id: "fireworks",
+                envVars: ["FIREWORKS_ALT_API_KEY"],
                 authEvidence: [
                   {
                     type: "local-file-with-env",
@@ -781,8 +776,8 @@ describe("provider env vars dynamic manifest metadata", () => {
         {
           id: "load-path-provider",
           origin: "global",
-          providerAuthEnvVars: {
-            "load-path-provider": ["LOAD_PATH_PROVIDER_API_KEY"],
+          setup: {
+            providers: [{ id: "load-path-provider", envVars: ["LOAD_PATH_PROVIDER_API_KEY"] }],
           },
         },
       ],

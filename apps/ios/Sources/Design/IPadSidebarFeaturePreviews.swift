@@ -235,7 +235,7 @@ private struct IPadActivityStatesPreview: View {
                         tailRows: [
                             ActivityPreviewRow(
                                 icon: "hourglass",
-                                title: "Loading threads",
+                                title: "Loading sessions",
                                 detail: "Fetching recent activity from the gateway.",
                                 value: "loading",
                                 color: OpenClawBrand.accent),
@@ -251,7 +251,7 @@ private struct IPadActivityStatesPreview: View {
                         tailRows: [
                             ActivityPreviewRow(
                                 icon: "bubble.left.and.text.bubble.right",
-                                title: "No recent threads",
+                                title: "No recent sessions",
                                 detail: "Start a chat and it will appear here.",
                                 value: "empty",
                                 color: .secondary),
@@ -267,7 +267,7 @@ private struct IPadActivityStatesPreview: View {
                         tailRows: [
                             ActivityPreviewRow(
                                 icon: "exclamationmark.triangle.fill",
-                                title: "Threads unavailable",
+                                title: "Sessions unavailable",
                                 detail: "Try again after the gateway reconnects.",
                                 value: "error",
                                 color: OpenClawBrand.warn),

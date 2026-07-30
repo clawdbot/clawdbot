@@ -64,8 +64,11 @@ export async function runSpawnPipeline<TState>(params: {
     return { ok: false, phase: "dispatch", state, error };
   }
 
-  const registration = params.buildRegistration(state, runId);
+  let registration: RegisterSubagentRunInput;
   try {
+    // Keep construction and registration in one synchronous section so callers
+    // can revalidate shared admission state without an interleaving await.
+    registration = params.buildRegistration(state, runId);
     registerSubagentRun(registration);
   } catch (error) {
     await params.adapter.cleanupOnFailure({ phase: "register", state, error });

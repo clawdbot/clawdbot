@@ -4,7 +4,10 @@
  * entire gateway/channel stack.
  */
 export { getRuntimeConfig } from "../config/config.js";
-export { loadSessionEntry, upsertSessionEntry } from "../config/sessions/session-accessor.js";
+export {
+  loadSessionEntryReadOnly as loadSessionEntry,
+  upsertSessionEntry,
+} from "../config/sessions/session-accessor.js";
 export { forkSessionEntryFromParent } from "../auto-reply/reply/session-fork.js";
 export { ensureContextEnginesInitialized } from "../context-engine/init.js";
 export { resolveContextEngine } from "../context-engine/registry.js";
@@ -27,6 +30,7 @@ export {
 } from "../utils/delivery-context.shared.js";
 export { resolveAgentConfig } from "./agent-scope.js";
 export { AGENT_LANE_SUBAGENT } from "./lanes.js";
+export { loadPreparedModelCatalog } from "./prepared-model-catalog.js";
 export { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 export { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 export { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";

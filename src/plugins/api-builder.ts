@@ -80,12 +80,9 @@ type BuildPluginApiParams = {
       | "unscheduleSessionTurnsByTag"
       | "registerDetachedTaskRuntime"
       | "registerMemoryCapability"
-      | "registerMemoryPromptSection"
       | "registerMemoryPromptSupplement"
       | "registerMemoryPromptPreparation"
       | "registerMemoryCorpusSupplement"
-      | "registerMemoryFlushPlan"
-      | "registerMemoryRuntime"
       | "registerMemoryEmbeddingProvider"
       | "on"
     >
@@ -177,15 +174,12 @@ const noopUnscheduleSessionTurnsByTag: OpenClawPluginApi["unscheduleSessionTurns
   async () => ({ removed: 0, failed: 0 });
 const noopRegisterDetachedTaskRuntime: OpenClawPluginApi["registerDetachedTaskRuntime"] = () => {};
 const noopRegisterMemoryCapability: OpenClawPluginApi["registerMemoryCapability"] = () => {};
-const noopRegisterMemoryPromptSection: OpenClawPluginApi["registerMemoryPromptSection"] = () => {};
 const noopRegisterMemoryPromptSupplement: OpenClawPluginApi["registerMemoryPromptSupplement"] =
   () => {};
 const noopRegisterMemoryPromptPreparation: OpenClawPluginApi["registerMemoryPromptPreparation"] =
   () => {};
 const noopRegisterMemoryCorpusSupplement: OpenClawPluginApi["registerMemoryCorpusSupplement"] =
   () => {};
-const noopRegisterMemoryFlushPlan: OpenClawPluginApi["registerMemoryFlushPlan"] = () => {};
-const noopRegisterMemoryRuntime: OpenClawPluginApi["registerMemoryRuntime"] = () => {};
 const noopRegisterMemoryEmbeddingProvider: OpenClawPluginApi["registerMemoryEmbeddingProvider"] =
   () => {};
 const noopOn: OpenClawPluginApi["on"] = () => {};
@@ -292,16 +286,12 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerDetachedTaskRuntime:
       handlers.registerDetachedTaskRuntime ?? noopRegisterDetachedTaskRuntime,
     registerMemoryCapability: handlers.registerMemoryCapability ?? noopRegisterMemoryCapability,
-    registerMemoryPromptSection:
-      handlers.registerMemoryPromptSection ?? noopRegisterMemoryPromptSection,
     registerMemoryPromptSupplement:
       handlers.registerMemoryPromptSupplement ?? noopRegisterMemoryPromptSupplement,
     registerMemoryPromptPreparation:
       handlers.registerMemoryPromptPreparation ?? noopRegisterMemoryPromptPreparation,
     registerMemoryCorpusSupplement:
       handlers.registerMemoryCorpusSupplement ?? noopRegisterMemoryCorpusSupplement,
-    registerMemoryFlushPlan: handlers.registerMemoryFlushPlan ?? noopRegisterMemoryFlushPlan,
-    registerMemoryRuntime: handlers.registerMemoryRuntime ?? noopRegisterMemoryRuntime,
     registerMemoryEmbeddingProvider:
       handlers.registerMemoryEmbeddingProvider ?? noopRegisterMemoryEmbeddingProvider,
     resolvePath: params.resolvePath,

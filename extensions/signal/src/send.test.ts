@@ -1,4 +1,6 @@
 // Signal tests cover send plugin behavior.
+import http from "node:http";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const signalRpcRequestMock = vi.hoisted(() => vi.fn());
@@ -28,20 +30,20 @@ const {
   clearSignalApprovalReactionTargetsForTest,
   resolveSignalApprovalReactionTargetWithPersistence,
 } = await import("./approval-reactions.js");
-const { sendMessageSignal } = await import("./send.js");
+const { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } = await import("./send.js");
 
 const SIGNAL_TEST_CFG = {
   channels: {
     signal: {
       accounts: {
         default: {
-          httpUrl: "http://signal.test",
+          transport: { kind: "external-native", url: "http://signal.test" },
           account: "+15550001111",
         },
       },
     },
   },
-};
+} satisfies OpenClawConfig;
 
 describe("sendMessageSignal receipts", () => {
   beforeEach(() => {
@@ -50,8 +52,39 @@ describe("sendMessageSignal receipts", () => {
     resolveOutboundAttachmentFromUrlMock.mockClear();
   });
 
+  it("routes a named container account across send, typing, and receipt RPCs", async () => {
+    signalRpcRequestMock.mockResolvedValue({ timestamp: 1234567890 });
+    const cfg = {
+      channels: {
+        signal: {
+          accounts: {
+            work: {
+              account: "+15550001111",
+              transport: { kind: "container" as const, url: "http://container:8080" },
+            },
+          },
+        },
+      },
+    };
+
+    await sendMessageSignal("+15551234567", "hello", { cfg, accountId: "work" });
+    await sendTypingSignal("+15551234567", { cfg, accountId: "work" });
+    await sendReadReceiptSignal("+15551234567", 1234567890, { cfg, accountId: "work" });
+
+    expect(signalRpcRequestMock).toHaveBeenCalledTimes(3);
+    for (const call of signalRpcRequestMock.mock.calls) {
+      expect(call[2]).toMatchObject({
+        baseUrl: "http://container:8080",
+        transportKind: "container",
+      });
+    }
+  });
+
   it("attaches a text receipt for timestamp results", async () => {
-    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567890 });
+    signalRpcRequestMock.mockResolvedValueOnce({
+      timestamp: 1234567890,
+      results: [{ type: "SUCCESS" }],
+    });
 
     const result = await sendMessageSignal("+15551234567", "hello", {
       cfg: SIGNAL_TEST_CFG,
@@ -87,6 +120,60 @@ describe("sendMessageSignal receipts", () => {
     expect(result.receipt.sentAt).toBeGreaterThan(0);
   });
 
+  it("rejects per-recipient failures even when signal-cli returns a timestamp", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({
+      timestamp: 1234567890,
+      results: [{ type: "UNREGISTERED_FAILURE" }],
+    });
+
+    await expect(
+      sendMessageSignal("+15551234567", "hello", {
+        cfg: SIGNAL_TEST_CFG,
+      }),
+    ).rejects.toThrow("Signal send failed for 1 recipient: UNREGISTERED_FAILURE");
+  });
+
+  it("rejects legacy per-recipient success false results", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({
+      timestamp: 1234567890,
+      results: [{ success: false, message: "recipient is not registered" }],
+    });
+
+    await expect(
+      sendMessageSignal("+15551234567", "hello", {
+        cfg: SIGNAL_TEST_CFG,
+      }),
+    ).rejects.toThrow("Signal send failed for 1 recipient: recipient is not registered");
+  });
+
+  it("preserves a group delivery when at least one member receives the message", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({
+      timestamp: 1234567891,
+      results: [{ type: "SUCCESS" }, { type: "UNREGISTERED_FAILURE" }],
+    });
+
+    await expect(
+      sendMessageSignal("group:group-1", "hello", { cfg: SIGNAL_TEST_CFG }),
+    ).resolves.toMatchObject({
+      messageId: "1234567891",
+      timestamp: 1234567891,
+      receipt: { primaryPlatformMessageId: "1234567891" },
+    });
+    expect(signalRpcRequestMock).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a group delivery when every member fails", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({
+      timestamp: 1234567891,
+      results: [{ type: "NETWORK_FAILURE" }, { type: "UNREGISTERED_FAILURE" }],
+    });
+
+    await expect(
+      sendMessageSignal("group:group-1", "hello", { cfg: SIGNAL_TEST_CFG }),
+    ).rejects.toThrow("Signal send failed for 2 recipients: NETWORK_FAILURE, UNREGISTERED_FAILURE");
+    expect(signalRpcRequestMock).toHaveBeenCalledOnce();
+  });
+
   it.each(["username:alice.42", "u:alice.42", "signal:u:ALICE.42"])(
     "sends %s through the canonical username parameter",
     async (target) => {
@@ -120,7 +207,7 @@ describe("sendMessageSignal receipts", () => {
     );
     expect(signalRpcRequestMock).toHaveBeenCalledWith(
       "send",
-      expect.objectContaining({ attachments: ["/tmp/image.png"] }),
+      expect.objectContaining({ attachments: ["/tmp/image.png"], message: "" }),
       expect.objectContaining({ maxAttachmentBytes: maxBytes }),
     );
     expect(result.messageId).toBe("1234567891");
@@ -340,7 +427,7 @@ describe("sendMessageSignal receipts", () => {
           signal: {
             accounts: {
               default: {
-                httpUrl: "http://signal.test",
+                transport: { kind: "external-native" as const, url: "http://signal.test" },
                 account: "+15550001111",
               },
             },
@@ -376,7 +463,7 @@ describe("sendMessageSignal receipts", () => {
         signal: {
           accounts: {
             default: {
-              httpUrl: "http://signal.test",
+              transport: { kind: "external-native" as const, url: "http://signal.test" },
               account: "+15550001111",
               allowFrom: ["+15551234567"],
             },
@@ -424,7 +511,7 @@ describe("sendMessageSignal receipts", () => {
         signal: {
           accounts: {
             default: {
-              httpUrl: "http://signal.test",
+              transport: { kind: "external-native" as const, url: "http://signal.test" },
               account: "+15550001111",
               allowFrom: ["+15551234567"],
             },
@@ -485,7 +572,7 @@ describe("sendMessageSignal receipts", () => {
         signal: {
           accounts: {
             default: {
-              httpUrl: "http://signal.test",
+              transport: { kind: "external-native" as const, url: "http://signal.test" },
               account: "+15550001111",
               allowFrom: ["+15551234567"],
             },
@@ -529,7 +616,7 @@ describe("sendMessageSignal receipts", () => {
         signal: {
           accounts: {
             default: {
-              httpUrl: "http://signal.test",
+              transport: { kind: "external-native" as const, url: "http://signal.test" },
               account: "+15550001111",
               allowFrom: ["+15551234567"],
             },
@@ -580,7 +667,7 @@ describe("sendMessageSignal receipts", () => {
         signal: {
           accounts: {
             default: {
-              httpUrl: "http://signal.test",
+              transport: { kind: "external-native" as const, url: "http://signal.test" },
               accountUuid: "123e4567-e89b-12d3-a456-426614174000",
               allowFrom: ["+15551234567"],
             },
@@ -707,5 +794,183 @@ describe("sendMessageSignal receipts", () => {
     ).rejects.toThrow("Signal HTTP timed out");
 
     expect(signalRpcRequestMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Signal native JSON-RPC recipient delivery", () => {
+  it("rejects real per-recipient failures and preserves successful send receipts", async () => {
+    const failureTypes = [
+      "NETWORK_FAILURE",
+      "UNREGISTERED_FAILURE",
+      "IDENTITY_FAILURE",
+      "RATE_LIMIT_FAILURE",
+      "INVALID_PRE_KEY_FAILURE",
+    ];
+    const responses: Array<{
+      timestamp: number;
+      results?: Array<{ type?: string; success?: boolean; message?: string }>;
+    }> = [
+      ...failureTypes.map((type) => ({ timestamp: 1234567890, results: [{ type }] })),
+      {
+        timestamp: 1234567890,
+        results: [{ success: false, message: "recipient is not registered" }],
+      },
+      {
+        timestamp: 1234567891,
+        results: [{ type: "SUCCESS" }, { type: "UNREGISTERED_FAILURE" }],
+      },
+      {
+        timestamp: 1234567892,
+        results: [{ type: "NETWORK_FAILURE" }, { type: "UNREGISTERED_FAILURE" }],
+      },
+      { timestamp: 1234567893, results: [{ type: "SUCCESS" }] },
+      { timestamp: 1234567894 },
+    ];
+    const requests: Array<{
+      method: string | undefined;
+      path: string | undefined;
+      contentType: string | undefined;
+      jsonrpc: unknown;
+      rpcMethod: unknown;
+      account: unknown;
+      recipient: unknown;
+      groupId: unknown;
+      message: unknown;
+    }> = [];
+    const server = http.createServer((request, response) => {
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk: string) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        const envelope = JSON.parse(body) as {
+          id?: string;
+          jsonrpc?: string;
+          method?: string;
+          params?: {
+            account?: string;
+            recipient?: string[];
+            groupId?: string;
+            message?: string;
+          };
+        };
+        requests.push({
+          method: request.method,
+          path: request.url,
+          contentType: request.headers["content-type"],
+          jsonrpc: envelope.jsonrpc,
+          rpcMethod: envelope.method,
+          account: envelope.params?.account,
+          recipient: envelope.params?.recipient,
+          groupId: envelope.params?.groupId,
+          message: envelope.params?.message,
+        });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: envelope.id,
+            result: responses.shift(),
+          }),
+        );
+      });
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const { port } = server.address() as { port: number };
+    const cfg = {
+      channels: {
+        signal: {
+          accounts: {
+            default: {
+              transport: {
+                kind: "external-native",
+                url: `http://127.0.0.1:${port}`,
+              },
+              account: "+15550001111",
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    signalRpcRequestMock.mockClear();
+    vi.doUnmock("./client-adapter.js");
+    vi.resetModules();
+    const { sendMessageSignal: sendMessageSignalWithRealRpc } = await import("./send.js");
+
+    try {
+      for (const failureType of failureTypes) {
+        await expect(
+          sendMessageSignalWithRealRpc("+15551234567", "hello over real rpc", { cfg }),
+        ).rejects.toThrow(`Signal send failed for 1 recipient: ${failureType}`);
+      }
+      await expect(
+        sendMessageSignalWithRealRpc("+15551234567", "hello over real rpc", { cfg }),
+      ).rejects.toThrow("Signal send failed for 1 recipient: recipient is not registered");
+
+      await expect(
+        sendMessageSignalWithRealRpc("group:group-1", "hello over real rpc", { cfg }),
+      ).resolves.toMatchObject({
+        messageId: "1234567891",
+        timestamp: 1234567891,
+        receipt: { primaryPlatformMessageId: "1234567891" },
+      });
+      await expect(
+        sendMessageSignalWithRealRpc("group:group-1", "hello over real rpc", { cfg }),
+      ).rejects.toThrow(
+        "Signal send failed for 2 recipients: NETWORK_FAILURE, UNREGISTERED_FAILURE",
+      );
+
+      await expect(
+        sendMessageSignalWithRealRpc("+15551234567", "hello over real rpc", { cfg }),
+      ).resolves.toMatchObject({
+        messageId: "1234567893",
+        timestamp: 1234567893,
+        receipt: { primaryPlatformMessageId: "1234567893" },
+      });
+      await expect(
+        sendMessageSignalWithRealRpc("+15551234567", "hello over real rpc", { cfg }),
+      ).resolves.toMatchObject({
+        messageId: "1234567894",
+        timestamp: 1234567894,
+        receipt: { primaryPlatformMessageId: "1234567894" },
+      });
+
+      expect(signalRpcRequestMock).not.toHaveBeenCalled();
+      const expectedBaseRequest = {
+        method: "POST",
+        path: "/api/v1/rpc",
+        contentType: "application/json",
+        jsonrpc: "2.0",
+        rpcMethod: "send",
+        account: "+15550001111",
+        message: "hello over real rpc",
+      };
+      const expectedDirectRequest = {
+        ...expectedBaseRequest,
+        recipient: ["+15551234567"],
+        groupId: undefined,
+      };
+      const expectedGroupRequest = {
+        ...expectedBaseRequest,
+        recipient: undefined,
+        groupId: "group-1",
+      };
+      expect(requests).toEqual([
+        ...Array.from({ length: 6 }, () => expectedDirectRequest),
+        expectedGroupRequest,
+        expectedGroupRequest,
+        expectedDirectRequest,
+        expectedDirectRequest,
+      ]);
+      expect(responses).toHaveLength(0);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
   });
 });

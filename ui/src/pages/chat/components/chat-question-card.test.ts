@@ -14,7 +14,7 @@ function gatewayPrompt(overrides: Partial<QuestionPrompt> = {}): QuestionPrompt 
     id: "question-1",
     questions: [
       {
-        id: "format",
+        questionId: "format",
         header: "Format",
         question: "Which format should I use?",
         options: [
@@ -90,14 +90,14 @@ describe("shared question panel", () => {
     const prompt = gatewayPrompt({
       questions: [
         {
-          id: "target",
+          questionId: "target",
           header: "Target",
           question: "Where should I send it?",
           options: [{ label: "Chat" }, { label: "File" }],
           isOther: true,
         },
         {
-          id: "extras",
+          questionId: "extras",
           header: "Extras",
           question: "Which extras should I include?",
           options: [{ label: "Tests" }, { label: "Docs" }],
@@ -174,7 +174,7 @@ describe("shared question panel", () => {
         questions: [
           ...gatewayPrompt().questions,
           {
-            id: "confirm",
+            questionId: "confirm",
             header: "Confirm",
             question: "Ready to continue?",
             options: [{ label: "Ready" }],

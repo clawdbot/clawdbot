@@ -1,5 +1,6 @@
 package ai.openclaw.app.wear
 
+import ai.openclaw.wear.shared.WearConnectionFailure
 import ai.openclaw.wear.shared.WearDecodeResult
 import ai.openclaw.wear.shared.WearEventType
 import ai.openclaw.wear.shared.WearMessage
@@ -22,6 +23,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -293,6 +295,65 @@ class WearProxyBridgeTest {
     assertEquals("true", continued.getValue("streamTextComplete").jsonPrimitive.content)
     assertEquals("tail", unknownPrefix.getValue("streamText").jsonPrimitive.content)
     assertEquals("false", unknownPrefix.getValue("streamTextComplete").jsonPrimitive.content)
+  }
+
+  @Test
+  fun foreignFinalPreservesTheActiveWatchStream() {
+    assertForeignTerminalPreservesActiveStream("final")
+  }
+
+  @Test
+  fun foreignAbortPreservesTheActiveWatchStream() {
+    assertForeignTerminalPreservesActiveStream("aborted")
+  }
+
+  @Test
+  fun foreignErrorPreservesTheActiveWatchStream() {
+    assertForeignTerminalPreservesActiveStream("error")
+  }
+
+  @Test
+  fun foreignFinalPreservesAnAnonymousWatchStream() {
+    assertForeignTerminalPreservesAnonymousStream("final")
+  }
+
+  @Test
+  fun foreignAbortPreservesAnAnonymousWatchStream() {
+    assertForeignTerminalPreservesAnonymousStream("aborted")
+  }
+
+  @Test
+  fun foreignErrorPreservesAnAnonymousWatchStream() {
+    assertForeignTerminalPreservesAnonymousStream("error")
+  }
+
+  @Test
+  fun identifiedTerminalClearsItsOwnStreamWithoutErasingAnotherRun() {
+    val projector = WearChatStreamProjector()
+    projectStreamEvent(projector, state = "delta", runId = "older-run", text = "Old", message = "Old")
+    projectStreamEvent(projector, state = "delta", runId = "active-run", text = "Hel", message = "Hel")
+
+    projectStreamEvent(projector, state = "final", runId = "older-run")
+
+    val active = projectStreamEvent(projector, state = "delta", runId = "active-run", text = "lo")
+    val retired = projectStreamEvent(projector, state = "delta", runId = "older-run", text = "new")
+    assertEquals("Hello", active.getValue("streamText").jsonPrimitive.content)
+    assertEquals("true", active.getValue("streamTextComplete").jsonPrimitive.content)
+    assertEquals("new", retired.getValue("streamText").jsonPrimitive.content)
+    assertEquals("false", retired.getValue("streamTextComplete").jsonPrimitive.content)
+  }
+
+  @Test
+  fun unidentifiedTerminalClearsEveryStreamInItsSession() {
+    val projector = WearChatStreamProjector()
+    projectStreamEvent(projector, state = "delta", runId = "older-run", text = "old", message = "old")
+    projectStreamEvent(projector, state = "delta", runId = "active-run", text = "stale", message = "stale")
+
+    projectStreamEvent(projector, state = "final")
+
+    val next = projectStreamEvent(projector, state = "delta", runId = "active-run", text = "fresh")
+    assertEquals("fresh", next.getValue("streamText").jsonPrimitive.content)
+    assertEquals("false", next.getValue("streamTextComplete").jsonPrimitive.content)
   }
 
   @Test
@@ -723,6 +784,58 @@ class WearProxyBridgeTest {
     }
 
   @Test
+  fun connectionEventsCarrySemanticFailureReasons() =
+    runTest {
+      val sent = mutableListOf<SentWearMessage>()
+      val bridge =
+        WearProxyBridge(
+          scope = backgroundScope,
+          sender =
+            WearMessageSender { nodeId, path, data ->
+              sent += SentWearMessage(nodeId, path, data)
+            },
+          peerResolver = WearPeerResolver { setOf("watch-1") },
+          handleRequest = { _, request ->
+            WearMessage.Response(requestId = request.requestId, ok = true)
+          },
+        )
+      bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-1")))
+      sent.clear()
+
+      bridge.publishConnection(
+        connected = false,
+        status = "Update required",
+        failure = WearConnectionFailure.Incompatible,
+      )
+      bridge.awaitIdleForTests()
+
+      val event =
+        sent
+          .single { it.path == WearProtocol.EVENT_PATH }
+          .let { (WearProtocolCodec.decode(it.data) as WearDecodeResult.Success).message }
+          as WearMessage.Event
+      val payload = checkNotNull(event.payload).jsonObject
+      assertEquals(false, payload.getValue("connected").jsonPrimitive.boolean)
+      assertEquals("incompatible", payload.getValue("failure").jsonPrimitive.content)
+    }
+
+  @Test
+  fun connectionFailurePreservesProtocolMismatchAndLegacyUpdateSignals() {
+    assertEquals(
+      WearConnectionFailure.Incompatible,
+      wearConnectionFailure(problemCode = "PROTOCOL_MISMATCH", status = "Connection failed"),
+    )
+    assertEquals(
+      WearConnectionFailure.Incompatible,
+      wearConnectionFailure(problemCode = null, status = "Update required"),
+    )
+    assertEquals(
+      WearConnectionFailure.GatewayOffline,
+      wearConnectionFailure(problemCode = null, status = "Offline"),
+    )
+  }
+
+  @Test
   fun canceledGoogleTaskResumesAsSendFailure() =
     runTest {
       val failure = runCatching { Tasks.forCanceled<Int>().awaitWearTask() }.exceptionOrNull()
@@ -787,6 +900,55 @@ class WearProxyBridgeTest {
       // The stale send is retried after discovery, then the later offline event also delivers.
       assertEquals(2, sent.count { it.path == WearProtocol.EVENT_PATH })
     }
+
+  private fun assertForeignTerminalPreservesActiveStream(state: String) {
+    val projector = WearChatStreamProjector()
+    projectStreamEvent(projector, state = "delta", runId = "active-run", text = "Hel", message = "Hel")
+
+    projectStreamEvent(projector, state = state, runId = "older-run")
+
+    val continued = projectStreamEvent(projector, state = "delta", runId = "active-run", text = "lo")
+    assertEquals("Hello", continued.getValue("streamText").jsonPrimitive.content)
+    assertEquals("true", continued.getValue("streamTextComplete").jsonPrimitive.content)
+  }
+
+  private fun assertForeignTerminalPreservesAnonymousStream(state: String) {
+    val projector = WearChatStreamProjector()
+    projectStreamEvent(projector, state = "delta", text = "Hel", message = "Hel")
+
+    projectStreamEvent(projector, state = state, runId = "older-run")
+
+    val continued = projectStreamEvent(projector, state = "delta", text = "lo")
+    assertEquals("Hello", continued.getValue("streamText").jsonPrimitive.content)
+    assertEquals("true", continued.getValue("streamTextComplete").jsonPrimitive.content)
+  }
+
+  private fun projectStreamEvent(
+    projector: WearChatStreamProjector,
+    state: String,
+    runId: String? = null,
+    text: String? = null,
+    message: String? = null,
+  ): JsonObject =
+    checkNotNull(
+      projector.project(
+        buildJsonObject {
+          put("sessionKey", "main")
+          runId?.let { put("runId", it) }
+          put("state", state)
+          text?.let { put("deltaText", it) }
+          message?.let { fullText ->
+            put(
+              "message",
+              buildJsonObject {
+                put("role", "assistant")
+                put("content", fullText)
+              },
+            )
+          }
+        },
+      ),
+    )
 
   private fun request(requestId: String): WearMessage.Request = WearMessage.Request(requestId = requestId, method = WearRpcMethod.ProxyStatus)
 }

@@ -23,7 +23,6 @@ import {
   resetLoadConfigMock,
   sendWebDirectInboundMessage,
   setLoadConfigMock,
-  setRuntimeConfigSourceSnapshotMock,
   startWebAutoReplyMonitor,
 } from "./auto-reply.test-harness.js";
 import {
@@ -106,8 +105,9 @@ async function startWatchdogScenario(params: {
 }
 
 function expectErrorContaining(errorFn: unknown, text: string): void {
-  const messages = ((errorFn as { mock?: { calls?: unknown[][] } }).mock?.calls ?? []).map((call) =>
-    typeof call[0] === "string" ? call[0] : call[0] instanceof Error ? call[0].message : "",
+  const messages = ((errorFn as { mock?: { calls?: unknown[][] } }).mock?.calls ?? []).map(
+    (call) =>
+      typeof call[0] === "string" ? call[0] : call[0] instanceof Error ? call[0].message : "",
   );
   expect(messages.join("\n")).toContain(text);
 }
@@ -924,73 +924,7 @@ describe("web auto-reply connection", () => {
     }
   });
 
-  it("passes accounts.default debounceMs into the live listener for named accounts", async () => {
-    const capture = createWebListenerFactoryCapture();
-
-    setLoadConfigMock({
-      channels: {
-        whatsapp: {
-          accounts: {
-            default: {
-              debounceMs: 250,
-            },
-            work: {
-              authDir: "/tmp/work",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig);
-
-    await monitorWebChannel(
-      false,
-      capture.listenerFactory as never,
-      false,
-      async () => ({ text: "ok" }),
-      undefined,
-      undefined,
-      {
-        accountId: "work",
-      },
-    );
-
-    resetLoadConfigMock();
-    expect(capture.getLastOptions()?.debounceMs).toBe(250);
-  });
-
-  it("matches per-account debounce overrides case-insensitively", async () => {
-    const capture = createWebListenerFactoryCapture();
-
-    setLoadConfigMock({
-      channels: {
-        whatsapp: {
-          accounts: {
-            work: {
-              authDir: "/tmp/work",
-              debounceMs: 250,
-            },
-          },
-        },
-      },
-    } as OpenClawConfig);
-
-    await monitorWebChannel(
-      false,
-      capture.listenerFactory as never,
-      false,
-      async () => ({ text: "ok" }),
-      undefined,
-      undefined,
-      {
-        accountId: "Work",
-      },
-    );
-
-    resetLoadConfigMock();
-    expect(capture.getLastOptions()?.debounceMs).toBe(250);
-  });
-
-  it("keeps the global inbound debounce fallback when WhatsApp debounceMs is only the schema default", async () => {
+  it("passes the global inbound debounce into the live listener", async () => {
     const capture = createWebListenerFactoryCapture();
 
     setLoadConfigMock({
@@ -1009,8 +943,6 @@ describe("web auto-reply connection", () => {
         },
       },
     } as OpenClawConfig);
-    setRuntimeConfigSourceSnapshotMock(null);
-
     await monitorWebChannel(
       false,
       capture.listenerFactory as never,

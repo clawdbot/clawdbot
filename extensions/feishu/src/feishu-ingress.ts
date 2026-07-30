@@ -1,35 +1,27 @@
 // Feishu plugin owns raw Lark event admission, replay, and turn adoption.
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
-  createChannelIngressDrain,
+  createChannelIngressError,
+  createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
-  DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-  type ChannelIngressDrain,
+  type ChannelIngressMonitorDeliveryResult,
+  type ChannelIngressMonitorLifecycle,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { getFeishuRuntime } from "./runtime.js";
 
 const FEISHU_INGRESS_PAYLOAD_VERSION = 1;
 const FEISHU_INGRESS_POLL_INTERVAL_MS = 500;
-const FEISHU_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-const FEISHU_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const FEISHU_INGRESS_COMPLETED_MAX_ENTRIES = 20_000;
-const FEISHU_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const FEISHU_INGRESS_FAILED_MAX_ENTRIES = 20_000;
 const FEISHU_DURABLE_EVENT_TYPES = new Set([
   "drive.notice.comment_add_v1",
   "im.message.receive_v1",
 ]);
 
-export type FeishuIngressLifecycle = {
-  abortSignal: AbortSignal;
-  onAdopted: () => void | Promise<void>;
-  onDeferred: () => void;
-  onAdoptionFinalizing: () => void;
-  onAbandoned: () => void | Promise<void>;
+export type FeishuIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission"> & {
   registerAbandonHandler?: (handler: () => void | Promise<void>) => () => void;
 };
 
@@ -58,8 +50,14 @@ type FeishuIngressOptions = {
   adoptionStallTimeoutMs?: number;
 };
 
+export type FeishuWebhookInvoker = (
+  data: unknown,
+  params?: { needCheck?: boolean },
+) => Promise<{ kind: "durable" | "non-durable"; value: unknown }>;
+
 type FeishuDurableIngress = {
   invoke: Lark.EventDispatcher["invoke"];
+  invokeWebhook: FeishuWebhookInvoker;
   resolveLifecycle: (data: unknown) => FeishuIngressLifecycle | undefined;
   setSocketTerminator: (terminate: (() => void) | undefined) => void;
   start: () => void;
@@ -72,20 +70,10 @@ type FeishuLifecycleSource = {
   replayClaim?: ChannelReplayClaimHandle;
 };
 
-export class FeishuIngressPermanentError extends Error {
-  constructor(
-    readonly reason: "authentication-failed" | "invalid-event",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "FeishuIngressPermanentError";
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+export const FeishuIngressPermanentError = createChannelIngressError<
+  "authentication-failed" | "invalid-event"
+>("FeishuIngressPermanentError", { withReason: true });
+export type FeishuIngressPermanentError = InstanceType<typeof FeishuIngressPermanentError>;
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -225,8 +213,8 @@ export function buildFeishuFlushIngressLifecycle(
   const replayClaims = durableSources
     .map((source) => source.replayClaim)
     .filter((claim) => claim !== undefined);
-  const [firstLifecycle] = lifecycles;
-  if (!firstLifecycle) {
+  const transportLifecycle = fanInChannelIngressLifecycles(lifecycles).lifecycle;
+  if (!transportLifecycle) {
     return { lifecycle: undefined, settle: async () => {} };
   }
   let handedOff = false;
@@ -243,7 +231,7 @@ export function buildFeishuFlushIngressLifecycle(
       return;
     }
     releaseReplayClaims();
-    await Promise.all(lifecycles.map(async (lifecycle) => await lifecycle.onAbandoned()));
+    await transportLifecycle.onAbandoned();
     terminal = "abandoned";
   };
   const ensureAbandoned = async () => {
@@ -286,9 +274,7 @@ export function buildFeishuFlushIngressLifecycle(
       adopting ??
       (async () => {
         try {
-          for (const lifecycle of lifecycles) {
-            await lifecycle.onAdopted();
-          }
+          await transportLifecycle.onAdopted();
           terminal = "adopted";
           // Queue adoption is authoritative. Logical twin guards commit only
           // afterward: partial best-effort guard writes may admit a duplicate,
@@ -321,24 +307,17 @@ export function buildFeishuFlushIngressLifecycle(
   };
   return {
     lifecycle: {
-      abortSignal:
-        lifecycles.length === 1
-          ? firstLifecycle.abortSignal
-          : AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal)),
+      abortSignal: transportLifecycle.abortSignal,
       onAdopted: async () => {
         handedOff = true;
         await adoptAll();
       },
       onDeferred: () => {
         handedOff = true;
-        for (const lifecycle of lifecycles) {
-          lifecycle.onDeferred();
-        }
+        transportLifecycle.onDeferred();
       },
       onAdoptionFinalizing: () => {
-        for (const lifecycle of lifecycles) {
-          lifecycle.onAdoptionFinalizing();
-        }
+        transportLifecycle.onAdoptionFinalizing();
       },
       onAbandoned: async () => {
         handedOff = true;
@@ -354,12 +333,8 @@ export function buildFeishuFlushIngressLifecycle(
       handedOff = true;
       releaseReplayClaims();
       try {
-        for (const lifecycle of lifecycles) {
-          lifecycle.onAdoptionFinalizing();
-        }
-        for (const lifecycle of lifecycles) {
-          await lifecycle.onAdopted();
-        }
+        transportLifecycle.onAdoptionFinalizing();
+        await transportLifecycle.onAdopted();
         terminal = "adopted";
       } catch (error) {
         await ensureAbandoned().catch(() => undefined);
@@ -370,189 +345,102 @@ export function buildFeishuFlushIngressLifecycle(
 }
 
 export function createFeishuDurableIngress(options: FeishuIngressOptions): FeishuDurableIngress {
-  let queue = options.queue;
-  let drain: ChannelIngressDrain | undefined;
-  let running = false;
-  let requested = false;
-  let pumping: Promise<void> | undefined;
-  let pollTimer: ReturnType<typeof setInterval> | undefined;
-  let admissionTail: Promise<void> = Promise.resolve();
   let socketTerminator: (() => void) | undefined;
-  let lastPrunedAt = 0;
   const activeLifecycles = new Map<string, FeishuIngressLifecycle>();
-  const activeDeliveries = new Set<Promise<unknown>>();
-  const deferredClaims = new Map<string, Promise<void>>();
 
-  const getQueue = (): ChannelIngressQueue<FeishuIngressPayload> => {
-    queue ??= getFeishuRuntime().state.openChannelIngressQueue<FeishuIngressPayload>({
-      accountId: options.accountId,
-    });
-    return queue;
-  };
-
-  const getDrain = (): ChannelIngressDrain => {
-    drain ??= createChannelIngressDrain<FeishuIngressPayload>({
-      queue: getQueue(),
-      adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
-      retryPolicy: {
-        maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-        deadLetterMinAgeMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-      },
-      resolveNonRetryableFailure: resolveFeishuIngressNonRetryableFailure,
-      onLog: (message) => options.runtime.error?.(`feishu ingress: ${message}`),
-      dispatchClaimedEvent: async (claimed, lifecycle) => {
-        if (claimed.payload.version !== FEISHU_INGRESS_PAYLOAD_VERSION) {
-          throw new FeishuIngressPermanentError(
-            "invalid-event",
-            `Feishu ingress row ${claimed.id} has an unsupported version.`,
-          );
-        }
-        const facts = inspectFeishuIngressEnvelope(claimed.payload.rawEnvelope, options.encryptKey);
-        if (!facts || facts.eventId !== claimed.id) {
-          throw new FeishuIngressPermanentError(
-            "invalid-event",
-            `Feishu ingress row ${claimed.id} has invalid delivery identity.`,
-          );
-        }
-        if (lifecycle.abortSignal.aborted) {
-          throw lifecycle.abortSignal.reason;
-        }
-        let resolveDeferred!: () => void;
-        const deferred = new Promise<void>((resolve) => {
-          resolveDeferred = resolve;
-        });
-        let deferredSettled = false;
-        const settleDeferred = () => {
-          if (deferredSettled) {
-            return;
-          }
-          deferredSettled = true;
-          if (deferredClaims.get(claimed.id) === deferred) {
-            deferredClaims.delete(claimed.id);
-          }
-          resolveDeferred();
-        };
-        const abandonHandlers = new Set<() => void | Promise<void>>();
-        const wrappedLifecycle: FeishuIngressLifecycle = {
-          ...lifecycle,
-          onAdopted: async () => {
-            try {
-              await lifecycle.onAdopted();
-            } finally {
-              settleDeferred();
-            }
-          },
-          onAbandoned: async () => {
-            try {
-              await Promise.allSettled(
-                [...abandonHandlers].map(async (handler) => await handler()),
-              );
-              await lifecycle.onAbandoned();
-            } finally {
-              settleDeferred();
-            }
-          },
-          registerAbandonHandler: (handler) => {
-            abandonHandlers.add(handler);
-            return () => abandonHandlers.delete(handler);
-          },
-        };
-        activeLifecycles.set(claimed.id, wrappedLifecycle);
-        const delivery = options.dispatcher.invoke(parseRawEnvelope(claimed.payload.rawEnvelope), {
+  const monitor = createChannelIngressMonitor<
+    string,
+    { receivedAt: number; rawEnvelope: string },
+    FeishuIngressPayload
+  >({
+    queue:
+      options.queue ??
+      (() =>
+        getFeishuRuntime().state.openChannelIngressQueue<FeishuIngressPayload>({
+          accountId: options.accountId,
+        })),
+    inspect: (rawEnvelope, context) => {
+      const facts = inspectFeishuIngressEnvelope(
+        rawEnvelope,
+        options.encryptKey,
+        context.phase === "admission",
+      );
+      return facts ? { eventId: facts.eventId, laneKey: facts.laneKey } : null;
+    },
+    payload: {
+      version: FEISHU_INGRESS_PAYLOAD_VERSION,
+      serialize: (rawEnvelope, { receivedAt }) => ({ receivedAt, rawEnvelope }),
+      deserialize: (body) => body.rawEnvelope,
+      encode: ({ body }) => ({ version: FEISHU_INGRESS_PAYLOAD_VERSION, ...body }),
+      decode: (payload) => ({
+        version: payload.version,
+        body: { receivedAt: payload.receivedAt, rawEnvelope: payload.rawEnvelope },
+      }),
+      createClaimError: (kind, claim) =>
+        new FeishuIngressPermanentError(
+          "invalid-event",
+          kind === "invalid-version"
+            ? `Feishu ingress row ${claim.id} has an unsupported version.`
+            : `Feishu ingress row ${claim.id} has invalid delivery identity.`,
+        ),
+    },
+    deliver: async (rawEnvelope, lifecycle, claim) => {
+      const abandonHandlers = new Set<() => void | Promise<void>>();
+      // Feishu handlers can defer transport settlement across broadcast lanes.
+      // Keep their lifecycle registry local while the monitor owns the durable claim.
+      const wrappedLifecycle: FeishuIngressLifecycle = {
+        ...lifecycle,
+        onAdopted: lifecycle.onAdopted,
+        onAbandoned: async () => {
+          await Promise.allSettled([...abandonHandlers].map(async (handler) => await handler()));
+          await lifecycle.onAbandoned();
+        },
+        registerAbandonHandler: (handler) => {
+          abandonHandlers.add(handler);
+          return () => abandonHandlers.delete(handler);
+        },
+      };
+      activeLifecycles.set(claim.id, wrappedLifecycle);
+      try {
+        const result = await options.dispatcher.invoke(parseRawEnvelope(rawEnvelope), {
           needCheck: false,
         });
-        activeDeliveries.add(delivery);
-        try {
-          const result = await delivery;
-          if (isRecord(result) && result.kind === "deferred" && !deferredSettled) {
-            deferredClaims.set(claimed.id, deferred);
-          }
-          return result;
-        } finally {
-          if (activeLifecycles.get(claimed.id) === wrappedLifecycle) {
-            activeLifecycles.delete(claimed.id);
-          }
-          activeDeliveries.delete(delivery);
+        if (!isRecord(result)) {
+          return undefined;
         }
-      },
-    });
-    return drain;
-  };
-
-  const pruneIfDue = async () => {
-    const now = Date.now();
-    if (now - lastPrunedAt < FEISHU_INGRESS_PRUNE_INTERVAL_MS) {
-      return;
-    }
-    await getQueue().prune({
-      completedTtlMs: FEISHU_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: FEISHU_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: FEISHU_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: FEISHU_INGRESS_FAILED_MAX_ENTRIES,
-      now,
-    });
-    lastPrunedAt = now;
-  };
-
-  const runPump = async () => {
-    try {
-      for (;;) {
-        requested = false;
-        await pruneIfDue();
-        if (!running) {
-          break;
+        if (result.kind === "deferred") {
+          return { kind: "deferred" };
         }
-        const activeDrain = getDrain();
-        const { started } = await activeDrain.drainOnce();
-        await activeDrain.waitForIdle();
-        if (!running || (!requested && started === 0)) {
-          break;
+        if (result.kind === "completed") {
+          return { kind: "completed" };
+        }
+        if (result.kind === "failed-retryable") {
+          return {
+            kind: "failed-retryable",
+            error: result.error,
+          } satisfies ChannelIngressMonitorDeliveryResult;
+        }
+        return undefined;
+      } finally {
+        if (activeLifecycles.get(claim.id) === wrappedLifecycle) {
+          activeLifecycles.delete(claim.id);
         }
       }
-    } catch (error) {
-      options.runtime.error?.(`feishu ingress drain failed: ${formatErrorMessage(error)}`);
-    } finally {
-      pumping = undefined;
-      if (running && requested) {
-        requestDrain();
-      }
-    }
-  };
+    },
+    deferredClaims: "wait-on-stop",
+    pollIntervalMs: options.pollIntervalMs ?? FEISHU_INGRESS_POLL_INTERVAL_MS,
+    retention: "standard",
+    drain: {
+      adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
+      resolveNonRetryableFailure: resolveFeishuIngressNonRetryableFailure,
+      onLog: (message) => options.runtime.error?.(`feishu ingress: ${message}`),
+    },
+    createStoppedError: () => new Error("Feishu ingress is stopped."),
+    onError: (error) =>
+      options.runtime.error?.(`feishu ingress drain failed: ${formatErrorMessage(error)}`),
+  });
 
-  const requestDrain = () => {
-    requested = true;
-    if (!running || pumping) {
-      return;
-    }
-    pumping = runPump();
-  };
-
-  const admitOnce = async (rawEnvelope: string, facts: FeishuIngressFacts) => {
-    const receivedAt = Date.now();
-    let lastError: unknown;
-    for (const delayMs of [0, 100, 300]) {
-      if (delayMs > 0) {
-        await new Promise((resolve) => {
-          setTimeout(resolve, delayMs);
-        });
-      }
-      try {
-        await getQueue().enqueue(
-          facts.eventId,
-          { version: FEISHU_INGRESS_PAYLOAD_VERSION, receivedAt, rawEnvelope },
-          { receivedAt, laneKey: facts.laneKey },
-        );
-        requestDrain();
-        return;
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    socketTerminator?.();
-    throw lastError;
-  };
-
-  const invoke: Lark.EventDispatcher["invoke"] = async (data, params) => {
+  const invokeWebhook: FeishuWebhookInvoker = async (data, params) => {
     let rawEnvelope: string;
     try {
       const serialized = JSON.stringify(data);
@@ -573,16 +461,27 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions): Feish
     // exists. Claim-side validation then dead-letters them without retry.
     const facts = inspectFeishuIngressEnvelope(rawEnvelope, options.encryptKey, true);
     if (!facts) {
-      return await options.dispatcher.invoke(data, params);
+      return {
+        kind: "non-durable",
+        value: await options.dispatcher.invoke(data, params),
+      };
     }
-    const admission = admissionTail.then(async () => await admitOnce(rawEnvelope, facts));
-    admissionTail = admission.catch(() => undefined);
-    await admission;
-    return undefined;
+    try {
+      await monitor.admit(rawEnvelope, {
+        facts: { eventId: facts.eventId, laneKey: facts.laneKey },
+      });
+    } catch (error) {
+      socketTerminator?.();
+      throw error;
+    }
+    return { kind: "durable", value: undefined };
   };
+  const invoke: Lark.EventDispatcher["invoke"] = async (data, params) =>
+    (await invokeWebhook(data, params)).value;
 
   return {
     invoke,
+    invokeWebhook,
     resolveLifecycle: (data) => {
       const eventId = isRecord(data) ? readString(data.event_id) : null;
       return eventId ? activeLifecycles.get(eventId) : undefined;
@@ -590,43 +489,12 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions): Feish
     setSocketTerminator: (terminate) => {
       socketTerminator = terminate;
     },
-    start: () => {
-      if (running) {
-        return;
-      }
-      running = true;
-      pollTimer = setInterval(
-        requestDrain,
-        options.pollIntervalMs ?? FEISHU_INGRESS_POLL_INTERVAL_MS,
-      );
-      pollTimer.unref?.();
-      requestDrain();
-    },
+    start: monitor.start,
     stop: async () => {
-      running = false;
-      if (pollTimer) {
-        clearInterval(pollTimer);
-        pollTimer = undefined;
-      }
-      await admissionTail;
-      drain?.dispose();
-      await pumping;
-      drain?.dispose();
-      await Promise.allSettled(activeDeliveries);
-      await Promise.allSettled(deferredClaims.values());
-      await drain?.waitForIdle();
+      await monitor.stop();
       activeLifecycles.clear();
       socketTerminator = undefined;
     },
-    waitForIdle: async () => {
-      for (;;) {
-        const activePump = pumping;
-        if (!activePump) {
-          break;
-        }
-        await activePump;
-      }
-      await drain?.waitForIdle();
-    },
+    waitForIdle: monitor.waitForIdle,
   };
 }
