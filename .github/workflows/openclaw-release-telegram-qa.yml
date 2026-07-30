@@ -2556,6 +2556,7 @@ jobs:
         if: always() && steps.terminate_sut.outputs.quiescent == 'true' && steps.run_lane.outputs.output_dir != ''
         env:
           BOUNDARY_EVIDENCE_DIR: ${{ steps.create_sut.outputs.boundary_evidence_dir }}
+          CANDIDATE_ROOT: ${{ steps.create_sut.outputs.candidate_root }}
           OUTPUT_DIR: ${{ steps.run_lane.outputs.output_dir }}
           RUN_LANE_OUTCOME: ${{ steps.run_lane.outcome }}
         shell: bash
@@ -2568,17 +2569,6 @@ jobs:
           shopt -s nullglob
           retain_lease_paths=("${BOUNDARY_EVIDENCE_DIR}"/retain-credential-lease-*.json)
           ((${#retain_lease_paths[@]} == 0))
-          runtime_parts=("${BOUNDARY_EVIDENCE_DIR}"/runtime-boundary-*.json)
-          ((${#runtime_parts[@]} > 0))
-          jq -s \
-            '{
-              version: 1,
-              kind: "qa-gateway-process-boundary",
-              launches: [.[].launches[]]
-            }' \
-            "${runtime_parts[@]}" >"${runtime_path}.tmp"
-          chmod 0600 "${runtime_path}.tmp"
-          mv "${runtime_path}.tmp" "$runtime_path"
 
           jq -e \
             --arg runId "$GITHUB_RUN_ID" \
@@ -2600,6 +2590,31 @@ jobs:
               (.candidateArtifact.sourceSha | test("^[a-f0-9]{40}$")) and
               (.candidateArtifact.version | length > 0)
             ' "$context_path" >/dev/null
+
+          candidate_telegram_cli="${CANDIDATE_ROOT}/extensions/qa-lab/src/live-transports/telegram/cli.runtime.ts"
+          candidate_boundary_controller="${CANDIDATE_ROOT}/extensions/qa-lab/src/gateway-process-boundary.ts"
+          if [[ ! -f "$candidate_boundary_controller" ]] ||
+            ! grep -Fq "resolveTelegramQaSutOpenClawCommand" "$candidate_telegram_cli"; then
+            # Frozen candidates before the boundary protocol have no runtime evidence to emit.
+            jq --arg executionMode "legacy-runner" \
+              '. + {executionMode: $executionMode}' "$context_path" >"$aggregate_path"
+            chmod 0600 "$aggregate_path"
+            echo "aggregate_path=$aggregate_path" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          runtime_parts=("${BOUNDARY_EVIDENCE_DIR}"/runtime-boundary-*.json)
+          ((${#runtime_parts[@]} > 0))
+          jq -s \
+            '{
+              version: 1,
+              kind: "qa-gateway-process-boundary",
+              launches: [.[].launches[]]
+            }' \
+            "${runtime_parts[@]}" >"${runtime_path}.tmp"
+          chmod 0600 "${runtime_path}.tmp"
+          mv "${runtime_path}.tmp" "$runtime_path"
+
           jq -e \
             --arg runLaneOutcome "$RUN_LANE_OUTCOME" \
             '
