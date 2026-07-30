@@ -511,6 +511,7 @@ export type PluginHookInboundClaimResult = {
 };
 
 export type PluginHookBeforeDispatchEvent = {
+  messageId?: string;
   content: string;
   body?: string;
   channel?: string;
@@ -526,6 +527,7 @@ export type PluginHookBeforeDispatchEvent = {
 };
 
 export type PluginHookBeforeDispatchContext = {
+  messageId?: string;
   channelId?: string;
   accountId?: string;
   conversationId?: string;

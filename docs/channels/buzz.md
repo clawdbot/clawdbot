@@ -12,16 +12,18 @@ in a hosted or self-hosted Buzz workspace.
 
 ## What it does
 
-- Receives text messages from approved Buzz rooms
+- Receives normal, rich-content, and structured-diff messages from approved
+  Buzz rooms
 - Replies in the same room and thread
-- Sends text messages through OpenClaw's built-in `message` tool
+- Preserves Markdown in replies and sends text through OpenClaw's built-in
+  `message` tool
 - Supports mention requirements and sender allowlists
 - Discovers rooms after the bot has been approved
 - Reconnects and avoids processing the same message twice
 
-The current plugin supports group rooms and text messages. Direct messages,
-media and files, native reactions, room creation, and automatic admin approval
-are not supported yet.
+The current plugin supports group rooms, Markdown text, and inbound structured
+diffs. Direct messages, media and files, native reactions, room creation, and
+automatic admin approval are not supported yet.
 
 ## Buzz identity and room model
 
@@ -152,9 +154,16 @@ delivery.
 Agents can:
 
 - Reply to an incoming Buzz message in its room or thread
-- Send text to an approved Buzz room
+- Receive Buzz kind `9` normal messages, kind `40002` rich-content messages,
+  and kind `40008` structured diffs
+- Send Markdown text to an approved Buzz room as a normal kind `9` message
 - Use the configured default room when a workflow does not specify a target
 - Use the routed agent's normal skills, memory, and allowed tools
+
+Structured diffs include their repository, commit, file, branch, pull request,
+language, description, truncation status, and unified-diff content in the agent
+context when those fields are present. Diff content is not interpreted as an
+OpenClaw command or textual mention.
 
 Humans and automations can test the same outbound path from the CLI:
 

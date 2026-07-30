@@ -1,6 +1,8 @@
 import { Relay, finalizeEvent, type Event } from "nostr-tools";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import {
+  BUZZ_INBOUND_MESSAGE_KINDS,
+  BUZZ_NORMAL_MESSAGE_KIND,
   buildBuzzMessageTags,
   parseBuzzMessageEvent,
   type BuzzInboundMessage,
@@ -17,7 +19,6 @@ import {
 } from "./room-membership.js";
 import { decodeBuzzPrivateKey, resolveBuzzPublicKey } from "./types.js";
 
-const MESSAGE_KIND = 9;
 const PRESENCE_KIND = 20_001;
 const PRESENCE_HEARTBEAT_INTERVAL_MS = 30_000;
 const REPLAY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -49,7 +50,7 @@ function buildBuzzTextEvent(params: {
 }): Event {
   return finalizeEvent(
     {
-      kind: MESSAGE_KIND,
+      kind: BUZZ_NORMAL_MESSAGE_KIND,
       content: params.text,
       created_at: Math.floor(Date.now() / 1000),
       tags: buildBuzzMessageTags(params),
@@ -614,7 +615,7 @@ export async function startBuzzBus(options: {
         relay.subscribe(
           [
             {
-              kinds: [MESSAGE_KIND],
+              kinds: [...BUZZ_INBOUND_MESSAGE_KINDS],
               "#h": [channelId],
               since: options.since ?? sessionStartedAt,
             },

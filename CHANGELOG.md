@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Control UI first-run setup:** continue verified model setup into Custodian, explain that the web app is ready without a channel, and offer an optional dismissible path to Channels.
 - **Fish Audio speech:** add hosted S2.1 synthesis with streaming, voice notes, voice discovery, and telephony, plus local Fish S2 Pro reference-voice streaming in native macOS Talk. Thanks @Conan-Scott for the earlier community-plugin implementation.
 - **Control UI cloud workspace conflicts:** surface staged-ref guidance, bounded conflicted paths, structured transcript events, and sidebar attention for cloud worker results that kept local versions.
 - **Control UI update recovery:** the "A new version is available" Reload button now waits out the gateway restart that stranded the chunk and reloads as soon as it answers, instead of silently doing nothing and leaving a manual hard reload as the only way out.
@@ -17,6 +18,7 @@ Docs: https://docs.openclaw.ai
 - **Channel plugin ingress monitors:** add a shared plugin SDK monitor for durable admission, polling, pruning, claim identity validation, adoption handoff, and shutdown, and migrate IRC, Synology Chat, and Google Chat to the shared lifecycle.
 - **Dashboard MCP apps:** pin originating-session MCP app views as living dashboard widgets, renew their sandboxed view leases, and keep tool interactivity behind revision-bound grants with graceful stale-state recovery.
 - **External gateway supervision:** add `OPENCLAW_SUPERVISOR_MODE=external` for lifecycle owners such as OCM, preserving verified restart and deferral behavior without exposing native service authority, blocking native service mutation and self-update, and providing a versioned atomic restart-handoff consume contract. Thanks @shakkernerd.
+- **Buzz message fidelity:** preserve Markdown output and accept Buzz normal, rich-content, and structured-diff room messages through the existing authorized inbound path. Thanks @shakkernerd.
 - **ClickClack guided setup:** configure ClickClack from `openclaw onboard` or `openclaw channels add clickclack` with URL, token, and workspace prompts, default-account env fallback, nonfatal live connection validation, and gateway-aware next steps that connect automatically when OpenClaw is already running. Thanks @shakkernerd.
 - **ClickClack command menus:** publish each bot's native OpenClaw commands to ClickClack composer autocomplete at gateway startup, with per-account opt-out and nonfatal compatibility handling for older tokens and servers. Thanks @shakkernerd.
 - **Skill Workshop approvals:** run agent-initiated apply, reject, and quarantine actions without an additional approval prompt by default while preserving `skills.workshop.approvalPolicy: "pending"` as an opt-in approval gate. Thanks @shakkernerd.
@@ -53,6 +55,12 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Linux gateway service ownership:** refuse user-scope systemd publication and activation when the same gateway unit name is already owned or cannot be verified in the system scope, including `--force`, with actionable recovery guidance instead of creating restart-looping dual managers. Fixes #116129.
+- **macOS remote tunnel lifecycle:** prevent cancelled or superseded restart backoffs from recreating SSH tunnels, and join a tunnel create that another caller started while the actor was suspended.
+- **macOS location permission requests:** coalesce concurrent prompts so every caller resumes, and stop cancelled timeouts from opening Settings or completing a newer request.
+- **Control UI update reconciliation:** preserve an unresolved managed-update request across disconnects, accept the replacement Gateway version when it proves success, and otherwise show explicit recovery guidance instead of trusting an unrelated cached update result or failing silently. Fixes #116075. Thanks @shakkernerd.
+- **Control UI model readiness:** put AI setup first when no model is selectable, distinguish signed-in credentials from ready providers, and route accounts with no exposed models directly to provider recovery instead of leading with disabled default controls.
+- **Control UI Talk session isolation:** stop active realtime Talk media and retire its callbacks before chat session changes, Gateway disconnects, or pane disposal so previous-session audio, transcript, camera, and status updates cannot leak into the next view. Thanks @shakkernerd.
 - **Gateway reconnect event ordering:** reset the shared TypeScript client's outer event-sequence baseline for each replacement WebSocket, preventing gap recovery from comparing unrelated connection generations across Control UI, TUI, SDK, and browser extension clients. Thanks @shakkernerd.
 - **Skill Workshop offline apply:** preserve configless local proposal apply after upgrades under exclusive Gateway startup ownership, while keeping running Gateway snapshot invalidation fail-closed when CLI credentials are unavailable.
 - **macOS and Control UI keyboard navigation:** let Tab traverse links and controls inside embedded Dashboard, browser, and Canvas web views, and keep shortcuts working on non-Latin keyboard layouts without firing during IME composition.

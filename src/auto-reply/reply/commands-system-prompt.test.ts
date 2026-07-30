@@ -57,8 +57,7 @@ vi.mock("../../agents/system-prompt-params.js", () => ({
   buildSystemPromptParams: vi.fn(() => ({
     runtimeInfo: { host: "unknown", os: "unknown", arch: "unknown", node: process.version },
     userTimezone: "UTC",
-    userTime: "12:00 PM",
-    userTimeFormat: "12h",
+    userDate: "2026-01-05",
   })),
 }));
 

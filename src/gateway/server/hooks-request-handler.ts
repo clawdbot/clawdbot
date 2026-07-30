@@ -48,7 +48,12 @@ export type HookClientIpConfig = Readonly<{
 export type HooksRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
 type HookDispatchers = {
-  dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
+  dispatchWakeHook: (value: {
+    text: string;
+    mode: "now" | "next-heartbeat";
+    agentId?: string;
+    sessionKey?: string;
+  }) => void;
   dispatchAgentHook: (
     value: HookAgentDispatchPayload,
   ) => HookAgentDispatchResult | Promise<HookAgentDispatchResult>;
@@ -387,6 +392,7 @@ export function createHooksRequestHandler(
           deliver: normalized.value.deliver,
           channel: normalized.value.channel,
           to: normalized.value.to ?? null,
+          accountId: normalized.value.accountId ?? null,
           model: normalized.value.model ?? null,
           thinking: normalized.value.thinking ?? null,
           timeoutSeconds: normalized.value.timeoutSeconds ?? null,
@@ -437,11 +443,40 @@ export function createHooksRequestHandler(
             return true;
           }
           if (mapped.action.kind === "wake") {
+            const action = mapped.action;
+            let targetAgentId: string | undefined;
+            let dispatchSessionKey: string | undefined;
+            if (action.agentId || action.sessionKey) {
+              if (!isHookAgentAllowed(hooksConfig, action.agentId)) {
+                sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
+                return true;
+              }
+              targetAgentId = resolveEffectiveHookTargetAgentId(hooksConfig, action.agentId);
+              if (action.sessionKey) {
+                const sessionKey = resolveHookSessionKey({
+                  hooksConfig,
+                  source:
+                    action.sessionKeySource === "static" ? "mapping-static" : "mapping-templated",
+                  sessionKey: action.sessionKey,
+                });
+                if (!sessionKey.ok) {
+                  sendJson(res, 400, { ok: false, error: sessionKey.error });
+                  return true;
+                }
+                dispatchSessionKey =
+                  resolveDispatchSessionKeyOrRespond(sessionKey.value, targetAgentId) ?? undefined;
+                if (!dispatchSessionKey) {
+                  return true;
+                }
+              }
+            }
             dispatchWakeHook({
-              text: mapped.action.text,
-              mode: mapped.action.mode,
+              text: action.text,
+              mode: action.mode,
+              ...(targetAgentId ? { agentId: targetAgentId } : {}),
+              ...(dispatchSessionKey ? { sessionKey: dispatchSessionKey } : {}),
             });
-            sendJson(res, 200, { ok: true, mode: mapped.action.mode });
+            sendJson(res, 200, { ok: true, mode: action.mode });
             return true;
           }
           const action = mapped.action;

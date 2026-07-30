@@ -10,6 +10,7 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import {
+  canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
   resolveMainSessionKey,
   resolveMainSessionKeyFromConfig,
@@ -25,6 +26,7 @@ import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
+import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
 import {
   createHooksRequestHandler,
@@ -174,13 +176,53 @@ export function createGatewayHooksRequestHandler(params: {
   const loadIsolatedAgentModule = () =>
     (isolatedAgentModulePromise ??= import("../../cron/isolated-agent.js"));
 
-  const dispatchWakeHook = (value: { text: string; mode: "now" | "next-heartbeat" }) => {
-    const sessionKey = resolveMainSessionKeyFromConfig();
+  const dispatchWakeHook = (value: {
+    text: string;
+    mode: "now" | "next-heartbeat";
+    agentId?: string;
+    sessionKey?: string;
+  }) => {
+    const targeted = Boolean(value.agentId || value.sessionKey);
+    // A targeted wake must enqueue and wake the same canonical store key;
+    // otherwise the heartbeat runs for one agent while its event waits elsewhere.
+    const target = targeted
+      ? (() => {
+          const cfg = getRuntimeConfig();
+          const agentId = value.agentId ?? resolveDefaultAgentId(cfg);
+          if (cfg.session?.scope === "global") {
+            return {
+              eventSessionKey: "global",
+              heartbeatTarget: { agentId },
+            };
+          }
+          const eventSessionKey = canonicalizeMainSessionAlias({
+            cfg,
+            agentId,
+            sessionKey: value.sessionKey
+              ? toAgentStoreSessionKey({
+                  agentId,
+                  requestKey: value.sessionKey,
+                  mainKey: cfg.session?.mainKey,
+                })
+              : resolveAgentMainSessionKey({ cfg, agentId }),
+          });
+          return {
+            eventSessionKey,
+            heartbeatTarget: { agentId, sessionKey: eventSessionKey },
+          };
+        })()
+      : undefined;
+    const sessionKey = target?.eventSessionKey ?? resolveMainSessionKeyFromConfig();
     enqueueSystemEvent(value.text, {
       sessionKey,
     });
     if (value.mode === "now") {
-      requestHeartbeat({ source: "hook", intent: "immediate", reason: "hook:wake" });
+      requestHeartbeat({
+        source: "hook",
+        intent: "immediate",
+        reason: "hook:wake",
+        ...target?.heartbeatTarget,
+      });
     }
   };
 

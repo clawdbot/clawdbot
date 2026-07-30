@@ -3143,8 +3143,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Three timezone surfaces
   - H2: Setting the user timezone
-  - H2: Envelope timezone values
-  - H2: When to override
   - H2: Related
 
 ## concepts/typebox.md
@@ -3213,10 +3211,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Message envelopes (local by default)
   - H3: Examples
-  - H2: System prompt: current date and time
+  - H2: System prompt: temporal context
   - H2: System event lines (local by default)
-  - H3: Configure user timezone + format
-  - H2: Time format detection (auto)
+  - H3: Configure user timezone
+  - H2: Time format detection
   - H2: Tool payloads + connectors (raw provider time + normalized fields)
   - H2: Related docs
 
@@ -3421,7 +3419,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: agents.defaults.imageMaxDimensionPx
   - H3: agents.defaults.imageQuality
   - H3: agents.defaults.userTimezone
-  - H3: agents.defaults.timeFormat
   - H3: agents.defaults.model
   - H3: Runtime policy
   - H3: CLI backend selection
@@ -7640,6 +7637,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Terminal outcome classification
   - H3: Agent-end side effects
   - H3: User input and tool surfaces
+  - H3: Native MCP inventory
   - H3: Native Codex harness mode
   - H2: Runtime strictness
   - H2: Native sessions and transcript mirror

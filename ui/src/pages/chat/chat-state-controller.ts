@@ -2,6 +2,7 @@ import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { disposeSelectedSessionMessageSubscription } from "./chat-history.ts";
 import { subscribeChatOutboxProjection } from "./chat-queue.ts";
+import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
@@ -82,6 +83,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       this.composerPersistence.stop();
       cancelChatStreamRenderFrame(this.stateValue);
       cancelChatScroll(this.stateValue);
+      stopChatRealtimeTalk(this.stateValue);
     }
     this.stateValue = state;
     this.previousChatLoading = state.chatLoading;
@@ -368,15 +370,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       cancelChatScroll(state);
       invalidateImageLightbox(state);
       clearSessionWorkspaceTimers(state);
-    }
-    state?.realtimeTalkSession?.stop();
-    if (state) {
-      state.realtimeTalkSession = null;
-      state.realtimeTalkVideoStream = null;
-      state.realtimeTalkCameraDevices = [];
-      state.realtimeTalkVideoCapable = false;
-      state.realtimeTalkVideoPending = false;
-      state.realtimeTalkCameraError = false;
+      stopChatRealtimeTalk(state);
       state.resetToolStream?.();
     }
   }

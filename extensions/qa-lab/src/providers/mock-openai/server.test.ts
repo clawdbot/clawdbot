@@ -1,6 +1,7 @@
 // Qa Lab tests cover server plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
+import { readTargetFromPrompt } from "./mock-openai-tooling.js";
 import { startQaMockOpenAiServer } from "./server.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -811,6 +812,41 @@ describe("qa mock openai server", () => {
     expect(final.output[0]?.content?.[0]?.text).toBe("TOOL_PROGRESS_MARKER_OK");
   });
 
+  it("prefers a current tool-result marker over system and stale user directives", async () => {
+    const server = await startMockServer();
+    const prompt = [
+      "Tool progress QA check: call the read tool exactly once on `QA_KICKOFF_TASK.md` before answering.",
+      "The only valid final marker is inside that file.",
+      "After the read completes, reply with only the exact marker from the file.",
+    ].join(" ");
+    const marker = "TOOL_PROGRESS_OUTPUT_MARKER_OK";
+
+    const final = await expectResponsesJson<{
+      output: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      instructions: "If nothing needs attention, reply exactly: HEARTBEAT_OK",
+      input: [
+        makeUserInput(
+          "Earlier tool progress QA check: after the tool returns, reply exactly `STALE_PROGRESS_MARKER`.",
+        ),
+        makeUserInput(prompt),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_1",
+          output: [
+            "Matrix tool progress QA task.",
+            "Reply with only this exact marker and no other text:",
+            marker,
+          ].join("\n"),
+        },
+        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+      ],
+    });
+
+    expect(final.output[0]?.content?.[0]?.text).toBe(marker);
+  });
+
   it("plans deterministic tool-progress exec commands from exact command prompts", async () => {
     const server = await startMockServer();
     const command =
@@ -942,7 +978,7 @@ describe("qa mock openai server", () => {
     expect(errorOutput.output[0]?.content?.[0]?.text).toBe("TOOL_PROGRESS_ERROR_OK");
   });
 
-  it("uses the latest user prompt path for tool-progress plans", async () => {
+  it("uses the latest user tool-progress prompt kind and target for plans", async () => {
     const server = await startMockServer();
 
     const response = await postResponses(server, {
@@ -965,6 +1001,253 @@ describe("qa mock openai server", () => {
     expect(body).toContain('"name":"read"');
     expect(body).toContain("latest-missing-progress-target.txt");
     expect(body).not.toContain("older-progress-target.txt");
+
+    const command = "sleep 2; cat 'current-progress-target.txt'";
+    const currentNormal = await postResponses(server, {
+      stream: true,
+      input: [
+        makeUserInput(
+          "Tool progress error QA check: read `stale-missing-progress-target.txt` before answering. After the read fails, reply exactly `STALE_PROGRESS_OK`.",
+        ),
+        {
+          type: "function_call_output",
+          call_id: "call_stale_progress_read",
+          output: JSON.stringify({ error: "ENOENT: stale turn" }),
+        },
+        makeUserInput(
+          `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`${command}\`. After that command completes, reply exactly \`CURRENT_PROGRESS_OK\`.`,
+        ),
+      ],
+    });
+
+    expect(currentNormal.status).toBe(200);
+    const currentNormalBody = await currentNormal.text();
+    expect(currentNormalBody).toContain('"name":"exec"');
+    expect(currentNormalBody).toContain(command);
+    expect(currentNormalBody).not.toContain("stale-missing-progress-target.txt");
+  });
+
+  it.each([
+    {
+      name: "preview",
+      prompt:
+        "@openclaw:matrix-qa.test Tool progress QA check: call the read tool exactly once on `QA_KICKOFF_TASK.md` before answering. After that read completes, reply exactly `CURRENT_PREVIEW_OK`.",
+      toolName: "read",
+      expectedArgs: { path: "QA_KICKOFF_TASK.md" },
+    },
+    {
+      name: "command preview",
+      prompt:
+        "@openclaw:matrix-qa.test Tool progress QA check: call the exec tool exactly once with this exact command before answering: `printf 'matrix-command-progress-start\\n'; sleep 2`. After that exec command completes or fails, reply exactly `CURRENT_COMMAND_OK`.",
+      toolName: "exec",
+      expectedArgs: { command: "printf 'matrix-command-progress-start\\n'; sleep 2" },
+    },
+    {
+      name: "error",
+      prompt:
+        "@openclaw:matrix-qa.test Tool progress error QA check: read `missing-matrix-tool-progress-target.txt` before answering. After the read fails, reply exactly `CURRENT_ERROR_OK`.",
+      toolName: "read",
+      expectedArgs: { path: "missing-matrix-tool-progress-target.txt" },
+    },
+    {
+      name: "mention safety",
+      prompt:
+        "@openclaw:matrix-qa.test Tool progress QA check: read the missing workspace file `matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt` before answering. After that read fails, reply exactly `CURRENT_MENTION_OK`.",
+      toolName: "read",
+      expectedArgs: {
+        path: "matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt",
+      },
+    },
+  ])("routes current Matrix $name after stale streaming history", async (fixture) => {
+    const server = await startMockServer();
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_STREAMING_OK`.",
+        ),
+        makeUserInput(fixture.prompt),
+        makeUserInput("Continue with the current Matrix QA scenario."),
+      ],
+    });
+
+    const toolCall = outputToolCall(payload, fixture.toolName);
+    expect(outputToolArgsFromItem(toolCall)).toEqual(fixture.expectedArgs);
+    expect(JSON.stringify(payload)).not.toContain("STALE_STREAMING_OK");
+  });
+
+  it("does not let a prior Matrix tool result satisfy the current progress prompt", async () => {
+    const server = await startMockServer();
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "@openclaw:matrix-qa.test Tool progress QA check: read `stale-progress-target.txt` before answering. Reply exactly `STALE_PROGRESS_OK`.",
+        ),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_stale_progress",
+          output: "STALE_PROGRESS_OK",
+        },
+        makeUserInput(
+          "@openclaw:matrix-qa.test Tool progress QA check: read `current-progress-target.txt` before answering. Reply exactly `CURRENT_PROGRESS_OK`.",
+        ),
+      ],
+    });
+
+    const toolCall = outputToolCall(payload, "read");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({ path: "current-progress-target.txt" });
+    expect(JSON.stringify(payload)).not.toContain("STALE_PROGRESS_OK");
+  });
+
+  it.each([
+    {
+      name: "quiet streaming",
+      stalePrompt:
+        "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_QUIET_OK`.",
+    },
+    {
+      name: "tool progress",
+      stalePrompt:
+        "@openclaw:matrix-qa.test Tool progress QA check: read `stale-progress-target.txt` before answering. Reply exactly `STALE_PROGRESS_OK`.",
+    },
+  ])("does not resurrect stale Matrix $name across an ordinary turn", async (fixture) => {
+    const server = await startMockServer();
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(fixture.stalePrompt),
+        makeUserInput("Reply exactly `CURRENT_ORDINARY_OK`."),
+      ],
+    });
+
+    expect(outputText(payload)).toBe("CURRENT_ORDINARY_OK");
+    expect(JSON.stringify(payload)).not.toContain("stale-progress-target.txt");
+  });
+
+  it("does not treat an ordinary retry request as a Matrix scenario continuation", async () => {
+    const server = await startMockServer();
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_STREAMING_OK`.",
+        ),
+        makeUserInput(
+          "Please retry the new database operation, then reply exactly `CURRENT_RETRY_OK`.",
+        ),
+      ],
+    });
+
+    expect(outputText(payload)).toBe("CURRENT_RETRY_OK");
+    expect(JSON.stringify(payload)).not.toContain("STALE_STREAMING_OK");
+  });
+
+  it("uses the current tool result marker after stale streaming history", async () => {
+    const server = await startMockServer();
+    const currentPrompt =
+      "@openclaw:matrix-qa.test Tool progress QA check: call the read tool exactly once on `QA_KICKOFF_TASK.md` before answering. The only valid final marker is inside that file.";
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_STREAMING_OK`.",
+        ),
+        makeUserInput(currentPrompt),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_current_progress",
+          output: "Reply with only this exact marker and no other text:\nCURRENT_PROGRESS_OK",
+        },
+      ],
+    });
+
+    expect(outputText(payload)).toBe("CURRENT_PROGRESS_OK");
+  });
+
+  it("selects tool progress after quiet streaming in one user envelope", async () => {
+    const server = await startMockServer();
+    const currentPrompt =
+      "@openclaw:matrix-qa.test Tool progress QA check: call the read tool exactly once on `QA_KICKOFF_TASK.md` before answering. The only valid final marker is inside that file.";
+    const envelope = [
+      "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_ENVELOPE_OK`.",
+      currentPrompt,
+    ].join("\n");
+    const plan = await expectResponsesJson(server, {
+      stream: false,
+      input: [makeUserInput(envelope)],
+    });
+
+    const toolCall = outputToolCall(plan, "read");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({ path: "QA_KICKOFF_TASK.md" });
+    expect(JSON.stringify(plan)).not.toContain("STALE_ENVELOPE_OK");
+
+    const final = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(envelope),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_current_envelope",
+          output: "Reply with only this exact marker and no other text:\nCURRENT_ENVELOPE_OK",
+        },
+      ],
+    });
+
+    expect(outputText(final)).toBe("CURRENT_ENVELOPE_OK");
+  });
+
+  it("selects the latest tool-progress target in one user envelope", async () => {
+    const server = await startMockServer();
+    const envelope = [
+      "Tool progress QA check: read `stale-progress-target.txt` before answering. Reply exactly `STALE_PROGRESS_OK`.",
+      "Tool progress QA check: read `current-progress-target.txt` before answering. Reply exactly `CURRENT_PROGRESS_OK`.",
+    ].join("\n");
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [makeUserInput(envelope)],
+    });
+
+    const toolCall = outputToolCall(payload, "read");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({ path: "current-progress-target.txt" });
+    expect(JSON.stringify(payload)).not.toContain("stale-progress-target.txt");
+  });
+
+  it("selects the latest block-streaming markers and target in one user envelope", async () => {
+    const server = await startMockServer();
+    const envelope = [
+      "Block streaming QA check: first exact marker: `STALE_ONE`; read `stale-block.txt`; second exact marker: `STALE_TWO`.",
+      "Block streaming QA check: first exact marker: `CURRENT_ONE`; read `current-block.txt`; second exact marker: `CURRENT_TWO`.",
+    ].join("\n");
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [makeUserInput(envelope)],
+    });
+
+    expect(outputText(payload)).toBe("CURRENT_ONE");
+    const toolCall = outputToolCall(payload, "read");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({ path: "current-block.txt" });
+    expect(JSON.stringify(payload)).not.toContain("STALE_ONE");
+    expect(JSON.stringify(payload)).not.toContain("stale-block.txt");
+  });
+
+  it("rejects successful error-progress results without a prompt directive", async () => {
+    const server = await startMockServer();
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "Tool progress error QA check: read `missing-progress-target.txt` before answering. The final marker is supplied only after the tool runs.",
+        ),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_unexpected_success",
+          output: "Reply with only this exact marker and no other text:\nFALSE_POSITIVE_OK",
+        },
+      ],
+    });
+
+    expect(outputText(payload)).toBe("BUG-TOOL-DID-NOT-FAIL");
   });
 
   it("prefers path-like refs over generic quoted keys in prompts", async () => {
@@ -998,6 +1281,15 @@ describe("qa mock openai server", () => {
       'Please inspect "message_id" metadata first, then read `./QA_KICKOFF_TASK.md`.',
     );
     expect(debugPayload.plannedToolName).toBe("read");
+  });
+
+  it("keeps unformatted Matrix mention-shaped filenames intact", () => {
+    expect(
+      readTargetFromPrompt(
+        "Read the missing workspace file matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt before answering.",
+      ),
+    ).toBe("matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt");
+    expect(readTargetFromPrompt("Read _fixture.json before answering.")).toBe("_fixture.json");
   });
 
   it("reads unquoted fixture paths and honors exact replies after tool output", async () => {

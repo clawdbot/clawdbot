@@ -1097,7 +1097,6 @@ export async function handleControlUiHttpRequest(
             : "scripts",
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
       seamColor: config?.ui?.seamColor,
-      timeFormat: "auto",
       terminalEnabled,
       pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path: grantPath, match }) => ({
         pluginId,

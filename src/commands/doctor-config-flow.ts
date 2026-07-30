@@ -302,8 +302,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(sanitizeDoctorNote(unsupportedInternalHookEntryWarnings.join("\n")), "Doctor warnings");
   }
 
+  // Parsed config supplies invalid-key evidence only; migrations still mutate the
+  // include/env-resolved candidate so doctor never writes unresolved source values.
   const normalized = normalizeCompatibilityConfigValues(state.candidate, {
     blockedModelIdentities: blockedCodexModelIdentities,
+    sourceRaw: snapshot.parsed,
   });
   applyConfigMutation(normalized, {
     fixHint: `Run "${doctorFixCommand}" to apply these changes.`,

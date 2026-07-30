@@ -20,6 +20,7 @@ import {
 } from "../../tasks/task-runtime.test-helpers.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
+import { registerPluginSubagentRunFromGateway } from "./agent-task-tracking.js";
 import {
   applyGatewaySubagentRegistryTestDeps,
   getAgentTestMocks,
@@ -322,6 +323,50 @@ describe("gateway agent handler", () => {
       const retryTasks = listTaskRecords().filter((task) => task.runId === runId);
       expect(retryTasks).toHaveLength(1);
       expect(getSubagentRunByChildSessionKey(childSessionKey)?.createdAt).toBe(createdAt);
+    });
+  });
+
+  it("registers host-owned requester lineage for plugin subagent completion", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-plugin-subagent-requester-" }, async (root) => {
+      useTestStateDir(root);
+      resetSubagentRegistryForTests({ persist: false });
+      const childSessionKey = "agent:work:subagent:plugin-completion";
+      const requester = {
+        sessionKey: "agent:main:telegram:direct:123",
+        origin: {
+          channel: "telegram",
+          to: "telegram:123",
+          accountId: "work",
+          threadId: 42,
+        },
+      } as const;
+
+      await registerPluginSubagentRunFromGateway({
+        cfg: {
+          session: { mainKey: "main", scope: "per-sender" },
+          agents: {
+            list: [{ id: "main", default: true }, { id: "work" }],
+          },
+        },
+        runId: "plugin-subagent-current-requester",
+        childSessionKey,
+        task: "background plugin subagent task",
+        requester,
+        pluginId: "memory-core",
+      });
+
+      const run = requireValue(
+        getSubagentRunByChildSessionKey(childSessionKey),
+        "expected requester-bound plugin subagent run",
+      );
+      expectRecordFields(run, {
+        controllerSessionKey: "agent:work:main",
+        requesterSessionKey: requester.sessionKey,
+        requesterDisplayKey: requester.sessionKey,
+        requesterOrigin: requester.origin,
+        label: "plugin:memory-core",
+      });
+      expectRecordFields(run.completion, { required: true });
     });
   });
 

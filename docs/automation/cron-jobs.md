@@ -532,7 +532,7 @@ Query-string tokens are rejected.
       -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.6-sol"}'
     ```
 
-    Fields: `message` (required), `name`, `agentId`, `sessionKey` (requires `hooks.allowRequestSessionKey=true`), `sessionMode` (`isolated` or `persistent`), `idempotencyKey`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, `timeoutSeconds`.
+    Fields: `message` (required), `name`, `agentId`, `sessionKey` (requires `hooks.allowRequestSessionKey=true`), `sessionMode` (`isolated` or `persistent`), `idempotencyKey`, `wakeMode`, `deliver`, `channel`, `to`, `accountId`, `model`, `thinking`, `timeoutSeconds`.
 
     Set `sessionMode: "persistent"` only when repeated deliveries should reuse prior context. Direct persistent hooks require an explicit `sessionKey`, `hooks.allowRequestSessionKey: true`, and a non-empty `hooks.allowedSessionKeyPrefixes` allowlist. Omit `sessionMode` or use `"isolated"` for a fresh run session.
 
@@ -543,6 +543,7 @@ Query-string tokens are rejected.
     - Announce delivery requires a concrete channel; webhook hooks never inherit the main session's `last` channel or recipient.
     - Setting `deliver: false` keeps the run completion-only and ignores any delivery destination.
     - Supplying both a concrete `channel` and `to` enables direct announce delivery.
+    - Set `accountId` with `channel` and `to` to select a configured account on multi-account channels.
 
     The HTTP response waits only for runner admission, not for the agent turn to finish. A `200` may take up to 15 seconds and means the run entered its agent runner. Pre-run failures return `{ ok: false, error, runId }` with:
 

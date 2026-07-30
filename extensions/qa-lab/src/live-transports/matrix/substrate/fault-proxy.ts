@@ -85,6 +85,7 @@ export type MatrixQaFaultProxyHit = {
 type MatrixQaFaultProxy = {
   baseUrl: string;
   hits(): MatrixQaFaultProxyHit[];
+  setTargetBaseUrl(targetBaseUrl: string): void;
   stop(): Promise<void>;
 };
 
@@ -326,7 +327,7 @@ export async function startMatrixQaFaultProxy(
     targetBaseUrl: string;
   },
 ): Promise<MatrixQaFaultProxy> {
-  const targetBaseUrl = new URL(params.targetBaseUrl);
+  let targetBaseUrl = new URL(params.targetBaseUrl);
   const maxRequestBytes = params.maxRequestBytes ?? DEFAULT_FAULT_PROXY_REQUEST_MAX_BYTES;
   const maxResponseBytes = params.maxResponseBytes ?? DEFAULT_FAULT_PROXY_RESPONSE_MAX_BYTES;
   const hits: MatrixQaFaultProxyHit[] = [];
@@ -461,6 +462,9 @@ export async function startMatrixQaFaultProxy(
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     hits: () => [...hits],
+    setTargetBaseUrl(nextTargetBaseUrl) {
+      targetBaseUrl = new URL(nextTargetBaseUrl);
+    },
     stop: async () => {
       const closePromise = new Promise<void>((resolve, reject) => {
         server.close((error) => {

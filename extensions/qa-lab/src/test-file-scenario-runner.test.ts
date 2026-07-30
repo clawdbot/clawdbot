@@ -535,7 +535,7 @@ describe("qa test file scenario runner", () => {
 
   it.each([
     { evidence: "missing", expectedFailure: /without writing fresh producer QA evidence/u },
-    { evidence: "stale", expectedFailure: /not written by the current scenario run/u },
+    { evidence: "stale", expectedFailure: /without writing fresh producer QA evidence/u },
     { evidence: "empty", expectedFailure: /without reporting an executed producer check/u },
     { evidence: "malformed", expectedFailure: /invalid JSON/u },
     { evidence: "outside", expectedFailure: /inside its scenario output directory/u },

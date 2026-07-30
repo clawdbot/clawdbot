@@ -524,14 +524,17 @@ describe("createMattermostDraftStream forceNewMessage", () => {
     expect(stream.resolveFinalText("First block\n\nSecond block complete")).toEqual({
       kind: "remaining",
       text: "Second block complete",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
     });
     expect(stream.resolveFinalText("Second block complete")).toEqual({
       kind: "full",
       text: "Second block complete",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
     });
     expect(stream.resolveFinalText("First block extended")).toEqual({
       kind: "full",
       text: "First block extended",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
     });
   });
 
@@ -554,12 +557,42 @@ describe("createMattermostDraftStream forceNewMessage", () => {
     expect(stream.resolveFinalText("First block\n\nFinal after tool")).toEqual({
       kind: "remaining",
       text: "Final after tool",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
     });
     expect(stream.resolveFinalText("First block extended")).toEqual({
       kind: "full",
       text: "First block extended",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
     });
-    expect(stream.resolveFinalText("First block")).toEqual({ kind: "already-delivered" });
+    expect(stream.resolveFinalText("First block")).toEqual({
+      kind: "already-delivered",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
+    });
+    expect(stream.resolveFinalText("")).toEqual({
+      kind: "full",
+      text: "",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
+    });
+  });
+
+  it("uses provider-finalized content from a boundary edit", async () => {
+    const { client, requestMock } = createMockClient();
+    const stream = createMattermostDraftStream({
+      client,
+      channelId: "channel-1",
+      throttleMs: 0,
+    });
+
+    stream.updateAssistantText("Draft block");
+    await stream.flush();
+    requestMock.mockResolvedValueOnce({ id: "post-1", message: "Provider-finalized block" });
+    stream.updateAssistantText("Completed block");
+    await stream.forceNewMessage();
+
+    expect(stream.resolveFinalText("Completed block")).toEqual({
+      kind: "already-delivered",
+      publishedParts: [{ messageId: "post-1", content: "Provider-finalized block" }],
+    });
   });
 
   it("keeps the canonical final when an assistant boundary fails to publish", async () => {
@@ -577,7 +610,59 @@ describe("createMattermostDraftStream forceNewMessage", () => {
     await stream.forceNewMessage();
 
     const finalText = "First block complete\n\nFinal after failure";
-    expect(stream.resolveFinalText(finalText)).toEqual({ kind: "full", text: finalText });
+    expect(stream.resolveFinalText(finalText)).toEqual({
+      kind: "remaining",
+      text: "complete\n\nFinal after failure",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
+    });
+  });
+
+  it("retains posts published before a later boundary chunk fails", async () => {
+    const { client, requestMock } = createMockClient();
+    const stream = createMattermostDraftStream({
+      client,
+      channelId: "channel-1",
+      throttleMs: 0,
+      chunkText: () => ["First half", "Second half"],
+    });
+
+    stream.updateAssistantText("First half Second half");
+    await stream.flush();
+    requestMock
+      .mockResolvedValueOnce({ id: "post-1", message: "First half" })
+      .mockRejectedValueOnce(new Error("second chunk failed"));
+    await stream.forceNewMessage();
+
+    const finalText = "First half Second half\n\nFinal after failure";
+    expect(stream.resolveFinalText(finalText)).toEqual({
+      kind: "remaining",
+      text: "Second half\n\nFinal after failure",
+      publishedParts: [{ messageId: "post-1", content: "First half" }],
+    });
+  });
+
+  it("does not strip a requested prefix rewritten by the provider", async () => {
+    const { client, requestMock } = createMockClient();
+    const stream = createMattermostDraftStream({
+      client,
+      channelId: "channel-1",
+      throttleMs: 0,
+      chunkText: () => ["First half", "Second half"],
+    });
+
+    stream.updateAssistantText("First half Second half");
+    await stream.flush();
+    requestMock
+      .mockResolvedValueOnce({ id: "post-1", message: "Provider rewrite" })
+      .mockRejectedValueOnce(new Error("second chunk failed"));
+    await stream.forceNewMessage();
+
+    const finalText = "First half Second half\n\nFinal after failure";
+    expect(stream.resolveFinalText(finalText)).toEqual({
+      kind: "full",
+      text: finalText,
+      publishedParts: [{ messageId: "post-1", content: "Provider rewrite" }],
+    });
   });
 });
 

@@ -4431,9 +4431,17 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       "validate_macos_release_request",
     );
     const stepNames = validateJob.steps?.map((step) => step.name) ?? [];
+    const buildControlUi = validateJob.steps?.find((step) => step.name === "Build Control UI");
 
     expect(stepNames).not.toContain("Ensure matching GitHub release exists");
     expect(macosRelease.jobs?.validate_macos_release_request).toBeDefined();
+    expect(buildControlUi?.env?.OPENCLAW_CONTROL_UI_RELEASE_BUILD).toBe("1");
+  });
+
+  it("classifies fast pretag Control UI output as a release artifact", () => {
+    const script = readFileSync("scripts/release-fast-pretag-check.sh", "utf8");
+
+    expect(script).toContain("OPENCLAW_CONTROL_UI_RELEASE_BUILD=1 pnpm ui:build");
   });
 
   it("keeps every tracked repository skill visible to Git-aware syncs", () => {

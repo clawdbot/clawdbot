@@ -69,10 +69,10 @@ describe("memory search provenance", () => {
         endLine: 1,
       });
       db.prepare(
-        `UPDATE memory_index_chunk_provenance
-         SET origin_class = ?, session_kind = ?, observed_at = ?, supersedes_key = ?
-         WHERE chunk_id = ?`,
-      ).run("owner", "interactive", 1234, "tea-preference", "provenance-hit");
+        `INSERT INTO memory_index_chunk_provenance (
+           chunk_id, origin_class, session_kind, observed_at, supersedes_key
+         ) VALUES (?, ?, ?, ?, ?)`,
+      ).run("provenance-hit", "owner", "interactive", 1234, "tea-preference");
 
       const results = await searchKeyword({
         db,

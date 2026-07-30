@@ -613,6 +613,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     ]);
     const advertised = isGatewayMethodAdvertised(gatewaySnapshot, "models.probe");
     const blockedReason = this.mutationBlockedReason();
+    const configuredModels = buildSelectableDefaultModels(data.models, defaults);
     const body = renderModelProviders({
       connected: gatewaySnapshot.phase === "connected",
       loading: gatewaySnapshot.phase === "connected" && this.data === null,
@@ -622,7 +623,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       costDays: MODEL_PROVIDERS_COST_DAYS,
       credentialAgentLabel: selectedAgentLabel,
       cards,
-      configuredModels: buildSelectableDefaultModels(data.models, defaults),
+      configuredModels,
       defaultModels: defaults,
       defaultModelsDirty: this.defaultsDraft !== null,
       thinkingLevel,
@@ -697,6 +698,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         runtimeConfig.patchForm(["agents", "defaults", "thinkingDefault"], level),
       onFastModeChange: (mode: FastMode) =>
         runtimeConfig.patchForm(["agents", "defaults", "fastModeDefault"], mode),
+      onOpenModelSetup: () => this.context.navigate("model-setup"),
     });
     return html`
       <section class="content-header">
@@ -715,7 +717,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
             selectedId: this.selectedAgentId,
           })}
           <button class="btn" @click=${() => this.context.navigate("model-setup")}>
-            ${t("modelSetup.heading")}
+            ${t("tabs.modelSetup")}
           </button>
         </div>
       </section>

@@ -47,7 +47,7 @@ async function waitForCronRuns(count: number): Promise<void> {
 
 function cronRunCall(index = 0): {
   sessionKey?: string;
-  job?: { sessionTarget?: string };
+  job?: { sessionTarget?: string; delivery?: { accountId?: string } };
 } {
   const call = cronIsolatedRun.mock.calls.at(index)?.[0];
   if (!call || typeof call !== "object") {
@@ -242,6 +242,40 @@ describe("gateway hook session mode", () => {
 
       expect(cronRunCall(0).job?.sessionTarget).toBe("isolated");
       expect(cronRunCall(1).job?.sessionTarget).toBe("session:hook:mode:42");
+    });
+  });
+
+  test("keeps account id in the idempotency dispatch scope", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+    };
+    await withGatewayServer(async ({ port }) => {
+      mockRunsOk();
+      const headers = { "Idempotency-Key": "hook-idem-account-id" };
+      const basePayload = {
+        message: "Do it",
+        channel: "discord",
+        to: "channel-1",
+      };
+      const work = await postHook(
+        port,
+        "/hooks/agent",
+        { ...basePayload, accountId: "work" },
+        headers,
+      );
+      expect(work.status).toBe(200);
+      const personal = await postHook(
+        port,
+        "/hooks/agent",
+        { ...basePayload, accountId: "personal" },
+        headers,
+      );
+      expect(personal.status).toBe(200);
+      await waitForCronRuns(2);
+
+      expect(cronRunCall(0).job?.delivery?.accountId).toBe("work");
+      expect(cronRunCall(1).job?.delivery?.accountId).toBe("personal");
     });
   });
 });
