@@ -41,6 +41,7 @@ import {
   shouldSuppressAssistantEventForLiveChat,
 } from "./live-chat-projector.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
+import { hasSessionsChangedReceiver } from "./server-broadcast.js";
 import { isChatAbortMarkerCurrent } from "./server-chat-state.js";
 import type {
   BufferedAgentEvent,
@@ -817,7 +818,7 @@ export function createAgentEventHandler({
             return;
           }
           const sessionEventConnIds = sessionEventSubscribers.getAll();
-          if (sessionEventConnIds.size === 0) {
+          if (!hasSessionsChangedReceiver(sessionEventConnIds)) {
             return;
           }
           broadcastToConnIds(
@@ -1661,7 +1662,7 @@ export function createAgentEventHandler({
         );
       });
       const sessionEventConnIds = sessionEventSubscribers.getAll();
-      if (sessionEventConnIds.size > 0) {
+      if (hasSessionsChangedReceiver(sessionEventConnIds)) {
         broadcastToConnIds(
           "sessions.changed",
           {

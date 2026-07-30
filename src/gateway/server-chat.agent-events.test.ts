@@ -63,6 +63,8 @@ vi.mock("./session-utils.js", () => {
 
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { subscribePluginSessionsChanged } from "../plugins/gateway-events.js";
+import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   emitAgentEvent,
   emitAgentEvents,
@@ -121,6 +123,7 @@ describe("agent event handler", () => {
 
   function createHarness(params?: {
     now?: number;
+    broadcastToConnIds?: AgentEventHandlerOptions["broadcastToConnIds"];
     resolveSessionKeyForRun?: (runId: string) => string | undefined;
     lifecycleErrorRetryGraceMs?: number;
     isChatSendRunActive?: (runId: string) => boolean;
@@ -147,7 +150,7 @@ describe("agent event handler", () => {
 
     const handler = createAgentEventHandler({
       broadcast,
-      broadcastToConnIds,
+      broadcastToConnIds: params?.broadcastToConnIds ?? broadcastToConnIds,
       nodeSendToSession,
       agentRunSeq,
       chatRunState,
@@ -3191,6 +3194,28 @@ describe("agent event handler", () => {
     expect(logErrorMock).toHaveBeenCalledWith(
       "gateway: start session persistence failed session=global run=run-global-work error=Error: start disk full",
     );
+  });
+
+  it("publishes lifecycle session changes to plugins without websocket subscribers", async () => {
+    const received = vi.fn();
+    const unsubscribe = subscribePluginSessionsChanged(received);
+    const { broadcastToConnIds } = createGatewayBroadcaster({ clients: new Set() });
+    const { chatRunState, handler } = createHarness({ broadcastToConnIds });
+    registerChatRun(chatRunState, "run-plugin-start", "global", "client-plugin-start", {
+      agentId: "work",
+    });
+
+    try {
+      emitAgentEvent(handler, "run-plugin-start", "lifecycle", { phase: "start" });
+
+      await waitForFast(() => {
+        expect(received).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionKey: "global", agentId: "work", phase: "start" }),
+        );
+      });
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("routes hidden selected-agent global chat events only to matching subscribers", () => {

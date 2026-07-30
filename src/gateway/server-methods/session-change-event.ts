@@ -1,5 +1,6 @@
 // Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { hasSessionsChangedReceiver } from "../server-broadcast.js";
 import { buildGatewaySessionEventFields } from "../session-event-payload.js";
 import { invalidateSessionSharingSnapshot } from "../session-sharing.js";
 import { loadGatewaySessionRow } from "../session-utils.js";
@@ -25,7 +26,7 @@ export function emitSessionsChanged(
 ) {
   invalidateSessionSharingSnapshot(payload.sessionKey);
   const connIds = context.getSessionEventSubscriberConnIds();
-  if (connIds.size === 0) {
+  if (!hasSessionsChangedReceiver(connIds)) {
     return;
   }
   const sessionRow = payload.sessionKey

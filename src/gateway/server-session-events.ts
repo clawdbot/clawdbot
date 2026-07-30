@@ -18,6 +18,7 @@ import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-eve
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
+import { hasSessionsChangedReceiver } from "./server-broadcast.js";
 import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
@@ -39,10 +40,6 @@ import {
 
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
-
-function hasSessionsChangedReceiver(connIds: ReadonlySet<string>): boolean {
-  return connIds.size > 0 || hasPluginSessionsChangedSubscribers();
-}
 
 function readMessageIdempotencyKey(message: unknown): string | undefined {
   if (!message || typeof message !== "object" || Array.isArray(message)) {

@@ -5,7 +5,10 @@ import {
 // Gateway WebSocket broadcaster.
 // Applies event scope guards and slow-consumer handling before sending frames.
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
-import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
+import {
+  hasPluginSessionsChangedSubscribers,
+  queuePluginSessionsChanged,
+} from "../plugins/gateway-events.js";
 import { isBrowserCopilotClient } from "../utils/message-channel.js";
 import {
   ADMIN_SCOPE,
@@ -185,6 +188,15 @@ function hasEventScope(
     return scopes.includes(TALK_SCOPE) || scopes.includes(WRITE_SCOPE);
   }
   return required.some((scope) => scopes.includes(scope));
+}
+
+/**
+ * Emit guards must agree with the fan-out below: plugin `onSessionsChanged`
+ * subscribers receive `sessions.changed` even when no client holds a
+ * `sessions.subscribe` RPC subscription, so they count as receivers.
+ */
+export function hasSessionsChangedReceiver(connIds: ReadonlySet<string>): boolean {
+  return connIds.size > 0 || hasPluginSessionsChangedSubscribers();
 }
 
 export function createGatewayBroadcaster(params: {
