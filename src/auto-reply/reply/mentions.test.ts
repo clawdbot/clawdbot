@@ -208,6 +208,15 @@ describe("derived mention matching with decorated identity names", () => {
     expect(matchesMentionPatterns("clawdbot status", regexes)).toBe(false);
   });
 
+  it("keeps a separator required when a gap mixes whitespace and decoration", () => {
+    const regexes = buildMentionRegexes(configForName("Clawd 🦋 Bot"), "decorated-agent");
+
+    expect(matchesMentionPatterns("clawd bot status", regexes)).toBe(true);
+    expect(matchesMentionPatterns("clawd🦋bot status", regexes)).toBe(true);
+    expect(matchesMentionPatterns("clawd 🦋 bot status", regexes)).toBe(true);
+    expect(matchesMentionPatterns("clawdbot status", regexes)).toBe(false);
+  });
+
   it("only accepts the name's own decoration, not arbitrary punctuation", () => {
     const regexes = buildMentionRegexes(configForName("Papillon🦋Bot"), "decorated-agent");
 

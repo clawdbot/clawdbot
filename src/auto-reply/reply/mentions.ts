@@ -67,8 +67,13 @@ function deriveNamePattern(name: string): string {
   for (const [index, token] of tokens.entries()) {
     if (index > 0) {
       const gap = segments[index * 2] ?? "";
-      // Plain spacing stays required; decorated gaps are optional separators.
-      pattern += /^\s+$/.test(gap) ? String.raw`\s+` : `[\\s${decorationClassBody(gap)}]*`;
+      const decorations = decorationClassBody(gap);
+      // Plain spacing stays required; decoration-only gaps are optional
+      // separators. A gap carrying whitespace keeps a one-separator floor so
+      // the bare concatenation of the surrounding words never matches.
+      pattern += decorations
+        ? `[\\s${decorations}]${/\s/u.test(gap) ? "+" : "*"}`
+        : String.raw`\s+`;
     }
     pattern += escapeRegExp(token);
   }
