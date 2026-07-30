@@ -15,7 +15,9 @@ import { resolveNodeOpenClawArgv } from "./exec-approvals-lifecycle-node.js";
 import {
   isOpenClawExecutablePattern,
   matchesOpenClawProcessPattern,
+  matchesOpenClawUnitPattern,
 } from "./exec-approvals-lifecycle-patterns.js";
+import { classifyOpenClawApprovalPolicyArgv } from "./exec-approvals-lifecycle-policy.js";
 import { resolvePowerShellStartProcessOpenClawArgv } from "./exec-approvals-lifecycle-powershell.js";
 import { resolveLifecyclePackageRunnerArgv } from "./exec-approvals-lifecycle-runners.js";
 import {
@@ -243,6 +245,10 @@ function classifyOpenClawArgv(argv: readonly string[]): boolean {
 
   const command = normalizedToken(argv[index]);
   switch (command) {
+    case "approvals":
+    case "exec-approvals":
+    case "exec-policy":
+      return classifyOpenClawApprovalPolicyArgv(command, argv, index + 1);
     case "config":
       return classifyOpenClawConfigArgv(argv, index + 1);
     case "daemon":
@@ -321,12 +327,12 @@ function classifySystemctl(argv: readonly string[]): boolean {
       .slice(actionIndex + 1)
       .some((token) => SYSTEMCTL_MUTATIONS.has(normalizedToken(token)));
     const optionBeforeAction = argv.slice(1, actionIndex).some((token) => token.startsWith("-"));
-    return optionBeforeAction && concealedMutation && argv.some(looksLikeOpenClaw);
+    return optionBeforeAction && concealedMutation && argv.some(matchesOpenClawUnitPattern);
   }
   if (action === "kill" && argvUsesSignalZero(argv)) {
     return false;
   }
-  return argv.slice(actionIndex + 1).some(looksLikeOpenClaw);
+  return argv.slice(actionIndex + 1).some(matchesOpenClawUnitPattern);
 }
 
 function classifyServiceManager(argv: readonly string[]): boolean {

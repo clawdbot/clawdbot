@@ -34,6 +34,9 @@ const LIFECYCLE_RPC_METHODS = new Set([
   "config.apply",
   "config.patch",
   "config.set",
+  "exec.approval.resolve",
+  "exec.approvals.node.set",
+  "exec.approvals.set",
   "gateway.restart.request",
   "update.run",
 ]);

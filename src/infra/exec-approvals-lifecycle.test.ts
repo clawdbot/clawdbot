@@ -41,6 +41,32 @@ const mutationCases: Array<[string, string[]]> = [
   ["openclaw gateway call config.apply", ["openclaw", "gateway", "call", "config.apply"]],
   ["openclaw gateway call config.set", ["openclaw", "gateway", "call", "config.set"]],
   [
+    "openclaw gateway call exec.approvals.set",
+    ["openclaw", "gateway", "call", "exec.approvals.set"],
+  ],
+  [
+    "openclaw gateway call exec.approvals.node.set",
+    ["openclaw", "gateway", "call", "exec.approvals.node.set"],
+  ],
+  [
+    "openclaw gateway call exec.approval.resolve",
+    ["openclaw", "gateway", "call", "exec.approval.resolve"],
+  ],
+  ["openclaw exec-policy preset yolo", ["openclaw", "exec-policy", "preset", "yolo"]],
+  [
+    "openclaw exec-policy set --security full --ask off",
+    ["openclaw", "exec-policy", "set", "--security", "full", "--ask", "off"],
+  ],
+  ["openclaw approvals set --stdin", ["openclaw", "approvals", "set", "--stdin"]],
+  [
+    "openclaw approvals resolve abc allow-once",
+    ["openclaw", "approvals", "resolve", "abc", "allow-once"],
+  ],
+  [
+    "openclaw approvals allowlist add /usr/bin/rg",
+    ["openclaw", "approvals", "allowlist", "add", "/usr/bin/rg"],
+  ],
+  [
     "openclaw config set gateway.port 19001",
     ["openclaw", "config", "set", "gateway.port", "19001"],
   ],
@@ -48,6 +74,7 @@ const mutationCases: Array<[string, string[]]> = [
   ["openclaw config unset gateway.port", ["openclaw", "config", "unset", "gateway.port"]],
   ["openclaw doctor --fix", ["openclaw", "doctor", "--fix"]],
   ["openclaw doctor --repair", ["openclaw", "doctor", "--repair"]],
+  ["openclaw doctor --yes", ["openclaw", "doctor", "--yes"]],
   ["openclaw doctor --generate-gateway-token", ["openclaw", "doctor", "--generate-gateway-token"]],
   ["openclaw update --yes", ["openclaw", "update", "--yes"]],
   ["openclaw uninstall --all --yes", ["openclaw", "uninstall", "--all", "--yes"]],
@@ -71,6 +98,10 @@ const mutationCases: Array<[string, string[]]> = [
   [
     "systemctl --user restart openclaw-gateway.service",
     ["systemctl", "--user", "restart", "openclaw-gateway.service"],
+  ],
+  [
+    "systemctl restart 'open*claw-gateway.service'",
+    ["systemctl", "restart", "open*claw-gateway.service"],
   ],
   [
     "systemctl -H host restart openclaw-gateway.service",
@@ -278,6 +309,7 @@ const mutationCases: Array<[string, string[]]> = [
   ["xargs -I{} {} gateway restart", ["xargs", "-I{}", "{}", "gateway", "restart"]],
   ["xargs -i{} {} gateway restart", ["xargs", "-i{}", "{}", "gateway", "restart"]],
   ["xargs -J{} {} gateway restart", ["xargs", "-J{}", "{}", "gateway", "restart"]],
+  ["xargs -I{} dash -c {}", ["xargs", "-I{}", "dash", "-c", "{}"]],
   ["xargs -I{} env {} gateway restart", ["xargs", "-I{}", "env", "{}", "gateway", "restart"]],
   [
     "xargs env -a '' openclaw gateway restart",
@@ -305,6 +337,9 @@ const nonMutationCases: Array<[string, string[]]> = [
   ["openclaw config validate", ["openclaw", "config", "validate"]],
   ["openclaw doctor --lint", ["openclaw", "doctor", "--lint"]],
   ["openclaw doctor --post-upgrade", ["openclaw", "doctor", "--post-upgrade"]],
+  ["openclaw exec-policy show", ["openclaw", "exec-policy", "show"]],
+  ["openclaw approvals pending", ["openclaw", "approvals", "pending"]],
+  ["openclaw approvals get", ["openclaw", "approvals", "get"]],
   [
     "openclaw config set gateway.port 19001 --dry-run",
     ["openclaw", "config", "set", "gateway.port", "19001", "--dry-run"],

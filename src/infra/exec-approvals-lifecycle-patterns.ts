@@ -85,3 +85,17 @@ export function matchesOpenClawProcessPattern(value: string | undefined): boolea
     return false;
   }
 }
+
+/** Return true when a system service/unit glob can select an OpenClaw unit. */
+export function matchesOpenClawUnitPattern(value: string | undefined): boolean {
+  const pattern = (value ?? "").trim().toLowerCase().replace(/["']/gu, "");
+  if (pattern.includes("openclaw")) {
+    return true;
+  }
+  return (
+    /[*?[{]/u.test(pattern) &&
+    ["openclaw-gateway.service", "openclaw.service", "com.openclaw.gateway"].some((unit) =>
+      globPatternToRegExp(pattern).test(unit),
+    )
+  );
+}

@@ -1,0 +1,53 @@
+// Classifies commands that mutate OpenClaw's own exec approval policy.
+const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "--version"]);
+const OPTIONS_WITH_VALUE = new Set([
+  "--agent",
+  "--ask",
+  "--ask-fallback",
+  "--file",
+  "--host",
+  "--node",
+  "--reason",
+  "--security",
+  "--timeout",
+]);
+
+function optionName(token: string): string {
+  return token.trim().toLowerCase().split("=", 1)[0] ?? "";
+}
+
+function positionals(argv: readonly string[], start: number): string[] {
+  const values: string[] = [];
+  for (let index = start; index < argv.length; index += 1) {
+    const token = argv[index]?.trim() ?? "";
+    const name = optionName(token);
+    if (HELP_OR_VERSION_FLAGS.has(token)) {
+      return [];
+    }
+    if (OPTIONS_WITH_VALUE.has(name)) {
+      if (!token.includes("=")) {
+        index += 1;
+      }
+    } else if (!token.startsWith("-") || token === "-") {
+      values.push(token.toLowerCase());
+    }
+  }
+  return values;
+}
+
+/** Return true when approvals or exec-policy argv changes or resolves approval state. */
+export function classifyOpenClawApprovalPolicyArgv(
+  command: string,
+  argv: readonly string[],
+  start: number,
+): boolean {
+  const args = positionals(argv, start);
+  const action = args[0] ?? "";
+  if (command === "exec-policy") {
+    return ["preset", "set"].includes(action);
+  }
+  if (["resolve", "set"].includes(action)) {
+    return true;
+  }
+  return action === "allowlist" && ["add", "remove"].includes(args[1] ?? "");
+}

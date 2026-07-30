@@ -6,6 +6,7 @@ const MUTATION_FLAGS = new Set([
   "--generate-gateway-token",
   "--non-interactive",
   "--repair",
+  "--yes",
 ]);
 const OPTIONS_WITH_VALUE = new Set([
   "--only",
