@@ -461,6 +461,15 @@ describe("continue_delegate tool", () => {
       expected: "attachments_invalid_name (attachmentIndex=1)",
     },
     {
+      label: "overlong UTF-8 basename",
+      attachments: [
+        { name: "safe.txt", content: "12" },
+        { name: "é".repeat(128), content: "34" },
+      ],
+      expected:
+        "attachments_invalid_name (attachmentIndex=1 basenameBytes=256 maxBasenameBytes=255)",
+    },
+    {
       label: "duplicate name",
       attachments: [
         { name: "PRIVATE_DUPLICATE_NAME.txt", content: "12" },

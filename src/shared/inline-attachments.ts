@@ -119,9 +119,10 @@ function validateInlineAttachmentName(name: string, attachmentIndex: number): vo
   ) {
     throw new Error(`attachments_invalid_name (${index} name=${name})`);
   }
-  if (Buffer.byteLength(name, "utf8") > MAX_INLINE_ATTACHMENT_BASENAME_BYTES) {
+  const basenameBytes = Buffer.byteLength(name, "utf8");
+  if (basenameBytes > MAX_INLINE_ATTACHMENT_BASENAME_BYTES) {
     throw new Error(
-      `attachments_invalid_name (${index} too long: ${MAX_INLINE_ATTACHMENT_BASENAME_BYTES} bytes)`,
+      `attachments_invalid_name (${index} basenameBytes=${basenameBytes} maxBasenameBytes=${MAX_INLINE_ATTACHMENT_BASENAME_BYTES})`,
     );
   }
   if (/[. ]$/u.test(name)) {

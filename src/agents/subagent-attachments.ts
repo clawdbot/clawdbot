@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { privateFileStore } from "../infra/private-file-store.js";
 import {
   DEFAULT_INLINE_ATTACHMENT_SNAPSHOT_LIMITS,
+  MAX_INLINE_ATTACHMENT_BASENAME_BYTES,
   prepareInlineAttachmentSnapshots,
   validateInlineAttachmentSnapshots,
   type InlineAttachment,
@@ -145,6 +146,21 @@ function redactContinuationAttachmentValidationError(params: {
   const code = message.match(/^(attachments_[a-z0-9_]+)/)?.[1];
   if (!code) {
     return "attachments_validation_failed";
+  }
+  const basenameLimit = message.match(
+    /^attachments_invalid_name \(attachmentIndex=(\d+) basenameBytes=(\d+) maxBasenameBytes=(\d+)\)$/,
+  );
+  if (basenameLimit) {
+    const [, attachmentIndex, rawBasenameBytes, rawMaxBasenameBytes] = basenameLimit;
+    const basenameBytes = Number(rawBasenameBytes);
+    const maxBasenameBytes = Number(rawMaxBasenameBytes);
+    if (
+      Number.isSafeInteger(basenameBytes) &&
+      basenameBytes > maxBasenameBytes &&
+      maxBasenameBytes === MAX_INLINE_ATTACHMENT_BASENAME_BYTES
+    ) {
+      return `${code} (attachmentIndex=${attachmentIndex} basenameBytes=${basenameBytes} maxBasenameBytes=${MAX_INLINE_ATTACHMENT_BASENAME_BYTES})`;
+    }
   }
   if (code === "attachments_file_count_exceeded") {
     return `${code} (maxFiles=${limits.maxFiles})`;
