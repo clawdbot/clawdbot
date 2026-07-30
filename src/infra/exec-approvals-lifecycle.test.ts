@@ -11,6 +11,7 @@ function requiresApproval(command: string, argv: string[]): boolean {
 const mutationCases: Array<[string, string[]]> = [
   ["openclaw gateway restart", ["openclaw", "gateway", "restart"]],
   ["openclaw gateway", ["openclaw", "gateway"]],
+  ["openclaw gateway --token secret", ["openclaw", "gateway", "--token", "secret"]],
   ["openclaw daemon stop", ["openclaw", "daemon", "stop"]],
   ["openclaw gateway call update.run", ["openclaw", "gateway", "call", "update.run"]],
   ["openclaw update --yes", ["openclaw", "update", "--yes"]],
@@ -34,7 +35,15 @@ const mutationCases: Array<[string, string[]]> = [
   ],
   ["env -S 'openclaw gateway restart'", ["env", "-S", "openclaw gateway restart"]],
   ['sh -c "openclaw gateway restart"', ["sh", "-c", "openclaw gateway restart"]],
+  [
+    `sh -c 'openclaw gateway "$1"' sh restart`,
+    ["sh", "-c", `openclaw gateway "$1"`, "sh", "restart"],
+  ],
   ["npx openclaw@latest gateway restart", ["npx", "openclaw@latest", "gateway", "restart"]],
+  [
+    "npx -p openclaw openclaw gateway restart",
+    ["npx", "-p", "openclaw", "openclaw", "gateway", "restart"],
+  ],
   [
     "pnpm -C repo openclaw gateway restart",
     ["pnpm", "-C", "repo", "openclaw", "gateway", "restart"],
@@ -43,6 +52,11 @@ const mutationCases: Array<[string, string[]]> = [
     "node /opt/openclaw/dist/entry.js gateway restart",
     ["node", "/opt/openclaw/dist/entry.js", "gateway", "restart"],
   ],
+  [
+    `powershell -NoProfile -Command "kill openclaw"`,
+    ["powershell", "-NoProfile", "-Command", "kill openclaw"],
+  ],
+  ["Get-Process OpenClaw | Stop-Process", ["Get-Process", "OpenClaw", "|", "Stop-Process"]],
 ];
 
 const nonMutationCases: Array<[string, string[]]> = [
@@ -68,6 +82,10 @@ const nonMutationCases: Array<[string, string[]]> = [
   ["pidof openclaw", ["pidof", "openclaw"]],
   ["pkill -0 openclaw", ["pkill", "-0", "openclaw"]],
   ["echo openclaw gateway restart", ["echo", "openclaw", "gateway", "restart"]],
+  [
+    `echo 'Get-Service OpenClaw | Restart-Service'`,
+    ["echo", "Get-Service OpenClaw | Restart-Service"],
+  ],
 ];
 
 describe("OpenClaw lifecycle exec approvals", () => {

@@ -4,7 +4,11 @@ import { resolveCarrierCommandArgv } from "./command-carriers.js";
 import { unwrapKnownDispatchWrapperInvocation } from "./dispatch-wrapper-resolution.js";
 import type { ExecCommandSegment } from "./exec-command-analysis-types.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
-import { extractShellWrapperInlineCommand } from "./shell-wrapper-resolution.js";
+import { POSIX_INLINE_COMMAND_FLAGS, resolveInlineCommandMatch } from "./shell-inline-command.js";
+import {
+  extractShellWrapperInlineCommand,
+  POSIX_PARSEABLE_SHELL_WRAPPERS,
+} from "./shell-wrapper-resolution.js";
 
 const MAX_NESTED_COMMAND_DEPTH = 8;
 const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "--version"]);
@@ -18,16 +22,15 @@ const GATEWAY_OPTIONS = new Set([
   "--port",
   "--profile",
 ]);
-const GATEWAY_MUTATIONS = new Set([
-  "install",
-  "kill",
-  "restart",
-  "run",
-  "start",
-  "stop",
-  "uninstall",
+const GATEWAY_READ_ONLY = new Set([
+  "diagnostics",
+  "discover",
+  "health",
+  "probe",
+  "stability",
+  "status",
+  "usage-cost",
 ]);
-const GATEWAY_READ_ONLY = new Set(["discover", "health", "probe", "status"]);
 const LIFECYCLE_RPC_METHODS = new Set(["gateway.restart.request", "update.run"]);
 const LAUNCHCTL_MUTATIONS = new Set([
   "attach",
@@ -174,7 +177,9 @@ function classifyGatewayArgv(argv: readonly string[], start: number): boolean {
   if (GATEWAY_READ_ONLY.has(action)) {
     return false;
   }
-  return GATEWAY_MUTATIONS.has(action);
+  // Unknown gateway forms stay protected because a value-taking runtime option
+  // can otherwise be mistaken for a subcommand and hide foreground startup.
+  return true;
 }
 
 function classifyUpdateArgv(argv: readonly string[], start: number): boolean {
@@ -316,7 +321,13 @@ function classifyScheduledTask(argv: readonly string[]): boolean {
   return mutation && argv.some(looksLikeOpenClaw);
 }
 
-function classifyProcessMutation(argv: readonly string[], raw: string): boolean {
+type ShellContext = "powershell" | undefined;
+
+function classifyProcessMutation(
+  argv: readonly string[],
+  raw: string,
+  shellContext: ShellContext,
+): boolean {
   const executable = normalizeExecutableToken(argv[0] ?? "");
   if (["killall", "pkill"].includes(executable)) {
     if (
@@ -331,6 +342,9 @@ function classifyProcessMutation(argv: readonly string[], raw: string): boolean 
     return !argv.some((token) => normalizedToken(token) === "/?") && argv.some(looksLikeOpenClaw);
   }
   if (executable === "kill") {
+    if (shellContext === "powershell") {
+      return argv.slice(1).some(looksLikeOpenClaw);
+    }
     if (
       hasHelpOrVersion(argv) ||
       argv.some((token) => ["-0", "-l", "-s0", "--signal=0"].includes(normalizedToken(token)))
@@ -361,7 +375,7 @@ function resolvePackageRunnerArgv(argv: readonly string[]): string[] | null {
     if (commandFlag !== -1) {
       return null;
     }
-    const index = scanFirstPositional(argv, 1, new Set(["--package"]));
+    const index = scanFirstPositional(argv, 1, new Set(["-p", "--package"]));
     return index < argv.length ? [argv[index] ?? "", ...argv.slice(index + 1)] : null;
   }
   if (["pnpm", "yarn"].includes(executable)) {
@@ -386,7 +400,7 @@ function resolveNodeOpenClawArgv(argv: readonly string[]): string[] | null {
   return ["openclaw", ...argv.slice(scriptIndex + 1)];
 }
 
-function splitInlineCommands(command: string): string[] {
+function splitCommandText(command: string, delimiters: ReadonlySet<string>): string[] {
   const parts: string[] = [];
   let start = 0;
   let quote: "'" | '"' | null = null;
@@ -420,7 +434,7 @@ function splitInlineCommands(command: string): string[] {
       parenDepth -= 1;
       continue;
     }
-    if (parenDepth === 0 && [";", "|", "&", "\n", "\r"].includes(char)) {
+    if (parenDepth === 0 && delimiters.has(char)) {
       const part = command.slice(start, index).trim();
       if (part) {
         parts.push(part);
@@ -438,7 +452,84 @@ function splitInlineCommands(command: string): string[] {
   return parts;
 }
 
-function classifyArgv(argv: string[], raw: string, depth: number): boolean {
+function splitInlineCommands(command: string): string[] {
+  return splitCommandText(command, new Set([";", "|", "&", "\n", "\r"]));
+}
+
+function bindPosixShellPositionals(argv: string[], positionalArgv: readonly string[]): string[] {
+  const bound: string[] = [];
+  for (const token of argv) {
+    if (/^\$(?:@|\*|\{@\}|\{\*\})$/u.test(token)) {
+      bound.push(...positionalArgv.slice(1));
+      continue;
+    }
+    const replaced = token.replace(
+      /\$(?:\{([0-9]+)\}|([0-9]+))/gu,
+      (_match, bracedIndex: string | undefined, bareIndex: string | undefined) => {
+        const index = Number.parseInt(bracedIndex ?? bareIndex ?? "", 10);
+        return Number.isSafeInteger(index) ? (positionalArgv[index] ?? "") : "";
+      },
+    );
+    if (replaced) {
+      bound.push(replaced);
+    }
+  }
+  return bound;
+}
+
+function resolvePosixShellPositionals(argv: string[]): readonly string[] | null {
+  const executable = normalizeExecutableToken(argv[0] ?? "");
+  if (!POSIX_PARSEABLE_SHELL_WRAPPERS.has(executable)) {
+    return null;
+  }
+  const inlineMatch = resolveInlineCommandMatch(argv, POSIX_INLINE_COMMAND_FLAGS, {
+    allowCombinedC: true,
+  });
+  return inlineMatch.valueTokenIndex === null ? null : argv.slice(inlineMatch.valueTokenIndex + 1);
+}
+
+function isPowerShellSelection(argv: readonly string[]): boolean {
+  return (
+    ["get-process", "get-service", "gps", "gsv"].includes(
+      normalizeExecutableToken(argv[0] ?? ""),
+    ) && argv.slice(1).some(looksLikeOpenClaw)
+  );
+}
+
+function isPowerShellPipelineMutation(argv: readonly string[]): boolean {
+  return ["restart-service", "stop-process", "stop-service", "spps", "spsv"].includes(
+    normalizeExecutableToken(argv[0] ?? ""),
+  );
+}
+
+function commandHasPowerShellLifecyclePipeline(command: string): boolean {
+  const stages = splitCommandText(command, new Set(["|"]));
+  if (stages.length < 2) {
+    return false;
+  }
+  let selectedOpenClaw = false;
+  for (const stage of stages) {
+    const argv = splitShellArgs(stage);
+    if (!argv) {
+      return false;
+    }
+    if (isPowerShellSelection(argv)) {
+      selectedOpenClaw = true;
+      continue;
+    }
+    if (selectedOpenClaw && isPowerShellPipelineMutation(argv)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function classifyArgv(
+  argv: string[],
+  raw: string,
+  depth: number,
+  shellContext?: ShellContext,
+): boolean {
   if (argv.length === 0 || depth >= MAX_NESTED_COMMAND_DEPTH) {
     return false;
   }
@@ -448,24 +539,39 @@ function classifyArgv(argv: string[], raw: string, depth: number): boolean {
 
   const carried = resolveCarrierCommandArgv(argv, depth, { includeExec: true });
   if (carried?.length) {
-    return classifyArgv(carried, carried.join(" "), depth + 1);
+    return classifyArgv(carried, carried.join(" "), depth + 1, shellContext);
   }
   const dispatch = unwrapKnownDispatchWrapperInvocation(argv);
   if (dispatch.kind === "unwrapped" && dispatch.argv.length > 0) {
-    return classifyArgv(dispatch.argv, dispatch.argv.join(" "), depth + 1);
+    return classifyArgv(dispatch.argv, dispatch.argv.join(" "), depth + 1, shellContext);
   }
 
   const inline = extractShellWrapperInlineCommand(argv);
   if (inline !== null) {
+    const wrapper = normalizeExecutableToken(argv[0] ?? "");
+    const nestedShellContext: ShellContext = ["powershell", "pwsh"].includes(wrapper)
+      ? "powershell"
+      : undefined;
+    if (nestedShellContext === "powershell" && commandHasPowerShellLifecyclePipeline(inline)) {
+      return true;
+    }
+    const positionalArgv = resolvePosixShellPositionals(argv);
     return splitInlineCommands(inline).some((part) => {
       const nestedArgv = splitShellArgs(part);
-      return nestedArgv ? classifyArgv(nestedArgv, part, depth + 1) : false;
+      if (!nestedArgv) {
+        return false;
+      }
+      const boundArgv =
+        positionalArgv === null
+          ? nestedArgv
+          : bindPosixShellPositionals(nestedArgv, positionalArgv);
+      return classifyArgv(boundArgv, part, depth + 1, nestedShellContext);
     });
   }
 
   const packageArgv = resolvePackageRunnerArgv(argv);
   if (packageArgv) {
-    return classifyArgv(packageArgv, packageArgv.join(" "), depth + 1);
+    return classifyArgv(packageArgv, packageArgv.join(" "), depth + 1, shellContext);
   }
   const nodeArgv = resolveNodeOpenClawArgv(argv);
   if (nodeArgv) {
@@ -482,13 +588,7 @@ function classifyArgv(argv: string[], raw: string, depth: number): boolean {
   if (executable === "schtasks") {
     return classifyScheduledTask(argv);
   }
-  return (
-    classifyServiceManager(argv) ||
-    classifyProcessMutation(argv, raw) ||
-    /\bget-(?:process|service)\b[\s\S]{0,160}\bopenclaw\b[\s\S]{0,160}\b(?:stop-process|stop-service|restart-service)\b/iu.test(
-      raw,
-    )
-  );
+  return classifyServiceManager(argv) || classifyProcessMutation(argv, raw, shellContext);
 }
 
 /** Return true when generic exec trust must not authorize an OpenClaw self-mutation. */
@@ -499,11 +599,7 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
   envComplete?: boolean;
   segments: LifecycleSegment[];
 }): boolean {
-  if (
-    /\bget-(?:process|service)\b[\s\S]{0,160}\bopenclaw\b[\s\S]{0,160}\b(?:stop-process|stop-service|restart-service)\b/iu.test(
-      params.command,
-    )
-  ) {
+  if (commandHasPowerShellLifecyclePipeline(params.command)) {
     return true;
   }
   for (const segment of params.segments) {
