@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "declaredCapabilities": [" location ", "camera", "camera"],
+  "expectedCapabilities": ["camera", "location"],
+  "declaredCommands": ["location.get", "camera.snap"],
+  "expectedCommands": ["camera.snap", "location.get"],
+  "approvedCommands": ["camera.snap"],
+  "invocations": [
+    {
+      "command": "camera.snap",
+      "expected": "allow"
+    },
+    {
+      "command": "location.get",
+      "expected": "deny",
+      "errorCode": "COMMAND_NOT_APPROVED",
+      "errorMessage": "command is outside the current OpenClaw-approved surface"
+    }
+  ]
+}
