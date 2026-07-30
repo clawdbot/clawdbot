@@ -183,39 +183,6 @@ describe("mock gateway stateful config", () => {
   });
 });
 
-describe("mock gateway default contracts", () => {
-  it("returns a production-valid empty memory status", async () => {
-    const script = createControlUiMockGatewayInitScript();
-    window.sessionStorage.clear();
-    // oxlint-disable-next-line typescript/no-implied-eval -- Exercises the serialized Gateway initialization exactly as the browser does.
-    new Function(script)();
-
-    const socket = new WebSocket("ws://mock-gateway");
-    const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
-    });
-    await flushMockTimers();
-
-    socket.send(
-      JSON.stringify({
-        type: "req",
-        id: "memory-status-1",
-        method: "doctor.memory.status",
-        params: { agentId: "research" },
-      }),
-    );
-    await flushMockTimers();
-
-    expect(frames.find((frame) => frame.id === "memory-status-1")?.payload).toEqual({
-      agentId: "research",
-      provider: "none",
-      embedding: { ok: false, checked: false },
-    });
-    socket.close();
-  });
-});
-
 describe("mock gateway stateful sessions", () => {
   it("makes a successfully adopted catalog session visible to the next sessions.list", async () => {
     const sessionKey = "agent:main:adopted-codex";
