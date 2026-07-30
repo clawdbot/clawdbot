@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { FetchLike } from "../../../docker-runtime.js";
 
-const MATRIX_QA_DEFAULT_IMAGE = "ghcr.io/matrix-construct/tuwunel:v1.5.1";
+const MATRIX_QA_DEFAULT_IMAGE =
+  "ghcr.io/matrix-construct/tuwunel:v1.6.2@sha256:43ca6a5c13841b4e40c99370ab1518b5692953ee3b661f91ee10d002249af375";
 const MATRIX_QA_DEFAULT_SERVER_NAME = "matrix-qa.test";
 export const MATRIX_QA_INTERNAL_PORT = 8008;
 export const MATRIX_QA_SERVICE = "matrix-qa-homeserver";
