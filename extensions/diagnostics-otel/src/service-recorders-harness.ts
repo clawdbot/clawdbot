@@ -103,7 +103,7 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
       });
     }
     if (trackedSpan && trustedTrace?.spanId) {
-      completeTrackedLifecycleSpan(trustedTrace.spanId, trackedSpan, evt.ts);
+      completeTrackedLifecycleSpan(trustedTrace.traceId, trustedTrace.spanId, trackedSpan, evt.ts);
       return;
     }
     span.end(evt.ts);

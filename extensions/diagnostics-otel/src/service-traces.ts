@@ -118,7 +118,9 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
           )
         : undefined) ??
       retainedTrustedSpanContexts.get(retainedTrustedSpanContextKey(traceContext.traceId, spanId));
-    if (retained?.spanContext.traceId !== traceContext.traceId) {
+    // Keys already carry the diagnostic trace id, so a hit is the right trace. The
+    // stored SpanContext holds OTel ids, which never equal the diagnostic ids.
+    if (!retained) {
       return undefined;
     }
     if (retained.owner && !sameTrustedSpanAliasOwner(retained.owner, owner)) {
@@ -282,7 +284,10 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
       retainedTrustedSpanContexts.delete(oldestKey);
     }
   };
+  // traceId is the event's diagnostic trace id, which is what later children carry
+  // and look up by. The OTel trace id on the span is a different id space.
   const completeTrackedLifecycleSpan = (
+    traceId: string,
     spanId: string,
     span: ReturnType<typeof tracer.startSpan>,
     endTimeMs: number,
@@ -306,12 +311,7 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     }
     span.end(endTimeMs);
     for (const retainedKey of retainedKeys) {
-      retainTrustedSpanContext(
-        spanContext.traceId,
-        retainedKey.spanId,
-        spanContext,
-        retainedKey.owner,
-      );
+      retainTrustedSpanContext(traceId, retainedKey.spanId, spanContext, retainedKey.owner);
     }
   };
 
