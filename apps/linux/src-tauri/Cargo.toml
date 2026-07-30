@@ -15,15 +15,13 @@ tauri-build = { version = "2.6.3", features = [] }
 [dependencies]
 base64 = "0.23.0"
 ed25519-dalek = "3.0.0"
-futures-util = "0.3.33"
 getrandom = "0.4.3"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 mdns-sd = { version = "0.20", default-features = false }
-rustls = { version = "0.23.42", default-features = false, features = ["ring", "std", "tls12"] }
+openclaw-gateway-client = { path = "../../../crates/openclaw-gateway-client" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
-subtle = "2.6.1"
 # macos-private-api backs Quick Chat's transparent window. Tauri gates
 # `WebviewWindowBuilder::transparent` behind it on macOS, and the feature must
 # stay in sync with `app.macOSPrivateApi` in tauri.conf.json or tauri-build
@@ -43,7 +41,6 @@ tauri-plugin-single-instance = { version = "2.4.3", features = ["deep-link"] }
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-window-state = "2.4.1"
 tokio = { version = "1.53.1", features = ["macros", "sync", "time"] }
-tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
 uuid = { version = "1.24.0", features = ["v4"] }
 zeroize = "1.9.0"
 

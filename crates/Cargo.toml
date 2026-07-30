@@ -1,0 +1,3 @@
+[workspace]
+members = ["openclaw-gateway-client", "openclaw-node-host"]
+resolver = "2"
