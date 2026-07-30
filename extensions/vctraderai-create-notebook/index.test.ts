@@ -146,4 +146,22 @@ describe("vctraderai-create-notebook", () => {
     ).rejects.toThrow("notebook_json must encode a JSON object");
     expect(called).toBe(false);
   });
+  it("accepts run_id, without which the notebook is authored with no data", async () => {
+    // The executor runs in a LOCKED SANDBOX with no database or network access, so a
+    // run's equity/trades/metrics must be embedded AT AUTHORING TIME. The BFF has
+    // always been ready for this — templates.py:56 reads run_id plus the aliases
+    // source_run_id / backtest_run_id / dispatch_job_id — but this plugin had no such
+    // field, so the model could not supply one and EVERY agent-authored notebook shipped
+    // with run_id = "" and every analysis cell degraded to
+    // "No run snapshot is embedded in this notebook."
+    const captured = createCapturedPluginRegistration({ id: "vctraderai-create-notebook" });
+    plugin.register(captured.api);
+    const tool = captured.tools[0] as {
+      parameters?: { properties?: Record<string, { description?: string }> };
+    };
+    const runId = tool.parameters?.properties?.run_id;
+    expect(runId, "run_id must be an accepted parameter").toBeDefined();
+    // The consequence must be stated, or the model has no reason to pass it.
+    expect(runId?.description ?? "").toMatch(/no data|authoring time/i);
+  });
 });

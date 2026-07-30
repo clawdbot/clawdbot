@@ -36,6 +36,8 @@ export type CreateNotebookParams = {
   notebook?: Record<string, unknown>;
   notebook_json?: string;
   default_params?: Record<string, unknown>;
+  /** The run to embed. Absent = the notebook is authored with NO data. */
+  run_id?: string;
   idempotency_key?: string;
   [key: string]: unknown;
 };
@@ -142,6 +144,13 @@ export default defineToolPlugin({
           ),
           notebook_json: Type.Optional(
             Type.String({ description: "Serialized notebook document payload." }),
+          ),
+          run_id: Type.Optional(
+            Type.String({
+              description:
+                "The backtest/experiment run this notebook analyses. WITHOUT IT THE NOTEBOOK IS AUTHORED WITH NO DATA: the executor runs in a locked sandbox with no database or network access, so the run's equity, trades and metrics must be embedded AT AUTHORING TIME. Omit it and every analysis cell degrades to 'No run snapshot is embedded in this notebook.' Pass the dispatch job / run id you are reporting on.",
+              examples: ["2dd91b18-f3b2-4303-8778-27c255a7e522"],
+            }),
           ),
           default_params: Type.Optional(
             Type.Record(Type.String(), Type.Unknown(), {
