@@ -6,8 +6,9 @@ import { extractShellWrapperInlineCommand } from "./shell-wrapper-resolution.js"
 const POSIX_VARIABLE_RE = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/gu;
 const POWERSHELL_VARIABLE_RE = /\$env:([A-Za-z_][A-Za-z0-9_]*)/giu;
 const CMD_VARIABLE_RE = /%([A-Za-z_][A-Za-z0-9_]*)%/gu;
+const CMD_DELAYED_VARIABLE_RE = /!([A-Za-z_][A-Za-z0-9_]*)!/gu;
 const VARIABLE_REFERENCE_RE =
-  /\$\{[^}]+\}|\$(?:[A-Za-z_][A-Za-z0-9_]*|env:[A-Za-z_][A-Za-z0-9_]*)|%[A-Za-z_][A-Za-z0-9_]*%/iu;
+  /\$\{[^}]+\}|\$(?:[A-Za-z_][A-Za-z0-9_]*|env:[A-Za-z_][A-Za-z0-9_]*)|%[A-Za-z_][A-Za-z0-9_]*%|![A-Za-z_][A-Za-z0-9_]*!/iu;
 const POSIX_PARAMETER_OPERATOR_RE = /\$\{(?![A-Za-z_][A-Za-z0-9_]*\})[^}]+\}/u;
 const OPENCLAW_GLOBAL_FLAGS = new Set(["--dev", "--no-color"]);
 const OPENCLAW_GLOBAL_OPTIONS = new Set(["--container", "--log-level", "--profile"]);
@@ -128,7 +129,7 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
       tokens[commandIndex] ?? "",
     );
   }
-  if (["ash", "bash", "dash", "fish", "ksh", "sh", "zsh"].includes(executable)) {
+  if (["ash", "bash", "cmd", "dash", "fish", "ksh", "sh", "zsh"].includes(executable)) {
     const inline = extractShellWrapperInlineCommand([...argv]);
     if (inline === null) {
       return false;
@@ -185,7 +186,8 @@ function expandKnownEnvironmentReferences(
     .replace(POSIX_VARIABLE_RE, (match, braced: string | undefined, bare: string | undefined) =>
       replaceKnown(match, braced ?? bare ?? ""),
     )
-    .replace(CMD_VARIABLE_RE, replaceKnown);
+    .replace(CMD_VARIABLE_RE, replaceKnown)
+    .replace(CMD_DELAYED_VARIABLE_RE, replaceKnown);
 }
 
 /** Expand known references in executable command text while preserving single-quoted literals. */
@@ -224,7 +226,8 @@ export function expandLifecycleEnvironmentArgv(params: {
       .replace(POSIX_VARIABLE_RE, (_match, braced: string | undefined, bare: string | undefined) =>
         replaceVariable(braced ?? bare ?? ""),
       )
-      .replace(CMD_VARIABLE_RE, (_match, key: string) => replaceVariable(key)),
+      .replace(CMD_VARIABLE_RE, (_match, key: string) => replaceVariable(key))
+      .replace(CMD_DELAYED_VARIABLE_RE, (_match, key: string) => replaceVariable(key)),
   );
   return { argv, fieldSplitUncertain, unresolved };
 }

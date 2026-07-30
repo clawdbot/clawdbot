@@ -77,6 +77,14 @@ const mutationCases: Array<[string, string[]]> = [
     ["systemctl", "--job-mode", "replace", "restart", "openclaw-gateway.service"],
   ],
   [
+    "systemctl add-wants multi-user.target openclaw-gateway.service",
+    ["systemctl", "add-wants", "multi-user.target", "openclaw-gateway.service"],
+  ],
+  [
+    "systemctl remove-requires multi-user.target openclaw-gateway.service",
+    ["systemctl", "remove-requires", "multi-user.target", "openclaw-gateway.service"],
+  ],
+  [
     "systemctl -p --help restart openclaw-gateway.service",
     ["systemctl", "-p", "--help", "restart", "openclaw-gateway.service"],
   ],
@@ -101,6 +109,11 @@ const mutationCases: Array<[string, string[]]> = [
     String.raw`sc.exe \\localhost delete OpenClaw`,
     ["sc.exe", String.raw`\\localhost`, "delete", "OpenClaw"],
   ],
+  [
+    "sc.exe failure OpenClaw reset= 0 actions= restart/5000",
+    ["sc.exe", "failure", "OpenClaw", "reset=", "0", "actions=", "restart/5000"],
+  ],
+  ["sc.exe failureflag OpenClaw 1", ["sc.exe", "failureflag", "OpenClaw", "1"]],
   ['schtasks /Run /TN "OpenClaw Gateway"', ["schtasks", "/Run", "/TN", "OpenClaw Gateway"]],
   ["taskkill /IM open*.exe", ["taskkill", "/IM", "open*.exe"]],
   ["pkill -TERM openclaw", ["pkill", "-TERM", "openclaw"]],
@@ -147,6 +160,14 @@ const mutationCases: Array<[string, string[]]> = [
   ["npx openclaw@latest gateway restart", ["npx", "openclaw@latest", "gateway", "restart"]],
   ["pnpx openclaw gateway restart", ["pnpx", "openclaw", "gateway", "restart"]],
   [
+    "npx github:openclaw/openclaw#main gateway restart",
+    ["npx", "github:openclaw/openclaw#main", "gateway", "restart"],
+  ],
+  [
+    "npx oc@npm:openclaw@latest gateway restart",
+    ["npx", "oc@npm:openclaw@latest", "gateway", "restart"],
+  ],
+  [
     "npx --color always openclaw gateway restart",
     ["npx", "--color", "always", "openclaw", "gateway", "restart"],
   ],
@@ -178,6 +199,10 @@ const mutationCases: Array<[string, string[]]> = [
   [
     "pnpm -C repo dlx openclaw gateway restart",
     ["pnpm", "-C", "repo", "dlx", "openclaw", "gateway", "restart"],
+  ],
+  [
+    "corepack pnpm@latest dlx openclaw gateway restart",
+    ["corepack", "pnpm@latest", "dlx", "openclaw", "gateway", "restart"],
   ],
   ["yarn dlx openclaw gateway restart", ["yarn", "dlx", "openclaw", "gateway", "restart"]],
   ["yarnpkg dlx openclaw gateway restart", ["yarnpkg", "dlx", "openclaw", "gateway", "restart"]],
@@ -661,6 +686,37 @@ describe("OpenClaw lifecycle exec approvals", () => {
         ],
       }),
     ).toBe(true);
+  });
+
+  it("fails closed for CMD delayed-expansion lifecycle commands", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `cmd.exe /V:ON /C "set TOOL=openclaw && !TOOL! gateway restart"`,
+        env: {},
+        envComplete: false,
+        platform: "win32",
+        segments: [
+          {
+            raw: `cmd.exe /V:ON /C "set TOOL=openclaw && !TOOL! gateway restart"`,
+            argv: ["cmd.exe", "/V:ON", "/C", "set TOOL=openclaw && !TOOL! gateway restart"],
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `cmd.exe /V:ON /C "echo !UNSET!"`,
+        env: {},
+        envComplete: false,
+        platform: "win32",
+        segments: [
+          {
+            raw: `cmd.exe /V:ON /C "echo !UNSET!"`,
+            argv: ["cmd.exe", "/V:ON", "/C", "echo !UNSET!"],
+          },
+        ],
+      }),
+    ).toBe(false);
   });
 
   it("keeps unresolved gateway option values non-blocking for status", () => {

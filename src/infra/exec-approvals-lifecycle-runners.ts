@@ -149,12 +149,19 @@ export function resolveLifecyclePackageRunnerArgv(
   const executable =
     rawExecutable === "pnpx" ? "npx" : rawExecutable === "yarnpkg" ? "yarn" : rawExecutable;
   if (executable === "corepack") {
-    return argv.length > 1 ? { kind: "argv", argv: argv.slice(1) } : { kind: "not-runner" };
+    const manager = normalizedToken(argv[1]);
+    const match = /^(npm|pnpm|yarn)(?:@[^/]+)?$/u.exec(manager);
+    return match
+      ? { kind: "argv", argv: [match[1] ?? manager, ...argv.slice(2)] }
+      : { kind: "not-runner" };
   }
   if (["bunx", "npx"].includes(executable)) {
     const inline = resolveInlineCommand(argv, 1);
     const resolved = inline ?? packageTarget(argv, 1);
     if (resolved?.length) {
+      if (isOpenClawPackageTarget(resolved[0] ?? "")) {
+        return { kind: "argv", argv: ["openclaw", ...resolved.slice(1)] };
+      }
       return { kind: "argv", argv: resolved };
     }
     return looksLikeUnresolvedLifecycleRunner(argv)

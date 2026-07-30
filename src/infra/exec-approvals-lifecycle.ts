@@ -3,6 +3,7 @@ import { splitShellArgs } from "../utils/shell-argv.js";
 import { resolveCarrierCommandArgv } from "./command-carriers.js";
 import { unwrapKnownDispatchWrapperInvocation } from "./dispatch-wrapper-resolution.js";
 import { resolveLifecycleXargsArgv } from "./exec-approvals-lifecycle-carriers.js";
+import { classifyOpenClawConfigArgv } from "./exec-approvals-lifecycle-config.js";
 import {
   expandKnownLifecycleEnvironmentCommand,
   expandLifecycleEnvironmentArgv,
@@ -36,29 +37,6 @@ const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "--version"]);
 const OPENCLAW_GLOBAL_FLAGS = new Set(["--dev", "--no-color"]);
 const OPENCLAW_GLOBAL_OPTIONS = new Set(["--container", "--log-level", "--profile"]);
 const UPDATE_OPTIONS_WITH_VALUE = new Set(["--channel", "--tag", "--timeout"]);
-const CONFIG_OPTIONS_WITH_VALUE = new Set([
-  "--batch-file",
-  "--batch-json",
-  "--file",
-  "--provider-allowlist",
-  "--provider-arg",
-  "--provider-command",
-  "--provider-env",
-  "--provider-max-bytes",
-  "--provider-max-output-bytes",
-  "--provider-mode",
-  "--provider-no-output-timeout-ms",
-  "--provider-pass-env",
-  "--provider-path",
-  "--provider-source",
-  "--provider-timeout-ms",
-  "--provider-trusted-dir",
-  "--ref-id",
-  "--ref-provider",
-  "--ref-source",
-  "--replace-path",
-  "--section",
-]);
 const LAUNCHCTL_MUTATIONS = new Set([
   "attach",
   "bootstrap",
@@ -76,6 +54,8 @@ const LAUNCHCTL_MUTATIONS = new Set([
   "unload",
 ]);
 const SYSTEMCTL_MUTATIONS = new Set([
+  "add-requires",
+  "add-wants",
   "bind",
   "cancel",
   "disable",
@@ -93,6 +73,8 @@ const SYSTEMCTL_MUTATIONS = new Set([
   "reload-or-restart",
   "reload-or-try-restart",
   "reset-failed",
+  "remove-requires",
+  "remove-wants",
   "restart",
   "revert",
   "set-default",
@@ -230,23 +212,6 @@ function classifyUpdateArgv(argv: readonly string[], start: number): boolean {
   return true;
 }
 
-function classifyConfigArgv(argv: readonly string[], start: number): boolean {
-  if (hasEffectiveHelpOrVersion(argv, start, CONFIG_OPTIONS_WITH_VALUE)) {
-    return false;
-  }
-  for (let index = start; index < argv.length; index += 1) {
-    const token = argv[index]?.trim() ?? "";
-    const name = optionName(token);
-    if (CONFIG_OPTIONS_WITH_VALUE.has(name) && !token.includes("=")) {
-      index += 1;
-    } else if (name === "--dry-run") {
-      return false;
-    }
-  }
-  const actionIndex = scanFirstPositional(argv, start, new Set(["--section"]));
-  return !["file", "get", "schema", "validate"].includes(normalizedToken(argv[actionIndex]));
-}
-
 function classifyOpenClawArgv(argv: readonly string[]): boolean {
   let index = 1;
   for (; index < argv.length; index += 1) {
@@ -277,7 +242,7 @@ function classifyOpenClawArgv(argv: readonly string[]): boolean {
   const command = normalizedToken(argv[index]);
   switch (command) {
     case "config":
-      return classifyConfigArgv(argv, index + 1);
+      return classifyOpenClawConfigArgv(argv, index + 1);
     case "daemon":
     case "gateway":
       return classifyOpenClawGatewayArgv(argv, index + 1);
@@ -373,9 +338,26 @@ function classifyServiceManager(argv: readonly string[]): boolean {
   if (executable === "sc") {
     const actionIndex = argv[1]?.startsWith("\\\\") ? 2 : 1;
     return (
-      ["config", "create", "delete", "start", "stop"].includes(
-        normalizedToken(argv[actionIndex]),
-      ) && argv.slice(actionIndex + 1).some(looksLikeOpenClaw)
+      [
+        "config",
+        "continue",
+        "control",
+        "create",
+        "delete",
+        "description",
+        "failure",
+        "failureflag",
+        "managedaccount",
+        "pause",
+        "preferrednode",
+        "privs",
+        "sdset",
+        "sidtype",
+        "start",
+        "stop",
+        "triggerinfo",
+      ].includes(normalizedToken(argv[actionIndex])) &&
+      argv.slice(actionIndex + 1).some(looksLikeOpenClaw)
     );
   }
   if (executable === "net") {
