@@ -215,7 +215,9 @@ export function resolveLifecyclePackageRunnerArgv(
     const match = /^(npm|pnpm|yarn)(?:@[^/]+)?$/u.exec(manager);
     return match
       ? { kind: "argv", argv: [match[1] ?? manager, ...argv.slice(2)] }
-      : { kind: "not-runner" };
+      : looksLikeUnresolvedLifecycleRunner(argv)
+        ? { kind: "approval-required" }
+        : { kind: "not-runner" };
   }
   if (hasEffectivePackageNoExecute(argv, 1)) {
     return { kind: "not-runner" };
@@ -299,7 +301,7 @@ export function unresolvedPackageMutationMayTargetOpenClaw(
           [match[1] ?? manager, ...argv.slice(2)],
           isUnresolved,
         )
-      : false;
+      : looksLikeUnresolvedLifecycleRunner(argv);
   }
   const executable =
     rawExecutable === "pnpx" ? "npx" : rawExecutable === "yarnpkg" ? "yarn" : rawExecutable;

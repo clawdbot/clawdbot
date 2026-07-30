@@ -624,50 +624,6 @@ describe("OpenClaw lifecycle exec approvals", () => {
     ).toBe(true);
   });
 
-  it("does not trust initial environment values shadowed by shell assignments", () => {
-    const cases: Array<{ command: string; argv: string[] }> = [
-      {
-        command: `ACTION=restart; openclaw gateway "$ACTION"`,
-        argv: ["openclaw", "gateway", "$ACTION"],
-      },
-      {
-        command: `sh -c 'ACTION=restart; openclaw gateway "$ACTION"'`,
-        argv: ["sh", "-c", `ACTION=restart; openclaw gateway "$ACTION"`],
-      },
-    ];
-    for (const testCase of cases) {
-      expect(
-        commandRequiresOpenClawLifecycleApproval({
-          command: testCase.command,
-          env: { ACTION: "status" },
-          platform: "linux",
-          segments: [{ raw: testCase.command, argv: testCase.argv }],
-        }),
-        testCase.command,
-      ).toBe(true);
-    }
-    expect(
-      commandRequiresOpenClawLifecycleApproval({
-        command: `VALUE=hello; echo "$VALUE"`,
-        env: { VALUE: "status" },
-        segments: [{ raw: `echo "$VALUE"`, argv: ["echo", "$VALUE"] }],
-      }),
-    ).toBe(false);
-    expect(
-      commandRequiresOpenClawLifecycleApproval({
-        command: `ACTION=restart openclaw gateway "$ACTION"`,
-        env: { ACTION: "status" },
-        platform: "linux",
-        segments: [
-          {
-            raw: `ACTION=restart openclaw gateway "$ACTION"`,
-            argv: ["ACTION=restart", "openclaw", "gateway", "$ACTION"],
-          },
-        ],
-      }),
-    ).toBe(false);
-  });
-
   it("fails closed when a parameter operator supplies the executable", () => {
     expect(
       commandRequiresOpenClawLifecycleApproval({

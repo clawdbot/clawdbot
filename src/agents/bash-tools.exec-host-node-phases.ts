@@ -161,6 +161,27 @@ function buildNodeApprovalAnalysisEnv(env: Record<string, string> | undefined): 
   };
 }
 
+function resolveLifecycleAnalysisPlatforms(platform: string | null | undefined): NodeJS.Platform[] {
+  const normalized = platform?.trim().toLowerCase() ?? "";
+  if (normalized === "windows" || normalized === "win32" || normalized.startsWith("windows ")) {
+    return ["win32"];
+  }
+  if (
+    normalized === "macos" ||
+    normalized === "darwin" ||
+    normalized.startsWith("macos ") ||
+    normalized.startsWith("darwin-")
+  ) {
+    return ["darwin"];
+  }
+  if (normalized === "linux" || normalized.startsWith("linux-")) {
+    return ["linux"];
+  }
+  // The classifier only has Windows-vs-POSIX branches. Unknown node metadata
+  // must be evaluated under both rather than inheriting the gateway's OS.
+  return ["win32", "linux"];
+}
+
 function hasNodeAllowAlwaysCommandApproval(params: {
   allowlist: readonly ExecAllowlistEntry[];
   commandText: string;
@@ -570,13 +591,16 @@ export async function analyzeNodeApprovalRequirement(params: {
     ) && !(params.hostSecurity === "full" && params.hostAsk === "off");
   const requiresOpenClawLifecycleApproval =
     suppressionCommandEvals.some((entry) =>
-      commandRequiresOpenClawLifecycleApproval({
-        command: entry.command,
-        cwd: entry.cwd,
-        env: analysisEnv,
-        envComplete: false,
-        segments: entry.allowlistEval.segments,
-      }),
+      resolveLifecycleAnalysisPlatforms(params.target.platform).some((platform) =>
+        commandRequiresOpenClawLifecycleApproval({
+          command: entry.command,
+          cwd: entry.cwd,
+          env: analysisEnv,
+          envComplete: false,
+          platform,
+          segments: entry.allowlistEval.segments,
+        }),
+      ),
     ) && !(params.hostSecurity === "full" && params.hostAsk === "off");
   if (
     (params.hostAsk === "always" ||

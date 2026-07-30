@@ -314,6 +314,13 @@ export function lifecyclePositionalBindingRequiresApproval(
   );
 }
 
+/** Return true when a shell function executes its own positional argv as a command. */
+export function lifecycleFunctionLocalPositionalsRequireApproval(command: string): boolean {
+  return /(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*\s*(?:\(\s*\))?\s*\{(?:\s*|[^{}]*[;&|]\s*)["']?\$(?:@|\*|\{@\}|\{\*\})["']?(?:\s|;|&|\|)/u.test(
+    command,
+  );
+}
+
 /** Bind exact POSIX positional references for nested lifecycle classification. */
 export function bindLifecyclePosixShellPositionals(
   argv: string[],

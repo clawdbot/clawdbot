@@ -30,6 +30,7 @@ import {
 import {
   bindLifecyclePosixShellPositionals,
   extractShellSubstitutionCommands,
+  lifecycleFunctionLocalPositionalsRequireApproval,
   lifecyclePositionalBindingRequiresApproval,
   lifecycleSubstitutionResultMayHideLifecycle,
   resolveLifecyclePosixShellPositionals,
@@ -580,6 +581,9 @@ function classifyArgv(
       ? "powershell"
       : undefined;
     if (nestedShellContext === "powershell" && commandHasPowerShellLifecyclePipeline(inline)) {
+      return true;
+    }
+    if (lifecycleFunctionLocalPositionalsRequireApproval(inline)) {
       return true;
     }
     if (commandHasLifecycleSubstitution(inline, depth, nestedShellContext, cwd)) {

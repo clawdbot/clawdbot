@@ -2595,6 +2595,13 @@ describe("executeNodeHostCommand", () => {
       hostAsk: "on-miss",
       askFallback: "deny",
     });
+    listNodesMock.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run", "system.run.prepare"],
+        platform: "windows",
+      },
+    ]);
 
     const result = await executeNodeHostCommand({
       command: "launchctl stop gui/$UID/com.openclaw.gateway",
@@ -2617,6 +2624,7 @@ describe("executeNodeHostCommand", () => {
     expect(commandRequiresOpenClawLifecycleApprovalMock).toHaveBeenCalledWith(
       expect.objectContaining({
         envComplete: false,
+        platform: "win32",
       }),
     );
     expect(warnings).toContain(
