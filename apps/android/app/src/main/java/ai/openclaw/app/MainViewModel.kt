@@ -706,6 +706,10 @@ class MainViewModel private constructor(
     runtimeRef.value?.setForeground(value)
   }
 
+  fun refreshNodePermissionSurface() {
+    runtimeRef.value?.refreshNodePermissionSurface()
+  }
+
   fun setDisplayName(value: String) {
     prefs.setDisplayName(value)
   }

@@ -96,6 +96,7 @@ import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.node.invokeErrorFromThrowable
 import ai.openclaw.app.node.parseHexColorArgb
+import ai.openclaw.app.node.readAndroidPermissionSnapshot
 import ai.openclaw.app.protocol.OpenClawCanvasA2UIAction
 import ai.openclaw.app.systemagent.SystemAgentChatController
 import ai.openclaw.app.systemagent.SystemAgentChatState
@@ -907,11 +908,23 @@ class NodeRuntime private constructor(
       locationPreciseEnabled = { locationPreciseEnabled.value },
     )
 
+  private val permissionSnapshot = {
+    readAndroidPermissionSnapshot(
+      context = appContext,
+      smsEnabled = SensitiveFeatureConfig.smsEnabled,
+      callLogEnabled = SensitiveFeatureConfig.callLogEnabled,
+      photosEnabled = SensitiveFeatureConfig.photosEnabled,
+      backgroundLocationEnabled = SensitiveFeatureConfig.backgroundLocationEnabled,
+    )
+  }
+
   private val deviceHandler: DeviceHandler =
-    DeviceHandler(
+    DeviceHandler.withPermissionSnapshot(
       appContext = appContext,
       smsEnabled = SensitiveFeatureConfig.smsEnabled,
       callLogEnabled = SensitiveFeatureConfig.callLogEnabled,
+      photosEnabled = SensitiveFeatureConfig.photosEnabled,
+      permissionSnapshot = permissionSnapshot,
     )
 
   private val notificationsHandler: NotificationsHandler =
@@ -985,12 +998,14 @@ class NodeRuntime private constructor(
         SensitiveFeatureConfig.accessibilityControlEnabled && mobileUiHandler.isConnected.value
       },
       inlineWidgetsAvailable = { WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE) },
+      permissionSnapshot = permissionSnapshot,
       manualTls = { endpoint ->
         prefs.gatewayRegistry.entries.value
           .firstOrNull { it.stableId == endpoint.stableId }
           ?.tls ?: manualTls.value
       },
     )
+  private var lastNodePermissions = connectionManager.buildPermissions()
   private var lastVoiceWakeCapabilityEnabled = isVoiceWakeCapabilityEnabled()
 
   private val invokeDispatcher: InvokeDispatcher =
@@ -2991,6 +3006,7 @@ class NodeRuntime private constructor(
       voiceLifecycleEpoch.incrementAndGet()
     }
     if (value) {
+      refreshNodePermissionSurface()
       refreshVoiceWakeCapabilitySurfaceIfChanged()
       reconnectPreferredGatewayOnForeground()
       scope.launch {
@@ -3261,6 +3277,15 @@ class NodeRuntime private constructor(
       return
     }
     resolvePreferredGatewayEndpoint()?.let(::connect)
+  }
+
+  /**
+   * Reconnect a live node only when Android authority changed since its last connect.
+   */
+  fun refreshNodePermissionSurface() {
+    val permissions = connectionManager.buildPermissions()
+    if (permissions == lastNodePermissions) return
+    refreshNodeSurfaceAfterSettingsChange()
   }
 
   fun setDisplayName(value: String) {
@@ -4247,12 +4272,14 @@ class NodeRuntime private constructor(
           tls,
         )
       }
+      val nodeConnectOptions = connectionManager.buildNodeConnectOptions()
+      lastNodePermissions = nodeConnectOptions.permissions
       nodeSession.connect(
         endpoint,
         auth.token,
         auth.bootstrapToken,
         auth.password,
-        connectionManager.buildNodeConnectOptions(),
+        nodeConnectOptions,
         tls,
       )
       if (reconnect && operatorAuth != null) {

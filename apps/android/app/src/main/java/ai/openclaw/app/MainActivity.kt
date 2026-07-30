@@ -138,6 +138,7 @@ class MainActivity : AppCompatActivity() {
     if (::permissionRequester.isInitialized) {
       permissionRequester.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
+    initializedViewModel?.refreshNodePermissionSurface()
   }
 
   /**
