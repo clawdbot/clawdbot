@@ -133,6 +133,20 @@ describe("meeting realtime engine output ownership", () => {
     }
   });
 
+  it("does not start an invalidated write after a same-turn clear", async () => {
+    const fixture = await createEngineFixture();
+    try {
+      fixture.callbacks.onAudio(Buffer.from([1, 2, 3]));
+      fixture.callbacks.onClearAudio();
+      await Promise.resolve();
+
+      expect(fixture.writeOutput).not.toHaveBeenCalled();
+      expect(fixture.clearOutput).toHaveBeenCalled();
+    } finally {
+      await fixture.handle.stop();
+    }
+  });
+
   it.each(["response.done", "response.cancelled"])(
     "bounds queued bytes and rejects stale output through %s",
     async (terminalType) => {
@@ -145,17 +159,19 @@ describe("meeting realtime engine output ownership", () => {
         const fresh = Buffer.from([5]);
 
         fixture.callbacks.onAudio(first);
-        fixture.callbacks.onAudio(queued);
-        fixture.callbacks.onAudio(overflow);
-
-        expect(fixture.handleBargeIn).toHaveBeenCalledWith({
-          audioPlaybackActive: true,
-          force: true,
-        });
-        expect(fixture.clearOutput).toHaveBeenCalledOnce();
         await vi.waitFor(() => {
           expect(fixture.writeOutput).toHaveBeenCalledTimes(1);
         });
+        fixture.callbacks.onAudio(queued);
+        fixture.callbacks.onAudio(overflow);
+
+        await vi.waitFor(() => {
+          expect(fixture.handleBargeIn).toHaveBeenCalledWith({
+            audioPlaybackActive: true,
+            force: true,
+          });
+        });
+        expect(fixture.clearOutput).toHaveBeenCalledOnce();
         expect(fixture.writeOutput).toHaveBeenLastCalledWith(first);
 
         fixture.callbacks.onAudio(late);
@@ -167,6 +183,10 @@ describe("meeting realtime engine output ownership", () => {
           expect(fixture.writeOutput).toHaveBeenCalledTimes(2);
         });
         expect(fixture.writeOutput).toHaveBeenLastCalledWith(fresh);
+        expect(fixture.clearOutput).toHaveBeenCalledTimes(2);
+        expect(fixture.clearOutput.mock.invocationCallOrder[1]).toBeLessThan(
+          fixture.writeOutput.mock.invocationCallOrder[1] ?? 0,
+        );
         expect(fixture.beginOutput).toHaveBeenCalledTimes(2);
         fixture.releaseWrite(1);
       } finally {
@@ -178,18 +198,50 @@ describe("meeting realtime engine output ownership", () => {
   it("bounds queued tiny-frame ownership", async () => {
     const fixture = await createEngineFixture();
     try {
-      for (let index = 0; index < 257; index += 1) {
-        fixture.callbacks.onAudio(Buffer.from([index]));
-      }
-
-      expect(fixture.handleBargeIn).toHaveBeenCalledWith({
-        audioPlaybackActive: true,
-        force: true,
-      });
-      expect(fixture.clearOutput).toHaveBeenCalledOnce();
+      fixture.callbacks.onAudio(Buffer.from([0]));
       await vi.waitFor(() => {
         expect(fixture.writeOutput).toHaveBeenCalledTimes(1);
       });
+      for (let index = 1; index < 257; index += 1) {
+        fixture.callbacks.onAudio(Buffer.from([index]));
+      }
+
+      await vi.waitFor(() => {
+        expect(fixture.handleBargeIn).toHaveBeenCalledWith({
+          audioPlaybackActive: true,
+          force: true,
+        });
+      });
+      expect(fixture.clearOutput).toHaveBeenCalledOnce();
+      fixture.releaseWrite(0);
+    } finally {
+      await fixture.handle.stop();
+    }
+  });
+
+  it("does not report a deferred cancellation race after response completion", async () => {
+    const fixture = await createEngineFixture();
+    try {
+      fixture.callbacks.onAudio(Buffer.alloc(48_000, 1));
+      await vi.waitFor(() => {
+        expect(fixture.writeOutput).toHaveBeenCalledTimes(1);
+      });
+      fixture.callbacks.onAudio(Buffer.alloc(48_000, 2));
+      fixture.callbacks.onAudio(Buffer.from([3]));
+      await vi.waitFor(() => {
+        expect(fixture.handleBargeIn).toHaveBeenCalledOnce();
+      });
+
+      fixture.callbacks.onEvent?.({ direction: "server", type: "response.done" });
+      fixture.callbacks.onEvent?.({
+        direction: "server",
+        type: "error",
+        detail: "Cancellation failed: no active response found",
+      });
+
+      expect(fixture.handle.getHealth().recentTalkEvents.map((event) => event.type)).not.toContain(
+        "session.error",
+      );
       fixture.releaseWrite(0);
     } finally {
       await fixture.handle.stop();

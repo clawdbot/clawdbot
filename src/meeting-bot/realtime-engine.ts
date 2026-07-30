@@ -101,6 +101,9 @@ export const MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS = 900;
 // Playback duration plus a tail blocks live loopback; transcript lookback catches delayed echo.
 export const MEETING_OUTPUT_ECHO_SUPPRESSION_TAIL_MS = 3_000;
 export const MEETING_TRANSCRIPT_ECHO_LOOKBACK_MS = 45_000;
+const MEETING_REALTIME_OUTPUT_MAX_PENDING_MS = 2_000;
+const MEETING_REALTIME_OUTPUT_MAX_PENDING_FRAMES = 256;
+const MEETING_REALTIME_CANCELLATION_RACE_DETAIL = "Cancellation failed: no active response found";
 
 export function meetingOutputBytesPerMs(audioFormat: MeetingRealtimeAudioFormat): number {
   return audioFormat === "g711-ulaw-8khz" ? 8 : 48;
@@ -301,10 +304,36 @@ export async function startMeetingRealtimeEngine(params: {
   let realtimeReady = false;
   let lastClearAt: string | undefined;
   let clearCount = 0;
+  let outputGeneration = 0;
+  let outputWriteActive = false;
+  let outputClearPending = 0;
+  let outputClearAfterActive = false;
+  let outputPendingBytes = 0;
+  let outputPendingFrames = 0;
+  let outputBlocked: { token: symbol } | undefined;
+  let outputGenerationActive = false;
+  let outputClearTail = Promise.resolve();
+  const outputQueue: Array<{ audio: Buffer; generation: number }> = [];
+  const outputMaxPendingBytes =
+    meetingOutputBytesPerMs(params.config.chrome.audioFormat) *
+    MEETING_REALTIME_OUTPUT_MAX_PENDING_MS;
   const realtimeLogScope = params.logPrefix ? `${params.logPrefix} realtime` : "realtime";
 
+  const invalidateOutputQueue = () => {
+    outputGeneration += 1;
+    outputQueue.length = 0;
+    outputPendingBytes = 0;
+    outputPendingFrames = 0;
+    outputGenerationActive = false;
+  };
+
   const stop = async () => {
-    stopped = true;
+    if (!stopped) {
+      stopped = true;
+      outputBlocked = undefined;
+      outputClearAfterActive = false;
+      invalidateOutputQueue();
+    }
     if (stopPromise) {
       await stopPromise;
       return;
@@ -360,28 +389,126 @@ export async function startMeetingRealtimeEngine(params: {
       );
     });
   };
-  const clearOutputPlayback = () => {
+  const clearOutputPlayback = (): Promise<void> => {
     if (stopped) {
-      return;
+      return Promise.resolve();
     }
     clearCount += 1;
     lastClearAt = new Date().toISOString();
-    void params.transport.clearOutput().catch((error: unknown) => {
-      params.logger.warn(
-        `${params.platform.logScope} ${params.logPrefix ? `${params.logPrefix} audio clear` : "audio output clear"} failed: ${formatErrorMessage(error)}`,
-      );
-      stopAfterFailure("audio output clear");
+    outputClearPending += 1;
+    const clear = outputClearTail
+      .then(async () => {
+        if (!stopped) {
+          await params.transport.clearOutput();
+        }
+      })
+      .catch((error: unknown) => {
+        params.logger.warn(
+          `${params.platform.logScope} ${params.logPrefix ? `${params.logPrefix} audio clear` : "audio output clear"} failed: ${formatErrorMessage(error)}`,
+        );
+        stopAfterFailure("audio output clear");
+      })
+      .finally(() => {
+        outputClearPending -= 1;
+        pumpOutputQueue();
+      });
+    outputClearTail = clear;
+    return clear;
+  };
+
+  const pumpOutputQueue = () => {
+    if (stopped || outputWriteActive || outputClearPending > 0) {
+      return;
+    }
+    const next = outputQueue.shift();
+    if (!next) {
+      return;
+    }
+    if (next.generation !== outputGeneration) {
+      pumpOutputQueue();
+      return;
+    }
+    outputWriteActive = true;
+    void Promise.resolve()
+      .then(() => {
+        if (stopped || next.generation !== outputGeneration) {
+          return;
+        }
+        return params.transport.writeOutput(next.audio);
+      })
+      .catch((error: unknown) => {
+        if (stopped || next.generation !== outputGeneration) {
+          return;
+        }
+        params.logger.warn(
+          `${params.platform.logScope} ${params.logPrefix ? `${params.logPrefix} audio output` : "audio output"} failed: ${formatErrorMessage(error)}`,
+        );
+        stopAfterFailure("audio output");
+      })
+      .finally(() => {
+        outputWriteActive = false;
+        if (next.generation === outputGeneration) {
+          outputPendingBytes -= next.audio.byteLength;
+          outputPendingFrames -= 1;
+        }
+        if (outputClearAfterActive && !stopped) {
+          outputClearAfterActive = false;
+          void clearOutputPlayback();
+          return;
+        }
+        pumpOutputQueue();
+      });
+  };
+
+  const blockOutput = (): { blocked: boolean; token: symbol } => {
+    if (outputBlocked) {
+      return { blocked: false, token: outputBlocked.token };
+    }
+    const token = Symbol("meeting-realtime-output-blocked");
+    outputBlocked = { token };
+    outputClearAfterActive = outputWriteActive;
+    invalidateOutputQueue();
+    return { blocked: true, token };
+  };
+
+  const handleOutputBackpressure = () => {
+    const pendingBytes = outputPendingBytes;
+    const pendingFrames = outputPendingFrames;
+    const { blocked, token } = blockOutput();
+    if (!blocked) {
+      return;
+    }
+    params.logger.warn(
+      `${params.platform.logScope} ${realtimeLogScope} audio output backpressured: pendingBytes=${pendingBytes} pendingFrames=${pendingFrames}`,
+    );
+    harness.flushOutput(clearOutputPlayback);
+    harness.finishOutputAudio("output-backpressure");
+    queueMicrotask(() => {
+      if (stopped || outputBlocked?.token !== token) {
+        return;
+      }
+      harness.handleBargeIn({ audioPlaybackActive: true, force: true }, () => {});
     });
   };
-  const writeOutputAudio = (audio: Buffer) => {
-    void params.transport.writeOutput(audio).catch((error: unknown) => {
-      params.logger.warn(
-        `${params.platform.logScope} ${params.logPrefix ? `${params.logPrefix} audio output` : "audio output"} failed: ${formatErrorMessage(error)}`,
-      );
-      stopAfterFailure("audio output");
-    });
+
+  const queueOutputAudio = (audio: Buffer): boolean => {
+    if (stopped || outputBlocked) {
+      return false;
+    }
+    if (
+      audio.byteLength > outputMaxPendingBytes - outputPendingBytes ||
+      outputPendingFrames >= MEETING_REALTIME_OUTPUT_MAX_PENDING_FRAMES
+    ) {
+      handleOutputBackpressure();
+      return false;
+    }
+    outputPendingBytes += audio.byteLength;
+    outputPendingFrames += 1;
+    outputQueue.push({ audio, generation: outputGeneration });
+    pumpOutputQueue();
+    return true;
   };
-  let outputGenerationActive = false;
+
   const startHumanBargeInMonitor = () => {
     if (!params.transport.startBargeInMonitor) {
       return;
@@ -499,18 +626,21 @@ export async function startMeetingRealtimeEngine(params: {
       audioSink: {
         isOpen: () => !stopped,
         sendAudio: (audio) => {
+          if (!queueOutputAudio(audio)) {
+            return;
+          }
           if (!outputGenerationActive) {
             params.transport.beginOutput?.();
             outputGenerationActive = true;
           }
           harness.outputActivity.markPlaybackStarted();
           harness.recordOutputAudio(audio);
-          writeOutputAudio(audio);
         },
         clearAudio: () => {
-          outputGenerationActive = false;
-          harness.flushOutput(clearOutputPlayback);
-          harness.finishOutputAudio("clear");
+          if (blockOutput().blocked) {
+            harness.flushOutput(clearOutputPlayback);
+            harness.finishOutputAudio("clear");
+          }
         },
       },
       onTranscript: (role, text, isFinal) => {
@@ -576,9 +706,23 @@ export async function startMeetingRealtimeEngine(params: {
             final: true,
           });
         } else if (event.type === "response.done") {
+          outputBlocked = undefined;
           outputGenerationActive = false;
           harness.finishOutputAudio("response.done");
           harness.endTurn("response.done");
+        } else if (outputBlocked && event.type === "response.cancelled") {
+          outputBlocked = undefined;
+          outputGenerationActive = false;
+          harness.finishOutputAudio(event.type);
+        } else if (
+          event.type === "error" &&
+          event.detail === MEETING_REALTIME_CANCELLATION_RACE_DETAIL
+        ) {
+          if (outputBlocked) {
+            outputBlocked = undefined;
+            outputGenerationActive = false;
+            harness.finishOutputAudio(event.type);
+          }
         } else if (event.type === "error") {
           harness.emit({
             type: "session.error",
