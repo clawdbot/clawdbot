@@ -46,20 +46,29 @@ import type { ResolvedClaudeAppServerConfig } from "./config.js";
 import type { ClaudeDynamicToolBridge } from "./dynamic-tools.js";
 import { assertThreadStartResponse } from "./protocol-validators.js";
 import {
-  readClaudeAppServerBinding,
-  withClaudeAppServerBindingLock,
-  writeClaudeAppServerBinding,
+  claudeBindingSessionIdentity,
   type ClaudeAppServerBinding,
+  type ClaudeAppServerBindingStore,
+  type ClaudeBindingSessionIdentity,
 } from "./thread-store.js";
 import type { ThreadStartParams } from "./types.js";
 
 const THREAD_NOT_FOUND_RE = /thread not found/i;
+
+/**
+ * Lifecycle RPCs (thread/start|resume|fork) are local bridge bookkeeping, not
+ * model calls, and they run inside the per-session binding lock — a wedged
+ * bridge must not hold that lock for the client's blanket 600s turn-request
+ * timeout, so they get their own short deadline.
+ */
+const CLAUDE_THREAD_LIFECYCLE_RPC_TIMEOUT_MS = 60_000;
 
 export type StartOrResumeClaudeThreadParams = {
   client: ClaudeAppServerClient;
   params: EmbeddedRunAttemptParams;
   cfg: ResolvedClaudeAppServerConfig;
   bridge: ClaudeDynamicToolBridge;
+  bindingStore: ClaudeAppServerBindingStore;
   developerInstructions: string;
   developerInstructionsFingerprint: string;
   dynamicToolsFingerprint: string;
@@ -105,27 +114,29 @@ export type ThreadLifecycleOutcome = {
 export async function startOrResumeClaudeThread(
   args: StartOrResumeClaudeThreadParams,
 ): Promise<ThreadLifecycleOutcome> {
-  const sessionFile = args.params.sessionFile;
-  const run = async () => await startOrResumeClaudeThreadLocked(args);
-  return sessionFile ? await withClaudeAppServerBindingLock(sessionFile, run) : await run();
+  const identity = claudeBindingSessionIdentity(args.params);
+  return await args.bindingStore.withLifecycleLock(identity, () =>
+    startOrResumeClaudeThreadLocked(args, identity),
+  );
 }
 
 async function startOrResumeClaudeThreadLocked(
   args: StartOrResumeClaudeThreadParams,
+  identity: ClaudeBindingSessionIdentity,
 ): Promise<ThreadLifecycleOutcome> {
   const {
     client,
     params,
     cfg,
     bridge,
+    bindingStore,
     developerInstructions,
     developerInstructionsFingerprint,
     dynamicToolsFingerprint,
     effectiveWorkspace,
     nativeDisallowedTools,
   } = args;
-  const sessionFile = params.sessionFile;
-  const existing = sessionFile ? await readClaudeAppServerBinding(sessionFile) : null;
+  const existing = await bindingStore.read(identity);
 
   const rotationReason = classifyRotationReason(existing, dynamicToolsFingerprint);
 
@@ -134,7 +145,8 @@ async function startOrResumeClaudeThreadLocked(
       const threadId = await tryResumeWithPatch({
         client,
         existing,
-        sessionFile,
+        bindingStore,
+        identity,
         cfg,
         effectiveWorkspace,
         developerInstructions,
@@ -146,7 +158,8 @@ async function startOrResumeClaudeThreadLocked(
         throw err;
       }
       embeddedAgentLog.warn("claude-bridge: thread not found on resume; starting fresh", {
-        sessionFile,
+        sessionKey: identity.sessionKey,
+        sessionId: identity.sessionId,
         threadId: existing.threadId,
       });
     }
@@ -154,7 +167,8 @@ async function startOrResumeClaudeThreadLocked(
     embeddedAgentLog.info(
       "claude-bridge: rotating thread via thread/fork (transcript preserved, new SDK session)",
       {
-        sessionFile,
+        sessionKey: identity.sessionKey,
+        sessionId: identity.sessionId,
         previousThreadId: existing.threadId,
         reason: rotationReason,
       },
@@ -166,6 +180,8 @@ async function startOrResumeClaudeThreadLocked(
         params,
         cfg,
         bridge,
+        bindingStore,
+        identity,
         developerInstructions,
         developerInstructionsFingerprint,
         dynamicToolsFingerprint,
@@ -184,7 +200,11 @@ async function startOrResumeClaudeThreadLocked(
       }
       embeddedAgentLog.warn(
         "claude-bridge: thread/fork hit thread-not-found; falling back to fresh thread/start",
-        { sessionFile, previousThreadId: existing.threadId },
+        {
+          sessionKey: identity.sessionKey,
+          sessionId: identity.sessionId,
+          previousThreadId: existing.threadId,
+        },
       );
     }
   }
@@ -194,6 +214,8 @@ async function startOrResumeClaudeThreadLocked(
     params,
     cfg,
     bridge,
+    bindingStore,
+    identity,
     developerInstructions,
     developerInstructionsFingerprint,
     dynamicToolsFingerprint,
@@ -223,12 +245,13 @@ function classifyRotationReason(
   return undefined;
 }
 
-// ── resume path: send patches, update sidecar ───────────────────────────────
+// ── resume path: send patches, update binding ───────────────────────────────
 
 async function tryResumeWithPatch(args: {
   client: ClaudeAppServerClient;
   existing: ClaudeAppServerBinding;
-  sessionFile: string | undefined;
+  bindingStore: ClaudeAppServerBindingStore;
+  identity: ClaudeBindingSessionIdentity;
   cfg: ResolvedClaudeAppServerConfig;
   effectiveWorkspace: string;
   developerInstructions: string;
@@ -237,7 +260,8 @@ async function tryResumeWithPatch(args: {
   const {
     client,
     existing,
-    sessionFile,
+    bindingStore,
+    identity,
     cfg,
     effectiveWorkspace,
     developerInstructions,
@@ -253,17 +277,21 @@ async function tryResumeWithPatch(args: {
     existing.developerInstructionsFingerprint != null &&
     existing.developerInstructionsFingerprint !== developerInstructionsFingerprint;
 
-  await client.request("thread/resume", {
-    threadId: existing.threadId,
-    ...(cwdDiverged ? { cwd: effectiveWorkspace } : {}),
-    ...(approvalPolicyDiverged ? { approvalPolicy: cfg.appServer.approvalPolicy } : {}),
-    ...(developerInstructionsDiverged ? { developerInstructions } : {}),
-  });
+  await client.request(
+    "thread/resume",
+    {
+      threadId: existing.threadId,
+      ...(cwdDiverged ? { cwd: effectiveWorkspace } : {}),
+      ...(approvalPolicyDiverged ? { approvalPolicy: cfg.appServer.approvalPolicy } : {}),
+      ...(developerInstructionsDiverged ? { developerInstructions } : {}),
+    },
+    AbortSignal.timeout(CLAUDE_THREAD_LIFECYCLE_RPC_TIMEOUT_MS),
+  );
 
   // Persist the patched values so the next turn doesn't re-send the same
   // patches.
-  if (sessionFile && (cwdDiverged || approvalPolicyDiverged || developerInstructionsDiverged)) {
-    await writeClaudeAppServerBinding(sessionFile, {
+  if (cwdDiverged || approvalPolicyDiverged || developerInstructionsDiverged) {
+    await bindingStore.write(identity, {
       threadId: existing.threadId,
       cwd: effectiveWorkspace,
       model: existing.model,
@@ -287,6 +315,8 @@ async function forkThreadOnCatalogDrift(args: {
   params: EmbeddedRunAttemptParams;
   cfg: ResolvedClaudeAppServerConfig;
   bridge: ClaudeDynamicToolBridge;
+  bindingStore: ClaudeAppServerBindingStore;
+  identity: ClaudeBindingSessionIdentity;
   developerInstructions: string;
   developerInstructionsFingerprint: string;
   dynamicToolsFingerprint: string;
@@ -299,6 +329,8 @@ async function forkThreadOnCatalogDrift(args: {
     params,
     cfg,
     bridge,
+    bindingStore,
+    identity,
     developerInstructions,
     developerInstructionsFingerprint,
     dynamicToolsFingerprint,
@@ -334,23 +366,25 @@ async function forkThreadOnCatalogDrift(args: {
     dynamicToolsFingerprint,
     disallowedTools: [...nativeDisallowedTools],
   };
-  const rawResponse = await client.request<unknown>("thread/fork", forkParams);
+  const rawResponse = await client.request<unknown>(
+    "thread/fork",
+    forkParams,
+    AbortSignal.timeout(CLAUDE_THREAD_LIFECYCLE_RPC_TIMEOUT_MS),
+  );
   const response = assertThreadStartResponse(rawResponse);
   const newThreadId = response.thread.id;
 
-  if (params.sessionFile) {
-    await writeClaudeAppServerBinding(params.sessionFile, {
-      threadId: newThreadId,
-      cwd: effectiveWorkspace,
-      model: params.modelId,
-      modelProvider: cfg.appServer.modelProvider ?? DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER,
-      approvalPolicy: cfg.appServer.approvalPolicy,
-      approvalsReviewer: "user",
-      sandbox: cfg.appServer.sandbox,
-      developerInstructionsFingerprint,
-      dynamicToolsFingerprint,
-    });
-  }
+  await bindingStore.write(identity, {
+    threadId: newThreadId,
+    cwd: effectiveWorkspace,
+    model: params.modelId,
+    modelProvider: cfg.appServer.modelProvider ?? DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER,
+    approvalPolicy: cfg.appServer.approvalPolicy,
+    approvalsReviewer: "user",
+    sandbox: cfg.appServer.sandbox,
+    developerInstructionsFingerprint,
+    dynamicToolsFingerprint,
+  });
   return newThreadId;
 }
 
@@ -361,6 +395,8 @@ async function startFreshThread(args: {
   params: EmbeddedRunAttemptParams;
   cfg: ResolvedClaudeAppServerConfig;
   bridge: ClaudeDynamicToolBridge;
+  bindingStore: ClaudeAppServerBindingStore;
+  identity: ClaudeBindingSessionIdentity;
   developerInstructions: string;
   developerInstructionsFingerprint: string;
   dynamicToolsFingerprint: string;
@@ -372,6 +408,8 @@ async function startFreshThread(args: {
     params,
     cfg,
     bridge,
+    bindingStore,
+    identity,
     developerInstructions,
     developerInstructionsFingerprint,
     dynamicToolsFingerprint,
@@ -395,24 +433,25 @@ async function startFreshThread(args: {
     ...(nativeDisallowedTools.length > 0 ? { disallowedTools: [...nativeDisallowedTools] } : {}),
   };
 
-  const rawResponse = await client.request<unknown>("thread/start", startParams);
+  const rawResponse = await client.request<unknown>(
+    "thread/start",
+    startParams,
+    AbortSignal.timeout(CLAUDE_THREAD_LIFECYCLE_RPC_TIMEOUT_MS),
+  );
   const response = assertThreadStartResponse(rawResponse);
   const threadId = response.thread.id;
 
-  if (params.sessionFile) {
-    const binding: Omit<ClaudeAppServerBinding, "schemaVersion" | "createdAt" | "updatedAt"> = {
-      threadId,
-      cwd: effectiveWorkspace,
-      model: params.modelId,
-      modelProvider: cfg.appServer.modelProvider ?? DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER,
-      approvalPolicy: cfg.appServer.approvalPolicy,
-      approvalsReviewer: "user",
-      sandbox: cfg.appServer.sandbox,
-      developerInstructionsFingerprint,
-      dynamicToolsFingerprint,
-    };
-    await writeClaudeAppServerBinding(params.sessionFile, binding);
-  }
+  await bindingStore.write(identity, {
+    threadId,
+    cwd: effectiveWorkspace,
+    model: params.modelId,
+    modelProvider: cfg.appServer.modelProvider ?? DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER,
+    approvalPolicy: cfg.appServer.approvalPolicy,
+    approvalsReviewer: "user",
+    sandbox: cfg.appServer.sandbox,
+    developerInstructionsFingerprint,
+    dynamicToolsFingerprint,
+  });
   return threadId;
 }
 

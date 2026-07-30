@@ -1,11 +1,10 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import type { CompactEmbeddedAgentSessionParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import type { ClaudeAppServerClient, NotificationHandler } from "./client.js";
 import { ClaudeAppServerRpcError } from "./client.js";
 import { maybeCompactClaudeAppServerSession } from "./compact.js";
+import type { ClaudeAppServerBindingStore } from "./thread-store.js";
+import { createClaudeTestBindingStore } from "./thread-store.test-helpers.js";
 
 /**
  * Unit coverage for the harness-owned compaction hook: binding resolution,
@@ -17,28 +16,18 @@ import { maybeCompactClaudeAppServerSession } from "./compact.js";
  */
 
 const THREAD_ID = "11111111-2222-3333-4444-555555555555";
+const IDENTITY = { sessionKey: "agent:main:direct:tester", sessionId: "session-1" };
 
-async function makeBoundSessionFile(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), "claude-compact-test-"));
-  const sessionFile = path.join(dir, "session.jsonl");
-  await writeFile(sessionFile, "");
-  await writeFile(
-    `${sessionFile}.claude-binding.json`,
-    JSON.stringify({
-      schemaVersion: 1,
-      threadId: THREAD_ID,
-      cwd: "/tmp",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    }),
-  );
-  return sessionFile;
+async function makeBoundStore(): Promise<ClaudeAppServerBindingStore> {
+  const store = createClaudeTestBindingStore();
+  await store.write(IDENTITY, { threadId: THREAD_ID, cwd: "/tmp" });
+  return store;
 }
 
-function makeParams(sessionFile: string): CompactEmbeddedAgentSessionParams {
+function makeParams(): CompactEmbeddedAgentSessionParams {
   return {
-    sessionId: "session-1",
-    sessionFile,
+    sessionId: IDENTITY.sessionId,
+    sessionKey: IDENTITY.sessionKey,
     workspaceDir: "/tmp",
     currentTokenCount: 995_000,
   } as CompactEmbeddedAgentSessionParams;
@@ -102,11 +91,8 @@ function makeFakeClient(script: FakeClientScript): ClaudeAppServerClient {
 
 describe("maybeCompactClaudeAppServerSession", () => {
   it("fails with missing_thread_binding when the session has no bound thread", async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), "claude-compact-unbound-"));
-    const sessionFile = path.join(dir, "session.jsonl");
-    await writeFile(sessionFile, "");
-
-    const result = await maybeCompactClaudeAppServerSession(makeParams(sessionFile), {
+    const result = await maybeCompactClaudeAppServerSession(makeParams(), {
+      bindingStore: createClaudeTestBindingStore(),
       clientFactory: () => makeFakeClient({}),
     });
 
@@ -116,7 +102,7 @@ describe("maybeCompactClaudeAppServerSession", () => {
   });
 
   it("maps a successful compaction onto the compact result", async () => {
-    const sessionFile = await makeBoundSessionFile();
+    const bindingStore = await makeBoundStore();
     const client = makeFakeClient({
       emit: [
         {
@@ -134,7 +120,8 @@ describe("maybeCompactClaudeAppServerSession", () => {
       ],
     });
 
-    const result = await maybeCompactClaudeAppServerSession(makeParams(sessionFile), {
+    const result = await maybeCompactClaudeAppServerSession(makeParams(), {
+      bindingStore,
       clientFactory: () => client,
     });
 
@@ -149,7 +136,7 @@ describe("maybeCompactClaudeAppServerSession", () => {
   });
 
   it("falls back to the caller's token count when the SDK omits boundary accounting", async () => {
-    const sessionFile = await makeBoundSessionFile();
+    const bindingStore = await makeBoundStore();
     const client = makeFakeClient({
       emit: [
         {
@@ -159,7 +146,8 @@ describe("maybeCompactClaudeAppServerSession", () => {
       ],
     });
 
-    const result = await maybeCompactClaudeAppServerSession(makeParams(sessionFile), {
+    const result = await maybeCompactClaudeAppServerSession(makeParams(), {
+      bindingStore,
       clientFactory: () => client,
     });
 
@@ -169,7 +157,7 @@ describe("maybeCompactClaudeAppServerSession", () => {
   });
 
   it("ignores completions for other threads", async () => {
-    const sessionFile = await makeBoundSessionFile();
+    const bindingStore = await makeBoundStore();
     const client = makeFakeClient({
       emit: [
         {
@@ -187,7 +175,8 @@ describe("maybeCompactClaudeAppServerSession", () => {
       ],
     });
 
-    const result = await maybeCompactClaudeAppServerSession(makeParams(sessionFile), {
+    const result = await maybeCompactClaudeAppServerSession(makeParams(), {
+      bindingStore,
       clientFactory: () => client,
     });
 
@@ -196,7 +185,7 @@ describe("maybeCompactClaudeAppServerSession", () => {
   });
 
   it("maps -32601 to an actionable old-bridge failure without raising the version floor", async () => {
-    const sessionFile = await makeBoundSessionFile();
+    const bindingStore = await makeBoundStore();
     const client = makeFakeClient({
       onCompactStart: () => {
         throw new ClaudeAppServerRpcError(
@@ -208,7 +197,8 @@ describe("maybeCompactClaudeAppServerSession", () => {
       },
     });
 
-    const result = await maybeCompactClaudeAppServerSession(makeParams(sessionFile), {
+    const result = await maybeCompactClaudeAppServerSession(makeParams(), {
+      bindingStore,
       clientFactory: () => client,
     });
 
@@ -218,12 +208,13 @@ describe("maybeCompactClaudeAppServerSession", () => {
   });
 
   it("fails cleanly when the bridge exits mid-compaction", async () => {
-    const sessionFile = await makeBoundSessionFile();
+    const bindingStore = await makeBoundStore();
     const client = makeFakeClient({
       exitAfterRequest: new Error("claude-bridge stopped"),
     });
 
-    const result = await maybeCompactClaudeAppServerSession(makeParams(sessionFile), {
+    const result = await maybeCompactClaudeAppServerSession(makeParams(), {
+      bindingStore,
       clientFactory: () => client,
     });
 
@@ -232,10 +223,11 @@ describe("maybeCompactClaudeAppServerSession", () => {
   });
 
   it("times out when no completion notification ever arrives", async () => {
-    const sessionFile = await makeBoundSessionFile();
+    const bindingStore = await makeBoundStore();
     const client = makeFakeClient({});
 
-    const result = await maybeCompactClaudeAppServerSession(makeParams(sessionFile), {
+    const result = await maybeCompactClaudeAppServerSession(makeParams(), {
+      bindingStore,
       clientFactory: () => client,
       completionTimeoutMs: 50,
     });

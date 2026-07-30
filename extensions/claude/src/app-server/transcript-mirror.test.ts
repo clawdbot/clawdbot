@@ -50,9 +50,8 @@ async function readMirroredMessages(
   const events = await readSessionTranscriptEvents(target);
   return events
     .map((event) => (event && typeof event === "object" ? event : undefined))
-    .filter(
-      (event): event is { message: { idempotencyKey?: string; role?: string } } =>
-        Boolean(event && typeof (event as { message?: unknown }).message === "object"),
+    .filter((event): event is { message: { idempotencyKey?: string; role?: string } } =>
+      Boolean(event && typeof (event as { message?: unknown }).message === "object"),
     );
 }
 

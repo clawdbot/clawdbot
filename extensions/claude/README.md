@@ -48,7 +48,7 @@ This extension registers `/claude` with subcommands:
 
 - `/claude status` — shared-client liveness + last server stderr
 - `/claude version` — bridge + installed server package versions
-- `/claude threads` — the active session's `.claude-binding.json` sidecar
+- `/claude threads` — the active session's thread binding (SQLite plugin state)
 - `/claude resume <thread_id>` — rotate the session's binding to a specific thread
 - `/claude help` — subcommand listing (default when no args)
 

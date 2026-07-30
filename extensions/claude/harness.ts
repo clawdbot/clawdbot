@@ -12,6 +12,7 @@
 
 import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { claudeAppServerPoolKey, resolveClaudeAppServerConfig } from "./src/app-server/config.js";
+import type { ClaudeAppServerBindingStore } from "./src/app-server/thread-store.js";
 
 const DEFAULT_CLAUDE_PROVIDER_IDS = new Set(["anthropic"]);
 
@@ -22,10 +23,47 @@ export function createClaudeAppServerAgentHarness(options?: {
   poolKey?: string;
   pluginConfig?: unknown;
   resolvePluginConfig?: () => unknown;
+  /**
+   * Shared binding-store resolver, so /claude commands and harness turns hit
+   * the same store instance (one lifecycle-lock queue). Preferred over
+   * `runtime` when the registering plugin also registers binding consumers.
+   */
+  resolveBindingStore?: () => Promise<ClaudeAppServerBindingStore>;
+  /**
+   * Plugin runtime of the REGISTERING plugin (claude or glm-bridge), so
+   * thread bindings land in that plugin's own SQLite state namespace.
+   * Used when no resolveBindingStore is supplied; harness turns require one
+   * of the two (bare factory calls in tests may omit both).
+   */
+  runtime?: import("./src/app-server/thread-store.js").ClaudeBindingRuntime;
+  /** Test seam: overrides the runtime-opened binding store. */
+  bindingStore?: ClaudeAppServerBindingStore;
 }): AgentHarness {
   const providerIds = new Set(
     [...(options?.providerIds ?? DEFAULT_CLAUDE_PROVIDER_IDS)].map((id) => id.trim().toLowerCase()),
   );
+  // Promise-memoized: two concurrent first turns must not each open their own
+  // store instance — the per-session lifecycle-lock queue lives on the
+  // instance, so a duplicate would silently stop serializing same-session
+  // turns. The thread-store module stays dynamic-imported so registration
+  // remains light.
+  let bindingStorePromise: Promise<ClaudeAppServerBindingStore> | undefined;
+  const resolveBindingStore = (): Promise<ClaudeAppServerBindingStore> =>
+    (bindingStorePromise ??= options?.bindingStore
+      ? Promise.resolve(options.bindingStore)
+      : options?.resolveBindingStore
+        ? options.resolveBindingStore()
+        : options?.runtime
+          ? import("./src/app-server/thread-store.js").then((m) =>
+              m.openClaudeAppServerBindingStore(
+                options.runtime as NonNullable<typeof options.runtime>,
+              ),
+            )
+          : Promise.reject(
+              new Error(
+                "claude harness requires a plugin runtime (or binding store) for thread bindings",
+              ),
+            ));
   // Each bridge-backed extension owns exactly one shared-client pool slot,
   // keyed by its provider identity (client.ts / run-attempt.ts). dispose()
   // must clear ONLY that slot: clearing the whole pool would tear down a
@@ -70,18 +108,20 @@ export function createClaudeAppServerAgentHarness(options?: {
       const { runClaudeAppServerAttempt } = await import("./src/app-server/run-attempt.js");
       return runClaudeAppServerAttempt(params, {
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+        bindingStore: await resolveBindingStore(),
       });
     },
     compact: async (params) => {
       const { maybeCompactClaudeAppServerSession } = await import("./src/app-server/compact.js");
       return maybeCompactClaudeAppServerSession(params, {
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+        bindingStore: await resolveBindingStore(),
       });
     },
     reset: async (params) => {
-      if (params.sessionFile) {
-        const { clearClaudeAppServerBinding } = await import("./src/app-server/thread-store.js");
-        await clearClaudeAppServerBinding(params.sessionFile);
+      if (params.sessionKey || params.sessionId) {
+        const { claudeBindingSessionIdentity } = await import("./src/app-server/thread-store.js");
+        await (await resolveBindingStore()).clear(claudeBindingSessionIdentity(params));
       }
     },
     dispose: async () => {

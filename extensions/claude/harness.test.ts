@@ -52,6 +52,18 @@ describe("createClaudeAppServerAgentHarness dispose() pool-key scoping", () => {
     expect(clearSpy).toHaveBeenCalledWith("claude-bridge:custom");
   });
 
+  it("reset() clears the session's thread binding by session identity", async () => {
+    const { createClaudeTestBindingStore } =
+      await import("./src/app-server/thread-store.test-helpers.js");
+    const bindingStore = createClaudeTestBindingStore();
+    const identity = { sessionKey: "agent:main:direct:tester", sessionId: "sess-1" };
+    await bindingStore.write(identity, { threadId: "thr_reset_me", cwd: "/tmp" });
+
+    const harness = createClaudeAppServerAgentHarness({ bindingStore });
+    await harness.reset?.({ ...identity, reason: "new" });
+    expect(await bindingStore.read(identity)).toBeNull();
+  });
+
   it("resolves the pool key from the LIVE plugin config, not a providerIds guess frozen at construction", async () => {
     // An operator config that sets appServer.modelProvider to something other
     // than providerIds[0] is unusual but legal — dispose() must still match

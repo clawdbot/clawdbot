@@ -134,7 +134,9 @@ async function handleSessionsPanelRequest(
 
 function numberParam(url: URL, key: string): number | undefined {
   const raw = url.searchParams.get(key);
-  if (!raw) return undefined;
+  if (!raw) {
+    return undefined;
+  }
   const n = Number(raw);
   return Number.isFinite(n) ? n : undefined;
 }

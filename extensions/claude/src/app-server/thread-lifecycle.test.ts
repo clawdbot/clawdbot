@@ -1,18 +1,18 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClaudeAppServerClient } from "./client.js";
 import type { ResolvedClaudeAppServerConfig } from "./config.js";
 import type { ClaudeDynamicToolBridge } from "./dynamic-tools.js";
 import { isThreadNotFound, startOrResumeClaudeThread } from "./thread-lifecycle.js";
 import {
-  readClaudeAppServerBinding,
-  resolveClaudeAppServerBindingPath,
-  writeClaudeAppServerBinding,
+  createClaudeAppServerBindingStore,
   type ClaudeAppServerBinding,
+  type ClaudeAppServerBindingStore,
 } from "./thread-store.js";
+import {
+  createClaudeTestBindingStateStore,
+  createClaudeTestBindingStore,
+} from "./thread-store.test-helpers.js";
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -33,6 +33,7 @@ const BASE_CFG: ResolvedClaudeAppServerConfig = {
 
 const STABLE_DYNAMIC_TOOLS_FP = "fp-dynamic-tools-v1";
 const STABLE_DEVINSTRUCTIONS_FP = "fp-devinstructions-v1";
+const IDENTITY = { sessionKey: "agent:main:direct:tester", sessionId: "sess-1" };
 
 function makeBridge(): ClaudeDynamicToolBridge {
   return { specs: [], handlers: new Map() } as unknown as ClaudeDynamicToolBridge;
@@ -79,9 +80,10 @@ function makeClient(opts: {
   return { request } as unknown as ClaudeAppServerClient;
 }
 
-function makeParams(sessionFile: string): EmbeddedRunAttemptParams {
+function makeParams(): EmbeddedRunAttemptParams {
   return {
-    sessionFile,
+    sessionKey: IDENTITY.sessionKey,
+    sessionId: IDENTITY.sessionId,
     modelId: "claude-sonnet-4-6",
     workspaceDir: "/tmp/ws",
   } as unknown as EmbeddedRunAttemptParams;
@@ -90,25 +92,20 @@ function makeParams(sessionFile: string): EmbeddedRunAttemptParams {
 // ── tests ───────────────────────────────────────────────────────────────────
 
 describe("startOrResumeClaudeThread", () => {
-  let dir: string;
-  let sessionFile: string;
+  let store: ClaudeAppServerBindingStore;
 
-  beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), "claude-lifecycle-test-"));
-    sessionFile = path.join(dir, "session.jsonl");
-  });
-
-  afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+  beforeEach(() => {
+    store = createClaudeTestBindingStore();
   });
 
   it("starts a fresh thread when no binding exists", async () => {
     const client = makeClient({});
     const result = await startOrResumeClaudeThread({
       client,
-      params: makeParams(sessionFile),
+      params: makeParams(),
       cfg: BASE_CFG,
       bridge: makeBridge(),
+      bindingStore: store,
       developerInstructions: "x",
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
       dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
@@ -120,45 +117,51 @@ describe("startOrResumeClaudeThread", () => {
     expect(result.rotationReason).toBeUndefined();
   });
 
-  it("writes the binding sidecar on fresh start", async () => {
+  it("writes the binding on fresh start", async () => {
     const client = makeClient({});
     await startOrResumeClaudeThread({
       client,
-      params: makeParams(sessionFile),
+      params: makeParams(),
       cfg: BASE_CFG,
       bridge: makeBridge(),
+      bindingStore: store,
       developerInstructions: "x",
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
       dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
       effectiveWorkspace: "/tmp/ws",
       nativeDisallowedTools: [],
     });
-    const binding = await readClaudeAppServerBinding(sessionFile);
+    const binding = await store.read(IDENTITY);
     expect(binding?.threadId).toBe("thr_fresh_001");
     expect(binding?.dynamicToolsFingerprint).toBe(STABLE_DYNAMIC_TOOLS_FP);
     expect(binding?.developerInstructionsFingerprint).toBe(STABLE_DEVINSTRUCTIONS_FP);
   });
 
   it("rejects when binding persistence fails", async () => {
-    await mkdir(resolveClaudeAppServerBindingPath(sessionFile));
+    const brokenState = createClaudeTestBindingStateStore();
+    brokenState.update = () => {
+      throw new Error("plugin state write failed");
+    };
+    const brokenStore = createClaudeAppServerBindingStore(brokenState);
     const client = makeClient({});
     await expect(
       startOrResumeClaudeThread({
         client,
-        params: makeParams(sessionFile),
+        params: makeParams(),
         cfg: BASE_CFG,
         bridge: makeBridge(),
+        bindingStore: brokenStore,
         developerInstructions: "x",
         developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
         dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
         effectiveWorkspace: "/tmp/ws",
         nativeDisallowedTools: [],
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow("plugin state write failed");
   });
 
   it("resumes when an existing binding matches the dynamic-tools fingerprint", async () => {
-    await seedBinding(sessionFile, {
+    await seedBinding(store, {
       threadId: "thr_existing_001",
       dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
@@ -166,9 +169,10 @@ describe("startOrResumeClaudeThread", () => {
     const client = makeClient({});
     const result = await startOrResumeClaudeThread({
       client,
-      params: makeParams(sessionFile),
+      params: makeParams(),
       cfg: BASE_CFG,
       bridge: makeBridge(),
+      bindingStore: store,
       developerInstructions: "x",
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
       dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
@@ -180,7 +184,7 @@ describe("startOrResumeClaudeThread", () => {
   });
 
   it("forks the thread when dynamic-tools fingerprint changes (transcript preserved)", async () => {
-    await seedBinding(sessionFile, {
+    await seedBinding(store, {
       threadId: "thr_existing_002",
       dynamicToolsFingerprint: "fp-OLD",
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
@@ -194,9 +198,10 @@ describe("startOrResumeClaudeThread", () => {
     const client = { request } as unknown as ClaudeAppServerClient;
     const result = await startOrResumeClaudeThread({
       client,
-      params: makeParams(sessionFile),
+      params: makeParams(),
       cfg: BASE_CFG,
       bridge: makeBridge(),
+      bindingStore: store,
       developerInstructions: "x",
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
       dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
@@ -207,23 +212,23 @@ describe("startOrResumeClaudeThread", () => {
     expect(result.threadId).toBe("thr_after_fork");
     expect(result.forkedFromThreadId).toBe("thr_existing_002");
     expect(result.rotationReason).toContain("dynamic tool catalog changed");
-    expect(request).toHaveBeenCalledWith(
-      "thread/fork",
-      expect.objectContaining({
-        threadId: "thr_existing_002",
-        dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
-      }),
-    );
+    const forkCallArgs = request.mock.calls.find((c) => c[0] === "thread/fork")?.[1] as
+      | Record<string, unknown>
+      | undefined;
+    expect(forkCallArgs).toMatchObject({
+      threadId: "thr_existing_002",
+      dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
+    });
     // No thread/start should fire: this is a fork, not a fresh rotation.
-    expect(request).not.toHaveBeenCalledWith("thread/start", expect.anything());
-    // Binding sidecar rotates to the forked thread id with the new fingerprint.
-    const binding = await readClaudeAppServerBinding(sessionFile);
+    expect(request.mock.calls.some((c) => c[0] === "thread/start")).toBe(false);
+    // Binding rotates to the forked thread id with the new fingerprint.
+    const binding = await store.read(IDENTITY);
     expect(binding?.threadId).toBe("thr_after_fork");
     expect(binding?.dynamicToolsFingerprint).toBe(STABLE_DYNAMIC_TOOLS_FP);
   });
 
   it("falls back to fresh thread/start when thread/fork reports thread-not-found", async () => {
-    await seedBinding(sessionFile, {
+    await seedBinding(store, {
       threadId: "thr_gone",
       dynamicToolsFingerprint: "fp-OLD",
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
@@ -235,9 +240,10 @@ describe("startOrResumeClaudeThread", () => {
     });
     const result = await startOrResumeClaudeThread({
       client,
-      params: makeParams(sessionFile),
+      params: makeParams(),
       cfg: BASE_CFG,
       bridge: makeBridge(),
+      bindingStore: store,
       developerInstructions: "x",
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
       dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
@@ -251,7 +257,7 @@ describe("startOrResumeClaudeThread", () => {
   });
 
   it("carries current approvalPolicy + sandbox + disallowedTools into the fork (full policy envelope)", async () => {
-    await seedBinding(sessionFile, {
+    await seedBinding(store, {
       threadId: "thr_stale_policy",
       dynamicToolsFingerprint: "fp-OLD",
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
@@ -281,9 +287,10 @@ describe("startOrResumeClaudeThread", () => {
 
     const result = await startOrResumeClaudeThread({
       client,
-      params: makeParams(sessionFile),
+      params: makeParams(),
       cfg: cfgWithNewPolicy,
       bridge: makeBridge(),
+      bindingStore: store,
       developerInstructions: "x",
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
       dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
@@ -292,16 +299,16 @@ describe("startOrResumeClaudeThread", () => {
     });
 
     expect(result.outcome).toBe("forked");
-    expect(request).toHaveBeenCalledWith(
-      "thread/fork",
-      expect.objectContaining({
-        threadId: "thr_stale_policy",
-        approvalPolicy: "on-request",
-        sandbox: { type: "readOnly" },
-        disallowedTools: ["Bash", "Edit"],
-        dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
-      }),
-    );
+    const forkCallArgs = request.mock.calls.find((c) => c[0] === "thread/fork")?.[1] as
+      | Record<string, unknown>
+      | undefined;
+    expect(forkCallArgs).toMatchObject({
+      threadId: "thr_stale_policy",
+      approvalPolicy: "on-request",
+      sandbox: { type: "readOnly" },
+      disallowedTools: ["Bash", "Edit"],
+      dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
+    });
   });
 
   it("sends disallowedTools: [] when policy is empty so the fork clears parent's stale blocks", async () => {
@@ -310,7 +317,7 @@ describe("startOrResumeClaudeThread", () => {
     // disallowedTools: [] so the server doesn't inherit the parent's
     // stale block list. Omitting the field would inherit parent →
     // stale Bash/Edit blocks persist into the new thread.
-    await seedBinding(sessionFile, {
+    await seedBinding(store, {
       threadId: "thr_relaxed_policy",
       dynamicToolsFingerprint: "fp-OLD",
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
@@ -325,9 +332,10 @@ describe("startOrResumeClaudeThread", () => {
 
     await startOrResumeClaudeThread({
       client,
-      params: makeParams(sessionFile),
+      params: makeParams(),
       cfg: BASE_CFG,
       bridge: makeBridge(),
+      bindingStore: store,
       developerInstructions: "x",
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
       dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
@@ -343,7 +351,7 @@ describe("startOrResumeClaudeThread", () => {
   });
 
   it("propagates non-thread-not-found errors from thread/fork", async () => {
-    await seedBinding(sessionFile, {
+    await seedBinding(store, {
       threadId: "thr_a",
       dynamicToolsFingerprint: "fp-OLD",
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
@@ -353,9 +361,10 @@ describe("startOrResumeClaudeThread", () => {
     await expect(
       startOrResumeClaudeThread({
         client,
-        params: makeParams(sessionFile),
+        params: makeParams(),
         cfg: BASE_CFG,
         bridge: makeBridge(),
+        bindingStore: store,
         developerInstructions: "x",
         developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
         dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
@@ -366,7 +375,7 @@ describe("startOrResumeClaudeThread", () => {
   });
 
   it("falls back to fresh start when thread/resume reports thread-not-found", async () => {
-    await seedBinding(sessionFile, {
+    await seedBinding(store, {
       threadId: "thr_stale",
       dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
@@ -378,9 +387,10 @@ describe("startOrResumeClaudeThread", () => {
     });
     const result = await startOrResumeClaudeThread({
       client,
-      params: makeParams(sessionFile),
+      params: makeParams(),
       cfg: BASE_CFG,
       bridge: makeBridge(),
+      bindingStore: store,
       developerInstructions: "x",
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
       dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
@@ -393,7 +403,7 @@ describe("startOrResumeClaudeThread", () => {
   });
 
   it("propagates non-thread-not-found errors from thread/resume", async () => {
-    await seedBinding(sessionFile, {
+    await seedBinding(store, {
       threadId: "thr_a",
       dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
@@ -403,9 +413,10 @@ describe("startOrResumeClaudeThread", () => {
     await expect(
       startOrResumeClaudeThread({
         client,
-        params: makeParams(sessionFile),
+        params: makeParams(),
         cfg: BASE_CFG,
         bridge: makeBridge(),
+        bindingStore: store,
         developerInstructions: "x",
         developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
         dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
@@ -416,7 +427,7 @@ describe("startOrResumeClaudeThread", () => {
   });
 
   it("sends in-place patches for cwd/approval/developerInstructions divergence without rotating", async () => {
-    await seedBinding(sessionFile, {
+    await seedBinding(store, {
       threadId: "thr_patched",
       cwd: "/tmp/old-ws",
       approvalPolicy: "on-request",
@@ -429,9 +440,10 @@ describe("startOrResumeClaudeThread", () => {
     const client = { request } as unknown as ClaudeAppServerClient;
     const result = await startOrResumeClaudeThread({
       client,
-      params: makeParams(sessionFile),
+      params: makeParams(),
       cfg: BASE_CFG,
       bridge: makeBridge(),
+      bindingStore: store,
       developerInstructions: "fresh",
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
       dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
@@ -439,24 +451,24 @@ describe("startOrResumeClaudeThread", () => {
       nativeDisallowedTools: [],
     });
     expect(result.outcome).toBe("resumed");
-    expect(request).toHaveBeenCalledWith(
-      "thread/resume",
-      expect.objectContaining({
-        threadId: "thr_patched",
-        cwd: "/tmp/new-ws",
-        approvalPolicy: "never",
-        developerInstructions: "fresh",
-      }),
-    );
+    const resumeCallArgs = request.mock.calls.find((c) => c[0] === "thread/resume")?.[1] as
+      | Record<string, unknown>
+      | undefined;
+    expect(resumeCallArgs).toMatchObject({
+      threadId: "thr_patched",
+      cwd: "/tmp/new-ws",
+      approvalPolicy: "never",
+      developerInstructions: "fresh",
+    });
     // Binding gets the patched values so the next turn doesn't re-patch.
-    const updated = await readClaudeAppServerBinding(sessionFile);
+    const updated = await store.read(IDENTITY);
     expect(updated?.cwd).toBe("/tmp/new-ws");
     expect(updated?.approvalPolicy).toBe("never");
     expect(updated?.developerInstructionsFingerprint).toBe(STABLE_DEVINSTRUCTIONS_FP);
   });
 
   it("serializes same-session binding compare-and-mutate operations", async () => {
-    await seedBinding(sessionFile, {
+    await seedBinding(store, {
       threadId: "thr_serialized",
       cwd: "/tmp/old-ws",
       approvalPolicy: "on-request",
@@ -485,9 +497,10 @@ describe("startOrResumeClaudeThread", () => {
 
     const first = startOrResumeClaudeThread({
       client: { request: firstRequest } as unknown as ClaudeAppServerClient,
-      params: makeParams(sessionFile),
+      params: makeParams(),
       cfg: BASE_CFG,
       bridge: makeBridge(),
+      bindingStore: store,
       developerInstructions: "fresh",
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
       dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
@@ -498,9 +511,10 @@ describe("startOrResumeClaudeThread", () => {
 
     const second = startOrResumeClaudeThread({
       client: { request: secondRequest } as unknown as ClaudeAppServerClient,
-      params: makeParams(sessionFile),
+      params: makeParams(),
       cfg: BASE_CFG,
       bridge: makeBridge(),
+      bindingStore: store,
       developerInstructions: "fresh",
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
       dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
@@ -516,13 +530,12 @@ describe("startOrResumeClaudeThread", () => {
     resolveFirstResume();
     await Promise.all([first, second]);
 
-    expect(secondRequest).toHaveBeenCalledWith("thread/resume", {
-      threadId: "thr_serialized",
-    });
+    const resumeCallArgs = secondRequest.mock.calls.find((c) => c[0] === "thread/resume")?.[1];
+    expect(resumeCallArgs).toEqual({ threadId: "thr_serialized" });
   });
 
   it("skips the patch envelope when nothing diverged", async () => {
-    await seedBinding(sessionFile, {
+    await seedBinding(store, {
       threadId: "thr_no_patch",
       cwd: "/tmp/ws",
       approvalPolicy: "never",
@@ -535,9 +548,10 @@ describe("startOrResumeClaudeThread", () => {
     const client = { request } as unknown as ClaudeAppServerClient;
     await startOrResumeClaudeThread({
       client,
-      params: makeParams(sessionFile),
+      params: makeParams(),
       cfg: BASE_CFG,
       bridge: makeBridge(),
+      bindingStore: store,
       developerInstructions: "x",
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
       dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
@@ -574,10 +588,10 @@ describe("isThreadNotFound", () => {
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 async function seedBinding(
-  sessionFile: string,
+  store: ClaudeAppServerBindingStore,
   overrides: Partial<ClaudeAppServerBinding> & { threadId: string },
 ): Promise<void> {
-  const base: Omit<ClaudeAppServerBinding, "schemaVersion" | "createdAt" | "updatedAt"> = {
+  await store.write(IDENTITY, {
     threadId: overrides.threadId,
     cwd: overrides.cwd ?? "/tmp/ws",
     model: overrides.model ?? "claude-sonnet-4-6",
@@ -587,6 +601,5 @@ async function seedBinding(
     sandbox: overrides.sandbox ?? { type: "dangerFullAccess" },
     developerInstructionsFingerprint: overrides.developerInstructionsFingerprint,
     dynamicToolsFingerprint: overrides.dynamicToolsFingerprint,
-  };
-  await writeClaudeAppServerBinding(sessionFile, base);
+  });
 }

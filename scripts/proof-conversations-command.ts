@@ -1,20 +1,27 @@
 /**
- * Real-runtime proof for the new `/claude conversations` subcommand.
+ * Real-runtime proof for the `/claude conversations` subcommand.
  *
  * What's real vs stubbed:
  * - REAL: listSessionEntries (plugin-sdk/session-store-runtime) reading
  *   Tank's actual, live sessions.json store on this box (~5,300+ entries).
- * - REAL: resolveSessionFilePath (plugin-sdk) resolving each entry's real
- *   session transcript file path.
- * - REAL: readClaudeAppServerBinding reading real `.claude-binding.json`
- *   sidecars off disk.
+ * - REAL: thread bindings read from the claude plugin's actual SQLite
+ *   plugin-state namespace in the shared state DB (state/openclaw.sqlite).
  * - Nothing stubbed. This is read-only — it does not write or mutate any
- *   session state.
+ *   session or plugin state.
+ *
+ * Note: bindings only exist for sessions whose turns ran AFTER the
+ * sidecar-to-SQLite binding migration; on a freshly migrated box the
+ * row assertions fail until real Claude turns repopulate the store.
  *
  * Run: pnpm tsx scripts/proof-conversations-command.ts
  */
 
-import { readClaudeAppServerBinding } from "../extensions/claude/src/app-server/thread-store.js";
+import {
+  CLAUDE_APP_SERVER_BINDING_MAX_ENTRIES,
+  CLAUDE_APP_SERVER_BINDING_NAMESPACE,
+  createClaudeAppServerBindingStore,
+  type StoredClaudeAppServerBinding,
+} from "../extensions/claude/src/app-server/thread-store.js";
 import {
   buildConversationRows,
   formatConversationsList,
@@ -23,6 +30,7 @@ import {
   resolveConversationsExcludePatterns,
   type ConversationSessionEntry,
 } from "../extensions/claude/src/command-handlers.js";
+import { createPluginStateSyncKeyedStore } from "../src/plugin-state/plugin-state-store.js";
 
 let assertions = 0;
 function assert(condition: boolean, message: string): void {
@@ -34,8 +42,7 @@ function assert(condition: boolean, message: string): void {
 }
 
 async function main(): Promise<void> {
-  const { listSessionEntries, resolveSessionFilePath } =
-    await import("openclaw/plugin-sdk/session-store-runtime");
+  const { listSessionEntries } = await import("openclaw/plugin-sdk/session-store-runtime");
   const agentId = "tank";
   const rawEntries = listSessionEntries({ agentId });
   assert(
@@ -49,20 +56,25 @@ async function main(): Promise<void> {
     `filtered out ${automationCount} automation (subagent/cron/heartbeat) session keys`,
   );
 
+  // Same store shape openClaudeAppServerBindingStore opens through the plugin
+  // runtime, minus the runtime proxy — read-only against the live rows.
+  const bindingStore = createClaudeAppServerBindingStore(
+    createPluginStateSyncKeyedStore<StoredClaudeAppServerBinding>("claude", {
+      namespace: CLAUDE_APP_SERVER_BINDING_NAMESPACE,
+      maxEntries: CLAUDE_APP_SERVER_BINDING_MAX_ENTRIES,
+      overflowPolicy: "evict-oldest",
+    }),
+  );
+
   const entries = rawEntries as unknown as ConversationSessionEntry[];
   const { rows, candidateCount } = await buildConversationRows(entries, {
-    resolveSessionFile: (entry) =>
-      entry.sessionId ? resolveSessionFilePath(entry.sessionId, entry, { agentId }) : undefined,
-    readBinding: readClaudeAppServerBinding,
+    readBinding: (identity) => bindingStore.read(identity),
   });
   assert(
     candidateCount > 0,
-    `found ${candidateCount} real conversation session(s) with a provider binding`,
+    `found ${candidateCount} real conversation session(s) with a sessionId`,
   );
-  assert(
-    rows.length > 0,
-    `resolved ${rows.length} real conversation(s) with an actual claude-binding sidecar`,
-  );
+  assert(rows.length > 0, `resolved ${rows.length} real conversation(s) with a stored binding`);
 
   const text = formatConversationsList(rows, candidateCount);
   assert(text.includes("Claude conversations"), "formatted output has the expected header");
@@ -91,7 +103,7 @@ async function main(): Promise<void> {
   console.log(`\nAll ${assertions} runtime assertions passed.`);
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   console.error(err);
   process.exitCode = 1;
 });

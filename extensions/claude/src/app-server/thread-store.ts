@@ -1,36 +1,28 @@
 /**
- * Per-session-file binding for Claude threads. Mirrors codex's
- * session-binding pattern: each OpenClaw session has a sidecar JSON file
- * recording the corresponding claude-bridge thread_id so the next turn
- * resumes via thread/resume instead of starting a fresh thread.
+ * Per-session binding for Claude threads. Mirrors codex's session-binding
+ * pattern: each OpenClaw session records the corresponding claude-bridge
+ * thread_id so the next turn resumes via thread/resume instead of starting
+ * a fresh thread.
  *
- * Sidecar path: <sessionFile>.claude-binding.json
+ * Storage: SQLite plugin state (runtime.state.openSyncKeyedStore), keyed by
+ * the stable host session key. The old `<sessionFile>.claude-binding.json`
+ * sidecar files are gone — post-SQLite-migration `sessionFile` is a routing
+ * token, not a path, so sidecars landed in the gateway CWD and the file lock
+ * they required self-deadlocked under fs-safe 0.5 (non-reentrant locks).
  */
 
-import { AsyncLocalStorage } from "node:async_hooks";
-import { promises as fs } from "node:fs";
+import { createHash } from "node:crypto";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { type FileLockOptions, withFileLock } from "openclaw/plugin-sdk/file-lock";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateSyncKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { ApprovalPolicy, SandboxPolicy } from "./types.js";
 
 const SCHEMA_VERSION = 1;
-const CLAUDE_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS = 60_000;
-const CLAUDE_APP_SERVER_BINDING_LOCK_RETRY_INTERVAL_MS = 1_000;
-const CLAUDE_APP_SERVER_BINDING_LOCK_MIN_WAIT_MS =
-  CLAUDE_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS + 15_000;
-const CLAUDE_APP_SERVER_BINDING_LOCK_OPTIONS: FileLockOptions = {
-  retries: {
-    retries: Math.ceil(
-      CLAUDE_APP_SERVER_BINDING_LOCK_MIN_WAIT_MS / CLAUDE_APP_SERVER_BINDING_LOCK_RETRY_INTERVAL_MS,
-    ),
-    factor: 1,
-    minTimeout: CLAUDE_APP_SERVER_BINDING_LOCK_RETRY_INTERVAL_MS,
-    maxTimeout: CLAUDE_APP_SERVER_BINDING_LOCK_RETRY_INTERVAL_MS,
-  },
-  stale: CLAUDE_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS * 2,
-};
-const bindingMutationQueues = new Map<string, Promise<void>>();
-const bindingMutationContext = new AsyncLocalStorage<Set<string>>();
+export const CLAUDE_APP_SERVER_BINDING_NAMESPACE = "app-server-thread-bindings";
+export const CLAUDE_APP_SERVER_BINDING_MAX_ENTRIES = 50_000;
 
 export type ClaudeAppServerBinding = {
   schemaVersion: number;
@@ -55,7 +47,7 @@ export type ClaudeAppServerBinding = {
   /** Epoch milliseconds (Date.now()). Rendered by `/claude threads`. */
   updatedAt: number;
   /**
-   * Turn-completion summary, recorded by {@link recordClaudeThreadTurnSummary}
+   * Turn-completion summary, recorded by the store's recordTurnSummary
    * after each turn finishes — separately from the pre-turn fields above,
    * which thread-lifecycle.ts writes before a turn runs. Absent for bindings
    * written before this field existed, or if a turn is still in flight.
@@ -77,176 +69,222 @@ export type ClaudeAppServerBinding = {
   threadStack?: string[];
 };
 
-/** Cap on threadStack length so repeated /claude resume calls can't grow the sidecar unbounded. */
+/** Cap on threadStack length so repeated /claude resume calls can't grow the binding unbounded. */
 export const THREAD_STACK_MAX = 20;
 
-export function resolveClaudeAppServerBindingPath(sessionFile: string): string {
-  return `${sessionFile}.claude-binding.json`;
+/**
+ * Identity of the OpenClaw session a binding belongs to. The stable session
+ * key is the store key (one conversation, one binding); the ephemeral session
+ * id stamps writes so a stale binding can't leak across `/new` if the harness
+ * reset hook did not fire (crash between reset and the next turn).
+ */
+export type ClaudeBindingSessionIdentity = {
+  /** Stable host session key, e.g. `agent:tank:direct:eddie`. */
+  sessionKey?: string;
+  /** Ephemeral OpenClaw session id for the current session generation. */
+  sessionId?: string;
+};
+
+/** Stored value: the binding plus the session generation that wrote it. */
+export type StoredClaudeAppServerBinding = ClaudeAppServerBinding & {
+  sessionId?: string;
+};
+
+export type ClaudeThreadTurnSummary = {
+  stopReason?: string;
+  usage?: { input: number; output: number; total: number };
+  assistantPreview?: string;
+};
+
+export type ClaudeAppServerBindingStore = {
+  read(identity: ClaudeBindingSessionIdentity): Promise<ClaudeAppServerBinding | null>;
+  write(
+    identity: ClaudeBindingSessionIdentity,
+    binding: Omit<ClaudeAppServerBinding, "schemaVersion" | "createdAt" | "updatedAt"> & {
+      createdAt?: number;
+    },
+  ): Promise<void>;
+  clear(identity: ClaudeBindingSessionIdentity): Promise<void>;
+  recordTurnSummary(
+    identity: ClaudeBindingSessionIdentity,
+    summary: ClaudeThreadTurnSummary,
+  ): Promise<void>;
+  /**
+   * Serializes read/classify/resume-or-fork-or-start/write for one session so
+   * concurrent turns can't overwrite a sibling's patched binding state.
+   * In-process only — the gateway is the sole writer of this plugin's state.
+   */
+  withLifecycleLock<T>(identity: ClaudeBindingSessionIdentity, run: () => Promise<T>): Promise<T>;
+};
+
+/** Binding identity from any params shape carrying the session identity pair. */
+export function claudeBindingSessionIdentity(params: {
+  sessionId?: string;
+  sessionKey?: string;
+}): ClaudeBindingSessionIdentity {
+  return {
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+  };
 }
 
-/** Serializes compare-and-mutate operations for one Claude binding sidecar. */
-export async function withClaudeAppServerBindingLock<T>(
-  sessionFile: string,
-  run: () => Promise<T>,
-): Promise<T> {
-  const bindingPath = resolveClaudeAppServerBindingPath(sessionFile);
-  const ownedBindings = bindingMutationContext.getStore();
-  if (ownedBindings?.has(bindingPath)) {
-    // This call chain already holds the queue slot and the file lock below.
-    // fs-safe locks are non-reentrant without an owner key, so re-acquiring
-    // here self-deadlocks into file_lock_timeout and fails the turn.
-    return await run();
+export function claudeBindingStoreKey(identity: ClaudeBindingSessionIdentity): string {
+  const sessionKey = identity.sessionKey?.trim();
+  if (sessionKey) {
+    // Digested, mirroring codex bindingStoreKey: session keys are unbounded
+    // (plugin-state caps keys at 512 bytes) and can embed channel/sender
+    // handles that should not sit cleartext in the shared state table.
+    const digest = createHash("sha256").update(sessionKey).digest("base64url");
+    return `session-key:${digest}`;
   }
-
-  const previous = bindingMutationQueues.get(bindingPath) ?? Promise.resolve();
-  let releaseCurrent!: () => void;
-  const current = new Promise<void>((resolve) => {
-    releaseCurrent = resolve;
-  });
-  const queued = previous.then(
-    () => current,
-    () => current,
-  );
-  bindingMutationQueues.set(bindingPath, queued);
-  await previous.catch(() => undefined);
-
-  const nestedOwnedBindings = new Set(ownedBindings);
-  nestedOwnedBindings.add(bindingPath);
-  try {
-    return await bindingMutationContext.run(nestedOwnedBindings, () =>
-      withFileLock(bindingPath, CLAUDE_APP_SERVER_BINDING_LOCK_OPTIONS, run),
-    );
-  } finally {
-    releaseCurrent();
-    if (bindingMutationQueues.get(bindingPath) === queued) {
-      bindingMutationQueues.delete(bindingPath);
-    }
+  const sessionId = identity.sessionId?.trim();
+  if (sessionId) {
+    return `session-id:${sessionId}`;
   }
-}
-
-export async function readClaudeAppServerBinding(
-  sessionFile: string,
-): Promise<ClaudeAppServerBinding | null> {
-  try {
-    const raw = await fs.readFile(resolveClaudeAppServerBindingPath(sessionFile), "utf8");
-    const parsed = JSON.parse(raw) as ClaudeAppServerBinding;
-    if (parsed.schemaVersion !== SCHEMA_VERSION || typeof parsed.threadId !== "string") {
-      embeddedAgentLog.warn("claude-bridge: binding schema mismatch, ignoring", {
-        sessionFile,
-        got: parsed.schemaVersion,
-      });
-      return null;
-    }
-    return parsed;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    embeddedAgentLog.warn("claude-bridge: failed to read binding", {
-      sessionFile,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
-  }
-}
-
-export async function writeClaudeAppServerBinding(
-  sessionFile: string,
-  binding: Omit<ClaudeAppServerBinding, "schemaVersion" | "createdAt" | "updatedAt"> & {
-    createdAt?: number;
-  },
-): Promise<void> {
-  await withClaudeAppServerBindingLock(sessionFile, async () => {
-    // Epoch milliseconds — the unit `formatBinding` renders via
-    // `new Date(b.updatedAt).toISOString()` and the unit `handleResume`
-    // already writes (`Date.now()`). Storing seconds here made `/claude
-    // threads` render "Updated" as a 1970 date and split the same field into
-    // two units depending on whether the binding was last touched by a normal
-    // turn (seconds) or by `/claude resume` (ms) — openclaw-0ld C1.
-    const now = Date.now();
-    // schemaVersion/createdAt/updatedAt MUST be spread onto AFTER `...binding`,
-    // not before — callers that read-modify-write via `{...existing, ...}`
-    // (e.g. recordClaudeThreadTurnSummary, handleResume) pass an object that
-    // already carries the OLD schemaVersion/createdAt/updatedAt from the
-    // existing binding. Spreading `...binding` last would let those stale
-    // values silently win over the freshly computed `now`, so every
-    // subsequent write kept re-persisting the original creation timestamp
-    // as "updated" — this is exactly what caused `/claude threads` and
-    // `/claude conversations` to render a frozen "Updated" time.
-    const data: ClaudeAppServerBinding = {
-      ...binding,
-      schemaVersion: SCHEMA_VERSION,
-      createdAt: binding.createdAt ?? now,
-      updatedAt: now,
-    };
-    const target = resolveClaudeAppServerBindingPath(sessionFile);
-    const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
-    try {
-      await fs.writeFile(tmp, JSON.stringify(data, null, 2), "utf8");
-      await fs.rename(tmp, target);
-    } catch (err) {
-      await fs.unlink(tmp).catch(() => undefined);
-      embeddedAgentLog.warn("claude-bridge: failed to persist binding", {
-        sessionFile,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      throw err;
-    }
-  });
+  throw new Error("Claude thread binding requires a session key or session id");
 }
 
 const ASSISTANT_PREVIEW_MAX_CHARS = 200;
 
-/**
- * Attaches a turn-completion summary (real stop reason, usage, a truncated
- * preview of the final reply) to the existing binding, so `/claude threads`
- * can say more than just "here's the thread id" — read-modify-write onto
- * whatever thread-lifecycle.ts already wrote for this turn, matching the
- * same pattern `/claude resume` already uses (command-handlers.ts) rather
- * than nesting a second binding-lock acquisition inside this one.
- *
- * No-ops if no binding exists yet (e.g. the write raced ahead of
- * thread-lifecycle's initial write, or the binding was cleared mid-turn) —
- * the next turn's thread-lifecycle write recreates the binding regardless.
- */
-export async function recordClaudeThreadTurnSummary(
-  sessionFile: string,
-  summary: {
-    stopReason?: string;
-    usage?: { input: number; output: number; total: number };
-    assistantPreview?: string;
-  },
-): Promise<void> {
-  const existing = await readClaudeAppServerBinding(sessionFile);
-  if (!existing) {
-    return;
+export function createClaudeAppServerBindingStore(
+  state: Pick<
+    PluginStateSyncKeyedStore<StoredClaudeAppServerBinding>,
+    "lookup" | "update" | "delete"
+  >,
+): ClaudeAppServerBindingStore {
+  const updateEntry = state.update?.bind(state);
+  const deleteEntry = state.delete?.bind(state);
+  if (!updateEntry || !deleteEntry) {
+    throw new Error("Claude thread bindings require atomic plugin-state updates");
   }
-  const trimmedPreview = summary.assistantPreview?.trim();
-  const preview = trimmedPreview
-    ? trimmedPreview.length > ASSISTANT_PREVIEW_MAX_CHARS
-      ? `${trimmedPreview.slice(0, ASSISTANT_PREVIEW_MAX_CHARS)}…`
-      : trimmedPreview
-    : existing.lastAssistantPreview;
-  await writeClaudeAppServerBinding(sessionFile, {
-    ...existing,
-    lastTurnStopReason: summary.stopReason ?? existing.lastTurnStopReason,
-    lastTurnUsage: summary.usage ?? existing.lastTurnUsage,
-    lastAssistantPreview: preview,
-    turnCount: (existing.turnCount ?? 0) + 1,
-  });
-}
+  const lifecycleTails = new Map<string, Promise<void>>();
 
-export async function clearClaudeAppServerBinding(sessionFile: string): Promise<void> {
-  await withClaudeAppServerBindingLock(sessionFile, async () => {
-    try {
-      await fs.unlink(resolveClaudeAppServerBindingPath(sessionFile));
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        embeddedAgentLog.warn("claude-bridge: failed to clear binding", {
-          sessionFile,
+  const asCurrentBinding = (
+    stored: StoredClaudeAppServerBinding | undefined,
+    identity: ClaudeBindingSessionIdentity,
+  ): ClaudeAppServerBinding | null => {
+    if (!stored) {
+      return null;
+    }
+    if (stored.schemaVersion !== SCHEMA_VERSION || typeof stored.threadId !== "string") {
+      embeddedAgentLog.warn("claude-bridge: binding schema mismatch, ignoring", {
+        sessionKey: identity.sessionKey,
+        got: stored.schemaVersion,
+      });
+      return null;
+    }
+    // Session-generation guard: a binding stamped by a different session id
+    // belongs to a pre-`/new` generation whose reset hook never ran. Treating
+    // it as absent rotates to a fresh thread instead of silently resuming
+    // the retired conversation's context.
+    if (stored.sessionId && identity.sessionId && stored.sessionId !== identity.sessionId) {
+      return null;
+    }
+    return stored;
+  };
+
+  const stamp = (
+    identity: ClaudeBindingSessionIdentity,
+    binding: ClaudeAppServerBinding,
+  ): StoredClaudeAppServerBinding => ({
+    ...binding,
+    ...(identity.sessionId ? { sessionId: identity.sessionId } : {}),
+  });
+
+  /** Atomic read-modify-write; returning undefined from the mutation is a no-op. */
+  const mutate = (
+    identity: ClaudeBindingSessionIdentity,
+    mutation: (existing: ClaudeAppServerBinding | null) => ClaudeAppServerBinding | undefined,
+  ): void => {
+    updateEntry(claudeBindingStoreKey(identity), (existing) => {
+      const next = mutation(asCurrentBinding(existing, identity));
+      return next === undefined ? undefined : stamp(identity, next);
+    });
+  };
+
+  return {
+    async read(identity) {
+      try {
+        return asCurrentBinding(state.lookup(claudeBindingStoreKey(identity)), identity);
+      } catch (err) {
+        // A corrupt row must degrade to "no binding" (fresh thread next turn,
+        // write self-heals the row) instead of failing every turn — the same
+        // recovery the old sidecar reader had for unreadable JSON.
+        embeddedAgentLog.warn("claude-bridge: failed to read binding, ignoring", {
+          sessionKey: identity.sessionKey,
           error: err instanceof Error ? err.message : String(err),
         });
+        return null;
       }
-    }
-  });
+    },
+
+    async write(identity, binding) {
+      const now = Date.now();
+      // Full replacement: a fresh thread/start or fork is a NEW thread, so
+      // createdAt resets to now unless the caller is read-modify-writing an
+      // existing binding and passes its original createdAt through.
+      updateEntry(claudeBindingStoreKey(identity), () =>
+        stamp(identity, {
+          ...binding,
+          schemaVersion: SCHEMA_VERSION,
+          createdAt: binding.createdAt ?? now,
+          updatedAt: now,
+        }),
+      );
+    },
+
+    async clear(identity) {
+      deleteEntry(claudeBindingStoreKey(identity));
+    },
+
+    async recordTurnSummary(identity, summary) {
+      const trimmedPreview = summary.assistantPreview?.trim();
+      mutate(identity, (existing) => {
+        // No-op if no binding exists yet (e.g. the write raced ahead of
+        // thread-lifecycle's initial write, or the binding was cleared
+        // mid-turn) — the next turn's lifecycle write recreates it anyway.
+        if (!existing) {
+          return undefined;
+        }
+        const preview = trimmedPreview
+          ? trimmedPreview.length > ASSISTANT_PREVIEW_MAX_CHARS
+            ? `${trimmedPreview.slice(0, ASSISTANT_PREVIEW_MAX_CHARS)}…`
+            : trimmedPreview
+          : existing.lastAssistantPreview;
+        return {
+          ...existing,
+          lastTurnStopReason: summary.stopReason ?? existing.lastTurnStopReason,
+          lastTurnUsage: summary.usage ?? existing.lastTurnUsage,
+          lastAssistantPreview: preview,
+          turnCount: (existing.turnCount ?? 0) + 1,
+          updatedAt: Date.now(),
+        };
+      });
+    },
+
+    withLifecycleLock: (identity, run) =>
+      enqueueKeyedTask({ tails: lifecycleTails, key: claudeBindingStoreKey(identity), task: run }),
+  };
+}
+
+export type ClaudeBindingRuntime = {
+  state: {
+    openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateSyncKeyedStore<T>;
+  };
+};
+
+/** Opens the plugin-scoped SQLite-backed binding store off the injected plugin runtime. */
+export function openClaudeAppServerBindingStore(
+  runtime: ClaudeBindingRuntime,
+): ClaudeAppServerBindingStore {
+  return createClaudeAppServerBindingStore(
+    runtime.state.openSyncKeyedStore<StoredClaudeAppServerBinding>({
+      namespace: CLAUDE_APP_SERVER_BINDING_NAMESPACE,
+      maxEntries: CLAUDE_APP_SERVER_BINDING_MAX_ENTRIES,
+      // Deliberately NOT codex's "reject-new": at the cap, dropping the
+      // oldest conversation's binding (it just starts a fresh thread) beats
+      // silently refusing to persist bindings for active new conversations.
+      overflowPolicy: "evict-oldest",
+    }),
+  );
 }

@@ -79,6 +79,13 @@ export default definePluginEntry({
         label: "GLM app-server harness (via Z.ai)",
         providerIds: ["zai"],
         resolvePluginConfig: resolveCurrentPluginConfig,
+        // Bindings land in glm-bridge's own plugin-state namespace, separate
+        // from the claude extension's — a session runs on one harness at a
+        // time, and cross-provider thread resume was never valid anyway.
+        // Follow-up: /claude threads|resume|thread-pop|conversations read the
+        // claude plugin's namespace only, so GLM sessions need a /glm command
+        // (same handlers, this store, zai pool key) to regain that surface.
+        runtime: api.runtime,
       }),
     );
   },

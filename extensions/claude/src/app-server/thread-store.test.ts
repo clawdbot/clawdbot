@@ -1,44 +1,29 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  readClaudeAppServerBinding,
-  recordClaudeThreadTurnSummary,
-  writeClaudeAppServerBinding,
-} from "./thread-store.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import type { ClaudeAppServerBindingStore } from "./thread-store.js";
+import { createClaudeTestBindingStore } from "./thread-store.test-helpers.js";
 
-describe("recordClaudeThreadTurnSummary", () => {
-  let dir: string;
-  let sessionFile: string;
+const IDENTITY = { sessionKey: "agent:main:direct:tester", sessionId: "sess-1" };
 
-  beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), "claude-thread-store-test-"));
-    sessionFile = path.join(dir, "session.jsonl");
+describe("claude app-server binding store", () => {
+  let store: ClaudeAppServerBindingStore;
+
+  beforeEach(() => {
+    store = createClaudeTestBindingStore();
   });
 
-  afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
-  });
-
-  it("is a no-op when no binding exists yet", async () => {
-    await recordClaudeThreadTurnSummary(sessionFile, { stopReason: "stop" });
-    const binding = await readClaudeAppServerBinding(sessionFile);
-    expect(binding).toBeNull();
+  it("recordTurnSummary is a no-op when no binding exists yet", async () => {
+    await store.recordTurnSummary(IDENTITY, { stopReason: "stop" });
+    expect(await store.read(IDENTITY)).toBeNull();
   });
 
   it("attaches stop reason, usage, and a preview to an existing binding", async () => {
-    await writeClaudeAppServerBinding(sessionFile, {
-      threadId: "thr_1",
-      cwd: dir,
-      model: "claude-sonnet-5",
-    });
-    await recordClaudeThreadTurnSummary(sessionFile, {
+    await store.write(IDENTITY, { threadId: "thr_1", cwd: "/tmp/ws", model: "claude-sonnet-5" });
+    await store.recordTurnSummary(IDENTITY, {
       stopReason: "stop",
       usage: { input: 100, output: 20, total: 120 },
       assistantPreview: "Hello there!",
     });
-    const binding = await readClaudeAppServerBinding(sessionFile);
+    const binding = await store.read(IDENTITY);
     expect(binding?.lastTurnStopReason).toBe("stop");
     expect(binding?.lastTurnUsage).toEqual({ input: 100, output: 20, total: 120 });
     expect(binding?.lastAssistantPreview).toBe("Hello there!");
@@ -49,45 +34,63 @@ describe("recordClaudeThreadTurnSummary", () => {
   });
 
   it("increments turnCount across successive turns", async () => {
-    await writeClaudeAppServerBinding(sessionFile, { threadId: "thr_1", cwd: dir });
-    await recordClaudeThreadTurnSummary(sessionFile, { stopReason: "stop" });
-    await recordClaudeThreadTurnSummary(sessionFile, { stopReason: "stop" });
-    const binding = await readClaudeAppServerBinding(sessionFile);
-    expect(binding?.turnCount).toBe(2);
+    await store.write(IDENTITY, { threadId: "thr_1", cwd: "/tmp/ws" });
+    await store.recordTurnSummary(IDENTITY, { stopReason: "stop" });
+    await store.recordTurnSummary(IDENTITY, { stopReason: "stop" });
+    expect((await store.read(IDENTITY))?.turnCount).toBe(2);
   });
 
   it("truncates a long preview and appends an ellipsis", async () => {
-    await writeClaudeAppServerBinding(sessionFile, { threadId: "thr_1", cwd: dir });
-    const longText = "x".repeat(500);
-    await recordClaudeThreadTurnSummary(sessionFile, { assistantPreview: longText });
-    const binding = await readClaudeAppServerBinding(sessionFile);
+    await store.write(IDENTITY, { threadId: "thr_1", cwd: "/tmp/ws" });
+    await store.recordTurnSummary(IDENTITY, { assistantPreview: "x".repeat(500) });
+    const binding = await store.read(IDENTITY);
     expect(binding?.lastAssistantPreview?.length).toBe(201);
     expect(binding?.lastAssistantPreview?.endsWith("…")).toBe(true);
   });
 
-  it("always stamps a fresh updatedAt, even though it read-modify-writes onto an object that already carries the old one", async () => {
-    await writeClaudeAppServerBinding(sessionFile, { threadId: "thr_1", cwd: dir });
-    const first = await readClaudeAppServerBinding(sessionFile);
+  it("always stamps a fresh updatedAt on turn summaries and keeps createdAt", async () => {
+    await store.write(IDENTITY, { threadId: "thr_1", cwd: "/tmp/ws" });
+    const first = await store.read(IDENTITY);
     const firstUpdatedAt = first?.updatedAt;
     expect(firstUpdatedAt).toBeDefined();
     await new Promise((resolve) => {
       setTimeout(resolve, 5);
     });
-    await recordClaudeThreadTurnSummary(sessionFile, { stopReason: "stop" });
-    const second = await readClaudeAppServerBinding(sessionFile);
-    // Before the fix: spreading `...existing` (which carries the OLD
-    // updatedAt) onto the object AFTER the freshly computed `now` clobbered
-    // it back to the stale value, so this would equal firstUpdatedAt.
+    await store.recordTurnSummary(IDENTITY, { stopReason: "stop" });
+    const second = await store.read(IDENTITY);
     expect(second?.updatedAt).toBeGreaterThan(firstUpdatedAt ?? 0);
     expect(second?.createdAt).toBe(first?.createdAt);
   });
 
   it("keeps the previous preview when the new turn's summary omits one", async () => {
-    await writeClaudeAppServerBinding(sessionFile, { threadId: "thr_1", cwd: dir });
-    await recordClaudeThreadTurnSummary(sessionFile, { assistantPreview: "first reply" });
-    await recordClaudeThreadTurnSummary(sessionFile, { stopReason: "toolUse" });
-    const binding = await readClaudeAppServerBinding(sessionFile);
+    await store.write(IDENTITY, { threadId: "thr_1", cwd: "/tmp/ws" });
+    await store.recordTurnSummary(IDENTITY, { assistantPreview: "first reply" });
+    await store.recordTurnSummary(IDENTITY, { stopReason: "toolUse" });
+    const binding = await store.read(IDENTITY);
     expect(binding?.lastAssistantPreview).toBe("first reply");
     expect(binding?.lastTurnStopReason).toBe("toolUse");
+  });
+
+  it("treats a binding stamped by another session generation as absent", async () => {
+    // Same conversation (session key), earlier session id: written before a
+    // /new whose harness reset hook never ran.
+    await store.write({ ...IDENTITY, sessionId: "sess-0" }, { threadId: "thr_old", cwd: "/tmp" });
+    expect(await store.read(IDENTITY)).toBeNull();
+    // Rebinding under the current generation replaces the stale row.
+    await store.write(IDENTITY, { threadId: "thr_new", cwd: "/tmp" });
+    expect((await store.read(IDENTITY))?.threadId).toBe("thr_new");
+  });
+
+  it("clear removes the binding", async () => {
+    await store.write(IDENTITY, { threadId: "thr_1", cwd: "/tmp/ws" });
+    await store.clear(IDENTITY);
+    expect(await store.read(IDENTITY)).toBeNull();
+  });
+
+  it("falls back to a session-id key when no session key exists", async () => {
+    const idOnly = { sessionId: "sess-orphan" };
+    await store.write(idOnly, { threadId: "thr_1", cwd: "/tmp/ws" });
+    expect((await store.read(idOnly))?.threadId).toBe("thr_1");
+    expect(await store.read({ sessionId: "sess-other" })).toBeNull();
   });
 });

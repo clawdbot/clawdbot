@@ -36,12 +36,14 @@ import {
 import { claudeAppServerPoolKey, resolveClaudeAppServerConfig } from "./config.js";
 import { resolveManagedClaudeBridgeStartOptions } from "./managed-binary.js";
 import { assertClaudeBridgeCredentials, resolveClaudeBridgeStartEnv } from "./run-attempt.js";
-import { readClaudeAppServerBinding } from "./thread-store.js";
+import { claudeBindingSessionIdentity, type ClaudeAppServerBindingStore } from "./thread-store.js";
 
 const RPC_METHOD_NOT_FOUND = -32601;
 
 export type ClaudeAppServerCompactOptions = {
   pluginConfig?: unknown;
+  /** Plugin-scoped SQLite-backed store for per-session thread bindings. */
+  bindingStore: ClaudeAppServerBindingStore;
   /** Test seam: supplies a started client instead of the shared pool. */
   clientFactory?: () => Promise<ClaudeAppServerClient> | ClaudeAppServerClient;
   /** Test seam / override for the completion wait (default: compaction timeout). */
@@ -59,17 +61,16 @@ type CompactCompletedPayload = {
   error?: { message?: string } | null;
 };
 
-/** Runs bridge-native compaction for the session bound to `params.sessionFile`. */
+/** Runs bridge-native compaction for the thread bound to this session. */
 export async function maybeCompactClaudeAppServerSession(
   params: CompactEmbeddedAgentSessionParams,
-  options: ClaudeAppServerCompactOptions = {},
+  options: ClaudeAppServerCompactOptions,
 ): Promise<EmbeddedAgentCompactResult> {
-  const binding = params.sessionFile ? await readClaudeAppServerBinding(params.sessionFile) : null;
+  const binding = await options.bindingStore.read(claudeBindingSessionIdentity(params));
   if (!binding?.threadId) {
     embeddedAgentLog.warn("claude app-server compaction found no thread binding", {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
-      sessionFile: params.sessionFile,
     });
     return {
       ok: false,

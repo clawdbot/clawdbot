@@ -4,8 +4,8 @@
  * Mirrors extensions/codex/src/commands.ts. Subcommands:
  *   - status         show shared-client liveness + recent error context
  *   - version        report bridge + installed server package versions
- *   - threads        list .claude-binding.json files for the active session
- *   - conversations  list this agent's other real conversations with a bound Claude/GLM thread
+ *   - threads        show the active session's claude thread binding
+ *   - conversations  list this agent's other real conversations with a bound Claude thread
  *   - resume <id>    rotate the current session's binding to a given thread_id
  *   - thread-pop     rotate back to the thread you last switched away from via resume
  *   - help           print subcommand listing
@@ -21,10 +21,19 @@ import type {
   PluginCommandContext,
   PluginCommandResult,
 } from "openclaw/plugin-sdk/plugin-entry";
+import type { ClaudeAppServerBindingStore } from "./app-server/thread-store.js";
 
 export type ClaudeCommandOptions = {
   pluginConfig?: unknown;
   resolvePluginConfig?: () => unknown;
+  /**
+   * Shared binding-store resolver from the plugin entry — the SAME instance
+   * the harness uses, so command mutations serialize through one
+   * lifecycle-lock queue with in-flight turns.
+   */
+  resolveBindingStore?: () => Promise<ClaudeAppServerBindingStore>;
+  /** Test seam: overrides the resolver-provided binding store. */
+  bindingStore?: ClaudeAppServerBindingStore;
 };
 
 export function createClaudeCommand(
@@ -74,19 +83,28 @@ export async function handleClaudeCommand(
   const { sub, rest } = parseSubcommand(ctx.args);
   try {
     const handlers = await loadHandlers();
+    const resolveBindingStore = async (): Promise<ClaudeAppServerBindingStore> => {
+      if (options.bindingStore) {
+        return options.bindingStore;
+      }
+      if (!options.resolveBindingStore) {
+        throw new Error("thread bindings are unavailable: no binding store was provided");
+      }
+      return await options.resolveBindingStore();
+    };
     switch (sub) {
       case "status":
         return handlers.handleStatus(ctx);
       case "version":
         return await handlers.handleVersion(ctx);
       case "threads":
-        return await handlers.handleThreads(ctx);
+        return await handlers.handleThreads(ctx, await resolveBindingStore());
       case "conversations":
-        return await handlers.handleConversations(ctx, options);
+        return await handlers.handleConversations(ctx, await resolveBindingStore(), options);
       case "resume":
-        return await handlers.handleResume(ctx, rest);
+        return await handlers.handleResume(ctx, rest, await resolveBindingStore());
       case "thread-pop":
-        return await handlers.handleThreadPop(ctx);
+        return await handlers.handleThreadPop(ctx, await resolveBindingStore());
       default:
         return handlers.handleHelp();
     }

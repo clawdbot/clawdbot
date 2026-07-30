@@ -61,7 +61,9 @@ export class ClaudeNativeSubagentTaskMirror {
 
   /** Call on each `turn/progress {kind:"subagentActivity"}` pulse. Idempotent while already active. */
   noteActivity(): void {
-    if (this.active || this.failedToCreate) return;
+    if (this.active || this.failedToCreate) {
+      return;
+    }
     const eventAt = this.now();
     const taskRecord = this.runtime.tryCreateRunningTaskRun({
       sourceId: this.runId,
@@ -92,7 +94,9 @@ export class ClaudeNativeSubagentTaskMirror {
    * settles while a subagent task is still open.
    */
   finalize(status: "succeeded" | "failed" | "cancelled"): void {
-    if (!this.active) return;
+    if (!this.active) {
+      return;
+    }
     this.active = false;
     const eventAt = this.now();
     this.runtime.finalizeTaskRunByRunId({

@@ -40,6 +40,7 @@
 import { createHash } from "node:crypto";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import {
+  agentHarnessAttemptTerminal,
   buildAgentHookContextChannelFields,
   buildEmbeddedAttemptToolRunContext,
   embeddedAgentLog,
@@ -89,7 +90,7 @@ import {
 } from "./protocol-validators.js";
 import { ClaudeNativeSubagentTaskMirror } from "./subagent-task-mirror.js";
 import { startOrResumeClaudeThread } from "./thread-lifecycle.js";
-import { recordClaudeThreadTurnSummary } from "./thread-store.js";
+import { claudeBindingSessionIdentity, type ClaudeAppServerBindingStore } from "./thread-store.js";
 import { mirrorClaudeAppServerTranscript } from "./transcript-mirror.js";
 import type {
   ApprovalPolicy,
@@ -102,6 +103,8 @@ import { filterToolsForVisionInputs, modelSupportsVision } from "./vision-tools.
 
 export type RunClaudeAppServerAttemptOptions = {
   pluginConfig?: unknown;
+  /** Plugin-scoped SQLite-backed store for per-session thread bindings. */
+  bindingStore: ClaudeAppServerBindingStore;
 };
 
 export async function runClaudeAppServerAttempt(
@@ -339,13 +342,14 @@ export async function runClaudeAppServerAttempt(
     const dynamicToolsFingerprint = fingerprintDynamicTools(bridge.specs);
 
     // 6. Resume or start the thread for this session. The lifecycle module
-    //    owns the rotation-vs-patch decision and the binding-sidecar reads
-    //    and writes. See thread-lifecycle.ts for the policy summary.
+    //    owns the rotation-vs-patch decision and the binding reads and
+    //    writes. See thread-lifecycle.ts for the policy summary.
     const lifecycle = await startOrResumeClaudeThread({
       client,
       params,
       cfg,
       bridge,
+      bindingStore: options.bindingStore,
       developerInstructions,
       developerInstructionsFingerprint,
       dynamicToolsFingerprint,
@@ -492,26 +496,28 @@ export async function runClaudeAppServerAttempt(
     if (lastAssistantMessage) {
       result.lastAssistant = lastAssistantMessage as typeof result.lastAssistant;
     }
-    // Attach a turn-completion summary to the thread binding sidecar so
+    // Attach a turn-completion summary to the thread binding so
     // `/claude threads` can show more than just the thread id (real stop
     // reason + usage + a preview of the final reply), now that C1-C3
     // (openclaw-0ld) make those fields trustworthy. Best-effort: a failure
     // here must never fail the turn itself.
-    if (params.sessionFile && lastAssistantMessage) {
+    if (lastAssistantMessage) {
       const summary = lastAssistantMessage as unknown as {
         stopReason?: string;
         usage?: { input: number; output: number; total: number };
         content?: Array<{ type: string; text?: string }>;
       };
-      recordClaudeThreadTurnSummary(params.sessionFile, {
-        stopReason: summary.stopReason,
-        usage: summary.usage,
-        assistantPreview: summary.content?.find((c) => c.type === "text")?.text,
-      }).catch((err) => {
-        embeddedAgentLog.warn("claude-bridge: failed to record thread turn summary", {
-          error: err instanceof Error ? err.message : String(err),
+      options.bindingStore
+        .recordTurnSummary(claudeBindingSessionIdentity(params), {
+          stopReason: summary.stopReason,
+          usage: summary.usage,
+          assistantPreview: summary.content?.find((c) => c.type === "text")?.text,
+        })
+        .catch((err: unknown) => {
+          embeddedAgentLog.warn("claude-bridge: failed to record thread turn summary", {
+            error: err instanceof Error ? err.message : String(err),
+          });
         });
-      });
     }
     // accumulated.reasoning is collected for diagnostics but not surfaced
     // via replayMetadata (codex's EmbeddedRunReplayMetadata is strictly typed).
@@ -590,11 +596,14 @@ export async function runClaudeAppServerAttempt(
       },
       ctx: harnessHookCtx,
     });
+    const projectedTerminal = agentHarnessAttemptTerminal.project(result.terminal);
     runAgentHarnessAgentEndHook({
       event: {
         messages: result.messagesSnapshot,
-        success: !result.aborted && !result.promptError,
-        ...(result.promptError ? { error: formatPromptError(result.promptError) } : {}),
+        success: !projectedTerminal.aborted && !projectedTerminal.promptError,
+        ...(projectedTerminal.promptError
+          ? { error: formatPromptError(projectedTerminal.promptError) }
+          : {}),
         durationMs: Date.now() - attemptStartedAt,
       },
       ctx: harnessHookCtx,
@@ -605,12 +614,14 @@ export async function runClaudeAppServerAttempt(
     const externalAbort = params.abortSignal?.aborted ?? false;
     const idle = err instanceof IdleTimeoutError;
     const aborted = ac.signal.aborted || idle;
-    result.aborted = aborted;
-    result.externalAbort = externalAbort;
-    result.timedOut = aborted && !externalAbort;
-    result.idleTimedOut = idle;
-    result.promptError = err instanceof Error ? err : new Error(String(err));
-    result.promptErrorSource = "prompt";
+    result.terminal = agentHarnessAttemptTerminal.normalize({
+      aborted,
+      externalAbort,
+      timedOut: aborted && !externalAbort,
+      idleTimedOut: idle,
+      promptError: err instanceof Error ? err : new Error(String(err)),
+      promptErrorSource: "prompt",
+    });
     embeddedAgentLog.warn("claude-bridge: runAttempt failed", {
       sessionId: params.sessionId,
       error: err instanceof Error ? err.message : String(err),
@@ -2098,13 +2109,7 @@ function renderClaudeWorkspaceBootstrapPromptContext(
 
 function emptyResult(params: EmbeddedRunAttemptParams): EmbeddedRunAttemptResult {
   return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    promptError: null,
-    promptErrorSource: null,
+    terminal: { kind: "ok" },
     sessionIdUsed: params.sessionId,
     sessionFileUsed: params.sessionFile,
     assistantTexts: [],

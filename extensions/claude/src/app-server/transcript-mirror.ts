@@ -71,7 +71,8 @@ export async function mirrorClaudeAppServerTranscript(
     async (context) => {
       const existingIdempotencyKeys = readTranscriptIdempotencyKeys(await context.readEvents());
       for (const message of messages) {
-        const idempotencyKey = (message as AgentMessage & { idempotencyKey?: string }).idempotencyKey;
+        const idempotencyKey = (message as AgentMessage & { idempotencyKey?: string })
+          .idempotencyKey;
         if (idempotencyKey && existingIdempotencyKeys.has(idempotencyKey)) {
           continue;
         }
