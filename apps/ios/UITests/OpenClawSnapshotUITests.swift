@@ -1023,6 +1023,9 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(
             readiness.waitForExistence(timeout: 8),
             "OpenClaw root readiness marker did not appear")
+        if screenshotMode {
+            self.waitForValue("ready:\(target.initialDestination)", of: readiness, timeout: 8)
+        }
     }
 
     private func configuredApp(

@@ -13,13 +13,14 @@ final class ShareExtensionUITests: XCTestCase {
     func testComposeCardStatesInShareSheet() throws {
         let photos = XCUIApplication(bundleIdentifier: "com.apple.mobileslideshow")
         addUIInterruptionMonitor(withDescription: "Photos notifications") { alert in
-            for title in ["Don't Allow", "Not Now"] where alert.buttons[title].exists {
+            for title in ["Don’t Allow", "Don't Allow", "Not Now"] where alert.buttons[title].exists {
                 alert.buttons[title].tap()
                 return true
             }
             return false
         }
         photos.launch()
+        photos.tap()
 
         // Photos intermittently shows a "What's New" splash on launch.
         let continueButton = photos.buttons["Continue"].firstMatch
@@ -92,7 +93,7 @@ final class ShareExtensionUITests: XCTestCase {
         let photoGrid = photos.buttons["all_photos_grid"]
         if photoGrid.waitForExistence(timeout: 5) {
             // iPadOS 18 exposes the whole top thumbnail strip as one grid button.
-            photoGrid.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap()
+            photoGrid.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.9)).tap()
             return
         }
 
