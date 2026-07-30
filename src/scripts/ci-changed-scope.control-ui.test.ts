@@ -20,3 +20,10 @@ it("runs Chromium UI tests for browser copilot extension changes", () => {
     true,
   );
 });
+
+it.each(["package.json", ".github/workflows/ci.yml"])(
+  "runs Chromium UI tests when %s can change the browser copilot CI route",
+  (changedPath) => {
+    expect(detectChangedScope([changedPath]).runUiTests).toBe(true);
+  },
+);
