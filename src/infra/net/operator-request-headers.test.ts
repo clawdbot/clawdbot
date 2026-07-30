@@ -92,6 +92,9 @@ describe("resolveOperatorRequestHeaders", () => {
       "X-Amz-Security-Token": "aws-live",
       "X-GitHub-Token": "github-live",
       "X-APIKEY": "generic-live",
+      "Fastly-Key": "fastly-live",
+      "X-Auth-Key": "auth-live",
+      "X-RapidAPI-Key": "rapidapi-live",
       "X-Fine": "ok",
     });
     expect(Object.keys(headers ?? {})).toEqual(["X-Fine"]);
@@ -114,6 +117,9 @@ describe("resolveOperatorRequestHeaders", () => {
         "X-Amz-Security-Token",
         "X-GitHub-Token",
         "X-APIKEY",
+        "Fastly-Key",
+        "X-Auth-Key",
+        "X-RapidAPI-Key",
       ]),
     );
   });
@@ -137,14 +143,22 @@ describe("resolveOperatorRequestHeaders", () => {
     expect(ignored).toEqual(expect.arrayContaining(["X Invalid", "X-Unicode"]));
   });
 
-  it("accepts non-credential metadata that only matches the loose audit heuristic", () => {
+  it("accepts known non-credential metadata despite sensitive-looking names", () => {
     const { headers, suspicious } = resolve({
       "X-Tokenizer-Version": "v2",
       "X-Secret-Scan-Status": "clean",
       "X-Trace-Token": "trace-context",
+      "Idempotency-Key": "request-123",
+      "X-Idempotency-Key": "request-456",
+      "Surrogate-Key": "product-123",
+      "X-Cache-Key": "tenant-123",
     });
 
     expect(headers).toEqual({
+      "Idempotency-Key": "request-123",
+      "Surrogate-Key": "product-123",
+      "X-Cache-Key": "tenant-123",
+      "X-Idempotency-Key": "request-456",
       "X-Secret-Scan-Status": "clean",
       "X-Tokenizer-Version": "v2",
       "X-Trace-Token": "trace-context",

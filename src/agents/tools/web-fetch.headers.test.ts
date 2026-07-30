@@ -145,6 +145,9 @@ describe("web_fetch configured request headers", () => {
       "X-Amz-Security-Token": "aws-live-key",
       "X-GitHub-Token": "github-live-key",
       "X-APIKEY": "generic-live-key",
+      "Fastly-Key": "fastly-live-key",
+      "X-Auth-Key": "auth-live-key",
+      "X-RapidAPI-Key": "rapidapi-live-key",
       "X-Routing-Target": "staging",
     });
 
@@ -169,6 +172,9 @@ describe("web_fetch configured request headers", () => {
     expect(names).not.toContain("X-Amz-Security-Token");
     expect(names).not.toContain("X-GitHub-Token");
     expect(names).not.toContain("X-APIKEY");
+    expect(names).not.toContain("Fastly-Key");
+    expect(names).not.toContain("X-Auth-Key");
+    expect(names).not.toContain("X-RapidAPI-Key");
     const warnings = warnSpy.mock.calls.map(([message]) => message);
     expect(warnings.some((message) => message.includes("Authorization"))).toBe(true);
     expect(warnings.every((message) => !message.includes(credentialLogSentinel))).toBe(true);

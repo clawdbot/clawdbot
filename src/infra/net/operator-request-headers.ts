@@ -9,8 +9,8 @@
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
-  isAlwaysCredentialHeaderName,
   isLikelySensitiveModelProviderHeaderName,
+  isOutboundCredentialHeaderName,
 } from "../../secrets/model-provider-header-policy.js";
 import { isRecord } from "../../utils.js";
 
@@ -126,7 +126,7 @@ export function resolveOperatorRequestHeaders(params: {
     if (
       reserved.has(lowerName) ||
       FRAMING_HEADER_NAMES.has(lowerName) ||
-      isAlwaysCredentialHeaderName(lowerName)
+      isOutboundCredentialHeaderName(lowerName)
     ) {
       refused.push(name);
       continue;
