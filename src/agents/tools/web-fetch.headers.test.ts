@@ -148,6 +148,7 @@ describe("web_fetch configured request headers", () => {
       "Fastly-Key": "fastly-live-key",
       "X-Auth-Key": "auth-live-key",
       "X-RapidAPI-Key": "rapidapi-live-key",
+      "X-Akamai-ACS-Auth-Sign": "akamai-live-signature",
       "X-Routing-Target": "staging",
     });
 
@@ -175,6 +176,7 @@ describe("web_fetch configured request headers", () => {
     expect(names).not.toContain("Fastly-Key");
     expect(names).not.toContain("X-Auth-Key");
     expect(names).not.toContain("X-RapidAPI-Key");
+    expect(names).not.toContain("X-Akamai-ACS-Auth-Sign");
     const warnings = warnSpy.mock.calls.map(([message]) => message);
     expect(warnings.some((message) => message.includes("Authorization"))).toBe(true);
     expect(warnings.every((message) => !message.includes(credentialLogSentinel))).toBe(true);

@@ -45,7 +45,8 @@ const OUTBOUND_NON_CREDENTIAL_HEADER_NAMES = new Set([
   "x-trace-token",
 ]);
 
-const CREDENTIAL_HEADER_NAME_SUFFIX_PATTERN = /(?:^|-)(?:credential|key|password|secret|token)$/u;
+const CREDENTIAL_HEADER_NAME_SUFFIX_PATTERN =
+  /(?:^|-)(?:auth-sign|auth-signature|credential|key|password|secret|signature|token)$/u;
 
 /**
  * Returns whether a header name is unambiguously credential material by exact name.
@@ -62,8 +63,9 @@ function isAlwaysCredentialHeaderName(value: string): boolean {
  * must not be forwarded to a model-chosen host.
  *
  * Credential suffixes cover vendor spellings such as Fastly-Key, X-Auth-Key,
- * and X-RapidAPI-Key. The narrow exception list preserves established metadata
- * headers without reopening loose substring matching as a refusal rule.
+ * X-RapidAPI-Key, and X-Akamai-ACS-Auth-Sign. The narrow exception list
+ * preserves established metadata headers without reopening loose substring
+ * matching as a refusal rule.
  */
 export function isOutboundCredentialHeaderName(value: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(value);

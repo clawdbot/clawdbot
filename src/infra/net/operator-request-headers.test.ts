@@ -95,6 +95,7 @@ describe("resolveOperatorRequestHeaders", () => {
       "Fastly-Key": "fastly-live",
       "X-Auth-Key": "auth-live",
       "X-RapidAPI-Key": "rapidapi-live",
+      "X-Akamai-ACS-Auth-Sign": "akamai-live",
       "X-Fine": "ok",
     });
     expect(Object.keys(headers ?? {})).toEqual(["X-Fine"]);
@@ -120,6 +121,7 @@ describe("resolveOperatorRequestHeaders", () => {
         "Fastly-Key",
         "X-Auth-Key",
         "X-RapidAPI-Key",
+        "X-Akamai-ACS-Auth-Sign",
       ]),
     );
   });
