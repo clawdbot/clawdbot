@@ -262,8 +262,8 @@ outbound policy after DNS resolution.
   for trusted fake-IP proxy stacks; leave them unset unless your proxy owns
   those synthetic ranges and enforces its own destination policy
 - Redirects are checked and limited by `maxRedirects` (default `3`)
-- `tools.web.fetch.headers` is not a credential store: values are sent to every
-  fetched host, and are dropped when a redirect crosses origins
+- `tools.web.fetch.headers` is not a credential store: values are sent to fetched
+  hosts, and cross-origin redirects retain only the guarded-fetch safe allowlist
 - `useTrustedEnvProxy` is an explicit opt-in and should only be enabled for
   operator-controlled proxies that still enforce outbound policy after DNS
   resolution

@@ -119,7 +119,7 @@ export function resolveOperatorRequestHeaders(params: {
     }
     // A later case variant owns this slot even when its value is unusable. Leaving
     // an earlier valid value behind would send stale routing metadata.
-    if (!isSendableHeaderValue(value) || value === "") {
+    if (!isSendableHeaderValue(value)) {
       ignored.push(rawName);
       continue;
     }

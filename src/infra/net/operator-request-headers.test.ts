@@ -42,10 +42,11 @@ describe("resolveOperatorRequestHeaders", () => {
   });
 
   it("trims names and values and sorts the result", () => {
-    const { headers } = resolve({ "  X-B  ": " two ", "X-A": "one" });
+    const { headers } = resolve({ "  X-B  ": " two ", "X-A": "one", "X-Empty": " \t " });
     expect(Object.entries(headers ?? {})).toEqual([
       ["X-A", "one"],
       ["X-B", "two"],
+      ["X-Empty", ""],
     ]);
   });
 
@@ -119,11 +120,10 @@ describe("resolveOperatorRequestHeaders", () => {
     const { headers, ignored } = resolve({
       "X Invalid": "spaced name",
       "X-Unicode": "東",
-      "X-Blank": "   ",
       "X-Fine": "ok",
     });
     expect(Object.keys(headers ?? {})).toEqual(["X-Fine"]);
-    expect(ignored).toEqual(expect.arrayContaining(["X Invalid", "X-Unicode", "X-Blank"]));
+    expect(ignored).toEqual(expect.arrayContaining(["X Invalid", "X-Unicode"]));
   });
 
   it("accepts credential-looking names but reports them as suspicious", () => {

@@ -189,7 +189,7 @@ describe("web_fetch configured request headers", () => {
     ]);
   });
 
-  it("trims values and ignores ones that are empty after trimming", async () => {
+  it("trims values and preserves valid empty values", async () => {
     // undici trims field values, so an untrimmed value would partition the cache
     // on bytes the request never sends.
     const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Trimmed"));
@@ -201,7 +201,7 @@ describe("web_fetch configured request headers", () => {
 
     const headers = getRequestHeaders(fetchSpy);
     expect(headers["X-Padded"]).toBe("staging");
-    expect(Object.keys(headers)).not.toContain("X-Blank");
+    expect(headers["X-Blank"]).toBe("");
   });
 
   it("preserves valid obs-text at header boundaries", async () => {
@@ -396,6 +396,29 @@ describe("web_fetch configured request headers", () => {
     );
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("partitions the cache for a valid empty-valued header", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Empty Header"));
+    global.fetch = withFetchPreconnect(fetchSpy);
+    const url = "https://example.com/cache-empty-header";
+    const plain = createWebFetchTool({
+      lookupFn: lookupMock as unknown as LookupFn,
+      config: { tools: { web: { fetch: { cacheTtlMinutes: 15 } } } },
+    });
+
+    await plain?.execute?.("call", { url });
+    await createToolWithHeaders({ "X-Presence-Flag": "" }, { cacheTtlMinutes: 15 })?.execute?.(
+      "call",
+      { url },
+    );
+    await createToolWithHeaders({ "X-Presence-Flag": "" }, { cacheTtlMinutes: 15 })?.execute?.(
+      "call",
+      { url },
+    );
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(getRequestHeaders(fetchSpy, 1)["X-Presence-Flag"]).toBe("");
   });
 
   it("does not partition the cache for headers the request never carries", async () => {
