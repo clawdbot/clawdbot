@@ -30,8 +30,8 @@ const FeishuGroupPolicySchema = z.union([
 // query or fragment would absorb the appended route.
 const FeishuCustomDomainSchema = z
   .intersection(
-    z.string().url(),
-    z.string().regex(/^[Hh][Tt][Tt][Pp][Ss]:\/\//),
+    z.string().trim().url(),
+    z.string().trim().regex(/^[Hh][Tt][Tt][Pp][Ss]:\/\//),
   )
   .transform((value) => new URL(value))
   .superRefine((url, ctx) => {

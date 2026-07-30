@@ -39,6 +39,9 @@ describe("FeishuConfigSchema custom domain", () => {
     expect(FeishuConfigSchema.parse({ domain: "Https://tenant.example/base/" }).domain).toBe(
       "https://tenant.example/base",
     );
+    expect(FeishuConfigSchema.parse({ domain: " HTTPS://tenant.example/ " }).domain).toBe(
+      "https://tenant.example",
+    );
   });
 
   it("accepts and normalizes an uppercase HTTPS custom domain per account", () => {
