@@ -1872,6 +1872,72 @@ describe("agentLoop tool termination", () => {
     ]);
     expect(events.at(-1)).toMatchObject({ type: "agent_end" });
   });
+
+  it("strips orphaned tool_use from context.messages when the run aborts mid-batch", async () => {
+    const controller = new AbortController();
+    let streamCalls = 0;
+    const executed: string[] = [];
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 1) {
+        throw new Error("model was called after abort");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-a", name: "tool_a", arguments: {} },
+          { type: "toolCall", id: "call-b", name: "tool_b", arguments: {} },
+          { type: "toolCall", id: "call-c", name: "tool_c", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const tools: AgentTool[] = [
+      makeTool("tool_a", executed),
+      {
+        name: "tool_b",
+        label: "tool_b",
+        description: "tool_b",
+        parameters: Type.Object({}, { additionalProperties: false }),
+        execute: async () => {
+          executed.push("tool_b");
+          controller.abort(new Error("user stopped"));
+          return { content: [{ type: "text", text: "tool_b result" }], details: { name: "tool_b" } };
+        },
+      },
+      makeTool("tool_c", executed),
+    ];
+
+    const events: AgentEvent[] = [];
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "test", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools },
+      { ...config, toolExecution: "sequential" },
+      (event) => { events.push(event); },
+      controller.signal,
+      streamFn,
+    );
+
+    expect(executed).toEqual(["tool_a", "tool_b"]);
+    expect(streamCalls).toBe(1);
+
+    // The assistant message (before the failure message) should have tool_c stripped
+    const assistantMsg = messages.findLast(
+      (m) => m.role === "assistant" && m.stopReason !== "aborted",
+    );
+    expect(assistantMsg).toBeDefined();
+    const remainingCalls = (assistantMsg as AssistantMessage).content.filter(
+      (c) => c.type === "toolCall",
+    );
+    expect(remainingCalls).toHaveLength(2);
+    expect(remainingCalls.map((c) => c.name)).toEqual(["tool_a", "tool_b"]);
+
+    expect(messages.at(-2)).toMatchObject({ role: "assistant", stopReason: "aborted" });
+  });
 });
 
 describe("Agent next-turn preparation", () => {

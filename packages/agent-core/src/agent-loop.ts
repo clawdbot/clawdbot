@@ -93,6 +93,45 @@ function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessa
   return content.length === message.content.length ? message : { ...message, content };
 }
 
+/**
+ * Remove toolCall entries from the latest assistant message that have no
+ * matching toolResult. This prevents orphaned tool_use from polluting
+ * context.messages after a mid-turn abort where tool execution was skipped
+ * or partially completed.
+ *
+ * Mutates the message in-place so all array references see the fix.
+ */
+function stripOrphanedToolCalls(messages: AgentMessage[]): void {
+  const assistantIdx = messages.map((m) => m.role).lastIndexOf("assistant");
+  if (assistantIdx === -1) {
+    return;
+  }
+
+  const msg = messages[assistantIdx] as AssistantMessage;
+  const toolCalls = msg.content.filter((c): c is AgentToolCall => c.type === "toolCall");
+  if (toolCalls.length === 0) {
+    return;
+  }
+
+  const executedIds = new Set<string>();
+  for (const m of messages) {
+    if (m.role === "toolResult") {
+      executedIds.add((m as ToolResultMessage).toolCallId);
+    }
+  }
+
+  const orphanedIds = toolCalls
+    .filter((tc) => !executedIds.has(tc.id))
+    .map((tc) => tc.id);
+  if (orphanedIds.length === 0) {
+    return;
+  }
+
+  (msg as { content: unknown[] }).content = msg.content.filter(
+    (c) => !(c.type === "toolCall" && orphanedIds.includes((c as AgentToolCall).id)),
+  );
+}
+
 function ensureToolTurnIdentity(message: AssistantMessage): AssistantMessage {
   if (message.stopReason !== "toolUse" || message.responseId?.trim() || message.turnId?.trim()) {
     return message;
@@ -394,6 +433,7 @@ async function runLoop(
 
       await emit({ type: "turn_end", message, toolResults });
       turnOpen = false;
+      stripOrphanedToolCalls(currentContext.messages);
       if (await stopIfAborted()) {
         return;
       }
