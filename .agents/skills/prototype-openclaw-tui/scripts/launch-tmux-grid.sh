@@ -290,10 +290,6 @@ if [[ $refresh_session == true ]]; then
     exit 1
   fi
   configure_tmux_session "$session_id" "$window_id"
-  client_attached=false
-  if tmux_session_has_client "$session_id"; then
-    client_attached=true
-  fi
 
   pane_ids=()
   while IFS= read -r pane_id; do
@@ -326,12 +322,9 @@ else
   window_id=$(tmux display-message -p -t "$first_pane" '#{window_id}')
   configure_tmux_session "$session_id" "$window_id"
   tmux select-pane -t "$first_pane" -T "${pane_titles[0]}"
-  client_attached=false
   if [[ $open_external == true ]]; then
     if open_external_terminal "$session_name"; then
-      if wait_for_tmux_client "$session_id"; then
-        client_attached=true
-      else
+      if ! wait_for_tmux_client "$session_id"; then
         echo "external terminal opened but did not attach in time; run --refresh after attaching" >&2
       fi
     else
@@ -340,11 +333,6 @@ else
     fi
   fi
   build_comparison_grid "$window_id" "$first_pane"
-fi
-
-if [[ $client_attached == false ]]; then
-  # Allow a later manual attachment to replace tmux's detached default size.
-  tmux set-window-option -t "$window_id" window-size latest
 fi
 
 tmux select-pane -t "$first_pane"

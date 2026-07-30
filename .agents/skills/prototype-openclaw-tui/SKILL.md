@@ -83,13 +83,15 @@ explicitly provided. `--open` uses the user's
 `.command`-associated terminal app on macOS, Windows Terminal from WSL, or the
 first available Linux launcher from `xdg-terminal-exec`, `$TERMINAL`, and
 `x-terminal-emulator`. If no supported launcher is available, the tmux session
-remains ready and the script exits successfully after printing the manual
-attach command. When invoked from a non-interactive `TERM=dumb` environment,
-the launcher removes its inherited `NO_COLOR` only from prototype pane
-processes so the external terminal can detect and render its normal colors.
-Prefer the external terminal over the Codex in-app terminal unless the user
-asks for the in-app surface. Leave the session running for user review unless
-asked to stop it.
+remains ready at equal detached dimensions and the script exits successfully
+after printing the manual attach command. Attach, then run `--refresh` once to
+adopt the terminal's larger dimensions. The same guidance applies if an
+external terminal opens but does not attach within ten seconds. When invoked
+from a non-interactive `TERM=dumb` environment, the launcher removes its
+inherited `NO_COLOR` only from prototype pane processes so the external
+terminal can detect and render its normal colors. Prefer the external terminal
+over the Codex in-app terminal unless the user asks for the in-app surface.
+Leave the session running for user review unless asked to stop it.
 
 ## Handoff
 
