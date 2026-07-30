@@ -2,11 +2,11 @@
  * Standalone MCP server for selected built-in OpenClaw tools.
  *
  * Run via: node --import tsx src/mcp/openclaw-tools-serve.ts
-import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
  * Or: bun src/mcp/openclaw-tools-serve.ts
  */
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createCronTool } from "../agents/tools/cron-tool.js";
 import { createSystemAgentTool } from "../agents/tools/system-agent-tool.js";
