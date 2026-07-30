@@ -240,3 +240,20 @@ export const buzzOutboundAdapter = {
     return attachChannelToResult("buzz", { to: channelId, messageId });
   },
 };
+
+export async function sendBuzzTyping(params: {
+  cfg: OpenClawConfig;
+  to: string;
+  accountId?: string | null;
+  threadId?: string | number | null;
+}): Promise<void> {
+  const resolvedAccountId = params.accountId ?? resolveDefaultBuzzAccountId(params.cfg);
+  const bus = activeBuses.get(resolvedAccountId);
+  if (!bus) {
+    return;
+  }
+  await bus.sendTyping({
+    channelId: parseBuzzTarget(params.to),
+    threadId: params.threadId == null ? undefined : String(params.threadId),
+  });
+}
