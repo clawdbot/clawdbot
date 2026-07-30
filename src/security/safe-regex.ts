@@ -16,6 +16,7 @@ type TokenState = {
 };
 
 type ParseFrame = {
+  zeroWidth: boolean;
   lastToken: TokenState | null;
   containsRepetition: boolean;
   hasAmbiguousAlternation: boolean;
@@ -60,8 +61,9 @@ export type SafeRegexCompileResult =
 
 const safeRegexCache = new Map<string, SafeRegexCompileResult>();
 
-function createParseFrame(): ParseFrame {
+function createParseFrame(zeroWidth = false): ParseFrame {
   return {
+    zeroWidth,
     lastToken: null,
     containsRepetition: false,
     hasAmbiguousAlternation: false,
@@ -275,12 +277,17 @@ function atomsMayOverlap(left: string, right: string, flags: string): boolean {
 
 function pathsMayOverlap(leftPaths: string[][], rightPaths: string[][], flags: string): boolean {
   return leftPaths.some((left) =>
-    rightPaths.some(
-      (right) =>
-        left.length === right.length &&
-        left.every((atom, index) =>
-          atomsMayOverlap(atom, expectDefined(right[index], "equal-length path atom"), flags),
+    rightPaths.some((right) =>
+      (left.length <= right.length ? left : right).every((atom, index) =>
+        atomsMayOverlap(
+          atom,
+          expectDefined(
+            (left.length <= right.length ? right : left)[index],
+            "alternative path atom",
+          ),
+          flags,
         ),
+      ),
     ),
   );
 }
@@ -493,7 +500,7 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
   const emitSimpleToken = (source: string, zeroWidth: boolean) => {
     emitToken({
       containsRepetition: false,
-      hasAmbiguousAlternation: zeroWidth,
+      hasAmbiguousAlternation: false,
       minLength: zeroWidth ? 0 : 1,
       maxLength: zeroWidth ? 0 : 1,
       paths: zeroWidth ? [[]] : [[source]],
@@ -508,9 +515,7 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
     }
 
     if (token.kind === "group-open") {
-      const frame = createParseFrame();
-      frame.hasAmbiguousAlternation = token.zeroWidth;
-      frames.push(frame);
+      frames.push(createParseFrame(token.zeroWidth));
       continue;
     }
 
@@ -527,7 +532,7 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
           ? (frame.altMaxLength ?? 0)
           : frame.branchMaxLength;
         const alternativePaths = frame.alternativePaths.flatMap((paths) => paths ?? []);
-        const groupPaths = frame.hasAlternation
+        const consumingGroupPaths = frame.hasAlternation
           ? frame.alternativePaths.every((paths) => paths !== null) &&
             alternativePaths.length <= MAX_ALTERNATIVE_PATHS
             ? alternativePaths
@@ -540,12 +545,11 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
             (frame.hasAlternation &&
               frame.altMinLength !== null &&
               frame.altMaxLength !== null &&
-              (frame.altMinLength !== frame.altMaxLength ||
-                alternativesOverlap(frame.alternativePaths, flags) ||
+              (alternativesOverlap(frame.alternativePaths, flags) ||
                 alternativesRepeatExactly(frame.alternativeSignatures))),
-          minLength: groupMinLength,
-          maxLength: groupMaxLength,
-          paths: groupPaths,
+          minLength: frame.zeroWidth ? 0 : groupMinLength,
+          maxLength: frame.zeroWidth ? 0 : groupMaxLength,
+          paths: frame.zeroWidth ? [[]] : consumingGroupPaths,
           signature: JSON.stringify(
             frame.hasAlternation ? frame.alternativeSignatures : frame.branchSignatures,
           ),
