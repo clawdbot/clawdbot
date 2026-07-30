@@ -3286,6 +3286,12 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(result.stderr).not.toContain("[test] starting");
   });
 
+  it("lets buffered failure diagnostics drain before the dispatcher exits", () => {
+    const source = fs.readFileSync("scripts/test-projects.mjs", "utf8");
+
+    expect(source).not.toContain("process.exit(");
+  });
+
   it("allows explicit split Vitest config targets without treating them as unmatched tests", () => {
     expect(
       findUnmatchedExplicitTestTargets(
