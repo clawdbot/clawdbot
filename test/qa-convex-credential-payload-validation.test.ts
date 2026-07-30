@@ -1,10 +1,10 @@
-import { nip19 } from "nostr-tools";
 // QA Convex credential tests validate credential payload shapes.
 import { describe, expect, it } from "vitest";
 import { normalizeCredentialPayloadForKind } from "../qa/convex-credential-broker/convex/payload_validation.js";
 
 const BUZZ_DRIVER_PRIVATE_KEY = "01".repeat(32);
 const BUZZ_SUT_PRIVATE_KEY = "02".repeat(32);
+const BUZZ_DRIVER_NSEC = "nsec1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqstywftw";
 
 describe("QA Convex credential payload validation", () => {
   it("normalizes Buzz credential payloads", () => {
@@ -75,17 +75,12 @@ describe("QA Convex credential payload validation", () => {
   });
 
   it("rejects runtime-invalid Buzz secrets and equivalent key encodings", () => {
-    const nsec = nip19.nsecEncode(
-      Uint8Array.from(
-        BUZZ_DRIVER_PRIVATE_KEY.match(/.{2}/gu)?.map((byte) => Number.parseInt(byte, 16)) ?? [],
-      ),
-    );
     expect(() =>
       normalizeCredentialPayloadForKind("buzz", {
         relayUrl: "wss://relay.qa.example",
         roomId: "123e4567-e89b-42d3-a456-426614174000",
         driverPrivateKey: BUZZ_DRIVER_PRIVATE_KEY,
-        sutPrivateKey: nsec,
+        sutPrivateKey: BUZZ_DRIVER_NSEC,
       }),
     ).toThrow(/distinct driver and SUT identities/u);
     expect(() =>
