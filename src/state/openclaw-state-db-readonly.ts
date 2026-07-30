@@ -22,6 +22,8 @@ type OpenClawStateReadOnlyDatabase = {
   path: string;
 };
 
+type ReusedOpenClawStateReadOnlyDatabase<T> = { reused: false } | { reused: true; value: T };
+
 function resolveReadOnlyPath(options: OpenClawStateDatabaseOptions): string {
   return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
 }
@@ -50,6 +52,45 @@ function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void 
   }
 }
 
+function withOpenClawStateDatabaseReadOnlyIfOpen<T>(
+  operation: (database: OpenClawStateReadOnlyDatabase) => T,
+  options: OpenClawStateDatabaseOptions,
+  pathname: string,
+): ReusedOpenClawStateReadOnlyDatabase<T> {
+  const opened = getOpenClawStateDatabaseIfOpen(options);
+  if (!opened || opened.db.isTransaction) {
+    return { reused: false };
+  }
+  try {
+    // Process-local terminal failures evict this handle. Persisted quarantine
+    // is checked on the next physical open so hot reads do not poll metadata.
+    // A newer build can migrate this file while the handle stays open, so the
+    // forward-compatibility gate still runs before any reused read.
+    assertSupportedSchemaVersion(opened.db, pathname);
+    return { reused: true, value: operation(opened) };
+  } catch (error) {
+    evictOpenClawStateDatabaseAfterCorruption(opened, error);
+    throw error;
+  }
+}
+
+function withFreshOpenClawStateDatabaseReadOnly<T>(
+  operation: (database: OpenClawStateReadOnlyDatabase) => T,
+  options: OpenClawStateDatabaseOptions,
+  pathname: string,
+): T {
+  assertOpenClawStateDatabaseFreshOpenAllowed(options);
+  const db = openNodeSqliteDatabase(pathname, { readOnly: true });
+  try {
+    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+    assertSupportedSchemaVersion(db, pathname);
+    return operation({ db, path: pathname });
+  } finally {
+    clearNodeSqliteKyselyCacheForDatabase(db);
+    db.close();
+  }
+}
+
 /**
  * Read shared state without joining the writable lifecycle.
  *
@@ -65,30 +106,11 @@ export function withOpenClawStateDatabaseReadOnly<T>(
   // and closing a connection per call made shared-state reads scale with row
   // count. An in-flight transaction is skipped so callers never observe
   // uncommitted rows a fresh read-only connection could not have seen.
-  const opened = getOpenClawStateDatabaseIfOpen(options);
-  if (opened && !opened.db.isTransaction) {
-    try {
-      // Process-local terminal failures evict this handle. Persisted quarantine
-      // is checked on the next physical open so hot reads do not poll metadata.
-      // A newer build can migrate this file while the handle stays open, so the
-      // forward-compatibility gate still runs before any reused read.
-      assertSupportedSchemaVersion(opened.db, pathname);
-      return operation(opened);
-    } catch (error) {
-      evictOpenClawStateDatabaseAfterCorruption(opened, error);
-      throw error;
-    }
+  const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, options, pathname);
+  if (reused.reused) {
+    return reused.value;
   }
-  assertOpenClawStateDatabaseFreshOpenAllowed(options);
-  const db = openNodeSqliteDatabase(pathname, { readOnly: true });
-  try {
-    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-    assertSupportedSchemaVersion(db, pathname);
-    return operation({ db, path: pathname });
-  } finally {
-    clearNodeSqliteKyselyCacheForDatabase(db);
-    db.close();
-  }
+  return withFreshOpenClawStateDatabaseReadOnly(operation, options, pathname);
 }
 
 /** Read existing shared state while preserving non-missing filesystem failures. */
@@ -96,8 +118,17 @@ export function withExistingOpenClawStateDatabaseReadOnly<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
 ): T | undefined {
-  const pathname = existingPathOrUndefined(resolveReadOnlyPath(options));
-  return pathname === undefined
+  const pathname = resolveReadOnlyPath(options);
+  const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, options, pathname);
+  if (reused.reused) {
+    return reused.value;
+  }
+  const existingPath = existingPathOrUndefined(pathname);
+  return existingPath === undefined
     ? undefined
-    : withOpenClawStateDatabaseReadOnly(operation, { ...options, path: pathname });
+    : withFreshOpenClawStateDatabaseReadOnly(
+        operation,
+        { ...options, path: existingPath },
+        existingPath,
+      );
 }

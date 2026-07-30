@@ -962,6 +962,27 @@ describe("plugin state keyed store", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "reuses a process-held state database when its directory becomes inaccessible",
+    async () => {
+      await withPluginStateTestState(async () => {
+        const store = createPluginStateKeyedStore("discord", {
+          namespace: "inaccessible-open-handle",
+          maxEntries: 10,
+        });
+        await store.register("k", { ok: true });
+        const database = openOpenClawStateDatabase();
+        chmodSync(testState?.stateDir ?? "", 0o000);
+        try {
+          await expect(store.lookup("k")).resolves.toEqual({ ok: true });
+          expect(database.db.isOpen).toBe(true);
+        } finally {
+          chmodSync(testState?.stateDir ?? "", 0o700);
+        }
+      });
+    },
+  );
+
   it("does not close a shared state database opened before the plugin-state probe", async () => {
     await withPluginStateTestState(async () => {
       const database = openOpenClawStateDatabase();
