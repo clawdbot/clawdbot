@@ -75,10 +75,11 @@ async function uploadToSharePoint(params: {
 
   // Use "OpenClawShared" folder to organize bot-uploaded files
   const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
+  const timeoutMs = resolveMSTeamsSharePointUploadTimeoutMs(params.buffer.length);
 
   const data = await withMSTeamsAbortableRequestTimeout({
     label: SHAREPOINT_UPLOAD_TIMEOUT_LABEL,
-    timeoutMs: resolveMSTeamsSharePointUploadTimeoutMs(params.buffer.length),
+    timeoutMs,
     work: async (signal) => {
       const token = await getGraphAccessToken(params.tokenProvider);
       const res = await fetchFn(
@@ -103,7 +104,7 @@ async function uploadToSharePoint(params: {
         id?: string;
         webUrl?: string;
         name?: string;
-      }>(res, "msteams.graph-upload.uploadSharePointFile");
+      }>(res, "msteams.graph-upload.uploadSharePointFile", { chunkTimeoutMs: timeoutMs });
     },
   });
 
