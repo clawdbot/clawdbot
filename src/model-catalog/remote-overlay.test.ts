@@ -73,4 +73,33 @@ describe("remote model catalog overlay", () => {
     ).toBeUndefined();
     expect(mocks.read).toHaveBeenCalledTimes(2);
   });
+
+  it("re-reads the store after a negative result once a background refresh writes a bundle", () => {
+    // A cold start reads an empty store: the overlay must not cache that null,
+    // or a later background refresh can never apply without a manual restart.
+    mocks.read.mockReturnValueOnce(undefined);
+    expect(getRemoteModelCatalogOverlay({})).toBeUndefined();
+    // The background refresh writes a valid bundle into the store.
+    expect(getRemoteModelCatalogOverlay({})).toHaveProperty("anthropic");
+    // The negative result was not pinned: read was retried and the new bundle loaded.
+    expect(mocks.read).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-reads the store after a stale-bundle result once a newer bundle is written", () => {
+    // A bundle older than the bundled stamp is rejected once, then a newer bundle
+    // written by refresh must load without a process restart.
+    const newerBundle = { ...bundle, generatedAt: 300 };
+    mocks.read
+      .mockReturnValueOnce({
+        bundle_json: JSON.stringify({ ...bundle, generatedAt: 50 }),
+        source_url: "https://catalog.openclaw.ai/models/v1/catalog.json",
+      })
+      .mockReturnValueOnce({
+        bundle_json: JSON.stringify(newerBundle),
+        source_url: "https://catalog.openclaw.ai/models/v1/catalog.json",
+      });
+    expect(getRemoteModelCatalogOverlay({})).toBeUndefined();
+    expect(getRemoteModelCatalogOverlay({})).toHaveProperty("anthropic");
+    expect(mocks.read).toHaveBeenCalledTimes(2);
+  });
 });

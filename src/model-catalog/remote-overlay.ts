@@ -17,7 +17,7 @@ type ActiveRemoteModelCatalog = {
   pricing?: Readonly<Record<string, RemoteModelCatalogPricing>>;
 };
 
-let cachedOverlay: { sourceUrl: string; value: ActiveRemoteModelCatalog | null } | undefined;
+let cachedOverlay: { sourceUrl: string; value: ActiveRemoteModelCatalog } | undefined;
 let readBundledGeneratedAt = bundledCatalogGeneratedAt;
 let readStoredCatalog = readRemoteModelCatalog;
 
@@ -35,22 +35,24 @@ function getActiveRemoteModelCatalog(config: OpenClawConfig): ActiveRemoteModelC
   }
   try {
     const sourceUrl = resolveRemoteCatalogUrl(config);
+    // A successfully loaded overlay is cached for the process lifetime (the
+    // bundled/generated stamps and source URL are process-stable). Negative
+    // results are NOT cached: a cold start, a deleted store, or a stale bundle
+    // can all be resolved by a background refresh writing a newer bundle, and
+    // caching null would pin the overlay to "absent" until a manual restart.
     if (cachedOverlay?.sourceUrl === sourceUrl) {
-      return cachedOverlay.value ?? undefined;
+      return cachedOverlay.value;
     }
     const bundledGeneratedAt = readBundledGeneratedAt();
     if (bundledGeneratedAt === undefined) {
-      cachedOverlay = { sourceUrl, value: null };
       return undefined;
     }
     const stored = readStoredCatalog();
     if (!stored || stored.source_url !== sourceUrl) {
-      cachedOverlay = { sourceUrl, value: null };
       return undefined;
     }
     const bundle = validateAndSanitizeRemoteModelCatalogBundle(JSON.parse(stored.bundle_json));
     if (bundle.generatedAt <= bundledGeneratedAt || !isCompatible(bundle)) {
-      cachedOverlay = { sourceUrl, value: null };
       return undefined;
     }
     const value = {
