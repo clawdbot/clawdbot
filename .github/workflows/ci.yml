@@ -2073,6 +2073,7 @@ jobs:
             scripts/ci-run-node-test-shard.mjs
             scripts/lib/direct-run.mjs
             scripts/lib/local-heavy-check-runtime.mjs
+          sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - name: Run Node test shard

@@ -4693,6 +4693,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         ref: "${{ github.workflow_sha }}",
         path: ".ci-workflow",
         "sparse-checkout": expect.stringContaining("scripts/ci-run-node-test-shard.mjs"),
+        "sparse-checkout-cone-mode": false,
         "persist-credentials": false,
       },
     });
