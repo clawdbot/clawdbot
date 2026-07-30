@@ -45,7 +45,8 @@ const OUTBOUND_NON_CREDENTIAL_HEADER_NAMES = new Set([
   "x-trace-token",
 ]);
 
-const CREDENTIAL_HEADER_NAME_SUFFIX_PATTERN = /(?:^|-)(?:credential|key|password|secret|token)$/u;
+const CREDENTIAL_HEADER_NAME_SUFFIX_PATTERN =
+  /(?:^|-)(?:auth|authentication|credential|key|password|secret|token)$/u;
 const AUTHENTICATION_SIGNATURE_HEADER_NAME_SEGMENT_PATTERN =
   /(?:^|-)(?:auth-sign(?:ature)?|hmac|signature)(?:-|$)/u;
 

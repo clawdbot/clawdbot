@@ -151,6 +151,7 @@ describe("web_fetch configured request headers", () => {
       "X-Akamai-ACS-Auth-Sign": "akamai-live-signature",
       "X-Plivo-Signature-V2": "plivo-live-signature",
       "Telnyx-Signature-Ed25519": "telnyx-live-signature",
+      "X-XAI-Token-Auth": "xai-live-auth",
       "X-Routing-Target": "staging",
     });
 
@@ -181,6 +182,7 @@ describe("web_fetch configured request headers", () => {
     expect(names).not.toContain("X-Akamai-ACS-Auth-Sign");
     expect(names).not.toContain("X-Plivo-Signature-V2");
     expect(names).not.toContain("Telnyx-Signature-Ed25519");
+    expect(names).not.toContain("X-XAI-Token-Auth");
     const warnings = warnSpy.mock.calls.map(([message]) => message);
     expect(warnings.some((message) => message.includes("Authorization"))).toBe(true);
     expect(warnings.every((message) => !message.includes(credentialLogSentinel))).toBe(true);

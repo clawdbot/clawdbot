@@ -100,6 +100,8 @@ describe("resolveOperatorRequestHeaders", () => {
       "X-Plivo-Signature-V3": "plivo-live",
       "Telnyx-Signature-Ed25519": "telnyx-live",
       "X-HMAC-SHA256": "hmac-live",
+      "X-Custom-Auth": "custom-live",
+      "X-XAI-Token-Auth": "xai-live",
       "X-Fine": "ok",
     });
     expect(Object.keys(headers ?? {})).toEqual(["X-Fine"]);
@@ -130,6 +132,8 @@ describe("resolveOperatorRequestHeaders", () => {
         "X-Plivo-Signature-V3",
         "Telnyx-Signature-Ed25519",
         "X-HMAC-SHA256",
+        "X-Custom-Auth",
+        "X-XAI-Token-Auth",
       ]),
     );
   });
