@@ -28,7 +28,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     telemetryExporterCounter,
     spanWithDuration,
     activeTrustedParentContext,
-    activeInternalOrTrustedContext,
+    exportedInternalOrTrustedContext,
     trackTrustedSpan,
     takeTrackedTrustedSpan,
     setSpanAttrs,
@@ -244,7 +244,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     // shouldEmitAgentRunDiagnostics is false there), so the parent is
     // openclaw.harness.run; other harnesses open a run scope and parent to openclaw.run.
     const span = spanWithDuration("openclaw.exec", spanAttrs, evt.durationMs, {
-      parentContext: activeInternalOrTrustedContext(evt, metadata),
+      parentContext: exportedInternalOrTrustedContext(evt, metadata),
       endTimeMs: evt.ts,
     });
     if (evt.outcome === "failed") {

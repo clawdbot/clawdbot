@@ -193,7 +193,9 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     }
     return trace.setSpanContext(otelContextApi.active(), spanContext);
   };
-  const activeInternalOrTrustedContext = (
+  // Resolves only spans this process actually exported, so a miss leaves the caller
+  // parentless rather than pointing at a span id no backend will ever receive.
+  const exportedInternalOrTrustedContext = (
     evt: DiagnosticEventPayload,
     metadata: DiagnosticEventMetadata,
   ) => {
@@ -217,11 +219,18 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     const retainedSpanContext =
       retainedTrustedSpanContext(traceContext, traceContext.spanId, owner) ??
       retainedTrustedSpanContext(traceContext, traceContext.parentSpanId, owner);
-    if (retainedSpanContext) {
-      return trace.setSpanContext(otelContextApi.active(), retainedSpanContext);
-    }
-    return internalOrTrustedParentContext(evt, metadata);
+    return retainedSpanContext
+      ? trace.setSpanContext(otelContextApi.active(), retainedSpanContext)
+      : undefined;
   };
+  // Message spans additionally accept a remote parent, because their trace context can
+  // come from an inbound traceparent whose span really does live in another process.
+  const activeInternalOrTrustedContext = (
+    evt: DiagnosticEventPayload,
+    metadata: DiagnosticEventMetadata,
+  ) =>
+    exportedInternalOrTrustedContext(evt, metadata) ??
+    internalOrTrustedParentContext(evt, metadata);
   const trackTrustedSpan = (
     evt: DiagnosticEventPayload,
     metadata: DiagnosticEventMetadata,
@@ -292,17 +301,19 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
       retainedTrustedSpanContexts.delete(oldestKey);
     }
   };
-  // Takes the whole diagnostic trace context, not a bare trace id: later children
-  // look the parent up by the ids they carry on their own event, and DiagnosticTraceContext
-  // is the only shape that cannot be satisfied by an OTel SpanContext (traceFlags is
-  // string here, number there). Passing span.spanContext() would key retention under
-  // the OTel trace id and silently split every late child into its own trace.
+  // Retention keys on the diagnostic ids the event carries. Taking the whole context
+  // (not a bare trace id) makes an OTel SpanContext a type error here; keying by OTel
+  // ids instead would silently split every late child into its own trace.
   const completeTrackedLifecycleSpan = (
     traceContext: DiagnosticTraceContext,
-    spanId: string,
     span: ReturnType<typeof tracer.startSpan>,
     endTimeMs: number,
   ) => {
+    const spanId = traceContext.spanId;
+    if (!spanId) {
+      span.end(endTimeMs);
+      return;
+    }
     const spanContext = span.spanContext();
     const retainedKeys: Array<{ spanId: string; owner?: TrustedSpanAliasOwner }> = [{ spanId }];
     const retainedAliasKeys: string[] = [];
@@ -381,6 +392,7 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     internalOrTrustedExplicitParentContext,
     activeTrustedParentContext,
     activeInternalOrTrustedContext,
+    exportedInternalOrTrustedContext,
     trackTrustedSpan,
     trackInternalOrTrustedSpan,
     takeTrackedTrustedSpan,
