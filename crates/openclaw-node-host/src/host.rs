@@ -680,13 +680,15 @@ fn client_error_class(error: &ClientError) -> &'static str {
         ClientError::InvalidUrl(_) | ClientError::InsecureRemoteGateway | ClientError::Tls(_) => {
             "configuration"
         }
-        ClientError::Transport(_) | ClientError::ChallengeTimeout | ClientError::Closed(_) => {
-            "transport"
-        }
+        ClientError::Transport(_)
+        | ClientError::ConnectTimeout
+        | ClientError::ChallengeTimeout
+        | ClientError::Closed(_) => "transport",
         ClientError::InvalidChallenge(_) | ClientError::InvalidFrame(_) => "protocol",
         ClientError::ConnectParams(_) | ClientError::Identity(_) => "identity",
         ClientError::Gateway { .. } => "gateway",
         ClientError::RequestTimeout(_) => "request-timeout",
+        ClientError::WriteTimeout(_) => "write-timeout",
         ClientError::EventLagged(_) => "event-lagged",
         ClientError::NotActivated => "activation",
     }

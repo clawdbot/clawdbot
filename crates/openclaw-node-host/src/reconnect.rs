@@ -215,8 +215,10 @@ fn classify_pause(error: &ClientError) -> Option<ReconnectPause> {
         }
         ClientError::Transport(_)
         | ClientError::Tls(_)
+        | ClientError::ConnectTimeout
         | ClientError::ChallengeTimeout
         | ClientError::RequestTimeout(_)
+        | ClientError::WriteTimeout(_)
         | ClientError::Closed(_)
         | ClientError::EventLagged(_)
         | ClientError::NotActivated => None,

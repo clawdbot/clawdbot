@@ -13,6 +13,7 @@ use std::{
 };
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex, Semaphore};
+use tokio::time::Instant;
 use tokio_tungstenite::{
     connect_async_tls_with_config,
     tungstenite::{
@@ -28,16 +29,22 @@ use url::{Host, Url};
 use crate::{pinned_tls_config, TlsTrust};
 
 const DEFAULT_CHALLENGE_TIMEOUT: Duration = Duration::from_secs(15);
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+const DEFAULT_MAX_EVENT_BUFFER_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct GatewayClientConfig {
     request: tokio_tungstenite::tungstenite::http::Request<()>,
     tls_trust: TlsTrust,
+    connect_timeout: Duration,
     challenge_timeout: Duration,
     request_timeout: Duration,
+    write_timeout: Duration,
     max_message_bytes: usize,
+    max_event_buffer_bytes: usize,
     event_capacity: usize,
     max_in_flight: usize,
 }
@@ -53,9 +60,12 @@ impl GatewayClientConfig {
         Ok(Self {
             request,
             tls_trust: TlsTrust::SystemRoots,
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             challenge_timeout: DEFAULT_CHALLENGE_TIMEOUT,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            write_timeout: DEFAULT_WRITE_TIMEOUT,
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
+            max_event_buffer_bytes: DEFAULT_MAX_EVENT_BUFFER_BYTES,
             event_capacity: 256,
             max_in_flight: 64,
         })
@@ -78,6 +88,12 @@ impl GatewayClientConfig {
     }
 
     #[must_use]
+    pub fn connect_timeout(mut self, timeout: Duration) -> Self {
+        self.connect_timeout = timeout;
+        self
+    }
+
+    #[must_use]
     pub fn challenge_timeout(mut self, timeout: Duration) -> Self {
         self.challenge_timeout = timeout;
         self
@@ -90,8 +106,20 @@ impl GatewayClientConfig {
     }
 
     #[must_use]
+    pub fn write_timeout(mut self, timeout: Duration) -> Self {
+        self.write_timeout = timeout;
+        self
+    }
+
+    #[must_use]
     pub fn max_message_bytes(mut self, bytes: usize) -> Self {
         self.max_message_bytes = bytes;
+        self
+    }
+
+    #[must_use]
+    pub fn max_event_buffer_bytes(mut self, bytes: usize) -> Self {
+        self.max_event_buffer_bytes = bytes;
         self
     }
 
@@ -129,6 +157,8 @@ pub enum ClientError {
     Transport(String),
     #[error("Gateway TLS connection failed: {0}")]
     Tls(String),
+    #[error("Gateway connection timed out")]
+    ConnectTimeout,
     #[error("Gateway connect challenge timed out")]
     ChallengeTimeout,
     #[error("Gateway connect challenge was invalid: {0}")]
@@ -146,6 +176,8 @@ pub enum ClientError {
     },
     #[error("Gateway request timed out: {0}")]
     RequestTimeout(String),
+    #[error("Gateway write timed out: {0}")]
+    WriteTimeout(String),
     #[error("Gateway session is closed: {0}")]
     Closed(String),
     #[error("Gateway frame was invalid: {0}")]
@@ -184,23 +216,36 @@ impl GatewayClient {
             ))),
         };
         let secure_endpoint = config.request.uri().scheme_str() == Some("wss");
-        let (mut socket, _) =
-            connect_async_tls_with_config(config.request, Some(websocket_config), false, connector)
-                .await
-                .map_err(|error| classify_connect_error(error, secure_endpoint))?;
+        let (mut socket, _) = tokio::time::timeout(
+            config.connect_timeout,
+            connect_async_tls_with_config(config.request, Some(websocket_config), false, connector),
+        )
+        .await
+        .map_err(|_| ClientError::ConnectTimeout)?
+        .map_err(|error| classify_connect_error(error, secure_endpoint))?;
 
-        let nonce = tokio::time::timeout(config.challenge_timeout, wait_for_challenge(&mut socket))
-            .await
-            .map_err(|_| ClientError::ChallengeTimeout)??;
+        let nonce = tokio::time::timeout(
+            config.challenge_timeout,
+            wait_for_challenge(&mut socket, config.write_timeout),
+        )
+        .await
+        .map_err(|_| ClientError::ChallengeTimeout)??;
         let params = make_params(nonce)
             .await
             .map_err(|error| ClientError::ConnectParams(error.to_string()))?;
 
         let connect_id = "rust-gateway-connect-1";
-        send_request(&mut socket, connect_id, "connect", params).await?;
+        send_request(
+            &mut socket,
+            connect_id,
+            "connect",
+            params,
+            config.write_timeout,
+        )
+        .await?;
         let hello = tokio::time::timeout(
             config.request_timeout,
-            wait_for_response(&mut socket, connect_id, "connect"),
+            wait_for_response(&mut socket, connect_id, "connect", config.write_timeout),
         )
         .await
         .map_err(|_| ClientError::RequestTimeout("connect".into()))??;
@@ -211,24 +256,33 @@ impl GatewayClient {
         // pending requests even if the caller drops its future.
         let command_capacity = config.max_in_flight.max(1);
         let (command_tx, command_rx) = mpsc::channel(command_capacity);
-        let (event_tx, initial_event_rx) = broadcast::channel(config.event_capacity.max(1));
+        let event_capacity = bounded_event_capacity(
+            config.event_capacity,
+            config.max_message_bytes,
+            config.max_event_buffer_bytes,
+        );
+        let (event_tx, initial_event_rx) = broadcast::channel(event_capacity);
         let (activity_tx, activity_rx) = watch::channel(0_u64);
         let (closed_tx, closed_rx) = watch::channel(None);
+        let (close_tx, close_rx) = watch::channel(false);
         tokio::spawn(run_session(
             socket,
             command_rx,
             event_tx.clone(),
             activity_tx,
             closed_tx,
+            close_rx,
+            config.write_timeout,
         ));
 
         Ok(GatewaySession {
             hello,
             command_tx,
-            event_tx,
+            event_tx: event_tx.downgrade(),
             event_rx: Arc::new(Mutex::new(initial_event_rx)),
             activity_rx,
             closed_rx,
+            close_tx,
             next_request_id: Arc::new(AtomicU64::new(1)),
             request_timeout: config.request_timeout,
             in_flight: Arc::new(Semaphore::new(config.max_in_flight.max(1))),
@@ -240,10 +294,11 @@ impl GatewayClient {
 pub struct GatewaySession {
     hello: Value,
     command_tx: mpsc::Sender<SessionCommand>,
-    event_tx: broadcast::Sender<Event>,
+    event_tx: broadcast::WeakSender<Event>,
     event_rx: Arc<Mutex<broadcast::Receiver<Event>>>,
     activity_rx: watch::Receiver<u64>,
     closed_rx: watch::Receiver<Option<SessionCloseCause>>,
+    close_tx: watch::Sender<bool>,
     next_request_id: Arc<AtomicU64>,
     request_timeout: Duration,
     in_flight: Arc<Semaphore>,
@@ -257,7 +312,9 @@ impl GatewaySession {
 
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
-        self.event_tx.subscribe()
+        self.event_tx
+            .upgrade()
+            .map_or_else(closed_event_receiver, |events| events.subscribe())
     }
 
     #[must_use]
@@ -306,43 +363,39 @@ impl GatewaySession {
                 "request method must not be empty".into(),
             ));
         }
-        let permit = self
-            .in_flight
-            .clone()
-            .acquire_owned()
+        let deadline = Instant::now() + self.request_timeout;
+        let permit = tokio::time::timeout_at(deadline, self.in_flight.clone().acquire_owned())
             .await
+            .map_err(|_| ClientError::RequestTimeout(method.clone()))?
             .map_err(|_| self.closed_error())?;
         let id = format!(
             "rust-gateway-{}",
             self.next_request_id.fetch_add(1, Ordering::Relaxed)
         );
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.command_tx
-            .send(SessionCommand::Request {
+        tokio::time::timeout_at(
+            deadline,
+            self.command_tx.send(SessionCommand::Request {
                 id: id.clone(),
                 method: method.clone(),
                 params,
                 reply: reply_tx,
                 permit,
-            })
-            .await
-            .map_err(|_| self.closed_error())?;
+                deadline,
+            }),
+        )
+        .await
+        .map_err(|_| ClientError::RequestTimeout(method))?
+        .map_err(|_| self.closed_error())?;
 
-        match tokio::time::timeout(self.request_timeout, reply_rx).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(self.closed_error()),
-            Err(_) => {
-                let _ = self
-                    .command_tx
-                    .send(SessionCommand::CancelRequest { id })
-                    .await;
-                Err(ClientError::RequestTimeout(method))
-            }
-        }
+        let mut cancellation = RequestCancellation::new(id, self.command_tx.clone());
+        let result = reply_rx.await.map_err(|_| self.closed_error())?;
+        cancellation.disarm();
+        result
     }
 
     pub async fn close(&self) {
-        let _ = self.command_tx.send(SessionCommand::Close).await;
+        let _ = self.close_tx.send(true);
     }
 
     pub async fn wait_closed(&self) -> Result<(), ClientError> {
@@ -365,11 +418,44 @@ impl GatewaySession {
     }
 }
 
+fn closed_event_receiver() -> broadcast::Receiver<Event> {
+    let (sender, receiver) = broadcast::channel(1);
+    drop(sender);
+    receiver
+}
+
+struct RequestCancellation {
+    id: Option<String>,
+    commands: mpsc::Sender<SessionCommand>,
+}
+
+impl RequestCancellation {
+    fn new(id: String, commands: mpsc::Sender<SessionCommand>) -> Self {
+        Self {
+            id: Some(id),
+            commands,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.id = None;
+    }
+}
+
+impl Drop for RequestCancellation {
+    fn drop(&mut self) {
+        if let Some(id) = self.id.take() {
+            let _ = self.commands.try_send(SessionCommand::CancelRequest { id });
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 enum SessionCloseCause {
     Closed(String),
     InvalidFrame(String),
     Transport(String),
+    WriteTimeout(String),
 }
 
 impl SessionCloseCause {
@@ -378,6 +464,7 @@ impl SessionCloseCause {
             Self::Closed(reason) => ClientError::Closed(reason.clone()),
             Self::InvalidFrame(reason) => ClientError::InvalidFrame(reason.clone()),
             Self::Transport(reason) => ClientError::Transport(reason.clone()),
+            Self::WriteTimeout(operation) => ClientError::WriteTimeout(operation.clone()),
         }
     }
 
@@ -387,6 +474,9 @@ impl SessionCloseCause {
             Self::Closed(reason) => ClientError::Closed(format!("{reason}{suffix}")),
             Self::InvalidFrame(reason) => ClientError::InvalidFrame(format!("{reason}{suffix}")),
             Self::Transport(reason) => ClientError::Transport(format!("{reason}{suffix}")),
+            Self::WriteTimeout(operation) => {
+                ClientError::WriteTimeout(format!("{operation}{suffix}"))
+            }
         }
     }
 }
@@ -398,11 +488,11 @@ enum SessionCommand {
         params: Value,
         reply: oneshot::Sender<Result<Value, ClientError>>,
         permit: tokio::sync::OwnedSemaphorePermit,
+        deadline: Instant,
     },
     CancelRequest {
         id: String,
     },
-    Close,
 }
 
 #[derive(Deserialize)]
@@ -443,12 +533,13 @@ struct GatewayErrorShape {
 
 async fn wait_for_challenge<S>(
     socket: &mut tokio_tungstenite::WebSocketStream<S>,
+    write_timeout: Duration,
 ) -> Result<String, ClientError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     loop {
-        match next_frame(socket).await? {
+        match next_frame(socket, write_timeout).await? {
             IncomingFrame::Event { event, payload, .. } if event == "connect.challenge" => {
                 let nonce = payload
                     .get("nonce")
@@ -467,6 +558,7 @@ async fn wait_for_response<S>(
     socket: &mut tokio_tungstenite::WebSocketStream<S>,
     expected_id: &str,
     method: &str,
+    write_timeout: Duration,
 ) -> Result<Value, ClientError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
@@ -477,7 +569,7 @@ where
             ok,
             payload,
             error,
-        } = next_frame(socket).await?
+        } = next_frame(socket, write_timeout).await?
         {
             if id == expected_id {
                 return response_result(method, ok, payload, error);
@@ -488,6 +580,7 @@ where
 
 async fn next_frame<S>(
     socket: &mut tokio_tungstenite::WebSocketStream<S>,
+    write_timeout: Duration,
 ) -> Result<IncomingFrame, ClientError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
@@ -503,10 +596,9 @@ where
                 return serde_json::from_str(text.as_str())
                     .map_err(|error| ClientError::InvalidFrame(error.to_string()));
             }
-            Message::Ping(payload) => socket
-                .send(Message::Pong(payload))
-                .await
-                .map_err(|error| ClientError::Transport(error.to_string()))?,
+            Message::Ping(payload) => {
+                send_message(socket, Message::Pong(payload), write_timeout, "pong").await?
+            }
             Message::Close(frame) => return Err(ClientError::Closed(format_close(frame.as_ref()))),
             Message::Binary(_) | Message::Pong(_) | Message::Frame(_) => {}
         }
@@ -518,15 +610,43 @@ async fn send_request<S>(
     id: &str,
     method: &str,
     params: Value,
+    write_timeout: Duration,
 ) -> Result<(), ClientError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     let frame = json!({ "type": "req", "id": id, "method": method, "params": params });
-    socket
-        .send(Message::Text(frame.to_string().into()))
+    send_message(
+        socket,
+        Message::Text(frame.to_string().into()),
+        write_timeout,
+        method,
+    )
+    .await
+}
+
+async fn send_message<S>(
+    socket: &mut tokio_tungstenite::WebSocketStream<S>,
+    message: Message,
+    timeout: Duration,
+    operation: &str,
+) -> Result<(), ClientError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    tokio::time::timeout(timeout, socket.send(message))
         .await
+        .map_err(|_| ClientError::WriteTimeout(operation.into()))?
         .map_err(|error| ClientError::Transport(error.to_string()))
+}
+
+fn bounded_event_capacity(
+    requested_capacity: usize,
+    max_message_bytes: usize,
+    max_event_buffer_bytes: usize,
+) -> usize {
+    let capacity_by_bytes = max_event_buffer_bytes.max(1) / max_message_bytes.max(1);
+    requested_capacity.max(1).min(capacity_by_bytes.max(1))
 }
 
 async fn run_session<S>(
@@ -535,25 +655,73 @@ async fn run_session<S>(
     events: broadcast::Sender<Event>,
     activity: watch::Sender<u64>,
     closed: watch::Sender<Option<SessionCloseCause>>,
+    mut close: watch::Receiver<bool>,
+    write_timeout: Duration,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    let mut pending = HashMap::new();
+    let mut pending: HashMap<String, PendingRequest> = HashMap::new();
     let close_reason = loop {
+        let next_deadline = pending
+            .values()
+            .map(|request: &PendingRequest| request.deadline)
+            .min();
+        let deadline = async move {
+            if let Some(deadline) = next_deadline {
+                tokio::time::sleep_until(deadline).await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        };
+        tokio::pin!(deadline);
         tokio::select! {
+            changed = close.changed() => {
+                let _ = changed;
+                let _ = tokio::time::timeout(write_timeout, socket.close(None)).await;
+                break SessionCloseCause::Closed("closed by client".into());
+            }
+            () = &mut deadline => {
+                let now = Instant::now();
+                let expired = pending
+                    .iter()
+                    .filter(|(_, request)| request.deadline <= now)
+                    .map(|(id, _)| id.clone())
+                    .collect::<Vec<_>>();
+                for id in expired {
+                    if let Some(request) = pending.remove(&id) {
+                        let _ = request.reply.send(Err(ClientError::RequestTimeout(
+                            request.method,
+                        )));
+                    }
+                }
+            }
             command = commands.recv() => {
                 match command {
-                    Some(SessionCommand::Request { id, method, params, reply, permit }) => {
-                        match send_request(&mut socket, &id, &method, params).await {
-                            Ok(()) => { pending.insert(id, (method, reply, permit)); }
-                            Err(error) => { let _ = reply.send(Err(error)); }
+                    Some(SessionCommand::Request { id, method, params, reply, permit, deadline }) => {
+                        if deadline <= Instant::now() {
+                            let _ = reply.send(Err(ClientError::RequestTimeout(method)));
+                            continue;
+                        }
+                        match send_request(&mut socket, &id, &method, params, write_timeout).await {
+                            Ok(()) => {
+                                pending.insert(id, PendingRequest { method, reply, _permit: permit, deadline });
+                            }
+                            Err(ClientError::WriteTimeout(operation)) => {
+                                let _ = reply.send(Err(ClientError::WriteTimeout(operation.clone())));
+                                break SessionCloseCause::WriteTimeout(operation);
+                            }
+                            Err(error) => {
+                                let reason = error.to_string();
+                                let _ = reply.send(Err(error));
+                                break SessionCloseCause::Transport(reason);
+                            }
                         }
                     }
                     Some(SessionCommand::CancelRequest { id }) => {
                         pending.remove(&id);
                     }
-                    Some(SessionCommand::Close) | None => {
-                        let _ = socket.close(None).await;
+                    None => {
+                        let _ = tokio::time::timeout(write_timeout, socket.close(None)).await;
                         break SessionCloseCause::Closed("closed by client".into());
                     }
                 }
@@ -569,16 +737,26 @@ async fn run_session<S>(
                                 let _ = events.send(Event { event, payload, seq });
                             }
                             Ok(IncomingFrame::Response { id, ok, payload, error }) => {
-                                if let Some((method, reply, _permit)) = pending.remove(&id) {
-                                    let _ = reply.send(response_result(&method, ok, payload, error));
+                                if let Some(request) = pending.remove(&id) {
+                                    let _ = request.reply.send(response_result(
+                                        &request.method,
+                                        ok,
+                                        payload,
+                                        error,
+                                    ));
                                 }
                             }
                             Err(error) => break SessionCloseCause::InvalidFrame(error.to_string()),
                         }
                     }
                     Some(Ok(Message::Ping(payload))) => {
-                        if let Err(error) = socket.send(Message::Pong(payload)).await {
-                            break SessionCloseCause::Transport(error.to_string());
+                        if let Err(error) = send_message(
+                            &mut socket,
+                            Message::Pong(payload),
+                            write_timeout,
+                            "pong",
+                        ).await {
+                            break session_close_cause(error);
                         }
                     }
                     Some(Ok(Message::Close(frame))) => {
@@ -592,10 +770,26 @@ async fn run_session<S>(
         }
     };
 
-    for (_, (method, reply, _permit)) in pending {
-        let _ = reply.send(Err(close_reason.pending_request_error(&method)));
+    for (_, request) in pending {
+        let _ = request
+            .reply
+            .send(Err(close_reason.pending_request_error(&request.method)));
     }
     let _ = closed.send(Some(close_reason));
+}
+
+struct PendingRequest {
+    method: String,
+    reply: oneshot::Sender<Result<Value, ClientError>>,
+    _permit: tokio::sync::OwnedSemaphorePermit,
+    deadline: Instant,
+}
+
+fn session_close_cause(error: ClientError) -> SessionCloseCause {
+    match error {
+        ClientError::WriteTimeout(operation) => SessionCloseCause::WriteTimeout(operation),
+        error => SessionCloseCause::Transport(error.to_string()),
+    }
 }
 
 fn response_result(
@@ -721,5 +915,15 @@ mod tests {
             classify_connect_error(invalid_data(), false),
             ClientError::Transport(_)
         ));
+    }
+
+    #[test]
+    fn event_capacity_is_bounded_by_the_memory_budget() {
+        assert_eq!(
+            bounded_event_capacity(256, 16 * 1024 * 1024, 64 * 1024 * 1024),
+            4
+        );
+        assert_eq!(bounded_event_capacity(2, 1024, 64 * 1024), 2);
+        assert_eq!(bounded_event_capacity(0, 0, 0), 1);
     }
 }
