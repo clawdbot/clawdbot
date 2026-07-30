@@ -1174,6 +1174,24 @@ export function retainSharedCodexAppServerClientIfCurrent(
   return undefined;
 }
 
+/** Retains the live shared client whose initialized instance id matches a thread binding. */
+export function retainSharedCodexAppServerClientByInstanceId(
+  clientId: string | undefined,
+): { client: CodexAppServerClient; release: () => void } | undefined {
+  const normalizedClientId = clientId?.trim();
+  if (!normalizedClientId) {
+    return undefined;
+  }
+  for (const entry of getSharedCodexAppServerClientState().clients.values()) {
+    const client = entry.client;
+    if (client?.getInstanceId() !== normalizedClientId || entry.closeWhenIdle || entry.closeError) {
+      continue;
+    }
+    return { client, release: retainSharedClientEntry(entry) };
+  }
+  return undefined;
+}
+
 /**
  * Retires a matching shared client. Default is graceful: detach from the map
  * (future acquisitions get a fresh client) and close once leases drain.

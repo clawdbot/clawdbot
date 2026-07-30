@@ -7,9 +7,10 @@ import { renderDreamingSettings } from "./memory-dreaming.ts";
 function renderInto(
   dreaming: Record<string, unknown> | null,
   onPatch: (path: readonly string[], value: unknown) => void = vi.fn(),
+  disabled = false,
 ): HTMLElement {
   const container = document.createElement("div");
-  render(renderDreamingSettings({ dreaming, onPatch }), container);
+  render(renderDreamingSettings({ dreaming, disabled, onPatch }), container);
   return container;
 }
 
@@ -81,6 +82,22 @@ describe("renderDreamingSettings", () => {
     expect(selectedSegment(renderInto({ storage: { mode: "both" } }))).toBe("both");
     // An unreadable stored value is not a fourth mode: it reads as the default.
     expect(selectedSegment(renderInto({ storage: { mode: "nonsense" } }))).toBe("separate");
+  });
+
+  it("locks every global dreaming control when config mutation is unavailable", () => {
+    const container = renderInto(null, vi.fn(), true);
+
+    expect(
+      [...container.querySelectorAll<HTMLInputElement>("input")].every((input) => input.disabled),
+    ).toBe(true);
+    expect(
+      [...container.querySelectorAll<HTMLElement & { disabled?: boolean }>("wa-switch")].every(
+        (toggle) => toggle.disabled === true,
+      ),
+    ).toBe(true);
+    expect(
+      container.querySelector<HTMLElement & { disabled?: boolean }>("wa-radio-group")?.disabled,
+    ).toBe(true);
   });
 });
 

@@ -56,6 +56,7 @@ import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
 } from "../../gateway/active-sessions-shutdown-tracker.js";
+import { emitSessionAutoResetHook } from "../../hooks/session-auto-reset.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
@@ -1152,6 +1153,21 @@ async function initSessionStateAttemptLocked(
     sessionStore,
   });
   const previousSessionTranscript = committed.previousSessionTranscript;
+  if (previousSessionEntry?.sessionId) {
+    emitSessionAutoResetHook({
+      cfg,
+      sessionId: previousSessionEntry.sessionId,
+      sessionKey,
+      reason: previousSessionEndReason,
+      sessionFile: previousSessionTranscript.sessionFile,
+      transcriptArchived: previousSessionTranscript.transcriptArchived,
+      nextSessionId: sessionId,
+      nextSessionKey: sessionKey,
+      agentId,
+      workspaceDir: previousSessionEntry.spawnedWorkspaceDir,
+      storePath,
+    });
+  }
 
   if (previousSessionEntry?.sessionId) {
     await retireSessionMcpRuntime({

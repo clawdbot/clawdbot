@@ -34,6 +34,12 @@ const PERMISSION_VALUE_MAX_LENGTH = 48;
 const COMMAND_PREVIEW_WITH_DETAILS_MAX_LENGTH = 80;
 const APPROVAL_PREVIEW_SCAN_MAX_LENGTH = 4096;
 const APPROVAL_PREVIEW_OMITTED = "[preview truncated or unsafe content omitted]";
+// Automatic approval is limited to concrete calls. A before_tool_call allow
+// covers the evaluated call, not future scope; new or grant-shaped methods stay human-gated.
+const CONCRETE_TOOL_AUTO_APPROVAL_METHODS = new Set([
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+]);
 const ANSI_OSC_SEQUENCE_RE = new RegExp(
   String.raw`(?:\u001b]|\u009d)[^\u001b\u009c\u0007]*(?:\u0007|\u001b\\|\u009c)`,
   "g",
@@ -76,6 +82,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
     "allowedEvents" | "generation" | "relayId"
   >;
   autoApprove?: boolean;
+  autoApproveOpenClawToolPolicy?: boolean;
   signal?: AbortSignal;
   onNativeToolFailureDisposition?: (
     itemId: string,
@@ -86,10 +93,6 @@ export async function handleCodexAppServerApprovalRequest(params: {
   if (!matchesCurrentTurn(requestParams, params.threadId, params.turnId)) {
     return undefined;
   }
-  if (!isSupportedAppServerApprovalMethod(params.method)) {
-    return unsupportedApprovalResponse();
-  }
-
   const context = buildApprovalContext({
     method: params.method,
     requestParams,
@@ -134,7 +137,24 @@ export async function handleCodexAppServerApprovalRequest(params: {
       });
       return buildApprovalResponse(params.method, context.requestParams, policyOutcome.outcome);
     }
-    if (params.autoApprove === true) {
+    const canAutoApproveConcreteToolCall = CONCRETE_TOOL_AUTO_APPROVAL_METHODS.has(params.method);
+    if (
+      canAutoApproveConcreteToolCall &&
+      params.autoApproveOpenClawToolPolicy === true &&
+      policyOutcome?.outcome === "allowed"
+    ) {
+      emitApprovalEvent(params.paramsForRun, {
+        phase: "resolved",
+        kind: context.kind,
+        status: "approved",
+        title: context.title,
+        ...context.eventDetails,
+        ...approvalEventScope(params.method, "approved-once"),
+        message: "Codex app-server approval accepted by OpenClaw tool policy.",
+      });
+      return buildApprovalResponse(params.method, context.requestParams, "approved-once");
+    }
+    if (canAutoApproveConcreteToolCall && params.autoApprove === true) {
       emitApprovalEvent(params.paramsForRun, {
         phase: "resolved",
         kind: context.kind,
@@ -396,7 +416,7 @@ type ApprovalPolicyOutcome =
       failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
     }
   | { outcome: "approved-once" | "approved-session" }
-  | { outcome: "no-decision" };
+  | { outcome: "allowed" };
 
 async function runOpenClawToolPolicyForApprovalRequest(params: {
   method: string;
@@ -441,7 +461,7 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
     return { outcome: nativeRelayOutcome.outcome };
   }
   if (nativeRelayOutcome?.handled) {
-    return { outcome: "no-decision" };
+    return { outcome: "allowed" };
   }
   const hookChannelId = buildAgentHookContextChannelFields({
     sessionKey: params.paramsForRun.sessionKey,
@@ -465,6 +485,13 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
       ...(params.paramsForRun.sessionId ? { sessionId: params.paramsForRun.sessionId } : {}),
       ...(params.paramsForRun.runId ? { runId: params.paramsForRun.runId } : {}),
       ...(hookChannelId ? { channelId: hookChannelId } : {}),
+      trigger: params.paramsForRun.trigger,
+      approvalReviewerDeviceId: params.paramsForRun.approvalReviewerDeviceId,
+      turnSourceChannel: params.paramsForRun.messageChannel ?? params.paramsForRun.messageProvider,
+      turnSourceTo:
+        params.paramsForRun.currentMessagingTarget ?? params.paramsForRun.currentChannelId,
+      turnSourceAccountId: params.paramsForRun.agentAccountId,
+      turnSourceThreadId: params.paramsForRun.currentThreadTs,
     },
   });
   if (outcome.blocked) {
@@ -490,7 +517,7 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
       outcome: "approved-once",
     };
   }
-  return undefined;
+  return { outcome: "allowed" };
 }
 
 async function runNativeRelayToolPolicyForApprovalRequest(params: {
@@ -1234,14 +1261,6 @@ function approvalKindForMethod(method: string): AgentApprovalEventData["kind"] {
     return "plugin";
   }
   return "unknown";
-}
-
-function isSupportedAppServerApprovalMethod(method: string): boolean {
-  return (
-    method === "item/commandExecution/requestApproval" ||
-    method === "item/fileChange/requestApproval" ||
-    method === "item/permissions/requestApproval"
-  );
 }
 
 function emitApprovalEvent(params: EmbeddedRunAttemptParams, data: AgentApprovalEventData): void {

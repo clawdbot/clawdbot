@@ -494,6 +494,109 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("keeps streamed pre-tool text over the final-message result in transcript reparses", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "init", session_id: "session-reparse" }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Marker caribou-lampion-473 explanation." },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            content_block: { type: "tool_use", id: "tool-1", name: "session_status" },
+          },
+        }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_stop" } }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "TEST DONE" },
+          },
+        }),
+        JSON.stringify({ type: "result", session_id: "session-reparse", result: "TEST DONE" }),
+      ].join("\n"),
+      {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      "local-cli",
+    );
+
+    expect(result).toEqual({
+      text: "Marker caribou-lampion-473 explanation.\n\nTEST DONE",
+      sessionId: "session-reparse",
+      usage: undefined,
+    });
+  });
+
+  it("continues transcript reparses past an interim result", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "init", session_id: "session-interim-reparse" }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Interim answer." },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-interim-reparse",
+          result: "Interim answer.",
+        }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Pre-tool follow-up." },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            content_block: { type: "tool_use", id: "tool-2", name: "session_status" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "DONE" },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-interim-reparse",
+          result: "DONE",
+        }),
+      ].join("\n"),
+      {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      "local-cli",
+    );
+
+    expect(result?.text).toBe("Interim answer.\nPre-tool follow-up.\n\nDONE");
+  });
+
   it.each(OPENAI_COMPATIBLE_CLI_USAGE_CASES)(
     "normalizes $name from CLI JSONL output",
     ({ raw, normalized }) => {
@@ -1402,6 +1505,508 @@ describe("createCliJsonlStreamingParser", () => {
     expect(parser.getOutput()).toEqual({
       text: "hello world",
       sessionId: "session-stream",
+      usage: undefined,
+    });
+  });
+
+  it("keeps streamed pre-tool text when the result envelope carries only the final message", () => {
+    const deltas: Array<{ text: string; delta?: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: (delta) => deltas.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-tool-split" }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Marker caribou-lampion-473 explanation." },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            content_block: { type: "tool_use", id: "tool-1", name: "session_status" },
+          },
+        }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_stop" } }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "TEST DONE" },
+          },
+        }),
+        JSON.stringify({ type: "result", session_id: "session-tool-split", result: "TEST DONE" }),
+        "",
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: "Marker caribou-lampion-473 explanation.\n\nTEST DONE",
+      sessionId: "session-tool-split",
+      usage: undefined,
+    });
+    // Cumulative text must stay reconstructible from deltas for preview streams.
+    expect(deltas.map((entry) => entry.delta).join("")).toBe(
+      "Marker caribou-lampion-473 explanation.\n\nTEST DONE",
+    );
+    expect(deltas.at(-1)?.text).toBe("Marker caribou-lampion-473 explanation.\n\nTEST DONE");
+  });
+
+  it("keeps pre-tool text when text, tool_use, and text share one assistant message", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-single-message" }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Marker caribou-lampion-473 explanation." },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            content_block: { type: "tool_use", id: "tool-1", name: "session_status" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "TEST DONE" },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-single-message",
+          result: "TEST DONE",
+        }),
+        "",
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()?.text).toBe("Marker caribou-lampion-473 explanation.\n\nTEST DONE");
+  });
+
+  it("keeps pre-tool text when a toolless closer message follows a tool-using message", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-closer" }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Pre-tool analysis." },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            content_block: { type: "tool_use", id: "tool-1", name: "session_status" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Post-tool summary." },
+          },
+        }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_stop" } }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "DONE" },
+          },
+        }),
+        JSON.stringify({ type: "result", session_id: "session-closer", result: "DONE" }),
+        "",
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()?.text).toBe("Pre-tool analysis.\n\nPost-tool summary.\n\nDONE");
+  });
+
+  it("judges post-interim-result segments on their own stream state", () => {
+    const deltas: Array<{ text: string; delta?: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: (delta) => deltas.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-interim" }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Interim answer." },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-interim",
+          result: "Interim answer.",
+        }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Pre-tool follow-up." },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            content_block: { type: "tool_use", id: "tool-2", name: "session_status" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "DONE" },
+          },
+        }),
+        JSON.stringify({ type: "result", session_id: "session-interim", result: "DONE" }),
+        "",
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()?.text).toBe("Interim answer.\nPre-tool follow-up.\n\nDONE");
+    // Preview snapshots stay cumulative across the interim result.
+    expect(deltas.at(-1)?.text).toBe("Interim answer.\n\nPre-tool follow-up.\n\nDONE");
+    expect(deltas.map((entry) => entry.delta).join("")).toBe(
+      "Interim answer.\n\nPre-tool follow-up.\n\nDONE",
+    );
+  });
+
+  it("does not duplicate existing newlines at message boundaries", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-newlines" }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Pre-tool explanation.\n\n" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            content_block: { type: "tool_use", id: "tool-1", name: "session_status" },
+          },
+        }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "TEST DONE" },
+          },
+        }),
+        JSON.stringify({ type: "result", session_id: "session-newlines", result: "TEST DONE" }),
+        "",
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()?.text).toBe("Pre-tool explanation.\n\nTEST DONE");
+  });
+
+  it("keeps a later tool split's pre-tool text after an earlier ordinary boundary", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-mixed" }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Superseded draft." },
+          },
+        }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_stop" } }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Important pre-tool text." },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            content_block: { type: "tool_use", id: "tool-1", name: "session_status" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "DONE" },
+          },
+        }),
+        JSON.stringify({ type: "result", session_id: "session-mixed", result: "DONE" }),
+        "",
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()?.text).toBe("Important pre-tool text.\n\nDONE");
+  });
+
+  it("drops an earlier draft when a fresh message starts with a tool call", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-tool-first" }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Superseded draft." },
+          },
+        }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_stop" } }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            content_block: { type: "tool_use", id: "tool-1", name: "session_status" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Fresh answer." },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-tool-first",
+          result: "Fresh answer.",
+        }),
+        "",
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()?.text).toBe("Fresh answer.");
+  });
+
+  it("defers to the result envelope across message boundaries without a tool split", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-draft" }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Superseded draft." },
+          },
+        }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_stop" } }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Final answer." },
+          },
+        }),
+        JSON.stringify({ type: "result", session_id: "session-draft", result: "Final answer." }),
+        "",
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()?.text).toBe("Final answer.");
+  });
+
+  it("defers to the result envelope on a suffix match inside a single message", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-suffix" }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "discarded draft authoritative result" },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-suffix",
+          result: "authoritative result",
+        }),
+        "",
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: "authoritative result",
+      sessionId: "session-suffix",
+      usage: undefined,
+    });
+  });
+
+  it("prefers the result envelope when streamed text diverges from it", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-diverged" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "draft wording" },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-diverged",
+          result: "authoritative result",
+        }),
+        "",
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: "authoritative result",
+      sessionId: "session-diverged",
       usage: undefined,
     });
   });

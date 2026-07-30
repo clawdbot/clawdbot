@@ -30291,7 +30291,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 421,
+      "line": 429,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Repairing the OpenClaw Gateway update…",
       "surface": "apple",
@@ -30299,7 +30299,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 422,
+      "line": 430,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Updating the OpenClaw Gateway to \\(targetVersion)…",
       "surface": "apple",
@@ -30307,7 +30307,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 443,
+      "line": 451,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Gateway update needs attention.",
       "surface": "apple",
@@ -30315,7 +30315,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 445,
+      "line": 453,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Gateway update failed.",
       "surface": "apple",
@@ -30323,7 +30323,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 460,
+      "line": 468,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Gateway update finished, but verification failed.",
       "surface": "apple",
@@ -30331,7 +30331,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 467,
+      "line": 475,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "OpenClaw Gateway \\(installedVersion) is installed.",
       "surface": "apple",
@@ -31859,7 +31859,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 223,
+      "line": 246,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Dashboard reconnecting",
       "surface": "apple",
@@ -31867,7 +31867,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 224,
+      "line": 247,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "The selected Gateway changed.",
       "surface": "apple",
@@ -31875,7 +31875,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 225,
+      "line": 248,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Waiting for a fresh authenticated connection.",
       "surface": "apple",
@@ -31883,7 +31883,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 381,
+      "line": 404,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Dashboard unavailable",
       "surface": "apple",
@@ -31891,7 +31891,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 383,
+      "line": 406,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Check Settings → Connection or use Debug → Reset Remote Tunnel, then try again.",
       "surface": "apple",
@@ -31899,7 +31899,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 589,
+      "line": 612,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Could Not Switch Gateway",
       "surface": "apple",
@@ -31907,7 +31907,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 617,
+      "line": 640,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Could Not Open Gateway Window",
       "surface": "apple",
@@ -31915,7 +31915,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 721,
+      "line": 744,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "\\(base)-\\(UUID().uuidString)",
       "surface": "apple",
@@ -31923,7 +31923,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 961,
+      "line": 984,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Could Not Set Primary Gateway",
       "surface": "apple",
@@ -32795,7 +32795,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 194,
+      "line": 195,
       "path": "apps/macos/Sources/OpenClaw/GatewayEnvironment.swift",
       "source": " (local: \\(projectEntrypoint ?? \"unknown\"))",
       "surface": "apple",
@@ -32803,7 +32803,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 198,
+      "line": 199,
       "path": "apps/macos/Sources/OpenClaw/GatewayEnvironment.swift",
       "source": "(\\(gatewayLabel))",
       "surface": "apple",
@@ -32835,7 +32835,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 571,
+      "line": 569,
       "path": "apps/macos/Sources/OpenClaw/GatewayProcessManager.swift",
       "source": "not linked",
       "surface": "apple",
@@ -32843,7 +32843,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 584,
+      "line": 582,
       "path": "apps/macos/Sources/OpenClaw/GatewayProcessManager.swift",
       "source": "unknown error",
       "surface": "apple",
@@ -33795,7 +33795,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 832,
+      "line": 830,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Retry now",
       "surface": "apple",
@@ -33803,7 +33803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 837,
+      "line": 835,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Open logs",
       "surface": "apple",

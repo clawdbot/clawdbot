@@ -380,6 +380,8 @@ export const en: TranslationMap = {
       "Update installed but running version did not change — restart may have been blocked. Expected v{expectedVersion}, running v{actualVersion}.",
     handoffTimeout:
       "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
+    outcomeUnknown:
+      "The update request may have been accepted, but the Gateway did not report a final result after reconnect. Run `openclaw update status` before retrying.",
     failureReasons: {
       dirty: "Commit or stash changes, then retry.",
       noUpstream: "Set an upstream branch, then retry.",
@@ -2400,7 +2402,9 @@ export const en: TranslationMap = {
       description:
         "Exactly one memory plugin owns the memory slot. Selecting an engine enables it and disables the others.",
       rowTitle: "Memory engine",
+      openClawMemory: "OpenClaw Memory",
       off: "Off",
+      unavailable: "Unavailable",
       autoHint: "No engine is pinned in config, so the slot falls back to its default owner.",
       explicitHint: "This engine is pinned in config under plugins.slots.memory.",
       offHint: "Memory is switched off in config: plugins.slots.memory is set to none.",
@@ -4842,6 +4846,7 @@ export const en: TranslationMap = {
       pause: "Pause",
       seek: "Seek media",
       download: "Download {filename}",
+      preparing: "Preparing playback…",
       videoUnavailable: "Can't play this format — download instead.",
     },
     modelControls: {

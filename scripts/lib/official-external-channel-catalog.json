@@ -566,6 +566,7 @@
           "docsLabel": "buzz",
           "blurb": "Connect OpenClaw agents to Buzz team rooms.",
           "envVars": ["BUZZ_RELAY_URL", "BUZZ_PRIVATE_KEY", "BUZZ_AUTH_TAG"],
+          "markdownCapable": true,
           "order": 56
         },
         "install": {

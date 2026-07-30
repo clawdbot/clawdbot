@@ -8,6 +8,7 @@ import { pruneBindingsForMissingAgents } from "./legacy-config-binding-repair.js
 import { normalizeBaseCompatibilityConfigValues } from "./legacy-config-compatibility-base.js";
 import { normalizeLegacyOpenAICodexModelsAddMetadata } from "./legacy-config-core-normalizers.js";
 import { stripRetiredTuningKnobs } from "./legacy-config-migrations.runtime.retired-media.js";
+import { migrateReservedMcpServerNames } from "./reserved-mcp-server-name-migrate.js";
 
 function repairNullAgentWorkspaces(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
   const agents = cfg.agents?.list;
@@ -52,14 +53,17 @@ export function normalizeCompatibilityConfigValues(
   cfg: OpenClawConfig,
   options: {
     blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
+    sourceRaw?: unknown;
   } = {},
 ): {
   config: OpenClawConfig;
   changes: string[];
 } {
   const changes: string[] = [];
+  const reservedMcpServerNames = migrateReservedMcpServerNames(cfg, options.sourceRaw);
+  changes.push(...reservedMcpServerNames.changes);
   let next = normalizeBaseCompatibilityConfigValues(
-    cfg,
+    reservedMcpServerNames.config,
     changes,
     (config) => {
       const setupMigration = runPluginSetupConfigMigrations({

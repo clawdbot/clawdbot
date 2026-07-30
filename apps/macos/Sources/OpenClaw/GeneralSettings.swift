@@ -786,9 +786,7 @@ struct GeneralSettings: View {
 
     private func refreshGatewayStatus() {
         Task {
-            let status = await Task.detached(priority: .utility) {
-                GatewayEnvironment.check()
-            }.value
+            let status = await GatewayEnvironment.check()
             self.gatewayStatus = status
         }
     }

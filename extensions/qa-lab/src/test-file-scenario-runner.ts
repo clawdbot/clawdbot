@@ -354,16 +354,12 @@ async function runQaTestFileScenario(params: {
 }) {
   const requiresProducerEvidence =
     params.scenario.execution.kind === "script" && !isDockerE2eScenario(params.scenario);
-  let producerEvidenceStartedAtMs: number | undefined;
   if (requiresProducerEvidence) {
     const scenarioOutputDir = path.join(params.outputDir, params.scenario.id);
-    // Both producer indexes belong to one command invocation. Clear them before
-    // launch so a successful no-op cannot authenticate an earlier scenario run.
-    await Promise.all([
-      fs.rm(path.join(scenarioOutputDir, "latest-run.json"), { force: true }),
-      fs.rm(path.join(scenarioOutputDir, QA_EVIDENCE_FILENAME), { force: true }),
-    ]);
-    producerEvidenceStartedAtMs = Date.now();
+    // The whole producer artifact root belongs to one command invocation. Clear
+    // it so neither a stale index nor a stale bundle can authenticate a no-op.
+    await fs.rm(scenarioOutputDir, { force: true, recursive: true });
+    await fs.mkdir(scenarioOutputDir, { recursive: true });
   }
   const definition = testFileRunnerDefinitions[params.scenario.execution.kind];
   const result = await runScenarioCommandSteps({
@@ -379,7 +375,7 @@ async function runQaTestFileScenario(params: {
       outputDir: params.outputDir,
       repoRoot: params.repoRoot,
       scenario: params.scenario,
-      producerEvidenceStartedAtMs,
+      requireCurrentRunEvidence: requiresProducerEvidence,
     });
   } catch (error) {
     if (result.status !== "pass") {

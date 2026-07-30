@@ -139,6 +139,7 @@ async function runNativeHookRelayPreToolUse(params: {
       runId: params.registration.runId,
       ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
       ...(params.registration.requester ? { requester: params.registration.requester } : {}),
+      ...params.registration.approvalContext,
       ...(params.invocation.cwd
         ? { cwd: params.invocation.cwd, workspaceDir: params.invocation.cwd }
         : {}),

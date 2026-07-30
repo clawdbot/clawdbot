@@ -135,6 +135,9 @@ function renderSuccess(
                 latencyMs: String(activation.latencyMs),
               })}
         </div>
+        ${activation.warning
+          ? html`<div class="model-setup__success-warning">${activation.warning}</div>`
+          : nothing}
       </div>
       <button type="button" class="btn primary" @click=${onOpenChat}>
         ${t("modelSetup.success.openChat")}

@@ -334,6 +334,7 @@ two-party event loops that do not go through the shared inbound reply runner.
       provider: "openai", // optional override
       model: "gpt-5.6-sol", // optional override
       deliver: false,
+      completionDelivery: "current-requester", // optional, before_dispatch hooks only
     });
 
     // Wait for completion
@@ -356,6 +357,8 @@ two-party event loops that do not go through the shared inbound reply runner.
     </Warning>
 
     `toolsAlsoAllow` adds exact, uniquely owned tools registered by the calling plugin to the worker's normal tool surface. The runtime rejects core tools and names shared with another plugin. Profiles and operator tool policies still apply, including explicit allowlists and denies.
+
+    `completionDelivery: "current-requester"` is default-off and is only available while a `before_dispatch` hook is handling an authenticated inbound request. OpenClaw captures the canonical requester session and delivery route before invoking the plugin, then delivers the subagent completion through the normal announce path. Plugins cannot provide or override requester lineage or destination fields. Calls outside that requester-bound hook context are rejected.
 
     `deleteSession(...)` can delete sessions created by the same plugin through `api.runtime.subagent.run(...)`. Deleting arbitrary user or operator sessions still requires an admin-scoped Gateway request.
 

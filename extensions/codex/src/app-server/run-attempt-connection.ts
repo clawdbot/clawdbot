@@ -310,7 +310,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     env: process.env,
     agentDir,
   });
-  if (configuredAppServer.approvalPolicy === "never" && appServer.approvalPolicy === "untrusted") {
+  let approvalPolicyPromotedForOpenClawToolPolicy =
+    configuredAppServer.approvalPolicy === "never" && appServer.approvalPolicy === "untrusted";
+  if (approvalPolicyPromotedForOpenClawToolPolicy) {
     embeddedAgentLog.info("codex app-server approval policy promoted for OpenClaw tool policy", {
       from: "never",
       to: "untrusted",
@@ -387,6 +389,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       env: process.env,
       agentDir,
     });
+    approvalPolicyPromotedForOpenClawToolPolicy =
+      configuredAppServer.approvalPolicy === "never" && appServer.approvalPolicy === "untrusted";
   }
   const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
     configuredEvents: options.nativeHookRelay?.events,
@@ -444,6 +448,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     effectiveWorkspace,
     effectiveCwd,
     appServer,
+    approvalPolicyPromotedForOpenClawToolPolicy,
     nativeHookRelayEvents,
     runAbortController,
     terminalState,

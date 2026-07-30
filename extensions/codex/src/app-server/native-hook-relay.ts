@@ -144,6 +144,7 @@ export function createCodexNativeHookRelay(params: {
   runId: string;
   channelId?: string;
   requester?: NonNullable<PluginHookToolContext["requester"]>;
+  approvalContext?: Parameters<typeof registerNativeHookRelay>[0]["approvalContext"];
   attemptTimeoutMs: number;
   startupTimeoutMs: number;
   turnStartTimeoutMs: number;
@@ -172,6 +173,7 @@ export function createCodexNativeHookRelay(params: {
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
     ...(params.requester ? { requester: params.requester } : {}),
+    ...(params.approvalContext ? { approvalContext: params.approvalContext } : {}),
     allowedEvents: params.events,
     preToolUseLoopDetection: params.loopDetectionPreToolUseRelay,
     ttlMs: resolveCodexNativeHookRelayTtlMs({
