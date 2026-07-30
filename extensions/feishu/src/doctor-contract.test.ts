@@ -8,7 +8,7 @@ function feishuConfig(entry: Record<string, unknown>): OpenClawConfig {
   return { channels: { feishu: entry } } as never;
 }
 
-describe("feishu streaming legacy config rules", () => {
+describe("feishu legacy config rules", () => {
   const rootRule = legacyConfigRules.find(
     (rule) => rule.path.join(".") === "channels.feishu" && rule.message.includes("chunkMode"),
   );
@@ -29,9 +29,19 @@ describe("feishu streaming legacy config rules", () => {
     expect(accountsRule?.match?.({ main: { streaming: true } }, {})).toBe(true);
     expect(accountsRule?.match?.({ main: { streaming: { mode: "off" } } }, {})).toBe(false);
   });
+
+  it("matches custom domains with unsafe base URL components", () => {
+    const domainRule = legacyConfigRules.find((rule) => rule.message.includes("HTTPS API base URL"));
+    expect(domainRule?.match?.({ domain: "https://tenant.example/base#fragment" }, {})).toBe(true);
+    expect(
+      domainRule?.match?.({
+        accounts: { work: { domain: "https://u:p@tenant.example/base?query=value" } },
+      }, {}),
+    ).toBe(true);
+  });
 });
 
-describe("feishu normalizeCompatibilityConfig streaming aliases", () => {
+describe("feishu normalizeCompatibilityConfig legacy migrations", () => {
   it("migrates boolean streaming plus flat delivery keys into the nested shape", () => {
     const result = normalizeCompatibilityConfig({
       cfg: feishuConfig({
@@ -211,6 +221,27 @@ describe("feishu normalizeCompatibilityConfig streaming aliases", () => {
       "Removed channels.feishu.heartbeat (legacy Feishu fields were never read by runtime).",
       "Removed channels.feishu.accounts.work.heartbeat (legacy Feishu fields were never read by runtime).",
       "Removed channels.feishu.accounts.empty.heartbeat (legacy Feishu fields were never read by runtime).",
+    ]);
+    expect(FeishuConfigSchema.safeParse(feishu).success).toBe(true);
+  });
+
+  it("strips unsafe components from legacy custom domains at root and account scope", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: feishuConfig({
+        domain: "https://tenant.example/base?query=value",
+        accounts: {
+          work: { domain: "https://u:p@tenant.example/account#fragment" },
+        },
+      }),
+    });
+
+    const feishu = result.config.channels?.feishu as unknown as Record<string, unknown>;
+    expect(feishu.domain).toBe("https://tenant.example/base");
+    const work = (feishu.accounts as Record<string, Record<string, unknown>>).work;
+    expect(work?.domain).toBe("https://tenant.example/account");
+    expect(result.changes).toEqual([
+      "Normalized channels.feishu.domain by removing unsupported URL credentials, query, or fragment components.",
+      "Normalized channels.feishu.accounts.work.domain by removing unsupported URL credentials, query, or fragment components.",
     ]);
     expect(FeishuConfigSchema.safeParse(feishu).success).toBe(true);
   });

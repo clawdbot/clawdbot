@@ -39,6 +39,56 @@ const toolsBaseMigration = defineKeyMoveMigration({
   sourceOwn: false,
 });
 
+function normalizeLegacyCustomDomain(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return undefined;
+  }
+  if (
+    url.protocol !== "https:" ||
+    (!url.username && !url.password && !url.href.includes("?") && !url.href.includes("#"))
+  ) {
+    return undefined;
+  }
+  url.username = "";
+  url.password = "";
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/+$/, "");
+}
+
+function sanitizeLegacyCustomDomain(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const domain = normalizeLegacyCustomDomain(params.entry.domain);
+  if (!domain) {
+    return { entry: params.entry, changed: false };
+  }
+  params.changes.push(
+    `Normalized ${params.pathPrefix}.domain by removing unsupported URL credentials, query, or fragment components.`,
+  );
+  return { entry: { ...params.entry, domain }, changed: true };
+}
+
+function hasLegacyFeishuCustomDomain(entry: Record<string, unknown> | undefined): boolean {
+  if (!entry) {
+    return false;
+  }
+  if (normalizeLegacyCustomDomain(entry.domain)) {
+    return true;
+  }
+  return Object.values(asObjectRecord(entry.accounts) ?? {}).some((account) => {
+    return normalizeLegacyCustomDomain(asObjectRecord(account)?.domain) !== undefined;
+  });
+}
+
 function sanitizeLegacyHeartbeatFields(params: {
   entry: Record<string, unknown>;
   pathPrefix: string;
@@ -91,18 +141,19 @@ function sanitizeLegacyCoalesceFields(params: {
   };
 }
 
-function sanitizeFeishuCoalesce(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
+function sanitizeFeishuLegacyConfig(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
   return normalizeChannelConfigEntries({
     cfg,
     channelId: "feishu",
     changes,
     normalizeEntry: (params) => {
       const tools = toolsBaseMigration.normalize(params);
-      const coalesce = sanitizeLegacyCoalesceFields({ ...params, entry: tools.entry });
+      const domain = sanitizeLegacyCustomDomain({ ...params, entry: tools.entry });
+      const coalesce = sanitizeLegacyCoalesceFields({ ...params, entry: domain.entry });
       const heartbeat = sanitizeLegacyHeartbeatFields({ ...params, entry: coalesce.entry });
       return {
         entry: heartbeat.entry,
-        changed: tools.changed || coalesce.changed || heartbeat.changed,
+        changed: tools.changed || domain.changed || coalesce.changed || heartbeat.changed,
       };
     },
   }).config;
@@ -122,6 +173,12 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
       );
     },
   },
+  {
+    path: ["channels", "feishu"],
+    message:
+      'channels.feishu[.accounts.<id>].domain must be an HTTPS API base URL. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyFeishuCustomDomain(asObjectRecord(value)),
+  },
 ];
 
 export function normalizeCompatibilityConfig({
@@ -131,7 +188,7 @@ export function normalizeCompatibilityConfig({
 }): ChannelDoctorConfigMutation {
   const aliases = streamingAliasMigration.normalizeChannelConfig({ cfg });
   return {
-    config: sanitizeFeishuCoalesce(aliases.config, aliases.changes),
+    config: sanitizeFeishuLegacyConfig(aliases.config, aliases.changes),
     changes: aliases.changes,
   };
 }

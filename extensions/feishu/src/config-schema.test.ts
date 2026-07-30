@@ -58,9 +58,9 @@ describe("FeishuConfigSchema custom domain", () => {
   it.each([
     "https://tenant.example/base#fragment",
     "https://tenant.example/base?query=value",
-    "https://u:p@tenant.example/base",
     "https://tenant.example/base#",
     "https://tenant.example/base?",
+    "https://u:p@tenant.example/base",
   ])("rejects a custom domain with non-base URL components: %s", (domain) => {
     expectSchemaIssue(FeishuConfigSchema.safeParse({ domain }), "domain");
     expectSchemaIssue(
@@ -68,6 +68,7 @@ describe("FeishuConfigSchema custom domain", () => {
       "accounts.work.domain",
     );
   });
+
 
   it("rejects a custom HTTP domain", () => {
     expectSchemaIssue(FeishuConfigSchema.safeParse({ domain: "http://tenant.example" }), "domain");

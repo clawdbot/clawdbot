@@ -25,8 +25,9 @@ const FeishuGroupPolicySchema = z.union([
 ]);
 // URL schemes are case-insensitive (RFC 3986 §3.1), so accept an uppercase
 // HTTPS scheme such as "HTTPS://tenant.example" and normalize it to lowercase.
-// The Lark SDK concatenates API paths onto this value, so it must be an API
-// base URL, not a URL with client-only or credential-bearing components.
+// The Lark SDK concatenates API paths onto this value, so it must be an API base URL.
+// Axios converts URL credentials to Basic auth, replacing the Feishu bearer token; a
+// query or fragment would absorb the appended route.
 const FeishuCustomDomainSchema = z
   .string()
   .url()
@@ -35,12 +36,7 @@ const FeishuCustomDomainSchema = z
     if (url.protocol !== "https:") {
       ctx.addIssue({ code: "custom", message: "Custom Feishu domain must use HTTPS" });
     }
-    if (
-      url.username ||
-      url.password ||
-      url.href.includes("?") ||
-      url.href.includes("#")
-    ) {
+    if (url.username || url.password || url.href.includes("?") || url.href.includes("#")) {
       ctx.addIssue({
         code: "custom",
         message: "Custom Feishu domain must be an HTTPS API base URL",

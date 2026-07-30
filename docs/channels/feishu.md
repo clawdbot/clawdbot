@@ -635,7 +635,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | Setting                                                  | Description                                                                          | Default                              |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------ |
 | `channels.feishu.enabled`                                | Enable/disable the channel                                                           | `true`                               |
-| `channels.feishu.domain`                                 | API domain (`feishu`, `lark`, or an `https://` base URL)                             | `feishu`                             |
+| `channels.feishu.domain`                                 | API domain (`feishu`, `lark`, or an `https://` base URL without credentials, query, or fragment) | `feishu`                             |
 | `channels.feishu.connectionMode`                         | Event transport (`websocket` or `webhook`)                                           | `websocket`                          |
 | `channels.feishu.defaultAccount`                         | Default account for outbound routing                                                 | `default`                            |
 | `channels.feishu.verificationToken`                      | Required for webhook mode                                                            | -                                    |
@@ -645,7 +645,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.webhookPort`                            | Webhook bind port                                                                    | `3000`                               |
 | `channels.feishu.accounts.<id>.appId`                    | App ID                                                                               | -                                    |
 | `channels.feishu.accounts.<id>.appSecret`                | App Secret                                                                           | -                                    |
-| `channels.feishu.accounts.<id>.domain`                   | Per-account domain override                                                          | `feishu`                             |
+| `channels.feishu.accounts.<id>.domain`                   | Per-account API base URL override (same requirements)                                | `feishu`                             |
 | `channels.feishu.accounts.<id>.tts`                      | Per-account TTS override                                                             | `tts`                                |
 | `channels.feishu.dmPolicy`                               | DM policy (`pairing`, `allowlist`, `open`)                                           | `pairing`                            |
 | `channels.feishu.allowFrom`                              | DM allowlist (open_id list)                                                          | -                                    |
