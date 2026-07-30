@@ -464,9 +464,9 @@ function normalizeModelCatalogMediaInput(value: unknown): ModelCatalogMediaInput
   return Object.keys(normalizedImage).length > 0 ? { image: normalizedImage } : undefined;
 }
 
-// Provider-interpreted params are opaque to the catalog: copy the record so the
-// key a provider contract reads survives config -> catalog (#116120). Dropping
-// it made a schema-valid entry silently do nothing.
+// Provider-interpreted params are opaque to the catalog. Preserve the record so
+// provider capability keys survive config -> catalog instead of silently doing
+// nothing after successful schema validation.
 function normalizeModelCatalogParams(value: unknown): Record<string, unknown> | undefined {
   if (!isRecord(value)) {
     return undefined;

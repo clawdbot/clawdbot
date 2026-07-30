@@ -236,8 +236,8 @@ export type ModelCatalogModel = {
   compat?: ModelCatalogCompatConfig;
   /**
    * Provider-interpreted model parameters. Opaque here: provider contracts read
-   * their own keys (e.g. Anthropic's `canonicalModelId`), so normalization must
-   * carry the record through rather than whitelist per-provider keys (#116120).
+   * their own keys, so normalization must carry the record through rather than
+   * whitelist per-provider keys.
    */
   params?: Record<string, unknown>;
   /**

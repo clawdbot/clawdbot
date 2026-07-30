@@ -177,6 +177,7 @@ function modelDefinitionFromManifestRow(
     ...(row.contextTokens ? { contextTokens: row.contextTokens } : {}),
     maxTokens: row.maxTokens,
     ...(row.thinkingLevelMap ? { thinkingLevelMap: { ...row.thinkingLevelMap } } : {}),
+    ...(row.params ? { params: { ...row.params } } : {}),
     ...(row.headers ? { headers: row.headers } : {}),
     ...(row.compat ? { compat: row.compat } : {}),
     ...(row.mediaInput ? { mediaInput: row.mediaInput } : {}),

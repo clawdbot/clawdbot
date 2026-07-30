@@ -1,3 +1,4 @@
+import { supportsClaudeNativeMaxEffort } from "@openclaw/llm-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createManifestRecord } from "./model.static-catalog.test-helpers.js";
 
@@ -578,6 +579,43 @@ describe("resolveBundledStaticCatalogModel", () => {
       reasoning: true,
       thinkingLevelMap: { off: null, minimal: "low", max: "max" },
     });
+  });
+
+  it("carries manifest params into provider capability resolution", () => {
+    setManifestPlugins([
+      {
+        id: "anthropic-proxy",
+        origin: "bundled",
+        providers: ["anthropic-proxy"],
+        modelCatalog: {
+          providers: {
+            "anthropic-proxy": {
+              baseUrl: "https://proxy.example.test/v1",
+              api: "anthropic-messages",
+              models: [
+                {
+                  id: "vendor-opus-v5",
+                  name: "Vendor Opus 5",
+                  contextWindow: 200000,
+                  maxTokens: 64000,
+                  params: { canonicalModelId: "claude-opus-5" },
+                },
+              ],
+            },
+          },
+          discovery: { "anthropic-proxy": "static" },
+        },
+      },
+    ]);
+
+    const model = resolveBundledStaticCatalogModel({
+      provider: "anthropic-proxy",
+      modelId: "vendor-opus-v5",
+      cfg: {},
+    });
+
+    expect(model?.params).toEqual({ canonicalModelId: "claude-opus-5" });
+    expect(supportsClaudeNativeMaxEffort(model ?? {})).toBe(true);
   });
 
   it("ignores non-bundled and non-static manifest catalog rows", () => {

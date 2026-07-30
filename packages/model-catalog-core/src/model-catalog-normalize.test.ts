@@ -256,6 +256,41 @@ describe("model catalog normalization", () => {
     expect(buildModelCatalogMergeKey("OpenAI", "GPT-5.4")).toBe("openai::gpt-5.4");
   });
 
+  it("preserves opaque provider params through both normalization paths", () => {
+    const model = {
+      id: "claude-opus-5-vendor",
+      params: {
+        canonicalModelId: "claude-opus-5",
+        ignored: undefined,
+      },
+    };
+
+    const catalog = normalizeModelCatalog(
+      {
+        providers: {
+          anthropic: {
+            models: [model],
+          },
+        },
+      },
+      { ownedProviders: new Set(["anthropic"]) },
+    );
+    expect(catalog?.providers?.anthropic?.models[0]?.params).toEqual({
+      canonicalModelId: "claude-opus-5",
+    });
+
+    const rows = normalizeModelCatalogProviderRows({
+      provider: "anthropic",
+      providerCatalog: {
+        models: [model],
+      },
+      source: "manifest",
+    });
+    expect(rows[0]?.params).toEqual({
+      canonicalModelId: "claude-opus-5",
+    });
+  });
+
   it("normalizes complete provider routing, pricing, reasoning, and image limits", () => {
     const tier = { input: 0, output: 2, cacheRead: 0, cacheWrite: 1, range: [128] };
     const catalog = normalizeModelCatalog(
