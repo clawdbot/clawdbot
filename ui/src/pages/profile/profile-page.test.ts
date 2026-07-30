@@ -180,6 +180,9 @@ it("renders identity before a Usage statistics link without requesting usage dat
   await waitForFast(() => expect(page.querySelector("#settings-profile-identity")).not.toBeNull());
 
   expect(request.mock.calls.map(([method]) => method)).toEqual(["users.self"]);
+  const docsLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
+  expect(docsLink?.textContent?.trim()).toBe("Learn more");
+  expect(docsLink?.href).toBe("https://docs.openclaw.ai/concepts/user-model");
   expect(page.querySelector(".profile-stats")).toBeNull();
   expect(page.querySelector(".profile-heatmap")).toBeNull();
   const usageRow = page.querySelector<HTMLButtonElement>(".settings-row--nav");
@@ -228,6 +231,44 @@ it("rerenders on connection transitions for unidentified connections", async () 
   harness.emitConnected(true);
   await page.updateComplete;
   expect(page.querySelector(".profile-hero")).not.toBeNull();
+});
+
+it("falls back to the text avatar when the hero image fails to load", async () => {
+  const request = vi.fn();
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"]);
+  const agentsState = harness.context.agents.state as unknown as {
+    agentsList: {
+      defaultId: string;
+      agents: Array<{
+        id: string;
+        identity: { name: string; emoji: string; avatarUrl: string };
+      }>;
+    };
+  };
+  agentsState.agentsList = {
+    defaultId: "main",
+    agents: [
+      {
+        id: "main",
+        identity: { name: "Molty", emoji: "🦞", avatarUrl: "/unloadable-avatar.png" },
+      },
+    ],
+  };
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await page.updateComplete;
+  const image = page.querySelector<HTMLImageElement>(".profile-hero__avatar-image");
+  expect(image?.getAttribute("src")).toBe("/unloadable-avatar.png");
+  expect(page.querySelector(".profile-hero__avatar-text")).toBeNull();
+
+  image?.dispatchEvent(new Event("error"));
+  await page.updateComplete;
+
+  expect(page.querySelector(".profile-hero__avatar-image")).toBeNull();
+  expect(page.querySelector(".profile-hero__avatar-text")?.textContent).toBe("🦞");
 });
 
 it("retries the identity bootstrap when users.self returns no profile", async () => {

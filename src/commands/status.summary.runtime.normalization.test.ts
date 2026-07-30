@@ -19,7 +19,7 @@ describe("statusSummaryRuntime configured model normalization", () => {
   });
 
   it("skips manifest and plugin model normalization for configured model refs", async () => {
-    const { statusSummaryRuntime } = await import("./status.summary.runtime.js");
+    const { statusSummaryRuntime } = await import("../status/summary.runtime.js");
 
     expect(
       statusSummaryRuntime.resolveConfiguredStatusModelRef({
@@ -63,7 +63,7 @@ describe("statusSummaryRuntime configured model normalization", () => {
   });
 
   it("skips manifest and plugin model normalization for providerless persisted session models", async () => {
-    const { statusSummaryRuntime } = await import("./status.summary.runtime.js");
+    const { statusSummaryRuntime } = await import("../status/summary.runtime.js");
     const cfg = {
       agents: {
         defaults: {

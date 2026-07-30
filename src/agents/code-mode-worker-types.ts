@@ -70,7 +70,9 @@ export type CodeModeSettlementMode =
   | { kind: "awaiting" }
   | { kind: "draining"; requiredRequestIds: string[] };
 
-export type CodeModeWorkerResult =
+export type CodeModeFailurePhase = "input" | "guest" | "bridge" | "host";
+
+export type CodeModeWorkerThreadResult =
   | {
       status: "completed";
       value: unknown;
@@ -93,5 +95,7 @@ export type CodeModeWorkerResult =
         | "output_limit_exceeded"
         | "snapshot_limit_exceeded"
         | "internal_error";
+      failurePhase: Extract<CodeModeFailurePhase, "input" | "guest">;
+      bridgeDispatchStarted: false;
       output: unknown[];
     };

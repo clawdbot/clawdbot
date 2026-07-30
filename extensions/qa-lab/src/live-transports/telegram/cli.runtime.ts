@@ -6,7 +6,7 @@ import type { LiveTransportQaCommandOptions } from "openclaw/plugin-sdk/qa-runti
 import type { QaGatewayChildCommand } from "../../gateway-child.js";
 import { runQaFlowSuiteFromRuntime } from "../../suite-launch.runtime.js";
 import type { QaSuiteRoundTripProbe } from "../../suite-round-trip.js";
-import { readQaSuiteFailedScenarioCountFromFile } from "../../suite-summary.js";
+import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "../../suite-summary.js";
 // Qa Lab plugin module implements cli behavior.
 import { printLiveTransportQaArtifacts } from "../shared/live-artifacts.js";
 import { createTelegramQaTransportAdapter } from "./adapter.runtime.js";
@@ -196,8 +196,10 @@ export async function runQaTelegramSuite(opts: TelegramQaSuiteOptions) {
     summary: result.summaryPath,
   });
   if (!runOptions.allowFailures) {
-    const failedScenarioCount = await readQaSuiteFailedScenarioCountFromFile(result.summaryPath);
-    if (failedScenarioCount > 0) {
+    const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
+      result.summaryPath,
+    );
+    if (blockingScenarioCount > 0) {
       process.exitCode = 1;
     }
   }

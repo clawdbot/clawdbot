@@ -199,6 +199,8 @@ jobs:
 
       - name: Build
         if: steps.dist_build_cache.outputs.cache-hit != 'true'
+        env:
+          OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1"
         run: pnpm build
 
       - name: Pack publishable core packages
@@ -244,6 +246,8 @@ jobs:
 
       - name: Build Control UI
         if: steps.dist_build_cache.outputs.cache-hit != 'true'
+        env:
+          OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1"
         run: pnpm ui:build
 
       - name: Save preflight build outputs

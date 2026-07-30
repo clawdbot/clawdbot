@@ -112,7 +112,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
 
     expect(controller.activeTargetId).toBe("stable-tab");
     expect(controller.view).toBe(previousView);
-    expect(controller.errorText).toBe("Navigation rejected");
+    expect(controller.errorText).toBe("Browser request failed: Navigation rejected");
     expect(controller.loading).toBe(false);
   });
 
@@ -210,7 +210,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     expect(controller.tabs[0]?.url).toBe(committedUrl);
     expect(controller.view?.url).toBe(committedUrl);
     expect(controller.view?.dataUrl).toContain(btoa("fresh screenshot"));
-    expect(controller.errorText).toBe("Latest navigation rejected");
+    expect(controller.errorText).toBe("Browser request failed: Latest navigation rejected");
     expect(controller.loading).toBe(false);
     expect(
       request.mock.calls.filter(([, envelope]) => {
@@ -262,7 +262,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
 
     expect(controller.view?.url).toBe(committedUrl);
     expect(controller.view?.dataUrl).toContain(btoa("fresh screenshot"));
-    expect(controller.errorText).toBe("Latest navigation rejected");
+    expect(controller.errorText).toBe("Browser request failed: Latest navigation rejected");
 
     previousSnapshot.resolve({ running: true, tabs: [] });
     await previous;
@@ -306,7 +306,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
       committedNavigation.resolve({ targetId: "raw-stable", url: committedUrl });
       await expect(Promise.all([previous, latest])).resolves.toEqual([undefined, undefined]);
 
-      expect(controller.errorText).toBe("Original navigation rejected");
+      expect(controller.errorText).toBe("Browser request failed: Original navigation rejected");
       expect(controller.loading).toBe(false);
     },
   );
@@ -339,7 +339,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     await expect(Promise.all([previous, latest])).resolves.toEqual([undefined, undefined]);
 
     expect(controller.tabs).toEqual([]);
-    expect(controller.errorText).toBe("Original navigation rejected");
+    expect(controller.errorText).toBe("Browser request failed: Original navigation rejected");
     expect(controller.loading).toBe(false);
     expect(
       request.mock.calls.some(([, envelope]) => {

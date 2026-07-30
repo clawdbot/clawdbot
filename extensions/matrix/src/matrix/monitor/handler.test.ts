@@ -2979,6 +2979,28 @@ describe("matrix monitor handler draft streaming", () => {
     return { dispatch, redactEventMock };
   }
 
+  it("shares first-reply state between tool and final Matrix deliveries", async () => {
+    const { dispatch } = createStreamingHarness({ replyToMode: "first", streaming: "off" });
+    const { deliver, finish } = await dispatch();
+
+    await deliver({ text: "tool result", replyToId: "$msg1" }, { kind: "tool" });
+    await deliver({ text: "final result" }, { kind: "final" });
+
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(2);
+    const toolDelivery = requireRecord(
+      callArg(deliverMatrixRepliesMock, 0, 0, "Matrix tool reply"),
+      "Matrix tool reply",
+    );
+    const finalDelivery = requireRecord(
+      callArg(deliverMatrixRepliesMock, 1, 0, "Matrix final reply"),
+      "Matrix final reply",
+    );
+    expect(toolDelivery.hasRepliedRef).toEqual({ value: false });
+    expect(finalDelivery.hasRepliedRef).toBe(toolDelivery.hasRepliedRef);
+
+    await finish();
+  });
+
   it("finalizes a single quiet-preview block in place when block streaming is enabled", async () => {
     const { dispatch, redactEventMock } = createStreamingHarness({ blockStreamingEnabled: true });
     const { deliver, opts, finish } = await dispatch();

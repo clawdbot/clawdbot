@@ -407,6 +407,9 @@ type SessionWorkspaceFileEntry = {
   content?: string;
   /** sha256 hex of the file bytes; the CAS token for sessions.files.set. */
   hash?: string;
+  mimeType?: string;
+  contentEncoding?: "utf8" | "base64";
+  previewKind?: "text" | "image" | "unsupported";
 };
 
 type SessionWorkspaceBrowserEntry = {
@@ -565,6 +568,7 @@ export type GatewaySessionRow = {
   thinkingOptions?: string[];
   thinkingDefault?: string;
   fastMode?: FastMode;
+  toolOverrides?: import("../lib/sessions/patch.js").SessionToolOverrides;
   effectiveFastMode?: FastMode;
   effectiveFastModeSource?: FastModeSource;
   fastAutoOnSeconds?: number;

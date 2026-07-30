@@ -702,19 +702,16 @@ export function canReceiveSessionEvent(params: {
   });
 }
 
-export function filterDraftSessionsForClient(params: {
+export function createSessionListEntryFilter(params: {
   client: GatewayClient | null;
-  store: Record<string, SessionEntry>;
-}): Record<string, SessionEntry> {
+}): ((sessionKey: string, entry: SessionEntry) => boolean) | undefined {
   const identity = gatewayClientSessionCreator(params.client);
   if (isGatewayAdmin(params.client) || !identity) {
-    return params.store;
+    return undefined;
   }
-  return Object.fromEntries(
-    Object.entries(params.store).filter(([sessionKey, entry]) => {
-      const owner = entry.createdActor?.id === identity.id;
-      const incognito = entry.incognito === true || isIncognitoSessionKey(sessionKey);
-      return !incognito && (owner || resolveSessionVisibility(entry) !== "draft");
-    }),
-  );
+  return (sessionKey, entry) => {
+    const owner = entry.createdActor?.id === identity.id;
+    const incognito = entry.incognito === true || isIncognitoSessionKey(sessionKey);
+    return !incognito && (owner || resolveSessionVisibility(entry) !== "draft");
+  };
 }

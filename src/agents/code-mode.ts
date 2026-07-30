@@ -169,7 +169,7 @@ function createCodeModeExecDescription(
     nodesGuidance +
     skillsGuidance +
     ' The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.' +
-    " Both `code` and `command` contain JavaScript or TypeScript, never a shell command. " +
+    " The `code` field contains JavaScript or TypeScript, never a shell command. " +
     "For shell or file operations, call the exact catalog tool from guest JavaScript; do not retry failed shell source." +
     (namespacePrompt ? `\n\n${namespacePrompt}` : "") +
     (catalogIndex ? `\n\n${catalogIndex}` : "")
@@ -182,18 +182,12 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     label: "exec",
     description: createCodeModeExecDescription(ctx),
     parameters: Type.Object({
-      code: Type.Optional(
-        Type.String({
-          description:
-            "JavaScript or TypeScript for one complete workflow. Select exact ids from `ALL_TOOLS` or `tools.search`; never invent ids. `tools.search` takes a query string, not an object. Keep dependent calls in order; never put dependent calls in Promise.all. Return the final value. Node built-in modules are not available.",
-        }),
-      ),
-      command: Type.Optional(
-        Type.String({
-          description:
-            "Alias for JavaScript or TypeScript code, provided for exec-compatible hook policies. Not a shell command.",
-        }),
-      ),
+      // `command` stays runtime-only for hook compatibility. Requiring the sole
+      // model-facing field prevents schema-valid empty calls from constrained models.
+      code: Type.String({
+        description:
+          'Required JS/TS; no Python, shell, `require`, `import`. Use explicit `return value`; a trailing expression is discarded and yields `null`. Use `callValue`, not `call`, for data; `call` wraps it under `.result`. Core text reads: `{kind:"text",content:string}`; use `.content`. Unknown format: return it first, then parse it in a later exec; never guess separators. Example: `const file=await tools.callValue("openclaw:core:read", { path: "notes.txt" }); if(file.kind!=="text") return file; return file.content;`. Use exact ids from `ALL_TOOLS` or `tools.search(query)`; never invent ids or parallelize dependent calls.',
+      }),
       language: optionalStringEnum(["javascript", "typescript"] as const, {
         description:
           'Source language. Must be "javascript" or "typescript". Defaults to javascript.',

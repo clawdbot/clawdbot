@@ -1,15 +1,5 @@
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
-import { asSchemaObject } from "./schema.shared.js";
-
-type JsonSchemaObject = Record<string, unknown> & {
-  type?: string | string[];
-  properties?: Record<string, JsonSchemaObject>;
-  additionalProperties?: JsonSchemaObject | boolean;
-  items?: JsonSchemaObject | JsonSchemaObject[];
-  anyOf?: JsonSchemaObject[];
-  oneOf?: JsonSchemaObject[];
-  allOf?: JsonSchemaObject[];
-};
+import { asSchemaObject, type ConfigJsonSchemaObject } from "./schema.shared.js";
 
 const ROOT_TIER_PATHS = `
 accessGroups acp agents approvals attachments auth bindings broadcast browser channels
@@ -132,7 +122,7 @@ gateway.auth.trustedProxy.allowUsers gateway.auth.trustedProxy.userHeader gatewa
 gateway.controlUi.allowedOrigins gateway.http.endpoints.chatCompletions.images.urlAllowlist
 gateway.http.endpoints.responses.files.urlAllowlist
 gateway.http.endpoints.responses.images.urlAllowlist gateway.mode gateway.nodes.allowSkills
-gateway.nodes.pairing.autoApproveCidrs gateway.nodes.pluginTools.enabled gateway.port
+gateway.nodes.pairing.autoApproveCidrs gateway.nodes.pairing.autoApproveLocal gateway.nodes.pluginTools.enabled gateway.port
 gateway.remote.password gateway.remote.sshTarget gateway.remote.tlsFingerprint
 gateway.remote.token gateway.remote.transport gateway.remote.url gateway.tailscale.mode
 gateway.trustedProxies hooks.allowedAgentIds hooks.enabled hooks.gmail.account hooks.gmail.label
@@ -158,7 +148,7 @@ secrets.providers.*.path secrets.providers.*.source skills.allowBundled
 skills.entries.*.apiKey skills.entries.*.config skills.entries.*.enabled
 skills.entries.*.env skills.install.allowUploadedArchives skills.install.nodeManager
 skills.load.allowSymlinkTargets skills.load.extraDirs skills.workshop.approvalPolicy
-skills.workshop.autonomous.enabled talk.provider talk.providers.*.apiKey
+skills.workshop.autonomous.mode talk.provider talk.providers.*.apiKey
 talk.realtime.brain talk.realtime.mode talk.realtime.provider
 talk.realtime.model talk.realtime.providers.*.apiKey talk.realtime.speakerVoice talk.speechLocale
 tools.alsoAllow tools.deny tools.exec
@@ -235,7 +225,7 @@ function createTierMatcher(hints: ConfigUiHints): (path: string) => boolean | un
   };
 }
 
-function isNumericSchema(schema: JsonSchemaObject): boolean {
+function isNumericSchema(schema: ConfigJsonSchemaObject): boolean {
   const types = Array.isArray(schema.type) ? schema.type : [schema.type];
   return types.includes("number") || types.includes("integer");
 }
@@ -254,6 +244,46 @@ function resolveTier(params: { inheritedTier: boolean; ownTier: boolean | undefi
 function mergeTierHint(hints: ConfigUiHints, path: string, advanced: boolean): void {
   const current = hints[path];
   hints[path] = current ? { ...current, advanced } : { advanced };
+}
+
+function visitSchemaNodes<T>(
+  schema: unknown,
+  initialState: T,
+  visit: (node: ConfigJsonSchemaObject, path: string, state: T) => T,
+): void {
+  const visited = new WeakMap<object, Set<string>>();
+  const walk = (value: unknown, path: string, state: T): void => {
+    const node = asSchemaObject(value);
+    if (!node) {
+      return;
+    }
+    const previousPaths = visited.get(node);
+    if (previousPaths?.has(path)) {
+      return;
+    }
+    if (previousPaths) {
+      previousPaths.add(path);
+    } else {
+      visited.set(node, new Set([path]));
+    }
+    const nextState = visit(node, path, state);
+    for (const [key, child] of Object.entries(node.properties ?? {})) {
+      walk(child, path ? `${path}.${key}` : key, nextState);
+    }
+    if (node.additionalProperties && typeof node.additionalProperties === "object") {
+      walk(node.additionalProperties, path ? `${path}.*` : "*", nextState);
+    }
+    const items = Array.isArray(node.items) ? node.items : node.items ? [node.items] : [];
+    for (const item of items) {
+      walk(item, path ? `${path}.*` : "*", nextState);
+    }
+    for (const branches of [node.anyOf, node.oneOf, node.allOf]) {
+      for (const branch of branches ?? []) {
+        walk(branch, path, nextState);
+      }
+    }
+  };
+  walk(schema, "", initialState);
 }
 
 /** Add authored common/advanced tier boundaries to the base hint map. */
@@ -283,21 +313,7 @@ function applyNumericTuningTierHints(
 ): ConfigUiHints {
   const next = { ...hints };
   const authoredTier = createTierMatcher(hints);
-  const visited = new WeakMap<object, Set<string>>();
-  const visit = (value: unknown, path: string): void => {
-    const node = asSchemaObject(value) as JsonSchemaObject | null;
-    if (!node) {
-      return;
-    }
-    const prior = visited.get(node);
-    if (prior?.has(path)) {
-      return;
-    }
-    if (prior) {
-      prior.add(path);
-    } else {
-      visited.set(node, new Set([path]));
-    }
+  visitSchemaNodes(schema, undefined, (node, path) => {
     if (
       path &&
       isNumericSchema(node) &&
@@ -306,23 +322,8 @@ function applyNumericTuningTierHints(
     ) {
       mergeTierHint(next, path, true);
     }
-    for (const [key, child] of Object.entries(node.properties ?? {})) {
-      visit(child, path ? `${path}.${key}` : key);
-    }
-    if (node.additionalProperties && typeof node.additionalProperties === "object") {
-      visit(node.additionalProperties, path ? `${path}.*` : "*");
-    }
-    const items = Array.isArray(node.items) ? node.items : node.items ? [node.items] : [];
-    for (const item of items) {
-      visit(item, path ? `${path}.*` : "*");
-    }
-    for (const branches of [node.anyOf, node.oneOf, node.allOf]) {
-      for (const branch of branches ?? []) {
-        visit(branch, path);
-      }
-    }
-  };
-  visit(schema, "");
+    return undefined;
+  });
   return next;
 }
 
@@ -334,22 +335,8 @@ export function applyResolvedConfigTierHints(
   const tierHints = applyNumericTuningTierHints(schema, hints);
   const next = { ...tierHints };
   const matchTier = createTierMatcher(tierHints);
-  const visited = new WeakMap<object, Set<string>>();
 
-  const visit = (value: unknown, path: string, inheritedTier: boolean): void => {
-    const node = asSchemaObject(value) as JsonSchemaObject | null;
-    if (!node) {
-      return;
-    }
-    const previousPaths = visited.get(node);
-    if (previousPaths?.has(path)) {
-      return;
-    }
-    if (previousPaths) {
-      previousPaths.add(path);
-    } else {
-      visited.set(node, new Set([path]));
-    }
+  visitSchemaNodes(schema, true, (_node, path, inheritedTier) => {
     const advanced = path
       ? resolveTier({
           inheritedTier,
@@ -359,23 +346,7 @@ export function applyResolvedConfigTierHints(
     if (path) {
       mergeTierHint(next, path, advanced);
     }
-    for (const [key, child] of Object.entries(node.properties ?? {})) {
-      visit(child, path ? `${path}.${key}` : key, advanced);
-    }
-    if (node.additionalProperties && typeof node.additionalProperties === "object") {
-      visit(node.additionalProperties, path ? `${path}.*` : "*", advanced);
-    }
-    const items = Array.isArray(node.items) ? node.items : node.items ? [node.items] : [];
-    for (const item of items) {
-      visit(item, path ? `${path}.*` : "*", advanced);
-    }
-    for (const branches of [node.anyOf, node.oneOf, node.allOf]) {
-      for (const branch of branches ?? []) {
-        visit(branch, path, advanced);
-      }
-    }
-  };
-
-  visit(schema, "", true);
+    return advanced;
+  });
   return next;
 }

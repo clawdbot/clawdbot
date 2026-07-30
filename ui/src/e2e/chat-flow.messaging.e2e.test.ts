@@ -140,6 +140,88 @@ suite.define(() => {
     }
   });
 
+  it("preserves distinct same-text peer messages through conflicting envelopes and stale history", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, { historyMessages: [] });
+    const prompt = "Both clients independently sent the same prompt.";
+    const persistedMessages = ["web", "tui"].map((client, index) => ({
+      __openclaw: {
+        id: `canonical-${client}-same-text`,
+        idempotencyKey: `${client}-same-text-run:user`,
+        seq: index + 1,
+      },
+      content: [{ text: prompt, type: "text" }],
+      role: "user",
+      timestamp: 1_700_000_000_000 + index,
+    }));
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      const historyCount = (await gateway.getRequests("chat.history")).length;
+      await gateway.deferNext("chat.history");
+
+      const emitPersistedMessage = async (index: number) => {
+        const message = persistedMessages[index];
+        await gateway.emitGatewayEvent("session.message", {
+          activeRunIds: [],
+          hasActiveRun: false,
+          message,
+          // Persisted metadata is authoritative when a transport envelope disagrees.
+          messageId: `conflicting-envelope-${index + 1}`,
+          messageSeq: 100 + index,
+          session: {
+            activeRunIds: [],
+            hasActiveRun: false,
+            key: "main",
+            kind: "direct",
+            status: "done",
+            updatedAt: Date.now(),
+          },
+          sessionKey: "main",
+        });
+      };
+
+      await emitPersistedMessage(0);
+      await waitForRequests(gateway, "chat.history", historyCount + 1);
+      await emitPersistedMessage(1);
+
+      // Consecutive users intentionally share one sender group; identity belongs to each bubble.
+      const peerBubbles = page.locator(".chat-group.user .chat-bubble", { hasText: prompt });
+      const expectedBubbleIds = ["web", "tui"].map(
+        (client) => `msg:send:${client}-same-text-run:0`,
+      );
+      const expectDistinctPeerBubbles = async () => {
+        await expect.poll(() => peerBubbles.count()).toBe(2);
+        await expect
+          .poll(() =>
+            peerBubbles.evaluateAll((bubbles) =>
+              bubbles.map((bubble) => bubble.getAttribute("data-message-id")),
+            ),
+          )
+          .toEqual(expectedBubbleIds);
+      };
+      await expectDistinctPeerBubbles();
+      await gateway.setHistoryMessages(persistedMessages);
+      await gateway.resolveDeferred("chat.history", {
+        messages: [],
+        sessionId: "control-ui-e2e-session",
+        thinkingLevel: null,
+      });
+      await expectDistinctPeerBubbles();
+
+      await emitPersistedMessage(0);
+      await expectDistinctPeerBubbles();
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it.each([
     { identity: "transcript metadata", includeMessageMetadata: true },
     { identity: "gateway event envelope", includeMessageMetadata: false },
@@ -202,7 +284,7 @@ suite.define(() => {
 
         const sharedUserEvent = {
           activeRunIds: [runId],
-          ...(includeMessageMetadata ? {} : { clientRunId: runId }),
+          clientRunId: includeMessageMetadata ? "conflicting-envelope-run" : runId,
           hasActiveRun: true,
           message: userMessage,
           messageId: "shared-session-user",

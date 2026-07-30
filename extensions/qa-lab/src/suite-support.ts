@@ -1,5 +1,4 @@
 import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
-import { buildQaCodexAppServerArgs } from "./codex-app-server-args.js";
 import type { QaSuiteChannelDriverSelection } from "./crabline-artifacts.js";
 import type { QaProviderMode } from "./model-selection.js";
 import { parseQaProgressBooleanEnv as parseQaSuiteBooleanEnv } from "./progress-format.js";
@@ -119,44 +118,6 @@ export function remapModelRefForForcedRuntime(params: {
     return params.modelRef;
   }
   return `openai/${split.model}`;
-}
-
-export function buildQaRuntimeEnvPatch(params: {
-  providerMode: QaProviderMode;
-  forcedRuntime?: RuntimeId;
-  mockBaseUrl?: string;
-  nativeAppServerArgs?: string;
-}): NodeJS.ProcessEnv | undefined {
-  const patch: NodeJS.ProcessEnv = {};
-  if (params.forcedRuntime) {
-    patch.OPENCLAW_BUILD_PRIVATE_QA = "1";
-    patch.OPENCLAW_QA_FORCE_RUNTIME = params.forcedRuntime;
-  }
-  if (params.forcedRuntime !== "codex") {
-    return Object.keys(patch).length > 0 ? patch : undefined;
-  }
-  if (params.providerMode !== "mock-openai") {
-    patch.OPENCLAW_CODEX_APP_SERVER_ARGS = buildQaCodexAppServerArgs({
-      existingArgs: params.nativeAppServerArgs,
-    });
-    return patch;
-  }
-  let mockBaseUrl = params.mockBaseUrl?.trim();
-  while (mockBaseUrl?.endsWith("/")) {
-    mockBaseUrl = mockBaseUrl.slice(0, -1);
-  }
-  if (!mockBaseUrl) {
-    return Object.keys(patch).length > 0 ? patch : undefined;
-  }
-  // The forced codex lane uses the Codex app-server's native OpenAI provider
-  // path, so pin the managed app-server to the QA mock endpoint instead of
-  // leaking to the maintainer's real OpenAI config.
-  patch.OPENCLAW_CODEX_APP_SERVER_ARGS = buildQaCodexAppServerArgs({
-    providerBaseUrl: `${mockBaseUrl}/v1`,
-  });
-  patch.OPENAI_API_KEY = "qa-mock-openai-key";
-  patch.CODEX_API_KEY = "qa-mock-openai-key";
-  return patch;
 }
 
 export function appendNodeOption(raw: string | undefined, option: string) {

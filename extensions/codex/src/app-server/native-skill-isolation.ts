@@ -12,6 +12,16 @@ export type CodexNativeSkillIsolation = {
 const MAX_PERSONAL_SKILL_DIRECTORIES = 2_000;
 const MAX_PERSONAL_SKILL_DEPTH = 6;
 const MAX_PERSONAL_SKILL_ENTRIES = 10_000;
+// Keep one bounded workspace/environment snapshot per physical app-server client.
+const nativeSkillIsolationByClient = new WeakMap<
+  CodexAppServerClient,
+  {
+    key: string;
+    result: Promise<CodexNativeSkillIsolation | undefined>;
+    settled: boolean;
+    signal?: AbortSignal;
+  }
+>();
 
 function isMissingPathError(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === "ENOENT";
@@ -97,11 +107,7 @@ async function collectPersonalSkillRealPaths(
       }
     }
   };
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (!current) {
-      break;
-    }
+  for (const current of queue) {
     let realDir: string;
     try {
       realDir = await fs.realpath(current.dir);
@@ -201,6 +207,42 @@ export async function resolveCodexNativeSkillIsolation(params: {
   userProfile?: string;
   signal?: AbortSignal;
 }): Promise<CodexNativeSkillIsolation | undefined> {
+  params.signal?.throwIfAborted();
+  if (!process.env.OPENCLAW_STATE_DIR?.trim()) {
+    return undefined;
+  }
+  const key = JSON.stringify([
+    path.resolve(resolveStateDir()),
+    path.resolve(params.cwd),
+    params.codexHome?.trim() || process.env.CODEX_HOME?.trim() || "",
+    params.home?.trim() || process.env.HOME?.trim() || "",
+    params.userProfile?.trim() || process.env.USERPROFILE?.trim() || "",
+  ]);
+  const cached = nativeSkillIsolationByClient.get(params.client);
+  if (cached?.key === key && (cached.settled || cached.signal === params.signal)) {
+    const isolation = await cached.result;
+    params.signal?.throwIfAborted();
+    return isolation;
+  }
+  const result = resolveUncachedCodexNativeSkillIsolation(params);
+  const entry = { key, result, settled: false, signal: params.signal };
+  nativeSkillIsolationByClient.set(params.client, entry);
+  try {
+    const isolation = await result;
+    entry.settled = true;
+    params.signal?.throwIfAborted();
+    return isolation;
+  } catch (error) {
+    if (nativeSkillIsolationByClient.get(params.client)?.result === result) {
+      nativeSkillIsolationByClient.delete(params.client);
+    }
+    throw error;
+  }
+}
+
+async function resolveUncachedCodexNativeSkillIsolation(
+  params: Parameters<typeof resolveCodexNativeSkillIsolation>[0],
+): Promise<CodexNativeSkillIsolation | undefined> {
   if (await usesDefaultStateDir()) {
     return undefined;
   }

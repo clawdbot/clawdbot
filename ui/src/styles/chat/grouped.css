@@ -280,8 +280,8 @@
 
 .chat-group-timestamp {
   font-size: 12px; /* was 11px */
+  /* Keep full-opacity --muted: opacity < 1 composites below WCAG AA on dark surfaces. */
   color: var(--muted);
-  opacity: 0.7;
   line-height: 1.2;
 }
 

@@ -447,6 +447,17 @@ const BROAD_CHANGED_FALLBACK_PATTERNS = [
   /^test\/helpers\//u,
 ];
 const PRECISE_SOURCE_TEST_TARGETS = new Map([
+  ...[
+    "src/system-agent/setup-inference-persist.ts",
+    "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts",
+    "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
+  ].map((sourcePath) => [
+    sourcePath,
+    [
+      "src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts",
+      "src/commands/onboard-guided.inference.e2e.test.ts",
+    ],
+  ]),
   [
     "src/plugins/contracts/tts-contract-suites.ts",
     [
@@ -4837,6 +4848,45 @@ function hasConservativeVitestWorkerBudget(env) {
       : "OPENCLAW_VITEST_MAX_WORKERS",
   );
   return workerBudget !== null && workerBudget <= 1;
+}
+
+const FULL_EXTENSIONS_CONFIG = "test/vitest/vitest.full-extensions.config.ts";
+const FULL_EXTENSIONS_MIN_HEAP_MB = 8192;
+
+function ensureMaxOldSpaceSize(nodeOptions, minimumMb) {
+  const normalized = nodeOptions?.trim() ?? "";
+  const matches = Array.from(
+    normalized.matchAll(/(^|\s)--max[-_]old[-_]space[-_]size(?:=|\s+)(\d+)(?=\s|$)/gu),
+  );
+  const match = matches.at(-1);
+  if (!match) {
+    return [normalized, `--max-old-space-size=${minimumMb}`].filter(Boolean).join(" ");
+  }
+  const currentMb = Number(match[2]);
+  if (Number.isSafeInteger(currentMb) && currentMb >= minimumMb) {
+    return normalized;
+  }
+  const start = match.index;
+  const replacement = match[0].replace(/\d+$/u, String(minimumMb));
+  return `${normalized.slice(0, start)}${replacement}${normalized.slice(start + match[0].length)}`;
+}
+
+export function applyFullExtensionsHeapBudget(specs, params = {}) {
+  const baseEnv = params.env ?? {};
+  return specs.map((spec) =>
+    spec.config === FULL_EXTENSIONS_CONFIG
+      ? {
+          ...spec,
+          env: {
+            ...spec.env,
+            NODE_OPTIONS: ensureMaxOldSpaceSize(
+              spec.env?.NODE_OPTIONS ?? baseEnv.NODE_OPTIONS,
+              FULL_EXTENSIONS_MIN_HEAP_MB,
+            ),
+          },
+        }
+      : spec,
+  );
 }
 
 export function resolveParallelFullSuiteConcurrency(specCount, envInput, hostInfo) {

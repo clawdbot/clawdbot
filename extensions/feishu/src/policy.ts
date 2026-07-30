@@ -9,11 +9,6 @@ import {
   type ChannelIngressIdentitySubjectInput,
   type ResolveChannelMessageIngressParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import {
-  resolveScopeKeyCaseInsensitive,
-  resolveScopeToolsPolicy,
-  type ScopeTree,
-} from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ChannelGroupContext } from "../runtime-api.js";
@@ -231,66 +226,47 @@ export async function resolveFeishuGroupSenderActivationIngressAccess(params: {
   });
 }
 
-export function resolveFeishuGroupConfig(params: { cfg?: FeishuConfig; groupId?: string | null }) {
+function resolveFeishuExplicitGroupConfigKey(params: {
+  cfg?: FeishuConfig;
+  groupId?: string | null;
+}): string | undefined {
   const groups = params.cfg?.groups ?? {};
-  const wildcard = groups["*"];
   const groupId = params.groupId?.trim();
-  if (!groupId) {
+  if (!groupId || groupId === "*") {
     return undefined;
   }
-
-  const direct = groups[groupId];
-  if (direct) {
-    return direct;
+  if (Object.hasOwn(groups, groupId)) {
+    return groupId;
   }
-
   const lowered = normalizeOptionalLowercaseString(groupId) ?? "";
-  const matchKey = Object.keys(groups).find(
-    (key) => normalizeOptionalLowercaseString(key) === lowered,
+  return Object.keys(groups).find(
+    (key) => key !== "*" && normalizeOptionalLowercaseString(key) === lowered,
   );
-  if (matchKey) {
-    return groups[matchKey];
+}
+
+export function resolveFeishuGroupConfig(params: { cfg?: FeishuConfig; groupId?: string | null }) {
+  if (!params.groupId?.trim()) {
+    return undefined;
   }
-  return wildcard;
+  const groups = params.cfg?.groups ?? {};
+  const key = resolveFeishuExplicitGroupConfigKey(params);
+  return key ? groups[key] : groups["*"];
 }
 
 export function hasExplicitFeishuGroupConfig(params: {
   cfg?: FeishuConfig;
   groupId?: string | null;
 }): boolean {
-  const groups = params.cfg?.groups ?? {};
-  const groupId = params.groupId?.trim();
-  if (!groupId) {
-    return false;
-  }
-  if (Object.hasOwn(groups, groupId) && groupId !== "*") {
-    return true;
-  }
-
-  const lowered = normalizeOptionalLowercaseString(groupId) ?? "";
-  return Object.keys(groups).some(
-    (key) => key !== "*" && normalizeOptionalLowercaseString(key) === lowered,
-  );
+  return resolveFeishuExplicitGroupConfigKey(params) !== undefined;
 }
 
 export function resolveFeishuGroupToolPolicy(params: ChannelGroupContext) {
   // This adapter intentionally reads root channels.feishu without account merge;
   // reply mention policy merges accounts, and changing that asymmetry is product behavior.
-  const cfg: FeishuConfig | undefined = params.cfg.channels?.feishu;
-  if (!cfg) {
-    return undefined;
-  }
-  const groups: NonNullable<FeishuConfig["groups"]> = cfg.groups ?? {};
-  // Whole-entry selection: a matched group hides every wildcard field.
-  const tree: ScopeTree = {
-    scopes: Object.fromEntries(
-      Object.entries(groups).map(([key, entry]) => [key, { tools: entry?.tools }]),
-    ),
-  };
-  const groupId = params.groupId?.trim();
-  const matchedKey = resolveScopeKeyCaseInsensitive(tree, groupId);
-  const scopeKey = groupId && !matchedKey && Object.hasOwn(tree.scopes, "*") ? "*" : matchedKey;
-  return resolveScopeToolsPolicy({ tree, path: scopeKey ? [scopeKey] : [] });
+  return resolveFeishuGroupConfig({
+    cfg: params.cfg.channels?.feishu,
+    groupId: params.groupId,
+  })?.tools;
 }
 
 export function resolveFeishuReplyPolicy(params: {

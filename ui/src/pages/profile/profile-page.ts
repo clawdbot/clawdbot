@@ -8,7 +8,7 @@ import type {
   UsersSetDisplayNameResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -18,6 +18,7 @@ import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { resolveCurrentSelfUser, userProfileAvatarUrl } from "../../app/user-profile.ts";
 import { icons } from "../../components/icons.ts";
 import {
+  renderDocsLink,
   renderSettingsEmpty,
   renderSettingsGroup,
   renderSettingsNavRow,
@@ -32,6 +33,8 @@ import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import "../../styles/profile.css";
 import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
 import { renderIdentitySection } from "./identity-section.ts";
+
+const PROFILE_DOCS_URL = "https://docs.openclaw.ai/concepts/user-model";
 
 function toIdentityErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim()) {
@@ -52,6 +55,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   @state() private identityLoading = false;
   @state() private identityBusy: "display-name" | "avatar" | null = null;
   @state() private identityError: string | null = null;
+  @state() private failedHeroAvatarUrl: string | null = null;
 
   private client: GatewayBrowserClient | null = null;
   private connected = false;
@@ -317,8 +321,15 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   private renderAvatar(avatarUrl: string | null, textAvatar: string | null, name: string) {
-    if (avatarUrl) {
-      return html`<img class="profile-hero__avatar-image" src=${avatarUrl} alt=${name} />`;
+    if (avatarUrl && avatarUrl !== this.failedHeroAvatarUrl) {
+      return html`<img
+        class="profile-hero__avatar-image"
+        src=${avatarUrl}
+        alt=${name}
+        @error=${() => {
+          this.failedHeroAvatarUrl = avatarUrl;
+        }}
+      />`;
     }
     if (textAvatar) {
       return html`<span class="profile-hero__avatar-text">${textAvatar}</span>`;
@@ -363,6 +374,10 @@ export class ProfilePage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("profile")}</div>
+          <div class="page-subtitle">
+            ${subtitleForRoute("profile")}
+            ${renderDocsLink(PROFILE_DOCS_URL, t("common.learnMore"))}
+          </div>
         </div>
         ${this.selfUser
           ? html`<button class="btn profile-refresh" @click=${() => this.refreshManually()}>

@@ -165,10 +165,12 @@ describe("minimal npm extended-stable workflow", () => {
 
     // Only the build producers skip on a cache hit; every validation step
     // still runs against the restored artifacts.
-    expect(step(preflight, "Build").if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
-    expect(step(preflight, "Build Control UI").if).toBe(
-      "steps.dist_build_cache.outputs.cache-hit != 'true'",
-    );
+    const build = step(preflight, "Build");
+    const buildControlUi = step(preflight, "Build Control UI");
+    expect(build.if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
+    expect(build.env?.OPENCLAW_CONTROL_UI_RELEASE_BUILD).toBe("1");
+    expect(buildControlUi.if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
+    expect(buildControlUi.env?.OPENCLAW_CONTROL_UI_RELEASE_BUILD).toBe("1");
     expect(step(preflight, "Check").if).toBeUndefined();
     expect(step(preflight, "Verify release contents").if).toBeUndefined();
     expect(step(preflight, "Verify prepared npm tarball install").if).toBeUndefined();

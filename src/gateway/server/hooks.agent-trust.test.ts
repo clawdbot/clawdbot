@@ -62,7 +62,7 @@ function waitForFast<T>(
   return vi.waitFor(callback, { interval: 1, ...options });
 }
 
-function buildMinimalParams() {
+function buildMinimalParams(overrides: { agentStartAdmissionTimeoutMs?: number } = {}) {
   return {
     deps: {} as never,
     getHooksConfig: () => null,
@@ -75,6 +75,7 @@ function buildMinimalParams() {
       info: logHooksInfoMock,
       error: vi.fn(),
     } as never,
+    ...overrides,
   };
 }
 
@@ -90,6 +91,7 @@ function buildAgentPayload(name: string, agentId?: string) {
     deliver: false,
     channel: "last" as const,
     to: undefined,
+    delivery: { mode: "none" as const },
     model: undefined,
     thinking: undefined,
     timeoutSeconds: undefined,
@@ -163,6 +165,35 @@ describe("dispatchAgentHook trust handling", () => {
   afterEach(() => {
     resetGatewayWorkAdmission();
     vi.restoreAllMocks();
+  });
+
+  it("passes normalized delivery through to the isolated CronJob", async () => {
+    const delivery = {
+      mode: "announce" as const,
+      channel: "telegram" as const,
+      to: "123456",
+      accountId: "work",
+    };
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "ok",
+      summary: "done",
+      delivered: true,
+    });
+
+    dispatchAgentHook({
+      ...buildAgentPayload("Explicit delivery"),
+      deliver: true,
+      channel: delivery.channel,
+      to: delivery.to,
+      accountId: delivery.accountId,
+      delivery,
+    });
+
+    await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1));
+    expect(runCronIsolatedAgentTurnMock.mock.calls[0]?.[0]).toMatchObject({
+      job: { delivery },
+    });
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
   it("retains detached agent work after the hook request releases admission", async () => {
@@ -341,14 +372,19 @@ describe("dispatchAgentHook trust handling", () => {
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
-  it("reports runtime-config failures after returning a run id", async () => {
+  it("reports runtime-config failures as failed admission", async () => {
     loadConfigMock.mockImplementationOnce(() => {
       throw new Error("config exploded");
     });
 
-    const runId = dispatchAgentHook(buildAgentPayload("Config"));
+    const result = await dispatchAgentHook(buildAgentPayload("Config"));
 
-    expect(runId).toEqual(expect.any(String));
+    expect(result).toMatchObject({
+      ok: false,
+      statusCode: 502,
+      error: "hook agent run failed before entering the agent runner",
+      runId: expect.any(String),
+    });
     await waitForFast(() =>
       expect(enqueueSystemEventMock).toHaveBeenCalledWith(
         "Hook Config (error): Error: config exploded",
@@ -356,6 +392,69 @@ describe("dispatchAgentHook trust handling", () => {
       ),
     );
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("keeps cron admission details behind stable public errors", async () => {
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "error",
+      error: 'Session "agent:private:canonical" changed while starting work. Retry.',
+      admissionDisposition: "session-conflict",
+    });
+
+    const result = await dispatchAgentHook(buildAgentPayload("Conflict"));
+
+    expect(result).toMatchObject({
+      ok: false,
+      statusCode: 409,
+      error: "hook agent run was rejected because the target session changed",
+      runId: expect.any(String),
+    });
+    await waitForFast(() =>
+      expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+        'Hook Conflict (error): Session "agent:private:canonical" changed while starting work. Retry.',
+        { sessionKey: "agent:main:main" },
+      ),
+    );
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("does not start same-session work after its admission timeout", async () => {
+    capturedDispatchAgentHook = undefined;
+    createGatewayHooksRequestHandler(buildMinimalParams({ agentStartAdmissionTimeoutMs: 10 }));
+    const firstRunStarted = createDeferred();
+    const releaseFirstRun = createDeferred();
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        firstRunStarted.resolve();
+        await releaseFirstRun.promise;
+        return { status: "ok", summary: "first done", delivered: false };
+      },
+    );
+
+    const firstAdmission = dispatchAgentHook({
+      ...buildAgentPayload("First"),
+      message: "first",
+      sessionKey: "shared-session",
+    });
+    await firstRunStarted.promise;
+    await expect(firstAdmission).resolves.toMatchObject({ ok: true });
+
+    const timedOutAdmission = dispatchAgentHook({
+      ...buildAgentPayload("Second"),
+      message: "second",
+      sessionKey: "shared-session",
+    });
+    await expect(timedOutAdmission).resolves.toMatchObject({
+      ok: false,
+      statusCode: 503,
+      error: "hook agent run did not start before admission timeout",
+    });
+    expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1);
+
+    releaseFirstRun.resolve();
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not announce successful deliver:false hook results", async () => {

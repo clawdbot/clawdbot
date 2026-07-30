@@ -132,6 +132,7 @@ import {
   SessionsReclaimParamsSchema,
   SessionsMessagesSubscribeParamsSchema,
   SessionsMessagesUnsubscribeParamsSchema,
+  SessionsViewerPresenceSetParamsSchema,
   SessionsAbortParamsSchema,
   SessionsPatchParamsSchema,
   SessionsPluginPatchParamsSchema,
@@ -237,6 +238,8 @@ import {
   SkillsProposalReviseParamsSchema,
   SkillsProposalRequestRevisionParamsSchema,
   SkillsProposalActionParamsSchema,
+  SkillsProposalEvaluateParamsSchema,
+  SkillsProposalEventsListParamsSchema,
   SkillsSecurityVerdictsParamsSchema,
   SkillsSkillCardParamsSchema,
   CronListParamsSchema,
@@ -500,6 +503,9 @@ export const validateSessionsMessagesSubscribeParams = lazyCompile(
 export const validateSessionsMessagesUnsubscribeParams = lazyCompile(
   SessionsMessagesUnsubscribeParamsSchema,
 );
+export const validateSessionsViewerPresenceSetParams = lazyCompile(
+  SessionsViewerPresenceSetParamsSchema,
+);
 export const validateSessionsAbortParams = lazyCompile(SessionsAbortParamsSchema);
 export const validateSessionsPatchParams = lazyCompile(SessionsPatchParamsSchema);
 export const validateSessionsPluginPatchParams = lazyCompile(SessionsPluginPatchParamsSchema);
@@ -621,6 +627,10 @@ export const validateSkillsProposalRequestRevisionParams = lazyCompile(
   SkillsProposalRequestRevisionParamsSchema,
 );
 export const validateSkillsProposalActionParams = lazyCompile(SkillsProposalActionParamsSchema);
+export const validateSkillsProposalEvaluateParams = lazyCompile(SkillsProposalEvaluateParamsSchema);
+export const validateSkillsProposalEventsListParams = lazyCompile(
+  SkillsProposalEventsListParamsSchema,
+);
 export const validateSkillsSecurityVerdictsParams = lazyCompile(SkillsSecurityVerdictsParamsSchema);
 export const validateSkillsSkillCardParams = lazyCompile(SkillsSkillCardParamsSchema);
 export const validateCronListParams = lazyCompile(CronListParamsSchema);

@@ -74,6 +74,7 @@ type ModelSetupViewProps = {
   manualApiKey: string;
   manualError: string | null;
   moreSignInOpen: boolean;
+  firstRun: boolean;
   iconUrls: Readonly<Record<string, string>>;
   onDetect: () => void;
   onVerify: () => void;
@@ -81,6 +82,7 @@ type ModelSetupViewProps = {
   onStartAuth: (option: AuthOption) => void;
   onStartPrepare: (option: ModelSetupPrepareOption) => void;
   onManualProviderChange: (providerId: string) => void;
+  onUseManualProvider: (providerId: string) => void;
   onManualApiKeyChange: (apiKey: string) => void;
   onManualConnect: () => void;
   onMoreSignInToggle: (open: boolean) => void;
@@ -121,6 +123,7 @@ function failureLabel(status: string): string {
 function renderSuccess(
   activation: Extract<ModelSetupActivationState, { phase: "success" }>,
   onOpenChat: () => void,
+  firstRun: boolean,
 ) {
   return html`
     <div class="model-setup__success" role="status">
@@ -134,9 +137,12 @@ function renderSuccess(
                 latencyMs: String(activation.latencyMs),
               })}
         </div>
+        ${activation.warning
+          ? html`<div class="model-setup__success-warning">${activation.warning}</div>`
+          : nothing}
       </div>
       <button type="button" class="btn primary" @click=${onOpenChat}>
-        ${t("modelSetup.success.openChat")}
+        ${t(firstRun ? "modelSetup.success.continueSetup" : "modelSetup.success.openChat")}
       </button>
     </div>
   `;
@@ -277,7 +283,7 @@ function renderCurrentConnection(props: ModelSetupViewProps, modelRef: string) {
   `;
 }
 
-function renderUnavailable(result: SystemAgentSetupDetectResult) {
+function renderUnavailable(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
   if (!result.unavailableCandidates?.length) {
     return nothing;
   }
@@ -287,16 +293,60 @@ function renderUnavailable(result: SystemAgentSetupDetectResult) {
         <h2>${t("modelSetup.unavailable.title")}</h2>
       </div>
       <div class="model-setup__rows">
-        ${result.unavailableCandidates.map(
-          (candidate) => html`
-            <div class="model-setup__row model-setup__row--info">
-              <div>
-                <div><strong>${candidate.label}</strong> — ${candidate.detail}</div>
-                <div>${candidate.reason}</div>
+        ${result.unavailableCandidates.map((candidate) => {
+          const authOption = (result.authOptions ?? []).find(
+            (option) => option.id === candidate.authOptionId,
+          );
+          const manualProvider = result.manualProviders.find(
+            (provider) => provider.id === candidate.manualProviderId,
+          );
+          return html`
+            <div
+              class="model-setup__row model-setup__row--info"
+              data-unavailable-candidate=${candidate.id}
+            >
+              <div class="model-setup__provider-copy">
+                ${renderProviderIcon(props, candidate)}
+                <div>
+                  <div><strong>${candidate.label}</strong> — ${candidate.detail}</div>
+                  <div class="muted">${candidate.reason}</div>
+                </div>
+              </div>
+              <div class="model-setup__row-actions">
+                ${authOption
+                  ? html`<button
+                      type="button"
+                      class="btn primary"
+                      ?disabled=${props.actionsDisabled}
+                      @click=${() => props.onStartAuth(authOption)}
+                    >
+                      ${t("modelSetup.unavailable.signIn", {
+                        provider: authOption.groupLabel ?? authOption.label,
+                      })}
+                    </button>`
+                  : nothing}
+                ${manualProvider
+                  ? html`<button
+                      type="button"
+                      class="btn"
+                      ?disabled=${props.actionsDisabled}
+                      @click=${() => props.onUseManualProvider(manualProvider.id)}
+                    >
+                      ${t("modelSetup.unavailable.useApiKey")}
+                    </button>`
+                  : nothing}
+                <button
+                  type="button"
+                  class="btn"
+                  ?disabled=${props.actionsDisabled}
+                  @click=${props.onDetect}
+                >
+                  ${t("modelSetup.checkAgain")}
+                </button>
               </div>
             </div>
-          `,
-        )}
+          `;
+        })}
       </div>
     </section>
   `;
@@ -478,7 +528,7 @@ function renderManual(props: ModelSetupViewProps, result: SystemAgentSetupDetect
 
 function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
   if (props.activation.phase === "success") {
-    return renderSuccess(props.activation, props.onOpenChat);
+    return renderSuccess(props.activation, props.onOpenChat, props.firstRun);
   }
   const current = result.configuredModel
     ? renderCurrentConnection(props, result.configuredModel)
@@ -493,8 +543,8 @@ function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectR
   }
   return html`
     ${current} ${renderEmptyState(props, result)} ${renderCandidateRows(props, result)}
-    ${renderUnavailable(result)} ${renderPrepare(props, result)} ${renderSignIn(props, result)}
-    ${renderManual(props, result)}
+    ${renderUnavailable(props, result)} ${renderPrepare(props, result)}
+    ${renderSignIn(props, result)} ${renderManual(props, result)}
   `;
 }
 

@@ -7,7 +7,9 @@ import { createMockTypingController } from "./reply/reply.test-helpers.js";
 import type { MsgContext } from "./templating.js";
 
 const mocks = vi.hoisted(() => ({
+  buildModelAliasIndex: vi.fn(),
   resolveReplyDirectives: vi.fn(),
+  resolveSubagentSessionDefaultModel: vi.fn(),
   handleInlineActions: vi.fn(),
   initSessionState: vi.fn(),
   runPreparedReply: vi.fn(),
@@ -31,6 +33,7 @@ vi.mock("../agents/model-selection.js", async () => {
   );
   return {
     ...actual,
+    buildModelAliasIndex: (...args: unknown[]) => mocks.buildModelAliasIndex(...args),
     resolveModelRefFromString: vi.fn(() => null),
   };
 });
@@ -59,7 +62,8 @@ vi.mock("./reply/directive-handling.defaults.js", () => ({
     defaultModel: "claude-opus-4-6",
     aliasIndex: new Map(),
   })),
-  resolveSubagentSessionDefaultModel: vi.fn(() => null),
+  resolveSubagentSessionDefaultModel: (...args: unknown[]) =>
+    mocks.resolveSubagentSessionDefaultModel(...args),
 }));
 vi.mock("./reply/inbound-context.js", () => ({
   finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
@@ -180,12 +184,16 @@ describe("block streaming", () => {
 
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    mocks.buildModelAliasIndex.mockReset();
     mocks.resolveReplyDirectives.mockReset();
+    mocks.resolveSubagentSessionDefaultModel.mockReset();
     mocks.handleInlineActions.mockReset();
     mocks.initSessionState.mockReset();
     mocks.runPreparedReply.mockReset();
 
+    mocks.buildModelAliasIndex.mockReturnValue(new Map());
     mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult());
+    mocks.resolveSubagentSessionDefaultModel.mockReturnValue(null);
     mocks.handleInlineActions.mockImplementation(async (params) => ({
       kind: "continue",
       directives: params.directives,
@@ -253,5 +261,46 @@ describe("block streaming", () => {
     const streamPayload = Array.isArray(resStreamMode) ? resStreamMode[0] : resStreamMode;
     expect(streamPayload?.text).toBe("final");
     expect(onBlockReplyStreamMode).not.toHaveBeenCalled();
+  });
+
+  it("rebuilds subagent aliases with the active agent scope", async () => {
+    mocks.resolveSubagentSessionDefaultModel.mockReturnValue({
+      provider: "openai",
+      model: "gpt-5.6-sol",
+    });
+    mocks.initSessionState.mockImplementationOnce(async ({ ctx }: { ctx: MsgContext }) => ({
+      sessionCtx: {
+        ...ctx,
+        CommandAuthorized: true,
+      },
+      sessionEntry: { spawnDepth: 1 },
+      previousSessionEntry: {},
+      sessionStore: {},
+      sessionKey: "agent:main:subagent:test",
+      sessionId: "session-subagent",
+      isNewSession: true,
+      resetTriggered: false,
+      systemSent: false,
+      abortedLastRun: false,
+      storePath: "/tmp/sessions.json",
+      sessionScope: "per-sender",
+      groupResolution: undefined,
+      isGroup: false,
+      triggerBodyNormalized: "ping",
+      bodyStripped: "ping",
+    }));
+
+    await getReplyFromConfig(
+      createTelegramMessage("msg-subagent"),
+      undefined,
+      createReplyConfig(),
+    );
+
+    expect(mocks.buildModelAliasIndex).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      defaultProvider: "openai",
+      agentId: "main",
+      allowPluginNormalization: false,
+    });
   });
 });

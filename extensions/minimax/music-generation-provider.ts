@@ -21,18 +21,20 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  assertMinimaxBaseResp,
+  DEFAULT_MINIMAX_MEDIA_BASE_URL,
+  resolveMinimaxGuardedRequestOptions,
+  resolveMinimaxMediaBaseUrl,
+  type MinimaxBaseResp,
+  type MinimaxRequestPolicy,
+} from "./media-provider-runtime.js";
 
-const DEFAULT_MINIMAX_MUSIC_BASE_URL = "https://api.minimax.io";
 const DEFAULT_MINIMAX_MUSIC_MODEL = "music-2.6";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_OPERATION_TIMEOUT_MS = 300_000;
 const STREAM_ENVELOPE_MAX_BYTES_MULTIPLIER = 5;
 const STREAM_ENVELOPE_OVERHEAD_BYTES = 64 * 1024;
-
-type MinimaxBaseResp = {
-  status_code?: number;
-  status_msg?: string;
-};
 
 type MinimaxMusicCreateResponse = {
   task_id?: string;
@@ -54,47 +56,6 @@ type MinimaxMusicStreamFrame = {
   };
   base_resp?: MinimaxBaseResp;
 };
-
-type MinimaxRequestPolicy = Pick<
-  Parameters<typeof postJsonRequest>[0],
-  "allowPrivateNetwork" | "dispatcherPolicy"
->;
-
-function resolveMinimaxMusicBaseUrl(
-  cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
-  providerId: string,
-): string {
-  const direct = normalizeOptionalString(cfg?.models?.providers?.[providerId]?.baseUrl);
-  if (!direct) {
-    return DEFAULT_MINIMAX_MUSIC_BASE_URL;
-  }
-  try {
-    return new URL(direct).origin;
-  } catch {
-    return DEFAULT_MINIMAX_MUSIC_BASE_URL;
-  }
-}
-
-function assertMinimaxBaseResp(baseResp: MinimaxBaseResp | undefined, context: string): void {
-  if (!baseResp || typeof baseResp.status_code !== "number" || baseResp.status_code === 0) {
-    return;
-  }
-  throw new Error(
-    `${context} (${baseResp.status_code}): ${baseResp.status_msg ?? "unknown error"}`,
-  );
-}
-
-function resolveMinimaxGuardedRequestOptions(
-  policy: MinimaxRequestPolicy,
-): Parameters<typeof fetchWithTimeoutGuarded>[4] | undefined {
-  if (!policy.allowPrivateNetwork && !policy.dispatcherPolicy) {
-    return undefined;
-  }
-  return {
-    ...(policy.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
-    ...(policy.dispatcherPolicy ? { dispatcherPolicy: policy.dispatcherPolicy } : {}),
-  };
-}
 
 function decodeHexAudioWithLimit(data: string, maxBytes: number): Buffer {
   const trimmed = data.trim();
@@ -338,8 +299,8 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
       });
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
-          baseUrl: resolveMinimaxMusicBaseUrl(req.cfg, providerId),
-          defaultBaseUrl: DEFAULT_MINIMAX_MUSIC_BASE_URL,
+          baseUrl: resolveMinimaxMediaBaseUrl(req.cfg, providerId),
+          defaultBaseUrl: DEFAULT_MINIMAX_MEDIA_BASE_URL,
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
           },

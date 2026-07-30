@@ -86,6 +86,7 @@ export function resolveSessionModelRef(
       const aliasIndex = buildModelAliasIndex({
         cfg,
         defaultProvider,
+        agentId,
         allowPluginNormalization: options?.allowPluginNormalization,
       });
       const subagentRef = resolveModelRefFromString({

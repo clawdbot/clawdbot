@@ -187,8 +187,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     return result;
   };
 
-  const isRoutedReplyDelivered = (result: { ok: boolean; suppressed?: boolean }) =>
-    result.ok && result.suppressed !== true;
+  const isRoutedReplyDelivered = (result: { delivered: boolean }) => result.delivered;
 
   /**
    * Helper to send a payload via route-reply (async).
@@ -260,7 +259,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
           `dispatch-from-config: route-reply (plugin binding notice) failed: ${result.error ?? "unknown error"}`,
         );
       }
-      return result.ok;
+      return result.delivered || result.suppressed === true;
     }
     markInboundDedupeReplayUnsafe();
     return mode === "additive"

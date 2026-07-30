@@ -4,15 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import {
-  readCuratedMemoryTriggerCandidates,
-  readMemoryRecallMetadata,
-} from "./memory-recall-metadata.js";
-import { ensureMemoryRecallMetadataColumns } from "./memory-schema-recall.js";
+import { readMemoryRecallMetadata } from "./memory-recall-metadata.js";
+import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
 
 describe("memory index schema", () => {
-  it("lazily adds nullable recall metadata columns without a schema bump", () => {
+  it("migrates unreleased inline recall metadata without changing chunk rows", () => {
     const db = new DatabaseSync(":memory:");
     try {
       db.exec(`
@@ -20,56 +17,47 @@ describe("memory index schema", () => {
           id TEXT PRIMARY KEY, path TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'memory',
           start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, hash TEXT NOT NULL,
           model TEXT NOT NULL, text TEXT NOT NULL, embedding TEXT NOT NULL,
-          updated_at INTEGER NOT NULL
+          updated_at INTEGER NOT NULL,
+          importance INTEGER CHECK (importance IS NULL OR importance BETWEEN 1 AND 10),
+          triggers TEXT,
+          project_key TEXT
         ) STRICT;
+        INSERT INTO memory_index_chunks VALUES (
+          'legacy', 'MEMORY.md', 'memory', 1, 1, 'h', 'm', 'body', '[]', 7,
+          8, 'legacy trigger', 'project/key'
+        );
       `);
-      db.exec("BEGIN IMMEDIATE");
-      ensureMemoryRecallMetadataColumns(db);
-      db.exec("ROLLBACK");
+
+      ensureMemoryRecallMetadataSchema(db);
+
       expect(
         db
           .prepare("SELECT name FROM pragma_table_info('memory_index_chunks') ORDER BY cid")
           .all()
           .map((row) => (row as { name: string }).name),
-      ).not.toContain("importance");
-      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
-      const columns = db
-        .prepare("SELECT name FROM pragma_table_info('memory_index_chunks') ORDER BY cid")
-        .all()
-        .map((row) => (row as { name: string }).name);
-      expect(columns).toContain("importance");
-      expect(columns).toContain("triggers");
-      expect(() =>
-        db
-          .prepare(
-            `INSERT INTO memory_index_chunks
-             (id, path, start_line, end_line, hash, model, text, embedding, updated_at, importance)
-             VALUES ('bad', 'MEMORY.md', 1, 1, 'h', 'm', 't', '[]', 1, 11)`,
-          )
-          .run(),
-      ).toThrow();
-      db.prepare(
-        `INSERT INTO memory_index_chunks
-         (id, path, start_line, end_line, hash, model, text, embedding, updated_at, importance, triggers)
-         VALUES ('good', 'MEMORY.md', 1, 1, 'h', 'm', 't', '[]', 1, 9, 'when flying')`,
-      ).run();
-      expect(readMemoryRecallMetadata(db, ["good"]).get("good")).toEqual({
-        id: "good",
-        importance: 9,
-        triggers: "when flying",
-      });
-      expect(readCuratedMemoryTriggerCandidates(db, 10)).toEqual([
-        {
-          id: "good",
-          path: "MEMORY.md",
-          source: "memory",
-          start_line: 1,
-          end_line: 1,
-          text: "t",
-          importance: 9,
-          triggers: "when flying",
-        },
+      ).toEqual([
+        "id",
+        "path",
+        "source",
+        "start_line",
+        "end_line",
+        "hash",
+        "model",
+        "text",
+        "embedding",
+        "updated_at",
       ]);
+      expect(db.prepare("SELECT id, text, updated_at FROM memory_index_chunks").get()).toEqual({
+        id: "legacy",
+        text: "body",
+        updated_at: 7,
+      });
+      expect(readMemoryRecallMetadata(db, ["legacy"]).get("legacy")).toEqual({
+        id: "legacy",
+        importance: 8,
+        triggers: "legacy trigger",
+        project_key: "project/key",
+      });
     } finally {
       db.close();
     }
@@ -87,7 +75,7 @@ describe("memory index schema", () => {
 
     const readOnly = new DatabaseSync(databasePath, { readOnly: true });
     try {
-      expect(() => ensureMemoryRecallMetadataColumns(readOnly)).not.toThrow();
+      expect(() => ensureMemoryRecallMetadataSchema(readOnly)).not.toThrow();
     } finally {
       readOnly.close();
       fs.rmSync(rootDir, { recursive: true, force: true });
@@ -193,7 +181,23 @@ describe("memory index schema", () => {
            FROM memory_index_chunk_provenance WHERE chunk_id = ?`,
           )
           .get("chunk-2"),
-      ).toEqual({ origin_class: "agent", session_kind: "unknown", observed_at: 50 });
+      ).toBeUndefined();
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND name = 'memory_index_chunk_provenance_after_insert'",
+          )
+          .get(),
+      ).toBeUndefined();
+      ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
+      expect(
+        db
+          .prepare(
+            `SELECT origin_class, session_kind, observed_at
+             FROM memory_index_chunk_provenance WHERE chunk_id = ?`,
+          )
+          .get("chunk-2"),
+      ).toEqual({ origin_class: "untrusted", session_kind: "unknown", observed_at: 50 });
       expect(db.prepare("SELECT id, text FROM memory_index_chunks_fts").all()).toEqual([
         { id: "chunk-1", text: "remember this" },
       ]);

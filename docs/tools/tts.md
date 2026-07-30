@@ -63,6 +63,7 @@ speech.
 | **Azure Speech**  | `AZURE_SPEECH_KEY` + `AZURE_SPEECH_REGION` (also `AZURE_SPEECH_API_KEY`, `SPEECH_KEY`, `SPEECH_REGION`)          | Native Ogg/Opus voice-note output and telephony.                                            |
 | **DeepInfra**     | `DEEPINFRA_API_KEY`                                                                                              | OpenAI-compatible TTS. Defaults to `hexgrad/Kokoro-82M`.                                    |
 | **ElevenLabs**    | `ELEVENLABS_API_KEY` or `XI_API_KEY`                                                                             | Voice cloning, multilingual, deterministic via `seed`; streamed for Discord voice playback. |
+| **Fish Audio**    | `FISH_API_KEY` or `FISH_AUDIO_API_KEY`                                                                           | S2.1 hosted TTS, expressive tags, voice discovery, streaming, and telephony.                |
 | **Google Gemini** | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                                                                             | Gemini API batch TTS; persona-aware via `promptTemplate: "audio-profile-v1"`.               |
 | **Gradium**       | `GRADIUM_API_KEY`                                                                                                | Voice-note and telephony output.                                                            |
 | **Inworld**       | `INWORLD_API_KEY`                                                                                                | Streaming TTS API. Native Opus voice-note and PCM telephony.                                |
@@ -128,6 +129,24 @@ fields shown below are canonical; each provider's own `voice`/`voiceId`/
         apiKey: "${ELEVENLABS_API_KEY}",
         model: "eleven_multilingual_v2",
         speakerVoiceId: "EXAVITQu4vr4xnSDxMaL",
+      },
+    },
+  },
+}
+```
+  </Tab>
+  <Tab title="Fish Audio">
+```json5
+{
+  tts: {
+    auto: "tagged",
+    provider: "fish-audio",
+    providers: {
+      "fish-audio": {
+        apiKey: "${FISH_API_KEY}",
+        model: "s2.1-pro",
+        speakerVoiceId: "802e3bc2b27e49c2995d23ef70e6ac89",
+        latency: "balanced",
       },
     },
   },
@@ -402,8 +421,8 @@ is required by OpenClaw's provider configuration but is not validated by the
 loopback server.
 </Tab>
 <Tab title="macOS CLI">
-The Homebrew `speech` executable can write directly to OpenClaw's temporary
-output path:
+The Homebrew `speech` executable can write directly to OpenClaw's
+per-invocation output path:
 
 ```json5
 {
@@ -793,6 +812,13 @@ whether voice-style TTS should ask providers for a native `voice-note` target or
 keep normal `audio-file` synthesis, and whether the channel transcodes
 non-native output before sending.
 
+After synthesis, OpenClaw persists batch TTS output in the media store under
+`tool-speech-synthesis`. The reply uses that stable media path instead of a
+provider temporary file, and normal media maintenance prunes expired output.
+Local CLI providers may still use `{{OutputPath}}` as scratch space before
+OpenClaw imports the completed bytes. See [Media playback](/nodes/media-playback)
+for inline-player formats and limits.
+
 | Target                                | Format                                                                                                                                |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | Feishu / Matrix / Telegram / WhatsApp | Voice-note replies prefer **Opus** (`opus_48000_64` from ElevenLabs, `opus` from OpenAI). 48 kHz / 64 kbps balances clarity and size. |
@@ -1093,6 +1119,7 @@ provider default.
 ## Related
 
 - [Media overview](/tools/media-overview)
+- [Media playback](/nodes/media-playback)
 - [Music generation](/tools/music-generation)
 - [Video generation](/tools/video-generation)
 - [Slash commands](/tools/slash-commands)

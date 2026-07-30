@@ -13,6 +13,7 @@ import type {
   EffectiveToolInventoryResult,
 } from "../../agents/tools-effective-inventory.types.js";
 import { buildRuntimeCompatibleMcpToolInventory } from "../../agents/tools-effective-mcp-inventory.js";
+import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { logDebug, logWarn } from "../../logger.js";
@@ -25,6 +26,7 @@ import {
   deliveryContextFromSession,
   getActivePluginChannelRegistryVersion,
   getActivePluginRegistryVersion,
+  getRegisteredAgentHarness,
   listAgentIds,
   loadSessionEntryReadOnly,
   peekSessionMcpRuntime,
@@ -70,6 +72,8 @@ type TrustedToolsEffectiveContext = {
   groupSpace?: string | null;
   replyToMode?: "off" | "first" | "all" | "batched";
   spawnedBy?: string | null;
+  agentHarnessId?: string;
+  toolOverrides?: SessionToolOverrides;
 };
 
 type ToolsEffectiveCacheEntry = {
@@ -136,6 +140,7 @@ function buildMcpConfigSummaryCacheKey(params: {
     config: params.context.runtimeConfigCacheKey,
     pluginRegistry: params.context.pluginRegistryVersion,
     workspaceDir: params.workspaceDir,
+    toolOverrides: params.context.toolOverrides,
   });
 }
 
@@ -161,6 +166,7 @@ function resolveCachedSessionMcpConfigSummary(params: {
   const summary = resolveSessionMcpConfigSummary({
     workspaceDir: params.workspaceDir,
     cfg: params.context.cfg,
+    ...(params.context.toolOverrides ? { toolOverrides: params.context.toolOverrides } : {}),
   });
   mcpConfigSummaryCache.set(key, summary);
   trimMcpConfigSummaryCache();
@@ -307,25 +313,29 @@ function mcpDiscoveryNotice(
   if (mcpServerNames.length === 0) {
     return undefined;
   }
-  const servers = formatMcpServerNames(mcpServerNames);
+  const servers = mcpServerNames.toSorted((a, b) => a.localeCompare(b));
+  const formattedServers = formatMcpServerNames(servers);
   switch (reason) {
     case "stale-config":
       return {
         id: "mcp-stale-catalog",
         severity: "info",
-        message: `MCP servers ${servers} changed since the current runtime catalog was discovered. MCP tools will appear here after the next agent run discovers them.`,
+        message: `MCP servers ${formattedServers} changed since the current runtime catalog was discovered. MCP tools will appear here after the next agent run discovers them.`,
+        servers,
       };
     case "not-listed":
       return {
         id: "mcp-not-yet-listed",
         severity: "info",
-        message: `MCP servers ${servers} are connected but have not finished listing tools yet. MCP tools will appear here after the session discovers them.`,
+        message: `MCP servers ${formattedServers} are connected but have not finished listing tools yet. MCP tools will appear here after the session discovers them.`,
+        servers,
       };
     case "not-connected":
       return {
         id: "mcp-not-yet-connected",
         severity: "info",
-        message: `MCP servers ${servers} are configured but not connected for this session yet. MCP tools will appear here after an agent run discovers them.`,
+        message: `MCP servers ${formattedServers} are configured but not connected for this session yet. MCP tools will appear here after an agent run discovers them.`,
+        servers,
       };
     default:
       // Exhaustiveness guard for oxlint's consistent-return rule.
@@ -406,9 +416,43 @@ async function resolveReadOnlyToolsEffectiveInventory(
     sessionKey: context.sessionKey,
     context,
   });
+  const harness = context.agentHarnessId
+    ? getRegisteredAgentHarness(context.agentHarnessId)?.harness
+    : undefined;
+  if (harness?.loadMcpToolCatalog) {
+    const mcpConfig = resolveCachedSessionMcpConfigSummary({
+      context,
+      workspaceDir: context.workspaceDir,
+    });
+    if (mcpConfig.serverNames.length === 0) {
+      return base;
+    }
+    try {
+      const catalog = await harness.loadMcpToolCatalog({
+        config: context.cfg,
+        agentId: context.agentId,
+        sessionId: context.sessionId,
+        sessionKey: context.sessionKey,
+        workspaceDir: context.workspaceDir,
+        mcpServerNames: mcpConfig.serverNames,
+        toolOverrides: context.toolOverrides,
+      });
+      if (catalog) {
+        return projectMcpCatalog({ base, catalog, context, workspaceDir: context.workspaceDir });
+      }
+    } catch (error) {
+      logWarn(
+        `tools-effective: ${context.agentHarnessId} MCP catalog failed for session ${context.sessionKey}: ${String(error)}`,
+      );
+    }
+    // A native owner has a distinct MCP runtime. Never substitute an in-process
+    // catalog under the same OpenClaw session identity when its catalog is unavailable.
+    return maybeAppendMcpNotice(base, mcpConfig.serverNames, "not-connected");
+  }
   // UI panel loads call `tools.effective`, so this path must not create MCP
   // runtimes, connect transports, or issue tools/list. It only projects an
-  // already-warm session catalog.
+  // already-warm core session catalog. Native harnesses opt into their own
+  // catalog read above because they own a separate per-thread runtime.
   const runtime = peekSessionMcpRuntime({
     sessionId: context.sessionId,
     sessionKey: context.sessionKey,
@@ -434,30 +478,43 @@ async function resolveReadOnlyToolsEffectiveInventory(
   if (!catalog) {
     return maybeAppendMcpNotice(base, mcpConfig.serverNames, "not-listed");
   }
+  return projectMcpCatalog({ base, catalog, context, workspaceDir: runtime.workspaceDir });
+}
+
+function projectMcpCatalog(params: {
+  base: EffectiveToolInventoryResult;
+  catalog: Parameters<typeof buildBundleMcpToolsFromCatalog>[0]["catalog"];
+  context: TrustedToolsEffectiveContext;
+  workspaceDir: string;
+}): EffectiveToolInventoryResult {
   const projectedMcpTools = buildBundleMcpToolsFromCatalog({
-    catalog,
-    reservedToolNames: base.groups.flatMap((group) => group.tools.map((tool) => tool.id)),
+    catalog: params.catalog,
+    reservedToolNames: params.base.groups.flatMap((group) => group.tools.map((tool) => tool.id)),
+    includeSessionDenied: true,
   });
-  const filteredMcpTools = filterMcpTools({ context, mcpTools: projectedMcpTools });
-  const agentDir = resolveAgentDir(context.cfg, context.agentId);
+  const filteredMcpTools = filterMcpTools({
+    context: params.context,
+    mcpTools: projectedMcpTools,
+  });
+  const agentDir = resolveAgentDir(params.context.cfg, params.context.agentId);
   const runtimeModelContext = resolveEffectiveToolInventoryRuntimeModelContext({
-    cfg: context.cfg,
-    agentId: context.agentId,
+    cfg: params.context.cfg,
+    agentId: params.context.agentId,
     agentDir,
-    workspaceDir: runtime.workspaceDir,
-    modelProvider: context.modelProvider,
-    modelId: context.modelId,
+    workspaceDir: params.workspaceDir,
+    modelProvider: params.context.modelProvider,
+    modelId: params.context.modelId,
   });
   const mcpInventory = buildRuntimeCompatibleMcpToolInventory({
     tools: filteredMcpTools,
-    cfg: context.cfg,
-    workspaceDir: runtime.workspaceDir,
-    modelProvider: context.modelProvider,
-    modelId: context.modelId,
+    cfg: params.context.cfg,
+    workspaceDir: params.workspaceDir,
+    modelProvider: params.context.modelProvider,
+    modelId: params.context.modelId,
     modelApi: runtimeModelContext.modelApi,
     runtimeModel: runtimeModelContext.runtimeModel,
   });
-  return appendMcpInventoryGroups({ base, mcpInventory });
+  return appendMcpInventoryGroups({ base: params.base, mcpInventory });
 }
 
 function resolveTrustedToolsEffectiveContext(params: {
@@ -540,6 +597,8 @@ function resolveTrustedToolsEffectiveContext(params: {
     groupChannel: loaded.entry.groupChannel,
     groupSpace: loaded.entry.space,
     spawnedBy: normalizeOptionalString(loaded.entry.spawnedBy),
+    agentHarnessId: normalizeOptionalString(loaded.entry.agentHarnessId),
+    toolOverrides: loaded.entry.toolOverrides,
     replyToMode: resolveReplyToMode(
       loaded.cfg,
       delivery?.channel ?? origin?.provider,

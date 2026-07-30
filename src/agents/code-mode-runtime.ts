@@ -6,12 +6,12 @@ import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { toCodeModeJsonSafe } from "./code-mode-json.js";
-import { createCodeModeApiVirtualFiles } from "./code-mode-namespaces.js";
+import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import {
   CODE_MODE_SHELL_SOURCE_ERROR,
   isShellLikeCodeModeSource,
 } from "./code-mode-shell-source.js";
-import type { CodeModeWorkerResult as WorkerThreadCodeModeResult } from "./code-mode-worker-types.js";
+import type { CodeModeFailurePhase, CodeModeWorkerThreadResult } from "./code-mode-worker-types.js";
 import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
 
@@ -81,11 +81,13 @@ export type CodeModeHeadlessResult =
     };
 
 export type CodeModeWorkerResult =
-  | Extract<WorkerThreadCodeModeResult, { status: "completed" | "waiting" }>
+  | Extract<CodeModeWorkerThreadResult, { status: "completed" | "waiting" }>
   | {
       status: "failed";
       error: string;
       code: CodeModeFailureCode;
+      failurePhase: CodeModeFailurePhase;
+      bridgeDispatchStarted: boolean;
       output: unknown[];
     };
 
@@ -629,10 +631,10 @@ export function errorMessage(error: unknown): string {
 }
 
 export function createCodeModeApiFilesForRun(
-  catalog: Parameters<typeof createCodeModeApiVirtualFiles>[0],
+  namespaceRuntime: CodeModeNamespaceRuntime,
   swarmEnabled: boolean,
 ) {
-  const files = createCodeModeApiVirtualFiles(catalog);
+  const { apiFiles: files } = namespaceRuntime;
   return swarmEnabled ? files : files.filter((file) => file.path !== "agents.d.ts");
 }
 

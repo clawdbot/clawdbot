@@ -1,13 +1,15 @@
-// Curated Memory home: engine/backend/add-on rows above the embedded memory
-// schema editor, with Dreaming as a sibling tab (see security.ts for the same
-// curated-rows-above-schema shape).
+// Memory destination shell and its merged Settings surface.
 import { html, nothing, type TemplateResult } from "lit";
+import "../../components/agent-select-registration.ts";
+import type { AgentSelectOption } from "../../components/agent-select.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import {
+  renderDocsLink,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsSegmented,
   renderSettingsStatus,
+  renderSettingsToggleRow,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
@@ -23,6 +25,8 @@ import {
 export type MemoryEngineOption = {
   id: string;
   label: string;
+  /** False when config names an engine absent from the current plugin catalog. */
+  available: boolean;
 };
 
 /**
@@ -38,6 +42,9 @@ export type MemoryAddonRow = {
   label: string;
   description: string;
   state: MemoryPluginState;
+  busy: boolean;
+  error: string | null;
+  notice: string | null;
 };
 
 type MemoryViewProps = {
@@ -60,15 +67,28 @@ type MemoryViewProps = {
   backendBusy: boolean;
   onBackendChange: (backend: MemoryBackend) => void;
   addons: readonly MemoryAddonRow[];
+  canToggleAddons: boolean;
+  onAddonChange: (pluginId: string, enabled: boolean) => void;
   pluginsHref: string;
   memoryImportHref: string;
-  /** Embedded schema editor for this tab's slice of the `memory` section. */
+  /** New status-led landing view. */
+  overview: TemplateResult;
+  /** Search and read the selected agent's indexed memory. */
+  memories: TemplateResult;
+  /** Agent-scoped dream diary and scene. */
+  dreams: TemplateResult;
+  /** One embedded editor for every `memory.*` schema field. */
   editor: TemplateResult;
-  /** Dreaming tab body; owns its own agent picker and per-agent reads. */
-  dreaming: TemplateResult;
+  /** Global dreaming controls, sharing runtimeConfig with the editor above. */
+  dreamingSettings: TemplateResult;
+  agentId: string | null;
+  agents: readonly AgentSelectOption[];
+  onAgentChange: (agentId: string | null) => void;
 };
 
 const MEMORY_PANEL_ID = "memory-settings-panel";
+
+const MEMORY_DOCS_URL = "https://docs.openclaw.ai/concepts/memory";
 
 const MEMORY_ENGINE_OFF = "";
 
@@ -101,7 +121,12 @@ function renderEngineSection(props: MemoryViewProps) {
     );
   }
   const options = [
-    ...props.engineOptions.map((option) => ({ value: option.id, label: option.label })),
+    ...props.engineOptions.map((option) => ({
+      value: option.id,
+      label: option.available
+        ? option.label
+        : `${option.label} (${t("memoryPage.engine.unavailable")})`,
+    })),
     { value: MEMORY_ENGINE_OFF, label: t("memoryPage.engine.off") },
   ];
   return renderSettingsSection(
@@ -208,12 +233,40 @@ function renderAddonsSection(props: MemoryViewProps) {
   return renderSettingsSection(
     { title: t("memoryPage.addons.title"), description: t("memoryPage.addons.description") },
     html`
-      ${props.addons.map((addon) =>
-        renderSettingsRow({
-          title: addon.label,
-          description: addon.description,
-          control: renderAddonStatus(addon.state),
-        }),
+      ${props.addons.map(
+        (addon) => html`
+          ${props.canToggleAddons && (addon.state === "enabled" || addon.state === "disabled")
+            ? renderSettingsToggleRow({
+                title: addon.label,
+                ariaLabel: t("memoryPage.addons.toggleAriaLabel", { plugin: addon.label }),
+                description: addon.description,
+                checked: addon.state === "enabled",
+                disabled: addon.busy,
+                onChange: (enabled) => props.onAddonChange(addon.id, enabled),
+              })
+            : renderSettingsRow({
+                title: addon.label,
+                description: addon.description,
+                control: renderAddonStatus(addon.state),
+              })}
+          ${addon.error === null
+            ? nothing
+            : renderSettingsRow({
+                title: t("memoryPage.addons.changeFailed", { plugin: addon.label }),
+                description: addon.error,
+                control: renderSettingsStatus({ kind: "danger", label: t("common.failed") }),
+              })}
+          ${addon.notice === null
+            ? nothing
+            : renderSettingsRow({
+                title: t("pluginsPage.needsAttention"),
+                description: addon.notice,
+                control: renderSettingsStatus({
+                  kind: "warn",
+                  label: t("pluginsPage.needsAttention"),
+                }),
+              })}
+        `,
       )}
       ${renderSettingsRow({
         title: t("memoryPage.addons.manage"),
@@ -225,10 +278,15 @@ function renderAddonsSection(props: MemoryViewProps) {
   );
 }
 
-function renderOverviewTab(props: MemoryViewProps) {
+function renderSettingsTab(props: MemoryViewProps) {
   return html`
     <div class="settings-page">
       ${renderEngineSection(props)} ${renderBackendSection(props)} ${renderAddonsSection(props)}
+      <p class="settings-page__intro">${t("memoryPage.search.intro")}</p>
+    </div>
+    ${props.editor}
+    <div class="settings-page">
+      ${props.dreamingSettings}
       ${renderSettingsSection(
         { title: t("memoryPage.import.title"), description: t("memoryPage.import.description") },
         renderSettingsRow({
@@ -240,36 +298,60 @@ function renderOverviewTab(props: MemoryViewProps) {
         }),
       )}
     </div>
-    ${props.editor}
   `;
 }
 
 export function renderMemory(props: MemoryViewProps) {
   return html`
     <section class="memory-page">
-      ${renderHubTabs<MemoryTab>({
-        id: "memory",
-        active: props.activeTab,
-        tabs: [
-          { value: "overview", label: t("memoryPage.tabs.overview") },
-          { value: "search", label: t("memoryPage.tabs.search") },
-          { value: "dreaming", label: t("memoryPage.tabs.dreaming") },
-        ],
-        ariaLabel: t("memoryPage.tablistLabel"),
-        panelId: MEMORY_PANEL_ID,
-        onSelect: (tab) => props.onTabChange(tab),
-      })}
+      <section class="content-header content-header--page hub-page-header">
+        <div class="hub-page-header__title">
+          <div class="page-title">${t("tabs.memory")}</div>
+          <div class="page-subtitle">
+            ${t("memoryPage.intro")} ${renderDocsLink(MEMORY_DOCS_URL, t("common.learnMore"))}
+          </div>
+        </div>
+        <div class="hub-page-header__tabs">
+          ${renderHubTabs<MemoryTab>({
+            id: "memory",
+            active: props.activeTab,
+            tabs: [
+              { value: "overview", label: t("memoryPage.tabs.overview") },
+              { value: "memories", label: t("memoryPage.tabs.memories") },
+              { value: "dreams", label: t("memoryPage.tabs.dreams") },
+              { value: "settings", label: t("memoryPage.tabs.settings") },
+            ],
+            ariaLabel: t("memoryPage.tablistLabel"),
+            panelId: MEMORY_PANEL_ID,
+            onSelect: (tab) => props.onTabChange(tab),
+          })}
+        </div>
+        <div class="hub-page-header__actions">
+          ${props.activeTab === "settings"
+            ? nothing
+            : html`
+                <div class="agent-scope-control">
+                  <span class="agent-scope-control__label"
+                    >${t("memoryPage.dreaming.agentScope.rowTitle")}</span
+                  >
+                  <openclaw-agent-select
+                    .options=${props.agents}
+                    .value=${props.agentId ?? ""}
+                    .accessibleLabel=${t("memoryPage.dreaming.agentScope.rowTitle")}
+                    .onSelect=${(value: string) => props.onAgentChange(value || null)}
+                  ></openclaw-agent-select>
+                </div>
+              `}
+        </div>
+      </section>
       <div id=${MEMORY_PANEL_ID} class="memory-page__panel" role="tabpanel">
         ${props.activeTab === "overview"
-          ? renderOverviewTab(props)
-          : props.activeTab === "search"
-            ? html`
-                <div class="settings-page">
-                  <p class="settings-page__intro">${t("memoryPage.search.intro")}</p>
-                </div>
-                ${props.editor}
-              `
-            : props.dreaming}
+          ? props.overview
+          : props.activeTab === "memories"
+            ? props.memories
+            : props.activeTab === "dreams"
+              ? props.dreams
+              : renderSettingsTab(props)}
       </div>
     </section>
   `;

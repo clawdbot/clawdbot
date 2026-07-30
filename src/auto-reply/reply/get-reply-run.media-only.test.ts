@@ -1645,6 +1645,12 @@ describe("runPreparedReply media-only handling", () => {
 
     const runPromise = runPreparedReply(
       baseParams({
+        cfg: {
+          session: {},
+          channels: {},
+          agents: { defaults: {} },
+          skills: { workshop: { autonomous: { mode: "off" } } },
+        },
         isNewSession: false,
         sessionId: "session-goal-interrupt",
         sessionEntry: activeEntry,
@@ -1696,6 +1702,12 @@ describe("runPreparedReply media-only handling", () => {
 
     await runPreparedReply(
       baseParams({
+        cfg: {
+          session: {},
+          channels: {},
+          agents: { defaults: {} },
+          skills: { workshop: { autonomous: { mode: "off" } } },
+        },
         isNewSession: false,
         sessionEntry,
         sessionStore,
@@ -1711,6 +1723,12 @@ describe("runPreparedReply media-only handling", () => {
 
     await runPreparedReply(
       baseParams({
+        cfg: {
+          session: {},
+          channels: {},
+          agents: { defaults: {} },
+          skills: { workshop: { autonomous: { mode: "off" } } },
+        },
         isNewSession: false,
         sessionEntry,
         sessionStore,
@@ -1723,6 +1741,42 @@ describe("runPreparedReply media-only handling", () => {
       requireLastRunReplyAgentCall().followupRun.currentInboundContext?.text ?? "",
     ).not.toContain("A reusable workflow");
   });
+
+  it.each(["propose", "auto"] as const)(
+    "suppresses the suggestion nudge in %s mode",
+    async (mode) => {
+      const suggestion = { skillName: "github-pr-workflow", detectedAt: 1 };
+      const sessionEntry: SessionEntry = {
+        sessionId: `skill-suggestion-${mode}`,
+        updatedAt: 1,
+        pendingSkillSuggestion: suggestion,
+      };
+      consumeSessionSkillSuggestionMock.mockResolvedValueOnce({
+        entry: { ...sessionEntry, pendingSkillSuggestion: undefined },
+        suggestion,
+      });
+
+      await runPreparedReply(
+        baseParams({
+          cfg: {
+            session: {},
+            channels: {},
+            agents: { defaults: {} },
+            skills: { workshop: { autonomous: { mode } } },
+          },
+          isNewSession: false,
+          sessionEntry,
+          sessionStore: { "session-key": sessionEntry },
+          storePath: "/tmp/openclaw-session-store.json",
+        }),
+      );
+
+      expect(consumeSessionSkillSuggestionMock).toHaveBeenCalledOnce();
+      expect(
+        requireLastRunReplyAgentCall().followupRun.currentInboundContext?.text ?? "",
+      ).not.toContain("A reusable workflow");
+    },
+  );
   it("treats reset-triggered followup mode as interrupt when the session lane is empty", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");

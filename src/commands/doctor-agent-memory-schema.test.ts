@@ -24,48 +24,31 @@ function createRegisteredAgentDatabase(): {
   return { databasePath, env };
 }
 
-function recreatePreProvenanceMemoryIndexChunks(databasePath: string): void {
+function recreateUnreleasedInlineMemoryMetadata(databasePath: string): void {
   const database = openNodeSqliteDatabase(databasePath);
   try {
     database.exec(`
       PRAGMA foreign_keys = OFF;
-      DROP TABLE memory_index_chunk_provenance;
-      DROP TABLE memory_index_chunks;
-      CREATE TABLE memory_index_chunks (
-        id TEXT PRIMARY KEY,
-        path TEXT NOT NULL,
-        source TEXT NOT NULL DEFAULT 'memory',
-        start_line INTEGER NOT NULL,
-        end_line INTEGER NOT NULL,
-        hash TEXT NOT NULL,
-        model TEXT NOT NULL,
-        text TEXT NOT NULL,
-        embedding TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
-      ) STRICT;
-      INSERT INTO memory_index_chunks VALUES (
-        'pre-provenance-sentinel', 'MEMORY.md', 'memory', 1, 2,
-        'sentinel-hash', 'sentinel-model', 'sentinel text', '[1,0]', 42
-      );
-      CREATE TRIGGER memory_index_chunks_revision_after_insert
+      DROP TABLE memory_index_chunk_recall_metadata;
+      ALTER TABLE memory_index_chunks ADD COLUMN importance INTEGER
+        CHECK (importance IS NULL OR importance BETWEEN 1 AND 10);
+      ALTER TABLE memory_index_chunks ADD COLUMN triggers TEXT;
+      ALTER TABLE memory_index_chunks ADD COLUMN project_key TEXT;
+      CREATE TRIGGER memory_index_chunk_provenance_after_insert
       AFTER INSERT ON memory_index_chunks
       BEGIN
-        UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
+        INSERT OR IGNORE INTO memory_index_chunk_provenance (
+          chunk_id, origin_class, session_kind, observed_at
+        ) VALUES (NEW.id, 'agent', 'unknown', NEW.updated_at);
       END;
-      CREATE TRIGGER memory_index_chunks_revision_after_update
-      AFTER UPDATE ON memory_index_chunks
-      BEGIN
-        UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-      END;
-      CREATE TRIGGER memory_index_chunks_revision_after_delete
-      AFTER DELETE ON memory_index_chunks
-      BEGIN
-        UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-      END;
-      CREATE INDEX idx_memory_index_chunks_path_source
-        ON memory_index_chunks(path, source);
-      CREATE INDEX idx_memory_index_chunks_path ON memory_index_chunks(path);
-      CREATE INDEX idx_memory_index_chunks_source ON memory_index_chunks(source);
+      INSERT INTO memory_index_chunks (
+        id, path, source, start_line, end_line, hash, model, text, embedding,
+        updated_at, importance, triggers, project_key
+      ) VALUES (
+        'pre-provenance-sentinel', 'MEMORY.md', 'memory', 1, 2,
+        'sentinel-hash', 'sentinel-model', 'sentinel text', '[1,0]', 42,
+        9, 'when testing rollback', 'project/key'
+      );
       PRAGMA foreign_keys = ON;
     `);
   } finally {
@@ -106,9 +89,9 @@ afterEach(() => {
 });
 
 describe("doctor agent memory schema repair", () => {
-  it("adds both recall columns, preserves rows, and lists the repair", async () => {
+  it("moves inline recall metadata, preserves rows, and lists the durable repair", async () => {
     const { databasePath, env } = createRegisteredAgentDatabase();
-    recreatePreProvenanceMemoryIndexChunks(databasePath);
+    recreateUnreleasedInlineMemoryMetadata(databasePath);
     const writeNote = vi.fn();
 
     const report = await noteDoctorAgentMemorySchemaHealth(
@@ -120,15 +103,16 @@ describe("doctor agent memory schema repair", () => {
       repaired: [
         {
           agentId: "worker-1",
-          columns: ["importance", "triggers"],
+          columns: ["importance", "triggers", "project_key"],
           path: databasePath,
+          removedTrigger: true,
         },
       ],
       warnings: [],
     });
     expect(writeNote).toHaveBeenCalledWith(
       expect.stringContaining(
-        "Agent worker-1: added memory_index_chunks.importance, memory_index_chunks.triggers",
+        "Agent worker-1: moved memory_index_chunks.importance, memory_index_chunks.triggers, memory_index_chunks.project_key to additive storage; removed memory_index_chunk_provenance_after_insert",
       ),
       "Doctor changes",
     );
@@ -146,17 +130,38 @@ describe("doctor agent memory schema repair", () => {
         "text",
         "embedding",
         "updated_at",
-        "importance",
-        "triggers",
       ]);
-      expect(
-        database.prepare("SELECT id, text, importance, triggers FROM memory_index_chunks").get(),
-      ).toEqual({
+      expect(database.prepare("SELECT id, text FROM memory_index_chunks").get()).toEqual({
         id: "pre-provenance-sentinel",
-        importance: null,
         text: "sentinel text",
-        triggers: null,
       });
+      expect(
+        database
+          .prepare(
+            `SELECT importance, triggers, project_key
+             FROM memory_index_chunk_recall_metadata
+             WHERE chunk_id = 'pre-provenance-sentinel'`,
+          )
+          .get(),
+      ).toEqual({
+        importance: 9,
+        project_key: "project/key",
+        triggers: "when testing rollback",
+      });
+      expect(
+        database
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND name = 'memory_index_chunk_provenance_after_insert'",
+          )
+          .get(),
+      ).toBeUndefined();
+      expect(
+        database
+          .prepare(
+            "SELECT origin_class FROM memory_index_chunk_provenance WHERE chunk_id = 'pre-provenance-sentinel'",
+          )
+          .get(),
+      ).toEqual({ origin_class: "agent" });
     } finally {
       database.close();
     }
@@ -164,7 +169,7 @@ describe("doctor agent memory schema repair", () => {
 
   it("is idempotent on a second doctor fix run", async () => {
     const { databasePath, env } = createRegisteredAgentDatabase();
-    recreatePreProvenanceMemoryIndexChunks(databasePath);
+    recreateUnreleasedInlineMemoryMetadata(databasePath);
     await noteDoctorAgentMemorySchemaHealth({ env, shouldRepair: true }, { note: vi.fn() });
     const writeNote = vi.fn();
 
@@ -198,7 +203,7 @@ describe("doctor agent memory schema repair", () => {
 
   it("continues canonical index maintenance on a pre-provenance database", async () => {
     const { databasePath, env } = createRegisteredAgentDatabase();
-    recreatePreProvenanceMemoryIndexChunks(databasePath);
+    recreateUnreleasedInlineMemoryMetadata(databasePath);
     const drifted = openNodeSqliteDatabase(databasePath);
     try {
       drifted.exec("DROP INDEX idx_agent_cache_updated;");

@@ -72,4 +72,29 @@ describe("resolveSubagentSessionDefaultModel", () => {
       }),
     ).toEqual({ provider: "openai", model: "gpt-5.6-luna" });
   });
+
+  it("resolves agent-scoped subagent aliases", () => {
+    const cfg = makeConfig();
+    const mainAgent = cfg.agents?.list?.[0];
+    if (!mainAgent) {
+      throw new Error("expected main agent config");
+    }
+    mainAgent.models = {
+      "openai/gpt-5.6-sol": { alias: "agent-solver" },
+    };
+    const subagents = cfg.agents?.defaults?.subagents;
+    if (!subagents) {
+      throw new Error("expected subagent defaults");
+    }
+    subagents.model = "agent-solver";
+
+    expect(
+      resolveSubagentSessionDefaultModel({
+        cfg,
+        agentId: "main",
+        sessionEntry: { spawnDepth: 1 },
+        defaultProvider: "anthropic",
+      }),
+    ).toEqual({ provider: "openai", model: "gpt-5.6-sol" });
+  });
 });

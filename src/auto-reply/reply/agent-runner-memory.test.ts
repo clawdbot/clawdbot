@@ -495,6 +495,91 @@ describe("runMemoryFlushIfNeeded", () => {
     );
   });
 
+  it("downgrades an owner-directed flush after a network-tainted embedded turn", async () => {
+    const recordWriteProvenance = vi.fn(async () => {});
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 20_000,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+      recordWriteProvenance,
+    }));
+    const storePath = path.join(rootDir, "tainted-owner-session.json");
+    const sessionKey = "agent:main:main";
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
+    await replaceSqliteTranscriptEvents(scope, [
+      {
+        type: "message",
+        message: { role: "user", content: "Research this", __openclaw: { senderIsOwner: true } },
+      },
+      {
+        type: "message",
+        message: {
+          role: "toolResult",
+          content: "untrusted page",
+          __openclaw: { resultContentSource: "network" },
+        },
+      },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "network-derived answer",
+          __openclaw: { turnTainted: true },
+        },
+      },
+      // Force the bounded SQLite tail to lose the turn boundary and taint marker.
+      // A truncated active turn must remain conservatively tainted.
+      ...Array.from({ length: 512 }, (_, index) => ({
+        type: "custom",
+        data: { index },
+      })),
+    ]);
+    const targetPath = path.join(rootDir, "memory", "2023-11-14.md");
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await fs.writeFile(targetPath, "network-derived memory\n", "utf8");
+      params.onAgentEvent?.({
+        stream: "tool",
+        data: { name: "write", phase: "result", isError: false },
+      });
+      return { payloads: [], meta: {} };
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        workspaceDir: rootDir,
+        sessionId: "session",
+        sessionKey,
+        senderIsOwner: true,
+      }),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(recordWriteProvenance).toHaveBeenCalledWith(
+      expect.objectContaining({ originClass: "untrusted" }),
+    );
+  });
+
   it("revalidates immutable Ultra for each memory-flush fallback candidate", async () => {
     const storePath = path.join(rootDir, "sessions.json");
     const sessionKey = "main";
@@ -2664,7 +2749,117 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.sessionFile).toContain("large-session.jsonl");
   });
 
-  it("skips OpenClaw maintenance when model policy routes a SQLite session to native-compacting claude-cli", async () => {
+  it("byte-guards a Codex runtime session through SQLite semantic compaction", async () => {
+    const storePath = path.join(rootDir, "sqlite-codex-byte-guard.json");
+    const sessionKey = "agent:main:main";
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
+    await replaceSqliteTranscriptEvents(scope, [
+      { message: { role: "user", content: "x".repeat(256) }, type: "message" },
+    ]);
+    expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(10);
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      compactionCount: 0,
+      agentRuntimeOverride: "codex",
+      agentHarnessId: "openclaw",
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const replyOperation = createReplyOperation();
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: { maxActiveTranscriptBytes: "10b" },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId: "session",
+        sessionKey,
+      }),
+      defaultModel: "gpt-5.5",
+      agentCfgContextTokens: 1_000_000,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation,
+    });
+
+    expect(entry?.compactionCount).toBe(1);
+    expect(replyOperation.setPhase).toHaveBeenCalledWith("preflight_compacting");
+    expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
+      agentHarnessId: "openclaw",
+      deferOwningContextEngineCompaction: false,
+      preflightCompactionTrigger: "transcript_bytes",
+      preflightRequired: true,
+      sessionId: "session",
+      sessionKey,
+      trigger: "budget",
+    });
+  });
+
+  it("leaves an under-limit SQLite Codex session to native token compaction", async () => {
+    const storePath = path.join(rootDir, "sqlite-codex-under-byte-guard.json");
+    const sessionKey = "agent:main:main";
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
+    await replaceSqliteTranscriptEvents(scope, [
+      { message: { role: "user", content: "small" }, type: "message" },
+    ]);
+    expect(readTranscriptStatsSync(scope).sizeBytes).toBeLessThan(10 * 1024);
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 347_000,
+      totalTokensFresh: true,
+      compactionCount: 0,
+      agentRuntimeOverride: "codex",
+      agentHarnessId: "openclaw",
+    };
+    const replyOperation = createReplyOperation();
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: { maxActiveTranscriptBytes: "10kb" },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId: "session",
+        sessionKey,
+      }),
+      defaultModel: "gpt-5.5",
+      agentCfgContextTokens: 350_000,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation,
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(replyOperation.setPhase).not.toHaveBeenCalled();
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+    expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps ownsNativeCompaction absolute over the SQLite transcript byte guard", async () => {
     registerClaudeCliBackend(true);
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,

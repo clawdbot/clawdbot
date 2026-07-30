@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -33,6 +34,7 @@ import {
   resolveStoredChatOutboxScope,
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
+import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import { handleChatInputHistoryKey } from "./input-history.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import {
@@ -1546,6 +1548,60 @@ describe("handleSendChat", () => {
     expect(host.lastError).toBe("Chat failed before the run started; try again.");
     expect(host.chatRunId).toBeNull();
   });
+
+  it.each(["error", "timeout"] as const)(
+    "removes only a reducer-owned optimistic turn after a terminal %s ACK",
+    async (status) => {
+      const persistedPeer = {
+        role: "user",
+        content: [{ type: "text", text: "same visible message" }],
+        __openclaw: { id: "peer-user", seq: 1, idempotencyKey: "peer-run:user" },
+      };
+      let rejectedRunId = "";
+      const host = makeHost({
+        requestHandlers: {
+          "chat.send": (params: unknown) => {
+            const payload = requireRecord(params, "terminal chat send payload");
+            rejectedRunId = String(payload.idempotencyKey);
+            const scope = { sessionKey: host.sessionKey };
+            const projection = reduceSessionProjection(
+              getChatSessionProjection(host, host.chatMessages, scope),
+              {
+                type: "sendPending",
+                runId: rejectedRunId,
+                message: {
+                  role: "user",
+                  content: [{ type: "text", text: "same visible message" }],
+                  __openclaw: { idempotencyKey: `${rejectedRunId}:user` },
+                },
+                scope,
+              },
+            );
+            setChatSessionProjection(host, projection);
+            host.chatMessages = [...projection.messages];
+            return { runId: rejectedRunId, status };
+          },
+        },
+        chatMessage: "same visible message",
+        chatMessages: [persistedPeer],
+        sessionKey: "agent:main",
+      });
+
+      await handleSendChat(host);
+
+      expect(host.chatMessages).toStrictEqual([persistedPeer]);
+      expect(host.chatMessage).toBe("same visible message");
+      expect(host.chatQueue).toHaveLength(1);
+      expect(host.chatQueue[0]).toMatchObject({
+        text: "same visible message",
+        sendRunId: rejectedRunId,
+        sendState: "failed",
+      });
+      expect(
+        getChatSessionProjection(host, host.chatMessages, { sessionKey: host.sessionKey }).entries,
+      ).not.toContainEqual(expect.objectContaining({ pendingRunId: rejectedRunId }));
+    },
+  );
 
   it("records visible send timing phases for a normal chat send", async () => {
     const host = makeHost({
@@ -4500,6 +4556,30 @@ describe("handleSendChat", () => {
       expect.objectContaining({ sendAttempts: 1, sendState: "waiting-reconnect" }),
     ]);
     expect(host.chatMessages).toStrictEqual([]);
+  });
+
+  it("coalesces duplicate queued local commands while the first command is running", async () => {
+    const command = createDeferred<{ content: string }>();
+    executeSlashCommandMock.mockImplementation(() => command.promise);
+    const host = makeHost({
+      requestHandlers: {
+        "chat.history": () => idleChatHistory(),
+      },
+    });
+
+    const first = handleSendChat(host, "/compact");
+    await waitForFast(() => expect(executeSlashCommandMock).toHaveBeenCalledOnce());
+    const duplicate = handleSendChat(host, "/compact");
+
+    try {
+      expect(host.chatQueue.filter((item) => item.localCommandName === "compact")).toHaveLength(1);
+      expect(executeSlashCommandMock).toHaveBeenCalledOnce();
+    } finally {
+      command.resolve({ content: "Compaction complete." });
+      await Promise.all([first, duplicate]);
+    }
+
+    expect(executeSlashCommandMock).toHaveBeenCalledOnce();
   });
 
   it("keeps normal prompt text visible as pending until chat.send is acknowledged", async () => {

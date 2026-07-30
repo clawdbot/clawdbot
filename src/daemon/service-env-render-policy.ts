@@ -55,13 +55,17 @@ export function applyManagedServiceEnvRenderPolicy(params: {
   if (managedKeys.size === 0) {
     return;
   }
-  if (launchAgent) {
+  // The caller limits these entries to file-backed SecretRefs active in the current config.
+  // Carry them through both file-backed supervisors or systemd can drop their env file.
+  if (launchAgent || params.platform === "linux") {
     addManagedServiceEnvEntries({
       plan: params.plan,
       entries: params.existingEnvironmentFileEnvironment,
       managedKeys,
       valueSource: "file",
     });
+  }
+  if (launchAgent) {
     addManagedServiceEnvEntries({
       plan: params.plan,
       entries: params.stateDirDotEnvEnvironment,

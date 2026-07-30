@@ -6,7 +6,6 @@ import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-mod
 import { defaultToolStreamExtraParams } from "openclaw/plugin-sdk/provider-stream-shared";
 import { jsonResult } from "openclaw/plugin-sdk/provider-web-search";
 import {
-  applyXaiRuntimeModelCompat,
   buildXaiImageGenerationProvider,
   normalizeXaiModelId,
   resolveXaiTransport,
@@ -22,7 +21,11 @@ import {
   buildXaiProvider,
 } from "./provider-catalog.js";
 import { isXaiProviderId } from "./provider-id.js";
-import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
+import {
+  isModernXaiModel,
+  normalizeXaiResolvedModel,
+  resolveXaiForwardCompatModel,
+} from "./provider-models.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { buildXaiRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 import { buildXaiRealtimeVoiceProvider } from "./realtime-voice-provider.js";
@@ -172,7 +175,7 @@ export default defineSingleProviderPluginEntry({
   id: "xai",
   name: "xAI Plugin",
   description: "Bundled xAI plugin",
-  provider: {
+  provider: (pluginApi) => ({
     label: "xAI",
     aliases: ["x-ai"],
     docsPath: "/providers/xai",
@@ -251,7 +254,10 @@ export default defineSingleProviderPluginEntry({
     },
     ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
     prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
-    wrapStreamFn: wrapXaiProviderStream,
+    wrapStreamFn: (ctx) =>
+      wrapXaiProviderStream(ctx, {
+        clientVersion: pluginApi.runtime.version,
+      }),
     // Provider-specific fallback auth stays owned by the xAI plugin so core
     // auth/discovery code can consume it generically without parsing xAI's
     // private config layout. Callers may receive a real key from the active
@@ -267,7 +273,7 @@ export default defineSingleProviderPluginEntry({
         mode: "api-key" as const,
       };
     },
-    normalizeResolvedModel: ({ model }) => applyXaiRuntimeModelCompat(model),
+    normalizeResolvedModel: ({ model }) => normalizeXaiResolvedModel(model),
     normalizeTransport: ({ provider, api, baseUrl }) =>
       resolveXaiTransport({ provider, api, baseUrl }),
     normalizeModelId: ({ modelId }) => normalizeXaiModelId(modelId),
@@ -276,7 +282,7 @@ export default defineSingleProviderPluginEntry({
     resolveThinkingProfile,
     isModernModelRef: ({ modelId }) => isModernXaiModel(modelId),
     classifyFailoverReason: ({ errorMessage }) => classifyXaiFailoverReason(errorMessage),
-  },
+  }),
   register(api) {
     api.registerWebSearchProvider(createXaiWebSearchProvider());
     api.registerMediaUnderstandingProvider(buildXaiMediaUnderstandingProvider());

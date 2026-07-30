@@ -63,7 +63,13 @@ vi.mock("nostr-tools", async (importOriginal) => {
 });
 
 import { sendBuzzTextOneShot, startBuzzBus } from "./buzz-bus.js";
+import {
+  BUZZ_DIFF_MESSAGE_KIND,
+  BUZZ_INBOUND_MESSAGE_KINDS,
+  type BuzzInboundMessage,
+} from "./message-event.js";
 
+const BUZZ_RICH_MESSAGE_KIND = 40_002;
 const PRIVATE_KEY = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 const SENDER_PRIVATE_KEY = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
 const ACCOUNT_ID = "default";
@@ -175,7 +181,7 @@ describe("Buzz bus lifecycle", () => {
 
   it("deduplicates replayed relay events by event id", async () => {
     relayMocks.auth.mockResolvedValue("ok");
-    const onMessage = vi.fn(async () => {});
+    const onMessage = vi.fn(async (_message: BuzzInboundMessage) => {});
     const bus = await startBuzzBus({
       accountId: ACCOUNT_ID,
       relayUrl: "wss://buzz.example.com",
@@ -200,6 +206,55 @@ describe("Buzz bus lifecycle", () => {
     messageSubscription?.handlers.onevent(event);
 
     await vi.waitFor(() => expect(onMessage).toHaveBeenCalledOnce());
+    await bus.close();
+  });
+
+  it("subscribes to and dispatches every supported Buzz timeline message kind", async () => {
+    relayMocks.auth.mockResolvedValue("ok");
+    const receivedKinds: number[] = [];
+    const onMessage = vi.fn(async (message: BuzzInboundMessage) => {
+      receivedKinds.push(message.kind);
+    });
+    const bus = await startBuzzBus({
+      accountId: ACCOUNT_ID,
+      relayUrl: "wss://buzz.example.com",
+      privateKey: PRIVATE_KEY,
+      channelIds: [CHANNEL_ID],
+      onMessage,
+    });
+    const messageSubscription = relayMocks.subscriptions.find((entry) =>
+      entry.filter.kinds?.includes(9),
+    );
+    expect(messageSubscription?.filter.kinds).toEqual([...BUZZ_INBOUND_MESSAGE_KINDS]);
+
+    const richEvent = finalizeEvent(
+      {
+        kind: BUZZ_RICH_MESSAGE_KIND,
+        created_at: 1_700_000_000,
+        content: "**rich**",
+        tags: [["h", CHANNEL_ID]],
+      },
+      Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex")),
+    );
+    const diffEvent = finalizeEvent(
+      {
+        kind: BUZZ_DIFF_MESSAGE_KIND,
+        created_at: 1_700_000_001,
+        content: "@@ -1 +1 @@\n-old\n+new",
+        tags: [
+          ["h", CHANNEL_ID],
+          ["repo", "https://github.com/openclaw/openclaw"],
+          ["commit", "abcdef1"],
+        ],
+      },
+      Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex")),
+    );
+
+    messageSubscription?.handlers.onevent(richEvent);
+    messageSubscription?.handlers.onevent(diffEvent);
+
+    await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(2));
+    expect(receivedKinds).toEqual([BUZZ_RICH_MESSAGE_KIND, BUZZ_DIFF_MESSAGE_KIND]);
     await bus.close();
   });
 

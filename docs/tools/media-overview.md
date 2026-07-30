@@ -48,6 +48,10 @@ telephony, meetings, browser realtime, and native push-to-talk clients.
     Transcribe inbound voice messages through batch STT or Voice Call
     streaming STT providers.
   </Card>
+  <Card title="Media playback" href="/nodes/media-playback" icon="play">
+    Play assistant audio and video inline across the Control UI and native
+    apps, with managed access and portable playback renditions.
+  </Card>
 </CardGroup>
 
 ## Provider capability matrix
@@ -171,6 +175,7 @@ catalogs returned by the Gateway.
 - [Video generation](/tools/video-generation)
 - [Music generation](/tools/music-generation)
 - [Text-to-speech](/tools/tts)
+- [Media playback](/nodes/media-playback)
 - [Media understanding](/nodes/media-understanding)
 - [Audio nodes](/nodes/audio)
 - [Talk mode](/nodes/talk)

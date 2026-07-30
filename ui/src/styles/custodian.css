@@ -1,3 +1,10 @@
+openclaw-custodian-page {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
 .custodian {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -13,12 +20,73 @@
   margin-inline: auto;
 }
 
+.custodian--setup-required .custodian__column {
+  width: 100%;
+  max-width: none;
+}
+
 .custodian-surface {
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto auto;
   width: 100%;
   height: 100%;
   min-height: 0;
+}
+
+.custodian-surface--setup-required {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.custodian__setup-state {
+  display: flex;
+  width: min(100%, 420px);
+  min-height: 0;
+  margin: auto;
+  padding: clamp(24px, 6vh, 56px) 24px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+}
+
+.custodian__setup-state openclaw-mascot {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.custodian__setup-state h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 22px;
+}
+
+.custodian__setup-state p {
+  max-width: 36ch;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.custodian__setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.custodian-surface--panel .custodian__setup-state {
+  padding: 24px 16px;
+}
+
+.custodian-surface--panel .custodian__setup-state h2 {
+  font-size: 18px;
+}
+
+.custodian-surface--empty-error {
+  grid-template-rows: auto auto auto;
+  align-content: start;
 }
 
 .custodian > openclaw-custodian-surface {
@@ -97,6 +165,39 @@
   color: var(--text);
 }
 
+.custodian__nudge--channel-onboarding {
+  width: 100%;
+  max-width: none;
+  padding: 12px;
+  border-color: var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+}
+
+.custodian__nudge-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.custodian__nudge-copy strong {
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.custodian__nudge-copy span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.custodian__nudge-cta {
+  flex: 0 0 auto;
+  align-self: center;
+}
+
 .custodian__nudge-action,
 .custodian__nudge-dismiss {
   border: 0;
@@ -136,6 +237,17 @@
 .custodian__nudge-dismiss:hover {
   background: var(--bg-hover);
   color: var(--text-strong);
+}
+
+@media (max-width: 640px) {
+  .custodian__nudge--channel-onboarding {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .custodian__nudge-copy {
+    flex-basis: calc(100% - 36px);
+  }
 }
 
 .custodian__option-card {

@@ -120,6 +120,7 @@ describe("chat pane header", () => {
     const { container } = mount({ nativeGateways: nativeGateways(gatewaySnapshot) });
     const rows = container.querySelectorAll(".chat-pane__gateway-item");
     expect(rows).toHaveLength(2);
+    expect(container.querySelectorAll(".chat-pane__gateway-menu-item")).toHaveLength(4);
     expect(rows[0]?.textContent).toContain("Local Gateway");
     expect(rows[0]?.textContent).toContain("primary");
     expect(rows[0]?.querySelector(".chat-pane__gateway-check")).not.toBeNull();
@@ -273,15 +274,17 @@ describe("chat pane header", () => {
     expect(dormant.container.querySelector("openclaw-session-owner-chip")).toBeNull();
   });
 
-  it("renders a resolved owner avatar with the header attribution semantics", async () => {
+  it("renders the durable session actor avatar with the header attribution semantics", async () => {
     const mounted = mount({
       showOwnerChip: true,
-      session: row({ createdActor: { type: "human", id: "profile-ada", label: "Ada" } }),
-      ownerUser: {
-        id: "profile-ada",
-        name: "Ada",
-        avatarUrl: "/api/users/profile-ada/avatar",
-      },
+      session: row({
+        createdActor: {
+          type: "human",
+          id: "profile-ada",
+          label: "Ada",
+          avatarUrl: "/api/users/profile-ada/avatar?v=7",
+        },
+      }),
     });
 
     await vi.waitFor(() => {
@@ -378,6 +381,14 @@ describe("chat pane header", () => {
     });
     const items = multiple.container.querySelectorAll(".chat-pane__branch-item");
     expect(multiple.container.querySelector(".chat-pane__branches-trigger")).not.toBeNull();
+    // wa-popup anchors to the first slot="trigger" element; a display:contents
+    // wrapper (like openclaw-tooltip) has a zero rect and pins the menu to the
+    // window's top-left corner, so the slotted trigger must be the button itself.
+    expect(
+      multiple.container
+        .querySelector('.chat-pane__branches-menu > [slot="trigger"]')
+        ?.classList.contains("chat-pane__branches-trigger"),
+    ).toBe(true);
     expect(items).toHaveLength(2);
     expect(items[0]?.textContent).toContain("Current work");
     expect(items[0]?.getAttribute("data-active")).toBe("true");

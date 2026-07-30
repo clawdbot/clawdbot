@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   })),
   ensureRuntimePluginsLoaded: vi.fn(),
   loadStaticCatalog: vi.fn<LoadStaticCatalog>(async () => []),
+  resolveStaticCatalogModel: vi.fn(() => undefined),
   configuredAgentIds: [] as string[],
   warn: vi.fn(),
   mutationListener: undefined as
@@ -78,6 +79,7 @@ vi.mock("./runtime-plugins.js", () => ({
 vi.mock("./embedded-agent-runner/model.static-catalog.js", () => ({
   loadBundledProviderStaticCatalogContextModels: (...args: Parameters<LoadStaticCatalog>) =>
     mocks.loadStaticCatalog(...args),
+  createBundledStaticCatalogModelResolver: () => mocks.resolveStaticCatalogModel,
 }));
 
 vi.mock("../logging/subsystem.js", () => ({

@@ -188,6 +188,88 @@ describeControlUiE2e("Control UI session transcript search", () => {
     await captureUiProof("04-matching-chat.png");
   });
 
+  it.each([
+    {
+      label: "a later session page cannot be loaded",
+      response: null,
+      message: /Unable to load all sessions for transcript search\./,
+      proofFile: "05-incomplete-roster-error.png",
+    },
+    {
+      label: "the session pagination cursor stops advancing",
+      response: {
+        count: 0,
+        hasMore: true,
+        nextOffset: 50,
+        offset: 50,
+        sessions: [],
+      },
+      message: /Session pagination did not advance during transcript search\./,
+      proofFile: "06-stalled-roster-error.png",
+    },
+  ])("shows a retryable search error when $label", async (testCase) => {
+    const timestamp = Date.parse("2026-07-12T14:30:00.000Z");
+    context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 800, width: 1200 },
+    });
+    page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.search"],
+      methodResponses: {
+        "sessions.list": {
+          cases: [
+            { match: { offset: 50 }, response: testCase.response },
+            {
+              response: {
+                count: 1,
+                defaults: { contextTokens: null, model: null, modelProvider: null },
+                hasMore: true,
+                nextOffset: 50,
+                offset: 0,
+                path: "",
+                sessions: [
+                  {
+                    key: "agent:main:visible",
+                    kind: "direct",
+                    label: "Visible session",
+                    updatedAt: timestamp,
+                  },
+                ],
+                totalCount: 51,
+                ts: timestamp,
+              },
+            },
+          ],
+        },
+        "sessions.search": { results: [] },
+      },
+    });
+
+    await page.goto(`${server?.baseUrl ?? ""}sessions`);
+    const search = page.getByRole("search", { name: "Search transcripts" });
+    const input = search.getByRole("searchbox", { name: "Search thread transcripts" });
+    await input.waitFor({ state: "visible", timeout: 10_000 });
+    await input.fill("needle");
+    await input.press("Enter");
+
+    await page
+      .locator(".sessions-transcript-search__notice--danger")
+      .getByText(testCase.message)
+      .waitFor({ state: "visible", timeout: 10_000 });
+    await page.getByRole("button", { name: "Retry" }).waitFor({ state: "visible" });
+    await expect
+      .poll(async () =>
+        (await gateway.getRequests("sessions.list")).some(
+          (request) => (request.params as { offset?: number } | undefined)?.offset === 50,
+        ),
+      )
+      .toBe(true);
+    expect(await gateway.getRequests("sessions.search")).toHaveLength(0);
+    await captureUiProof(testCase.proofFile);
+  });
+
   it("ignores stale results and exposes indexing and request errors", async () => {
     const timestamp = Date.parse("2026-07-12T14:30:00.000Z");
     context = await browser.newContext({

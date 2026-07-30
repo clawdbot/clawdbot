@@ -523,6 +523,26 @@ describe("detectSetupInference", () => {
       })),
       resolveManifestProviderAuthChoices: () => [
         {
+          pluginId: "google",
+          providerId: "google-gemini-cli",
+          methodId: "oauth",
+          choiceId: "google-gemini-cli",
+          choiceLabel: "Gemini CLI OAuth",
+          groupId: "google",
+          groupLabel: "Google",
+          appGuidedAuth: "oauth",
+        },
+        {
+          pluginId: "google",
+          providerId: "google",
+          methodId: "api-key",
+          choiceId: "gemini-api-key",
+          choiceLabel: "Google Gemini API key",
+          groupId: "google",
+          groupLabel: "Google",
+          appGuidedSecret: true,
+        },
+        {
           pluginId: "local-plugin",
           providerId: "local",
           methodId: "ambient",
@@ -552,7 +572,12 @@ describe("detectSetupInference", () => {
       },
     ]);
     expect(detection.unavailableCandidates).toEqual([
-      expect.objectContaining({ id: "gemini-cli" }),
+      expect.objectContaining({
+        id: "gemini-cli",
+        brandId: "google-gemini-cli",
+        authOptionId: "google-gemini-cli",
+        manualProviderId: "gemini-api-key",
+      }),
       expect.objectContaining({ id: "antigravity-cli" }),
       expect.objectContaining({ id: "pi-cli" }),
       expect.objectContaining({ id: "opencode-cli" }),

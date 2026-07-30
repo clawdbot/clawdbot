@@ -92,6 +92,63 @@ describe("doctor config analysis helpers", () => {
     });
   });
 
+  it.each([
+    {
+      name: "the config root",
+      config: { $include: "./base.json5", unexpected: true },
+      path: [],
+    },
+    {
+      name: "an agent entry identity",
+      config: {
+        agents: {
+          entries: {
+            main: { identity: { $include: "./main-identity.json5" } },
+          },
+        },
+        unexpected: true,
+      },
+      path: ["agents", "entries", "main", "identity"],
+    },
+    {
+      name: "an agent entry",
+      config: {
+        agents: { entries: { main: { $include: "./main-agent.json5" } } },
+        unexpected: true,
+      },
+      path: ["agents", "entries", "main"],
+    },
+    {
+      name: "agent defaults",
+      config: {
+        agents: { defaults: { $include: "./agent-defaults.json5" } },
+        unexpected: true,
+      },
+      path: ["agents", "defaults"],
+    },
+    {
+      name: "gateway config",
+      config: { gateway: { $include: "./gateway.json5" }, unexpected: true },
+      path: ["gateway"],
+    },
+    {
+      name: "an array entry",
+      config: {
+        plugins: { load: { paths: [{ $include: "./plugin-path.json5" }] } },
+        unexpected: true,
+      },
+      path: ["plugins", "load", "paths", 0],
+    },
+  ])("preserves include syntax at $name while stripping unknown keys", ({ config, path }) => {
+    const result = stripUnknownConfigKeys(config as never);
+
+    expect(result.removed).toContain("unexpected");
+    expect(result.removed).not.toContain(formatConfigPath([...path, "$include"]));
+    expect(resolveConfigPathTarget(result.config, path)).toMatchObject({
+      $include: expect.any(String),
+    });
+  });
+
   describe("stripUnknownConfigKeys during update", () => {
     const originalEnv = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
 

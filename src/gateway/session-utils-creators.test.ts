@@ -3,18 +3,20 @@ import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { filterSessionStoreToConfiguredAgents } from "./server-methods/sessions-shared.js";
 import type { GatewayClient } from "./server-methods/types.js";
-import { filterDraftSessionsForClient } from "./session-sharing.js";
+import { createSessionListEntryFilter } from "./session-sharing.js";
 
 const getUserProfileListItem = vi.hoisted(() =>
   vi.fn((profileId: string) => ({
     id: profileId,
     displayName: profileId === "profile-ada" ? "Ada" : "Bob",
+    hasAvatar: profileId === "profile-ada",
+    updatedAt: 42,
   })),
 );
 
 vi.mock("../state/user-profiles.js", () => ({ getUserProfileListItem }));
 
-import { listSessionsFromStore } from "./session-utils.js";
+import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-utils.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -44,13 +46,18 @@ it("returns the complete deterministic creator facet independently of pagination
   expect(result.count).toBe(1);
   expect(result.totalCount).toBe(2);
   expect(result.creators).toEqual([
-    { id: "profile-ada", label: "Ada" },
+    {
+      id: "profile-ada",
+      label: "Ada",
+      avatarUrl: "/api/users/profile-ada/avatar?v=42",
+    },
     { id: "profile-bob", label: "Bob" },
   ]);
   expect(result.sessions[0]?.createdActor).toEqual({
     type: "human",
     id: "profile-ada",
     label: "Ada",
+    avatarUrl: "/api/users/profile-ada/avatar?v=42",
   });
   expect(result.sessions[0]?.archivedBy).toEqual({
     type: "human",
@@ -69,13 +76,15 @@ it("returns the complete deterministic creator facet independently of pagination
   expect(filtered.creators).toEqual(result.creators);
 });
 
-it("preserves legacy list output across visibility, scope, creator, and search filters", () => {
+it("preserves legacy list output across visibility, scope, creator, and search filters", async () => {
   const now = 1_000_000;
   vi.spyOn(Date, "now").mockReturnValue(now);
   getUserProfileListItem.mockImplementation((profileId: string) => ({
     id: profileId,
     displayName:
       profileId === "profile-ada" ? "Ada" : profileId === "profile-bob" ? "Bob" : "Carol",
+    hasAvatar: false,
+    updatedAt: now,
   }));
   const cfg = {
     agents: {
@@ -157,12 +166,13 @@ it("preserves legacy list output across visibility, scope, creator, and search f
       scopes: ["operator.read"],
     },
   } as GatewayClient;
-  const visibleStore = filterDraftSessionsForClient({ client: viewer, store });
-  const configuredStore = filterSessionStoreToConfiguredAgents(cfg, visibleStore);
+  const entryFilter = createSessionListEntryFilter({ client: viewer });
+  const configuredStore = filterSessionStoreToConfiguredAgents(cfg, store);
 
-  const project = (opts: Parameters<typeof listSessionsFromStore>[0]["opts"]) => {
-    const result = listSessionsFromStore({
+  const project = async (opts: Parameters<typeof listSessionsFromStore>[0]["opts"]) => {
+    const result = await listSessionsFromStoreAsync({
       cfg,
+      ...(entryFilter ? { entryFilter } : {}),
       opts,
       store: configuredStore,
       storePath: "/tmp/openclaw-session-filter-parity",
@@ -180,7 +190,12 @@ it("preserves legacy list output across visibility, scope, creator, and search f
   // These exact projections were captured from the pre-refactor chained-filter implementation.
   expect(
     JSON.stringify(
-      project({ archived: "all", includeGlobal: true, includeUnknown: true, search: "needle" }),
+      await project({
+        archived: "all",
+        includeGlobal: true,
+        includeUnknown: true,
+        search: "needle",
+      }),
     ),
   ).toBe(
     JSON.stringify({
@@ -198,7 +213,7 @@ it("preserves legacy list output across visibility, scope, creator, and search f
   );
   expect(
     JSON.stringify(
-      project({
+      await project({
         agentId: "main",
         archived: "all",
         creatorId: "profile-bob",

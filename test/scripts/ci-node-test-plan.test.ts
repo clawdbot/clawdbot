@@ -292,6 +292,12 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       // default scales with the runner class.
       OPENCLAW_VITEST_MAX_WORKERS: "2",
     });
+    expect(
+      compact.flatMap((shard) => shard.groups).find((group) => group.shard_name === "agentic-cli")
+        ?.env,
+    ).toEqual({
+      OPENCLAW_VITEST_MAX_WORKERS: "2",
+    });
     const startupCoreJob = compact.find((shard) =>
       shard.groups.some((group) => group.shard_name === "agentic-control-plane-startup-core"),
     );

@@ -1,9 +1,19 @@
 // @vitest-environment node
 // Control UI tests cover application-owned overlay races.
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
-import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
+import type { ApplicationGatewaySnapshot } from "./gateway.ts";
+import {
+  approval,
+  client,
+  createGatewayHarness,
+  deferred,
+  flushMicrotasks,
+  registerOverlayPairingAccessTests,
+  type RequestFn,
+} from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
+import { UPDATE_HANDOFF_STARTED_REASON } from "./update-overlay-helpers.ts";
 
 vi.mock("../build-info.ts", () => ({
   controlUiVersionDiffersFrom: (gatewayVersion: string | undefined) =>
@@ -16,110 +26,30 @@ vi.mock("../lib/nodes/index.ts", () => ({
   peekStoredDeviceIdentityId: peekStoredDeviceIdentityIdMock,
 }));
 
-type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
-const VERIFICATION_POLL_MS = 250;
+const HANDOFF_POLL_MS = 1_000;
+const RESTART_VERIFICATION_TIMEOUT_MS = 10_000;
 
-function deferred<T = unknown>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
+function installUpdateTranslations() {
+  const translations: Record<string, string> = {
+    "updates.coalescedRestart":
+      "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
+    "updates.status": "Update {status}: {reason}. {guidance}",
+    "updates.failureReasons.managedServiceHandoffAlreadyRunning":
+      "Another managed update is already running. Wait for it to complete, then refresh update status.",
+    "updates.verificationFailedWithVersions":
+      "Update installed but running version did not change — restart may have been blocked. Expected v{expectedVersion}, running v{actualVersion}.",
+    "updates.outcomeUnknown":
+      "The update request may have been accepted, but the Gateway did not report a final result after reconnect. Run `openclaw update status` before retrying.",
+  };
+  return vi.spyOn(i18n, "t").mockImplementation((key, params) => {
+    const template = translations[key] ?? key;
+    return template.replace(/\{(\w+)\}/g, (_match, name: string) => params?.[name] ?? `{${name}}`);
   });
-  return { promise, reject, resolve };
 }
 
-function approval(id: string, createdAtMs: number) {
-  return {
-    id,
-    createdAtMs,
-    expiresAtMs: Date.now() + 60_000,
-    request: { command: `echo ${id}` },
-  };
-}
-
-function createGatewayHarness(
-  initialClient: GatewayBrowserClient | null,
-  initialConnected = initialClient !== null,
-) {
-  let snapshot: ApplicationGatewaySnapshot = {
-    assistantAgentId: "main",
-    client: initialClient,
-    phase: initialConnected ? "connected" : "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    lastError: null,
-    lastErrorCode: null,
-    sessionKey: "main",
-  };
-  const snapshotListeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
-  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
-  const connect = vi.fn();
-  const gateway = {
-    get snapshot() {
-      return snapshot;
-    },
-    connection: { gatewayUrl: "ws://gateway.test", password: "", token: "", bootstrapToken: "" },
-    eventLog: [],
-    connect,
-    setSessionKey() {},
-    start() {},
-    stop() {},
-    subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
-      snapshotListeners.add(listener);
-      return () => snapshotListeners.delete(listener);
-    },
-    subscribeEventLog() {
-      return () => {};
-    },
-    subscribeEvents(listener: (event: GatewayEventFrame) => void) {
-      eventListeners.add(listener);
-      return () => eventListeners.delete(listener);
-    },
-  } satisfies ApplicationGateway;
-  return {
-    emitApproval(id: string, createdAtMs: number) {
-      const event: GatewayEventFrame = {
-        event: "exec.approval.requested",
-        payload: approval(id, createdAtMs),
-        type: "event",
-      };
-      for (const listener of eventListeners) {
-        listener(event);
-      }
-    },
-    emitSystemApproval(id: string, createdAtMs: number) {
-      const event: GatewayEventFrame = {
-        event: "openclaw.approval.requested",
-        payload: {
-          id,
-          createdAtMs,
-          expiresAtMs: Date.now() + 60_000,
-          request: {
-            title: "OpenClaw change",
-            description: "Set gateway.port to 19001",
-            command: "Set gateway.port to 19001",
-            proposalHash: "a".repeat(64),
-            allowedDecisions: ["allow-once", "deny"],
-          },
-        },
-        type: "event",
-      };
-      for (const listener of eventListeners) {
-        listener(event);
-      }
-    },
-    gateway,
-    connect,
-    update(next: Partial<ApplicationGatewaySnapshot>) {
-      snapshot = { ...snapshot, ...next };
-      for (const listener of snapshotListeners) {
-        listener(snapshot);
-      }
-    },
-  };
-}
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("device-auth upgrade migration", () => {
   beforeEach(() => {
@@ -299,16 +229,6 @@ describe("device-auth upgrade migration", () => {
   });
 });
 
-function client(request: RequestFn): GatewayBrowserClient {
-  return { request } as unknown as GatewayBrowserClient;
-}
-
-async function flushMicrotasks() {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
 describe("Control UI refresh nudge", () => {
   it("waits for a reconnect before flagging a version mismatch", () => {
     const gatewayClient = client(async () => []);
@@ -363,6 +283,55 @@ describe("Control UI refresh nudge", () => {
 });
 
 describe("application approval overlays", () => {
+  it("keeps no-auth approvals readable without granting resolution authority", async () => {
+    const request = vi.fn<RequestFn>((method) =>
+      Promise.resolve(method.endsWith(".list") ? [] : { ok: true }),
+    );
+    const harness = createGatewayHarness(client(request));
+    harness.update({ hello: null });
+    const overlays = createApplicationOverlays(harness.gateway);
+    await flushMicrotasks();
+
+    harness.emitApproval("approval-review-only", 1_000);
+    await overlays.decideApproval("allow-once", "approval-review-only");
+
+    expect(request).toHaveBeenCalledWith("exec.approval.list", {});
+    expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
+      "approval-review-only",
+    ]);
+    expect(overlays.snapshot.approvalBusy).toBe(false);
+    expect(
+      request.mock.calls.some(
+        ([method]) => method === "exec.approval.resolve" || method === "approval.resolve",
+      ),
+    ).toBe(false);
+    overlays.dispose();
+  });
+
+  it.each([
+    { name: "reviewer", scopes: ["operator.approvals"] },
+    { name: "administrator", scopes: ["operator.admin"] },
+  ])("resolves a queued approval with an authenticated $name grant", async ({ scopes }) => {
+    const request = vi.fn<RequestFn>((method) =>
+      Promise.resolve(method.endsWith(".list") ? [] : { ok: true }),
+    );
+    const harness = createGatewayHarness(client(request));
+    harness.update({
+      hello: { auth: { role: "operator", scopes } } as ApplicationGatewaySnapshot["hello"],
+    });
+    const overlays = createApplicationOverlays(harness.gateway);
+    await flushMicrotasks();
+    harness.emitApproval("approval-authorized", 1_000);
+
+    await overlays.decideApproval("allow-once", "approval-authorized");
+
+    expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
+      id: "approval-authorized",
+      decision: "allow-once",
+    });
+    overlays.dispose();
+  });
+
   it.each([
     { name: "read-only", scopes: ["operator.read"] },
     { name: "write-only", scopes: ["operator.write"] },
@@ -468,6 +437,132 @@ describe("application approval overlays", () => {
     firstList.resolve([approval("approval-stale", 1_000)]);
     await flushMicrotasks();
     expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual(["approval-current"]);
+    overlays.dispose();
+  });
+
+  it("rejects a retained approval action after same-client approval access is revoked", async () => {
+    const request = vi.fn<RequestFn>((method) =>
+      Promise.resolve(method.endsWith(".list") ? [] : { ok: true }),
+    );
+    const harness = createGatewayHarness(client(request));
+    harness.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.approvals"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    const overlays = createApplicationOverlays(harness.gateway);
+    await flushMicrotasks();
+    harness.emitApproval("approval-retired", 1_000);
+
+    harness.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.read"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await overlays.decideApproval("allow-once", "approval-retired");
+
+    expect(overlays.snapshot.approvalQueue).toEqual([]);
+    expect(request.mock.calls.some(([method]) => method === "exec.approval.resolve")).toBe(false);
+    overlays.dispose();
+  });
+
+  it("does not let a revoked approval decision release a restored decision", async () => {
+    const staleResolution = deferred();
+    const currentResolution = deferred();
+    let resolutionCount = 0;
+    const request = vi.fn<RequestFn>((method) => {
+      if (method.endsWith(".list")) {
+        return Promise.resolve([]);
+      }
+      resolutionCount += 1;
+      return resolutionCount === 1 ? staleResolution.promise : currentResolution.promise;
+    });
+    const harness = createGatewayHarness(client(request));
+    harness.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.approvals"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    const overlays = createApplicationOverlays(harness.gateway);
+    await flushMicrotasks();
+    harness.emitApproval("approval-stale", 1_000);
+    const staleDecision = overlays.decideApproval("allow-once");
+
+    harness.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.read"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    harness.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.approvals"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await flushMicrotasks();
+    harness.emitApproval("approval-current", 2_000);
+    const currentDecision = overlays.decideApproval("deny");
+
+    staleResolution.resolve({ ok: true });
+    await staleDecision;
+    expect(overlays.snapshot.approvalBusy).toBe(true);
+    expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual(["approval-current"]);
+
+    currentResolution.resolve({ ok: true });
+    await currentDecision;
+    expect(overlays.snapshot.approvalBusy).toBe(false);
+    expect(overlays.snapshot.approvalQueue).toEqual([]);
+    overlays.dispose();
+  });
+
+  it("retires a grant-only downgrade without clearing the readable approval queue", async () => {
+    const staleResolution = deferred();
+    const currentResolution = deferred();
+    let resolutionCount = 0;
+    const request = vi.fn<RequestFn>((method) => {
+      if (method.endsWith(".list")) {
+        return Promise.resolve([]);
+      }
+      resolutionCount += 1;
+      return resolutionCount === 1 ? staleResolution.promise : currentResolution.promise;
+    });
+    const harness = createGatewayHarness(client(request));
+    harness.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.approvals"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    const overlays = createApplicationOverlays(harness.gateway);
+    await flushMicrotasks();
+    harness.emitApproval("approval-stale-grant", 1_000);
+    const staleDecision = overlays.decideApproval("allow-once", "approval-stale-grant");
+
+    harness.update({ hello: null });
+    expect(overlays.snapshot.approvalBusy).toBe(false);
+    expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
+      "approval-stale-grant",
+    ]);
+    harness.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.approvals"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    harness.emitApproval("approval-current-grant", 2_000);
+    const currentDecision = overlays.decideApproval("deny", "approval-current-grant");
+
+    staleResolution.resolve({ ok: true });
+    await staleDecision;
+    expect(overlays.snapshot.approvalBusy).toBe(true);
+    expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
+      "approval-stale-grant",
+      "approval-current-grant",
+    ]);
+
+    currentResolution.resolve({ ok: true });
+    await currentDecision;
+    expect(overlays.snapshot.approvalBusy).toBe(false);
+    expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
+      "approval-stale-grant",
+    ]);
     overlays.dispose();
   });
 
@@ -716,7 +811,31 @@ describe("application approval overlays", () => {
   });
 });
 
+registerOverlayPairingAccessTests();
+
 describe("application update overlays", () => {
+  it.each([
+    { name: "read-only", scopes: ["operator.read"] },
+    { name: "write-only", scopes: ["operator.write"] },
+    { name: "approval-only", scopes: ["operator.approvals"] },
+    { name: "explicitly ungranted", scopes: [] },
+  ])("rejects an update request from a $name operator", async ({ scopes }) => {
+    const request = vi.fn<RequestFn>(() => Promise.resolve({ ok: true }));
+    const drainConfigWrites = vi.fn(async () => undefined);
+    const harness = createGatewayHarness(client(request));
+    harness.update({
+      hello: { auth: { role: "operator", scopes } } as ApplicationGatewaySnapshot["hello"],
+    });
+    const overlays = createApplicationOverlays(harness.gateway, { drainConfigWrites });
+
+    await overlays.runUpdate();
+
+    expect(request).not.toHaveBeenCalledWith("update.run", {});
+    expect(drainConfigWrites).not.toHaveBeenCalled();
+    expect(overlays.snapshot.updateRunning).toBe(false);
+    overlays.dispose();
+  });
+
   it("drains config writes after suspending and before issuing update.run", async () => {
     const order: string[] = [];
     const request = vi.fn<RequestFn>().mockImplementation(async (method) => {
@@ -744,6 +863,7 @@ describe("application update overlays", () => {
   });
 
   it("surfaces a coalesced restart while reconnect verification remains active", async () => {
+    installUpdateTranslations();
     const request = vi.fn<RequestFn>().mockResolvedValue({
       ok: true,
       restart: { coalesced: true },
@@ -785,6 +905,7 @@ describe("application update overlays", () => {
   });
 
   it("reports a concurrent managed update as rejected", async () => {
+    installUpdateTranslations();
     const request = vi.fn<RequestFn>().mockResolvedValue({
       ok: false,
       handoff: { status: "already-running" },
@@ -806,7 +927,7 @@ describe("application update overlays", () => {
     overlays.dispose();
   });
 
-  it("verifies on reconnect and survives updates within the connected epoch", async () => {
+  it("promotes restart health polling to the managed handoff budget", async () => {
     vi.useFakeTimers();
     let statusRequests = 0;
     const request = vi.fn<RequestFn>((method) => {
@@ -822,7 +943,7 @@ describe("application update overlays", () => {
       if (method === "update.status") {
         statusRequests += 1;
         return Promise.resolve(
-          statusRequests === 1
+          statusRequests <= 11
             ? {
                 sentinel: {
                   kind: "update",
@@ -853,15 +974,86 @@ describe("application update overlays", () => {
       expect(statusRequests).toBe(1);
 
       harness.update({ sessionKey: "agent:main:next" });
-      await vi.advanceTimersByTimeAsync(VERIFICATION_POLL_MS);
+      await vi.advanceTimersByTimeAsync(RESTART_VERIFICATION_TIMEOUT_MS);
       await flushMicrotasks();
 
-      expect(statusRequests).toBe(2);
+      expect(statusRequests).toBe(11);
+      expect(overlays.snapshot.updateReconciliationPending).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(HANDOFF_POLL_MS);
+      await flushMicrotasks();
+
+      expect(statusRequests).toBe(12);
       expect(overlays.snapshot.updateStatusBanner).toBeNull();
       expect(overlays.snapshot.updateReconciliationPending).toBe(false);
     } finally {
       overlays.dispose();
       vi.useRealTimers();
+    }
+  });
+
+  it("falls back to updateAvailable.latestVersion for post-handoff version verification", async () => {
+    installUpdateTranslations();
+    let statusRequests = 0;
+    const request = vi.fn<RequestFn>((method) => {
+      if (method.endsWith(".list")) {
+        return Promise.resolve([]);
+      }
+      if (method === "update.run") {
+        return Promise.resolve({
+          ok: true,
+          handoff: { status: "started" },
+          result: {
+            status: "skipped",
+            reason: UPDATE_HANDOFF_STARTED_REASON,
+          },
+        });
+      }
+      if (method === "update.status") {
+        statusRequests += 1;
+        return Promise.resolve({
+          sentinel: {
+            kind: "update",
+            status: "ok",
+            stats: { after: { version: "1.0.0" } },
+          },
+        });
+      }
+      return Promise.resolve({});
+    });
+    const gatewayClient = client(request);
+    const harness = createGatewayHarness(gatewayClient);
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    try {
+      harness.update({
+        hello: {
+          server: { version: "1.0.0" },
+          snapshot: {
+            updateAvailable: {
+              currentVersion: "1.0.0",
+              latestVersion: "2.0.0",
+              channel: "stable",
+            },
+          },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+
+      await overlays.runUpdate();
+      expect(overlays.snapshot.updateReconciliationPending).toBe(true);
+      expect(overlays.snapshot.updateStatusBanner).toBeNull();
+
+      harness.update({ phase: "stopped" });
+      harness.update({ phase: "connected" });
+      await flushMicrotasks();
+      expect(statusRequests).toBe(1);
+      expect(overlays.snapshot.updateReconciliationPending).toBe(false);
+      expect(overlays.snapshot.updateStatusBanner).toEqual({
+        tone: "danger",
+        text: expect.stringContaining("Expected v2.0.0, running v1.0.0"),
+      });
+    } finally {
+      overlays.dispose();
     }
   });
 });

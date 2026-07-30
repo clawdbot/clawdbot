@@ -38,7 +38,6 @@ type CodeModeRunState = {
   output: unknown[];
   // Retain all output for cumulative limits, but never replay blocks already returned to the model.
   deliveredOutputCount: number;
-  createdAt: number;
   expiresAt: number;
   agentWaitRetainUntil?: number;
   runtime: ToolSearchRuntime;
@@ -107,6 +106,14 @@ export function disposeCodeModeRun(runId: string): void {
   scheduleActiveRunExpiry();
 }
 
+/** Cancel suspended bridge work before its Gateway-owned runtimes disappear. */
+export function disposeAllCodeModeRuns(): void {
+  activeRuns.forEach((state) => cancelPendingBridgeStates(state.pending));
+  activeRuns.clear();
+  resumingRunIds.clear();
+  scheduleActiveRunExpiry();
+}
+
 /** Advance the snapshot frontier before exposing output to a wait observer. */
 export function takeUndeliveredCodeModeRunOutput(state: CodeModeRunState): unknown[] {
   const output = state.output.slice(state.deliveredOutputCount);
@@ -151,16 +158,13 @@ export function waitForPendingBridgeSettlement(
   settlementMode: CodeModeSettlementMode,
 ): Promise<void> {
   const required = pendingBridgeStatesForSettlement(pending, settlementMode);
+  const outstanding = required.filter((entry) => !entry.settled);
   // Workers reject hostless pending guests; headless execution also validates
   // the frontier before reaching this shared settlement helper.
   if (
-    required.length === 0 ||
-    (settlementMode.kind === "awaiting" && required.some((entry) => entry.settled))
+    outstanding.length === 0 ||
+    (settlementMode.kind === "awaiting" && outstanding.length !== required.length)
   ) {
-    return Promise.resolve();
-  }
-  const outstanding = required.filter((entry) => !entry.settled);
-  if (outstanding.length === 0) {
     return Promise.resolve();
   }
   const settlement =
@@ -370,7 +374,6 @@ export function storeSnapshotState(params: {
     replaySafe: params.replaySafe,
     output: params.output,
     deliveredOutputCount: params.output.length,
-    createdAt: now,
     expiresAt,
     agentWaitRetainUntil,
     runtime: params.runtime,
