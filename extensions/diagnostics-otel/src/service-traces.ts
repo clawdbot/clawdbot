@@ -11,10 +11,7 @@ import type {
   DiagnosticTraceContext,
 } from "../api.js";
 import { redactOtelAttributes } from "./service-attributes.js";
-import {
-  MAX_RETAINED_TRUSTED_SPAN_CONTEXTS,
-  RETAINED_TRUSTED_SPAN_CONTEXT_MAX_AGE_MS,
-} from "./service-constants.js";
+import { MAX_RETAINED_TRUSTED_SPAN_CONTEXTS } from "./service-constants.js";
 import {
   contextForTraceContext,
   normalizedTrustedTraceContext,
@@ -28,13 +25,12 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     string,
     { span: ReturnType<typeof tracer.startSpan>; spanId: string; owner: TrustedSpanAliasOwner }
   >();
-  // Translates a completed lifecycle span's diagnostic span id to the real OTel span
-  // context so late children still attach to the span we exported. Children of a long
-  // turn arrive many ticks later, so the horizon must outlast a whole turn; past it a
-  // straggler would stretch its parent's reported duration instead.
+  // Keeps a completed lifecycle span's real OTel context for late children.
+  // Ended contexts remain valid parents without changing their span duration.
+  // Entries live until capacity eviction or service stop.
   const retainedTrustedSpanContexts = new Map<
     string,
-    { spanContext: SpanContext; retainedAtMs: number; owner?: TrustedSpanAliasOwner }
+    { spanContext: SpanContext; owner?: TrustedSpanAliasOwner }
   >();
   const stopActiveTrustedSpans = () => {
     const stopAt = Date.now();
@@ -128,14 +124,6 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     // Keys carry the diagnostic trace id, so a hit is already trace-correct; comparing
     // against the stored OTel trace id would wrongly reject root lifecycle spans.
     if (!retained) {
-      return undefined;
-    }
-    // Aged out lazily rather than on a timer: a timer that fires mid-turn is what
-    // silently split traces before, and an expired parent would only skew its duration.
-    if (Date.now() - retained.retainedAtMs > RETAINED_TRUSTED_SPAN_CONTEXT_MAX_AGE_MS) {
-      retainedTrustedSpanContexts.delete(
-        retainedTrustedSpanContextKey(traceContext.traceId, spanId, retained.owner),
-      );
       return undefined;
     }
     if (retained.owner && !sameTrustedSpanAliasOwner(retained.owner, owner)) {
@@ -298,9 +286,9 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
   ) => {
     retainedTrustedSpanContexts.set(retainedTrustedSpanContextKey(traceId, spanId, owner), {
       spanContext,
-      retainedAtMs: Date.now(),
       ...(owner ? { owner } : {}),
     });
+    // Map iteration is insertion-ordered, so this removes the oldest mapping first.
     while (retainedTrustedSpanContexts.size > MAX_RETAINED_TRUSTED_SPAN_CONTEXTS) {
       const oldestKey = retainedTrustedSpanContexts.keys().next().value;
       if (!oldestKey) {

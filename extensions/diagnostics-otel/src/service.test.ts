@@ -191,10 +191,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { emitDiagnosticEvent } from "../api.js";
-import {
-  MAX_RETAINED_TRUSTED_SPAN_CONTEXTS,
-  RETAINED_TRUSTED_SPAN_CONTEXT_MAX_AGE_MS,
-} from "./service-constants.js";
+import { MAX_RETAINED_TRUSTED_SPAN_CONTEXTS } from "./service-constants.js";
 import { createDiagnosticsOtelService } from "./service.js";
 import {
   CHILD_SPAN_ID,
@@ -218,8 +215,8 @@ import {
 function numberedSpanId(index: number) {
   return (index + 0x1000).toString(16).padStart(16, "0");
 }
-// Comfortably past the retention window a late child used to depend on.
-const LATE_CHILD_RETENTION_ELAPSED_MS = 6_000;
+// Longer than the default 30-minute background exec timeout.
+const LATE_CHILD_ELAPSED_MS = 30 * 60_000 + 1_000;
 const PROTO_KEY = "__proto__";
 const MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS = 128 * 1024;
 const OTEL_TRUNCATED_SUFFIX_MAX_CHARS = 20;
@@ -3654,10 +3651,9 @@ describe("diagnostics-otel service", () => {
     );
   });
 
-  // Real turns run far longer than any retention window, so children can be
-  // dispatched long after run.completed ended the parent span. A missed parent
-  // lookup makes OTel mint a fresh trace id, silently splitting the turn into
-  // one-span traces, so the link must not depend on elapsed time.
+  // Background commands can finish long after run.completed ended the parent span.
+  // A missed parent lookup makes OTel mint a fresh trace id, silently splitting the
+  // turn into one-span traces, so the link must not depend on elapsed time.
   test.each([
     [
       "openclaw.model.call",
@@ -3679,12 +3675,9 @@ describe("diagnostics-otel service", () => {
       },
     ],
   ] as const)(
-    "parents late %s spans into the run trace after retention elapses",
+    "parents late %s spans into the run trace after more than 30 minutes",
     async (spanName, childEvent) => {
-      // Fake setTimeout so any retained-context timer can be advanced, and Date so a
-      // Date.now()-based lazy expiry cannot pass either. setImmediate stays real so the
-      // diagnostic queue keeps draining. This test asserts no timings itself.
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      vi.useFakeTimers({ toFake: ["Date"] });
       try {
         await startOtelService({ traces: true, metrics: true });
 
@@ -3692,7 +3685,7 @@ describe("diagnostics-otel service", () => {
         const runSpanContext = spanByName("openclaw.run").spanContext();
         emitRunCompleted();
 
-        vi.advanceTimersByTime(LATE_CHILD_RETENTION_ELAPSED_MS);
+        vi.setSystemTime(Date.now() + LATE_CHILD_ELAPSED_MS);
         await flushDiagnosticEvents();
         await waitForDiagnosticEventsDrained();
         await flushDiagnosticEvents();
@@ -3708,33 +3701,6 @@ describe("diagnostics-otel service", () => {
       }
     },
   );
-
-  // Past the horizon a straggler would only stretch its parent's reported duration, so
-  // it starts its own trace instead. The window must stay far above a real turn.
-  test("stops parenting late children once the retention horizon has passed", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    try {
-      await startOtelService({ traces: true, metrics: true });
-
-      emitRunStarted();
-      emitRunCompleted();
-      vi.advanceTimersByTime(RETAINED_TRUSTED_SPAN_CONTEXT_MAX_AGE_MS + 1_000);
-      await flushDiagnosticEvents();
-      telemetryState.tracer.startSpan.mockClear();
-
-      emitTrustedDiagnosticEvent({
-        type: "model.call.completed",
-        ...MODEL_CALL_FIXTURE,
-        durationMs: 80,
-        trace: createTestTrace(MODEL_CALL_SPAN_ID, CHILD_SPAN_ID),
-      });
-      await flushDiagnosticEvents();
-
-      expect(startedSpanParentContexts("openclaw.model.call")[0]).toBeUndefined();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 
   // Retained contexts outlive the turn, so this bound is what keeps a long-lived
   // gateway from growing the map without limit.
