@@ -10,24 +10,17 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { completionRequiresMessageToolDelivery } from "../auto-reply/reply/completion-delivery-policy.js";
-import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-loaded.js";
-import type { ChannelId } from "../channels/plugins/types.public.js";
-import { routeFromConversationRef, routeToDeliveryFields } from "../channels/route-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
-import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { sourceDeliveryTargetsMatch } from "../infra/outbound/source-delivery-plan.js";
 import { scheduleSessionDelivery } from "../infra/session-delivery-queue-runtime.js";
 import {
   enqueueClaimedSessionDelivery,
   releaseSessionDeliveryClaim,
-  type SessionDeliveryRoute,
 } from "../infra/session-delivery-queue.js";
 import { normalizeMediaReferenceForComparison } from "../media/media-reference-comparison.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
-import { normalizeAccountId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   isAgentMediatedCompletionSourceTool,
@@ -41,23 +34,31 @@ import {
   parseCronRunScopeSuffix,
 } from "../sessions/session-key-utils.js";
 import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
-import { mergeDeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { sessionDeliveryChannel } from "../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
-  isDeliverableMessageChannel,
   isGatewayMessageChannel,
-  isInternalMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
-import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
+import { resolveDefaultAgentId } from "./agent-scope-config.js";
 import {
+  collectAutomaticDeliveredMediaUrls,
   collectDeliveredMediaUrls,
   collectMessagingToolDeliveredMediaUrls,
   getAgentCommandDeliveryFailure,
   getGatewayAgentResult,
+  hasAmbiguousPayloadSendBeforeError,
+  hasCommittedOutboundDeliveryEvidence,
+  hasIncompletePartialPayloadOutcomeEvidence,
   hasMessagingToolDeliveryEvidence,
-  hasVisibleAgentPayload,
+  hasPayloadDeliveryOutcomes,
+  hasPayloadOutcomeSendEvidence,
+  hasSuppressedPayloadDeliveryStatus,
 } from "./embedded-agent-runner/delivery-evidence.js";
+import {
+  hasIntentionalSilentAgentPayload,
+  hasVisibleAgentPayload,
+} from "./embedded-agent-runner/message-visibility.js";
 import type { EmbeddedAgentQueueMessageOptions } from "./embedded-agent-runner/run-state.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/runs.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
@@ -67,9 +68,7 @@ import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./i
 import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 import {
   callGateway,
-  createBoundDeliveryRouter,
   dispatchGatewayMethodInProcess,
-  getGlobalHookRunner,
   isEmbeddedAgentRunActive,
   isEmbeddedRunAbandoned,
   getRuntimeConfig,
@@ -78,7 +77,6 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
   resolveAgentIdFromSessionKey,
-  resolveConversationIdFromTargets,
   resolveExternalBestEffortDeliveryTarget,
   resolveQueueSettings,
   resolveStorePath,
@@ -88,10 +86,14 @@ import {
   runSubagentAnnounceDispatch,
   type SubagentAnnounceDeliveryResult,
 } from "./subagent-announce-dispatch.js";
-import type { DeliveryContext } from "./subagent-announce-origin.js";
+import {
+  inferDeliveryTargetChatType,
+  resolveCompletionDeliveryOrigins,
+  resolveGeneratedMediaSessionDeliveryRoute,
+  type DeliveryContext,
+} from "./subagent-announce-origin.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
-import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 type SubagentAnnounceDeliveryDeps = {
@@ -102,6 +104,7 @@ type SubagentAnnounceDeliveryDeps = {
     isActive: boolean;
   };
   isRequesterSessionAbandoned: (requesterSessionKey: string, sessionId?: string) => boolean;
+  loadSessionEntry: typeof loadSessionEntry;
   loadRequesterSessionEntry: typeof loadRequesterSessionEntry;
   queueEmbeddedAgentMessageWithOutcome: (
     sessionId: string,
@@ -125,6 +128,7 @@ const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
   },
   isRequesterSessionAbandoned: (requesterSessionKey, sessionId) =>
     isEmbeddedRunAbandoned({ sessionKey: requesterSessionKey, sessionId }),
+  loadSessionEntry,
   loadRequesterSessionEntry,
   queueEmbeddedAgentMessageWithOutcome: queueEmbeddedAgentMessageWithOutcomeAsync,
   sendMessage,
@@ -191,46 +195,6 @@ function formatQueueWakeFailureError(
 ): string {
   const summary = formatEmbeddedAgentQueueFailureSummary(outcome);
   return summary ? `${fallback}: ${summary}` : fallback;
-}
-
-function resolveBoundConversationOrigin(params: {
-  bindingConversation: ConversationRef & { parentConversationId?: string };
-  requesterConversation?: ConversationRef;
-  requesterOrigin?: DeliveryContext;
-}): DeliveryContext {
-  const conversation = params.bindingConversation;
-  const conversationId = conversation.conversationId?.trim() ?? "";
-  const parentConversationId = conversation.parentConversationId?.trim() ?? "";
-  const requesterConversationId = params.requesterConversation?.conversationId?.trim() ?? "";
-  const requesterTo = params.requesterOrigin?.to?.trim();
-  const boundTarget = routeToDeliveryFields(routeFromConversationRef(conversation));
-  const inferredThreadId =
-    boundTarget.threadId ??
-    (parentConversationId && parentConversationId !== conversationId
-      ? conversationId
-      : undefined) ??
-    (params.requesterOrigin?.threadId != null && params.requesterOrigin.threadId !== ""
-      ? stringifyRouteThreadId(params.requesterOrigin.threadId)
-      : undefined);
-  if (
-    requesterTo &&
-    conversationId &&
-    requesterConversationId &&
-    conversationId.toLowerCase() === requesterConversationId.toLowerCase()
-  ) {
-    return {
-      channel: conversation.channel,
-      accountId: conversation.accountId,
-      to: requesterTo,
-      threadId: inferredThreadId,
-    };
-  }
-  return {
-    channel: conversation.channel,
-    accountId: conversation.accountId,
-    to: boundTarget.to,
-    threadId: inferredThreadId,
-  };
 }
 
 function resolveRequesterSessionActivity(requesterSessionKey: string) {
@@ -645,105 +609,12 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
   return await params.run();
 }
 
-export async function resolveSubagentCompletionOrigin(params: {
-  childSessionKey: string;
-  requesterSessionKey: string;
-  requesterOrigin?: DeliveryContext;
-  childRunId?: string;
-  spawnMode?: SpawnSubagentMode;
-  expectsCompletionMessage: boolean;
-}): Promise<DeliveryContext | undefined> {
-  const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
-  const channel = normalizeOptionalLowercaseString(requesterOrigin?.channel);
-  const to = requesterOrigin?.to?.trim();
-  const accountId = normalizeAccountId(requesterOrigin?.accountId);
-  const threadId =
-    requesterOrigin?.threadId != null && requesterOrigin.threadId !== ""
-      ? requesterOrigin.threadId
-      : undefined;
-  const conversationId =
-    stringifyRouteThreadId(threadId) ||
-    resolveConversationIdFromTargets({
-      targets: [to],
-    }) ||
-    "";
-  const requesterConversation: ConversationRef | undefined =
-    channel && conversationId ? { channel, accountId, conversationId } : undefined;
-
-  const router = createBoundDeliveryRouter();
-  const requesterRoute = router.resolveDestination({
-    eventKind: "task_completion",
-    targetSessionKey: params.requesterSessionKey,
-    requester: requesterConversation,
-    failClosed: true,
-  });
-  if (requesterRoute.mode === "bound" && requesterRoute.binding) {
-    return mergeDeliveryContext(
-      resolveBoundConversationOrigin({
-        bindingConversation: requesterRoute.binding.conversation,
-        requesterConversation,
-        requesterOrigin,
-      }),
-      requesterOrigin,
-    );
-  }
-
-  const childRoute = router.resolveDestination({
-    eventKind: "task_completion",
-    targetSessionKey: params.childSessionKey,
-    requester: requesterConversation,
-    failClosed: true,
-  });
-  if (childRoute.mode === "bound" && childRoute.binding) {
-    return mergeDeliveryContext(
-      resolveBoundConversationOrigin({
-        bindingConversation: childRoute.binding.conversation,
-        requesterConversation,
-        requesterOrigin,
-      }),
-      requesterOrigin,
-    );
-  }
-
-  const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("subagent_delivery_target")) {
-    return requesterOrigin;
-  }
-  try {
-    const result = await hookRunner.runSubagentDeliveryTarget(
-      {
-        childSessionKey: params.childSessionKey,
-        requesterSessionKey: params.requesterSessionKey,
-        requesterOrigin,
-        childRunId: params.childRunId,
-        spawnMode: params.spawnMode,
-        expectsCompletionMessage: params.expectsCompletionMessage,
-      },
-      {
-        runId: params.childRunId,
-        childSessionKey: params.childSessionKey,
-        requesterSessionKey: params.requesterSessionKey,
-      },
-    );
-    const hookOrigin = normalizeDeliveryContext(result?.origin);
-    if (!hookOrigin) {
-      return requesterOrigin;
-    }
-    if (hookOrigin.channel && isInternalMessageChannel(hookOrigin.channel)) {
-      return requesterOrigin;
-    }
-    return mergeDeliveryContext(hookOrigin, requesterOrigin);
-  } catch {
-    return requesterOrigin;
-  }
-}
-
 export function loadRequesterSessionEntry(requesterSessionKey: string) {
   const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
   const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey);
-  const agentId = resolveAgentIdFromSessionKey(canonicalKey);
+  const agentId = resolveAgentIdFromSessionKey(canonicalKey, resolveDefaultAgentId(cfg));
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  const entry = loadSessionEntry({
+  const entry = subagentAnnounceDeliveryDeps.loadSessionEntry({
     storePath,
     sessionKey: canonicalKey,
     clone: false,
@@ -753,9 +624,9 @@ export function loadRequesterSessionEntry(requesterSessionKey: string) {
 
 export function loadSessionEntryByKey(sessionKey: string) {
   const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
-  const agentId = resolveAgentIdFromSessionKey(sessionKey);
+  const agentId = resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(cfg));
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  return loadSessionEntry({
+  return subagentAnnounceDeliveryDeps.loadSessionEntry({
     storePath,
     sessionKey,
     clone: false,
@@ -785,7 +656,7 @@ async function maybeSteerSubagentAnnounce(params: {
 
   const queueSettings = resolveQueueSettings({
     cfg,
-    channel: entry?.channel ?? entry?.lastChannel ?? entry?.origin?.provider,
+    channel: sessionDeliveryChannel(entry),
     sessionEntry: entry,
   });
 
@@ -821,110 +692,6 @@ async function maybeSteerSubagentAnnounce(params: {
   return { status: currentActivity.isActive ? "dropped" : "none" };
 }
 
-function hasVisibleGatewayAgentPayload(response: unknown): boolean {
-  const result = getGatewayAgentResult(response);
-  return Boolean(
-    result && (hasVisibleAgentPayload(result) || hasMessagingToolDeliveryEvidence(result)),
-  );
-}
-
-function hasVisibleNonSilentGatewayAgentPayload(response: unknown): boolean {
-  const result = getGatewayAgentResult(response);
-  if (!result) {
-    return false;
-  }
-  if (hasMessagingToolDeliveryEvidence(result)) {
-    return true;
-  }
-  const payloads = Array.isArray(result.payloads) ? result.payloads : [];
-  return payloads.some(isVisibleNonSilentGatewayAgentPayload);
-}
-
-function isVisibleNonSilentGatewayAgentPayload(payload: unknown): boolean {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return false;
-  }
-  const record = payload as {
-    text?: unknown;
-    mediaUrl?: unknown;
-    mediaUrls?: unknown;
-    presentation?: unknown;
-    interactive?: unknown;
-    channelData?: unknown;
-  };
-  if (
-    record.mediaUrl ||
-    (Array.isArray(record.mediaUrls) && record.mediaUrls.length > 0) ||
-    record.presentation ||
-    record.interactive ||
-    record.channelData
-  ) {
-    return true;
-  }
-  return (
-    typeof record.text === "string" &&
-    record.text.trim() !== "" &&
-    !isSilentReplyPayloadText(record.text, SILENT_REPLY_TOKEN)
-  );
-}
-
-function hasGatewayAgentMessagingToolDeliveryEvidence(response: unknown): boolean {
-  const result = getGatewayAgentResult(response);
-  return Boolean(result && hasMessagingToolDeliveryEvidence(result));
-}
-
-function hasGatewayAgentCompletionSideEffectEvidence(response: unknown): boolean {
-  const result = getGatewayAgentResult(response);
-  if (!result) {
-    return false;
-  }
-  return (
-    hasMessagingToolDeliveryEvidence(result) ||
-    (Array.isArray(result.acceptedSessionSpawns) &&
-      hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
-    hasPositiveDeliveryCount(result.successfulCronAdds)
-  );
-}
-
-function hasIntentionalSilentGatewayAgentPayload(response: unknown): boolean {
-  const result = getGatewayAgentResult(response);
-  if (!result || !Array.isArray(result.payloads)) {
-    return false;
-  }
-  return result.payloads.some(isIntentionalSilentGatewayAgentPayload);
-}
-
-function isIntentionalSilentGatewayAgentPayload(payload: unknown): boolean {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return false;
-  }
-  const record = payload as {
-    text?: unknown;
-    mediaUrl?: unknown;
-    mediaUrls?: unknown;
-    presentation?: unknown;
-    interactive?: unknown;
-    channelData?: unknown;
-  };
-  if (
-    typeof record.text !== "string" ||
-    !isSilentReplyPayloadText(record.text, SILENT_REPLY_TOKEN)
-  ) {
-    return false;
-  }
-  return !(
-    record.mediaUrl ||
-    (Array.isArray(record.mediaUrls) && record.mediaUrls.length > 0) ||
-    record.presentation ||
-    record.interactive ||
-    record.channelData
-  );
-}
-
-function hasPositiveDeliveryCount(value: unknown): boolean {
-  return typeof value === "number" && Number.isFinite(value) && value > 0;
-}
-
 function requiresAgentMediatedCompletionDelivery(params: {
   expectsCompletionMessage: boolean;
   sourceTool?: string;
@@ -955,11 +722,6 @@ function collectExpectedMediaFromInternalEvents(
     }
   }
   return mediaUrls;
-}
-
-function getGatewayAgentCommandDeliveryFailure(response: unknown): string | undefined {
-  const result = getGatewayAgentResult(response);
-  return result ? getAgentCommandDeliveryFailure(result) : undefined;
 }
 
 function isGatewayAgentRunPending(response: unknown): boolean {
@@ -1048,7 +810,10 @@ async function deliverGeneratedMediaCompletionDirect(params: {
     sourceTool: params.sourceTool,
     internalEvents: params.internalEvents,
   });
-  const agentId = resolveAgentIdFromSessionKey(params.requesterSessionKey);
+  const agentId = resolveAgentIdFromSessionKey(
+    params.requesterSessionKey,
+    resolveDefaultAgentId(params.cfg),
+  );
   const idempotencyKey = `${params.directIdempotencyKey}:generated-media-direct`;
   try {
     await subagentAnnounceDeliveryDeps.sendMessage({
@@ -1100,37 +865,6 @@ async function deliverGeneratedMediaCompletionDirect(params: {
           : {}),
     };
   }
-}
-
-function inferDeliveryTargetChatType(target: {
-  channel?: string;
-  to?: string;
-}): "direct" | "group" | "channel" | undefined {
-  const normalizedTo = normalizeOptionalLowercaseString(target.to);
-  if (!normalizedTo) {
-    return undefined;
-  }
-  if (
-    normalizedTo.startsWith("dm:") ||
-    normalizedTo.startsWith("direct:") ||
-    normalizedTo.startsWith("user:") ||
-    normalizedTo.includes(":dm:") ||
-    normalizedTo.includes(":direct:")
-  ) {
-    return "direct";
-  }
-  if (normalizedTo.startsWith("channel:") || normalizedTo.startsWith("thread:")) {
-    return "channel";
-  }
-  if (normalizedTo.startsWith("group:")) {
-    return "group";
-  }
-  const channel = normalizeMessageChannel(target.channel);
-  return channel
-    ? getLoadedChannelPluginForRead(channel as ChannelId)?.messaging?.inferTargetChatType?.({
-        to: target.to ?? "",
-      })
-    : undefined;
 }
 
 function isDirectMessageDeliveryTarget(
@@ -1199,7 +933,10 @@ async function deliverTextCompletionDirect(params: {
   ) {
     return undefined;
   }
-  const agentId = resolveAgentIdFromSessionKey(params.requesterSessionKey);
+  const agentId = resolveAgentIdFromSessionKey(
+    params.requesterSessionKey,
+    resolveDefaultAgentId(params.cfg),
+  );
   const idempotencyKey = `${params.directIdempotencyKey}:text-direct`;
   try {
     await subagentAnnounceDeliveryDeps.sendMessage({
@@ -1234,7 +971,7 @@ async function deliverTextCompletionDirect(params: {
 
 function resolveGeneratedMediaDirectFallbackUrls(params: {
   expectedMediaUrls: readonly string[];
-  announceResponse?: unknown;
+  announceResult?: NonNullable<ReturnType<typeof getGatewayAgentResult>>;
   requiresMessageToolDelivery: boolean;
   automaticDeliveryRequested: boolean;
   automaticDeliveryFailed?: boolean;
@@ -1246,7 +983,7 @@ function resolveGeneratedMediaDirectFallbackUrls(params: {
   };
 }): string[] {
   const expected = uniqueStrings(normalizeStringEntries(params.expectedMediaUrls));
-  const result = getGatewayAgentResult(params.announceResponse);
+  const result = params.announceResult;
   if (!result) {
     return expected;
   }
@@ -1286,16 +1023,12 @@ function collectAutomaticCompletionDeliveredMediaUrls(params: {
     }
   };
   if (params.automaticDeliveryRequested) {
-    if (params.automaticDeliveryFailed) {
+    if (params.automaticDeliveryFailed || hasPayloadDeliveryOutcomes(params.result)) {
       addUrls(
-        collectPayloadOutcomeDeliveredMediaUrls(params.result, {
-          countAmbiguousSinglePayloadFailure: params.expectedMediaCount === 1,
-        }),
-      );
-    } else if (hasPayloadDeliveryOutcomes(params.result)) {
-      addUrls(
-        collectPayloadOutcomeDeliveredMediaUrls(params.result, {
-          countAmbiguousSinglePayloadFailure: false,
+        collectAutomaticDeliveredMediaUrls(params.result, {
+          includeAmbiguousSinglePayloadFailure:
+            params.automaticDeliveryFailed && params.expectedMediaCount === 1,
+          includeSuppressedOutcomes: false,
         }),
       );
     } else if (!hasSuppressedPayloadDeliveryStatus(params.result)) {
@@ -1312,137 +1045,6 @@ function collectPayloadMediaUrls(
   return collectDeliveredMediaUrls({
     payloads: Array.isArray(result.payloads) ? result.payloads : [],
   });
-}
-
-function getPayloadDeliveryStatusRecord(
-  result: NonNullable<ReturnType<typeof getGatewayAgentResult>>,
-): Record<string, unknown> | undefined {
-  return result.deliveryStatus && typeof result.deliveryStatus === "object"
-    ? (result.deliveryStatus as Record<string, unknown>)
-    : undefined;
-}
-
-function hasPayloadDeliveryOutcomes(
-  result: NonNullable<ReturnType<typeof getGatewayAgentResult>>,
-): boolean {
-  return Array.isArray(getPayloadDeliveryStatusRecord(result)?.payloadOutcomes);
-}
-
-function hasPayloadOutcomeSendEvidence(response: unknown): boolean {
-  const result = getGatewayAgentResult(response);
-  if (!result) {
-    return false;
-  }
-  const outcomes = getPayloadDeliveryStatusRecord(result)?.payloadOutcomes;
-  return (
-    Array.isArray(outcomes) &&
-    outcomes.some(
-      (outcome) =>
-        Boolean(outcome && typeof outcome === "object") &&
-        (normalizeOptionalLowercaseString((outcome as Record<string, unknown>).status) === "sent" ||
-          (outcome as Record<string, unknown>).sentBeforeError === true),
-    )
-  );
-}
-
-function hasAmbiguousPayloadSendBeforeError(response: unknown): boolean {
-  const result = getGatewayAgentResult(response);
-  const outcomes = result ? getPayloadDeliveryStatusRecord(result)?.payloadOutcomes : undefined;
-  return (
-    Array.isArray(outcomes) &&
-    outcomes.some(
-      (outcome) =>
-        Boolean(outcome && typeof outcome === "object") &&
-        normalizeOptionalLowercaseString((outcome as Record<string, unknown>).status) ===
-          "failed" &&
-        (outcome as Record<string, unknown>).sentBeforeError === true,
-    )
-  );
-}
-
-function hasIncompletePartialPayloadOutcomeEvidence(response: unknown): boolean {
-  const result = getGatewayAgentResult(response);
-  if (!result) {
-    return false;
-  }
-  const deliveryStatus = getPayloadDeliveryStatusRecord(result);
-  if (normalizeOptionalLowercaseString(deliveryStatus?.status) !== "partial_failed") {
-    return false;
-  }
-  const payloads = Array.isArray(result.payloads) ? result.payloads : [];
-  const outcomes = deliveryStatus?.payloadOutcomes;
-  if (!Array.isArray(outcomes) || payloads.length === 0 || outcomes.length !== payloads.length) {
-    return true;
-  }
-  const seenIndexes = new Set<number>();
-  for (const outcome of outcomes) {
-    if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) {
-      return true;
-    }
-    const record = outcome as Record<string, unknown>;
-    const index =
-      typeof record.index === "number" && Number.isInteger(record.index) ? record.index : undefined;
-    const status = normalizeOptionalLowercaseString(record.status);
-    if (
-      index === undefined ||
-      index < 0 ||
-      index >= payloads.length ||
-      seenIndexes.has(index) ||
-      (status !== "sent" && status !== "suppressed" && status !== "failed") ||
-      (status === "failed" && typeof record.sentBeforeError !== "boolean")
-    ) {
-      return true;
-    }
-    seenIndexes.add(index);
-  }
-  return seenIndexes.size !== payloads.length;
-}
-
-function hasSuppressedPayloadDeliveryStatus(
-  result: NonNullable<ReturnType<typeof getGatewayAgentResult>>,
-): boolean {
-  return (
-    normalizeOptionalLowercaseString(getPayloadDeliveryStatusRecord(result)?.status) ===
-    "suppressed"
-  );
-}
-
-function collectPayloadOutcomeDeliveredMediaUrls(
-  result: NonNullable<ReturnType<typeof getGatewayAgentResult>>,
-  options: { countAmbiguousSinglePayloadFailure: boolean },
-): string[] {
-  const payloads = Array.isArray(result.payloads) ? result.payloads : [];
-  const deliveryStatus = getPayloadDeliveryStatusRecord(result);
-  const payloadOutcomes = Array.isArray(deliveryStatus?.payloadOutcomes)
-    ? deliveryStatus.payloadOutcomes
-    : [];
-  const urls = new Set<string>();
-  for (const outcome of payloadOutcomes) {
-    if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) {
-      continue;
-    }
-    const record = outcome as Record<string, unknown>;
-    const status = normalizeOptionalLowercaseString(record.status);
-    const ambiguousSinglePayloadFailure =
-      status === "failed" &&
-      record.sentBeforeError === true &&
-      options.countAmbiguousSinglePayloadFailure &&
-      payloadOutcomes.length === 1 &&
-      payloads.length === 1;
-    if (status !== "sent" && !ambiguousSinglePayloadFailure) {
-      continue;
-    }
-    const index =
-      typeof record.index === "number" && Number.isInteger(record.index) ? record.index : undefined;
-    const payload = index === undefined ? undefined : payloads[index];
-    if (!payload) {
-      continue;
-    }
-    for (const url of collectDeliveredMediaUrls({ payloads: [payload] })) {
-      urls.add(url);
-    }
-  }
-  return Array.from(urls);
 }
 
 function collectMessagingToolDeliveredMediaUrlsForTarget(
@@ -1501,89 +1103,6 @@ function collectMessagingToolDeliveredMediaUrlsForTarget(
     }
   }
   return Array.from(urls);
-}
-
-function stripNonDeliverableChannelForCompletionOrigin(
-  context?: DeliveryContext,
-): DeliveryContext | undefined {
-  const normalized = normalizeDeliveryContext(context);
-  if (!normalized?.channel) {
-    return normalized;
-  }
-  const channel = normalizeMessageChannel(normalized.channel);
-  if (!channel || isDeliverableMessageChannel(channel)) {
-    return normalized;
-  }
-  const { channel: _channel, ...rest } = normalized;
-  return normalizeDeliveryContext(rest);
-}
-
-function resolveCompletionDeliveryOrigins(params: {
-  expectsCompletionMessage: boolean;
-  completionDirectOrigin?: DeliveryContext;
-  directOrigin?: DeliveryContext;
-  requesterSessionOrigin?: DeliveryContext;
-}) {
-  const directOrigin = normalizeDeliveryContext(params.directOrigin);
-  const requesterSessionOrigin = normalizeDeliveryContext(params.requesterSessionOrigin);
-  const externalCompletionDirectOrigin = stripNonDeliverableChannelForCompletionOrigin(
-    params.completionDirectOrigin,
-  );
-  const completionExternalFallbackOrigin = mergeDeliveryContext(
-    directOrigin,
-    requesterSessionOrigin,
-  );
-  return {
-    directOrigin,
-    requesterSessionOrigin,
-    effectiveDirectOrigin: params.expectsCompletionMessage
-      ? mergeDeliveryContext(externalCompletionDirectOrigin, completionExternalFallbackOrigin)
-      : directOrigin,
-  };
-}
-
-function resolveGeneratedMediaSessionDeliveryRoute(params: {
-  sessionKey: string;
-  completionDirectOrigin?: DeliveryContext;
-  directOrigin?: DeliveryContext;
-  requesterSessionOrigin?: DeliveryContext;
-}): { route: SessionDeliveryRoute; deliveryContext?: DeliveryContext } {
-  const externalCompletionOrigin = stripNonDeliverableChannelForCompletionOrigin(
-    params.completionDirectOrigin,
-  );
-  const fallbackOrigin = mergeDeliveryContext(params.directOrigin, params.requesterSessionOrigin);
-  const deliveryContext = normalizeDeliveryContext(
-    mergeDeliveryContext(externalCompletionOrigin, fallbackOrigin),
-  );
-  const channel = normalizeMessageChannel(deliveryContext?.channel);
-  const to = deliveryContext?.to?.trim();
-  const inferredRouteChatType = inferDeliveryTargetChatType({ channel, to });
-  const derivedChatType = deriveSessionChatTypeFromKey(params.sessionKey);
-  const chatType =
-    inferredRouteChatType ??
-    (!derivedChatType || derivedChatType === "unknown" ? "direct" : derivedChatType);
-  if (channel && isGatewayMessageChannel(channel) && to) {
-    return {
-      route: {
-        channel,
-        to,
-        ...(deliveryContext?.accountId ? { accountId: deliveryContext.accountId } : {}),
-        ...(deliveryContext?.threadId != null
-          ? { threadId: stringifyRouteThreadId(deliveryContext.threadId) }
-          : {}),
-        chatType,
-      },
-      deliveryContext,
-    };
-  }
-  return {
-    route: {
-      channel: INTERNAL_MESSAGE_CHANNEL,
-      to: params.sessionKey,
-      chatType,
-    },
-    deliveryContext,
-  };
 }
 
 async function sendSubagentAnnounceDirectly(params: {
@@ -1699,6 +1218,10 @@ async function sendSubagentAnnounceDirectly(params: {
       announceResponse?: unknown,
       knownMissingMediaUrls?: readonly string[],
     ) => {
+      const announceResult = getGatewayAgentResult(announceResponse);
+      const commandDeliveryFailure = announceResult
+        ? getAgentCommandDeliveryFailure(announceResult)
+        : undefined;
       const mediaLabel = resolveGeneratedMediaCompletionLabel({
         sourceTool: params.sourceTool,
         internalEvents: params.internalEvents,
@@ -1715,12 +1238,13 @@ async function sendSubagentAnnounceDirectly(params: {
           ? `${mediaLabel[0]?.toUpperCase() ?? "M"}${mediaLabel.slice(1)} generation completed, but the generated media could not be attached here.`
           : undefined);
       const agentAlreadyProducedDeliverySideEffects =
-        announceResponse !== undefined &&
-        (hasGatewayAgentCompletionSideEffectEvidence(announceResponse) ||
-          hasPayloadOutcomeSendEvidence(announceResponse) ||
+        announceResult !== null &&
+        (hasCommittedOutboundDeliveryEvidence(announceResult) ||
+          hasPayloadOutcomeSendEvidence(announceResult) ||
           (shouldDeliverAgentFinal &&
-            !getGatewayAgentCommandDeliveryFailure(announceResponse) &&
-            hasVisibleGatewayAgentPayload(announceResponse)));
+            !commandDeliveryFailure &&
+            (hasVisibleAgentPayload(announceResult) ||
+              hasMessagingToolDeliveryEvidence(announceResult))));
       // Accepted work still owns the idempotency key even before delivery
       // evidence exists. Raw fallback here could race the eventual agent final.
       if (isGatewayAgentRunPending(announceResponse)) {
@@ -1741,7 +1265,8 @@ async function sendSubagentAnnounceDirectly(params: {
       if (
         knownMissingMediaUrls &&
         knownMissingMediaUrls.length > 1 &&
-        hasAmbiguousPayloadSendBeforeError(announceResponse)
+        announceResult &&
+        hasAmbiguousPayloadSendBeforeError(announceResult)
       ) {
         return undefined;
       }
@@ -1752,12 +1277,10 @@ async function sendSubagentAnnounceDirectly(params: {
         knownMissingMediaUrls ??
         resolveGeneratedMediaDirectFallbackUrls({
           expectedMediaUrls,
-          announceResponse,
+          announceResult: announceResult ?? undefined,
           requiresMessageToolDelivery,
           automaticDeliveryRequested: shouldDeliverAgentFinal,
-          automaticDeliveryFailed:
-            !requiresMessageToolDelivery &&
-            Boolean(getGatewayAgentCommandDeliveryFailure(announceResponse)),
+          automaticDeliveryFailed: !requiresMessageToolDelivery && Boolean(commandDeliveryFailure),
           deliveryTarget,
         });
       return await deliverGeneratedMediaCompletionDirect({
@@ -1780,9 +1303,7 @@ async function sendSubagentAnnounceDirectly(params: {
     const requesterQueueSettings = resolveQueueSettings({
       cfg,
       channel:
-        requesterEntry?.channel ??
-        requesterEntry?.lastChannel ??
-        requesterEntry?.origin?.provider ??
+        sessionDeliveryChannel(requesterEntry) ??
         requesterSessionOrigin?.channel ??
         directOrigin?.channel,
       sessionEntry: requesterEntry,
@@ -1976,9 +1497,10 @@ async function sendSubagentAnnounceDirectly(params: {
       };
     }
 
+    const directAnnounceResult = getGatewayAgentResult(directAnnounceResponse);
     const directDeliveryFailure =
-      shouldDeliverAgentFinal || requiresMessageToolDelivery
-        ? getGatewayAgentCommandDeliveryFailure(directAnnounceResponse)
+      (shouldDeliverAgentFinal || requiresMessageToolDelivery) && directAnnounceResult
+        ? getAgentCommandDeliveryFailure(directAnnounceResult)
         : undefined;
     const shouldRequireGeneratedMediaDelivery =
       agentMediatedCompletion &&
@@ -1987,7 +1509,7 @@ async function sendSubagentAnnounceDirectly(params: {
     const missingExpectedMediaUrls = shouldRequireGeneratedMediaDelivery
       ? resolveGeneratedMediaDirectFallbackUrls({
           expectedMediaUrls,
-          announceResponse: directAnnounceResponse,
+          announceResult: directAnnounceResult ?? undefined,
           requiresMessageToolDelivery,
           automaticDeliveryRequested: shouldDeliverAgentFinal,
           automaticDeliveryFailed: !requiresMessageToolDelivery && Boolean(directDeliveryFailure),
@@ -1996,8 +1518,8 @@ async function sendSubagentAnnounceDirectly(params: {
       : [];
     if (shouldRequireGeneratedMediaDelivery && missingExpectedMediaUrls.length > 0) {
       if (
-        hasAmbiguousPayloadSendBeforeError(directAnnounceResponse) ||
-        hasIncompletePartialPayloadOutcomeEvidence(directAnnounceResponse)
+        (directAnnounceResult && hasAmbiguousPayloadSendBeforeError(directAnnounceResult)) ||
+        (directAnnounceResult && hasIncompletePartialPayloadOutcomeEvidence(directAnnounceResult))
       ) {
         return {
           delivered: false,
@@ -2045,15 +1567,27 @@ async function sendSubagentAnnounceDirectly(params: {
         delivered: false,
         path: "direct",
         error: directDeliveryFailure,
-        ...(hasPayloadOutcomeSendEvidence(directAnnounceResponse) ? { terminal: true } : {}),
+        ...(directAnnounceResult && hasPayloadOutcomeSendEvidence(directAnnounceResult)
+          ? { terminal: true }
+          : {}),
       };
     }
+    const hasMessagingToolDelivery = Boolean(
+      directAnnounceResult && hasMessagingToolDeliveryEvidence(directAnnounceResult),
+    );
+    const hasVisibleGatewayPayload = Boolean(
+      directAnnounceResult &&
+      (hasVisibleAgentPayload(directAnnounceResult) || hasMessagingToolDelivery),
+    );
+    const hasIntentionalSilentCompletionReply = Boolean(
+      directAnnounceResult && hasIntentionalSilentAgentPayload(directAnnounceResult),
+    );
     if (
       params.expectsCompletionMessage &&
       shouldDeliverAgentFinal &&
       isSubagentCompletion &&
-      !hasVisibleGatewayAgentPayload(directAnnounceResponse) &&
-      !hasGatewayAgentMessagingToolDeliveryEvidence(directAnnounceResponse)
+      !hasVisibleGatewayPayload &&
+      !hasMessagingToolDelivery
     ) {
       const textDelivery = await deliverTextCompletionDirect({
         cfg,
@@ -2077,9 +1611,8 @@ async function sendSubagentAnnounceDirectly(params: {
     if (
       params.expectsCompletionMessage &&
       requiresMessageToolDelivery &&
-      !hasGatewayAgentMessagingToolDeliveryEvidence(directAnnounceResponse) &&
-      (!hasIntentionalSilentGatewayAgentPayload(directAnnounceResponse) ||
-        subagentDirectMessageCompletionRequiresMessageTool)
+      !hasMessagingToolDelivery &&
+      (!hasIntentionalSilentCompletionReply || subagentDirectMessageCompletionRequiresMessageTool)
     ) {
       if (hasFailedSubagentNoOutputCompletion(params.internalEvents)) {
         return {
@@ -2108,12 +1641,14 @@ async function sendSubagentAnnounceDirectly(params: {
         error: "completion agent did not use the message tool for message-tool-only delivery",
       };
     }
-    const hasVisibleCompletionReply =
-      hasVisibleNonSilentGatewayAgentPayload(directAnnounceResponse);
-    const hasCompletionSideEffect =
-      hasGatewayAgentCompletionSideEffectEvidence(directAnnounceResponse);
-    const hasIntentionalSilentCompletionReply =
-      hasIntentionalSilentGatewayAgentPayload(directAnnounceResponse);
+    const hasVisibleCompletionReply = Boolean(
+      directAnnounceResult &&
+      (hasMessagingToolDelivery ||
+        hasVisibleAgentPayload(directAnnounceResult, { includeSilentReplyPayloads: false })),
+    );
+    const hasCompletionSideEffect = Boolean(
+      directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
+    );
     const acceptsIntentionalSilentCompletion =
       hasIntentionalSilentCompletionReply && !isSubagentCompletion;
     if (
@@ -2135,7 +1670,7 @@ async function sendSubagentAnnounceDirectly(params: {
       params.expectsCompletionMessage &&
       shouldDeliverAgentFinal &&
       !isSubagentCompletion &&
-      !hasVisibleGatewayAgentPayload(directAnnounceResponse)
+      !hasVisibleGatewayPayload
     ) {
       return {
         delivered: false,

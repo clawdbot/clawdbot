@@ -88,8 +88,9 @@ function parseFeishuMessageEventPayload(value: unknown): FeishuMessageEvent | nu
   const chatId = readString(message.chat_id);
   const chatType = normalizeFeishuChatType(message.chat_type);
   const messageType = readString(message.message_type);
-  const content = readString(message.content);
-  if (!messageId || !chatId || !chatType || !messageType || !content) {
+  // Feishu can deliver a legitimately empty message body; keep absent or
+  // non-string bodies malformed instead of inventing fallback content.
+  if (!messageId || !chatId || !chatType || !messageType || typeof message.content !== "string") {
     return null;
   }
   return value as FeishuMessageEvent;
@@ -311,10 +312,9 @@ export function createFeishuMessageReceiveHandler({
     }
   };
 
-  const filterRecalledDebounceEntries = async (
-    entries: FeishuMessageDebounceEntry[],
-  ): Promise<FeishuMessageDebounceEntry[]> => {
+  const partitionRecalledDebounceEntries = (entries: FeishuMessageDebounceEntry[]) => {
     const activeEntries: FeishuMessageDebounceEntry[] = [];
+    const recalledEntries: FeishuMessageDebounceEntry[] = [];
     for (const entry of entries) {
       if (
         !isFeishuSourceMessageRecalled({
@@ -326,24 +326,31 @@ export function createFeishuMessageReceiveHandler({
         activeEntries.push(entry);
         continue;
       }
-      log(
-        `feishu[${accountId}]: dropping recalled debounced message ${entry.event.message.message_id}`,
-      );
-      // Keep transport adoption and logical replay-guard release symmetric
-      // with the later sequential-queue recall check above.
-      if (!entry.turnAdoptionLifecycle) {
-        entry.processingClaim?.release({ error: new Error("feishu-source-message-recalled") });
-        continue;
-      }
-      const { settle } = buildFeishuFlushIngressLifecycle([
-        {
-          lifecycle: entry.turnAdoptionLifecycle,
-          replayClaim: entry.processingClaim,
-        },
-      ]);
-      await settle();
+      recalledEntries.push(entry);
     }
-    return activeEntries;
+    return {
+      activeEntries,
+      settleRecalledEntries: async () => {
+        for (const entry of recalledEntries) {
+          log(
+            `feishu[${accountId}]: dropping recalled debounced message ${entry.event.message.message_id}`,
+          );
+          // Keep transport adoption and logical replay-guard release symmetric
+          // with the later sequential-queue recall check above.
+          if (!entry.turnAdoptionLifecycle) {
+            entry.processingClaim?.release({ error: new Error("feishu-source-message-recalled") });
+            continue;
+          }
+          const { settle } = buildFeishuFlushIngressLifecycle([
+            {
+              lifecycle: entry.turnAdoptionLifecycle,
+              replayClaim: entry.processingClaim,
+            },
+          ]);
+          await settle();
+        }
+      },
+    };
   };
 
   const inboundDebouncer =
@@ -368,117 +375,119 @@ export function createFeishuMessageReceiveHandler({
       },
       // The shared debouncer routes buffered, immediate, and capacity-fallback
       // entries through onFlush, so this callback owns every retention lease.
-      onFlush: async (entries) => {
-        const handedOffRetentions = new Set<FeishuMessageDebounceEntry>();
-        let flushLifecycle: FeishuIngressLifecycle | undefined;
-        const handOffRetentions = (taskEntries: readonly FeishuMessageDebounceEntry[]) => {
-          for (const entry of taskEntries) {
-            handedOffRetentions.add(entry);
-          }
-          return () => {
-            for (const entry of taskEntries) {
-              entry.sourceMessageRetention?.dispose();
+      onFlush: (entries, createFlush) => {
+        const { activeEntries, settleRecalledEntries } = partitionRecalledDebounceEntries(
+          entries.filter((entry) => !entry.abandoned),
+        );
+        const last = activeEntries.at(-1);
+        const { lifecycle, settle } = buildFeishuFlushIngressLifecycle(
+          activeEntries.map((entry) => ({
+            lifecycle: entry.turnAdoptionLifecycle,
+            replayClaim: entry.processingClaim,
+          })),
+          {
+            onReplayCommitError: (err) =>
+              error(`feishu[${accountId}]: failed to commit logical replay guard: ${String(err)}`),
+          },
+        );
+        return createFlush({
+          lifecycle,
+          dispatch: async (admissionLifecycle) => {
+            const handedOffRetentions = new Set<FeishuMessageDebounceEntry>();
+            const handOffRetentions = (taskEntries: readonly FeishuMessageDebounceEntry[]) => {
+              for (const entry of taskEntries) {
+                handedOffRetentions.add(entry);
+              }
+              return () => {
+                for (const entry of taskEntries) {
+                  entry.sourceMessageRetention?.dispose();
+                }
+              };
+            };
+            try {
+              await settleRecalledEntries();
+              if (!last) {
+                return;
+              }
+              if (admissionLifecycle.abortSignal.aborted) {
+                await admissionLifecycle.onAbandoned();
+                return;
+              }
+              if (activeEntries.length === 1) {
+                await dispatchFeishuMessage(
+                  last.event,
+                  resolveFeishuMessageDedupeKey(last.event),
+                  last.processingClaim,
+                  admissionLifecycle,
+                  [last.event.message.message_id],
+                  handOffRetentions([last]),
+                );
+                await settle();
+                return;
+              }
+              const dedupedEntries = dedupeFeishuDebounceEntriesByDedupeKey(activeEntries);
+              const freshEntries: FeishuMessageDebounceEntry[] = [];
+              for (const entry of dedupedEntries) {
+                if (
+                  !(await hasProcessedMessage(
+                    resolveFeishuMessageDedupeKey(entry.event),
+                    accountId,
+                    log,
+                  ))
+                ) {
+                  freshEntries.push(entry);
+                }
+              }
+              const dispatchEntry = freshEntries.at(-1);
+              if (!dispatchEntry) {
+                await settle();
+                return;
+              }
+              const dispatchDedupeKey = resolveFeishuMessageDedupeKey(dispatchEntry.event);
+              if (!lifecycle) {
+                await recordSuppressedMessageIds(dedupedEntries, dispatchDedupeKey);
+              }
+              const combinedText = freshEntries
+                .map((entry) => resolveDebounceText(entry.event))
+                .filter(Boolean)
+                .join("\n");
+              const mergedMentions = resolveFeishuDebounceMentions({
+                entries: freshEntries.map((entry) => entry.event),
+                botOpenId: getBotOpenId(accountId),
+              });
+              await dispatchFeishuMessage(
+                {
+                  ...dispatchEntry.event,
+                  message: {
+                    ...dispatchEntry.event.message,
+                    ...(combinedText.trim()
+                      ? {
+                          message_type: "text",
+                          content: JSON.stringify({ text: combinedText }),
+                        }
+                      : {}),
+                    mentions: mergedMentions ?? dispatchEntry.event.message.mentions,
+                  },
+                },
+                dispatchDedupeKey,
+                dispatchEntry.processingClaim,
+                admissionLifecycle,
+                freshEntries.map((entry) => entry.event.message.message_id),
+                handOffRetentions(freshEntries),
+              );
+              await settle();
+            } catch (err) {
+              await admissionLifecycle.onAbandoned();
+              throw err;
+            } finally {
+              for (const entry of entries) {
+                if (!handedOffRetentions.has(entry)) {
+                  entry.sourceMessageRetention?.dispose();
+                }
+              }
             }
-          };
-        };
-        try {
-          const activeEntries = await filterRecalledDebounceEntries(
-            entries.filter((entry) => !entry.abandoned),
-          );
-          const last = activeEntries.at(-1);
-          if (!last) {
-            return;
-          }
-          const { lifecycle, settle } = buildFeishuFlushIngressLifecycle(
-            activeEntries.map((entry) => ({
-              lifecycle: entry.turnAdoptionLifecycle,
-              replayClaim: entry.processingClaim,
-            })),
-            {
-              onReplayCommitError: (err) =>
-                error(
-                  `feishu[${accountId}]: failed to commit logical replay guard: ${String(err)}`,
-                ),
-            },
-          );
-          flushLifecycle = lifecycle;
-          if (lifecycle?.abortSignal.aborted) {
-            await lifecycle.onAbandoned();
-            return;
-          }
-          if (activeEntries.length === 1) {
-            await dispatchFeishuMessage(
-              last.event,
-              resolveFeishuMessageDedupeKey(last.event),
-              last.processingClaim,
-              lifecycle,
-              [last.event.message.message_id],
-              handOffRetentions([last]),
-            );
-            await settle();
-            return;
-          }
-          const dedupedEntries = dedupeFeishuDebounceEntriesByDedupeKey(activeEntries);
-          const freshEntries: FeishuMessageDebounceEntry[] = [];
-          for (const entry of dedupedEntries) {
-            if (
-              !(await hasProcessedMessage(
-                resolveFeishuMessageDedupeKey(entry.event),
-                accountId,
-                log,
-              ))
-            ) {
-              freshEntries.push(entry);
-            }
-          }
-          const dispatchEntry = freshEntries.at(-1);
-          if (!dispatchEntry) {
-            await settle();
-            return;
-          }
-          const dispatchDedupeKey = resolveFeishuMessageDedupeKey(dispatchEntry.event);
-          if (!lifecycle) {
-            await recordSuppressedMessageIds(dedupedEntries, dispatchDedupeKey);
-          }
-          const combinedText = freshEntries
-            .map((entry) => resolveDebounceText(entry.event))
-            .filter(Boolean)
-            .join("\n");
-          const mergedMentions = resolveFeishuDebounceMentions({
-            entries: freshEntries.map((entry) => entry.event),
-            botOpenId: getBotOpenId(accountId),
-          });
-          await dispatchFeishuMessage(
-            {
-              ...dispatchEntry.event,
-              message: {
-                ...dispatchEntry.event.message,
-                ...(combinedText.trim()
-                  ? {
-                      message_type: "text",
-                      content: JSON.stringify({ text: combinedText }),
-                    }
-                  : {}),
-                mentions: mergedMentions ?? dispatchEntry.event.message.mentions,
-              },
-            },
-            dispatchDedupeKey,
-            dispatchEntry.processingClaim,
-            lifecycle,
-            freshEntries.map((entry) => entry.event.message.message_id),
-            handOffRetentions(freshEntries),
-          );
-          await settle();
-        } catch (err) {
-          await flushLifecycle?.onAbandoned();
-          throw err;
-        } finally {
-          for (const entry of entries) {
-            if (!handedOffRetentions.has(entry)) {
-              entry.sourceMessageRetention?.dispose();
-            }
-          }
-        }
+          },
+        });
       },
       onError: (err, entries) => {
         for (const entry of entries) {

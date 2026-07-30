@@ -19,7 +19,7 @@ scenario:
     - docs/channels/qa-channel.md
   codeRefs:
     - extensions/qa-lab/src/suite.ts
-    - extensions/qa-lab/src/mock-openai-server.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
     - src/agents/embedded-agent-runner/run/incomplete-turn.ts
   execution:
     kind: flow

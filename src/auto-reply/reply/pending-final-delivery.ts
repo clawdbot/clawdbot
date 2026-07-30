@@ -91,13 +91,6 @@ export function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string 
 // centralized prevents new ownership fields from leaving a phantom pending delivery.
 export const PENDING_FINAL_DELIVERY_CLEAR_PATCH = {
   pendingFinalDelivery: undefined,
-  pendingFinalDeliveryText: undefined,
-  pendingFinalDeliveryCreatedAt: undefined,
-  pendingFinalDeliveryLastAttemptAt: undefined,
-  pendingFinalDeliveryAttemptCount: undefined,
-  pendingFinalDeliveryLastError: undefined,
-  pendingFinalDeliveryContext: undefined,
-  pendingFinalDeliveryIntentId: undefined,
 } as const satisfies Partial<SessionEntry>;
 
 function collectDurableMediaDirectives(payload: ReplyPayload): string[] {

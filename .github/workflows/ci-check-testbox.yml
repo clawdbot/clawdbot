@@ -11,6 +11,7 @@ on:
         description: "Maximum GitHub job runtime for long Testbox commands"
         default: 120
   pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
     paths:
       - ".github/workflows/**"
 

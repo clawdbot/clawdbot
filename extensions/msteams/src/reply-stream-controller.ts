@@ -13,10 +13,30 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MSTeamsConfig, ReplyPayload } from "../runtime-api.js";
+import { extractMessageId } from "./media-helpers.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 type Maybe<T> = T | undefined;
+
+type TeamsStreamChunkActivity = {
+  id?: string;
+  type?: string;
+  text?: string;
+  channelData?: { streamType?: string };
+};
+
+type TeamsStreamChunkEvents = {
+  on(event: "chunk", handler: (activity: TeamsStreamChunkActivity) => void): number;
+  off(subscriptionId: number): void;
+};
+
+type MSTeamsNativeDeliveryFinalization = {
+  visibleReplySent: boolean;
+  content?: string;
+  messageId?: string;
+  fallbackPayload?: ReplyPayload;
+};
 
 // The SDK throws StreamCancelledError synchronously from stream.emit/update
 // when the user pressed Stop in Teams (Teams replies 403 to the next chunk
@@ -44,6 +64,7 @@ function isStreamCancelledError(err: unknown): boolean {
  *   block message. We bypass the controller in that case.
  */
 export function createTeamsReplyStreamController(params: {
+  allowProviderPreview: boolean;
   conversationType?: string;
   context: MSTeamsTurnContext;
   feedbackLoopEnabled: boolean;
@@ -59,13 +80,18 @@ export function createTeamsReplyStreamController(params: {
   const isPersonal = normalizeOptionalLowercaseString(params.conversationType) === "personal";
   const streamMode = resolveChannelPreviewStreamMode(params.msteamsConfig, "partial");
   const shouldUseNativeStream =
-    isPersonal && (streamMode === "partial" || streamMode === "progress");
+    params.allowProviderPreview &&
+    isPersonal &&
+    (streamMode === "partial" || streamMode === "progress");
   const shouldStreamPreviewToolProgress =
-    streamMode === "progress" && resolveChannelStreamingPreviewToolProgress(params.msteamsConfig);
+    streamMode === "progress" &&
+    resolveChannelStreamingPreviewToolProgress(params.msteamsConfig, true, streamMode);
 
   const stream = shouldUseNativeStream ? params.context.stream : undefined;
 
   let tokensEmitted = false;
+  let nativeDispatchStarted = false;
+  let nativeDeliveryClaimed = false;
   let streamFinalizationPending = false;
   let canceledLocally = false;
   // Set when `stream.emit/close` fails for a non-cancel reason after we've
@@ -87,8 +113,56 @@ export function createTeamsReplyStreamController(params: {
   // delta. Holding text instead of length preserves the next chunk when the
   // pipeline normalizes trailing whitespace between cumulative snapshots.
   let emittedText = "";
+  let acknowledgedText = "";
+  let acknowledgedStreamId: string | undefined;
+  const streamEvents = (stream as { events?: TeamsStreamChunkEvents } | undefined)?.events;
+  let streamChunkSubscription: number | undefined;
+
+  // The SDK emits `chunk` only after Teams acknowledges a cumulative typing
+  // activity. Never infer delivered text from emit(), queued bytes, or errors.
+  if (typeof streamEvents?.on === "function" && typeof streamEvents.off === "function") {
+    streamChunkSubscription = streamEvents.on("chunk", (activity) => {
+      if (
+        activity.type !== "typing" ||
+        activity.channelData?.streamType !== "streaming" ||
+        !activity.id ||
+        !activity.text ||
+        (acknowledgedStreamId !== undefined && activity.id !== acknowledgedStreamId) ||
+        !activity.text.startsWith(acknowledgedText) ||
+        !emittedText.startsWith(activity.text)
+      ) {
+        return;
+      }
+      acknowledgedStreamId = activity.id;
+      acknowledgedText = activity.text;
+    });
+  }
 
   const wasCanceled = () => canceledLocally || Boolean(stream?.canceled);
+
+  const releaseStreamChunkSubscription = (): void => {
+    if (streamChunkSubscription === undefined) {
+      return;
+    }
+    streamEvents?.off(streamChunkSubscription);
+    streamChunkSubscription = undefined;
+  };
+
+  const fallbackPayloadAfterAcknowledgedText = (payload: ReplyPayload): Maybe<ReplyPayload> => {
+    if (
+      !acknowledgedText ||
+      typeof payload.text !== "string" ||
+      !payload.text.startsWith(acknowledgedText)
+    ) {
+      return payload;
+    }
+    const remainingText = payload.text.slice(acknowledgedText.length);
+    const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+    if (!remainingText && !hasMedia) {
+      return undefined;
+    }
+    return { ...payload, text: remainingText || undefined };
+  };
 
   const fallbackPayloadForSuppressedFinal = (payload: ReplyPayload): ReplyPayload => {
     const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
@@ -195,16 +269,14 @@ export function createTeamsReplyStreamController(params: {
         stream.emit(delta);
         emittedText = fullText;
         tokensEmitted = true;
+        nativeDispatchStarted = true;
       } catch (err) {
         if (isStreamCancelledError(err)) {
           canceledLocally = true;
           return;
         }
-        // Non-cancel failure: latch streamFailed so `preparePayload` lets
-        // block delivery happen even though tokens were already emitted.
-        // The user may see a duplicate (streamed prefix + full block reply)
-        // — that's intentional and matches the pre-migration recovery
-        // behavior; truncated-only is the worse outcome.
+        // Preserve full fallback unless the SDK has proved exactly which
+        // cumulative prefix Teams accepted; failed emits prove no delivery.
         streamFailed = true;
         params.log?.warn?.(
           `msteams stream emit failed, falling back to block delivery: ${err instanceof Error ? err.message : String(err)}`,
@@ -303,14 +375,24 @@ export function createTeamsReplyStreamController(params: {
       // Partial mode with tokens already streamed: stream carries the text;
       // strip text from the payload (keep media if any) so block delivery
       // doesn't duplicate. Exception: if a non-cancel stream failure was
-      // latched mid-flight, fall through to block delivery so the user gets
-      // the full reply instead of the truncated streamed prefix.
+      // latched mid-flight, deliver only a provider-acknowledged remainder;
+      // preserve the full reply when delivery was not acknowledged.
       if (tokensEmitted && !streamFailed) {
         const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
         pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
         streamFinalizationPending = true;
         tokensEmitted = false;
         return hasMedia ? { ...payload, text: undefined } : undefined;
+      }
+      if (streamFailed) {
+        const fallback = fallbackPayloadAfterAcknowledgedText(payload);
+        // An acknowledged prefix belongs to this failed segment only;
+        // later tool-round payloads must never inherit its trimming state.
+        pendingFinalPayload = undefined;
+        acknowledgedText = "";
+        acknowledgedStreamId = undefined;
+        releaseStreamChunkSubscription();
+        return fallback;
       }
       // Progress mode (or partial mode that received no tokens — e.g. a
       // tool-only response): emit the final text into the stream so the
@@ -320,6 +402,7 @@ export function createTeamsReplyStreamController(params: {
       if (streamMode === "progress" && payload.text) {
         try {
           stream.emit(payload.text);
+          nativeDispatchStarted = true;
           pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
           streamFinalizationPending = true;
           const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
@@ -339,30 +422,56 @@ export function createTeamsReplyStreamController(params: {
       return payload;
     },
 
-    async finalize(): Promise<Maybe<ReplyPayload>> {
+    claimNativeDelivery(): boolean {
+      if (!nativeDispatchStarted || nativeDeliveryClaimed) {
+        return false;
+      }
+      nativeDeliveryClaimed = true;
+      return true;
+    },
+
+    async finalize(): Promise<MSTeamsNativeDeliveryFinalization> {
       // The delay gate may still hold a pending start timer for fast turns;
       // stop it before closing so it cannot fire against the closed stream.
       progressDraftGate.cancel();
-      if (!stream || !streamFinalizationPending || wasCanceled()) {
-        return undefined;
+      if (!stream || !nativeDispatchStarted) {
+        releaseStreamChunkSubscription();
+        return { visibleReplySent: false };
       }
-      // Emit a final MessageActivity carrying the AI-generated marker and (if
-      // enabled) the feedback channelData. The SDK's HttpStream merges this
-      // into the closing activity it sends to Teams, so streamed replies still
-      // get the AI-generated label and thumbs up/down.
-      const finalEntities: Array<Record<string, unknown>> = [
-        {
-          type: "https://schema.org/Message",
-          "@type": "Message",
-          "@context": "https://schema.org",
-          "@id": "",
-          additionalType: ["AIGeneratedContent"],
-        },
-      ];
-      const finalChannelData: Record<string, unknown> = params.feedbackLoopEnabled
-        ? { feedbackLoopEnabled: true }
-        : {};
+      const content = wasCanceled()
+        ? acknowledgedText || undefined
+        : (pendingFinalPayload?.text ?? (emittedText || undefined));
       try {
+        if (wasCanceled()) {
+          pendingFinalPayload = undefined;
+          streamFinalizationPending = false;
+          return {
+            visibleReplySent: content !== undefined,
+            ...(content === undefined ? {} : { content }),
+          };
+        }
+        if (!streamFinalizationPending) {
+          return {
+            visibleReplySent: true,
+            ...(content === undefined ? {} : { content }),
+          };
+        }
+        // Emit a final MessageActivity carrying the AI-generated marker and (if
+        // enabled) the feedback channelData. The SDK's HttpStream merges this
+        // into the closing activity it sends to Teams, so streamed replies still
+        // get the AI-generated label and thumbs up/down.
+        const finalEntities: Array<Record<string, unknown>> = [
+          {
+            type: "https://schema.org/Message",
+            "@type": "Message",
+            "@context": "https://schema.org",
+            "@id": "",
+            additionalType: ["AIGeneratedContent"],
+          },
+        ];
+        const finalChannelData: Record<string, unknown> = params.feedbackLoopEnabled
+          ? { feedbackLoopEnabled: true }
+          : {};
         stream.emit({
           type: "message",
           entities: finalEntities,
@@ -373,16 +482,30 @@ export function createTeamsReplyStreamController(params: {
         if (!result) {
           const fallback = pendingFinalPayload;
           pendingFinalPayload = undefined;
-          return fallback;
+          const fallbackPayload =
+            fallback && !wasCanceled() ? fallbackPayloadAfterAcknowledgedText(fallback) : undefined;
+          return {
+            visibleReplySent: true,
+            ...(content === undefined ? {} : { content }),
+            ...(fallbackPayload ? { fallbackPayload } : {}),
+          };
         }
         pendingFinalPayload = undefined;
-        return undefined;
+        const messageId = extractMessageId(result) ?? undefined;
+        return {
+          visibleReplySent: true,
+          ...(content === undefined ? {} : { content }),
+          ...(messageId ? { messageId } : {}),
+        };
       } catch (err) {
         if (isStreamCancelledError(err)) {
           canceledLocally = true;
           pendingFinalPayload = undefined;
           streamFinalizationPending = false;
-          return undefined;
+          return {
+            visibleReplySent: true,
+            ...(content === undefined ? {} : { content }),
+          };
         }
         // Non-cancel failure during the closing emit/close. The streamed
         // prefix is already visible to the user; the only loss is the
@@ -397,7 +520,16 @@ export function createTeamsReplyStreamController(params: {
         );
         const fallback = pendingFinalPayload;
         pendingFinalPayload = undefined;
-        return fallback;
+        const fallbackPayload = fallback
+          ? fallbackPayloadAfterAcknowledgedText(fallback)
+          : undefined;
+        return {
+          visibleReplySent: true,
+          ...(content === undefined ? {} : { content }),
+          ...(fallbackPayload ? { fallbackPayload } : {}),
+        };
+      } finally {
+        releaseStreamChunkSubscription();
       }
     },
 

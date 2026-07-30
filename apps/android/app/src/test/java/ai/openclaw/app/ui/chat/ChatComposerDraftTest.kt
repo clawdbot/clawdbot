@@ -75,6 +75,19 @@ class ChatComposerDraftTest {
   }
 
   @Test
+  fun restoredAttachmentsReplaceTheCurrentComposerSet() {
+    val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:first")
+    val state = ChatComposerStateStore()
+    val existing = PendingAttachment("existing", "existing.jpg", "image/jpeg", "YQ==")
+    val restored = PendingAttachment("restored", "image-1", "image/png", "Yg==")
+    state.addAttachments(owner, listOf(existing))
+
+    state.replaceAttachments(owner, listOf(restored))
+
+    assertEquals(listOf(restored), state.attachments.value[owner])
+  }
+
+  @Test
   fun textDraftSnapshotRestoresEveryOwnerAfterProcessRecreation() {
     var saved = arrayListOf<String>()
     val first = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:first")
@@ -703,7 +716,29 @@ class ChatComposerDraftTest {
   fun attachmentAdmissionUsesPerKindDecodedBudgets() {
     assertEquals(CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES, chatComposerAttachmentDecodedByteLimit("image/png"))
     assertEquals(CHAT_COMPOSER_MAX_AUDIO_DECODED_BYTES, chatComposerAttachmentDecodedByteLimit("audio/mpeg"))
+    assertEquals(CHAT_COMPOSER_MAX_VIDEO_DECODED_BYTES, chatComposerAttachmentDecodedByteLimit("video/mp4"))
     assertEquals(CHAT_COMPOSER_MAX_DOCUMENT_DECODED_BYTES, chatComposerAttachmentDecodedByteLimit("application/pdf"))
+    assertEquals(20L * 1024L * 1024L, CHAT_COMPOSER_MAX_VIDEO_DECODED_BYTES)
+  }
+
+  @Test
+  fun videoPositionDoesNotRelaxNonVideoAdmissionBudget() {
+    val video = PendingAttachment("video", "clip.mp4", "video/mp4", "AAAA")
+    val document = PendingAttachment("document", "report.pdf", "application/pdf", "AAAAAAAA")
+
+    fun admit(candidates: List<PendingAttachment>) =
+      admitChatAttachments(
+        currentAttachments = emptyList(),
+        candidates = candidates,
+        maxAttachmentCount = 8,
+        maxBase64Chars = 100,
+        maxDecodedBytes = 9,
+        maxNonVideoBase64Chars = 100,
+        maxNonVideoDecodedBytes = 3,
+      )
+
+    assertEquals(listOf(video), admit(listOf(video, document)).accepted)
+    assertEquals(listOf(video), admit(listOf(document, video)).accepted)
   }
 
   @Test

@@ -3,7 +3,6 @@
  */
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
-import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -15,13 +14,8 @@ import { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js"
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import type { NormalizedUsage } from "../../usage.js";
-import {
-  rotateTranscriptAfterCompaction,
-  shouldRotateCompactionTranscript,
-} from "../compaction-successor-transcript.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
-import { updateActiveEmbeddedRunSessionFile } from "../runs.js";
 import { buildEmbeddedAgentEndContext } from "./agent-end-context.js";
 import {
   finalizeAttemptContextEngineTurn,
@@ -86,8 +80,8 @@ type CompleteEmbeddedAttemptAfterTurnInput = {
 export async function completeEmbeddedAttemptAfterTurn(
   input: CompleteEmbeddedAttemptAfterTurnInput,
 ): Promise<{ sessionIdUsed: string; sessionFileUsed?: string }> {
-  const { attempt, activeContextEngine, activeSession, sessionManager, state, runtime } = input;
-  let { sessionIdUsed, sessionFileUsed } = state;
+  const { attempt, activeContextEngine, sessionManager, state, runtime } = input;
+  const { sessionIdUsed, sessionFileUsed } = state;
 
   // Context-engine hooks may call runtime LLM capabilities. Only the transcript
   // rewrite callback reacquires the synchronous session write boundary.
@@ -146,7 +140,6 @@ export async function completeEmbeddedAttemptAfterTurn(
   }
 
   if (!state.beforeAgentFinalizeRevisionReason) {
-    await input.sessionLockController.waitForSessionEvents(activeSession);
     await input.withOwnedSessionWriteLock(async () => {
       const lifecycleState = input.readLifecycleState();
       if (
@@ -168,40 +161,6 @@ export async function completeEmbeddedAttemptAfterTurn(
           log.warn(`failed to persist bootstrap completion entry: ${String(entryErr)}`);
         }
       }
-
-      if (
-        state.compactionOccurredThisAttempt &&
-        !state.promptError &&
-        !lifecycleState.aborted &&
-        !lifecycleState.timedOut &&
-        !lifecycleState.idleTimedOut &&
-        !lifecycleState.timedOutDuringCompaction &&
-        shouldRotateCompactionTranscript(attempt.config)
-      ) {
-        try {
-          const rotation = await rotateTranscriptAfterCompaction({
-            sessionManager,
-            sessionFile: attempt.sessionFile,
-          });
-          if (rotation.rotated) {
-            sessionIdUsed = rotation.sessionId ?? sessionIdUsed;
-            sessionFileUsed = rotation.sessionFile ?? sessionFileUsed;
-            updateActiveEmbeddedRunSessionFile(
-              attempt.sessionId,
-              sessionFileUsed,
-              attempt.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(attempt.runId),
-            );
-            log.info(
-              `[compaction] rotated active transcript after automatic compaction ` +
-                `(sessionKey=${attempt.sessionKey ?? attempt.sessionId})`,
-            );
-          }
-        } catch (err) {
-          log.warn("[compaction] automatic transcript rotation failed", {
-            errorMessage: formatErrorMessage(err),
-          });
-        }
-      }
     });
   }
 
@@ -221,11 +180,18 @@ export async function completeEmbeddedAttemptAfterTurn(
     !state.beforeAgentFinalizeRevisionReason
   ) {
     const lifecycleForAgentEnd = input.readLifecycleState();
+    // Abort outranks failure in terminal-outcome precedence: teardown races can
+    // stamp an AbortError into promptError, and surfacing it as `error` would
+    // make agent_end consumers treat a user abort as an errored completion.
+    const agentEndError =
+      state.promptError && !lifecycleForAgentEnd.aborted
+        ? formatErrorMessage(state.promptError)
+        : undefined;
     runAgentEndSideEffects({
       event: {
         messages: state.messagesSnapshot,
         success: !lifecycleForAgentEnd.aborted && !state.promptError,
-        error: state.promptError ? formatErrorMessage(state.promptError) : undefined,
+        error: agentEndError,
         durationMs: Date.now() - runtime.promptStartedAt,
       },
       ctx: buildEmbeddedAgentEndContext({

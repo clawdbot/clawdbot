@@ -1,7 +1,9 @@
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
-import { resolveZoomMeetingsConfig } from "./config.js";
+import { zoomMeetingsConfig } from "./config.js";
 import { createZoomMeetingsNodeInvokePolicy } from "./node-invoke-policy.js";
+
+const resolveZoomMeetingsConfig = zoomMeetingsConfig.resolveConfig;
 
 describe("Zoom meetings node invoke policy", () => {
   it("replaces setup probe commands with trusted configured commands", async () => {

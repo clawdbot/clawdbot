@@ -14,12 +14,16 @@ import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "../../packages/gateway-protocol/src/version.js";
-import { readGatewayDispatchConfig } from "../config/gateway-dispatch-config.js";
+import {
+  readGatewayDispatchConfig,
+  readGatewayDispatchConfigWithShellEnvFallback,
+} from "../config/gateway-dispatch-config.js";
 import {
   resolveConfigPath as resolveConfigPathFromPaths,
   resolveGatewayPort as resolveGatewayPortFromPaths,
   resolveStateDir as resolveStateDirFromPaths,
 } from "../config/paths.js";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
@@ -331,8 +335,10 @@ export function isGatewayExplicitAuthRequiredError(
 
 const defaultCreateGatewayClient = (opts: GatewayClientOptions) => new GatewayClient(opts);
 type GatewayRuntimeConfigLoader = () => OpenClawConfig | Promise<OpenClawConfig>;
+// Gateway dispatch owns only connection, auth, TLS, and shell-env resolution.
+// Loading the full runtime config here makes every RPC pay unrelated plugin/state startup costs.
 const defaultGetRuntimeConfig = async (): Promise<OpenClawConfig> =>
-  (await import("../config/io.js")).getRuntimeConfig();
+  getRuntimeConfigSnapshot() ?? (await readGatewayDispatchConfigWithShellEnvFallback());
 const defaultGatewayCallDeps: {
   createGatewayClient: typeof defaultCreateGatewayClient;
   getRuntimeConfig: GatewayRuntimeConfigLoader;
@@ -653,8 +659,7 @@ type ResolvedGatewayCallContext = {
   remoteUrl?: string;
   explicitAuth: ExplicitGatewayAuth;
   modeOverride?: GatewayCredentialMode;
-  localTokenPrecedence?: GatewayCredentialPrecedence;
-  localPasswordPrecedence?: GatewayCredentialPrecedence;
+  localPrecedence?: GatewayCredentialPrecedence;
   remoteTokenPrecedence?: GatewayRemoteCredentialPrecedence;
   remotePasswordPrecedence?: GatewayRemoteCredentialPrecedence;
   remoteTokenFallback?: GatewayRemoteCredentialFallback;
@@ -760,8 +765,7 @@ async function resolveGatewayCredentialsWithEnv(
     urlOverrideSource: context.urlOverrideSource,
     env,
     modeOverride: context.modeOverride,
-    localTokenPrecedence: context.localTokenPrecedence,
-    localPasswordPrecedence: context.localPasswordPrecedence,
+    localPrecedence: context.localPrecedence,
     remoteTokenPrecedence: context.remoteTokenPrecedence,
     remotePasswordPrecedence: context.remotePasswordPrecedence,
     remoteTokenFallback: context.remoteTokenFallback,
@@ -884,7 +888,7 @@ function ensureGatewaySupportsRequiredMethods(params: {
     throw new Error(
       [
         `active gateway does not support required method "${method}" for "${params.attemptedMethod}".`,
-        "Update the gateway or run without SecretRefs.",
+        "Update or restart the active gateway and try again.",
       ].join(" "),
     );
   }

@@ -3,6 +3,7 @@
  */
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
@@ -52,7 +53,7 @@ type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise
 
 type StreamSettleResult = {
   promptError: unknown;
-  promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"];
+  promptErrorSource: AgentRunAttemptFailureSource | null;
   timedOutDuringCompaction: boolean;
   compactionOccurredThisAttempt: boolean;
   messagesSnapshot: AgentMessage[];
@@ -75,7 +76,7 @@ export async function settleEmbeddedAttemptStream(input: {
   subscription: EmbeddedAttemptSubscription;
   state: {
     promptError: unknown;
-    promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"];
+    promptErrorSource: AgentRunAttemptFailureSource | null;
     yieldAborted: boolean;
     sessionIdUsed: string;
   };
@@ -143,7 +144,12 @@ export async function settleEmbeddedAttemptStream(input: {
         abortSignal: input.runAbortSignal,
       });
     } catch (err) {
-      if (!input.readLifecycleState().timedOut || !isRunnerAbortError(err)) {
+      // Timeouts AND user aborts must still settle so the attempt reaches
+      // after-turn (transcript flush, agent-end side effects). Rethrowing here
+      // unwinds the whole lane task and silently starves every agent_end
+      // consumer for aborted runs.
+      const lifecycle = input.readLifecycleState();
+      if ((!lifecycle.timedOut && !lifecycle.aborted) || !isRunnerAbortError(err)) {
         throw err;
       }
       asyncTaskWait = await waitForCompletionRequiredAsyncTasks({
@@ -152,15 +158,15 @@ export async function settleEmbeddedAttemptStream(input: {
         deadlineAtMs: Date.now(),
       });
     }
-    if (asyncTaskWait.timedOutRunIds.length > 0) {
+    // An aborted run legitimately leaves async tasks unfinished; stamping a
+    // timeout failure here would reclassify the abort as an errored completion.
+    if (asyncTaskWait.timedOutRunIds.length > 0 && !input.readLifecycleState().aborted) {
       promptError = new Error(
         `Timed out waiting for async task completion: ${asyncTaskWait.timedOutRunIds.join(", ")}`,
       );
       promptErrorSource = "prompt";
       state.promptError = promptError;
       state.promptErrorSource = promptErrorSource;
-    } else if (asyncTaskWait.waitedRunIds.length > 0) {
-      await input.sessionLockController.waitForSessionEvents(activeSession);
     }
   }
 
@@ -234,7 +240,6 @@ export async function settleEmbeddedAttemptStream(input: {
   let lastCallUsage: NormalizedUsage | undefined;
   let promptCache: EmbeddedRunAttemptResult["promptCache"];
 
-  await input.sessionLockController.waitForSessionEvents(activeSession);
   await input.withOwnedSessionWriteLock(async () => {
     const { timedOutDuringCompaction } = input.readLifecycleState();
     compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;

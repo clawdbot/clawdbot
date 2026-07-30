@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -11,7 +10,6 @@ import {
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import { ensureOpenClawAgentSessionSharingSchemaInTransaction } from "../../state/openclaw-agent-session-sharing-schema.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 
@@ -23,23 +21,10 @@ type SessionMember = {
   addedAt: number;
 };
 
-const ensuredDatabases = new WeakSet<DatabaseSync>();
 const SESSION_MEMBERSHIP_QUERY_CHUNK_SIZE = 400;
 
 function resolveDatabaseOptions(scope: SessionAccessScope): OpenClawAgentDatabaseOptions {
   return toDatabaseOptions(resolveSqliteScope(scope));
-}
-
-function ensureSessionSharingSchema(options: OpenClawAgentDatabaseOptions): OpenClawAgentDatabase {
-  const database = openOpenClawAgentDatabase(options);
-  if (ensuredDatabases.has(database.db)) {
-    return database;
-  }
-  runOpenClawAgentWriteTransaction((transactionDatabase) => {
-    ensureOpenClawAgentSessionSharingSchemaInTransaction(transactionDatabase.db);
-  }, options);
-  ensuredDatabases.add(database.db);
-  return database;
 }
 
 function getSessionMemberKysely(database: OpenClawAgentDatabase) {
@@ -47,7 +32,7 @@ function getSessionMemberKysely(database: OpenClawAgentDatabase) {
 }
 
 export function listSessionMembers(scope: SessionAccessScope): SessionMember[] {
-  const database = ensureSessionSharingSchema(resolveDatabaseOptions(scope));
+  const database = openOpenClawAgentDatabase(resolveDatabaseOptions(scope));
   const db = getSessionMemberKysely(database);
   return executeSqliteQuerySync(
     database.db,
@@ -73,7 +58,7 @@ export function listSessionMembershipKeys(
   if (!normalizedIdentityId || normalizedSessionKeys.length === 0) {
     return new Set();
   }
-  const database = ensureSessionSharingSchema(resolveDatabaseOptions(scope));
+  const database = openOpenClawAgentDatabase(resolveDatabaseOptions(scope));
   const db = getSessionMemberKysely(database);
   const memberships = new Set<string>();
   for (
@@ -102,7 +87,7 @@ export function isSessionMember(scope: SessionAccessScope, identityId: string): 
   if (!normalizedIdentityId) {
     return false;
   }
-  const database = ensureSessionSharingSchema(resolveDatabaseOptions(scope));
+  const database = openOpenClawAgentDatabase(resolveDatabaseOptions(scope));
   const db = getSessionMemberKysely(database);
   return Boolean(
     executeSqliteQueryTakeFirstSync(
@@ -116,23 +101,36 @@ export function isSessionMember(scope: SessionAccessScope, identityId: string): 
   );
 }
 
-// Membership is bound to the session instance. Authorization is rechecked
-// before these transactions, but a reset/recreate can replace the row under the
-// same key in between; verifying the expected sessionId inside the write
-// transaction stops a stale owner from mutating the replacement's members.
+// Membership is bound to a live session entry, never a transcript placeholder.
+// Authorization is rechecked before these transactions, but a reset/recreate
+// can replace the row under the same key in between; the optional expected id
+// adds a caller snapshot check after the canonical node/entry check.
 function assertAuthorizedSessionInstance(
   database: OpenClawAgentDatabase,
   sessionKey: string,
   expectedSessionId: string | undefined,
 ): void {
-  if (expectedSessionId === undefined) {
-    return;
-  }
   const row =
-    database.db /* sqlite-allow-raw: sync TOCTOU re-read of session_id inside a write transaction; Kysely async execution is forbidden in synchronous commit sections */
-      .prepare("SELECT session_id FROM session_entries WHERE session_key = ?")
-      .get(sessionKey) as { session_id?: string } | undefined;
-  if (row?.session_id !== expectedSessionId) {
+    database.db /* sqlite-allow-raw: sync TOCTOU re-read of canonical entry identity inside a write transaction; Kysely async execution is forbidden in synchronous commit sections */
+      .prepare("SELECT current_session_id, entry_json FROM session_nodes WHERE session_key = ?")
+      .get(sessionKey) as { current_session_id?: string; entry_json?: string } | undefined;
+  let entrySessionId: string | undefined;
+  try {
+    const entry = row?.entry_json ? (JSON.parse(row.entry_json) as unknown) : undefined;
+    const candidate =
+      entry && typeof entry === "object" && !Array.isArray(entry)
+        ? (entry as { sessionId?: unknown }).sessionId
+        : undefined;
+    entrySessionId = typeof candidate === "string" ? candidate : undefined;
+  } catch {
+    entrySessionId = undefined;
+  }
+  if (
+    !row ||
+    entrySessionId === undefined ||
+    row.current_session_id !== entrySessionId ||
+    (expectedSessionId !== undefined && entrySessionId !== expectedSessionId)
+  ) {
     throw new Error("session changed before sharing mutation");
   }
 }
@@ -147,7 +145,6 @@ export function addSessionMember(
     throw new Error("session member identity and actor are required");
   }
   const options = resolveDatabaseOptions(scope);
-  ensureSessionSharingSchema(options);
   const addedAt = params.addedAt ?? Date.now();
   const inserted = runOpenClawAgentWriteTransaction((database) => {
     assertAuthorizedSessionInstance(
@@ -184,7 +181,6 @@ export function removeSessionMember(
     return null;
   }
   const options = resolveDatabaseOptions(scope);
-  ensureSessionSharingSchema(options);
   return runOpenClawAgentWriteTransaction((database) => {
     assertAuthorizedSessionInstance(
       database,

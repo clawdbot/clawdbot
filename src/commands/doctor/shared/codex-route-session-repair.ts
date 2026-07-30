@@ -1,9 +1,12 @@
 import fs from "node:fs";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
-import { loadSessionStore, updateSessionStore } from "../../../config/sessions/store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../../../config/sessions/targets.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import {
+  loadLegacySessionStore,
+  updateLegacySessionStore,
+} from "../../../infra/state-migrations.legacy-session-store.js";
 import { isValidAgentHarnessSessionStoreEntry } from "../../../sessions/agent-harness-session-key.js";
 import {
   isOpenAICodexAuthProfileRef,
@@ -95,7 +98,7 @@ function clearStaleCodexFallbackNotice(
   entry: SessionEntry,
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
 ): boolean {
-  const endpoints = [entry.fallbackNoticeSelectedModel, entry.fallbackNoticeActiveModel];
+  const endpoints = [entry.fallbackNotice?.selectedModel, entry.fallbackNotice?.activeModel];
   const hasBlockedEndpoint = endpoints.some(
     (modelRef) =>
       isOpenAICodexModelRef(modelRef) &&
@@ -104,9 +107,7 @@ function clearStaleCodexFallbackNotice(
   if (hasBlockedEndpoint || !endpoints.some(isOpenAICodexModelRef)) {
     return false;
   }
-  delete entry.fallbackNoticeSelectedModel;
-  delete entry.fallbackNoticeActiveModel;
-  delete entry.fallbackNoticeReason;
+  delete entry.fallbackNotice;
   return true;
 }
 
@@ -150,6 +151,7 @@ function repairProviderlessCodexSessionOverride(
   }
 
   entry.providerOverride = "openai";
+  entry.modelOverrideRouteResolution = "resolved";
   if (entry.model !== undefined || entry.modelProvider !== undefined) {
     delete entry.model;
     delete entry.modelProvider;
@@ -187,6 +189,9 @@ function repairCodexSessionStoreRoutes(params: {
       modelKey: "modelOverride",
       blockedModelIdentities: params.blockedModelIdentities,
     });
+    if (changedOverrideModelRoute) {
+      entry.modelOverrideRouteResolution = "resolved";
+    }
     const changedProviderlessOverride = repairProviderlessCodexSessionOverride(
       entry,
       params.blockedModelIdentities,
@@ -248,8 +253,8 @@ function scanCodexSessionStoreRoutes(
       );
     };
     const fallbackNoticeEndpoints = [
-      entry.fallbackNoticeSelectedModel,
-      entry.fallbackNoticeActiveModel,
+      entry.fallbackNotice?.selectedModel,
+      entry.fallbackNotice?.activeModel,
     ];
     const hasBlockedFallbackNoticeEndpoint = fallbackNoticeEndpoints.some(
       (modelRef) =>
@@ -294,7 +299,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
   if (!params.shouldRepair) {
     const stale = targets.flatMap((target) => {
       const sessionKeys = scanCodexSessionStoreRoutes(
-        loadSessionStore(target.storePath, { skipCache: true, clone: false }),
+        loadLegacySessionStore(target.storePath),
         params.blockedModelIdentities,
       );
       return sessionKeys.map((sessionKey) => `${target.agentId}:${sessionKey}`);
@@ -320,13 +325,13 @@ export async function maybeRepairCodexSessionRoutes(params: {
   let repairedSessions = 0;
   for (const target of targets) {
     const staleSessionKeys = scanCodexSessionStoreRoutes(
-      loadSessionStore(target.storePath, { skipCache: true, clone: false }),
+      loadLegacySessionStore(target.storePath),
       params.blockedModelIdentities,
     );
     if (staleSessionKeys.length === 0) {
       continue;
     }
-    const result = await updateSessionStore(
+    const result = await updateLegacySessionStore(
       target.storePath,
       (store) =>
         repairCodexSessionStoreRoutes({

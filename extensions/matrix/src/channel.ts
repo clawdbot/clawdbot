@@ -475,7 +475,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           }).map(projectMatrixConversationBinding),
       },
       messaging: {
-        defaultMarkdownTableMode: "bullets",
+        defaultMarkdownTableMode: "block",
         targetPrefixes: ["matrix"],
         targetIdComparison: "case-sensitive",
         normalizeTarget: normalizeMatrixMessagingTarget,

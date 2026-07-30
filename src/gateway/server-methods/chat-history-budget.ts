@@ -100,11 +100,11 @@ export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; max
 export function reportOmittedChatHistory(params: {
   originalMessages: unknown[];
   finalMessages: unknown[];
-  normalizedBytes: number;
+  getNormalizedBytes: () => number;
   maxHistoryBytes: number;
   logDebug: (message: string) => void;
 }): number {
-  const { originalMessages, finalMessages, normalizedBytes, maxHistoryBytes, logDebug } = params;
+  const { originalMessages, finalMessages, getNormalizedBytes, maxHistoryBytes, logDebug } = params;
   const survivors = new Set(finalMessages);
   let omittedCount = 0;
   for (const message of originalMessages) {
@@ -119,7 +119,7 @@ export function reportOmittedChatHistory(params: {
   logLargePayload({
     surface: "gateway.chat.history",
     action: "truncated",
-    bytes: normalizedBytes,
+    bytes: getNormalizedBytes(),
     limitBytes: maxHistoryBytes,
     count: omittedCount,
     reason: "chat_history_budget",

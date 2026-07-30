@@ -4942,6 +4942,7 @@ describe("DiscordVoiceManager", () => {
     const manager = createManager(
       {
         groupPolicy: "open",
+        allowFrom: ["discord:u-guest"],
         voice: {
           model: "openai/gpt-5.4-mini",
         },
@@ -4966,7 +4967,11 @@ describe("DiscordVoiceManager", () => {
     } as never);
 
     const client = createClientWithMember("u-guest", "Guest", "4321");
-    const manager = createManager({ groupPolicy: "open" }, client, {});
+    const manager = createManager(
+      { groupPolicy: "open", allowFrom: ["discord:u-guest"] },
+      client,
+      {},
+    );
     await processVoiceSegment(manager, "u-guest");
 
     const commandArgs = lastAgentCommandArgs() as
@@ -4989,7 +4994,11 @@ describe("DiscordVoiceManager", () => {
       text: `hello from voice\n\n${"x".repeat(700)}`,
     });
     const client = createClientWithMember("u-debug", "Debug", "0001", "Debug Speaker");
-    const manager = createManager({ groupPolicy: "open" }, client, {});
+    const manager = createManager(
+      { groupPolicy: "open", allowFrom: ["discord:u-debug"] },
+      client,
+      {},
+    );
 
     await processVoiceSegment(manager, "u-debug");
 
@@ -5018,7 +5027,11 @@ describe("DiscordVoiceManager", () => {
     } as never);
 
     const client = createClientWithMember("u-guest", "Guest", "4321");
-    const manager = createManager({ groupPolicy: "open" }, client, {});
+    const manager = createManager(
+      { groupPolicy: "open", allowFrom: ["discord:u-guest"] },
+      client,
+      {},
+    );
     await processVoiceSegment(manager, "u-guest");
 
     expect(lastTtsStreamArgs().channel).toBe("discord");
@@ -5040,6 +5053,7 @@ describe("DiscordVoiceManager", () => {
     const manager = createManager(
       {
         groupPolicy: "open",
+        allowFrom: ["discord:u-guest"],
         guilds: {
           g1: {
             channels: {
@@ -5076,6 +5090,7 @@ describe("DiscordVoiceManager", () => {
     const manager = createManager(
       {
         groupPolicy: "open",
+        allowFrom: ["discord:u-owner"],
         guilds: {
           g1: {
             channels: {

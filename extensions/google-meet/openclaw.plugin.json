@@ -11,7 +11,8 @@
     "onCapabilities": ["tool"]
   },
   "contracts": {
-    "tools": ["google_meet"]
+    "tools": ["google_meet"],
+    "transcriptSourceProviders": ["google-meet"]
   },
   "uiHints": {
     "defaults.meeting": {

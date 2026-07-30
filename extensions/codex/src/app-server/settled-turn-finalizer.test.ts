@@ -1,9 +1,7 @@
-import type {
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import {
   attachCodexMirrorAttestation,
   fingerprintCodexMirrorSourceMessage,
@@ -50,14 +48,7 @@ function createAttempt(): EmbeddedRunAttemptParams {
 
 function createSettledAttempt(): EmbeddedRunAttemptResult {
   return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
-    promptError: null,
-    promptErrorSource: null,
+    terminal: { kind: "ok" },
     sessionIdUsed: "session-1",
     messagesSnapshot: [
       {
@@ -124,7 +115,9 @@ describe("runCodexSettledTurnFinalization", () => {
           assistantMirrorIdentitiesOwned: ["settled-finalizer:run-1"],
           messagesPresent: [
             attachCodexMirrorAttestation(
-              assistant,
+              Object.assign({}, assistant, {
+                idempotencyKey: "codex-settled-finalizer:run-1:assistant",
+              }),
               fingerprintCodexMirrorSourceMessage(assistant as never),
             ),
           ],
@@ -181,6 +174,7 @@ describe("runCodexSettledTurnFinalization", () => {
     );
     expect(result).toMatchObject({
       assistantTranscriptOwned: true,
+      assistantTranscriptIdempotencyKey: "codex-settled-finalizer:run-1:assistant",
       usage: { input: 5, output: 4, cacheRead: 2, cacheWrite: 1, total: 12 },
       assistant: {
         role: "assistant",
@@ -255,6 +249,70 @@ describe("runCodexSettledTurnFinalization", () => {
       expect(mocks.mirror).not.toHaveBeenCalled();
     },
   );
+
+  it("accepts the exact current-turn prompt echo once", async () => {
+    const attempt = createAttempt();
+    mocks.runBounded.mockResolvedValue({
+      text: "The update was sent successfully.",
+      items: [
+        {
+          id: "prompt-echo",
+          type: "userMessage",
+          content: [{ type: "text", text: attempt.prompt, text_elements: [] }],
+        },
+        { id: "answer", type: "agentMessage", text: "The update was sent successfully." },
+      ],
+      model: "gpt-5.4",
+    });
+
+    await expect(
+      runCodexSettledTurnFinalization({ attempt, settledAttempt: createSettledAttempt() }, {}),
+    ).resolves.toMatchObject({ assistantTranscriptOwned: true });
+    expect(mocks.mirror).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a mismatched current-turn prompt echo before transcript mutation", async () => {
+    mocks.runBounded.mockResolvedValue({
+      text: "The update was sent successfully.",
+      items: [
+        {
+          id: "prompt-echo",
+          type: "userMessage",
+          content: [{ type: "text", text: "A different prompt.", text_elements: [] }],
+        },
+      ],
+      model: "gpt-5.4",
+    });
+
+    await expect(
+      runCodexSettledTurnFinalization(
+        { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
+        {},
+      ),
+    ).rejects.toThrow("unexpected native item: userMessage");
+    expect(mocks.mirror).not.toHaveBeenCalled();
+  });
+
+  it("rejects a duplicate current-turn prompt echo before transcript mutation", async () => {
+    const attempt = createAttempt();
+    const promptEcho = {
+      type: "userMessage",
+      content: [{ type: "text", text: attempt.prompt, text_elements: [] }],
+    };
+    mocks.runBounded.mockResolvedValue({
+      text: "The update was sent successfully.",
+      items: [
+        { id: "prompt-echo-1", ...promptEcho },
+        { id: "prompt-echo-2", ...promptEcho },
+      ],
+      model: "gpt-5.4",
+    });
+
+    await expect(
+      runCodexSettledTurnFinalization({ attempt, settledAttempt: createSettledAttempt() }, {}),
+    ).rejects.toThrow("unexpected native item: userMessage");
+    expect(mocks.mirror).not.toHaveBeenCalled();
+  });
 
   it("rejects a missing frozen context before starting the isolated turn", async () => {
     const settledAttempt = createSettledAttempt();

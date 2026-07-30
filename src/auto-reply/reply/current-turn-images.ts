@@ -10,9 +10,8 @@ import {
   stripExtractedFileImageMetadata,
   type ExtractedFileImage,
 } from "../../media-understanding/extracted-file-images.js";
-import { projectMediaFacts } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import type { MsgContext } from "../templating.js";
+import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { resolveAgentTurnAttachments } from "./agent-turn-attachments.js";
 
 type CurrentImageAttachment = {
@@ -92,7 +91,6 @@ function createUndescribedImageContext(
   return {
     ...ctx,
     media,
-    ...projectMediaFacts(media),
   };
 }
 

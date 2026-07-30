@@ -12,6 +12,7 @@ import {
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
 import { computeNextHeartbeatPhaseDueMs, resolveHeartbeatPhaseMs } from "./heartbeat-schedule.js";
 import {
+  getHeartbeatWakeAbortSignal,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   requestHeartbeat,
   setHeartbeatWakeHandler,
@@ -46,48 +47,102 @@ describe("startHeartbeatRunner", () => {
     } as OpenClawConfig;
   }
 
-  it("keeps a local fallback timer when cron is disabled, none when cron owns cadence", async () => {
+  it("does not self-fire when cron is disabled", async () => {
     useFakeHeartbeatTime();
-    const cronDisabledRun = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runOnce = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     const disabledCfg = {
       ...heartbeatConfig(),
       cron: { enabled: false },
     } as OpenClawConfig;
-    const fallbackRunner = startHeartbeatRunner({
-      cfg: disabledCfg,
-      runOnce: cronDisabledRun,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
-    });
-    // Shipped contract: cron.enabled=false gateways still get scheduled
-    // heartbeats — the runner self-fires without any external poke.
-    await vi.advanceTimersByTimeAsync(31 * 60_000);
-    expect(cronDisabledRun).toHaveBeenCalled();
-    fallbackRunner.stop();
-
-    const cronOwnedRun = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    const cronOwnedRunner = startDefaultRunner(cronOwnedRun);
-    // With cron owning cadence there is no self-firing timer.
-    await vi.advanceTimersByTimeAsync(31 * 60_000);
-    expect(cronOwnedRun).not.toHaveBeenCalled();
-    cronOwnedRunner.stop();
-  });
-
-  it("chains clamped fallback timers past Node's setTimeout cap to long due times", async () => {
-    useFakeHeartbeatTime();
-    const runOnce = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     const runner = startHeartbeatRunner({
-      cfg: {
-        agents: { defaults: { heartbeat: { every: "60d" } } },
-        cron: { enabled: false },
-      } as OpenClawConfig,
+      cfg: disabledCfg,
       runOnce,
       stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
-    // 60d exceeds the ~24.85d setTimeout cap: each clamped firing defers
-    // not-due and must re-arm until the real due slot inside 60d passes.
-    await vi.advanceTimersByTimeAsync(61 * 24 * 60 * 60 * 1000);
-    expect(runOnce).toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(31 * 60_000);
+    expect(runOnce).not.toHaveBeenCalled();
     runner.stop();
+  });
+
+  it("starts stopped when its owner signal is already aborted", async () => {
+    useFakeHeartbeatTime();
+    const owner = new AbortController();
+    owner.abort();
+    const runOnce = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce,
+      abortSignal: owner.signal,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    requestHeartbeat({
+      source: "manual",
+      intent: "manual",
+      reason: "manual",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runOnce).not.toHaveBeenCalled();
+
+    const drain = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
+    const disposeDrain = setHeartbeatWakeHandler(drain);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(drain).toHaveBeenCalledOnce();
+    disposeDrain();
+    runner.stop();
+  });
+
+  it("removes its owner abort listener on manual stop", () => {
+    const owner = new AbortController();
+    const removeListener = vi.spyOn(owner.signal, "removeEventListener");
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      abortSignal: owner.signal,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    runner.stop();
+
+    expect(removeListener).toHaveBeenCalledWith("abort", expect.any(Function));
+  });
+
+  it("aborts an active wake when the runner stops", async () => {
+    useFakeHeartbeatTime();
+    let finishWake: (() => void) | undefined;
+    const wakeFinished = new Promise<void>((resolve) => {
+      finishWake = resolve;
+    });
+    let wakeSignal: AbortSignal | undefined;
+    const runOnce = vi.fn(async () => {
+      wakeSignal = getHeartbeatWakeAbortSignal();
+      await wakeFinished;
+      return { status: "ran" as const, durationMs: 1 };
+    });
+    const runner = startDefaultRunner(runOnce);
+    requestHeartbeat({
+      source: "manual",
+      intent: "manual",
+      reason: "manual",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(wakeSignal?.aborted).toBe(false);
+
+    runner.stop();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(wakeSignal?.aborted).toBe(true);
+    finishWake?.();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const drain = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
+    const disposeDrain = setHeartbeatWakeHandler(drain);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(drain).toHaveBeenCalledOnce();
+    disposeDrain();
   });
 
   function resolveDueFromNow(nowMs: number, intervalMs: number, agentId: string) {
@@ -268,6 +323,88 @@ describe("startHeartbeatRunner", () => {
       startIndex: 1,
     });
 
+    runner.stop();
+  });
+
+  it("uses the persisted monitor cadence for scheduled ticks and later cooldown", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startDefaultRunner(runSpy);
+    const monitorAnchorMs = resolveHeartbeatPhaseMs({
+      schedulerSeed: TEST_SCHEDULER_SEED,
+      agentId: "main",
+      intervalMs: 5 * 60_000,
+    });
+    const monitorDueMs = resolveDueFromNow(0, 5 * 60_000, "main");
+    await vi.advanceTimersByTimeAsync(monitorDueMs);
+
+    requestHeartbeat({
+      source: "interval",
+      intent: "scheduled",
+      reason: "interval",
+      agentId: "main",
+      scheduledEveryMs: 5 * 60_000,
+      scheduledAnchorMs: monitorAnchorMs,
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect((getRunCall(runSpy, 0).heartbeat as { every?: string }).every).toBe("300000ms");
+
+    await vi.advanceTimersByTimeAsync(4 * 60_000);
+    requestHeartbeat(wake("exec-event", { agentId: "main", coalesceMs: 0 }));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    runner.stop();
+  });
+
+  it("keeps persisted monitor cadence authoritative when its tick joins a task turn", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startDefaultRunner(runSpy);
+    const monitorAnchorMs = resolveHeartbeatPhaseMs({
+      schedulerSeed: TEST_SCHEDULER_SEED,
+      agentId: "main",
+      intervalMs: 5 * 60_000,
+    });
+
+    requestHeartbeat({
+      source: "interval",
+      intent: "scheduled",
+      reason: "interval",
+      agentId: "main",
+      scheduledEveryMs: 5 * 60_000,
+      scheduledAnchorMs: monitorAnchorMs,
+      coalesceMs: 100,
+    });
+    requestHeartbeat({
+      source: "interval",
+      intent: "task",
+      reason: "heartbeat-task:job-inbox",
+      agentId: "main",
+      tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
+      coalesceMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expectRunCallFields(runSpy, 0, {
+      intent: "task",
+      tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
+    });
+    expect((getRunCall(runSpy, 0).heartbeat as { every?: string }).every).toBe("300000ms");
+
+    await vi.advanceTimersByTimeAsync(4 * 60_000);
+    requestHeartbeat(wake("exec-event", { agentId: "main", coalesceMs: 0 }));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
     runner.stop();
   });
 
@@ -752,8 +889,8 @@ describe("startHeartbeatRunner", () => {
     expect(runSpy).toHaveBeenCalledTimes(1);
 
     // Simulate the runaway: 4 more exec-event wakes from backgrounded process
-    // exits, fired well within the configured 30m interval. These should be
-    // debounced by the cooldown — the agent just ran, nothing has changed.
+    // exits, fired well within the configured 30m interval. They coalesce into
+    // one retained turn after the 30s floor instead of running every 10s.
     for (let i = 0; i < 4; i++) {
       await vi.advanceTimersByTimeAsync(10_000); // 10s between background exits
       requestHeartbeat({
@@ -766,10 +903,57 @@ describe("startHeartbeatRunner", () => {
       await vi.advanceTimersByTimeAsync(1);
     }
 
-    // Total elapsed: ~40s. Configured `every` is 30m. Subsequent exec-events
-    // should NOT trigger fresh runs within the cooldown window.
-    expect(runSpy).toHaveBeenCalledTimes(1);
+    // Total elapsed: ~40s. The queued events produced one follow-up at the
+    // spacing boundary; they did not bypass the floor or wait for the 30m tick.
+    expect(runSpy).toHaveBeenCalledTimes(2);
 
+    // Settle the final retained batch so this module-level wake queue is empty
+    // before the next runner lifecycle starts.
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(runSpy).toHaveBeenCalledTimes(3);
+
+    runner.stop();
+  });
+
+  it("retains an event that collides with a task until the spacing floor", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    requestHeartbeat({
+      source: "interval",
+      intent: "task",
+      reason: "heartbeat-task:job-inbox",
+      agentId: "main",
+      tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
+      coalesceMs: 0,
+    });
+    requestHeartbeat({
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      agentId: "main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expectRunCallFields(runSpy, 0, {
+      intent: "task",
+      tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
+    });
+
+    await vi.advanceTimersByTimeAsync(29_998);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    expectRunCallFields(runSpy, 1, { intent: "event", reason: "exec-event" });
+    expect(getRunCall(runSpy, 1).tasks).toEqual([]);
     runner.stop();
   });
 

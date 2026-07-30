@@ -336,8 +336,21 @@ export function describeReplyContext(
   }
   const contextInfo = extractContextInfo(message);
   const quoted = normalizeMessageContent(contextInfo?.quotedMessage as proto.IMessage | undefined);
-  if (!quoted) {
+  if (!quoted && !contextInfo?.stanzaId) {
     return null;
+  }
+  const senderJid = contextInfo?.participant ?? undefined;
+  const sender = resolveComparableIdentity({
+    jid: senderJid,
+    label: senderJid ? (jidToE164(senderJid) ?? senderJid) : "unknown sender",
+  });
+  if (!quoted) {
+    // Baileys may preserve a real reply ID while omitting its private quoted payload.
+    return {
+      id: contextInfo?.stanzaId || undefined,
+      body: "[quoted message unavailable]",
+      sender,
+    };
   }
   const location = extractLocationData(quoted);
   const locationText = location ? formatLocationText(location) : undefined;
@@ -354,11 +367,6 @@ export function describeReplyContext(
     );
     return null;
   }
-  const senderJid = contextInfo?.participant ?? undefined;
-  const sender = resolveComparableIdentity({
-    jid: senderJid,
-    label: senderJid ? (jidToE164(senderJid) ?? senderJid) : "unknown sender",
-  });
   return {
     id: contextInfo?.stanzaId || undefined,
     body: body ?? "",

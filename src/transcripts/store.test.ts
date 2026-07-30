@@ -73,6 +73,28 @@ describe("TranscriptsStore", () => {
     ]);
   });
 
+  it("deduplicates exact retries but preserves same-id revisions", async () => {
+    const { store } = createStore();
+    const target = session();
+    const interim = { id: "utterance-1", text: "draft", final: false };
+    await store.writeSession(target);
+    await store.appendUtteranceForSession(target, interim);
+    await store.appendUtteranceForSession(target, interim);
+    const final = {
+      id: "utterance-1",
+      text: "final text",
+      final: true,
+    };
+    await store.appendUtteranceForSession(target, final);
+    await store.appendUtteranceForSession(target, interim);
+    await store.appendUtteranceForSession(target, final);
+
+    await expect(store.readUtterancesForSession(target)).resolves.toMatchObject([
+      interim,
+      { id: "utterance-1", text: "final text", final: true },
+    ]);
+  });
+
   it("requires date-qualified selectors for repeated ids", async () => {
     const { store } = createStore();
     await store.writeSession(session("standup", "2026-07-01T10:00:00.000Z"));

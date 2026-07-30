@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sha256Hex } from "../infra/crypto-digest.js";
+import { removePathWithinRoot } from "../infra/fs-safe-remove.js";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
 
@@ -82,7 +83,7 @@ export async function writeTranscriptArtifact(
 }
 
 export async function removeTranscriptArtifact(rootDir: string, fileName: string): Promise<void> {
-  await fs.rm(path.join(rootDir, fileName), { force: true });
+  await removePathWithinRoot({ rootDir, relativePath: fileName, force: true });
 }
 
 export async function isCaseSensitiveDirectory(directory: string): Promise<boolean> {

@@ -312,6 +312,18 @@ func (accidentalListMarkerTranslator) TranslateRaw(_ context.Context, text, _, _
 
 func (accidentalListMarkerTranslator) Close() {}
 
+type translatedOrdinalTranslator struct{}
+
+func (translatedOrdinalTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	return text, nil
+}
+
+func (translatedOrdinalTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	return strings.NewReplacer("1st failure", "1. Fehler", "2nd failure", "2. Fehler").Replace(text), nil
+}
+
+func (translatedOrdinalTranslator) Close() {}
+
 type duplicateFirstFencedPlaceholderTranslator struct {
 	rawCalls int
 }
@@ -809,6 +821,39 @@ func TestEscapeUnexpectedMarkdownListMarkersPreservesFencedExamples(t *testing.T
 	}
 }
 
+func TestNormalizeMaskedListMarkerSpacingRestoresSourceWhitespace(t *testing.T) {
+	t.Parallel()
+
+	first := "__OC_I18N_000001__"
+	second := "__OC_I18N_000002__"
+	markers := map[string]string{first: "- ", second: "  - "}
+	source := "Intro.\n\n" + first + "First\n  continuation\n" + second + "Second\n"
+	translated := "Einleitung. " + first + "Erste\n  Fortsetzung\n\n\n" + second + "Zweite\n"
+	want := "Einleitung.\n\n" + first + "Erste\n  Fortsetzung\n" + second + "Zweite\n"
+
+	if got := normalizeMaskedListMarkerSpacing(source, translated, markers); got != want {
+		t.Fatalf("unexpected normalized spacing:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestTranslateDocBodyChunkedEscapesTranslatedOrdinalAtListItemStart(t *testing.T) {
+	t.Parallel()
+
+	body := "- 1st failure: 30 seconds\n- 2nd failure: 1 minute\n- 3rd+ failure: 5 minutes\n"
+	translated, err := translateDocBodyChunked(
+		context.Background(), translatedOrdinalTranslator{}, "concepts/model-failover.md", body, "en", "de",
+	)
+	if err != nil {
+		t.Fatalf("translateDocBodyChunked returned error: %v", err)
+	}
+	if !strings.Contains(translated, `- 1\. Fehler: 30 seconds`) || !strings.Contains(translated, `- 2\. Fehler: 1 minute`) {
+		t.Fatalf("expected translated ordinals to be escaped:\n%s", translated)
+	}
+	if err := validateDocBodyFencedLiterals(body, translated); err != nil {
+		t.Fatalf("expected repaired final structure to validate: %v", err)
+	}
+}
+
 func TestValidateDocChunkTranslationRejectsTranslatedInlineCode(t *testing.T) {
 	t.Parallel()
 
@@ -843,6 +888,30 @@ func TestValidateDocChunkTranslationAcceptsReorderedInlineCode(t *testing.T) {
 
 	if err := validateDocChunkTranslation(source, translated); err != nil {
 		t.Fatalf("expected reordered intact inline code to pass, got %v", err)
+	}
+}
+
+func TestUnwrapUnexpectedInlineCodeSpans(t *testing.T) {
+	t.Parallel()
+
+	source := "Use labels in ordinary prose.\n"
+	translated := "Verwende `Bezeichnungen` in `normalem Text`.\n"
+	want := "Verwende Bezeichnungen in normalem Text.\n"
+	if got := unwrapUnexpectedInlineCodeSpans(source, translated); got != want {
+		t.Fatalf("unexpected inline-code repair:\n%s\nwant:\n%s", got, want)
+	}
+	if err := validateDocChunkTranslation(source, want); err != nil {
+		t.Fatalf("expected repaired translation to validate: %v", err)
+	}
+}
+
+func TestUnwrapUnexpectedInlineCodeSpansPreservesSourceCodeContract(t *testing.T) {
+	t.Parallel()
+
+	source := "Use `--source`.\n"
+	translated := "Verwende `--target`.\n"
+	if got := unwrapUnexpectedInlineCodeSpans(source, translated); got != translated {
+		t.Fatalf("expected source inline-code contract to remain untouched: %q", got)
 	}
 }
 
@@ -1137,6 +1206,38 @@ func TestValidateDocChunkTranslationAllowsTranslatedProseInIsolatedIndentedFence
 	}
 	if err := validateDocChunkTranslation(source, translated); err != nil {
 		t.Fatalf("expected translated fence prose to validate, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationAllowsDedentedCodeInIndentedFence(t *testing.T) {
+	t.Parallel()
+
+	sourceFence := "    ```typescript\n" +
+		"const plugin = createPlugin<Account>({\n" +
+		"  // Account resolution belongs on `config`.\n" +
+		"  notify: (code) => `Pairing code: ${code}`,\n" +
+		"});\n" +
+		"    ```\n"
+	translatedFence := "    ```typescript\n" +
+		"const plugin = createPlugin<Account>({\n" +
+		"  // La resolución de cuentas pertenece a `config`.\n" +
+		"  notify: (code) => `Código de emparejamiento: ${code}`,\n" +
+		"});\n" +
+		"    ```\n"
+
+	if err := validateDocChunkTranslation(sourceFence, translatedFence); err != nil {
+		t.Fatalf("expected translated pure fenced chunk to validate, got %v", err)
+	}
+
+	source := "<Example>\n" + sourceFence + "    Run `openclaw doctor` after editing.\n</Example>\n"
+	translated := "<Example>\n" + translatedFence + "    Ejecuta `openclaw doctor` después de editar.\n</Example>\n"
+	if err := validateDocChunkTranslation(source, translated); err != nil {
+		t.Fatalf("expected translated component fence and preserved trailing inline code to validate, got %v", err)
+	}
+	changedTrailingCode := strings.Replace(translated, "`openclaw doctor`", "`openclaw fix`", 1)
+	err := validateDocChunkTranslation(source, changedTrailingCode)
+	if err == nil || !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected changed inline code after the fence to be rejected, got %v", err)
 	}
 }
 
@@ -2359,6 +2460,7 @@ func TestTranslateDocBodyChunkedMasksInlineCodeAndListMarkers(t *testing.T) {
 	body := strings.Join([]string{
 		"- Visible prose uses `openclaw config`.",
 		"  1. Visible prose keeps ``nested `ticks` `` exact.",
+		"- Visible prose keeps Hailuo 2.3/02 exact.",
 		"- Channel configs:",
 		"  - Telegram: Visible prose.",
 		"  - WhatsApp: Visible prose.",
@@ -2383,7 +2485,7 @@ func TestTranslateDocBodyChunkedMasksInlineCodeAndListMarkers(t *testing.T) {
 		t.Fatal("expected raw translator inputs")
 	}
 	for _, input := range translator.rawInputs {
-		if strings.Contains(input, "`openclaw config`") || strings.Contains(input, "``nested `ticks` ``") {
+		if strings.Contains(input, "`openclaw config`") || strings.Contains(input, "``nested `ticks` ``") || strings.Contains(input, "2.3/02") {
 			t.Fatalf("expected inline code outside fences to be masked:\n%s", input)
 		}
 		if strings.Contains(input, "- Visible prose uses") || strings.Contains(input, "1. Visible prose keeps") || strings.Contains(input, "> - Visible prose inside a quote.") {
@@ -2396,6 +2498,7 @@ func TestTranslateDocBodyChunkedMasksInlineCodeAndListMarkers(t *testing.T) {
 	for _, exact := range []string{
 		"- Видимый текст uses `openclaw config`.",
 		"  1. Видимый текст keeps ``nested `ticks` `` exact.",
+		"- Видимый текст keeps Hailuo 2.3/02 exact.",
 		"- Channel configs:\n  - Telegram: Видимый текст.\n  - WhatsApp: Видимый текст.",
 		"> - Видимый текст inside a quote.",
 		"```md\n- Видимый текст and `fenced example` stay exposed.\n```",
@@ -2650,8 +2753,8 @@ func TestValidateDocBodyRejectsChangedCompositeLiteral(t *testing.T) {
 func TestExtractNumericValuesKeepsLowAmbiguityComposites(t *testing.T) {
 	t.Parallel()
 
-	got := strings.Join(extractNumericValues("0xFF 0b101 0o755 1.5:1 24/7 1e-3 v1.2.3 v24/7 24/7z"), ",")
-	if want := "0xFF,0b101,0o755,1.5:1,24/7,1e-3"; got != want {
+	got := strings.Join(extractNumericValues("0xFF 0b101 0o755 1.5:1 24/7 1e-3 v1.2.3 v24/7 24/7z Hailuo-2.3/02"), ",")
+	if want := "0xFF,0b101,0o755,1.5:1,24/7,1e-3,2.3/02"; got != want {
 		t.Fatalf("unexpected composite literals: got=%q want=%q", got, want)
 	}
 	if err := validateDocChunkTranslation("Supports 1:1 conversations.\n", "Unterstützt 1:1-Unterhaltungen.\n"); err != nil {
@@ -2659,6 +2762,9 @@ func TestExtractNumericValuesKeepsLowAmbiguityComposites(t *testing.T) {
 	}
 	if err := validateDocChunkTranslation("Available 24/7.\n", "24/7 उपलब्ध।\n"); err != nil {
 		t.Fatalf("expected translated prose around exact slash ratio to pass: %v", err)
+	}
+	if err := validateDocChunkTranslation("Hailuo 2.3/02 models.\n", "Hailuo-2.3/02-Modelle.\n"); err != nil {
+		t.Fatalf("expected locale hyphen compound around exact ratio to pass: %v", err)
 	}
 }
 

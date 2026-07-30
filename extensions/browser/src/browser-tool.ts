@@ -1,3 +1,4 @@
+import { BROWSER_PROXY_COMMAND } from "./browser-node-commands.js";
 /**
  * Browser agent tool registration.
  *
@@ -15,12 +16,13 @@ import {
   executeActAction,
   executeConsoleAction,
   executeDownloadAction,
-  executeSnapshotAction,
+  executeExtractAction,
   executeTabsAction,
 } from "./browser-tool.actions.js";
 import {
   type AnyAgentTool,
   type NodeListNode,
+  BrowserToolOutputSchema,
   BrowserToolSchema,
   browserAct,
   browserArmDialog,
@@ -30,6 +32,7 @@ import {
   browserFocusTab,
   browserImportProfile,
   browserNavigate,
+  browserPageContent,
   browserOpenTab,
   browserPdfSave,
   browserProfiles,
@@ -38,13 +41,18 @@ import {
   browserStart,
   browserStatus,
   browserStop,
+  completeWithPreparedSimpleCompletionModel,
   describeImageFile,
+  extractAssistantText,
   getRuntimeConfig,
   getBrowserProfileCapabilities,
   imageResultFromFile,
+  htmlToMarkdown,
   jsonResult,
   listNodes,
   normalizeOptionalString,
+  normalizeWhitespace,
+  prepareSimpleCompletionModelForAgent,
   readPositiveIntegerParam,
   readStringParam,
   readStringValue,
@@ -54,12 +62,15 @@ import {
   resolveNodeIdFromList,
   resolveProfile,
   saveMediaBuffer,
+  sanitizeHtml,
   selectDefaultNodeFromList,
   stageBrowserScreenshotForSharing,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
+  validateJsonSchemaValue,
 } from "./browser-tool.runtime.js";
+import { appendNavigatedPageState, executeSnapshotAction } from "./browser-tool.snapshot.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
 import { parseBrowserNavigationUrl } from "./browser/navigation-guard.js";
 import { normalizeBrowserScreenshot } from "./browser/screenshot.js";
@@ -76,6 +87,7 @@ const browserToolDeps = {
   browserFocusTab,
   browserImportProfile,
   browserNavigate,
+  browserPageContent,
   browserOpenTab,
   browserPdfSave,
   browserProfiles,
@@ -84,16 +96,23 @@ const browserToolDeps = {
   browserStart,
   browserStatus,
   browserStop,
+  completeWithPreparedSimpleCompletionModel,
   describeImageFile,
+  extractAssistantText,
   getRuntimeConfig,
   imageResultFromFile,
+  htmlToMarkdown,
   listNodes,
+  normalizeWhitespace,
   normalizeBrowserScreenshot,
   saveMediaBuffer,
+  sanitizeHtml,
+  prepareSimpleCompletionModelForAgent,
   stageBrowserScreenshotForSharing,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
+  validateJsonSchemaValue,
 };
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
@@ -195,12 +214,14 @@ function readActRequestParam(params: Record<string, unknown>) {
 type BrowserNodeTarget = {
   nodeId: string;
   label?: string;
+  commands: string[];
+  pendingDeclaredCommands: string[];
 };
 
 function isBrowserNode(node: NodeListNode) {
   const caps = Array.isArray(node.caps) ? node.caps : [];
   const commands = Array.isArray(node.commands) ? node.commands : [];
-  return caps.includes("browser") || commands.includes("browser.proxy");
+  return caps.includes("browser") || commands.includes(BROWSER_PROXY_COMMAND);
 }
 
 async function resolveBrowserNodeTarget(params: {
@@ -250,7 +271,14 @@ async function resolveBrowserNodeTarget(params: {
       allowCompactDisplayName: true,
     });
     const node = browserNodes.find((entry) => entry.nodeId === nodeId);
-    return { nodeId, label: node?.displayName ?? node?.remoteIp ?? nodeId };
+    return {
+      nodeId,
+      label: node?.displayName ?? node?.remoteIp ?? nodeId,
+      commands: Array.isArray(node?.commands) ? node.commands : [],
+      pendingDeclaredCommands: Array.isArray(node?.pendingDeclaredCommands)
+        ? node.pendingDeclaredCommands
+        : [],
+    };
   }
 
   const selected = selectDefaultNodeFromList(browserNodes, {
@@ -263,6 +291,10 @@ async function resolveBrowserNodeTarget(params: {
       return {
         nodeId: selected.nodeId,
         label: selected.displayName ?? selected.remoteIp ?? selected.nodeId,
+        commands: Array.isArray(selected.commands) ? selected.commands : [],
+        pendingDeclaredCommands: Array.isArray(selected.pendingDeclaredCommands)
+          ? selected.pendingDeclaredCommands
+          : [],
       };
     }
     throw new Error(
@@ -278,6 +310,10 @@ async function resolveBrowserNodeTarget(params: {
     return {
       nodeId: selected.nodeId,
       label: selected.displayName ?? selected.remoteIp ?? selected.nodeId,
+      commands: Array.isArray(selected.commands) ? selected.commands : [],
+      pendingDeclaredCommands: Array.isArray(selected.pendingDeclaredCommands)
+        ? selected.pendingDeclaredCommands
+        : [],
     };
   }
   return null;
@@ -397,6 +433,7 @@ export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   activeModel?: {
@@ -416,9 +453,11 @@ export function createBrowserTool(opts?: {
   return {
     label: "Browser",
     name: "browser",
+    resultContentSource: "network",
     description: describeBrowserTool({ targetDefault, hostHint }),
     parameters: BrowserToolSchema,
-    execute: async (_toolCallId, args) => {
+    outputSchema: BrowserToolOutputSchema,
+    execute: async (_toolCallId, args, signal) => {
       const bindingResult =
         opts?.runToolBinding === undefined
           ? undefined
@@ -500,7 +539,7 @@ export function createBrowserTool(opts?: {
         opts?.allowHostControl !== false,
       );
       const proxyRequest = nodeTarget
-        ? createBrowserNodeProxyRequest({ nodeTarget, allowAutomaticHostFallback })
+        ? createBrowserNodeProxyRequest({ nodeTarget, allowAutomaticHostFallback, signal })
         : null;
       const toolTimeoutMs =
         requestedTimeoutMs ??
@@ -735,6 +774,18 @@ export function createBrowserTool(opts?: {
             proxyRequest,
             onTabActivity: sessionTabs.touch,
           });
+        case "extract":
+          return await executeExtractAction({
+            input: params,
+            baseUrl,
+            profile,
+            proxyRequest,
+            agentId: opts?.agentId ?? "main",
+            agentDir: opts?.agentDir,
+            signal,
+            deps: browserToolDeps,
+            onTabActivity: sessionTabs.touch,
+          });
         case "screenshot": {
           const targetId = readStringParam(params, "targetId");
           const fullPage = Boolean(params.fullPage);
@@ -868,28 +919,36 @@ export function createBrowserTool(opts?: {
         case "navigate": {
           const targetUrl = readTargetUrlParam(params);
           const targetId = readStringParam(params, "targetId");
-          if (proxyRequest) {
-            const result = await proxyRequest({
-              method: "POST",
-              path: "/navigate",
-              profile,
-              body: {
+          const result = proxyRequest
+            ? await proxyRequest({
+                method: "POST",
+                path: "/navigate",
+                profile,
+                body: {
+                  url: targetUrl,
+                  targetId,
+                },
+              })
+            : await browserToolDeps.browserNavigate(baseUrl, {
                 url: targetUrl,
                 targetId,
-              },
-            });
-            sessionTabs.touch(
-              readStringValue((result as { targetId?: unknown }).targetId) ?? targetId,
-            );
+                profile,
+              });
+          const navigatedTargetId =
+            readStringValue((result as { targetId?: unknown }).targetId) ?? targetId;
+          sessionTabs.touch(navigatedTargetId);
+          // A navigation that resolved to a download leaves the document
+          // unchanged, so inline page state would describe the wrong thing.
+          if ((result as { download?: unknown }).download) {
             return jsonResult(result);
           }
-          const result = await browserToolDeps.browserNavigate(baseUrl, {
-            url: targetUrl,
-            targetId,
+          return await appendNavigatedPageState({
+            result: jsonResult(result),
+            targetId: navigatedTargetId,
+            baseUrl,
             profile,
+            proxyRequest,
           });
-          sessionTabs.touch(readStringValue(result.targetId) ?? targetId);
-          return jsonResult(result);
         }
         case "console": {
           const result = await executeConsoleAction({

@@ -1,6 +1,9 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { decideUsageRefresh, USAGE_PAYLOAD_TTL_MS } from "./refresh-policy.ts";
+import { decideUsageRefresh } from "./refresh-policy.ts";
+
+// Mirrors the module-private default TTL; the tests assert that contract.
+const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
 
 const NOW_MS = 1_000_000;
 

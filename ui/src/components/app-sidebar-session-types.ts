@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionRunStatus } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import type { BoardFace } from "../lib/board/settings.ts";
 import {
   normalizeCatalogProjectGrouping,
   type CatalogProjectGrouping,
@@ -52,7 +53,10 @@ export function sidebarSessionAttentionPriority(attention: SidebarSessionAttenti
 
 export type SidebarRecentSession = {
   key: string;
+  displayName?: string;
+  incognito?: boolean;
   createdActor?: SessionCreatedActor;
+  archivedBy?: SessionCreatedActor;
   label: string;
   meta: string;
   /** Compact repo/branch/node line for work sessions. */
@@ -67,8 +71,10 @@ export type SidebarRecentSession = {
   pinned: boolean;
   archived?: boolean;
   visibility?: SessionVisibility;
+  draftOwnedBySelf?: boolean;
   icon?: string;
   category?: string;
+  boardFace?: BoardFace;
   channel?: string;
   channelSession?: boolean;
   workSession?: boolean;
@@ -87,7 +93,7 @@ export type SidebarRecentSession = {
   agentStatusNote?: string;
   observerDigest?: Pick<
     SessionObserverDigest,
-    "runId" | "headline" | "health" | "updatedAt" | "revision"
+    "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
   >;
   spawnedBy?: string;
   status?: SessionRunStatus;
@@ -158,8 +164,8 @@ export function resolveSidebarSessionsScrollState(
   }
   return "middle";
 }
-export type SidebarSessionGroupDropTarget = {
-  group: string;
+export type SidebarSectionDropTarget = {
+  sectionId: string;
   position: "before" | "after";
 };
 

@@ -11,7 +11,8 @@
     "onCapabilities": ["tool"]
   },
   "contracts": {
-    "tools": ["zoom_meetings"]
+    "tools": ["zoom_meetings"],
+    "transcriptSourceProviders": ["zoom"]
   },
   "uiHints": {
     "defaultMode": {

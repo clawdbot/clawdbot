@@ -125,6 +125,27 @@ describe("maybeRunCliInContainer", () => {
     });
   });
 
+  it.each([
+    { signal: "SIGINT" as const, exitCode: 130 },
+    { signal: "SIGTERM" as const, exitCode: 143 },
+  ])("preserves exit code $exitCode when the container child exits from $signal", (testCase) => {
+    const spawnSync = vi
+      .fn()
+      .mockReturnValueOnce({ status: 0, stdout: "true\n" })
+      .mockReturnValueOnce({ status: 1, stdout: "" })
+      .mockReturnValueOnce({ status: null, signal: testCase.signal });
+
+    expect(
+      maybeRunCliInContainer(["node", "openclaw", "status"], {
+        env: { OPENCLAW_CONTAINER: "demo" } as NodeJS.ProcessEnv,
+        spawnSync,
+      }),
+    ).toEqual({
+      handled: true,
+      exitCode: testCase.exitCode,
+    });
+  });
+
   it("uses OPENCLAW_CONTAINER when the flag is absent", () => {
     const spawnSync = vi
       .fn()

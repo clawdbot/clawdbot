@@ -5,14 +5,17 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginToolMeta } from "../../plugins/tools.js";
 import type { ResolvedConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import {
+  buildConversationToolPolicyPipelineSteps,
+  resolveConversationToolPolicies,
+} from "../conversation-tool-policy-pipeline.js";
 import { buildDeclaredToolAllowlistContext } from "../tool-policy-declared-context.js";
 import {
   applyToolPolicyPipeline,
-  buildDefaultToolPolicyPipelineSteps,
   type ToolPolicyFilterEvent,
   type ToolPolicyPipelineStep,
 } from "../tool-policy-pipeline.js";
-import { collectExplicitDenylist, mergeAlsoAllowPolicy } from "../tool-policy.js";
+import { collectExplicitDenylist } from "../tool-policy.js";
 import type { AnyAgentTool } from "../tools/common.js";
 
 /**
@@ -54,29 +57,7 @@ export function applyFinalEffectiveToolPolicy(
       "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
     );
   }
-  const {
-    agentId,
-    globalPolicy,
-    globalProviderPolicy,
-    agentPolicy,
-    agentProviderPolicy,
-    profile,
-    providerProfile,
-    profilePolicy,
-    providerProfilePolicy,
-    profileAlsoAllow,
-    providerProfileAlsoAllow,
-    groupPolicy,
-    senderPolicy,
-    sandboxPolicy,
-    subagentPolicy,
-    inheritedToolPolicy,
-  } = capabilityProfile.policy;
-  const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow);
-  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
-    providerProfilePolicy,
-    providerProfileAlsoAllow,
-  );
+  const policies = resolveConversationToolPolicies({ capabilityProfile });
   // Suppress unavailable-core-tool warnings on every step of this pass.
   // `applyToolPolicyPipeline` infers `coreToolNames` from the `tools` array
   // it's filtering, and this pass only sees the bundled MCP/LSP subset.
@@ -87,26 +68,11 @@ export function applyFinalEffectiveToolPolicy(
   // real diagnostics from the shared warning cache. Genuinely unknown
   // entries (typos) still surface through the `otherEntries` path in
   // `applyToolPolicyPipeline`.
-  const pipelineSteps: ToolPolicyPipelineStep[] = [
-    ...buildDefaultToolPolicyPipelineSteps({
-      profilePolicy: profilePolicyWithAlsoAllow,
-      profile,
-      profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
-      providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
-      providerProfile,
-      providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
-      globalPolicy,
-      globalProviderPolicy,
-      agentPolicy,
-      agentProviderPolicy,
-      groupPolicy,
-      senderPolicy,
-      agentId,
-    }),
-    { policy: sandboxPolicy, label: "sandbox tools.allow" },
-    { policy: subagentPolicy, label: "subagent tools.allow" },
-    { policy: inheritedToolPolicy, label: "inherited tools" },
-  ].map((step) => Object.assign({}, step, { suppressUnavailableCoreToolWarning: true }));
+  const pipelineSteps: ToolPolicyPipelineStep[] = buildConversationToolPolicyPipelineSteps({
+    capabilityProfile,
+    policies,
+    includeRuntimeToolPolicy: false,
+  }).map((step) => Object.assign({}, step, { suppressUnavailableCoreToolWarning: true }));
   return applyToolPolicyPipeline({
     tools: params.bundledTools,
     toolMeta: (tool) => getPluginToolMeta(tool),

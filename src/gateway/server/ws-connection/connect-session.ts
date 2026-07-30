@@ -17,7 +17,7 @@ import {
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
-import { loadNodeHostConfig } from "../../../node-host/config.js";
+import { resolveLocalNodeId } from "../../../node-host/local-id.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import {
@@ -61,16 +61,6 @@ type AuthenticatedNodePairingAdmission = {
 
 function isReleasedVersion(version: string): boolean {
   return RELEASED_VERSION_RE.test(version);
-}
-
-/**
- * Lazily resolve the local node host's nodeId from canonical shared SQLite state.
- * Process-stable: only changes on `openclaw node install`, which requires restart.
- */
-let cachedLocalNodeId: Promise<string | null> | undefined;
-async function resolveLocalNodeId(): Promise<string | null> {
-  cachedLocalNodeId ??= loadNodeHostConfig().then((config) => config?.nodeId ?? null);
-  return await cachedLocalNodeId;
 }
 
 function setSocketMaxPayload(socket: WebSocket, maxPayload: number): void {

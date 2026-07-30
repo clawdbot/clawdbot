@@ -1,9 +1,8 @@
 import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
 import {
-  normalizeMediaFacts,
-  projectMediaFacts,
+  readPersistedMediaFacts,
   readRuntimePromptMediaFacts,
-  resolveMediaFacts,
+  stripLegacyMediaContextFields,
   type MediaFact,
 } from "../../../media/media-facts.js";
 /**
@@ -40,18 +39,6 @@ type PrunableContextAgent = {
  * ones, so text-only turns consume the window.
  */
 const PRESERVE_RECENT_COMPLETED_TURNS = 3;
-const PERSISTED_MEDIA_FIELD_KEYS = [
-  "media",
-  "MediaPath",
-  "MediaPaths",
-  "MediaUrl",
-  "MediaUrls",
-  "MediaType",
-  "MediaTypes",
-  "MediaTranscribedIndexes",
-  "MediaWorkspaceDir",
-] as const;
-
 function resolvePruneBeforeIndex(messages: AgentMessage[]): number {
   const completedTurnStarts: number[] = [];
   let currentTurnStart = -1;
@@ -93,14 +80,7 @@ function resolveMessageMediaFacts(message: AgentMessage): MediaFact[] {
   if (runtimeMedia) {
     return runtimeMedia;
   }
-  const meta = (message as unknown as Record<string, unknown>)["__openclaw"];
-  const nestedMedia =
-    meta && typeof meta === "object" && !Array.isArray(meta)
-      ? (meta as Record<string, unknown>).media
-      : undefined;
-  return Array.isArray(nestedMedia)
-    ? normalizeMediaFacts(nestedMedia as MediaFact[])
-    : resolveMediaFacts(message as unknown as Parameters<typeof resolveMediaFacts>[0]);
+  return readPersistedMediaFacts(message) ?? [];
 }
 
 function wasStructurallyMediaPruned(message: AgentMessage): boolean {
@@ -160,10 +140,7 @@ function replaceOwnedMediaProjection(text: string, media: MediaFact[]): string {
   }
   const projectionLines = new Set<string>();
   for (const facts of [media, ...media.map((fact) => [fact])]) {
-    const projection = buildInboundMediaNoteProjection({
-      media: facts,
-      ...projectMediaFacts(facts, "channel"),
-    }).text;
+    const projection = buildInboundMediaNoteProjection({ media: facts }).text;
     for (const line of projection?.split("\n") ?? []) {
       if (line) {
         projectionLines.add(line);
@@ -192,9 +169,8 @@ function cloneMessageWithContent(
 ): AgentMessage {
   const clone = { ...message, content } as AgentMessage & Record<string, unknown>;
   if (dropMedia) {
-    for (const key of PERSISTED_MEDIA_FIELD_KEYS) {
-      delete clone[key];
-    }
+    delete clone.media;
+    stripLegacyMediaContextFields(clone);
   }
   if (dropImageMetadata) {
     const meta = clone["__openclaw"];

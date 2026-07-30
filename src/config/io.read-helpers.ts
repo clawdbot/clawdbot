@@ -2,12 +2,12 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { collectErrorGraphCandidates, extractErrorCode } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
-import { isRecord } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import {
   applyConfigEnvVars,
@@ -21,6 +21,7 @@ import {
 } from "./env-substitution.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import {
+  type ConfigIncludeResolutionEvent,
   hashConfigIncludeRaw,
   INCLUDE_KEY,
   readConfigIncludeFileWithGuards,
@@ -58,10 +59,7 @@ export function resolveConfigSnapshotHash(snapshot: {
 }
 
 export function coerceConfig(value: unknown): OpenClawConfig {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  return value as OpenClawConfig;
+  return (asOptionalRecord(value) ?? {}) as OpenClawConfig;
 }
 
 export function hasConfigMeta(value: unknown): boolean {
@@ -233,6 +231,7 @@ export function resolveConfigIncludesForRead(
   includeFileHashesForWrite?: Record<string, string>,
   includeFileTargetsForWrite?: Record<string, string>,
   includeFilePathsForWatch?: Set<string>,
+  onIncludeResolved?: (event: ConfigIncludeResolutionEvent) => void,
 ): unknown {
   const allowedRoots = resolveIncludeRoots(deps.env, deps.homedir);
   const recordIncludeWatchPath = (resolvedPath: string) => {
@@ -258,6 +257,7 @@ export function resolveConfigIncludesForRead(
     {
       readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
       onLexicalPath: recordIncludeWatchPath,
+      onIncludeResolved,
       readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) => {
         try {
           const raw = readConfigIncludeFileWithGuards({

@@ -1,7 +1,11 @@
 import type { HookExternalContentSource } from "../../security/external-content.js";
 
 /** Kept aligned with SessionStateActorType (src/sessions/session-state-event-kinds.ts); not imported to avoid layering config/sessions onto src/sessions. */
-export type SessionCreatedActor = { type: "human" | "agent" | "system"; id?: string };
+export type SessionCreatedActor = {
+  type: "human" | "agent" | "system";
+  id?: string;
+  label?: string;
+};
 export type SessionCreatedVia =
   | "operator" // gateway sessions.create (Control UI / operator clients)
   | "spawn" // sessions_spawn native or ACP subagent spawn

@@ -19,7 +19,7 @@ These plugins participate in meetings. They are separate from messaging channels
 | Microsoft Teams | [`teams-meetings`](/plugins/teams-meetings) | Work links under `teams.microsoft.com/l/meetup-join/...` and consumer links under `teams.live.com/meet/...` | Included; enabled by default                    | Local Chrome or Chrome on a paired node                  | Guest join for work and consumer meetings                                                                     |
 | Zoom            | [`zoom-meetings`](/plugins/zoom-meetings)   | `zoom.us/j/...` and account subdomains such as `example.zoom.us/j/...`                                      | Included; enabled by default                    | Local Chrome or Chrome on a paired node                  | Guest join through the Zoom Web App                                                                           |
 
-Choose Google Meet when you need meeting creation, Google API artifacts, or a Twilio phone path. Choose Teams or Zoom for direct browser guest participation on those platforms. The Teams and Zoom plugins do not create meetings, dial in, call the vendor API, or record meetings.
+Choose Google Meet when you need meeting creation, Google API artifacts, or a Twilio phone path. Choose Teams or Zoom for direct browser guest participation on those platforms. The Teams and Zoom plugins do not create meetings, dial in, call the vendor API, or capture audio/video recordings.
 
 ## Choose a mode
 
@@ -33,7 +33,17 @@ The three plugins share the same modes:
 
 Use `transcribe` when the agent only needs meeting text. Use `agent` for normal OpenClaw reasoning and tools. Use `bidi` when low-latency direct voice is more important than routing each turn through the regular agent.
 
-Caption transcripts are session-scoped runtime data, not durable meeting recordings. Caption availability still depends on the meeting platform, account, language, and host policy. See the platform guide for its transcript limits and status fields.
+The bounded live transcript remains available only in `transcribe` mode. In all
+three modes, browser joins also persist completed caption rows and a derived
+summary to the shared state database. Leaving the meeting finalizes visible
+captions and writes the summary; use [`openclaw transcripts`](/cli/transcripts)
+to list, inspect, or export it. This durable notes path does not change the live
+agent-consult transcript or create an audio/video recording.
+
+Automatic notes are on by default. Set `transcripts.enabled: false` to disable
+durable notes globally. An explicitly selected `transcribe` session retains its
+bounded live-caption tail without writing durable rows. Caption availability
+still depends on the meeting platform, account, language, and host policy.
 
 ## Prepare Chrome and audio
 
@@ -95,7 +105,7 @@ Browser automation handles the normal guest-name, prejoin camera and microphone,
 - Microsoft Teams may require tenant sign-in, email verification, or organizer admission.
 - Zoom may require authentication, email verification, a passcode, CAPTCHA completion, or host admission; an account can also disable browser join.
 
-When a join or status result reports `manualActionRequired`, complete the reported step in the same OpenClaw Chrome profile before retrying. Repeatedly opening new tabs does not resolve an account, tenant, lobby, or CAPTCHA gate.
+When a join or status result includes `manualAction`, complete its reported step in the same OpenClaw Chrome profile before retrying. Repeatedly opening new tabs does not resolve an account, tenant, lobby, or CAPTCHA gate.
 
 Only join meetings where the operator is authorized to add an agent. Tell participants when local policy or consent rules require disclosure of automated participation, transcription, or synthesized speech.
 

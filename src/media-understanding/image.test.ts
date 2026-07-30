@@ -168,14 +168,6 @@ vi.mock("../agents/embedded-agent-runner/model.js", () => ({
   resolveModelAsync: resolveModelAsyncMock,
 }));
 
-vi.mock("../plugin-sdk/provider-auth.js", () => ({
-  buildCopilotIdeHeaders: () => ({
-    "Editor-Version": "vscode/1.107.0",
-    "User-Agent": "GitHubCopilotChat/0.35.0",
-  }),
-  COPILOT_INTEGRATION_ID: "vscode-chat",
-}));
-
 const imageTestFetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 vi.mock("../infra/net/fetch-guard.js", async () => {
   const mod = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
@@ -187,7 +179,7 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
   };
 });
 
-const { describeImageWithModel } = await import("./image.js");
+const { describeImageWithModel, describeImagesWithModel } = await import("./image.js");
 
 describe("describeImageWithModel", () => {
   afterEach(() => {
@@ -268,6 +260,12 @@ describe("describeImageWithModel", () => {
         ? {
             [API_KEY_FIELD]: "test-api-key",
             baseUrl: "https://api.githubcopilot.com",
+            request: {
+              headers: {
+                "Copilot-Integration-Id": "copilot-developer-cli",
+                "Openai-Organization": "github-copilot",
+              },
+            },
           }
         : undefined;
     });
@@ -325,6 +323,35 @@ describe("describeImageWithModel", () => {
     });
     expect(fetchOptions.signal).toBeInstanceOf(AbortSignal);
     expect(timeoutSpy).toHaveBeenCalledWith(1000);
+    expect(completeMock).not.toHaveBeenCalled();
+  });
+
+  it("does not start another MiniMax request after caller cancellation", async () => {
+    const controller = new AbortController();
+    fetchMock.mockImplementationOnce(async () => {
+      controller.abort(new Error("caller cancelled MiniMax image batch"));
+      return Response.json({
+        base_resp: { status_code: 0 },
+        content: "first image",
+      });
+    });
+
+    await expect(
+      describeImagesWithModel({
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+        provider: "minimax-portal",
+        model: "MiniMax-VL-01",
+        images: [
+          { buffer: Buffer.from("first"), fileName: "first.png", mime: "image/png" },
+          { buffer: Buffer.from("second"), fileName: "second.png", mime: "image/png" },
+        ],
+        timeoutMs: 1000,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("caller cancelled MiniMax image batch");
+
+    expect(fetchMock).toHaveBeenCalledOnce();
     expect(completeMock).not.toHaveBeenCalled();
   });
 
@@ -734,6 +761,10 @@ describe("describeImageWithModel", () => {
         allowBundledStaticCatalogFallback: true,
         authStorage: preparedAuthStorage,
         modelRegistry: {},
+        preparedModelRuntime: expect.objectContaining({
+          agentDir: "/tmp/openclaw-agent",
+          workspaceDir: "/tmp/openclaw-workspace",
+        }),
         skipAgentDiscovery: true,
         skipProviderRuntimeHooks: true,
         workspaceDir: "/tmp/openclaw-workspace",
@@ -812,6 +843,7 @@ describe("describeImageWithModel", () => {
         allowBundledStaticCatalogFallback: true,
         authStorage: preparedAuthStorage,
         modelRegistry: {},
+        preparedModelRuntime: expect.objectContaining({ agentDir: "/tmp/openclaw-agent" }),
         skipAgentDiscovery: true,
         skipProviderRuntimeHooks: true,
       },
@@ -826,6 +858,7 @@ describe("describeImageWithModel", () => {
         allowBundledStaticCatalogFallback: true,
         authStorage: preparedAuthStorage,
         modelRegistry: {},
+        preparedModelRuntime: expect.objectContaining({ agentDir: "/tmp/openclaw-agent" }),
         skipAgentDiscovery: true,
       },
     );

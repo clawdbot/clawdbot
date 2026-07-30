@@ -108,7 +108,7 @@ export function noteCronModelOverrides(params: {
   }
 
   const lines = [
-    `Cron model overrides detected at ${shortenHomePath(params.storePath)}.`,
+    `Automation model overrides detected at ${shortenHomePath(params.storePath)}.`,
     `- ${pluralize(overrideCount, "job")} set \`payload.model\` and will not inherit \`agents.defaults.model\`${defaultModel ? ` (${defaultModel})` : ""}`,
     `- Provider namespaces: ${formatSortedCounts(providerCounts)}`,
   ];
@@ -119,7 +119,7 @@ export function noteCronModelOverrides(params: {
     lines.push(`- Examples: ${mismatchExamples.join(", ")}`);
   }
   lines.push(
-    `Review with ${formatCliCommand("openclaw cron list")} and ${formatCliCommand("openclaw cron show <job-id>")}; remove \`payload.model\` from jobs that should inherit the default.`,
+    `Review with ${formatCliCommand("openclaw automations list")} and ${formatCliCommand("openclaw automations show <job-id>")}; remove \`payload.model\` from jobs that should inherit the default.`,
   );
 
   note(lines.join("\n"), "Cron");
@@ -206,11 +206,11 @@ function collectCronDeliveryTargetAdvisory(params: {
   }
 
   return [
-    `Cron delivery targets unavailable channels at ${shortenHomePath(params.storePath)}.`,
+    `Automation delivery targets unavailable channels at ${shortenHomePath(params.storePath)}.`,
     `- ${pluralize(unavailableCount, "job")} ${unavailableCount === 1 ? "announces" : "announce"} to a channel whose plugin is not active; the next scheduled run will fail to deliver`,
     `- Channels: ${formatSortedCounts(channelCounts)}`,
     `- Examples: ${examples.join(", ")}`,
-    `Reactivate the channel plugin or update the job's \`delivery.channel\` after reviewing with ${formatCliCommand("openclaw cron list")} and ${formatCliCommand("openclaw cron show <job-id>")}.`,
+    `Reactivate the channel plugin or update the job's \`delivery.channel\` after reviewing with ${formatCliCommand("openclaw automations list")} and ${formatCliCommand("openclaw automations show <job-id>")}.`,
   ].join("\n");
 }
 

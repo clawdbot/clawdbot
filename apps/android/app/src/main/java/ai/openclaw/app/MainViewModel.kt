@@ -1,6 +1,7 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.chat.BackgroundTask
+import ai.openclaw.app.chat.ChatActiveRunPresentation
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatMessage
@@ -9,6 +10,7 @@ import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatPlanStep
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatSwarmGroup
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatTranscriptAnchorState
 import ai.openclaw.app.chat.ChatWidgetResource
@@ -16,10 +18,12 @@ import ai.openclaw.app.chat.GatewayDefaultAgentOwner
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.chat.SessionBranch
+import ai.openclaw.app.chat.SessionForkResult
 import ai.openclaw.app.chat.SessionRewindResult
 import ai.openclaw.app.chat.defaultChatThinkingLevelSelection
 import ai.openclaw.app.chat.resolveChatComposerOwner
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
@@ -76,6 +80,8 @@ internal data class ChatDraft(
   val owner: ChatComposerOwner? = null,
   val expectedExistingText: String? = null,
   val acceptsEmptyText: Boolean = false,
+  // Attachment payloads stay in ViewModel heap state; saved drafts persist text only.
+  val attachments: List<PendingAttachment>? = null,
 )
 
 internal fun claimChatDraftForOwner(
@@ -396,6 +402,7 @@ class MainViewModel private constructor(
 
   internal fun enterScreenshotFixtureMode(scene: AndroidScreenshotScene) {
     check(BuildConfig.DEBUG) { "Android screenshot fixtures require a debug build" }
+    AndroidScreenshotFixture.configure(scene)
     runtimeRef.value?.let { runtime ->
       // The ViewModel survives locale recreation; keep the fixture runtime instead of
       // treating the restored Activity as a second fixture startup.
@@ -641,10 +648,13 @@ class MainViewModel private constructor(
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = runtimeState(initial = emptyList()) { it.chatQuestions }
   val chatPlanSteps: StateFlow<List<ChatPlanStep>> = runtimeState(initial = emptyList()) { it.chatPlanSteps }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }
+  val chatSwarmGroups: StateFlow<List<ChatSwarmGroup>> = runtimeState(initial = emptyList()) { it.chatSwarmGroups }
   val chatSessionBranches: StateFlow<List<SessionBranch>> = runtimeState(initial = emptyList()) { it.chatSessionBranches }
   val chatSessionBranchesLoading: StateFlow<Boolean> = runtimeState(initial = false) { it.chatSessionBranchesLoading }
   val chatSessionBranchSwitching: StateFlow<Boolean> = runtimeState(initial = false) { it.chatSessionBranchSwitching }
   val pendingRunCount: StateFlow<Int> = runtimeState(initial = 0) { it.pendingRunCount }
+  internal val chatSelectedActiveRunPresentation: StateFlow<ChatActiveRunPresentation> =
+    runtimeState(initial = ChatActiveRunPresentation()) { it.chatSelectedActiveRunPresentation }
   val chatCommands: StateFlow<List<ChatCommandEntry>> = runtimeState(initial = emptyList<ChatCommandEntry>()) { it.chatCommands }
   val chatOutboxItems: StateFlow<List<ChatOutboxItem>> = runtimeState(initial = emptyList()) { it.chatOutboxItems }
   val chatOutboxPresentationRestored: StateFlow<Boolean> = runtimeState(initial = false) { it.chatOutboxPresentationRestored }
@@ -1299,6 +1309,14 @@ class MainViewModel private constructor(
     failedResource: ChatWidgetResource?,
   ) = ensureRuntime().resolveInlineWidgetResource(path, failedResource)
 
+  internal suspend fun loadChatImageArtifact(artifactId: String) = ensureRuntime().loadChatImageArtifact(artifactId)
+
+  internal suspend fun loadChatMediaArtifact(
+    artifactId: String,
+    kind: GatewayMediaKind,
+    playbackRendition: Boolean,
+  ) = ensureRuntime().loadChatMediaArtifact(artifactId, kind, playbackRendition)
+
   fun requestCanvasRehydrate(source: String = "screen_tab") {
     ensureRuntime().requestCanvasRehydrate(source = source, force = true)
   }
@@ -1584,7 +1602,7 @@ class MainViewModel private constructor(
 
   suspend fun rewindChatAtEntry(entryId: String): SessionRewindResult? = ensureRuntime().rewindChatAtEntry(entryId)
 
-  suspend fun forkChatAtEntry(entryId: String): Pair<String, String?>? = ensureRuntime().forkChatAtEntry(entryId)
+  suspend fun forkChatAtEntry(entryId: String): SessionForkResult? = ensureRuntime().forkChatAtEntry(entryId)
 
   suspend fun refreshChatSessionBranches(): Boolean = ensureRuntime().refreshChatSessionBranches()
 

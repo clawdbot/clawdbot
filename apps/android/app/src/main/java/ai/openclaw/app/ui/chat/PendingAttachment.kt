@@ -2,12 +2,14 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.chat.SessionEditorAttachment
 import ai.openclaw.app.chat.VOICE_NOTE_MIME_TYPE
 import ai.openclaw.app.chat.VoiceNoteRecording
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.Base64
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
 /** Attachment staged in a composer until the next chat.send call. */
@@ -17,6 +19,7 @@ data class PendingAttachment(
   val mimeType: String,
   val base64: String,
   val durationMs: Long? = null,
+  val videoThumbnailBase64: String? = null,
 )
 
 internal data class ChatComposerAttachmentMigration(
@@ -46,6 +49,16 @@ internal class ChatComposerAttachmentStore(
   ): Int =
     synchronized(lock) {
       addLocked(owner, candidates)
+    }
+
+  fun replace(
+    owner: ChatComposerOwner,
+    candidates: List<PendingAttachment>,
+  ): Int =
+    synchronized(lock) {
+      val admission = admitWithAggregateLimit(owner = owner, current = emptyList(), candidates = candidates)
+      replaceLocked(owner, admission.accepted)
+      admission.omittedCount
     }
 
   fun beginImport(owner: ChatComposerOwner): Long =
@@ -180,9 +193,20 @@ internal fun PendingAttachment.toOutgoingAttachment(): OutgoingAttachment =
     durationMs = durationMs,
   )
 
+internal fun List<SessionEditorAttachment>.toPendingAttachments(): List<PendingAttachment> =
+  mapIndexed { index, attachment ->
+    PendingAttachment(
+      id = "restored:${UUID.randomUUID()}",
+      fileName = "image-${index + 1}",
+      mimeType = attachment.mimeType,
+      base64 = attachment.data,
+    )
+  }
+
 internal fun attachmentTypeForMimeType(mimeType: String): String =
   when {
     mimeType.startsWith("audio/") -> "audio"
+    mimeType.startsWith("video/") -> "video"
     mimeType.startsWith("image/") -> "image"
     else -> "file"
   }

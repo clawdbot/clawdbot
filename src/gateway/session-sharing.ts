@@ -13,6 +13,7 @@ import {
 } from "../config/sessions.js";
 import { listSessionEntries } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { verifyBoardViewTicket } from "./board-view-ticket.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import type {
@@ -22,12 +23,20 @@ import type {
 } from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import {
+  invalidateSessionSharingSnapshot,
+  loadCachedSessionSharingSnapshot,
+  type SessionSharingSnapshot,
+} from "./session-sharing-snapshot-cache.js";
+import type {
+  GatewaySessionStoreCache,
+  GatewaySessionStoreDiscoveryCache,
+} from "./session-utils-store-lookup.js";
+import {
   resolveFreshestSessionStoreMatchFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils.js";
 
 const ADMIN_SCOPE = "operator.admin";
-const SNAPSHOT_CACHE_LIMIT = 2_048;
 
 type SessionSharingTarget = {
   agentId: string;
@@ -35,11 +44,6 @@ type SessionSharingTarget = {
   entry: SessionEntry;
   storeKey: string;
   storePath: string;
-};
-
-type SessionSharingSnapshot = {
-  creatorId?: string;
-  visibility: SessionVisibility;
 };
 
 type SessionMutationTarget = {
@@ -65,8 +69,7 @@ export class SessionMutationAuthorizationChangedError extends Error {
   }
 }
 
-const sharingSnapshotCache = new Map<string, SessionSharingSnapshot>();
-const sharingSnapshotAliases = new Map<string, string>();
+export { invalidateSessionSharingSnapshot };
 
 export function resolveSessionVisibility(
   entry: Pick<SessionEntry, "visibility">,
@@ -101,11 +104,18 @@ export function resolveSessionSharingTarget(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
+  projection?: "full" | "list";
+  storeCache?: GatewaySessionStoreCache;
+  targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
 }): SessionSharingTarget | null {
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg: params.cfg,
     key: params.sessionKey,
     agentId: params.agentId,
+    clone: false,
+    ...(params.projection ? { projection: params.projection } : {}),
+    ...(params.storeCache ? { storeCache: params.storeCache } : {}),
+    ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
   });
   const match = resolveFreshestSessionStoreMatchFromStoreKeys(target.store, target.storeKeys);
   return match
@@ -172,6 +182,49 @@ function canMutateSession(params: {
   return params.visibility === "shared" || params.role !== "viewer";
 }
 
+function incognitoSessionNotFound(sessionKey: string): ErrorShape {
+  return errorShape(ErrorCodes.INVALID_REQUEST, `Incognito session "${sessionKey}" was not found.`);
+}
+
+export function authorizeIncognitoSessionTarget(params: {
+  client: GatewayClient | null;
+  sessionKey: string;
+  target: SessionSharingTarget | null;
+}): ErrorShape | null {
+  const incognito = params.target
+    ? params.target.entry.incognito === true || isIncognitoSessionKey(params.target.canonicalKey)
+    : isIncognitoSessionKey(params.sessionKey);
+  if (!incognito) {
+    return null;
+  }
+  if (isGatewayAdmin(params.client)) {
+    return null;
+  }
+  const identity = gatewayClientSessionCreator(params.client);
+  if (!identity) {
+    return null;
+  }
+  return incognitoSessionNotFound(params.sessionKey);
+}
+
+export function canAccessIncognitoSession(params: {
+  cfg: OpenClawConfig;
+  client: GatewayClient | null;
+  sessionKey: string;
+  agentId?: string;
+}): boolean {
+  if (isGatewayAdmin(params.client)) {
+    return true;
+  }
+  return (
+    authorizeIncognitoSessionTarget({
+      client: params.client,
+      sessionKey: params.sessionKey,
+      target: resolveSessionSharingTarget(params),
+    }) === null
+  );
+}
+
 export function authorizeResolvedSessionMutation(params: {
   cfg: OpenClawConfig;
   client: GatewayClient | null;
@@ -182,13 +235,21 @@ export function authorizeResolvedSessionMutation(params: {
     return null;
   }
   const target = resolveSessionSharingTarget(params);
+  const incognitoError = authorizeIncognitoSessionTarget({
+    client: params.client,
+    sessionKey: params.sessionKey,
+    target,
+  });
+  if (incognitoError) {
+    return incognitoError;
+  }
   if (!target) {
     return null;
   }
   return authorizeSessionSharingTarget({ client: params.client, target });
 }
 
-function authorizeSessionSharingTarget(params: {
+export function authorizeSessionSharingTarget(params: {
   client: GatewayClient | null;
   target: SessionSharingTarget;
 }): ErrorShape | null {
@@ -203,6 +264,29 @@ function authorizeSessionSharingTarget(params: {
           visibility,
         },
       });
+}
+
+function resolveDirectIncognitoTargets(method: string, params: unknown): SessionMutationTarget[] {
+  if (method === "sessions.create" || method === "sessions.list") {
+    return [];
+  }
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return [];
+  }
+  const record = params as Record<string, unknown>;
+  const candidates = [record.key, record.sessionKey];
+  if (Array.isArray(record.keys)) {
+    candidates.push(...record.keys);
+  }
+  if (Array.isArray(record.sessionKeys)) {
+    candidates.push(...record.sessionKeys);
+  }
+  const agentId = normalizeOptionalString(record.agentId);
+  return candidates.flatMap((candidate): SessionMutationTarget[] =>
+    typeof candidate === "string" && isIncognitoSessionKey(candidate)
+      ? [{ sessionKey: candidate, ...(agentId ? { agentId } : {}) }]
+      : [],
+  );
 }
 
 function readStringParam(params: unknown, key: string): string | undefined {
@@ -398,6 +482,31 @@ export function resolveSessionMutationAuthorization(params: {
   // config change cannot split target discovery from authorization.
   let cachedCfg: OpenClawConfig | undefined;
   const getCfg = (): OpenClawConfig => (cachedCfg ??= params.context.getRuntimeConfig());
+  // Each cache pair defines one synchronous freshness epoch: initial authorization shares one,
+  // while commit-time guards start fresh after handler work.
+  const createLookupCaches = (): {
+    storeCache: GatewaySessionStoreCache;
+    targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
+  } => ({ storeCache: new Map(), targetDiscoveryCache: new Map() });
+  const lookupCaches = createLookupCaches();
+  // Incognito direct reads and writes share this central participation choke point;
+  // hidden keys use the stale-session refusal instead of revealing existence.
+  for (const targetRef of resolveDirectIncognitoTargets(params.method, params.requestParams)) {
+    const target = resolveSessionSharingTarget({
+      cfg: getCfg(),
+      sessionKey: targetRef.sessionKey,
+      agentId: targetRef.agentId,
+      ...lookupCaches,
+    });
+    const error = authorizeIncognitoSessionTarget({
+      client: params.client,
+      sessionKey: targetRef.sessionKey,
+      target,
+    });
+    if (error) {
+      return { error };
+    }
+  }
   const targetRefs = resolveSessionMutationTargets({
     method: params.method,
     requestParams: params.requestParams,
@@ -421,6 +530,7 @@ export function resolveSessionMutationAuthorization(params: {
       cfg,
       sessionKey: targetRef.sessionKey,
       agentId: targetRef.agentId,
+      ...lookupCaches,
     });
     const error = target ? authorizeSessionSharingTarget({ client: params.client, target }) : null;
     if (error) {
@@ -446,11 +556,13 @@ export function resolveSessionMutationAuthorization(params: {
         targetRef: SessionMutationTarget,
         expected: AuthorizedSessionMutationTarget | undefined,
         currentCfg: OpenClawConfig,
+        currentLookupCaches?: ReturnType<typeof createLookupCaches>,
       ) => {
         const current = resolveSessionSharingTarget({
           cfg: currentCfg,
           sessionKey: targetRef.sessionKey,
           agentId: targetRef.agentId,
+          ...currentLookupCaches,
         });
         const sameResolvedTarget =
           expected === undefined ||
@@ -488,8 +600,9 @@ export function resolveSessionMutationAuthorization(params: {
       return {
         assertCurrent: () => {
           const currentCfg = params.context.getRuntimeConfig();
+          const currentLookupCaches = createLookupCaches();
           for (const authorized of authorizedTargets) {
-            assertTargetCurrent(authorized, authorized, currentCfg);
+            assertTargetCurrent(authorized, authorized, currentCfg, currentLookupCaches);
           }
         },
         assertTargetCurrent: (targetRef: SessionMutationTarget) => {
@@ -504,95 +617,31 @@ export function resolveSessionMutationAuthorization(params: {
   };
 }
 
-function sharingSnapshotKey(sessionKey: string, agentId?: string): string {
-  return `${agentId ?? ""}\0${sessionKey}`;
-}
-
-function rememberSharingSnapshot(key: string, snapshot: SessionSharingSnapshot): void {
-  sharingSnapshotCache.delete(key);
-  sharingSnapshotCache.set(key, snapshot);
-  if (sharingSnapshotCache.size <= SNAPSHOT_CACHE_LIMIT) {
-    return;
-  }
-  const oldest = sharingSnapshotCache.keys().next().value;
-  if (oldest) {
-    sharingSnapshotCache.delete(oldest);
-    for (const [alias, canonical] of sharingSnapshotAliases) {
-      if (canonical === oldest) {
-        sharingSnapshotAliases.delete(alias);
-      }
-    }
-  }
-}
-
-function rememberSharingSnapshotAlias(alias: string, canonical: string): void {
-  sharingSnapshotAliases.delete(alias);
-  sharingSnapshotAliases.set(alias, canonical);
-  if (sharingSnapshotAliases.size <= SNAPSHOT_CACHE_LIMIT * 2) {
-    return;
-  }
-  const oldest = sharingSnapshotAliases.keys().next().value;
-  if (oldest) {
-    sharingSnapshotAliases.delete(oldest);
-  }
-}
-
-export function invalidateSessionSharingSnapshot(sessionKey?: string): void {
-  if (sessionKey) {
-    const matchingCanonicalKeys = new Set<string>();
-    for (const key of sharingSnapshotCache.keys()) {
-      if (key.endsWith(`\0${sessionKey}`)) {
-        matchingCanonicalKeys.add(key);
-      }
-    }
-    for (const [alias, canonical] of sharingSnapshotAliases) {
-      if (alias.endsWith(`\0${sessionKey}`) || canonical.endsWith(`\0${sessionKey}`)) {
-        matchingCanonicalKeys.add(canonical);
-      }
-    }
-    for (const key of matchingCanonicalKeys) {
-      sharingSnapshotCache.delete(key);
-    }
-    for (const [alias, canonical] of sharingSnapshotAliases) {
-      if (matchingCanonicalKeys.has(canonical)) {
-        sharingSnapshotAliases.delete(alias);
-      }
-    }
-    return;
-  }
-  sharingSnapshotCache.clear();
-  sharingSnapshotAliases.clear();
-}
-
 function loadSharingSnapshot(
   cfg: OpenClawConfig,
   sessionKey: string,
   agentId?: string,
 ): SessionSharingSnapshot {
-  const requestedKey = sharingSnapshotKey(sessionKey, agentId);
-  const aliasedKey = sharingSnapshotAliases.get(requestedKey);
-  const cached = sharingSnapshotCache.get(aliasedKey ?? requestedKey);
-  if (cached) {
-    return cached;
-  }
-  const target = resolveSessionSharingTarget({ cfg, sessionKey, agentId });
-  const canonicalKey = target
-    ? sharingSnapshotKey(target.canonicalKey, target.agentId)
-    : requestedKey;
-  const canonicalCached = sharingSnapshotCache.get(canonicalKey);
-  if (canonicalCached) {
-    rememberSharingSnapshotAlias(requestedKey, canonicalKey);
-    return canonicalCached;
-  }
-  const snapshot = {
-    // Missing rows occur after deletion. Fail closed here; the delete path also
-    // emits an unscoped catalog invalidation so identified readers still refresh.
-    visibility: target ? resolveSessionVisibility(target.entry) : "draft",
-    ...(target ? { creatorId: target.entry.createdActor?.id } : {}),
-  } satisfies SessionSharingSnapshot;
-  rememberSharingSnapshot(canonicalKey, snapshot);
-  rememberSharingSnapshotAlias(requestedKey, canonicalKey);
-  return snapshot;
+  return loadCachedSessionSharingSnapshot({
+    agentId,
+    sessionKey,
+    resolve: () => {
+      const target = resolveSessionSharingTarget({ cfg, sessionKey, agentId });
+      return {
+        canonicalKey: target?.canonicalKey ?? sessionKey,
+        canonicalAgentId: target?.agentId ?? agentId,
+        snapshot: {
+          // Missing rows occur after deletion. Fail closed here; the delete path also
+          // emits an unscoped catalog invalidation so identified readers still refresh.
+          visibility: target ? resolveSessionVisibility(target.entry) : "draft",
+          incognito: target
+            ? target.entry.incognito === true || isIncognitoSessionKey(target.canonicalKey)
+            : isIncognitoSessionKey(sessionKey),
+          ...(target ? { creatorId: target.entry.createdActor?.id } : {}),
+        },
+      };
+    },
+  });
 }
 
 export function canReceiveSessionEvent(params: {
@@ -600,31 +649,69 @@ export function canReceiveSessionEvent(params: {
   client: GatewayWsClient;
   sessionKeys: readonly string[];
   agentId?: string;
+  event?: string;
+  payload?: unknown;
 }): boolean {
   if (isGatewayAdmin(params.client)) {
     return true;
   }
   const identity = gatewayClientSessionCreator(params.client);
   if (!identity) {
+    return params.event !== "session.suggestion" && params.event !== "session.typing";
+  }
+  const visible = params.sessionKeys.every((sessionKey) => {
+    const snapshot = loadSharingSnapshot(params.cfg, sessionKey, params.agentId);
+    if (snapshot.incognito) {
+      return false;
+    }
+    if (snapshot.visibility !== "draft" || snapshot.creatorId === identity.id) {
+      return true;
+    }
+    if (params.event !== "session.typing") {
+      return false;
+    }
+    const target = resolveSessionSharingTarget({
+      cfg: params.cfg,
+      sessionKey,
+      agentId: params.agentId,
+    });
+    return (
+      target !== null &&
+      canManageSessionSharing(resolveSessionSharingRole({ client: params.client, target }))
+    );
+  });
+  if (!visible || params.event !== "session.suggestion") {
+    return visible;
+  }
+  const authorId =
+    params.payload && typeof params.payload === "object"
+      ? (params.payload as { suggestion?: { author?: { id?: unknown } } }).suggestion?.author?.id
+      : undefined;
+  if (authorId === identity.id) {
     return true;
   }
   return params.sessionKeys.every((sessionKey) => {
-    const snapshot = loadSharingSnapshot(params.cfg, sessionKey, params.agentId);
-    return snapshot.visibility !== "draft" || snapshot.creatorId === identity.id;
+    const target = resolveSessionSharingTarget({
+      cfg: params.cfg,
+      sessionKey,
+      agentId: params.agentId,
+    });
+    return (
+      target !== null && resolveSessionSharingRole({ client: params.client, target }) !== "viewer"
+    );
   });
 }
 
-export function filterDraftSessionsForClient(params: {
+export function createSessionListEntryFilter(params: {
   client: GatewayClient | null;
-  store: Record<string, SessionEntry>;
-}): Record<string, SessionEntry> {
+}): ((sessionKey: string, entry: SessionEntry) => boolean) | undefined {
   const identity = gatewayClientSessionCreator(params.client);
   if (isGatewayAdmin(params.client) || !identity) {
-    return params.store;
+    return undefined;
   }
-  return Object.fromEntries(
-    Object.entries(params.store).filter(([, entry]) => {
-      return resolveSessionVisibility(entry) !== "draft" || entry.createdActor?.id === identity.id;
-    }),
-  );
+  return (sessionKey, entry) => {
+    const owner = entry.createdActor?.id === identity.id;
+    const incognito = entry.incognito === true || isIncognitoSessionKey(sessionKey);
+    return !incognito && (owner || resolveSessionVisibility(entry) !== "draft");
+  };
 }

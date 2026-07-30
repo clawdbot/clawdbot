@@ -23,16 +23,6 @@ function extractCaptures(text: string, pattern: RegExp) {
   return Array.from(text.matchAll(globalPattern), (match) => match[1]?.trim()).filter(Boolean);
 }
 
-export function extractLastMatchingUserText(texts: string[], pattern: RegExp) {
-  for (let index = texts.length - 1; index >= 0; index -= 1) {
-    const text = texts[index] ?? "";
-    if (pattern.test(text)) {
-      return text;
-    }
-  }
-  return "";
-}
-
 export function extractExactReplyDirective(text: string) {
   const backtickedMatch = extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i);
   if (backtickedMatch) {
@@ -113,7 +103,7 @@ export function shouldUseWhatsAppContactMarker(prompt: string) {
 }
 
 export function shouldUseWhatsAppStickerMarker(prompt: string) {
-  const label = "WhatsApp media (untrusted metadata):";
+  const label = "WhatsApp media:";
   let searchFrom = 0;
   for (;;) {
     const labelIndex = prompt.indexOf(label, searchFrom);
@@ -131,7 +121,7 @@ export function shouldUseWhatsAppStickerMarker(prompt: string) {
           return true;
         }
       } catch {
-        // Ignore malformed untrusted metadata and continue to the next matching block.
+        // Ignore malformed metadata and continue to the next matching block.
       }
       searchFrom = fenceEnd + 3;
       continue;
@@ -204,6 +194,18 @@ export function hasToolDefinition(body: Record<string, unknown>, name: string) {
   const tools = Array.isArray(body.tools) ? body.tools : [];
   const dynamicTools = Array.isArray(body.dynamicTools) ? body.dynamicTools : [];
   return [...tools, ...dynamicTools].some((tool) => toolDefinitionMentionsName(tool, name));
+}
+
+export function hasDeclaredCustomTool(body: Record<string, unknown>, name: string) {
+  const tools = Array.isArray(body.tools) ? body.tools : [];
+  return tools.some(
+    (tool) =>
+      tool !== null &&
+      typeof tool === "object" &&
+      !Array.isArray(tool) &&
+      (tool as Record<string, unknown>).type === "custom" &&
+      (tool as Record<string, unknown>).name === name,
+  );
 }
 
 function toolDefinitionMentionsName(value: unknown, name: string, depth = 0): boolean {

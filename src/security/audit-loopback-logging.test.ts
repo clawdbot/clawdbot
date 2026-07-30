@@ -26,6 +26,7 @@ describe("security audit loopback and logging findings", () => {
     await Promise.all([
       (async () => {
         const cfg: OpenClawConfig = {
+          agents: { list: [{ id: "main", default: true }] },
           gateway: {
             bind: "loopback",
             controlUi: { enabled: true },
@@ -46,6 +47,7 @@ describe("security audit loopback and logging findings", () => {
         },
         async () => {
           const cfg: OpenClawConfig = {
+            agents: { list: [{ id: "main", default: true }] },
             gateway: {
               bind: "loopback",
               controlUi: { enabled: true },

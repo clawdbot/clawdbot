@@ -1,79 +1,6 @@
 // Tier-eval config compatibility migration and its scoped traversal helpers.
 import { ensureRecord, getRecord } from "../../../config/legacy.shared.js";
-
-function deleteRetiredPath(owner: unknown, path: readonly string[], index = 0): boolean {
-  const record = getRecord(owner);
-  if (!record) {
-    return false;
-  }
-  const key = path[index];
-  if (!key) {
-    return false;
-  }
-  if (key === "*") {
-    let changed = false;
-    for (const value of Object.values(record)) {
-      changed = deleteRetiredPath(value, path, index + 1) || changed;
-    }
-    return changed;
-  }
-  if (index === path.length - 1) {
-    if (!Object.hasOwn(record, key)) {
-      return false;
-    }
-    delete record[key];
-    return true;
-  }
-  const child = getRecord(record[key]);
-  if (!child || !deleteRetiredPath(child, path, index + 1)) {
-    return false;
-  }
-  if (Object.keys(child).length === 0) {
-    delete record[key];
-  }
-  return true;
-}
-
-function visitChannelEntries(
-  raw: Record<string, unknown>,
-  channelId: string,
-  visitor: (entry: Record<string, unknown>, path: string) => void,
-): void {
-  const channel = getRecord(getRecord(raw.channels)?.[channelId]);
-  if (!channel) {
-    return;
-  }
-  visitor(channel, `channels.${channelId}`);
-  const accounts = getRecord(channel.accounts);
-  if (!accounts) {
-    return;
-  }
-  for (const [accountId, value] of Object.entries(accounts)) {
-    const account = getRecord(value);
-    if (account) {
-      visitor(account, `channels.${channelId}.accounts.${accountId}`);
-    }
-  }
-}
-
-function moveKey(
-  owner: Record<string, unknown> | null | undefined,
-  legacyKey: string,
-  canonicalKey: string,
-  path: string,
-  changes: string[],
-): void {
-  if (!owner || !Object.hasOwn(owner, legacyKey)) {
-    return;
-  }
-  if (owner[canonicalKey] === undefined) {
-    owner[canonicalKey] = owner[legacyKey];
-    changes.push(`Moved ${path}.${legacyKey} → ${path}.${canonicalKey}.`);
-  } else {
-    changes.push(`Removed ${path}.${legacyKey} (${path}.${canonicalKey} already set).`);
-  }
-  delete owner[legacyKey];
-}
+import { deleteRetiredPath, visitChannelEntries } from "./legacy-config-record-shared.js";
 
 const TIER_EVAL_RETIRED_ROOT_PATHS = [
   ["cloudWorkers", "profiles", "*", "lifetime"],
@@ -247,20 +174,6 @@ function migrateCliBackendSessionArgs(
       );
     }
     delete backend.sessionArg;
-  }
-}
-
-function moveMcpWorkingDirectory(raw: Record<string, unknown>, changes: string[]): void {
-  for (const [ownerPath, servers] of [
-    ["mcp.servers", getRecord(getRecord(raw.mcp)?.servers)],
-    ["nodeHost.mcp.servers", getRecord(getRecord(getRecord(raw.nodeHost)?.mcp)?.servers)],
-  ] as const) {
-    if (!servers) {
-      continue;
-    }
-    for (const [serverId, value] of Object.entries(servers)) {
-      moveKey(getRecord(value), "workingDirectory", "cwd", `${ownerPath}.${serverId}`, changes);
-    }
   }
 }
 
@@ -464,25 +377,11 @@ function stripTtsPersonaPrompts(raw: Record<string, unknown>, changes: string[])
   if (!channels) {
     return;
   }
-  for (const [channelId, channelValue] of Object.entries(channels)) {
-    const channel = getRecord(channelValue);
-    if (!channel) {
-      continue;
-    }
-    const stripEntry = (entry: Record<string, unknown>, path: string) => {
+  for (const channelId of Object.keys(channels)) {
+    visitChannelEntries(raw, channelId, (entry, path) => {
       stripPromptsFromTtsConfig(entry.tts, `${path}.tts`, changes);
       stripPromptsFromTtsConfig(getRecord(entry.voice)?.tts, `${path}.voice.tts`, changes);
-    };
-    stripEntry(channel, `channels.${channelId}`);
-    const accounts = getRecord(channel.accounts);
-    if (accounts) {
-      for (const [accountId, accountValue] of Object.entries(accounts)) {
-        const account = getRecord(accountValue);
-        if (account) {
-          stripEntry(account, `channels.${channelId}.accounts.${accountId}`);
-        }
-      }
-    }
+    });
   }
 }
 
@@ -527,7 +426,6 @@ export function migrateTierEvalTranche(raw: Record<string, unknown>, changes: st
   let stripped = false;
   stripTtsPersonaPrompts(raw, changes);
   stripped = migratePresenceEnabled(raw, changes) || stripped;
-  moveMcpWorkingDirectory(raw, changes);
   migrateChannelAliases(raw, changes);
   const session = getRecord(raw.session);
   if (session && Object.hasOwn(session, "idleMinutes")) {

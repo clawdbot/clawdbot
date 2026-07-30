@@ -23,7 +23,6 @@ import {
   resolveEffectiveOperatorDeviceIdentity,
 } from "../../../infra/device-pairing.js";
 import {
-  isMobilePairingSetupBootstrapProfile,
   resolveBootstrapProfileScopesForRole,
   resolveBootstrapProfileScopesForRoles,
 } from "../../../shared/device-bootstrap-profile.js";
@@ -38,7 +37,7 @@ import { resolveTrustedProxyControlUiScopes } from "./connect-admission.js";
 import {
   isControlUiOperatorBootstrapProfile,
   isMobileNodeBootstrapConnect,
-  isSetupCodeMobileBootstrapClient,
+  isSetupCodeHandoffBootstrapClient,
   pairedDeviceAllowsBootstrapProfile,
   resolvePairedAccessScopes,
 } from "./connect-device-metadata.js";
@@ -56,6 +55,7 @@ const DEFAULT_TRUSTED_PROXY_DEVICE_AUTO_APPROVE_SCOPES = [
   "operator.read",
   "operator.write",
   "operator.approvals",
+  "operator.questions",
 ] as const;
 
 function resolveTrustedProxyDeviceAutoApproveScopes(params: {
@@ -70,7 +70,13 @@ function resolveTrustedProxyDeviceAutoApproveScopes(params: {
     return configuredScopes;
   }
   const configured = new Set(configuredScopes);
-  return normalizeSortedUniqueTrimmedStringList(params.requestedScopes).filter((scope) =>
+  const requestedScopes = normalizeSortedUniqueTrimmedStringList(params.requestedScopes);
+  // Trusted-proxy Control UI tabs can remain open across upgrades. Grant newly
+  // required default UI scopes without widening an explicitly configured cap.
+  if (params.configuredScopes === undefined) {
+    requestedScopes.push("operator.questions");
+  }
+  return normalizeSortedUniqueTrimmedStringList(requestedScopes).filter((scope) =>
     configured.has(scope),
   );
 }
@@ -245,6 +251,7 @@ export async function authorizeGatewayConnectDevice(
       const allowSilentLocalPairing =
         allowSilentExistingNonOperatorPairing &&
         shouldAllowSilentLocalPairing({
+          autoApproveLocal: configSnapshot.gateway?.nodes?.pairing?.autoApproveLocal,
           locality: pairingLocality,
           hasBrowserOriginHeader,
           isControlUi,
@@ -305,12 +312,14 @@ export async function authorizeGatewayConnectDevice(
               publicKey: devicePublicKey,
             })
           : null;
-      const allowSetupCodeMobileBootstrapPairing =
+      const allowSetupCodeHandoffBootstrapPairing =
         boundBootstrapProfile !== null &&
-        isMobilePairingSetupBootstrapProfile(boundBootstrapProfile) &&
         isSetupCodeMobileNodeConnect &&
-        isSetupCodeMobileBootstrapClient(connectParams.client);
-      const setupCodeMobileBootstrapProfile = allowSetupCodeMobileBootstrapPairing
+        isSetupCodeHandoffBootstrapClient({
+          profile: boundBootstrapProfile,
+          client: connectParams.client,
+        });
+      const setupCodeHandoffBootstrapProfile = allowSetupCodeHandoffBootstrapPairing
         ? boundBootstrapProfile
         : null;
       const allowControlUiOperatorBootstrapPairing = isControlUiOperatorBootstrapProfile({
@@ -325,16 +334,16 @@ export async function authorizeGatewayConnectDevice(
       // agree before the Gateway can skip owner approval and hand off the
       // selected operator profile below. Full mobile setup includes admin;
       // limited setup retains the previous bounded operator scope set.
-      const bootstrapPairingRoles = setupCodeMobileBootstrapProfile
-        ? uniqueStrings([role, ...setupCodeMobileBootstrapProfile.roles])
+      const bootstrapPairingRoles = setupCodeHandoffBootstrapProfile
+        ? uniqueStrings([role, ...setupCodeHandoffBootstrapProfile.roles])
         : controlUiOperatorBootstrapProfile
           ? ["operator"]
           : undefined;
-      const bootstrapPairingScopes = setupCodeMobileBootstrapProfile
+      const bootstrapPairingScopes = setupCodeHandoffBootstrapProfile
         ? resolveBootstrapProfileScopesForRoles(
             bootstrapPairingRoles ?? [],
-            setupCodeMobileBootstrapProfile.scopes,
-            setupCodeMobileBootstrapProfile.purpose,
+            setupCodeHandoffBootstrapProfile.scopes,
+            setupCodeHandoffBootstrapProfile.purpose,
           )
         : controlUiOperatorBootstrapProfile
           ? resolveBootstrapProfileScopesForRole(
@@ -344,7 +353,7 @@ export async function authorizeGatewayConnectDevice(
             )
           : undefined;
       const bootstrapApprovalProfile =
-        setupCodeMobileBootstrapProfile ?? controlUiOperatorBootstrapProfile;
+        setupCodeHandoffBootstrapProfile ?? controlUiOperatorBootstrapProfile;
       const pairingRequestScopes =
         allowControlUiDeviceAuthMigrationForUnpairedInstall &&
         deviceAuthMigrationScopes.length > 0 &&
@@ -364,11 +373,11 @@ export async function authorizeGatewayConnectDevice(
             }
           : {}),
         silent:
-          reason === "scope-upgrade" && !allowSetupCodeMobileBootstrapPairing
+          reason === "scope-upgrade" && !allowSetupCodeHandoffBootstrapPairing
             ? false
             : allowSilentLocalPairing ||
               allowSilentTrustedCidrsNodePairing ||
-              allowSetupCodeMobileBootstrapPairing ||
+              allowSetupCodeHandoffBootstrapPairing ||
               allowControlUiOperatorBootstrapPairing,
       });
       const trustedProxyAutoApproveScopes =
@@ -468,7 +477,7 @@ export async function authorizeGatewayConnectDevice(
             },
             { dropIfSlow: true },
           );
-          if (!(allowSetupCodeMobileBootstrapPairing && boundBootstrapProfile)) {
+          if (!(allowSetupCodeHandoffBootstrapPairing && boundBootstrapProfile)) {
             // Best-effort retirement of stale silent siblings; a prune
             // failure must never fail the fresh device's handshake.
             try {

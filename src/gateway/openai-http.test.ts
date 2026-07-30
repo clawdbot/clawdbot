@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import OpenAI from "openai";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import {
@@ -15,6 +16,10 @@ import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { enqueueCommandInLane } from "../process/command-queue.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { createDeferred } from "../test-utils/deferred.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommand,
@@ -59,10 +64,17 @@ async function startServer(port: number, opts?: { openAiChatCompletionsEnabled?:
   });
 }
 
-async function startTokenServer(port: number, opts?: { openAiChatCompletionsEnabled?: boolean }) {
+async function startSharedSecretServer(
+  port: number,
+  mode: "token" | "password",
+  opts?: { openAiChatCompletionsEnabled?: boolean },
+) {
   return await startGatewayServer(port, {
     host: "127.0.0.1",
-    auth: { mode: "token", token: "secret" },
+    auth:
+      mode === "token"
+        ? { mode: "token", token: "secret" }
+        : { mode: "password", password: "secret" },
     controlUiEnabled: false,
     openAiChatCompletionsEnabled: opts?.openAiChatCompletionsEnabled ?? true,
   });
@@ -90,6 +102,15 @@ async function postChatCompletions(port: number, body: unknown, headers?: Record
   return res;
 }
 
+function createOpenAiChatClient(port: number): OpenAI {
+  return new OpenAI({
+    apiKey: "test",
+    baseURL: `http://127.0.0.1:${port}/v1`,
+    defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+    maxRetries: 0,
+  });
+}
+
 function parseSseDataLines(text: string): string[] {
   return text
     .split("\n")
@@ -113,6 +134,7 @@ type FirstAgentCommandOptions = {
   message?: string;
   messageChannel?: string;
   model?: string;
+  senderIsOwner?: boolean;
   sessionKey?: string;
   streamParams?: {
     frequencyPenalty?: number;
@@ -1867,6 +1889,170 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     );
   });
 
+  it.each([
+    {
+      name: "a split custom XML opener",
+      deltas: ["<", "xiaohai-banli>milk tea</", "xiaohai-banli>"],
+      expected: "<xiaohai-banli>milk tea</xiaohai-banli>",
+    },
+    {
+      name: "literal script-like content",
+      deltas: ["<", "script>alert('literal')</", "script>"],
+      expected: "<script>alert('literal')</script>",
+    },
+  ])("preserves $name through the official OpenAI SDK SSE stream", async ({ deltas, expected }) => {
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      const { session, emit } = createStubSessionHarness();
+      subscribeEmbeddedAgentSession({ session, runId });
+      emit({ type: "message_start", message: { role: "assistant" } });
+      for (const delta of deltas) {
+        emitAssistantTextDelta({ emit, delta });
+      }
+      return { payloads: [{ text: expected }] };
+    }) as never);
+
+    const stream = await createOpenAiChatClient(enabledPort).chat.completions.create({
+      model: "openclaw",
+      messages: [{ role: "user", content: "Preserve the literal output." }],
+      stream: true,
+    });
+    const content: string[] = [];
+    const finishReasons: Array<string | null> = [];
+    for await (const chunk of stream) {
+      for (const choice of chunk.choices) {
+        if (typeof choice.delta.content === "string") {
+          content.push(choice.delta.content);
+        }
+        finishReasons.push(choice.finish_reason);
+      }
+    }
+
+    expect(content.join("")).toBe(expected);
+    expect(finishReasons.at(-1)).toBe("stop");
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves buffered leading content in cumulative assistant snapshots", async () => {
+    const expected = "<xiaohai-banli>milk tea</xiaohai-banli>";
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: {
+          text: expected,
+          delta: "xiaohai-banli>milk tea</xiaohai-banli>",
+        },
+      });
+      return { payloads: [{ text: expected }] };
+    }) as never);
+
+    const stream = await createOpenAiChatClient(enabledPort).chat.completions.create({
+      model: "openclaw",
+      messages: [{ role: "user", content: "Preserve the full snapshot." }],
+      stream: true,
+    });
+    const content: string[] = [];
+    const finishReasons: Array<string | null> = [];
+    for await (const chunk of stream) {
+      for (const choice of chunk.choices) {
+        if (typeof choice.delta.content === "string") {
+          content.push(choice.delta.content);
+        }
+        finishReasons.push(choice.finish_reason);
+      }
+    }
+
+    expect(content.join("")).toBe(expected);
+    expect(finishReasons.at(-1)).toBe("stop");
+  });
+
+  it("flushes same-turn assistant microtasks before the SSE done frame", async () => {
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce(((opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({ runId, stream: "assistant", data: { delta: "start " } });
+      const result = Promise.resolve({ payloads: [{ text: "start finish" }] });
+      void result.then(() => {
+        emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+        void Promise.resolve().then(() => {
+          emitAgentEvent({ runId, stream: "assistant", data: { delta: "finish" } });
+        });
+      });
+      return result;
+    }) as never);
+
+    const res = await postChatCompletions(enabledPort, {
+      stream: true,
+      model: "openclaw",
+      messages: [{ role: "user", content: "Finish the streamed response." }],
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+
+    const data = parseSseDataLines(await res.text());
+    expect(data.at(-1)).toBe("[DONE]");
+    const chunks = data
+      .filter((line) => line !== "[DONE]")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const content = chunks
+      .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
+      .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
+      .filter((value): value is string => typeof value === "string")
+      .join("");
+    expect(content).toBe("start finish");
+    const finishChoice = chunks
+      .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
+      .at(-1);
+    expect(finishChoice?.finish_reason).toBe("stop");
+  });
+
+  it.each([
+    { name: "successful completion", fail: false, expected: "hello" },
+    { name: "internal agent error", fail: true, expected: "Error: internal error" },
+  ])(
+    "separates streamed content from the terminal finish for an official SDK $name",
+    async ({ fail, expected }) => {
+      agentCommand.mockClear();
+      if (fail) {
+        agentCommand.mockRejectedValueOnce(new Error("private upstream failure"));
+      } else {
+        agentCommand.mockImplementationOnce((async (opts: unknown) =>
+          buildAssistantDeltaResult({
+            opts,
+            emit: emitAgentEvent,
+            deltas: ["he", "llo"],
+            text: expected,
+          })) as never);
+      }
+
+      const stream = await createOpenAiChatClient(enabledPort).chat.completions.create({
+        model: "openclaw",
+        messages: [{ role: "user", content: "Return a complete streamed response." }],
+        stream: true,
+      });
+      const choices: Array<{
+        delta: { content?: string | null };
+        finish_reason: string | null;
+      }> = [];
+      for await (const chunk of stream) {
+        choices.push(...chunk.choices);
+      }
+
+      const contentChoices = choices.filter((choice) => typeof choice.delta.content === "string");
+      expect(contentChoices.map((choice) => choice.delta.content).join("")).toBe(expected);
+      expect(contentChoices.every((choice) => choice.finish_reason === null)).toBe(true);
+
+      const terminalChoices = choices.filter((choice) => choice.finish_reason === "stop");
+      expect(terminalChoices).toHaveLength(1);
+      expect(terminalChoices[0]?.delta).toEqual({});
+      expect(choices.at(-1)).toEqual(terminalChoices[0]);
+    },
+  );
+
   it("streams SSE chunks when stream=true", async () => {
     const port = enabledPort;
     try {
@@ -1902,6 +2088,18 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           .filter((v): v is string => typeof v === "string")
           .join("");
         expect(allContent).toBe("hello");
+        const contentChoices = jsonChunks
+          .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
+          .filter(
+            (choice) =>
+              typeof (choice.delta as Record<string, unknown> | undefined)?.content === "string",
+          );
+        expect(contentChoices.every((choice) => choice.finish_reason === null)).toBe(true);
+        const stopChoices = jsonChunks
+          .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
+          .filter((choice) => choice.finish_reason === "stop");
+        expect(stopChoices).toHaveLength(1);
+        expect(stopChoices[0]?.delta).toEqual({});
         const usageChunks = jsonChunks.filter((c) => "usage" in c);
         expect(usageChunks).toHaveLength(0);
       }
@@ -2240,17 +2438,90 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const errorChunks = errorData
           .filter((d) => d !== "[DONE]")
           .map((d) => JSON.parse(d) as Record<string, unknown>);
-        const stopChoice = errorChunks
-          .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
-          .find((choice) => choice.finish_reason === "stop");
-        expect((stopChoice?.delta as Record<string, unknown> | undefined)?.content).toBe(
-          "Error: internal error",
+        const choices = errorChunks.flatMap(
+          (chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [],
         );
+        const errorContentChoice = choices.find(
+          (choice) =>
+            (choice.delta as Record<string, unknown> | undefined)?.content ===
+            "Error: internal error",
+        );
+        expect(errorContentChoice?.finish_reason).toBeNull();
+        const stopChoices = choices.filter((choice) => choice.finish_reason === "stop");
+        expect(stopChoices).toHaveLength(1);
+        expect(stopChoices[0]?.delta).toEqual({});
+        expect(choices.at(-1)).toEqual(stopChoices[0]);
       }
     } finally {
       // shared server
     }
   });
+
+  it.each([
+    { astral: "😀", boundary: 255 },
+    { astral: "𐐷", boundary: 511 },
+  ])(
+    "keeps streamed tool-call arguments well-formed ($astral at UTF-16 boundary $boundary)",
+    async ({ astral, boundary }) => {
+      const argumentPrefix = '{"value":"';
+      const value = `${"a".repeat(boundary - argumentPrefix.length)}${astral}tail`;
+      const expectedArguments = JSON.stringify({ value });
+      expect(expectedArguments.indexOf(astral)).toBe(boundary);
+
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({
+        payloads: [{ text: "Calling the tool." }],
+        meta: {
+          stopReason: "tool_calls",
+          pendingToolCalls: [
+            {
+              id: "call_1",
+              name: "read_value",
+              arguments: expectedArguments,
+            },
+          ],
+        },
+      } as never);
+
+      const res = await postChatCompletions(enabledPort, {
+        stream: true,
+        model: "openclaw",
+        messages: [{ role: "user", content: "read the value" }],
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("text/event-stream");
+
+      const data = parseSseDataLines(await res.text());
+      expect(data.at(-1)).toBe("[DONE]");
+
+      const chunks = data
+        .filter((line) => line !== "[DONE]")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const choices = chunks.flatMap(
+        (chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [],
+      );
+      const argumentDeltas = choices
+        .flatMap((choice) => {
+          const delta = choice.delta as Record<string, unknown> | undefined;
+          return (delta?.tool_calls as Array<Record<string, unknown>> | undefined) ?? [];
+        })
+        .map((toolCall) => {
+          const toolFunction = toolCall.function as Record<string, unknown> | undefined;
+          return toolFunction?.arguments;
+        })
+        .filter((argumentsDelta): argumentsDelta is string => typeof argumentsDelta === "string");
+
+      expect(argumentDeltas.length).toBeGreaterThan(1);
+      for (const argumentsDelta of argumentDeltas) {
+        expect(new TextDecoder().decode(new TextEncoder().encode(argumentsDelta))).toBe(
+          argumentsDelta,
+        );
+      }
+      expect(argumentDeltas.join("")).toBe(expectedArguments);
+      expect(JSON.parse(argumentDeltas.join(""))).toEqual({ value });
+      expect(choices.some((choice) => choice.finish_reason === "tool_calls")).toBe(true);
+    },
+  );
 
   it(
     "sends an initial SSE chunk before a streaming agent run settles",
@@ -2330,6 +2601,32 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       );
     },
   );
+
+  it("keeps streamed agent work admitted after the HTTP handler returns", async () => {
+    const idleRootCount = getActiveGatewayRootWorkCount();
+    const continueAgent = createDeferred();
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async () => {
+      await continueAgent.promise;
+      const queued = await enqueueCommandInLane("openai-http-admission-probe", async () => true);
+      return { payloads: [{ text: queued ? "answer queued" : "unreachable" }] };
+    }) as never);
+
+    const res = await postChatCompletions(enabledPort, {
+      stream: true,
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    continueAgent.resolve();
+
+    const streamed = parseSseDataLines(await res.text()).join("\n");
+    expect(streamed).toContain("answer queued");
+    expect(streamed).not.toContain("Error: internal error");
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
+  });
 
   it("buffers replaceable assistant events for streaming chat completions", async () => {
     const port = enabledPort;
@@ -2629,32 +2926,164 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(usageChunks).toHaveLength(0);
   });
 
-  it("accepts shared-secret bearer callers", async () => {
-    const port = await getFreePort();
-    const server = await startTokenServer(port);
-    try {
-      agentCommand.mockClear();
-      agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+  it("preserves declared owner identity for streaming and non-streaming private callers", async () => {
+    for (const stream of [false, true]) {
+      for (const { scopes, senderIsOwner } of [
+        { scopes: "operator.write", senderIsOwner: false },
+        { scopes: "operator.admin, operator.write", senderIsOwner: true },
+      ]) {
+        agentCommand.mockClear();
+        agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
 
-      const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
-        method: "POST",
-        headers: {
-          authorization: "Bearer secret",
-          "content-type": "application/json",
-          "x-openclaw-scopes": "operator.approvals",
-        },
-        body: JSON.stringify({
-          model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
-        }),
-      });
+        const res = await postChatCompletions(
+          enabledPort,
+          {
+            stream,
+            model: "openclaw",
+            messages: [{ role: "user", content: "hi" }],
+          },
+          {
+            "x-openclaw-scopes": scopes,
+            "x-openclaw-sender-is-owner": "true",
+          },
+        );
 
-      expect(res.status).toBe(200);
-      await res.text();
-    } finally {
-      await server.close({ reason: "openai token auth owner test done" });
+        expect(res.status).toBe(200);
+        await res.text();
+        expect(agentCommand).toHaveBeenCalledTimes(1);
+        expect(firstAgentCommandOptions()?.senderIsOwner).toBe(senderIsOwner);
+      }
     }
   });
+
+  it("preserves verified trusted-proxy owner identity for both response modes", async () => {
+    await withEnvAsync(
+      { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
+      async () => {
+        const port = await getFreePort();
+        let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+        const previousGatewayAuth = testState.gatewayAuth;
+        const trustedProxyAuth = {
+          mode: "trusted-proxy" as const,
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-proto"],
+            allowLoopback: true,
+          },
+        };
+        testState.gatewayAuth = trustedProxyAuth;
+        try {
+          await writeGatewayConfig({
+            gateway: {
+              auth: trustedProxyAuth,
+              trustedProxies: ["127.0.0.1"],
+            },
+          });
+          resetConfigRuntimeState();
+          server = await startGatewayServer(port, {
+            host: "127.0.0.1",
+            auth: trustedProxyAuth,
+            controlUiEnabled: false,
+            openAiChatCompletionsEnabled: true,
+          });
+
+          for (const stream of [false, true]) {
+            for (const { scopes, senderIsOwner } of [
+              { scopes: "operator.write", senderIsOwner: false },
+              { scopes: "operator.admin, operator.write", senderIsOwner: true },
+            ]) {
+              agentCommand.mockClear();
+              agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+
+              const res = await postChatCompletions(
+                port,
+                {
+                  stream,
+                  model: "openclaw",
+                  messages: [{ role: "user", content: "hi" }],
+                },
+                {
+                  "x-forwarded-proto": "https",
+                  "x-forwarded-user": "operator@example.com",
+                  "x-openclaw-scopes": scopes,
+                  "x-openclaw-sender-is-owner": "true",
+                },
+              );
+
+              expect(res.status).toBe(200);
+              await res.text();
+              expect(agentCommand).toHaveBeenCalledTimes(1);
+              expect(firstAgentCommandOptions()?.senderIsOwner).toBe(senderIsOwner);
+            }
+          }
+
+          agentCommand.mockClear();
+          const unauthorized = await postChatCompletions(
+            port,
+            { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+            {
+              "x-forwarded-proto": "https",
+              "x-openclaw-scopes": "operator.admin, operator.write",
+              "x-openclaw-sender-is-owner": "true",
+            },
+          );
+          expect(unauthorized.status).toBe(401);
+          await unauthorized.text();
+          expect(agentCommand).not.toHaveBeenCalled();
+        } finally {
+          await server?.close({ reason: "openai trusted-proxy auth owner test done" });
+          testState.gatewayAuth = previousGatewayAuth;
+          await writeGatewayConfig({});
+          resetConfigRuntimeState();
+        }
+      },
+    );
+  });
+
+  it.each(["token", "password"] as const)(
+    "preserves owner identity for streaming and non-streaming %s-authenticated callers",
+    async (mode) => {
+      const port = await getFreePort();
+      const server = await startSharedSecretServer(port, mode);
+      try {
+        for (const stream of [false, true]) {
+          agentCommand.mockClear();
+          agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+
+          const res = await postChatCompletions(
+            port,
+            {
+              stream,
+              model: "openclaw",
+              messages: [{ role: "user", content: "hi" }],
+            },
+            {
+              authorization: "Bearer secret",
+              "x-openclaw-scopes": "operator.approvals",
+              "x-openclaw-sender-is-owner": "false",
+            },
+          );
+
+          expect(res.status).toBe(200);
+          await res.text();
+          expect(agentCommand).toHaveBeenCalledTimes(1);
+          expect(firstAgentCommandOptions()?.senderIsOwner).toBe(true);
+        }
+
+        agentCommand.mockClear();
+        const unauthorized = await postChatCompletions(
+          port,
+          { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+          { authorization: "Bearer wrong", "x-openclaw-sender-is-owner": "true" },
+        );
+        expect(unauthorized.status).toBe(401);
+        await unauthorized.text();
+        expect(agentCommand).not.toHaveBeenCalled();
+      } finally {
+        await server.close({ reason: `openai ${mode} auth owner test done` });
+      }
+    },
+  );
 
   it("aborts agent command when streaming client disconnects", { timeout: 15_000 }, async () => {
     const port = enabledPort;

@@ -62,8 +62,9 @@ function createBackend(overrides: Partial<CliBackendPlugin> = {}): CliBackendPlu
 function runtimeEntry(
   overrides: Partial<CliBackendPlugin> = {},
   pluginId = "acme-plugin",
+  metadata: { builtWithOpenClawVersion?: string } = {},
 ): RuntimeBackendEntry {
-  return { ...createBackend(overrides), pluginId } as RuntimeBackendEntry;
+  return { ...createBackend(overrides), pluginId, ...metadata } as RuntimeBackendEntry;
 }
 
 function setupEntry(
@@ -121,6 +122,16 @@ describe("resolveCliBackendConfig", () => {
     });
   });
 
+  it("preserves the plugin-owned JSONL parser through runtime resolution", () => {
+    const parseJsonlEvent = vi.fn();
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [runtimeEntry({ parseJsonlEvent })],
+      resolvePluginSetupCliBackend: () => undefined,
+    });
+
+    expect(requireBackend().parseJsonlEvent).toBe(parseJsonlEvent);
+  });
+
   it("normalizes the registered adapter with agent and runtime config context", () => {
     const normalizeConfig = vi.fn(
       (config: CliBackendConfig): CliBackendConfig => ({
@@ -166,7 +177,11 @@ describe("resolveCliBackendConfig", () => {
   });
 
   it("falls back to setup registration before runtime activation", () => {
-    const entry = setupEntry({ config: { command: "setup-acme", args: ["run"] } });
+    const parseJsonlEvent = vi.fn();
+    const entry = setupEntry({
+      config: { command: "setup-acme", args: ["run"] },
+      parseJsonlEvent,
+    });
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [],
       resolvePluginSetupCliBackend: ({ backend }) => (backend === "acme-cli" ? entry : undefined),
@@ -177,6 +192,7 @@ describe("resolveCliBackendConfig", () => {
     expect(resolved.pluginId).toBeUndefined();
     expect(resolved.config).toEqual({ command: "setup-acme", args: ["run"] });
     expect(resolved.runtimeArtifact).toEqual(runtimeArtifact);
+    expect(resolved.parseJsonlEvent).toBe(parseJsonlEvent);
   });
 
   it("returns null when no plugin owns the backend", () => {
@@ -202,6 +218,7 @@ describe("resolveCliBackendConfig", () => {
           resolveExecutionArgs: resolveExecutionArgs as never,
           ownsNativeCompaction: true,
           nativeToolMode: "selectable",
+          toolAvailabilityEnforcement: "execution-args",
           sideQuestionToolMode: "disabled",
         }),
       ],
@@ -214,7 +231,45 @@ describe("resolveCliBackendConfig", () => {
     expect(resolved.resolveExecutionArgs).toBe(resolveExecutionArgs);
     expect(resolved.ownsNativeCompaction).toBe(true);
     expect(resolved.nativeToolMode).toBe("selectable");
+    expect(resolved.toolAvailabilityEnforcement).toBe("execution-args");
     expect(resolved.sideQuestionToolMode).toBe("disabled");
+  });
+
+  it("normalizes the shipped beta selectable-hook contract to execution-args enforcement", () => {
+    const resolveExecutionArgs = vi.fn(({ baseArgs }: { baseArgs: readonly string[] }) => baseArgs);
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        runtimeEntry(
+          {
+            nativeToolMode: "selectable",
+            resolveExecutionArgs: resolveExecutionArgs as never,
+          },
+          "acme-plugin",
+          { builtWithOpenClawVersion: "2026.7.2-beta.3" },
+        ),
+      ],
+      resolvePluginSetupCliBackend: () => undefined,
+    });
+
+    const resolved = requireBackend();
+
+    expect(resolved.resolveExecutionArgs).toBe(resolveExecutionArgs);
+    expect(resolved.toolAvailabilityEnforcement).toBe("execution-args");
+  });
+
+  it("does not infer enforcement for an unversioned selectable hook", () => {
+    const resolveExecutionArgs = vi.fn(({ baseArgs }: { baseArgs: readonly string[] }) => baseArgs);
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        runtimeEntry({
+          nativeToolMode: "selectable",
+          resolveExecutionArgs: resolveExecutionArgs as never,
+        }),
+      ],
+      resolvePluginSetupCliBackend: () => undefined,
+    });
+
+    expect(requireBackend().toolAvailabilityEnforcement).toBeUndefined();
   });
 });
 

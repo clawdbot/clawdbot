@@ -12,6 +12,7 @@ import {
   isHelpOrVersionInvocation,
   isRootHelpInvocation,
   isRootVersionInvocation,
+  isSimpleCommandHelpInvocation,
   normalizeGeneratedHelpCommandArgv,
   normalizeRootHelpTargetArgv,
   normalizeRootLogLevelArgv,
@@ -293,6 +294,75 @@ describe("argv helpers", () => {
       argv: ["node", "openclaw", "nodes", "invoke", "--", "--version"],
       expected: false,
     },
+    {
+      name: "root version flag",
+      argv: ["node", "openclaw", "--version"],
+      expected: true,
+    },
+    {
+      name: "root short version flag",
+      argv: ["node", "openclaw", "-V"],
+      expected: true,
+    },
+    {
+      name: "root version alias after profile",
+      argv: ["node", "openclaw", "--profile", "work", "-v"],
+      expected: true,
+    },
+    {
+      name: "root version flag after profile",
+      argv: ["node", "openclaw", "--profile", "work", "--version"],
+      expected: true,
+    },
+    {
+      name: "version-pinned skill install",
+      argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version", "1.2.3"],
+      expected: false,
+    },
+    {
+      name: "version-pinned skill verification",
+      argv: ["node", "openclaw", "skills", "verify", "@owner/weather", "--version", "1.2.3"],
+      expected: false,
+    },
+    {
+      name: "equals-form version-pinned skill install",
+      argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version=1.2.3"],
+      expected: false,
+    },
+    {
+      name: "profiled version-pinned skill verification",
+      argv: [
+        "node",
+        "openclaw",
+        "--profile",
+        "work",
+        "skills",
+        "verify",
+        "@owner/weather",
+        "--version",
+        "1.2.3",
+      ],
+      expected: false,
+    },
+    {
+      name: "help for a version-pinned skill command",
+      argv: [
+        "node",
+        "openclaw",
+        "skills",
+        "verify",
+        "@owner/weather",
+        "--version",
+        "1.2.3",
+        "--help",
+      ],
+      expected: true,
+    },
+    {
+      name: "unknown root option does not turn version into root help",
+      argv: ["node", "openclaw", "--unknown", "--version"],
+      expected: false,
+    },
   ])("detects help/version invocations: $name", ({ argv, expected }) => {
     expect(isHelpOrVersionInvocation(argv)).toBe(expected);
   });
@@ -409,6 +479,31 @@ describe("argv helpers", () => {
         2,
       ),
     ).toEqual(["config", "validate"]);
+  });
+
+  it("limits simple help fast paths to root options, a command, and help", () => {
+    const commands = new Set(["setup"]);
+    expect(
+      isSimpleCommandHelpInvocation(
+        ["node", "openclaw", "--profile", "work", "setup", "--help"],
+        commands,
+      ),
+    ).toBe(true);
+    expect(
+      isSimpleCommandHelpInvocation(
+        ["node", "openclaw", "setup", "--workspace", "--help"],
+        commands,
+      ),
+    ).toBe(false);
+    expect(
+      isSimpleCommandHelpInvocation(
+        ["node", "openclaw", "setup", "--profile", "work", "--help"],
+        commands,
+      ),
+    ).toBe(false);
+    expect(isSimpleCommandHelpInvocation(["node", "openclaw", "--help", "setup"], commands)).toBe(
+      false,
+    );
   });
 
   it("extracts routed config get positionals with interleaved root options", () => {
@@ -673,6 +768,12 @@ describe("argv helpers", () => {
     { argv: ["node", "openclaw", "models", "list"], expected: true },
     { argv: ["node", "openclaw", "models", "status"], expected: true },
     { argv: ["node", "openclaw", "update", "status", "--json"], expected: false },
+    { argv: ["node", "openclaw", "gateway", "call", "health", "--json"], expected: false },
+    {
+      argv: ["node", "openclaw", "--profile", "remote", "gateway", "call", "status"],
+      expected: false,
+    },
+    { argv: ["node", "openclaw", "gateway", "status"], expected: true },
     { argv: ["node", "openclaw", "agent", "--message", "hi"], expected: true },
     { argv: ["node", "openclaw", "agents", "list"], expected: true },
     { argv: ["node", "openclaw", "message", "send"], expected: true },
@@ -684,6 +785,9 @@ describe("argv helpers", () => {
   it.each([
     { path: ["status"], expected: true },
     { path: ["update", "status"], expected: false },
+    { path: ["gateway", "call"], expected: false },
+    { path: ["gateway", "health"], expected: true },
+    { path: ["gateway", "status"], expected: true },
     { path: ["config", "get"], expected: false },
     { path: ["agent"], expected: true },
     { path: ["models", "status"], expected: true },

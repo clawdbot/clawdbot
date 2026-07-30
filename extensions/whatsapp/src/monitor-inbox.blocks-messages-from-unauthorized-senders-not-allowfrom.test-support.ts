@@ -95,7 +95,7 @@ function firstInboundPayload(onMessage: ReturnType<typeof vi.fn>) {
 describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
 
-  it("blocks messages from unauthorized senders not in allowFrom", async () => {
+  it("delivery coordinator blocks unauthorized senders outside allowFrom", async () => {
     // Test for auto-recovery fix: early allowFrom filtering prevents Bad MAC errors
     // from unauthorized senders corrupting sessions
     const config = {
@@ -133,7 +133,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("applies hot-reloaded dmPolicy allowlist to the active listener", async () => {
+  it("delivery coordinator applies hot-reloaded dmPolicy to the active listener", async () => {
     const startupConfig = {
       channels: {
         whatsapp: {
@@ -179,7 +179,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("skips read receipts in self-chat mode", async () => {
+  it("delivery coordinator skips read receipts in self-chat mode", async () => {
     const config = {
       channels: {
         whatsapp: {
@@ -230,7 +230,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("skips read receipts when disabled", async () => {
+  it("delivery coordinator skips read receipts when disabled", async () => {
     const { onMessage, listener, sock } = await startWebInboxMonitor({
       sendReadReceipts: false,
     });

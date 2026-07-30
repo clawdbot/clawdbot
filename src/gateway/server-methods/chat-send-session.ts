@@ -8,6 +8,7 @@ import {
 } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpanSync } from "../../infra/diagnostics-timeline.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
@@ -73,6 +74,8 @@ function loadChatSendSessionContext(params: {
   const expectedSessionRoutingContract = normalizeOptionalChatText(
     p.expectedSessionRoutingContract,
   );
+  const expectedLeafEntryId =
+    p.expectedLeafEntryId === null ? null : normalizeOptionalChatText(p.expectedLeafEntryId);
   const sessionRoutingChanged = (candidateConfig: OpenClawConfig) =>
     expectedSessionRoutingContract !== undefined &&
     expectedSessionRoutingContract.toLowerCase() !== resolveSessionRoutingContract(candidateConfig);
@@ -89,6 +92,7 @@ function loadChatSendSessionContext(params: {
     sessionKey,
     legacyKey,
     sessionRoutingChanged,
+    expectedLeafEntryId,
     requestedAgentId,
   };
 }
@@ -103,6 +107,9 @@ export function prepareChatSendSession(params: {
   const { request, client } = params;
   const { p, explicitOrigin, normalizedAttachments, turnKind, rawMessage } = request;
   const { cfg, sessionKey, entry, legacyKey, rawSessionKey, requestedAgentId } = loaded;
+  if (isIncognitoSessionKey(sessionKey) && !entry) {
+    return { ok: false as const, error: `Incognito session "${sessionKey}" was not found.` };
+  }
   const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(sessionKey, entry);
   if (missingHarnessSessionError) {
     return { ok: false as const, error: missingHarnessSessionError };

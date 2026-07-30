@@ -28,7 +28,7 @@ describe("OpenClaw tools MCP server", () => {
     );
 
     const listed = await handlers.listTools();
-    expect(listed.tools.map((tool) => tool.name)).toContain("cron");
+    expect(listed.tools.map((tool) => tool.name)).toContain("automations");
   });
 
   it("requires the managed bridge to pass a real agent session key", () => {

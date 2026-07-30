@@ -12,6 +12,7 @@ import {
   type PolicyRuleMetadata,
   type PolicyScopeSelectorKind,
 } from "./doctor/register.js";
+import { getPolicyPath, scopedPolicyValue } from "./policy-value.js";
 
 const POLICY_CONFORMANCE_CHECK_IDS = {
   missing: "policy/policy-conformance-missing",
@@ -577,26 +578,6 @@ function normalizeSelectorValues(
     .map((entry) =>
       selector === "agentIds" ? normalizeAgentId(entry) : entry.trim().toLowerCase(),
     );
-}
-
-function scopedPolicyValue(overlay: Record<string, unknown>, path: readonly string[]): unknown {
-  const [root, ...remainingPath] = path;
-  if (!root) {
-    return undefined;
-  }
-  const scopedRoot = root === "agents" ? overlay.agents : overlay[root];
-  return getPolicyPath(scopedRoot, remainingPath);
-}
-
-function getPolicyPath(value: unknown, path: readonly string[]): unknown {
-  let current = value;
-  for (const part of path) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[part];
-  }
-  return current;
 }
 
 async function readPolicyDocument(path: string): Promise<PolicyDocumentReadResult> {

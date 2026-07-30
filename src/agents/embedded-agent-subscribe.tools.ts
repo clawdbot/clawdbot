@@ -34,6 +34,7 @@ import {
   readToolResultDetails,
   readToolResultStatus,
 } from "./tool-result-error.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
 export { isToolResultError };
 
@@ -602,7 +603,7 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "apply_patch",
   "browser",
   "canvas",
-  "cron",
+  AUTOMATIONS_TOOL_NAME,
   "edit",
   "exec",
   "gateway",

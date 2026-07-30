@@ -9,7 +9,7 @@ import {
   type PluginCliLoaderOptions,
 } from "./cli-registry-loader.js";
 import { registerPluginCliCommandGroups } from "./register-plugin-cli-command-groups.js";
-import type { OpenClawPluginCliCommandDescriptor, PluginLogger } from "./types.js";
+import type { OpenClawPluginCliRootCommandDescriptor, PluginLogger } from "./types.js";
 
 type PluginCliRegistrationMode = "eager" | "lazy";
 
@@ -88,7 +88,7 @@ export async function getPluginCliCommandDescriptors(
   cfg?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
   loaderOptions?: PluginCliLoaderOptions,
-): Promise<OpenClawPluginCliCommandDescriptor[]> {
+): Promise<OpenClawPluginCliRootCommandDescriptor[]> {
   return loadPluginCliDescriptors({ cfg, env, loaderOptions, logger: quietDescriptorLogger });
 }
 
@@ -123,7 +123,9 @@ export async function registerPluginCliCommands(
   await registerPluginCliCommandGroups(program, entries, {
     mode,
     primary,
-    existingCommands: new Set(program.commands.map((cmd) => cmd.name())),
+    // Include aliases: alias-only root names (cron|automations, tui|terminal)
+    // are owned commands too; a plugin claiming one would crash registration.
+    existingCommands: new Set(program.commands.flatMap((cmd) => [cmd.name(), ...cmd.aliases()])),
     logger,
   });
 }

@@ -905,7 +905,7 @@ openclaw logs --follow
 
 Common causes:
 
-- `publicUrl` points at a different path than `serve.path`.
+- `publicUrl` does not match the public webhook URL configured with the provider. A reverse proxy may map that public path to a different `serve.path`, but `publicUrl` must remain the provider-facing URL.
 - The tunnel URL changed after the Gateway started.
 - A proxy forwards the request but strips or rewrites host/proto headers.
 - Firewall or DNS routes the public hostname somewhere other than the Gateway.
@@ -919,8 +919,10 @@ under your control.
 
 ### Signature verification fails
 
-Provider signatures are checked against the public URL OpenClaw reconstructs
-from the incoming request. If signatures fail:
+Twilio and Plivo URL signatures use `publicUrl` when it is configured: its
+scheme, host, and path are preserved, while the request query is applied.
+Without `publicUrl`, OpenClaw reconstructs the URL from the request. Telnyx
+signatures do not include the request URL. If signatures fail:
 
 - Confirm the provider webhook URL exactly matches `publicUrl`, including scheme, host, and path.
 - For ngrok free-tier URLs, update `publicUrl` when the tunnel hostname changes.

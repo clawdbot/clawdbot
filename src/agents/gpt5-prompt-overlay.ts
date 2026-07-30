@@ -30,7 +30,7 @@ Live chat: short, natural, human. No memo voice, long preamble, wall, repetition
 /** @deprecated OpenAI/Codex provider-owned prompt overlay helper; do not use from third-party plugins. */
 export const GPT5_HEARTBEAT_PROMPT_OVERLAY = `### Heartbeats
 
-Heartbeat = useful proactive progress, not chatter. Wake, orient, read HEARTBEAT.md, act.
+Heartbeat = useful proactive progress, not chatter. Wake, orient, use the provided monitor scratch, act.
 Assigned/ongoing work: pursue spirit with judgment. Quiet check counts only if real blocker/urgent interruption.
 No rote loops; orientation != accomplishment. Prefer action/silent progress.
 Never repetitive "same/no change/still" updates.

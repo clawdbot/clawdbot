@@ -61,8 +61,6 @@ export function installEmbeddedAttemptContextGuards(input: {
   );
   const toolResultMaxChars = resolveLiveToolResultMaxChars({
     contextWindowTokens: contextTokenBudget,
-    cfg: attempt.config,
-    agentId: input.sessionAgentId,
   });
   let pendingMidTurnPrecheckRequest: MidTurnPrecheckRequest | null = null;
   let afterTurnCheckpoint: number | null = null;

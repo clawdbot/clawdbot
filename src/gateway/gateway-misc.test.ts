@@ -340,6 +340,7 @@ function makeScopedBroadcastClients() {
   const pairingSocket = makeRecordingSocket();
   const nodeSocket = makeRecordingSocket();
   const readSocket = makeRecordingSocket();
+  const talkSocket = makeRecordingSocket();
   const writeSocket = makeRecordingSocket();
   const adminSocket = makeRecordingSocket();
   const clients = new Set<GatewayWsClient>([
@@ -349,11 +350,12 @@ function makeScopedBroadcastClients() {
       scopes: ["operator.read"],
     } as GatewayWsClient["connect"]),
     makeOperatorWsClient("c-read", readSocket, ["operator.read"]),
+    makeOperatorWsClient("c-talk", talkSocket, ["operator.talk"]),
     makeOperatorWsClient("c-write", writeSocket, ["operator.write"]),
     makeOperatorWsClient("c-admin", adminSocket, ["operator.admin"]),
   ]);
 
-  return { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, clients };
+  return { pairingSocket, nodeSocket, readSocket, talkSocket, writeSocket, adminSocket, clients };
 }
 
 function makeScopedBroadcastContext() {
@@ -404,6 +406,32 @@ describe("gateway broadcaster", () => {
     expect(getBufferedAmount("c-admin")).toBe(1234);
     clients.delete(client);
     expect(getBufferedAmount("c-admin")).toBeUndefined();
+  });
+
+  it("closes a slow authoritative-session subscriber while delivering to healthy clients", () => {
+    const slowSocket = makeRecordingSocket();
+    slowSocket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+    const healthySocket = makeRecordingSocket();
+    const clients = makeOperatorWsClients([
+      { connId: "slow-session", socket: slowSocket, scopes: ["operator.read"] },
+      { connId: "healthy-session", socket: healthySocket, scopes: ["operator.read"] },
+    ]);
+    const { broadcastToConnIds } = createGatewayBroadcaster({ clients });
+    const payload = {
+      sessionKey: "agent:main:main",
+      messageId: "durable-user-1",
+      messageSeq: 1,
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "shared durable prompt" }],
+      },
+    };
+
+    broadcastToConnIds("session.message", payload, new Set(["slow-session", "healthy-session"]));
+
+    expect(slowSocket.close).toHaveBeenCalledWith(1008, "slow consumer");
+    expect(slowSocket.send).not.toHaveBeenCalled();
+    expect(healthySocket.sent).toEqual([{ type: "event", event: "session.message", payload }]);
   });
 
   it("keeps workers outside all generic and targeted gateway broadcasts", () => {
@@ -664,8 +692,15 @@ describe("gateway broadcaster", () => {
   });
 
   it("defaults unknown events to deny and classifies remaining gateway broadcast events", () => {
-    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
-      makeScopedBroadcastContext();
+    const {
+      pairingSocket,
+      nodeSocket,
+      readSocket,
+      talkSocket,
+      writeSocket,
+      adminSocket,
+      broadcast,
+    } = makeScopedBroadcastContext();
 
     broadcast("cron", { jobId: "job-1" });
     broadcast("talk.mode", { enabled: true });
@@ -705,6 +740,15 @@ describe("gateway broadcaster", () => {
       "cron",
       "voicewake.changed",
       "voicewake.routing.changed",
+      "heartbeat",
+      "presence",
+      "health",
+      "tick",
+      "shutdown",
+      "update.available",
+    ]);
+    expectSentEvents(talkSocket, [
+      "talk.mode",
       "heartbeat",
       "presence",
       "health",

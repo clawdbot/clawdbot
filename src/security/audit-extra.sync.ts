@@ -6,6 +6,7 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { resolveConfiguredToolPolicies } from "../agents/agent-tools.policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/network-mode.js";
@@ -233,13 +234,20 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
         "system.run.prepare",
         "system.which",
         "browser.proxy",
+        "browser.proxy.upload.v1",
         "screen.snapshot",
       ],
     },
     {
       platform: "linux",
       deviceFamily: "Linux",
-      approvedCommands: ["system.run", "system.run.prepare", "system.which", "browser.proxy"],
+      approvedCommands: [
+        "system.run",
+        "system.run.prepare",
+        "system.which",
+        "browser.proxy",
+        "browser.proxy.upload.v1",
+      ],
     },
     {
       platform: "windows",
@@ -249,6 +257,7 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
         "system.run.prepare",
         "system.which",
         "browser.proxy",
+        "browser.proxy.upload.v1",
         "screen.snapshot",
       ],
     },
@@ -481,12 +490,12 @@ type AuditAgentToolContext = {
 
 function listAuditAgentToolContexts(cfg: OpenClawConfig): AuditAgentToolContext[] {
   const contexts: AuditAgentToolContext[] = [{ label: "agents.defaults" }];
-  for (const agent of cfg.agents?.list ?? []) {
+  for (const agent of listAgentEntries(cfg)) {
     if (!agent || typeof agent !== "object" || typeof agent.id !== "string") {
       continue;
     }
     contexts.push({
-      label: `agents.list.${agent.id}`,
+      label: `agents.entries.${agent.id}`,
       agentId: agent.id,
       tools: agent.tools,
     });
@@ -798,7 +807,7 @@ export function collectGatewayHttpNoAuthFindings(
 export function collectSandboxDockerNoopFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const configuredPaths: string[] = [];
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const agents = listAgentEntries(cfg);
 
   const defaultsSandbox = cfg.agents?.defaults?.sandbox;
   const hasDefaultDocker = hasConfiguredDockerConfig(
@@ -823,7 +832,7 @@ export function collectSandboxDockerNoopFindings(cfg: OpenClawConfig): SecurityA
       continue;
     }
     if (resolveSandboxConfigForAgent(cfg, entry.id).mode === "off") {
-      configuredPaths.push(`agents.list.${entry.id}.sandbox.docker`);
+      configuredPaths.push(`agents.entries.${entry.id}.sandbox.docker`);
     }
   }
 
@@ -847,7 +856,7 @@ export function collectSandboxDockerNoopFindings(cfg: OpenClawConfig): SecurityA
 
 export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const agents = listAgentEntries(cfg);
 
   const configs: Array<{ source: string; docker: Record<string, unknown> }> = [];
   const defaultDocker = cfg.agents?.defaults?.sandbox?.docker;
@@ -864,7 +873,7 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
     const agentDocker = entry.sandbox?.docker;
     if (agentDocker && typeof agentDocker === "object") {
       configs.push({
-        source: `agents.list.${entry.id}.sandbox.docker`,
+        source: `agents.entries.${entry.id}.sandbox.docker`,
         docker: agentDocker as Record<string, unknown>,
       });
     }
@@ -1060,7 +1069,7 @@ export function collectMinimalProfileOverrideFindings(cfg: OpenClawConfig): Secu
     return findings;
   }
 
-  const overrides = (cfg.agents?.list ?? [])
+  const overrides = listAgentEntries(cfg)
     .filter((entry): entry is { id: string; tools?: AgentToolsConfig } => {
       return Boolean(
         entry &&
@@ -1082,7 +1091,7 @@ export function collectMinimalProfileOverrideFindings(cfg: OpenClawConfig): Secu
     title: "Global tools.profile=minimal is overridden by agent profiles",
     detail:
       "Global minimal profile is set, but these agent profiles take precedence:\n" +
-      overrides.map((entry) => `- agents.list.${entry}`).join("\n"),
+      overrides.map((entry) => `- agents.entries.${entry}`).join("\n"),
     remediation:
       'Set those agents to `tools.profile="minimal"` (or remove the agent override) if you want minimal tools enforced globally.',
   });

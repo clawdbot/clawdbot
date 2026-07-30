@@ -85,7 +85,13 @@ const workspaces = Object.fromEntries(
         ...settings.entry,
         ...(workspace === "."
           ? [".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!", ...ROOT_TEST_ENTRY_GLOBS]
-          : [TEST_ENTRY_GLOB]),
+          : [
+              TEST_ENTRY_GLOB,
+              // QA Lab loads this plugin fixture by path during the Gateway E2E.
+              ...(workspace === "extensions/qa-lab"
+                ? ["test-fixtures/current-requester-subagent-plugin/index.js!"]
+                : []),
+            ]),
       ],
       project:
         workspace === "."

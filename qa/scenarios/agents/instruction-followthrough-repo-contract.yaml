@@ -21,7 +21,7 @@ scenario:
   codeRefs:
     - src/agents/system-prompt.ts
     - src/agents/embedded-agent-runner/run/incomplete-turn.ts
-    - extensions/qa-lab/src/mock-openai-server.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow
     summary: Verify the agent reads repo instructions first, then completes the first bounded followthrough task without stalling.

@@ -1,8 +1,9 @@
 // Help tests cover command help generation and inherited help options.
-import { Command } from "commander";
+import { Command, CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgramContext } from "./context.js";
 import { configureProgramHelp } from "./help.js";
+import { OpenClawCommand } from "./openclaw-command.js";
 
 const hasEmittedCliBannerMock = vi.hoisted(() => vi.fn(() => false));
 const formatCliBannerLineMock = vi.hoisted(() => vi.fn(() => "BANNER-LINE"));
@@ -143,6 +144,32 @@ describe("configureProgramHelp", () => {
     expect(options?.mode).toBe("default");
     expect(help).toContain("Examples:");
     expect(help).toContain("https://docs.openclaw.ai/cli");
+  });
+
+  it("formats parse errors from the exact Commander command path", async () => {
+    let stderr = "";
+    process.argv = ["node", "openclaw", "plugins", "--source", "list", "list", "--wat"];
+    const program = new OpenClawCommand().enablePositionalOptions().exitOverride();
+    configureProgramHelp(program, testProgramContext);
+    program.configureOutput({
+      writeErr: (value) => {
+        stderr += value;
+      },
+    });
+    program
+      .command("plugins")
+      .option("--source <source>")
+      .command("list")
+      .action(() => {});
+
+    const firstError = await program.parseAsync(process.argv).catch((error: unknown) => error);
+    expect(firstError).toBeInstanceOf(CommanderError);
+    process.argv = ["node", "openclaw", "plugins", "list", "--still-wat"];
+    const secondError = await program.parseAsync(process.argv).catch((error: unknown) => error);
+    expect(secondError).toBeInstanceOf(CommanderError);
+
+    expect(stderr.match(/Try: openclaw plugins list --help/g)).toHaveLength(2);
+    expect(stderr).not.toContain("openclaw plugins list list --help");
   });
 
   it("suppresses banner formatting when parent default help requests it", () => {

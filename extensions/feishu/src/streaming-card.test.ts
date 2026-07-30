@@ -4,7 +4,11 @@ import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStreamingCardSendMode } from "./streaming-card-send-mode.js";
-import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
+import {
+  FeishuStreamingFinalizationError,
+  FeishuStreamingSession,
+  mergeStreamingText,
+} from "./streaming-card.js";
 
 const FEISHU_JSON_MAX_BYTES = 16 * 1024 * 1024;
 type FeishuStreamingFetch = typeof fetch;
@@ -746,7 +750,18 @@ describe("FeishuStreamingSession", () => {
       },
     });
 
-    await expect(session.close(undefined, { note: "model note" })).resolves.toBe(true);
+    const error = await session
+      .closeWithResult(undefined, { note: "model note" })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(FeishuStreamingFinalizationError);
+    expect(error).toMatchObject({
+      result: {
+        visibleReplySent: true,
+        content: "visible answer",
+        messageId: "om_rejected_note_and_close",
+      },
+    });
 
     expect(noteBodies).toHaveLength(1);
     expect(settingsBodies).toHaveLength(1);

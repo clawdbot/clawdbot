@@ -89,4 +89,42 @@ describe("chat session sharing menu", () => {
     expect(root.querySelector("wa-dropdown")).toBeNull();
     expect(root.querySelector(".chat-pane__draft-indicator")?.textContent).toContain("👻");
   });
+
+  it("publishes a manageable draft through the shared visibility callback", () => {
+    const onVisibilityChange = vi.fn();
+    const root = mount(
+      renderChatSessionSharing({
+        session: {
+          key: "agent:main:draft",
+          kind: "direct",
+          updatedAt: 1,
+          visibility: "draft",
+          sharingRole: "owner",
+        },
+        state: {
+          loading: false,
+          result: {
+            sessionKey: "agent:main:draft",
+            members: [],
+            identities: [],
+            role: "owner",
+            allowedVisibilities: ["shared", "draft"],
+          },
+        },
+        onOpen: vi.fn(),
+        onVisibilityChange,
+        onMemberChange: vi.fn(),
+      }),
+    );
+
+    const publish = root.querySelector<HTMLElement>(".chat-pane__publish-draft");
+    expect(publish?.textContent).toContain("Publish draft");
+    root.querySelector("wa-dropdown")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: publish?.getAttribute("value") } },
+      }),
+    );
+    expect(onVisibilityChange).toHaveBeenCalledWith("shared");
+    expect(root.querySelectorAll('wa-dropdown-item[value="visibility:shared"]')).toHaveLength(1);
+  });
 });

@@ -6,6 +6,8 @@ import "@awesome.me/webawesome/dist/components/radio/radio.js";
 import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { html, nothing, type TemplateResult } from "lit";
+import { live } from "lit/directives/live.js";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { icons } from "./icons.ts";
 import "./tooltip.ts";
 
@@ -43,6 +45,12 @@ export function renderSettingsPage(
       ${children}
     </div>
   `;
+}
+
+export function renderDocsLink(url: string, label: unknown): TemplateResult {
+  return html`<a href=${url} target=${EXTERNAL_LINK_TARGET} rel=${buildExternalLinkRel()}
+    >${label}</a
+  >`;
 }
 
 /** Section = plain text heading + one group surface containing rows. */
@@ -125,7 +133,7 @@ export function renderSettingsNavRow(
  * title is not associated with the input; prefer renderSettingsToggleRow. */
 export function renderSettingsToggle(props: {
   checked: boolean;
-  onChange: (checked: boolean) => void;
+  onChange: (checked: boolean) => boolean | void;
   disabled?: boolean;
   ariaLabel: string;
 }): TemplateResult {
@@ -133,10 +141,13 @@ export function renderSettingsToggle(props: {
     <wa-switch
       class="settings-toggle"
       size="s"
-      .checked=${props.checked}
+      .checked=${live(props.checked)}
       ?disabled=${props.disabled ?? false}
       @change=${(event: Event) => {
-        props.onChange((event.currentTarget as HTMLElement & { checked: boolean }).checked);
+        const target = event.currentTarget as HTMLElement & { checked: boolean };
+        if (props.onChange(target.checked) === false) {
+          target.checked = props.checked;
+        }
       }}
     >
       <span class="settings-control__sr-label">${props.ariaLabel}</span>
@@ -148,9 +159,10 @@ export function renderSettingsToggle(props: {
  * row is clickable and the checkbox gets its accessible name from the title. */
 export function renderSettingsToggleRow(props: {
   title: unknown;
+  ariaLabel?: unknown;
   description?: unknown;
   checked: boolean;
-  onChange: (checked: boolean) => void;
+  onChange: (checked: boolean) => boolean | void;
   /** Runs synchronously during direct activation for effects gated on user activation. */
   onAct?: (checked: boolean) => void;
   disabled?: boolean;
@@ -191,15 +203,18 @@ export function renderSettingsToggleRow(props: {
         <wa-switch
           class="settings-toggle"
           size="s"
-          .checked=${props.checked}
+          .checked=${live(props.checked)}
           ?disabled=${props.disabled ?? false}
           @click=${notifySwitchActivation}
           @keydown=${notifySwitchActivation}
           @change=${(event: Event) => {
-            props.onChange((event.currentTarget as HTMLElement & { checked: boolean }).checked);
+            const target = event.currentTarget as HTMLElement & { checked: boolean };
+            if (props.onChange(target.checked) === false) {
+              target.checked = props.checked;
+            }
           }}
         >
-          <span class="settings-control__sr-label">${props.title}</span>
+          <span class="settings-control__sr-label">${props.ariaLabel ?? props.title}</span>
         </wa-switch>
       </div>
     </div>
@@ -208,15 +223,16 @@ export function renderSettingsToggleRow(props: {
 
 export function renderSettingsSegmented<T extends string>(props: {
   value: T;
-  options: ReadonlyArray<{ value: T; label: unknown; title?: string }>;
+  options: ReadonlyArray<{ value: T; label: unknown; title?: string; testId?: string }>;
   /** The selected radio is passed so callers can anchor visual transitions. */
   onChange: (value: T, element: HTMLElement) => void;
   disabled?: boolean;
   ariaLabel?: string;
+  className?: string;
 }): TemplateResult {
   return html`
     <wa-radio-group
-      class="settings-segmented"
+      class="settings-segmented ${props.className ?? ""}"
       size="s"
       orientation="horizontal"
       .value=${props.value}
@@ -245,6 +261,7 @@ export function renderSettingsSegmented<T extends string>(props: {
             value=${option.value}
             .checked=${option.value === props.value}
             title=${option.title ?? nothing}
+            data-test-id=${option.testId ?? nothing}
           >
             ${option.label}
           </wa-radio>

@@ -87,8 +87,8 @@ func maskMarkdownDocSyntax(text string, nextPlaceholder func() string, placehold
 	}
 	inlineRanges = append(inlineRanges, protectedMarkdownLinkRanges(text)...)
 	masked := maskByteRanges(text, inlineRanges, nextPlaceholder, placeholders, mapping)
-
-	return maskByteRanges(masked, markdownListMarkerRanges(masked), nextPlaceholder, placeholders, mapping)
+	masked = maskByteRanges(masked, markdownListMarkerRanges(masked), nextPlaceholder, placeholders, mapping)
+	return maskByteRanges(masked, compositeNumericValueRanges(masked), nextPlaceholder, placeholders, mapping)
 }
 
 func markdownListMarkerRanges(text string) [][2]int {
@@ -161,6 +161,82 @@ func maskedListMarkerPlaceholders(mapping map[string]string) map[string]string {
 	return placeholders
 }
 
+func normalizeMaskedListMarkerSpacing(source, translated string, listPlaceholders map[string]string) string {
+	type replacement struct {
+		start int
+		end   int
+		value string
+	}
+	replacements := make([]replacement, 0, len(listPlaceholders))
+	for placeholder := range listPlaceholders {
+		sourcePosition := strings.Index(source, placeholder)
+		translatedPosition := strings.Index(translated, placeholder)
+		if sourcePosition < 0 || translatedPosition < 0 {
+			continue
+		}
+		sourceStart := markdownWhitespaceRunStart(source, sourcePosition)
+		translatedStart := markdownWhitespaceRunStart(translated, translatedPosition)
+		sourceSpacing := source[sourceStart:sourcePosition]
+		if translated[translatedStart:translatedPosition] == sourceSpacing {
+			continue
+		}
+		replacements = append(replacements, replacement{
+			start: translatedStart,
+			end:   translatedPosition,
+			value: sourceSpacing,
+		})
+	}
+	sort.Slice(replacements, func(i, j int) bool { return replacements[i].start > replacements[j].start })
+	for _, item := range replacements {
+		translated = translated[:item.start] + item.value + translated[item.end:]
+	}
+	return translated
+}
+
+func markdownWhitespaceRunStart(text string, position int) int {
+	for position > 0 {
+		switch text[position-1] {
+		case ' ', '\t', '\r', '\n':
+			position--
+		default:
+			return position
+		}
+	}
+	return position
+}
+
+func escapeUnexpectedListItemBodyMarkers(source, translated string, listPlaceholders map[string]string) string {
+	type insertion struct {
+		position int
+	}
+	insertions := make([]insertion, 0)
+	for placeholder := range listPlaceholders {
+		sourcePosition := strings.Index(source, placeholder)
+		translatedPosition := strings.Index(translated, placeholder)
+		if sourcePosition < 0 || translatedPosition < 0 {
+			continue
+		}
+		sourceBody := source[sourcePosition+len(placeholder):]
+		translatedBody := translated[translatedPosition+len(placeholder):]
+		sourceMatch := listMarkerRe.FindStringSubmatchIndex(sourceBody)
+		translatedMatch := listMarkerRe.FindStringSubmatchIndex(translatedBody)
+		if len(translatedMatch) < 6 || len(sourceMatch) >= 6 {
+			continue
+		}
+		markerStart, markerEnd := translatedMatch[4], translatedMatch[5]
+		insertAt := markerStart
+		if markerEnd-markerStart > 1 {
+			insertAt = markerEnd - 1
+		}
+		insertions = append(insertions, insertion{position: translatedPosition + len(placeholder) + insertAt})
+	}
+	sort.Slice(insertions, func(i, j int) bool { return insertions[i].position > insertions[j].position })
+	for _, item := range insertions {
+		translated = translated[:item.position] + `\` + translated[item.position:]
+	}
+	return translated
+}
+
 func escapeUnexpectedMarkdownListMarkers(text string, listPlaceholders map[string]string) string {
 	ranges := markdownListMarkerRanges(text)
 	if len(ranges) == 0 {
@@ -230,11 +306,20 @@ func markdownInlineLinkDestination(value string) string {
 }
 
 func extractNumericValues(text string) []string {
+	ranges := compositeNumericValueRanges(text)
+	values := make([]string, 0, len(ranges))
+	for _, span := range ranges {
+		values = append(values, text[span[0]:span[1]])
+	}
+	return values
+}
+
+func compositeNumericValueRanges(text string) [][2]int {
 	protocolRanges := make([][2]int, 0)
 	for _, span := range placeholderRe.FindAllStringIndex(text, -1) {
 		protocolRanges = append(protocolRanges, [2]int{span[0], span[1]})
 	}
-	values := make([]string, 0)
+	ranges := make([][2]int, 0)
 	for _, span := range numericValueRe.FindAllStringIndex(text, -1) {
 		candidate := [2]int{span[0], span[1]}
 		if hasCompositeNumericLeadingContinuation(text, candidate[0]) ||
@@ -242,9 +327,9 @@ func extractNumericValues(text string) []string {
 			rangeOverlapsAny(candidate, protocolRanges) {
 			continue
 		}
-		values = append(values, text[span[0]:span[1]])
+		ranges = append(ranges, [2]int{span[0], span[1]})
 	}
-	return values
+	return ranges
 }
 
 func hasClockMeridiemSuffix(text string, span [2]int) bool {
@@ -269,7 +354,7 @@ func hasCompositeNumericLeadingContinuation(text string, position int) bool {
 		}
 		return position > 0 && isCompositeNumericWordByte(text[position-1])
 	}
-	return value == '.' || value == '-' || isCompositeNumericWordByte(value)
+	return value == '.' || isCompositeNumericWordByte(value)
 }
 
 func hasCompositeNumericContinuation(text string, position int) bool {

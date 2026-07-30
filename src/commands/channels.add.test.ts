@@ -557,6 +557,49 @@ describe("channelsAddCommand", () => {
     await channelsAddCommand({ channel: "external-chat" }, runtime, { hasFlags: false });
 
     expect(setupOptions().initialSelection).toEqual(["external-chat"]);
+    expect(setupOptions().finishAfterInitialSelection).toBe(true);
+  });
+
+  it("opens an exact channel id instead of an earlier plugin alias", async () => {
+    const config: OpenClawConfig = { channels: {} };
+    const aliasOwner = createChannelTestPluginBase({
+      id: "alias-owner",
+      label: "Alias Owner",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "alias-owner",
+          plugin: {
+            ...aliasOwner,
+            meta: { ...aliasOwner.meta, aliases: ["exact-id"] },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      sourceConfig: config,
+      config,
+    });
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        ...createExternalChatCatalogEntry(),
+        id: "exact-id",
+        meta: {
+          ...createExternalChatCatalogEntry().meta,
+          id: "exact-id",
+          label: "Exact ID",
+          selectionLabel: "Exact ID",
+        },
+      },
+    ]);
+
+    await channelsAddCommand({ channel: "exact-id" }, runtime, { hasFlags: false });
+
+    expect(setupOptions().initialSelection).toEqual(["exact-id"]);
+    expect(setupOptions().finishAfterInitialSelection).toBe(true);
   });
 
   it("exits quietly when guided channel setup is cancelled", async () => {

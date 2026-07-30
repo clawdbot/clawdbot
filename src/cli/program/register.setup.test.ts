@@ -176,6 +176,7 @@ describe("registerSetupCommand", () => {
 
     expect(setupCommandMock).toHaveBeenCalledWith(lastSetupOptions(), runtime);
     expect(lastSetupOptions()?.workspace).toBe("/tmp/ws");
+    expect(lastSetupOptions()?.json).toBe(true);
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
@@ -218,6 +219,17 @@ describe("registerSetupCommand", () => {
     await runCli(["setup", "--tui"]);
 
     expect(lastWizardOptions()?.tui).toBe(true);
+    expect(setupCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects conflicting custom model input capabilities", async () => {
+    await runCli(["setup", "--custom-image-input", "--custom-text-input"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Use either --custom-image-input or --custom-text-input, not both.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 

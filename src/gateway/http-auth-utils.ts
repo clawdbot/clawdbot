@@ -24,6 +24,7 @@ import {
 import { sendGatewayAuthFailure, sendMissingScopeForbidden } from "./http-common.js";
 import { ADMIN_SCOPE, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
 export function getHeader(req: IncomingMessage, name: string): string | undefined {
@@ -69,13 +70,7 @@ export function resolveHttpBrowserOriginPolicy(
   req: IncomingMessage,
   cfg = getRuntimeConfig(),
 ): NonNullable<Parameters<typeof authorizeHttpGatewayConnect>[0]["browserOriginPolicy"]> {
-  return {
-    requestHost: getHeader(req, "host"),
-    origin: getHeader(req, "origin"),
-    allowedOrigins: cfg.gateway?.controlUi?.allowedOrigins,
-    allowHostHeaderOriginFallback:
-      cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
-  };
+  return resolveBrowserOriginPolicy({ req, cfg });
 }
 
 function usesSharedSecretHttpAuth(auth: SharedSecretGatewayAuth | undefined): boolean {

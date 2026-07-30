@@ -12,6 +12,8 @@ type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 type LoadConfigFn = (typeof import("../config/config.js"))["loadConfig"];
 type ParseClawHubPluginSpecFn = (typeof import("../infra/clawhub.js"))["parseClawHubPluginSpec"];
+type ReportClawHubPluginInstallTelemetryFn =
+  (typeof import("../infra/clawhub.js"))["reportClawHubPluginInstallTelemetry"];
 type InstallPluginFromMarketplaceFn =
   (typeof import("../plugins/marketplace.js"))["installPluginFromMarketplace"];
 type InstallPluginFromGitSpecFn =
@@ -70,7 +72,7 @@ export const installPluginFromMarketplace: Mock<InstallPluginFromMarketplaceFn> 
 export const installPluginFromGitSpec: Mock<InstallPluginFromGitSpecFn> = vi.fn();
 const parseGitPluginSpec: Mock<ParseGitPluginSpecFn> = vi.fn();
 const listMarketplacePlugins: Mock<ListMarketplacePluginsFn> = vi.fn();
-const resolveMarketplaceInstallShortcut: Mock<ResolveMarketplaceInstallShortcutFn> = vi.fn();
+export const resolveMarketplaceInstallShortcut: Mock<ResolveMarketplaceInstallShortcutFn> = vi.fn();
 export const enablePluginInConfig: UnknownMock = vi.fn();
 export const recordPluginInstall: UnknownMock = vi.fn();
 const loadInstalledPluginIndexInstallRecords: AsyncUnknownMock = vi.fn(async () =>
@@ -112,6 +114,8 @@ export const installPluginFromNpmPackArchive: AsyncUnknownMock = vi.fn();
 export const installPluginFromPath: AsyncUnknownMock = vi.fn();
 export const installPluginFromClawHub: AsyncUnknownMock = vi.fn();
 export const parseClawHubPluginSpec: Mock<ParseClawHubPluginSpecFn> = vi.fn();
+export const reportClawHubPluginInstallTelemetry: Mock<ReportClawHubPluginInstallTelemetryFn> =
+  vi.fn(async () => undefined);
 export const findBundledPluginSourceMock: UnknownMock = vi.fn();
 export const installHooksFromNpmSpec: AsyncUnknownMock = vi.fn();
 export const installHooksFromPath: AsyncUnknownMock = vi.fn();
@@ -284,18 +288,22 @@ vi.mock("../plugins/enable.js", () => ({
     )) as (typeof import("../plugins/enable.js"))["enablePluginInConfig"],
 }));
 
-vi.mock("../plugins/installs.js", () => ({
-  recordPluginInstall: ((
-    ...args: Parameters<(typeof import("../plugins/installs.js"))["recordPluginInstall"]>
-  ) =>
-    invokeMock<
-      Parameters<(typeof import("../plugins/installs.js"))["recordPluginInstall"]>,
-      ReturnType<(typeof import("../plugins/installs.js"))["recordPluginInstall"]>
-    >(
-      recordPluginInstall,
-      ...args,
-    )) as (typeof import("../plugins/installs.js"))["recordPluginInstall"],
-}));
+vi.mock("../plugins/installs.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/installs.js")>();
+  return {
+    ...actual,
+    recordPluginInstall: ((
+      ...args: Parameters<(typeof import("../plugins/installs.js"))["recordPluginInstall"]>
+    ) =>
+      invokeMock<
+        Parameters<(typeof import("../plugins/installs.js"))["recordPluginInstall"]>,
+        ReturnType<(typeof import("../plugins/installs.js"))["recordPluginInstall"]>
+      >(
+        recordPluginInstall,
+        ...args,
+      )) as (typeof import("../plugins/installs.js"))["recordPluginInstall"],
+  };
+});
 
 vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) => {
   const actual =
@@ -703,6 +711,18 @@ vi.mock("../infra/clawhub.js", () => ({
       parseClawHubPluginSpec,
       ...args,
     )) as (typeof import("../infra/clawhub.js"))["parseClawHubPluginSpec"],
+  reportClawHubPluginInstallTelemetry: ((
+    ...args: Parameters<
+      (typeof import("../infra/clawhub.js"))["reportClawHubPluginInstallTelemetry"]
+    >
+  ) =>
+    invokeMock<
+      Parameters<(typeof import("../infra/clawhub.js"))["reportClawHubPluginInstallTelemetry"]>,
+      ReturnType<(typeof import("../infra/clawhub.js"))["reportClawHubPluginInstallTelemetry"]>
+    >(
+      reportClawHubPluginInstallTelemetry,
+      ...args,
+    )) as (typeof import("../infra/clawhub.js"))["reportClawHubPluginInstallTelemetry"],
 }));
 
 const { registerPluginsCli } = await import("./plugins-cli.js");
@@ -758,6 +778,8 @@ export function resetPluginsCliTestState() {
   installPluginFromPath.mockReset();
   installPluginFromClawHub.mockReset();
   parseClawHubPluginSpec.mockReset();
+  reportClawHubPluginInstallTelemetry.mockReset();
+  reportClawHubPluginInstallTelemetry.mockResolvedValue(undefined);
   findBundledPluginSourceMock.mockReset();
   installHooksFromNpmSpec.mockReset();
   installHooksFromPath.mockReset();
