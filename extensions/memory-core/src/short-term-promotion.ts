@@ -143,7 +143,7 @@ export async function rankShortTermPromotionCandidates(
     if (signalCount <= 0) {
       continue;
     }
-    if (signalCount < minRecallCount) {
+    if (recallCount < minRecallCount) {
       continue;
     }
 
@@ -151,7 +151,7 @@ export async function rankShortTermPromotionCandidates(
     const frequency = clampScore(Math.log1p(signalCount) / Math.log1p(10));
     const uniqueQueries = entry.queryHashes?.length ?? 0;
     const contextDiversity = Math.max(uniqueQueries, entry.recallDays?.length ?? 0);
-    if (contextDiversity < minUniqueQueries) {
+    if (uniqueQueries < minUniqueQueries) {
       continue;
     }
     const diversity = clampScore(contextDiversity / 5);

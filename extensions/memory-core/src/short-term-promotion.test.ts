@@ -27,6 +27,7 @@ import {
   writeMemoryCoreWorkspaceEntry,
 } from "./dreaming-state.js";
 import { deleteShortTermLockEntryIfCurrent } from "./short-term-promotion-store.js";
+import type { ShortTermRecallEntry } from "./short-term-promotion-types.js";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
@@ -849,6 +850,8 @@ describe("short-term promotion", () => {
       const ranked = await rankShortTermPromotionCandidates({
         workspaceDir,
         nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
+        minRecallCount: 0,
+        minUniqueQueries: 0,
       });
 
       expect(ranked).toHaveLength(1);
@@ -1036,6 +1039,8 @@ describe("short-term promotion", () => {
       const ranked = await rankShortTermPromotionCandidates({
         workspaceDir,
         nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+        minRecallCount: 0,
+        minUniqueQueries: 0,
       });
 
       expect(ranked).toHaveLength(1);
@@ -1047,6 +1052,8 @@ describe("short-term promotion", () => {
         workspaceDir,
         candidates: ranked,
         nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+        minRecallCount: 0,
+        minUniqueQueries: 0,
       });
 
       expect(applied.applied).toBe(1);
@@ -4466,6 +4473,100 @@ describe("short-term promotion", () => {
       expect(memoryText).toContain("recalls=0");
       expect(memoryText).not.toMatch(/recalls=7/);
     });
+  });
+
+  it("enforces recall and unique-query thresholds at ranking and apply time", async () => {
+    const nowMs = Date.parse("2026-05-29T10:00:00.000Z");
+    const cases: Array<{
+      name: string;
+      minRecallCount: number;
+      minUniqueQueries: number;
+      mutate: (entry: ShortTermRecallEntry) => void;
+    }> = [
+      {
+        name: "daily and grounded signals do not satisfy minRecallCount",
+        minRecallCount: 1,
+        minUniqueQueries: 0,
+        mutate: (entry) => {
+          entry.recallCount = 0;
+          entry.dailyCount = 3;
+          entry.groundedCount = 1;
+        },
+      },
+      {
+        name: "recall days do not satisfy minUniqueQueries",
+        minRecallCount: 0,
+        minUniqueQueries: 2,
+        mutate: (entry) => {
+          entry.recallCount = 3;
+          entry.dailyCount = 0;
+          entry.groundedCount = 0;
+          entry.totalScore = 2.7;
+          entry.queryHashes = ["same-query"];
+          entry.recallDays = ["2026-05-27", "2026-05-28", "2026-05-29"];
+        },
+      },
+    ];
+
+    for (const testCase of cases) {
+      await withTempWorkspace(async (workspaceDir) => {
+        const snippet = `Threshold regression: ${testCase.name}.`;
+        await writeDailyMemoryNote(workspaceDir, "2026-05-29", [snippet]);
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "threshold regression",
+          nowMs,
+          results: [
+            {
+              path: "memory/2026-05-29.md",
+              startLine: 1,
+              endLine: 1,
+              score: 0.9,
+              snippet,
+              source: "memory",
+            },
+          ],
+        });
+
+        const store = await testing.readRecallStore(workspaceDir, new Date(nowMs).toISOString());
+        const entryKey = expectDefined(Object.keys(store.entries)[0], "threshold regression key");
+        const entry = expectDefined(store.entries[entryKey], "threshold regression entry");
+        testCase.mutate(entry);
+        await testing.writeRawRecallStore(workspaceDir, store);
+
+        const unfiltered = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          nowMs,
+        });
+        expect(unfiltered, testCase.name).toHaveLength(1);
+
+        await expect(
+          rankShortTermPromotionCandidates({
+            workspaceDir,
+            minScore: 0,
+            minRecallCount: testCase.minRecallCount,
+            minUniqueQueries: testCase.minUniqueQueries,
+            nowMs,
+          }),
+          testCase.name,
+        ).resolves.toEqual([]);
+
+        await expect(
+          applyShortTermPromotions({
+            workspaceDir,
+            candidates: unfiltered,
+            minScore: 0,
+            minRecallCount: testCase.minRecallCount,
+            minUniqueQueries: testCase.minUniqueQueries,
+            nowMs,
+          }),
+          testCase.name,
+        ).resolves.toMatchObject({ applied: 0, appliedCandidates: [] });
+      });
+    }
   });
 
   describe("UTF-16 snippet bounds", () => {
