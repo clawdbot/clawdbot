@@ -595,6 +595,7 @@ describe("runtime.llm.complete", () => {
     });
     expectFields(requireRecord(result, "completion result"), {
       text: "done",
+      toolCalls: [],
       provider: "openai",
       model: "gpt-5.5",
     });
@@ -634,6 +635,74 @@ describe("runtime.llm.complete", () => {
     expect(requireRecord(completionArg.options, "completion options")).not.toHaveProperty(
       "reasoning",
     );
+  });
+
+  it("passes declarative tools and zero retries to the provider", async () => {
+    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+      content: [
+        { type: "text", text: "Checking the snapshot." },
+        {
+          type: "toolCall",
+          id: "call_snapshot",
+          name: "lookup_record",
+          arguments: { id: "record-123" },
+        },
+      ],
+      usage: { input: 13, output: 5, total: 18 },
+    });
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: { allowComplete: true },
+    });
+    const tools = [
+      {
+        name: "lookup_record",
+        description: "Read one record by id.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: { id: { type: "string" } },
+          required: ["id"],
+        },
+      },
+    ];
+
+    const result = await llm.complete({
+      messages: [{ role: "user", content: "Prepare the briefing." }],
+      maxRetries: 0,
+      tools,
+    });
+
+    const completionArg = expectSingleCallFirstArg(
+      hoisted.completeWithPreparedSimpleCompletionModel,
+      { cfg },
+    );
+    expect(requireRecord(completionArg.options, "completion options").maxRetries).toBe(0);
+    expect(requireRecord(completionArg.context, "completion context").tools).toEqual(tools);
+    expect(result.toolCalls).toEqual([
+      {
+        id: "call_snapshot",
+        name: "lookup_record",
+        arguments: { id: "record-123" },
+      },
+    ]);
+    expect(result.text).toBe("Checking the snapshot.");
+  });
+
+  it("rejects invalid retry counts before dispatch", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: { allowComplete: true },
+    });
+
+    await expect(
+      llm.complete({
+        messages: [{ role: "user", content: "Ping" }],
+        maxRetries: -1,
+      }),
+    ).rejects.toThrow("maxRetries must be a non-negative integer");
+    expect(hoisted.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(hoisted.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
   });
 
   it("uses scoped plugin identity and ignores caller-shaped spoofing input", async () => {

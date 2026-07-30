@@ -224,15 +224,31 @@ export type LlmCompleteUsage = {
   costUsd?: number;
 };
 
+type LlmCompleteTool = {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+};
+
+type LlmCompleteToolCall = {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+};
+
 export type LlmCompleteParams = {
   messages: LlmCompleteMessage[];
   /** Model ref (e.g. "anthropic/claude-sonnet-4-6"); defaults to the target agent's configured model. */
   model?: string;
   maxTokens?: number;
+  /** Provider/SDK retries after the initial attempt, when supported. Set to 0 to disable them. */
+  maxRetries?: number;
   temperature?: number;
   /** Requested reasoning effort; the host normalizes it for the selected model. */
   reasoning?: import("../../auto-reply/thinking.js").ThinkLevel;
   systemPrompt?: string;
+  /** Declarative tool schemas exposed to the model. The helper never executes them. */
+  tools?: LlmCompleteTool[];
   signal?: AbortSignal;
   /** Human-readable reason for audit/debug output. */
   purpose?: string;
@@ -242,6 +258,7 @@ export type LlmCompleteParams = {
 
 export type LlmCompleteResult = {
   text: string;
+  toolCalls: LlmCompleteToolCall[];
   provider: string;
   model: string;
   agentId: string;

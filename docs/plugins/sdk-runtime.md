@@ -246,8 +246,21 @@ two-party event loops that do not go through the shared inbound reply runner.
       messages: [{ role: "user", content: "Summarize this transcript." }],
       purpose: "my-plugin.summary",
       maxTokens: 512,
+      maxRetries: 0,
       temperature: 0.2,
       reasoning: "high",
+      tools: [
+        {
+          name: "lookup_record",
+          description: "Read one record by id.",
+          parameters: {
+            type: "object",
+            properties: { id: { type: "string" } },
+            required: ["id"],
+            additionalProperties: false,
+          },
+        },
+      ],
     });
     ```
 
@@ -295,6 +308,11 @@ two-party event loops that do not go through the shared inbound reply runner.
     `medium`, `high`, `xhigh`, `adaptive`, `max`, and `ultra`) for the selected
     provider and model before dispatching the completion. `adaptive` becomes
     `medium`; `max` and `ultra` become `max` when supported, otherwise `xhigh`.
+
+    Tool schemas are declarative: the helper returns structured calls in
+    `result.toolCalls` but never executes them. Set `maxRetries: 0` when the
+    caller must make exactly one provider/SDK attempt on transports that honor
+    this option; omitted values preserve the provider default.
 
     <Warning>
     Model overrides require operator opt-in via `plugins.entries.<id>.llm.allowModelOverride: true` in config. Use `plugins.entries.<id>.llm.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets. Cross-agent completions require `plugins.entries.<id>.llm.allowAgentIdOverride: true`.

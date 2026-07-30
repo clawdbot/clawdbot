@@ -281,6 +281,7 @@ describe("handleClickClackInbound", () => {
     const runtime = createRuntime();
     vi.mocked(runtime.llm.complete).mockResolvedValue({
       text: "   ",
+      toolCalls: [],
       provider: "openai",
       model: "gpt-5.4-mini",
       agentId: "service-bot",

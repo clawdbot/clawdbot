@@ -7,7 +7,7 @@ import { normalizeModelRef } from "../../agents/model-selection.js";
 import type { NormalizedUsage, UsageLike } from "../../agents/usage.js";
 import { normalizeUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { Api, Message } from "../../llm/types.js";
+import type { Api, Message, Tool } from "../../llm/types.js";
 import { getChildLogger } from "../../logging.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
@@ -222,6 +222,27 @@ function finiteOption(value: number | undefined): number | undefined {
   return asFiniteNumber(value);
 }
 
+function nonNegativeIntegerOption(name: string, value: number | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Plugin LLM completion ${name} must be a non-negative integer.`);
+  }
+  return value;
+}
+
+function buildTools(params: LlmCompleteParams): Tool[] | undefined {
+  if (!params.tools || params.tools.length === 0) {
+    return undefined;
+  }
+  return params.tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    parameters: structuredClone(tool.parameters),
+  }));
+}
+
 function normalizeAllowedModelRef(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -368,6 +389,7 @@ export function createRuntimeLlm(
         });
         throw new Error(`Plugin LLM completion denied: ${reason}`);
       }
+      const maxRetries = nonNegativeIntegerOption("maxRetries", params.maxRetries);
 
       const [
         {
@@ -437,6 +459,7 @@ export function createRuntimeLlm(
           model: prepared.model.id,
           api: prepared.model.api,
         }),
+        tools: buildTools(params),
       };
 
       const result = await completeWithPreparedSimpleCompletionModel({
@@ -446,6 +469,7 @@ export function createRuntimeLlm(
         context,
         options: {
           maxTokens: finiteOption(params.maxTokens),
+          maxRetries,
           temperature: finiteOption(params.temperature),
           ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
           signal: params.signal,
@@ -456,6 +480,22 @@ export function createRuntimeLlm(
         .filter((c): c is { type: "text"; text: string } => c.type === "text")
         .map((c) => c.text)
         .join("");
+      const toolCalls = result.content
+        .filter(
+          (
+            c,
+          ): c is {
+            type: "toolCall";
+            id: string;
+            name: string;
+            arguments: Record<string, unknown>;
+          } => c.type === "toolCall",
+        )
+        .map((call) => ({
+          id: call.id,
+          name: call.name,
+          arguments: structuredClone(call.arguments),
+        }));
       const normalizedUsage = normalizeUsage(result.usage as UsageLike | undefined);
       const usage = buildUsage({
         rawUsage: result.usage,
@@ -477,6 +517,7 @@ export function createRuntimeLlm(
 
       return {
         text,
+        toolCalls,
         provider: prepared.selection.provider,
         model: prepared.selection.modelId,
         agentId,
