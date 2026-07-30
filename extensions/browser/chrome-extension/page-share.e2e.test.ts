@@ -16,7 +16,12 @@ declare const chrome: {
     }>;
   };
   tabs: {
+    get(tabId: number): Promise<{ id?: number; url?: string; windowId?: number }>;
     query(query: Record<string, unknown>): Promise<Array<{ id?: number; url?: string }>>;
+    update(tabId: number, update: { active: boolean }): Promise<unknown>;
+  };
+  windows: {
+    update(windowId: number, update: { focused: boolean }): Promise<unknown>;
   };
 };
 
@@ -183,6 +188,16 @@ describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay"
       return articleTab.id;
     }, article.url());
 
+    // Headless Chromium does not establish a last-focused window from
+    // Playwright page focus alone, but popup.js intentionally queries one.
+    await worker.evaluate(async (tabId) => {
+      const tab = await chrome.tabs.get(tabId);
+      if (typeof tab.windowId !== "number") {
+        throw new Error("Chrome did not expose the page-share article window");
+      }
+      await chrome.windows.update(tab.windowId, { focused: true });
+      await chrome.tabs.update(tabId, { active: true });
+    }, articleTabId);
     await article.bringToFront();
     const prior = (await browserCdp.send("Target.getTargets", {
       filter: [{}],
