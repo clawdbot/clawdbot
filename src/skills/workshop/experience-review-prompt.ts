@@ -7,6 +7,7 @@ type ExperienceReviewPromptCandidate = {
   ctx: { runId?: string };
   transcript: string;
   modelIterations: number;
+  turnAborted?: boolean;
 };
 
 function safeJson(value: unknown): string {
@@ -73,7 +74,7 @@ export function buildSkillExperienceReviewPrompt(
   candidate: ExperienceReviewPromptCandidate,
 ): string {
   return [
-    "Review this completed agent turn after the foreground run has ended.",
+    "Review this agent turn after the foreground run has ended.",
     "",
     "This is a conservative learning pass. Use skill_workshop to mutate a proposal only when at least one high-value condition has concrete evidence in the trajectory:",
     "- the model struggled, took a wrong path, needed correction, repeated failures, or found a reusable recovery technique; or",
@@ -87,7 +88,14 @@ export function buildSkillExperienceReviewPrompt(
     "",
     "Use list/inspect before mutation when useful. Prefer revising a relevant pending proposal. Otherwise create one broad skill. Make at most one create/revise call. The tool cannot update a live skill or apply, reject, or quarantine a proposal. If nothing clears the bar, make no mutation and answer NOTHING_TO_LEARN.",
     "",
-    `Completed run: ${candidate.ctx.runId ?? "unknown"}`,
+    candidate.turnAborted === true
+      ? `Interrupted run (stopped before completion): ${candidate.ctx.runId ?? "unknown"}`
+      : `Completed run: ${candidate.ctx.runId ?? "unknown"}`,
+    ...(candidate.turnAborted === true
+      ? [
+          "The trajectory may end mid-task. Only capture procedures that visibly worked before the interruption.",
+        ]
+      : []),
     `Model iterations in turn: ${candidate.modelIterations}`,
     "",
     "Trajectory:",

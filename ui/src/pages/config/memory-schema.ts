@@ -6,9 +6,11 @@
 // those answers live here rather than in the view module — importing the view
 // from search would pull lit, hub-tabs, and settings-ui into the startup chunk.
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveSlotSelection } from "../../../../src/plugins/slots.ts";
+import type { RouteLocation } from "@openclaw/uirouter";
+import { defaultSlotIdForKey, resolveSlotSelection } from "../../../../src/plugins/slots.ts";
+import { memoryTabFromPath, pathForMemoryTab, type MemoryRouteTab } from "../../app-route-paths.ts";
 
-export type MemoryTab = "overview" | "memories" | "dreams" | "settings";
+export type MemoryTab = MemoryRouteTab;
 
 export type MemoryBackend = "builtin" | "qmd";
 
@@ -22,6 +24,8 @@ export type MemoryEngineSelection =
   | { kind: "auto"; engineId: string }
   | { kind: "off" }
   | { kind: "pinned"; engineId: string };
+
+export const DEFAULT_MEMORY_ENGINE_ID = defaultSlotIdForKey("memory");
 
 /** Scroll target for `memory.backend`, which Settings curates out of the editor. */
 export const MEMORY_BACKEND_ANCHOR_ID = "memory-backend";
@@ -40,20 +44,62 @@ function normalizeMemoryTab(value: string | null | undefined): MemoryTab | null 
 }
 
 /** Old settings-search URLs had a memory section/hash but no tab. */
-export function memoryTabForRoute(route: {
-  tab?: string | null;
-  section?: string | null;
-  targetBlockId?: string | null;
-}): MemoryTab | null {
+export function memoryTabForRoute(
+  route: {
+    pathname?: string;
+    tab?: string | null;
+    section?: string | null;
+    targetBlockId?: string | null;
+  },
+  basePath = "",
+): MemoryTab | null {
+  const pathTab = route.pathname ? memoryTabFromPath(route.pathname, basePath) : null;
+  if (pathTab && pathTab !== "overview") {
+    return pathTab;
+  }
   const tab = normalizeMemoryTab(route.tab);
   if (tab) {
     return tab;
   }
   const target = route.targetBlockId ?? "";
-  return route.section === "memory" ||
+  if (
+    route.section === "memory" ||
     target === MEMORY_BACKEND_ANCHOR_ID ||
     target.startsWith("config-section-memory")
-    ? "settings"
+  ) {
+    return "settings";
+  }
+  return pathTab;
+}
+
+export function canonicalMemoryRouteLocation(
+  route: {
+    pathname: string;
+    search: string;
+    hash: string;
+    tab?: string | null;
+    section?: string | null;
+    targetBlockId?: string | null;
+    advanced?: boolean;
+  },
+  basePath = "",
+): RouteLocation | null {
+  const params = new URLSearchParams(route.search);
+  const hadLegacyTab = params.has("tab");
+  const hadLegacySection = route.section === "memory" && params.has("section");
+  params.delete("tab");
+  if (hadLegacySection) {
+    params.delete("section");
+    params.delete("advanced");
+  }
+  const search = params.toString();
+  const canonical: RouteLocation = {
+    pathname: pathForMemoryTab(memoryTabForRoute(route, basePath) ?? "overview", basePath),
+    search: search ? `?${search}` : "",
+    hash: route.hash,
+  };
+  return hadLegacyTab || hadLegacySection || canonical.pathname !== route.pathname
+    ? canonical
     : null;
 }
 

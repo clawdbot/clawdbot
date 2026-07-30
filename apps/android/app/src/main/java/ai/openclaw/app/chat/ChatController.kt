@@ -2,6 +2,8 @@ package ai.openclaw.app.chat
 
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.gateway.GatewayLoadedImage
+import ai.openclaw.app.gateway.GatewayLoadedMedia
+import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.gateway.GatewayRequestDefinitiveFailure
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
@@ -57,7 +59,7 @@ internal const val SESSION_LIST_FETCH_LIMIT = 200
 private val QUESTION_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
 private val SWARM_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
 private const val SESSION_EDITOR_MAX_BASE64_CHARS = ((OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES + 2) / 3) * 4
-private val MANAGED_IMAGE_PATH_REGEX =
+private val MANAGED_MEDIA_PATH_REGEX =
   Regex("^/api/chat/media/outgoing/[^/]+/([0-9a-fA-F-]{36})/full(?:\\?.*)?$")
 
 internal fun chatOutboxQueueFailureText(): NativeText = ChatController.queueFailureText()
@@ -120,6 +122,14 @@ class ChatController internal constructor(
     agentId: String?,
     artifactId: String,
   ) -> GatewayLoadedImage? = { _, _, _, _ -> null },
+  private val loadGatewayMediaArtifact: suspend (
+    gatewayId: String?,
+    sessionKey: String,
+    agentId: String?,
+    artifactId: String,
+    kind: GatewayMediaKind,
+    playbackRendition: Boolean,
+  ) -> GatewayLoadedMedia? = { _, _, _, _, _, _ -> null },
   private val commandOutbox: ChatCommandOutbox? = null,
   private val recordModelRecent: (String) -> Unit = {},
   private val onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
@@ -154,6 +164,9 @@ class ChatController internal constructor(
     loadGatewayImageArtifact = { gatewayId, sessionKey, agentId, artifactId ->
       session.loadImageArtifact(gatewayId, sessionKey, agentId, artifactId)
     },
+    loadGatewayMediaArtifact = { gatewayId, sessionKey, agentId, artifactId, kind, playbackRendition ->
+      session.loadMediaArtifact(gatewayId, sessionKey, agentId, artifactId, kind, playbackRendition)
+    },
     commandOutbox = commandOutbox,
     recordModelRecent = recordModelRecent,
     onSessionDeleted = onSessionDeleted,
@@ -168,6 +181,24 @@ class ChatController internal constructor(
       sessionKey,
       resolveAgentIdForSessionKey(sessionKey),
       normalizedArtifactId,
+    )
+  }
+
+  suspend fun loadMediaArtifact(
+    artifactId: String,
+    kind: GatewayMediaKind,
+    playbackRendition: Boolean,
+  ): GatewayLoadedMedia? {
+    val normalizedArtifactId = artifactId.trim().takeIf(String::isNotEmpty) ?: return null
+    if (kind == GatewayMediaKind.Image) return null
+    val sessionKey = normalizeRequestedSessionKey(_sessionKey.value)
+    return loadGatewayMediaArtifact(
+      currentCacheScope()?.gatewayId,
+      sessionKey,
+      resolveAgentIdForSessionKey(sessionKey),
+      normalizedArtifactId,
+      kind,
+      playbackRendition,
     )
   }
 
@@ -282,6 +313,10 @@ class ChatController internal constructor(
   private val _pendingRunCount = MutableStateFlow(0)
   val pendingRunCount: StateFlow<Int> = _pendingRunCount.asStateFlow()
 
+  private val selectedActiveRunPresentationState = MutableStateFlow(ChatActiveRunPresentation())
+  internal val selectedActiveRunPresentation: StateFlow<ChatActiveRunPresentation> =
+    selectedActiveRunPresentationState.asStateFlow()
+
   private val _streamingAssistantText = MutableStateFlow<String?>(null)
   val streamingAssistantText: StateFlow<String?> = _streamingAssistantText.asStateFlow()
 
@@ -383,7 +418,15 @@ class ChatController internal constructor(
       ?: error("Gateway returned no background task")
   }
 
+  private data class LiveRunTelemetryState(
+    val highestSequence: Long,
+    val outputTokens: Long? = null,
+    val terminal: Boolean = false,
+  )
+
   private val pendingRuns = mutableSetOf<String>()
+  private val liveRunTelemetryLock = Any()
+  private val liveRunTelemetryByRunId = mutableMapOf<String, LiveRunTelemetryState>()
   private val disconnectedPendingRunIds = mutableSetOf<String>()
   private val timedOutRunIds = ConcurrentHashMap.newKeySet<String>()
   private val terminalWithoutReplyRunIds = ConcurrentHashMap.newKeySet<String>()
@@ -650,6 +693,7 @@ class ChatController internal constructor(
       )
       clearLiveHistoryMarker()
       _sessions.value = emptyList()
+      publishRunPresentation()
       clearQuestions()
       applyThinkingMetadata(null)
       sessionsListArchived = false
@@ -2473,6 +2517,7 @@ class ChatController internal constructor(
     if (ownsCapturedUi()) projectRunToCurrentOwner()
 
     fun settleProjectedRun(settledRunId: String) {
+      retireRunTelemetry(settledRunId)
       clearPendingRun(settledRunId)
       removeOptimisticMessage(settledRunId)
       unresolvedRepliesByRunId.remove(settledRunId)
@@ -2614,6 +2659,160 @@ class ChatController internal constructor(
       mainSessionKey = appliedMainSessionKey,
     )
 
+  private fun currentSelectedSession(): ChatSessionEntry? = _sessions.value.firstOrNull { it.key == _sessionKey.value }
+
+  private fun advertisedRunIds(session: ChatSessionEntry? = currentSelectedSession()): List<String> =
+    session
+      ?.activeRunIds
+      .orEmpty()
+      .mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+      .distinct()
+
+  private fun publishRunPresentation() {
+    val localRunIds = synchronized(pendingRuns) { pendingRuns.toSet() }
+    val session = currentSelectedSession()
+    val rawAdvertisedRunIds = advertisedRunIds(session)
+    val telemetry = synchronized(liveRunTelemetryLock) { liveRunTelemetryByRunId.toMap() }
+    val liveLocalRunIds = localRunIds.filterTo(mutableSetOf()) { telemetry[it]?.terminal != true }
+    val liveAdvertisedRunIds = rawAdvertisedRunIds.filter { telemetry[it]?.terminal != true }
+    val selectedRunId =
+      resolvePreferredActiveRunId(
+        localRunIds = liveLocalRunIds,
+        advertisedRunIds = liveAdvertisedRunIds,
+      )
+    val hasUnknownAdvertisedRun =
+      session?.hasActiveRun == true &&
+        (rawAdvertisedRunIds.isEmpty() || liveAdvertisedRunIds.isNotEmpty())
+    val activeCount =
+      resolveSelectedActiveRunCount(
+        localRunIds = liveLocalRunIds,
+        advertisedRunIds = liveAdvertisedRunIds,
+        hasAdvertisedRun = hasUnknownAdvertisedRun,
+      )
+    val clockKey =
+      when {
+        selectedRunId != null && selectedRunId in liveLocalRunIds ->
+          pendingRunProjectionsByRunId[selectedRunId]?.optimisticMessage?.id
+            ?: optimisticMessagesByRunId[selectedRunId]?.id
+            ?: unresolvedRepliesByRunId[selectedRunId]?.id
+            ?: selectedRunId
+        selectedRunId != null -> selectedRunId
+        activeCount > 0 -> session?.startedAt?.let { "${_sessionKey.value}:active:$it" } ?: "${_sessionKey.value}:active"
+        else -> null
+      }
+    _pendingRunCount.value = localRunIds.size
+    selectedActiveRunPresentationState.value =
+      ChatActiveRunPresentation(
+        count = activeCount,
+        runId = selectedRunId,
+        clockKey = clockKey,
+        outputTokens = selectedRunId?.let { telemetry[it]?.outputTokens },
+      )
+  }
+
+  private fun pruneRunTelemetryToAuthoritativeOwnership() {
+    val session = currentSelectedSession() ?: return
+    if (!session.hasActiveRunMetadata) return
+    val localRunIds = synchronized(pendingRuns) { pendingRuns.toSet() }
+    val authoritativeRunIds = advertisedRunIds(session).toSet()
+    synchronized(liveRunTelemetryLock) {
+      liveRunTelemetryByRunId.keys.removeAll { it !in localRunIds && it !in authoritativeRunIds }
+    }
+  }
+
+  private fun clearUnownedNonterminalTelemetry(runId: String) {
+    val advertised = runId in advertisedRunIds()
+    synchronized(liveRunTelemetryLock) {
+      if (!advertised && liveRunTelemetryByRunId[runId]?.terminal != true) {
+        liveRunTelemetryByRunId.remove(runId)
+      }
+    }
+  }
+
+  private fun clearAllRunTelemetry() {
+    synchronized(liveRunTelemetryLock) { liveRunTelemetryByRunId.clear() }
+  }
+
+  private fun recordLiveRunUsage(
+    runId: String,
+    sequence: Long,
+    outputTokens: Long,
+  ): Boolean =
+    synchronized(liveRunTelemetryLock) {
+      val current = liveRunTelemetryByRunId[runId]
+      if (current?.terminal == true || sequence <= (current?.highestSequence ?: 0L)) {
+        return@synchronized false
+      }
+      val nextOutputTokens = maxOf(outputTokens, current?.outputTokens ?: 0L)
+      liveRunTelemetryByRunId[runId] =
+        LiveRunTelemetryState(
+          highestSequence = sequence,
+          outputTokens = nextOutputTokens,
+        )
+      nextOutputTokens != current?.outputTokens
+    }
+
+  private fun applyLiveRunLifecycle(
+    runId: String,
+    sequence: Long,
+    terminal: Boolean,
+  ): Boolean =
+    synchronized(liveRunTelemetryLock) {
+      val current = liveRunTelemetryByRunId[runId]
+      if (current?.terminal == true || sequence <= (current?.highestSequence ?: 0L)) {
+        return@synchronized false
+      }
+      liveRunTelemetryByRunId[runId] =
+        LiveRunTelemetryState(
+          highestSequence = sequence,
+          outputTokens = current?.outputTokens,
+          terminal = terminal,
+        )
+      true
+    }
+
+  private fun retireRunTelemetry(runId: String) {
+    synchronized(liveRunTelemetryLock) {
+      val current = liveRunTelemetryByRunId[runId]
+      liveRunTelemetryByRunId[runId] =
+        LiveRunTelemetryState(
+          highestSequence = current?.highestSequence ?: 0L,
+          outputTokens = current?.outputTokens,
+          terminal = true,
+        )
+    }
+  }
+
+  private fun invalidateIncompleteRunTelemetry() {
+    synchronized(liveRunTelemetryLock) {
+      liveRunTelemetryByRunId.toMap().forEach { (runId, state) ->
+        if (!state.terminal && state.outputTokens != null) {
+          liveRunTelemetryByRunId[runId] = state.copy(outputTokens = null)
+        }
+      }
+    }
+  }
+
+  private fun transferRunTelemetry(
+    oldRunId: String,
+    newRunId: String,
+  ) {
+    synchronized(liveRunTelemetryLock) {
+      val old = liveRunTelemetryByRunId.remove(oldRunId) ?: return@synchronized
+      val existing = liveRunTelemetryByRunId[newRunId]
+      liveRunTelemetryByRunId[newRunId] =
+        if (existing == null) {
+          old
+        } else {
+          LiveRunTelemetryState(
+            highestSequence = maxOf(old.highestSequence, existing.highestSequence),
+            outputTokens = listOfNotNull(old.outputTokens, existing.outputTokens).maxOrNull(),
+            terminal = old.terminal || existing.terminal,
+          )
+        }
+    }
+  }
+
   private fun projectPendingRun(projection: PendingRunProjection) {
     if (projection.owner != currentChatComposerRoutingOwner()) {
       unprojectPendingRun(projection.runId)
@@ -2632,15 +2831,13 @@ class ChatController internal constructor(
       _messages.value = _messages.value + optimisticMessage
     }
     armPendingRunTimeout(runId)
-    synchronized(pendingRuns) {
-      pendingRuns.add(runId)
-      _pendingRunCount.value = pendingRuns.size
-    }
+    synchronized(pendingRuns) { pendingRuns.add(runId) }
     updateErrorText(null)
     _streamingAssistantText.value = null
     pendingToolCallsById.clear()
     publishPendingToolCalls()
     clearPlanSteps()
+    publishRunPresentation()
   }
 
   /** Hides another owner's live run without discarding the ownership needed to restore it. */
@@ -2651,10 +2848,11 @@ class ChatController internal constructor(
     synchronized(pendingRuns) {
       disconnectedPendingRunIds.remove(runId)
       pendingRuns.remove(runId)
-      _pendingRunCount.value = pendingRuns.size
     }
+    clearUnownedNonterminalTelemetry(runId)
     clearTransientRunUiIfIdle()
     if (pendingRunProjectionsByRunId.containsKey(runId)) armPendingRunProjectionDeadline(runId)
+    publishRunPresentation()
   }
 
   /** Bounds hidden run ownership when its terminal event is lost before the owner is revisited. */
@@ -2780,6 +2978,14 @@ class ChatController internal constructor(
       unknownOutcomeRunIds.contains(runId) ||
       unresolvedRepliesByRunId.containsKey(runId)
 
+  private fun locallyOwnedRunIds(): Set<String> =
+    buildSet {
+      addAll(synchronized(pendingRuns) { pendingRuns.toSet() })
+      addAll(pendingRunProjectionsByRunId.keys)
+      addAll(unknownOutcomeRunIds)
+      addAll(unresolvedRepliesByRunId.keys)
+    }
+
   private fun sameOutboxSession(
     left: String,
     right: String,
@@ -2880,10 +3086,12 @@ class ChatController internal constructor(
         }
       }
       "seqGap" -> {
-        // Missed events may include deltas or the terminal state of a pending run;
-        // retain local ownership until the recovery snapshot can reconcile it.
+        // Missed events can hide terminal state or usage for any active run.
+        // Keep ownership, discard incomplete telemetry, and recover from snapshots.
         resetSwarmProgress()
         if (isSwarmEnabled()) refreshSwarmSessions()
+        invalidateIncompleteRunTelemetry()
+        publishRunPresentation()
         clearLiveRunUi()
         refreshQuestions()
         refreshHistoryForRecovery()
@@ -3336,10 +3544,10 @@ class ChatController internal constructor(
         val restored = disconnectedPendingRunIds.toSet()
         pendingRuns.addAll(restored)
         disconnectedPendingRunIds.clear()
-        _pendingRunCount.value = pendingRuns.size
         restored
       }
     restoredRunIds.forEach(::armPendingRunTimeout)
+    publishRunPresentation()
     val runIdsToReconcile =
       synchronized(pendingRuns) {
         pendingRuns + optimisticMessagesByRunId.keys + unresolvedRepliesByRunId.keys
@@ -3498,7 +3706,7 @@ class ChatController internal constructor(
           }
         latestAppliedHistoryRequest = requestSequence
         if (updateSessionInfo) {
-          updateSessionFromHistory(history)
+          updateSessionFromHistory(history, publishRunState = false)
           if (requestModelSelectionGeneration == modelSelectionGeneration.get()) {
             _selectedModelRef.value = history.sessionInfo?.providerQualifiedModelRef()
           }
@@ -3518,7 +3726,7 @@ class ChatController internal constructor(
             .filterNot { runId ->
               unknownOutcomeRunIds.contains(runId) && unresolvedRepliesByRunId.containsKey(runId)
             }.filterNotTo(mutableSetOf()) { optimisticMessagesByRunId.containsKey(it) }
-            .forEach(::clearPendingRun)
+            .forEach { clearPendingRun(it, publishRunState = false) }
         }
         if (snapshotRunId != null) {
           runIdsToReconcile
@@ -3526,7 +3734,7 @@ class ChatController internal constructor(
               it != snapshotRunId &&
                 !optimisticMessagesByRunId.containsKey(it) &&
                 !unresolvedRepliesByRunId.containsKey(it)
-            }.forEach(::clearPendingRun)
+            }.forEach { clearPendingRun(it, publishRunState = false) }
         }
         val nextMessages = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
         _messagesFromCache.value = false
@@ -3557,13 +3765,14 @@ class ChatController internal constructor(
           runIdsToReconcile
             .filterNot { runId ->
               unknownOutcomeRunIds.contains(runId) && unresolvedRepliesByRunId.containsKey(runId)
-            }.forEach(::clearPendingRun)
+            }.forEach { clearPendingRun(it, publishRunState = false) }
         }
         clearTransientRunUiIfIdle(preservePlan = true)
         // All live history paths (bootstrap, reconnect recovery, cache-first
         // replace) adopt the gateway's in-flight run snapshot so restored
         // runs keep their pending state and streaming text.
         adoptInFlightRun(history, runIdsOwnedAfterRequest)
+        publishRunPresentation()
         history.thinkingLevel
           ?.trim()
           ?.takeIf { it.isNotEmpty() }
@@ -3858,6 +4067,8 @@ class ChatController internal constructor(
         ) {
           continue
         }
+        pruneRunTelemetryToAuthoritativeOwnership()
+        publishRunPresentation()
         unreadPatchSessionKey?.let { trackedKey ->
           acknowledgeUnreadIfNeeded(
             key = trackedKey,
@@ -5160,7 +5371,10 @@ class ChatController internal constructor(
           }
           return
         }
-        if (runId != null) lastHandledTerminalRunId = runId
+        if (runId != null) {
+          lastHandledTerminalRunId = runId
+          retireRunTelemetry(runId)
+        }
         if (wasTimedOut) {
           val hasNewerRun =
             synchronized(pendingRuns) { pendingRuns.isNotEmpty() } || unresolvedRepliesByRunId.isNotEmpty()
@@ -5175,11 +5389,13 @@ class ChatController internal constructor(
               },
             )
           }
+          publishRunPresentation()
           refreshCurrentHistoryBestEffort(updateSessionInfo = true)
           return
         }
         if (runId != null && !isPending) {
           if (resolvesWithoutReply) terminalWithoutReplyRunIds.add(runId)
+          publishRunPresentation()
           refreshCurrentHistoryBestEffort(
             runIdsToReconcile = setOf(runId),
             updateSessionInfo = true,
@@ -5189,17 +5405,20 @@ class ChatController internal constructor(
         if (state == "error") {
           updateLocalizedErrorText(payload["errorMessage"].asStringOrNull()?.let(::verbatimText) ?: nativeText("Chat failed"))
         }
+        val terminalRunIds =
+          runId?.let(::setOf)
+            ?: (synchronized(pendingRuns) { pendingRuns.toSet() } + unresolvedRepliesByRunId.keys)
         if (runId != null) {
           clearPendingRun(runId)
           if (resolvesWithoutReply) {
             terminalWithoutReplyRunIds.add(runId)
           }
         } else {
-          clearPendingRuns(clearOptimisticMessages = false)
+          terminalRunIds.forEach(::retireRunTelemetry)
+          clearPendingRuns(clearOptimisticMessages = false, clearRunTelemetry = false)
         }
         clearLiveRunUi()
         clearPlanStepsFor(runId)
-        val terminalRunIds = runId?.let(::setOf) ?: unresolvedRepliesByRunId.keys.toSet()
         refreshCurrentHistoryBestEffort(
           runIdsToReconcile = terminalRunIds,
           updateSessionInfo = true,
@@ -5347,10 +5566,31 @@ class ChatController internal constructor(
     }
     if (eventOwner != visibleOwner) return
     val ownedEntry = reconcileSessionObserverProjectionOwner(entry, eventOwner)
+    val phase = payload["phase"].asStringOrNull()
+    val terminalRunId =
+      payload["runId"]
+        .asStringOrNull()
+        ?.trim()
+        ?.takeIf(String::isNotEmpty)
+        ?.takeIf { phase == "end" || phase == "error" }
+    val terminalWasLocal = terminalRunId?.let(::isLocallyOwnedRun) == true
+    val terminalWasAdvertised = terminalRunId?.let { it in advertisedRunIds() } == true
+    val settlesSelectedRun = terminalRunId != null && (terminalWasLocal || terminalWasAdvertised)
     upsertSessionEntry(
       entry = if (ownedEntry.ownerAgentId == eventOwner) ownedEntry else ownedEntry.copy(ownerAgentId = eventOwner),
       clearedFields = parseExplicitSessionClears(eventObject),
+      publishRunState = !settlesSelectedRun,
     )
+    if (!settlesSelectedRun) return
+    val settledRunId = terminalRunId
+    if (!entry.hasActiveRunMetadata) retireRunTelemetry(settledRunId)
+    if (terminalWasLocal) {
+      clearPendingRun(settledRunId)
+      clearPlanStepsFor(settledRunId)
+      clearTransientRunUiIfIdle()
+    } else {
+      publishRunPresentation()
+    }
   }
 
   private fun eventSessionObject(payload: JsonObject): JsonObject? = payload["session"].asObjectOrNull() ?: payload.takeIf { it["key"].asStringOrNull() != null }
@@ -5363,24 +5603,73 @@ class ChatController internal constructor(
       if (obj["category"] is JsonNull) add("category")
     }
 
+  private fun isLocallyOwnedRun(runId: String): Boolean = synchronized(pendingRuns) { runId in pendingRuns } || unresolvedRepliesByRunId.containsKey(runId)
+
+  private fun ownsLiveRunTelemetry(runId: String): Boolean = isLocallyOwnedRun(runId) || runId in advertisedRunIds()
+
+  private fun parseAgentEventSequence(payload: JsonObject): Long? {
+    val raw = payload["seq"] as? JsonPrimitive ?: return null
+    if (raw.isString) return null
+    return raw.asLongOrNull()?.takeIf { it > 0L }
+  }
+
+  private fun parsePositiveOutputTokens(data: JsonObject?): Long? {
+    val raw = data?.get("outputTokens") as? JsonPrimitive ?: return null
+    if (raw.isString) return null
+    return raw.asLongOrNull()?.takeIf { it > 0L }
+  }
+
   private fun handleAgentEvent(payloadJson: String) {
     val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
     val sessionKey = payload["sessionKey"].asStringOrNull()?.trim()
     if (!sessionKey.isNullOrEmpty() && sessionKey != _sessionKey.value) return
-    val runId = payload["runId"].asStringOrNull()
+    val runId = payload["runId"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
     val projection = runId?.let(pendingRunProjectionsByRunId::get)
     if (projection != null && projection.owner != currentChatComposerRoutingOwner()) return
-    if (
-      runId != null &&
-      synchronized(pendingRuns) { runId !in pendingRuns } &&
-      !unresolvedRepliesByRunId.containsKey(runId)
-    ) {
-      return
-    }
 
     val stream = payload["stream"].asStringOrNull()
     val data = payload["data"].asObjectOrNull()
+    if (stream == "usage") {
+      val usageRunId = runId?.takeIf(::ownsLiveRunTelemetry) ?: return
+      val sequence = parseAgentEventSequence(payload) ?: return
+      val outputTokens = parsePositiveOutputTokens(data) ?: return
+      if (recordLiveRunUsage(usageRunId, sequence, outputTokens)) publishRunPresentation()
+      return
+    }
+    if (stream == "lifecycle") {
+      val phase = data?.get("phase").asStringOrNull()
+      val isTerminal = phase == "end" || phase == "error"
+      if (runId != null && !ownsLiveRunTelemetry(runId)) return
+      if (runId == null && !isTerminal) return
+      val lifecycleRunId = runId ?: locallyOwnedRunIds().singleOrNull() ?: return
+      val sequence = parseAgentEventSequence(payload)
+      when (phase) {
+        "start" -> {
+          val orderedSequence = sequence ?: return
+          if (applyLiveRunLifecycle(lifecycleRunId, orderedSequence, terminal = false)) publishRunPresentation()
+        }
+        "end", "error" -> {
+          val accepted =
+            if (sequence == null) {
+              retireRunTelemetry(lifecycleRunId)
+              true
+            } else {
+              applyLiveRunLifecycle(lifecycleRunId, sequence, terminal = true)
+            }
+          if (!accepted) return
+          if (isLocallyOwnedRun(lifecycleRunId)) {
+            clearPendingRun(lifecycleRunId)
+            clearPlanStepsFor(lifecycleRunId)
+            clearTransientRunUiIfIdle()
+          } else {
+            publishRunPresentation()
+          }
+        }
+      }
+      return
+    }
 
+    if (runId != null && !isLocallyOwnedRun(runId)) return
     when (stream) {
       "assistant" -> {
         val text = data?.get("text")?.asStringOrNull()
@@ -5419,9 +5708,16 @@ class ChatController internal constructor(
       }
       "error" -> {
         updateLocalizedErrorText(nativeText("Event stream interrupted; try refreshing."))
-        clearPendingRuns()
-        clearLiveRunUi()
-        clearPlanSteps()
+        if (runId == null) {
+          clearPendingRuns()
+        } else {
+          clearPendingRun(runId)
+          clearPlanStepsFor(runId)
+          clearTransientRunUiIfIdle()
+        }
+        pendingToolCallsById.clear()
+        publishPendingToolCalls()
+        _streamingAssistantText.value = null
       }
     }
   }
@@ -5494,7 +5790,6 @@ class ChatController internal constructor(
       if (pendingRuns.isNotEmpty() && runId !in pendingRuns) return
       if (pendingRuns.isEmpty() && unresolvedRepliesByRunId.isNotEmpty() && !unresolvedRepliesByRunId.containsKey(runId)) return
       pendingRuns.add(runId)
-      _pendingRunCount.value = pendingRuns.size
     }
     armPendingRunTimeout(runId)
     if (run.text.isNotEmpty()) {
@@ -5584,15 +5879,19 @@ class ChatController internal constructor(
     publishOutbox()
   }
 
-  private fun clearPendingRun(runId: String) {
+  private fun clearPendingRun(
+    runId: String,
+    publishRunState: Boolean = true,
+  ) {
     pendingRunProjectionsByRunId.remove(runId)
     pendingRunTimeoutJobs.remove(runId)?.cancel()
     unknownOutcomeRunIds.remove(runId)
     synchronized(pendingRuns) {
       disconnectedPendingRunIds.remove(runId)
       pendingRuns.remove(runId)
-      _pendingRunCount.value = pendingRuns.size
     }
+    clearUnownedNonterminalTelemetry(runId)
+    if (publishRunState) publishRunPresentation()
   }
 
   private fun clearTransientRunUiIfIdle(preservePlan: Boolean = false) {
@@ -5604,6 +5903,7 @@ class ChatController internal constructor(
   private fun clearPendingRuns(
     clearOptimisticMessages: Boolean = true,
     preserveDisconnectedOwnership: Boolean = false,
+    clearRunTelemetry: Boolean = true,
   ) {
     for ((_, job) in pendingRunTimeoutJobs) {
       job.cancel()
@@ -5624,11 +5924,12 @@ class ChatController internal constructor(
         disconnectedPendingRunIds.clear()
       }
       pendingRuns.clear()
-      _pendingRunCount.value = 0
     }
+    if (clearRunTelemetry) clearAllRunTelemetry()
     pendingRunProjectionsByRunId.keys
       .filterNot { runId -> synchronized(pendingRuns) { runId in pendingRuns } }
       .forEach(::armPendingRunProjectionDeadline)
+    publishRunPresentation()
   }
 
   private fun removeOptimisticMessage(runId: String) {
@@ -5641,6 +5942,7 @@ class ChatController internal constructor(
     newRunId: String,
     fallbackMessage: ChatMessage,
     messageIdempotencyKey: String? = fallbackMessage.idempotencyKey,
+    publishRunState: Boolean = true,
   ) {
     if (oldRunId == newRunId) return
     val pendingProjection = pendingRunProjectionsByRunId.remove(oldRunId)
@@ -5649,6 +5951,7 @@ class ChatController internal constructor(
     val wasPending = synchronized(pendingRuns) { oldRunId in pendingRuns }
     val terminalWithoutReply = terminalWithoutReplyRunIds.remove(oldRunId)
     unknownOutcomeRunIds.remove(oldRunId)
+    pendingRunTimeoutJobs.remove(oldRunId)?.cancel()
     val original = optimistic ?: unresolved ?: fallbackMessage
     // Run ownership can change independently of the client key persisted on the
     // user row. Only history proof may replace that transcript identity.
@@ -5657,15 +5960,14 @@ class ChatController internal constructor(
     if (unresolved != null) unresolvedRepliesByRunId[newRunId] = rekeyed
     if (terminalWithoutReply) terminalWithoutReplyRunIds.add(newRunId)
     _messages.value = _messages.value.map { if (it.id == original.id) rekeyed else it }
-    clearPendingRun(oldRunId)
     val wasProjected = optimistic != null || unresolved != null || wasPending
-    if (wasProjected) {
-      synchronized(pendingRuns) {
-        pendingRuns.add(newRunId)
-        _pendingRunCount.value = pendingRuns.size
-      }
-      armPendingRunTimeout(newRunId)
+    synchronized(pendingRuns) {
+      disconnectedPendingRunIds.remove(oldRunId)
+      pendingRuns.remove(oldRunId)
+      if (wasProjected) pendingRuns.add(newRunId)
     }
+    transferRunTelemetry(oldRunId, newRunId)
+    if (wasProjected) armPendingRunTimeout(newRunId)
     if (pendingProjection != null) {
       pendingRunProjectionsByRunId[newRunId] =
         pendingProjection.copy(
@@ -5674,6 +5976,7 @@ class ChatController internal constructor(
         )
       if (!wasProjected) armPendingRunProjectionDeadline(newRunId)
     }
+    if (publishRunState) publishRunPresentation()
   }
 
   private fun transferLostAckOwnershipFromHistory(history: ChatHistory) {
@@ -5704,6 +6007,7 @@ class ChatController internal constructor(
         newRunId = snapshotRunId,
         fallbackMessage = optimistic,
         messageIdempotencyKey = persistedUser.idempotencyKey,
+        publishRunState = false,
       )
     }
   }
@@ -6168,15 +6472,23 @@ class ChatController internal constructor(
     }
   }
 
-  private fun updateSessionFromHistory(history: ChatHistory) {
+  private fun updateSessionFromHistory(
+    history: ChatHistory,
+    publishRunState: Boolean = true,
+  ) {
     val info = history.sessionInfo ?: return
-    upsertSessionEntry(info, preserveExistingContextUsageWithoutTotal = true)
+    upsertSessionEntry(
+      info,
+      preserveExistingContextUsageWithoutTotal = true,
+      publishRunState = publishRunState,
+    )
   }
 
   private fun upsertSessionEntry(
     entry: ChatSessionEntry,
     preserveExistingContextUsageWithoutTotal: Boolean = false,
     clearedFields: Set<String> = emptySet(),
+    publishRunState: Boolean = true,
   ) {
     val current = _sessions.value
     val index = current.indexOfFirst { it.key == entry.key }
@@ -6204,6 +6516,8 @@ class ChatController internal constructor(
       }
     if (applied.key == _sessionKey.value) {
       applyThinkingMetadata(applied)
+      pruneRunTelemetryToAuthoritativeOwnership()
+      if (publishRunState) publishRunPresentation()
     }
     acknowledgeUnreadIfNeeded(applied.key, applied, requireActive = true)
   }
@@ -6388,7 +6702,7 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
         text = obj["text"].asStringOrNull() ?: obj["content"].asStringOrNull(),
       )
 
-    "image", "audio" -> {
+    "image", "audio", "video" -> {
       val type = obj["type"].asStringOrNull() ?: "image"
       val inlineContent = obj["content"].asStringOrNull()?.takeIf { it.isNotBlank() }
       val url = obj["url"].asStringOrNull()
@@ -6396,25 +6710,44 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
         type = type,
         mimeType = obj["mimeType"].asStringOrNull(),
         fileName = obj["fileName"].asStringOrNull(),
-        artifactId = obj["artifactId"].asStringOrNull() ?: managedImageArtifactId(url),
+        artifactId =
+          obj["artifactId"].asStringOrNull()
+            ?: if (type == "image") managedImageArtifactId(url) else managedMediaArtifactId(url),
         url = url,
         openUrl = obj["openUrl"].asStringOrNull(),
         alt = obj["alt"].asStringOrNull(),
         width = obj["width"].asLongOrNull()?.toInt(),
         height = obj["height"].asLongOrNull()?.toInt(),
         sizeBytes = obj["sizeBytes"].asLongOrNull(),
-        base64 = inlineContent?.takeIf { type != "image" || it.length <= CHAT_IMAGE_MAX_BASE64_CHARS },
+        base64 = inlineContent?.takeIf { type == "image" && it.length <= CHAT_IMAGE_MAX_BASE64_CHARS },
+        durationMs = obj["durationMs"].asLongOrNull(),
+        playback = obj["playback"].asStringOrNull()?.takeIf { it == "native" || it == "transcode" },
       )
     }
 
     "attachment" -> {
       val attachment = obj["attachment"].asObjectOrNull() ?: return null
       val mimeType = attachment["mimeType"].asStringOrNull()
-      if (attachment["kind"].asStringOrNull() != "audio" && mimeType?.startsWith("audio/") != true) return null
+      val type =
+        when {
+          attachment["kind"].asStringOrNull() == "audio" || mimeType?.startsWith("audio/") == true -> "audio"
+          attachment["kind"].asStringOrNull() == "video" || mimeType?.startsWith("video/") == true -> "video"
+          else -> return null
+        }
+      val url = attachment["url"].asStringOrNull()
       ChatMessageContent(
-        type = "audio",
+        type = type,
         mimeType = mimeType,
-        fileName = attachment["label"].asStringOrNull(),
+        fileName = attachment["fileName"].asStringOrNull() ?: attachment["label"].asStringOrNull(),
+        artifactId = attachment["artifactId"].asStringOrNull() ?: managedMediaArtifactId(url),
+        url = url,
+        openUrl = attachment["openUrl"].asStringOrNull(),
+        alt = attachment["alt"].asStringOrNull(),
+        width = attachment["width"].asLongOrNull()?.toInt(),
+        height = attachment["height"].asLongOrNull()?.toInt(),
+        sizeBytes = attachment["sizeBytes"].asLongOrNull(),
+        durationMs = attachment["durationMs"].asLongOrNull(),
+        playback = attachment["playback"].asStringOrNull()?.takeIf { it == "native" || it == "transcode" },
       )
     }
 
@@ -6447,13 +6780,22 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
 }
 
 internal fun managedImageArtifactId(rawUrl: String?): String? {
+  val attachmentId = managedMediaAttachmentId(rawUrl) ?: return null
+  return "artifact_managed_image_$attachmentId"
+}
+
+internal fun managedMediaArtifactId(rawUrl: String?): String? {
+  val attachmentId = managedMediaAttachmentId(rawUrl) ?: return null
+  return "artifact_managed_media_$attachmentId"
+}
+
+private fun managedMediaAttachmentId(rawUrl: String?): String? {
   val match =
     rawUrl
       ?.trim()
-      ?.let(MANAGED_IMAGE_PATH_REGEX::matchEntire)
+      ?.let(MANAGED_MEDIA_PATH_REGEX::matchEntire)
       ?: return null
-  val attachmentId = runCatching { UUID.fromString(match.groupValues[1]).toString() }.getOrNull() ?: return null
-  return "artifact_managed_image_$attachmentId"
+  return runCatching { UUID.fromString(match.groupValues[1]).toString() }.getOrNull()
 }
 
 internal fun parseChatMessageContents(obj: JsonObject): List<ChatMessageContent> {
@@ -6755,6 +7097,27 @@ private fun JsonElement?.asBooleanOrNull(): Boolean? =
     is JsonPrimitive -> content.toBooleanStrictOrNull()
     else -> null
   }
+
+internal fun resolvePreferredActiveRunId(
+  localRunIds: Collection<String>,
+  advertisedRunIds: List<String>,
+): String? =
+  advertisedRunIds.firstOrNull(localRunIds::contains)
+    ?: localRunIds.minOrNull()
+    ?: advertisedRunIds.firstOrNull()
+
+internal fun resolveSelectedActiveRunCount(
+  localRunIds: Collection<String>,
+  advertisedRunIds: Collection<String>,
+  hasAdvertisedRun: Boolean,
+): Int =
+  maxOf(
+    buildSet {
+      addAll(localRunIds)
+      addAll(advertisedRunIds)
+    }.size,
+    if (hasAdvertisedRun) 1 else 0,
+  )
 
 internal fun mergeChatSessionEntry(
   existing: ChatSessionEntry,

@@ -11,6 +11,7 @@ import {
 } from "../active-jobs.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { deleteCronJobScratch } from "../scratch-store.js";
+import { removeStaleCronJobFamilyRows } from "../store.js";
 import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
 import { normalizeCronTaskRunJobId } from "../task-run-history.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
@@ -292,6 +293,17 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
       nextRunAtMs: job.state.nextRunAtMs,
     });
     return declarationKey ? { ...job, created: true, job } : job;
+  });
+}
+
+/** Prunes an owned job family from obsolete store partitions after active-store convergence. */
+export async function removeStaleJobFamily(
+  state: CronServiceState,
+  family: { declarationKey: string; name: string; ownerPluginTag: string },
+): Promise<number> {
+  return await locked(state, async () => {
+    await ensureLoaded(state, { skipRecompute: true });
+    return removeStaleCronJobFamilyRows(state.deps.storePath, family);
   });
 }
 

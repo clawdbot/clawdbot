@@ -1,8 +1,4 @@
 // Control UI queued-send implementation.
-import {
-  reduceSessionProjection,
-  type SessionProjectionScope,
-} from "@openclaw/gateway-client/browser";
 import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { setLastActiveSessionKey } from "../../app/settings.ts";
@@ -65,7 +61,7 @@ import {
   type StoredChatOutboxScope,
 } from "./composer-persistence.ts";
 import { formatConnectError } from "./connect-error.ts";
-import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
+import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation } from "./input-history.ts";
 import { controlUiNowMs, roundedControlUiDurationMs } from "./performance.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
@@ -300,26 +296,13 @@ export async function sendQueuedChatMessage(
         sendState: "failed",
       }));
       if (isVisibleSession()) {
-        const scope: SessionProjectionScope = {
+        const scope = readChatSessionProjectionScope(host, {
           sessionKey,
-          ...(prepared.agentId ? { agentId: prepared.agentId } : {}),
-          ...(host.currentSessionId ? { sessionId: host.currentSessionId } : {}),
-          ...(Object.hasOwn(host, "chatDisplayedLeafEntryId")
-            ? { activeLeafEntryId: host.chatDisplayedLeafEntryId ?? null }
-            : {}),
-        };
-        const currentProjection = getChatSessionProjection(host, host.chatMessages, scope);
-        const projection = reduceSessionProjection(currentProjection, {
-          type: "sendFailed",
-          runId,
-          scope,
+          agentId: prepared.agentId,
         });
         // A definite rejection removes only this pane's existing optimistic
         // entry; unrelated transcript rows and unconfirmed sends stay intact.
-        if (projection !== currentProjection) {
-          setChatSessionProjection(host, projection);
-          host.chatMessages = [...projection.messages];
-        }
+        reduceChatSessionProjection(host, { type: "sendFailed", runId }, { scope });
         reconcileChatRunLifecycle(
           host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
           {
@@ -349,18 +332,14 @@ export async function sendQueuedChatMessage(
     }
     if (isVisibleSession()) {
       if (retireOnAck) {
-        const scope: SessionProjectionScope = {
+        const scope = readChatSessionProjectionScope(host, {
           sessionKey,
-          ...(prepared.agentId ? { agentId: prepared.agentId } : {}),
-          ...(host.currentSessionId ? { sessionId: host.currentSessionId } : {}),
-          ...(Object.hasOwn(host, "chatDisplayedLeafEntryId")
-            ? { activeLeafEntryId: host.chatDisplayedLeafEntryId ?? null }
-            : {}),
-        };
+          agentId: prepared.agentId,
+        });
         // Route the existing optimistic bubble through the pane reducer so a
         // concurrent history snapshot cannot erase its send identity.
-        let projection = reduceSessionProjection(
-          getChatSessionProjection(host, host.chatMessages, scope),
+        reduceChatSessionProjection(
+          host,
           {
             type: "sendPending",
             runId,
@@ -373,19 +352,16 @@ export async function sendQueuedChatMessage(
               timestamp: startedAt,
               __openclaw: { idempotencyKey: `${runId}:user` },
             },
-            scope,
           },
+          { scope },
         );
         if (ack.runId !== runId) {
-          projection = reduceSessionProjection(projection, {
-            type: "sendAcknowledged",
-            previousRunId: runId,
-            runId: ack.runId,
-            scope,
-          });
+          reduceChatSessionProjection(
+            host,
+            { type: "sendAcknowledged", previousRunId: runId, runId: ack.runId },
+            { scope },
+          );
         }
-        setChatSessionProjection(host, projection);
-        host.chatMessages = [...projection.messages];
       }
       if (ack.status === "ok") {
         reconcileChatRunLifecycle(

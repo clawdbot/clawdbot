@@ -48,7 +48,13 @@ import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { resolveAgentConfig, resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
+import { hasUsableOAuthCredential } from "../auth-profiles/credential-state.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
+import {
+  isSafeToUseExternalCliCredential,
+  readExternalCliBootstrapCredential,
+} from "../auth-profiles/external-cli-sync.js";
+import { buildOAuthRefreshFailureLoginCommand } from "../auth-profiles/oauth-refresh-failure.js";
 import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
@@ -110,6 +116,10 @@ import {
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { getClaudeLiveSessionGenerationForOwner } from "./claude-live-session.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
+import {
+  resolveBundledCliBackendAuthPolicy,
+  type BundledCliBackendAuthPolicy,
+} from "./cli-backend-auth-policy.js";
 import { buildCliAgentSystemPrompt, isClaudeCliProvider, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import { buildCliMcpGrantContext, normalizeOptionalMcpContextValue } from "./mcp-grant-context.js";
@@ -163,6 +173,7 @@ const prepareDeps = {
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
   getClaudeLiveSessionGenerationForOwner,
+  readExternalCliBootstrapCredential,
   resolveApiKeyForProfile,
 };
 
@@ -314,16 +325,54 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 }
 
 function shouldRefreshAuthProfileForExecution(params: {
-  backendId: string;
+  policy?: BundledCliBackendAuthPolicy;
   authProfileId?: string;
   authCredential?: AuthProfileCredential;
 }): boolean {
   return Boolean(
-    (params.backendId === "google-gemini-cli" || params.backendId === "claude-cli") &&
+    params.policy &&
     params.authProfileId &&
     (params.authCredential?.type === "oauth" ||
       params.authCredential?.type === "api_key" ||
       params.authCredential?.type === "token"),
+  );
+}
+
+type CliAuthProfileResolutionFailure =
+  | { kind: "unmaterialized" }
+  | { kind: "resolved-as-other"; resolvedProfileId: string }
+  | { kind: "native-login-missing" }
+  | { kind: "native-login-identity-mismatch" };
+
+function describeCliAuthProfileResolutionFailure(
+  profileId: string,
+  failure: CliAuthProfileResolutionFailure,
+): string {
+  switch (failure.kind) {
+    case "resolved-as-other":
+      return `selected auth profile "${profileId}" resolved as "${failure.resolvedProfileId}"`;
+    case "native-login-missing":
+      return `selected auth profile "${profileId}" reuses the host's Claude CLI login, but no reusable Claude CLI login is available`;
+    case "native-login-identity-mismatch":
+      return `selected auth profile "${profileId}" reuses the host's Claude CLI login, but the current Claude CLI login belongs to a different account`;
+    case "unmaterialized":
+      return `could not materialize selected auth profile "${profileId}"`;
+  }
+  return failure satisfies never;
+}
+
+function buildCliAuthProfileResolutionError(params: {
+  backendId: string;
+  profileId: string;
+  provider: string;
+  failure: CliAuthProfileResolutionFailure;
+}): Error {
+  const loginCommand = buildOAuthRefreshFailureLoginCommand(params.provider, {
+    profileId: params.profileId,
+  });
+  const reason = describeCliAuthProfileResolutionFailure(params.profileId, params.failure);
+  return new Error(
+    `CLI backend "${params.backendId}" ${reason}. Re-authenticate with: ${loginCommand}. OpenClaw did not start the run.`,
   );
 }
 
@@ -378,6 +427,13 @@ export async function prepareCliRunContext(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
+  const backendAuthPolicy = resolveBundledCliBackendAuthPolicy(backendResolved.id);
+  const canEnforceExactToolAvailability =
+    backendResolved.nativeToolMode === "selectable" &&
+    ((backendResolved.toolAvailabilityEnforcement === "execution-args" &&
+      backendResolved.resolveExecutionArgs !== undefined) ||
+      (backendResolved.toolAvailabilityEnforcement === "prepare-execution" &&
+        backendResolved.prepareExecution !== undefined));
   let runtimeToolsAllowPolicy: string[] | undefined;
   if (params.toolsAllow !== undefined) {
     if (params.cliToolAvailability !== undefined) {
@@ -412,6 +468,16 @@ export async function prepareCliRunContext(
       };
     }
   }
+  if (params.disableTools === true && !isSideQuestion && canEnforceExactToolAvailability) {
+    // Selectable backends need the exact empty cap as well as the generic flag;
+    // otherwise their native tools remain selectable and the run must fail closed.
+    runtimeToolsAllowPolicy = undefined;
+    params = {
+      ...params,
+      toolsAllow: undefined,
+      cliToolAvailability: { native: [], openClaw: [] },
+    };
+  }
   const internalParams = params as RunCliAgentPrepareParams;
   const nodeClaudePlacement = resolveNodeClaudePlacement({
     backendId: backendResolved.id,
@@ -429,15 +495,7 @@ export async function prepareCliRunContext(
       },
     };
   }
-  if (
-    params.cliToolAvailability !== undefined &&
-    (backendResolved.nativeToolMode !== "selectable" ||
-      !backendResolved.toolAvailabilityEnforcement ||
-      (backendResolved.toolAvailabilityEnforcement === "execution-args" &&
-        !backendResolved.resolveExecutionArgs) ||
-      (backendResolved.toolAvailabilityEnforcement === "prepare-execution" &&
-        !backendResolved.prepareExecution))
-  ) {
+  if (params.cliToolAvailability !== undefined && !canEnforceExactToolAvailability) {
     // Cron persists this verbatim and failure alerts truncate at 200 characters,
     // so keep the upgrade recovery and fail-closed outcome compact.
     throw new Error(
@@ -497,10 +555,48 @@ export async function prepareCliRunContext(
       authCredential = authStore.profiles[effectiveAuthProfileId];
     }
   }
-  if (
+  // Claude CLI-provider OAuth credentials exist only as imports of the host's
+  // own `claude` login; Claude owns that single-use refresh-token family.
+  // Forwarding a snapshot goes stale within hours and blocks the subprocess
+  // from refreshing itself, so verify the live login matches the selected
+  // identity and let Claude authenticate natively (it refreshes in place).
+  const nativeClaudeCliCredential =
+    backendAuthPolicy?.nativePassthroughProviderId !== undefined &&
+    authCredential?.type === "oauth" &&
+    authCredential.provider === backendAuthPolicy.nativePassthroughProviderId
+      ? authCredential
+      : undefined;
+  if (effectiveAuthProfileId && authStore && nativeClaudeCliCredential) {
+    const authProfileId = effectiveAuthProfileId;
+    const liveNativeLogin = prepareDeps.readExternalCliBootstrapCredential({
+      store: authStore,
+      profileId: authProfileId,
+      credential: nativeClaudeCliCredential,
+    });
+    if (!liveNativeLogin) {
+      throw buildCliAuthProfileResolutionError({
+        backendId: backendResolved.id,
+        profileId: authProfileId,
+        provider: nativeClaudeCliCredential.provider,
+        failure: { kind: "native-login-missing" },
+      });
+    }
+    if (!isSafeToUseExternalCliCredential(nativeClaudeCliCredential, liveNativeLogin)) {
+      throw buildCliAuthProfileResolutionError({
+        backendId: backendResolved.id,
+        profileId: authProfileId,
+        provider: nativeClaudeCliCredential.provider,
+        failure: { kind: "native-login-identity-mismatch" },
+      });
+    }
+    // Spawn with no forwarded credential. The local-login auth epoch then keys
+    // the session to the host account (identity-hashed, rotation-stable), and
+    // the next store load re-adopts whatever Claude rotates.
+    authCredential = undefined;
+  } else if (
     effectiveAuthProfileId &&
     shouldRefreshAuthProfileForExecution({
-      backendId: backendResolved.id,
+      policy: backendAuthPolicy,
       authProfileId: effectiveAuthProfileId,
       authCredential,
     })
@@ -512,11 +608,45 @@ export async function prepareCliRunContext(
       store: writableAuthStore,
       profileId: authProfileId,
       agentDir,
+      // Claude's selected profile is an account boundary. Never refresh or
+      // substitute a sibling account while preparing this run.
+      ...(backendAuthPolicy?.strictSelectedProfile ? { allowProfileFallback: false } : {}),
     });
+    if (!resolvedAuth && backendAuthPolicy?.strictSelectedProfile) {
+      throw buildCliAuthProfileResolutionError({
+        backendId: backendResolved.id,
+        profileId: authProfileId,
+        provider: writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
+        failure: { kind: "unmaterialized" },
+      });
+    }
+    if (
+      resolvedAuth &&
+      backendAuthPolicy?.strictSelectedProfile &&
+      resolvedAuth.profileId !== authProfileId
+    ) {
+      throw buildCliAuthProfileResolutionError({
+        backendId: backendResolved.id,
+        profileId: authProfileId,
+        provider: writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
+        failure: { kind: "resolved-as-other", resolvedProfileId: resolvedAuth.profileId },
+      });
+    }
     const resolvedAuthProfileId = resolvedAuth?.profileId ?? authProfileId;
-    const resolvedAuthCredential = resolvedAuth?.credential;
     authStore = loadScopedAuthStore({ profileId: resolvedAuthProfileId });
-    authCredential = resolvedAuthCredential ?? authStore.profiles[resolvedAuthProfileId];
+    authCredential = resolvedAuth?.credential ?? authStore.profiles[resolvedAuthProfileId];
+    if (
+      backendAuthPolicy?.strictSelectedProfile &&
+      (!authCredential ||
+        (authCredential.type === "oauth" && !hasUsableOAuthCredential(authCredential)))
+    ) {
+      throw buildCliAuthProfileResolutionError({
+        backendId: backendResolved.id,
+        profileId: authProfileId,
+        provider: resolvedAuth?.provider ?? params.provider,
+        failure: { kind: "unmaterialized" },
+      });
+    }
     if (resolvedAuth && authCredential) {
       effectiveAuthProfileId = resolvedAuthProfileId;
       resolvedProfileAuth = {
@@ -774,6 +904,11 @@ export async function prepareCliRunContext(
     };
   }
   const promptTools = bundleMcpEnabled ? projectedTools : [];
+  const resultContentSourceByToolName = new Map(
+    promptTools.flatMap((tool) =>
+      tool.resultContentSource ? [[tool.name, tool.resultContentSource] as const] : [],
+    ),
+  );
   // A restricted selectable tool surface must also bound the MCP bundle:
   // CLI-side --allowedTools is advisory under bypass permission modes, so
   // user/plugin MCP servers must not be merged into the run's config at all.
@@ -851,6 +986,7 @@ export async function prepareCliRunContext(
       backend: backendResolved.config,
       workspaceDir,
       config: params.config,
+      toolOverrides: params.toolOverrides,
       agentDir,
       // Restricted runs serve only the loopback server; merging user/plugin
       // MCP servers would let the run reach tools outside its allowlist.
@@ -896,12 +1032,11 @@ export async function prepareCliRunContext(
     } satisfies Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];
     preparedExecution =
       (await backendResolved.prepareExecution?.(
-        (backendResolved.id === "google-gemini-cli" || backendResolved.id === "claude-cli"
+        (backendAuthPolicy
           ? {
               ...prepareExecutionContext,
-              // Private bridge for bundled auth-owning CLI backends. This is intentionally not
-              // part of the public Plugin SDK until a credential-forwarding
-              // contract exists.
+              // Private bridge for bundled auth-owning CLI backends. The core-internal auth
+              // policy table owns membership until a public forwarding contract exists.
               authCredential,
             }
           : prepareExecutionContext) as typeof prepareExecutionContext & {
@@ -1362,6 +1497,7 @@ export async function prepareCliRunContext(
         extraSystemPromptHash,
         messageToolPolicyHash,
         promptToolNamesHash,
+        ...(resultContentSourceByToolName.size > 0 ? { resultContentSourceByToolName } : {}),
         cwdHash,
         ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true } : {}),
       };
@@ -1439,6 +1575,7 @@ export async function prepareCliRunContext(
       extraSystemPromptHash,
       messageToolPolicyHash,
       promptToolNamesHash,
+      ...(resultContentSourceByToolName.size > 0 ? { resultContentSourceByToolName } : {}),
       cwdHash,
       ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true } : {}),
     };

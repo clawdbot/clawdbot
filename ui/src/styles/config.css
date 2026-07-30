@@ -63,7 +63,7 @@
   gap: var(--space-3);
 }
 
-/* Toolbar: mode toggle / section tabs left, inline autosave status right */
+/* Toolbar: mode toggle / section tabs */
 .config-toolbar {
   display: flex;
   align-items: center;
@@ -72,38 +72,10 @@
   gap: var(--space-2) var(--space-3);
 }
 
-.config-toolbar__status {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-left: auto;
-  min-height: 28px;
-}
-
 .config-show-advanced.active {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
   background: var(--accent-subtle);
-}
-
-/* Restart affordance shown after a successful save until apply */
-.config-apply-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--space-2) var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
-  border-radius: var(--radius-md);
-  background: var(--accent-subtle);
-  font-size: 12.5px;
-  color: var(--text);
-}
-
-.config-apply-banner__text {
-  min-width: 0;
-  line-height: 1.4;
 }
 
 /* Raw mode file operations (open / discard / save) */
@@ -716,13 +688,22 @@
 /* Memory */
 .memory-page {
   display: grid;
-  gap: 14px;
-  margin-top: 12px;
+  gap: 0;
 }
 
 .memory-page__panel {
   display: grid;
   gap: 14px;
+}
+
+.shell--settings .content:has(.settings-page) .content-header.hub-page-header {
+  max-width: 1120px;
+}
+
+.memory-page__panel .settings-page,
+.memory-page__panel .config-lead,
+.memory-page__panel .config-content-callout {
+  margin-inline: 0;
 }
 
 .memory-page__link {
@@ -803,6 +784,108 @@
   padding: var(--space-4);
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
+}
+
+/* Advanced Settings accordion navigation, rendered by view.ts. */
+.config-accordion-nav {
+  margin-bottom: 20px;
+}
+
+.config-accordion-group {
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: var(--radius-md);
+  margin-bottom: 4px;
+  overflow: hidden;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.config-accordion-group:hover {
+  border-color: var(--border);
+}
+
+.config-accordion-group__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 16px;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--bg-elevated) 50%, var(--card) 50%);
+  border: none;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.config-accordion-group__header:hover,
+.config-accordion-group__header--active {
+  background: var(--bg-hover);
+}
+
+.config-accordion-group__icon {
+  display: flex;
+  align-items: center;
+  color: var(--accent);
+  opacity: 0.7;
+}
+
+.config-accordion-group__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.config-accordion-group__chevron {
+  margin-left: auto;
+  opacity: 0.35;
+  transition: transform var(--duration-normal) var(--ease-out);
+}
+
+.config-accordion-group__chevron--open {
+  transform: rotate(180deg);
+}
+
+.config-accordion-group__items {
+  border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  padding: 4px 0;
+  background: var(--card);
+}
+
+.config-accordion-group__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 16px 9px 40px;
+  font-size: 0.8125rem;
+  font-weight: 450;
+  color: var(--muted);
+  background: none;
+  border: none;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.config-accordion-group__item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.config-accordion-group__item--active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.config-accordion-group__item-icon {
+  display: flex;
+  align-items: center;
+  opacity: 0.45;
+}
+
+.config-accordion-group__item-icon svg {
+  width: 14px;
+  height: 14px;
 }
 
 @media (max-width: 820px) {

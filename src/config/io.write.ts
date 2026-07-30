@@ -33,7 +33,6 @@ import {
   type ConfigWriteAuditResult,
 } from "./io.audit.js";
 import type { ConfigIoContext } from "./io.context.js";
-import { resolveModelIdNormalizationPolicies } from "./io.context.js";
 import { recordConfigWriteMetadata } from "./io.meta.js";
 import {
   collectEnvRefPaths,
@@ -147,9 +146,6 @@ export async function writeConfigFileFromContext(
       explicitSetValueSource: options.explicitSetValueSource,
       allowedAgentRosterRemovals: options.allowedAgentRosterRemovals,
       allowIncludeAncestorExplicitSetPaths: options.allowIncludeAncestorExplicitSetPaths,
-      modelIdNormalizationPolicies: resolveModelIdNormalizationPolicies(
-        snapshotRead.pluginMetadataSnapshot,
-      ),
     });
   } else if (snapshot.exists && hasAuthoredIncludes) {
     persistCandidate = preserveIncludeOwnedConfigForWrite({

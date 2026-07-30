@@ -115,6 +115,80 @@ describe("deliverMatrixReplies", () => {
     expect(sendOptions(2).threadId).toBeUndefined();
   });
 
+  it("shares the first reply across separately dispatched, chunked payloads", async () => {
+    chunkMatrixTextMock.mockImplementation((text: string) => ({
+      trimmedText: text.trim(),
+      convertedText: text,
+      singleEventLimit: 4000,
+      fitsInSingleEvent: true,
+      chunks: text.split("|"),
+    }));
+    const hasRepliedRef = { value: false };
+    const delivery = {
+      cfg,
+      roomId: "room:1",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "first" as const,
+      replyToId: "reply-1",
+      hasRepliedRef,
+    };
+
+    await deliverMatrixReplies({ ...delivery, replies: [{ text: "first-a|first-b" }] });
+    await deliverMatrixReplies({ ...delivery, replies: [{ text: "second" }] });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(3);
+    expect(sendOptions(0).replyToId).toBe("reply-1");
+    expect(sendOptions(1).replyToId).toBe("reply-1");
+    expect(sendOptions(2).replyToId).toBeUndefined();
+    expect(hasRepliedRef.value).toBe(true);
+  });
+
+  it("does not consume the first reply when Matrix delivery fails", async () => {
+    const hasRepliedRef = { value: false };
+    const delivery = {
+      cfg,
+      replies: [{ text: "retry me" }],
+      roomId: "room:1",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "first" as const,
+      replyToId: "reply-1",
+      hasRepliedRef,
+    };
+    sendMessageMatrixMock.mockRejectedValueOnce(new Error("Matrix unavailable"));
+
+    await expect(deliverMatrixReplies(delivery)).rejects.toThrow("Matrix unavailable");
+    expect(hasRepliedRef.value).toBe(false);
+
+    await expect(deliverMatrixReplies(delivery)).resolves.toBe(true);
+    expect(sendOptions(0).replyToId).toBe("reply-1");
+    expect(sendOptions(1).replyToId).toBe("reply-1");
+    expect(hasRepliedRef.value).toBe(true);
+  });
+
+  it("preserves native thread fallback after the first reply has been consumed", async () => {
+    const hasRepliedRef = { value: true };
+
+    await deliverMatrixReplies({
+      cfg,
+      replies: [{ text: "thread follow-up" }],
+      roomId: "room:3",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "first",
+      replyToId: "reply-thread",
+      threadId: "thread-77",
+      hasRepliedRef,
+    });
+
+    expect(sendOptions(0).replyToId).toBe("reply-thread");
+    expect(sendOptions(0).threadId).toBe("thread-77");
+  });
+
   it("keeps replyToId on every reply when replyToMode=all", async () => {
     await deliverMatrixReplies({
       cfg,
@@ -183,6 +257,9 @@ describe("deliverMatrixReplies", () => {
       replies: [
         { text: "Reasoning:\n_hidden_" },
         { text: "<think>still hidden</think>" },
+        { text: "<mm:think>MiniMax private reasoning</mm:think>" },
+        { text: "<mm:thought>MiniMax private thought</mm:thought>" },
+        { text: "<antml:thinking>Anthropic private reasoning</antml:thinking>" },
         { text: "Visible answer" },
       ],
       roomId: "room:5",
@@ -196,6 +273,90 @@ describe("deliverMatrixReplies", () => {
     expect(sendCall(0)[0]).toBe("room:5");
     expect(sendCall(0)[1]).toBe("Visible answer");
     expect(sendOptions(0).cfg).toBe(cfg);
+  });
+
+  it("delivers literal reasoning tags inside Markdown code", async () => {
+    const text = "Use `<mm:think>example</mm:think>` literally.";
+
+    await deliverMatrixReplies({
+      cfg,
+      replies: [{ text }],
+      roomId: "room:5",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(sendCall(0)[1]).toBe(text);
+  });
+
+  it("strips namespaced reasoning while delivering visible Matrix replies", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [
+        { text: "<mm:think>MiniMax private reasoning</mm:think>Visible MiniMax answer" },
+        { text: "<antml:thinking>Anthropic private reasoning</antml:thinking>Visible answer" },
+        { text: "<br>Visible HTML answer<mm:think>MiniMax private reasoning</mm:think>" },
+        { text: "Visible safe answer<mm:think>unfinished private reasoning" },
+        { text: "Visible answer<think>old reasoning</think><think>unfinished private reasoning" },
+        { text: "<thinking>private reasoning</think>Visible alias answer" },
+        { text: "<final>Visible final answer" },
+      ],
+      roomId: "room:5",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(7);
+    expect(sendCall(0)[1]).toBe("Visible MiniMax answer");
+    expect(sendCall(1)[1]).toBe("Visible answer");
+    expect(sendCall(2)[1]).toBe("<br>Visible HTML answer");
+    expect(sendCall(3)[1]).toBe("Visible safe answer");
+    expect(sendCall(4)[1]).toBe("Visible answer");
+    expect(sendCall(5)[1]).toBe("Visible alias answer");
+    expect(sendCall(6)[1]).toBe("Visible final answer");
+  });
+
+  it("preserves significant whitespace in visible Markdown replies", async () => {
+    const text = "    indented Markdown code\n\nVisible line with a hard break  \nnext line";
+
+    await deliverMatrixReplies({
+      cfg,
+      replies: [{ text }],
+      roomId: "room:5",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(sendCall(0)[1]).toBe(text.trim());
+  });
+
+  it("delivers Matrix media without a reasoning-only caption", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [
+        {
+          text: "<mm:think>MiniMax private reasoning</mm:think>",
+          mediaUrl: "https://example.com/a.jpg",
+        },
+      ],
+      roomId: "room:5",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(sendCall(0)[1]).toBe("");
+    expect(sendOptions(0).mediaUrl).toBe("https://example.com/a.jpg");
   });
 
   it("uses supplied cfg for chunking and send delivery without reloading runtime config", async () => {

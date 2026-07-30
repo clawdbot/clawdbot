@@ -24,6 +24,7 @@ import {
   isTurnHandoffAbort,
   normalizeCoreContextMessages,
 } from "./turn-interruption.js";
+import type { ToolResultContentSource } from "./types.js";
 import type {
   AgentContext,
   AgentEvent,
@@ -280,6 +281,7 @@ async function runLoop(
   let config = initialConfig;
   let firstTurn = true;
   let turnOpen = true;
+  let turnTainted = isActiveTurnTainted(initialContext.messages);
   // Check for steering messages at start (user may have typed while waiting)
   let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) || [];
   const stopIfAborted = async (): Promise<boolean> => {
@@ -288,10 +290,13 @@ async function runLoop(
     }
     // Persist an aborted assistant outcome so session post-processing does not
     // compact or continue from the preceding toolUse message.
-    const abortedMessage = createFailureMessage(
-      config.model,
-      signal.reason instanceof Error ? signal.reason : new Error("Agent run aborted"),
-      true,
+    const abortedMessage = withAssistantTurnTaint(
+      createFailureMessage(
+        config.model,
+        signal.reason instanceof Error ? signal.reason : new Error("Agent run aborted"),
+        true,
+      ),
+      turnTainted,
     );
     newMessages.push(abortedMessage);
     if (!turnOpen) {
@@ -329,6 +334,9 @@ async function runLoop(
       // Process pending messages (inject before next assistant response)
       if (pendingMessages.length > 0) {
         for (const message of pendingMessages) {
+          if (message.role === "user") {
+            turnTainted = false;
+          }
           await emit({ type: "message_start", message });
           await emit({ type: "message_end", message });
           currentContext.messages.push(message);
@@ -348,6 +356,7 @@ async function runLoop(
         emit,
         streamFn,
         runtime,
+        turnTainted,
       );
       newMessages.push(message);
 
@@ -374,6 +383,7 @@ async function runLoop(
           emit,
         );
         toolResults.push(...executedToolBatch.messages);
+        turnTainted ||= toolResults.some(toolResultTaintsTurn);
         hasMoreToolCalls = !executedToolBatch.terminate;
 
         for (const result of toolResults) {
@@ -460,6 +470,7 @@ async function streamAssistantResponse(
   emit: AgentEventSink,
   streamFn?: StreamFn,
   runtime?: AgentCoreStreamRuntimeDeps,
+  turnTainted = false,
 ): Promise<AssistantMessage> {
   // Apply context transform if configured (AgentMessage[] → AgentMessage[])
   let messages = context.messages;
@@ -527,8 +538,9 @@ async function streamAssistantResponse(
 
       case "done":
       case "error": {
-        const finalMessage = ensureToolTurnIdentity(
-          removeNonExecutableToolCalls(await response.result()),
+        const finalMessage = withAssistantTurnTaint(
+          ensureToolTurnIdentity(removeNonExecutableToolCalls(await response.result())),
+          turnTainted,
         );
         if (addedPartial) {
           context.messages[context.messages.length - 1] = finalMessage;
@@ -544,8 +556,9 @@ async function streamAssistantResponse(
     }
   }
 
-  const finalMessage = ensureToolTurnIdentity(
-    removeNonExecutableToolCalls(await response.result()),
+  const finalMessage = withAssistantTurnTaint(
+    ensureToolTurnIdentity(removeNonExecutableToolCalls(await response.result())),
+    turnTainted,
   );
   if (addedPartial) {
     context.messages[context.messages.length - 1] = finalMessage;
@@ -669,14 +682,24 @@ async function executeToolCallsSequential(
     );
     let finalized: FinalizedToolCallOutcome;
     if (preparation.kind === "immediate") {
-      finalized = {
-        toolCall,
-        result: preparation.result,
-        isError: preparation.isError,
-        executionStarted: false,
-        ...(preparation.errorKind ? { errorKind: preparation.errorKind } : {}),
-        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-      };
+      finalized = await finalizeToolCallOutcome(
+        currentContext,
+        assistantMessage,
+        {
+          toolCall,
+          result: preparation.result,
+          isError: preparation.isError,
+          executionStarted: false,
+          ...(preparation.errorKind ? { errorKind: preparation.errorKind } : {}),
+          ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+          ...(preparation.resultContentSource
+            ? { resultContentSource: preparation.resultContentSource }
+            : {}),
+        },
+        toolCall.arguments,
+        config,
+        signal,
+      );
     } else {
       const executed = await executePreparedToolCall(
         preparation,
@@ -745,14 +768,24 @@ async function executeToolCallsParallel(
       resolvedToolCalls,
     );
     if (preparation.kind === "immediate") {
-      const finalized = {
-        toolCall,
-        result: preparation.result,
-        isError: preparation.isError,
-        executionStarted: false,
-        ...(preparation.errorKind ? { errorKind: preparation.errorKind } : {}),
-        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-      } satisfies FinalizedToolCallOutcome;
+      const finalized = await finalizeToolCallOutcome(
+        currentContext,
+        assistantMessage,
+        {
+          toolCall,
+          result: preparation.result,
+          isError: preparation.isError,
+          executionStarted: false,
+          ...(preparation.errorKind ? { errorKind: preparation.errorKind } : {}),
+          ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+          ...(preparation.resultContentSource
+            ? { resultContentSource: preparation.resultContentSource }
+            : {}),
+        },
+        toolCall.arguments,
+        config,
+        signal,
+      );
       await emitToolExecutionEnd(finalized, emit);
       finalizedCalls.push(finalized);
       if (signal?.aborted) {
@@ -812,6 +845,7 @@ type ImmediateToolCallOutcome = {
   result: AgentToolResult<unknown>;
   isError: boolean;
   errorKind?: "argument-validation";
+  resultContentSource?: ToolResultContentSource;
 };
 
 type ExecutedToolCallOutcome = {
@@ -827,6 +861,7 @@ type FinalizedToolCallOutcome = {
   executionStarted: boolean;
   errorKind?: "argument-validation";
   hideFromChannelProgress?: boolean;
+  resultContentSource?: ToolResultContentSource;
 };
 
 type FinalizedToolCallEntry = FinalizedToolCallOutcome | (() => Promise<FinalizedToolCallOutcome>);
@@ -942,6 +977,7 @@ async function prepareToolCall(
       kind: "immediate",
       result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
       isError: true,
+      ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
     };
   }
 
@@ -954,6 +990,7 @@ async function prepareToolCall(
       result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
       isError: true,
       errorKind: "argument-validation",
+      ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
     };
   }
 
@@ -973,6 +1010,7 @@ async function prepareToolCall(
           kind: "immediate",
           result: createErrorToolResult("Operation aborted"),
           isError: true,
+          ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
         };
       }
       if (beforeResult?.block) {
@@ -980,6 +1018,7 @@ async function prepareToolCall(
           kind: "immediate",
           result: createErrorToolResult(beforeResult.reason || "Tool execution was blocked"),
           isError: true,
+          ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
         };
       }
     }
@@ -988,6 +1027,7 @@ async function prepareToolCall(
         kind: "immediate",
         result: createErrorToolResult("Operation aborted"),
         isError: true,
+        ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
       };
     }
     return {
@@ -1001,6 +1041,7 @@ async function prepareToolCall(
       kind: "immediate",
       result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
       isError: true,
+      ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
     };
   }
 }
@@ -1106,13 +1147,78 @@ async function finalizeExecutedToolCall(
     }
   }
 
-  return {
-    toolCall: prepared.toolCall,
-    result,
-    isError,
-    executionStarted: executed.executionStarted,
-    ...(prepared.tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
-  };
+  return await finalizeToolCallOutcome(
+    currentContext,
+    assistantMessage,
+    {
+      toolCall: prepared.toolCall,
+      result,
+      isError,
+      executionStarted: executed.executionStarted,
+      ...(prepared.tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
+      ...(prepared.tool.resultContentSource
+        ? { resultContentSource: prepared.tool.resultContentSource }
+        : {}),
+    },
+    prepared.args,
+    config,
+    signal,
+  );
+}
+
+async function finalizeToolCallOutcome(
+  currentContext: AgentContext,
+  assistantMessage: AssistantMessage,
+  finalized: FinalizedToolCallOutcome,
+  args: unknown,
+  config: AgentLoopConfig,
+  signal: AbortSignal | undefined,
+): Promise<FinalizedToolCallOutcome> {
+  if (!config.afterToolOutcome) {
+    return finalized;
+  }
+  try {
+    const afterResult = await config.afterToolOutcome(
+      {
+        assistantMessage,
+        toolCall: finalized.toolCall,
+        args,
+        result: finalized.result,
+        isError: finalized.isError,
+        executionStarted: finalized.executionStarted,
+        ...(finalized.errorKind ? { errorKind: finalized.errorKind } : {}),
+        context: currentContext,
+      },
+      signal,
+    );
+    if (!afterResult) {
+      return finalized;
+    }
+    return {
+      ...finalized,
+      result: {
+        ...finalized.result,
+        content: afterResult.content ?? finalized.result.content,
+        details: afterResult.details ?? finalized.result.details,
+        terminate: afterResult.terminate ?? finalized.result.terminate,
+      },
+      isError: afterResult.isError ?? finalized.isError,
+    };
+  } catch (error) {
+    const errorResult = createErrorToolResult(
+      error instanceof Error ? error.message : String(error),
+    );
+    return {
+      ...finalized,
+      result: {
+        ...errorResult,
+        ...(finalized.result.terminate === undefined
+          ? {}
+          : { terminate: finalized.result.terminate }),
+      },
+      isError: true,
+    };
+  }
 }
 
 function createErrorToolResult(message: string): AgentToolResult<unknown> {
@@ -1139,15 +1245,70 @@ async function emitToolExecutionEnd(
 }
 
 function createToolResultMessage(finalized: FinalizedToolCallOutcome): ToolResultMessage {
+  return withToolResultContentSource(
+    {
+      role: "toolResult",
+      toolCallId: finalized.toolCall.id,
+      toolName: finalized.toolCall.name,
+      content: finalized.result.content ?? [],
+      details: finalized.result.details,
+      isError: finalized.isError,
+      timestamp: Date.now(),
+    },
+    finalized.resultContentSource,
+  );
+}
+
+type TurnTaintMetadata = {
+  resultContentSource?: ToolResultContentSource;
+  turnTainted?: true;
+};
+
+function readTurnTaintMetadata(message: AgentMessage): TurnTaintMetadata | undefined {
+  const metadata = (message as unknown as Record<string, unknown>)["__openclaw"];
+  return metadata && typeof metadata === "object" && !Array.isArray(metadata)
+    ? (metadata as TurnTaintMetadata)
+    : undefined;
+}
+
+function toolResultTaintsTurn(message: ToolResultMessage): boolean {
+  return readTurnTaintMetadata(message)?.resultContentSource === "network";
+}
+
+function isActiveTurnTainted(messages: readonly AgentMessage[]): boolean {
+  for (const message of messages.toReversed()) {
+    if (message.role === "user") {
+      return false;
+    }
+    const metadata = readTurnTaintMetadata(message);
+    if (metadata?.turnTainted === true || metadata?.resultContentSource === "network") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function withAssistantTurnTaint(message: AssistantMessage, tainted: boolean): AssistantMessage {
+  if (!tainted) {
+    return message;
+  }
   return {
-    role: "toolResult",
-    toolCallId: finalized.toolCall.id,
-    toolName: finalized.toolCall.name,
-    content: finalized.result.content ?? [],
-    details: finalized.result.details,
-    isError: finalized.isError,
-    timestamp: Date.now(),
-  };
+    ...message,
+    __openclaw: { ...readTurnTaintMetadata(message), turnTainted: true },
+  } as unknown as AssistantMessage;
+}
+
+function withToolResultContentSource(
+  message: ToolResultMessage,
+  source: ToolResultContentSource | undefined,
+): ToolResultMessage {
+  if (!source) {
+    return message;
+  }
+  return {
+    ...message,
+    __openclaw: { ...readTurnTaintMetadata(message), resultContentSource: source },
+  } as ToolResultMessage;
 }
 
 async function emitToolResultMessage(

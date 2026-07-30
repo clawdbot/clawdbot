@@ -36,6 +36,10 @@ function resolveDefaultHomeDir(): string {
   return resolveRequiredHomeDir(process.env, os.homedir);
 }
 
+function resolveSystemAccountHomeDir(): string {
+  return os.userInfo().homedir;
+}
+
 /** Build a homedir thunk that respects OPENCLAW_HOME for the given env. */
 function envHomedir(env: NodeJS.ProcessEnv): () => string {
   return () => resolveRequiredHomeDir(env, os.homedir);
@@ -93,8 +97,8 @@ export function resolveStateDir(
   return newDir;
 }
 
-function normalizeStateDirForComparison(stateDir: string): string {
-  const resolved = path.resolve(stateDir);
+function normalizePathForComparison(candidate: string): string {
+  const resolved = path.resolve(candidate);
   try {
     return fs.realpathSync.native(resolved);
   } catch {
@@ -115,8 +119,37 @@ export function isDefaultStateDir(
   }
   const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
   return (
-    normalizeStateDirForComparison(resolveStateDir(env, effectiveHomedir)) ===
-    normalizeStateDirForComparison(newStateDir(effectiveHomedir))
+    normalizePathForComparison(resolveStateDir(env, effectiveHomedir)) ===
+    normalizePathForComparison(newStateDir(effectiveHomedir))
+  );
+}
+
+/** Whether host service management belongs to the active default install identity. */
+export function isDefaultInstallIdentity(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = resolveSystemAccountHomeDir,
+): boolean {
+  const accountHome = resolveRequiredHomeDir({}, homedir);
+  const accountHomedir = () => accountHome;
+  if (
+    normalizePathForComparison(resolveStateDir(env, envHomedir(env))) !==
+    normalizePathForComparison(newStateDir(accountHomedir))
+  ) {
+    return false;
+  }
+  if (!env.OPENCLAW_CONFIG_PATH?.trim()) {
+    return true;
+  }
+  const defaultConfigEnv = {
+    ...env,
+    HOME: accountHome,
+    OPENCLAW_HOME: undefined,
+    OPENCLAW_STATE_DIR: undefined,
+    OPENCLAW_CONFIG_PATH: undefined,
+  };
+  return (
+    normalizePathForComparison(resolveConfigPathCandidate(env, envHomedir(env))) ===
+    normalizePathForComparison(resolveConfigPathCandidate(defaultConfigEnv, accountHomedir))
   );
 }
 

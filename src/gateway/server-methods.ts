@@ -504,7 +504,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadDiagnosticsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["controlUi.githubPreview", "controlUi.sessionPullRequests"],
+    methods: ["controlUi.githubPreview", "controlUi.sessionPullRequests.subscribe"],
     loadHandlers: loadControlUiHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -739,6 +739,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.cleanup",
       "sessions.subscribe",
       "sessions.unsubscribe",
+      "sessions.viewers.set",
       "sessions.messages.subscribe",
       "sessions.messages.unsubscribe",
       "sessions.preview",
@@ -955,7 +956,7 @@ function createRequestGatewayMethodRegistry(
 export async function handleGatewayRequest(
   opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers },
 ): Promise<void> {
-  const { req, respond, client, isWebchatConnect, context } = opts;
+  const { req, respond, client, isWebchatConnect, context, signal } = opts;
   // Prefer the caller-attached registry when it owns the requested method so plugin dispatch
   // metadata newer than global runtime state still authorizes and dispatches correctly. When the
   // attached snapshot does not own the method, rebuild from the gateway-pinned registry. Without
@@ -1103,6 +1104,7 @@ export async function handleGatewayRequest(
       isWebchatConnect,
       respond,
       context,
+      ...(signal ? { signal } : {}),
       ...(sessionMutation.authorization
         ? { sessionMutationAuthorization: sessionMutation.authorization }
         : {}),

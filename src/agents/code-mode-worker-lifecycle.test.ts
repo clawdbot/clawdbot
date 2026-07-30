@@ -90,15 +90,18 @@ describe("Code Mode worker lifecycle", () => {
     expect(() => reserveActiveRunSlot()).toThrow("too many suspended code mode runs");
     expect(vi.getTimerCount()).toBe(1);
 
+    const clearExpiryTimer = vi.spyOn(globalThis, "clearTimeout");
     disposeAllCodeModeRuns();
     disposeAllCodeModeRuns();
 
     expect(firstCancel).toHaveBeenCalledOnce();
     expect(secondCancel).toHaveBeenCalledOnce();
+    expect(clearExpiryTimer).toHaveBeenCalledOnce();
     expect(activeRuns.size).toBe(0);
     expect(resumingRunIds.has(firstRunId)).toBe(false);
     expect(resumingRunIds.has(secondRunId)).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
+    clearExpiryTimer.mockRestore();
 
     const releaseFreedSlot = reserveActiveRunSlot();
     releaseFreedSlot();

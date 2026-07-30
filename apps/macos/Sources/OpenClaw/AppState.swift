@@ -30,7 +30,6 @@ enum ExecApprovalsPolicyLoadState: Equatable {
 final class AppState {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app-state")
     private static let execApprovalsReadRetryAttempts = 5
-    private static let execApprovalsReadUnavailableMessage = "Exec approvals unavailable. Retry to refresh."
 
     private let isPreview: Bool
     @ObservationIgnored private let execApprovalsDefaultsAsyncResolver:
@@ -86,6 +85,14 @@ final class AppState {
         didSet {
             self.ifNotPreview { UserDefaults.standard.set(self.debugPaneEnabled, forKey: debugPaneEnabledKey) }
             CanvasManager.shared.refreshDebugStatus()
+        }
+    }
+
+    var nativeSettingsPanesEnabled: Bool {
+        didSet {
+            self.ifNotPreview {
+                UserDefaults.standard.set(self.nativeSettingsPanesEnabled, forKey: nativeSettingsPanesEnabledKey)
+            }
         }
     }
 
@@ -345,6 +352,7 @@ final class AppState {
         self.launchAtLogin = false
         self.onboardingSeen = onboardingSeen
         self.debugPaneEnabled = UserDefaults.standard.bool(forKey: debugPaneEnabledKey)
+        self.nativeSettingsPanesEnabled = UserDefaults.standard.bool(forKey: nativeSettingsPanesEnabledKey)
         let savedVoiceWake = UserDefaults.standard.bool(forKey: swabbleEnabledKey)
         self.swabbleEnabled = voiceWakeSupported ? savedVoiceWake : false
         self.swabbleTriggerWords = UserDefaults.standard
@@ -966,7 +974,7 @@ extension AppState {
     private func performExecApprovalModeReadAttempts(maxAttempts: Int, generation: Int) async {
         guard self.execApprovalsReadGeneration == generation else { return }
         guard maxAttempts > 0 else {
-            self.execApprovalPolicyLoadState = .unavailable(Self.execApprovalsReadUnavailableMessage)
+            self.execApprovalPolicyLoadState = .unavailable(ExecApprovalsReadError.unavailable.message)
             return
         }
         self.execApprovalPolicyLoadState = .loading
@@ -986,12 +994,16 @@ extension AppState {
                 self.syncExecApprovalMode(
                     ExecApprovalQuickMode.from(security: defaults.security, ask: defaults.ask))
                 return
-            case .failure:
+            case let .failure(.migrationRequired(error)):
+                self.execApprovalPolicyLoadState = .unavailable(
+                    ExecApprovalsReadError.migrationRequired(error).message)
+                return
+            case .failure(.unavailable):
                 continue
             }
         }
         guard self.execApprovalsReadGeneration == generation else { return }
-        self.execApprovalPolicyLoadState = .unavailable(Self.execApprovalsReadUnavailableMessage)
+        self.execApprovalPolicyLoadState = .unavailable(ExecApprovalsReadError.unavailable.message)
     }
 
     private func scheduleExecApprovalModeReadRetry() {
@@ -1187,6 +1199,7 @@ extension AppState {
         state.launchAtLogin = true
         state.onboardingSeen = true
         state.debugPaneEnabled = true
+        state.nativeSettingsPanesEnabled = true
         state.swabbleEnabled = true
         state.swabbleTriggerWords = ["Claude", "Computer", "Jarvis"]
         state.voiceWakeTriggerChime = .system(name: "Glass")

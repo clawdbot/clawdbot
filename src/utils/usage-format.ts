@@ -565,17 +565,6 @@ export function resolveModelCostConfig(params: {
     return undefined;
   }
   const agentDir = resolveCostAgentDir(params.config, params.agentDir);
-  if (params.allowPluginNormalization !== false) {
-    const catalogPricing = resolveCatalogModelPricing({
-      config: params.config,
-      provider: params.provider ?? "",
-      model: params.model ?? "",
-    });
-    if (catalogPricing) {
-      return normalizeResolvedPricing(catalogPricing);
-    }
-  }
-
   // Favor direct configured keys first so local pricing/status lookups stay
   // synchronous and do not drag plugin/provider discovery into the hot path.
   const rawModelsJsonCost = loadModelsJsonCostIndex({
@@ -611,6 +600,15 @@ export function resolveModelCostConfig(params: {
         return configuredCost;
       }
     }
+  }
+
+  const catalogPricing = resolveCatalogModelPricing({
+    config: params.config,
+    provider: params.provider ?? "",
+    model: params.model ?? "",
+  });
+  if (catalogPricing) {
+    return normalizeResolvedPricing(catalogPricing);
   }
 
   const hostedPricing = resolveHostedModelPricing({

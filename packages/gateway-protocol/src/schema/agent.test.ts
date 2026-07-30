@@ -61,6 +61,8 @@ const musicCompletionEvent: AgentInternalEvent = {
       path: "/tmp/openclaw/generated-release-anthem.mp3",
       mimeType: "audio/mpeg",
       name: "generated-release-anthem.mp3",
+      sizeBytes: 1_024,
+      durationMs: 30_000,
     },
   ],
   mediaUrls: ["/tmp/openclaw/generated-release-anthem.mp3"],

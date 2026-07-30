@@ -34,8 +34,9 @@ describe("engine/tools/remind-logic", () => {
       if (!("deleteAfterRun" in call.job)) {
         throw new Error("expected one-shot reminder job");
       }
-      expect(call.job.schedule.atMs).toBeGreaterThanOrEqual(before + 5 * 60_000);
-      expect(call.job.schedule.atMs).toBeLessThanOrEqual(Date.now() + 5 * 60_000 + 1_000);
+      const scheduledAtMs = Date.parse(call.job.schedule.at);
+      expect(scheduledAtMs).toBeGreaterThanOrEqual(before + 5 * 60_000);
+      expect(scheduledAtMs).toBeLessThanOrEqual(Date.now() + 5 * 60_000 + 1_000);
       expect(call.job.sessionTarget).toBe("isolated");
       expect(call.job.wakeMode).toBe("now");
       expect(call.job.deleteAfterRun).toBe(true);

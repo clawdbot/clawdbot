@@ -44,6 +44,7 @@ function createRuntimeStub(stateDir?: string): PluginRuntime {
           enqueue: async () => {},
           flushKey: async () => {},
           cancelKey: () => false,
+          drain: async () => {},
         }),
       },
     },

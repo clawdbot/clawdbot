@@ -44,7 +44,7 @@ const LockPayloadSchema = z.object({
   createdAt: z.string(),
   configPath: z.string(),
   port: z.number().int().min(1).max(65_535).optional(),
-  role: z.enum(["gateway", "sqlite-maintenance"]).optional(),
+  role: z.enum(["gateway", "skill-workshop-apply", "sqlite-maintenance"]).optional(),
   stateDir: z.string().optional(),
   startTime: z.number().optional(),
 }) as z.ZodType<LockPayload>;
@@ -56,7 +56,7 @@ type GatewayLockHandle = {
   release: () => Promise<void>;
 };
 
-type GatewayLockRole = "gateway" | "sqlite-maintenance";
+type GatewayLockRole = "gateway" | "skill-workshop-apply" | "sqlite-maintenance";
 
 export type GatewayLockIdentity = {
   pid: number;
@@ -198,12 +198,13 @@ async function resolveGatewayOwnerStatus(
   }
 
   const readFn = readCmdline ?? ((p: number) => defaultReadProcessCmdline(p, platform));
-  if (role === "sqlite-maintenance") {
+  if (role === "sqlite-maintenance" || role === "skill-workshop-apply") {
     const args = readFn(pid);
     if (!args) {
       return "unknown";
     }
-    return isOpenClawCommandArgv(args, "doctor") ? "alive" : "dead";
+    const command = role === "sqlite-maintenance" ? "doctor" : "skills";
+    return isOpenClawCommandArgv(args, command) ? "alive" : "dead";
   }
 
   const args = readFn(pid);
@@ -332,7 +333,7 @@ async function readVerifiedGatewayLockIdentity(
   opts: Pick<GatewayLockOptions, "platform" | "readProcessCmdline" | "readProcessStartTime">,
 ): Promise<GatewayLockIdentity | undefined> {
   const payload = await readLockPayload(lockPath);
-  if (!payload?.port || payload.role === "sqlite-maintenance") {
+  if (!payload?.port || (payload.role && payload.role !== "gateway")) {
     return undefined;
   }
   const ownerStatus = await resolveGatewayOwnerStatus(
@@ -375,8 +376,7 @@ export async function acquireGatewayLock(
     stateDir: paths.stateDir,
     ownerId,
   });
-  const shouldAcquireConfigLock =
-    role === "sqlite-maintenance" || env.OPENCLAW_ALLOW_MULTI_GATEWAY !== "1";
+  const shouldAcquireConfigLock = role !== "gateway" || env.OPENCLAW_ALLOW_MULTI_GATEWAY !== "1";
   if (!shouldAcquireConfigLock) {
     return {
       ...stateLock,

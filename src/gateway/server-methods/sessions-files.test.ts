@@ -384,10 +384,13 @@ describe("sessions.files RPC handlers", () => {
 
     expect(preview.file).toMatchObject({
       content: "export default {};\n",
+      contentEncoding: "utf8",
       hash: hashContent("export default {};\n"),
       kind: "read",
+      mimeType: "text/plain",
       missing: false,
       path: "ui/vite.config.ts",
+      previewKind: "text",
     });
   });
 
@@ -585,6 +588,45 @@ describe("sessions.files RPC handlers", () => {
       size: 260 * 1024,
       type: "session_file_too_large",
     });
+  });
+
+  it.each([
+    {
+      name: "SQLite",
+      mimeType: "application/x-sqlite3",
+      bytes: Buffer.concat([Buffer.from("SQLite format 3\0"), Buffer.alloc(260 * 1024)]),
+    },
+    {
+      name: "PNG",
+      mimeType: "image/png",
+      bytes: Buffer.concat([
+        Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+          "base64",
+        ),
+        Buffer.alloc(260 * 1024),
+      ]),
+    },
+  ])("returns oversized $name files as bounded metadata", async (fixture) => {
+    const fileName = `large-${fixture.name.toLowerCase()}.bin`;
+    fs.writeFileSync(path.join(workspaceRoot, fileName), fixture.bytes);
+
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: fileName,
+      }),
+    );
+
+    expect(payload.file).toMatchObject({
+      mimeType: fixture.mimeType,
+      path: fileName,
+      previewKind: "unsupported",
+      size: fixture.bytes.length,
+    });
+    expect(payload.file.content).toBeUndefined();
+    expect(payload.file.contentEncoding).toBeUndefined();
+    expect(payload.file.hash).toBeUndefined();
   });
 
   it("overwrites an existing file when its hash matches", async () => {
@@ -825,19 +867,171 @@ describe("sessions.files RPC handlers", () => {
     );
   });
 
-  it("previews binary files without issuing a CAS hash", async () => {
-    const binary = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02]);
-    fs.writeFileSync(path.join(workspaceRoot, "logo.png"), binary);
+  it.each([
+    {
+      format: "AVIF",
+      mimeType: "image/avif",
+      bytes: Buffer.from([
+        0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66, 0x00, 0x00, 0x00,
+        0x00, 0x61, 0x76, 0x69, 0x66,
+      ]),
+    },
+    { format: "GIF", mimeType: "image/gif", bytes: Buffer.from("GIF89a", "ascii") },
+    {
+      format: "JPEG",
+      mimeType: "image/jpeg",
+      bytes: Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]),
+    },
+    {
+      format: "PNG",
+      mimeType: "image/png",
+      bytes: Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+        "base64",
+      ),
+    },
+    {
+      format: "WebP",
+      mimeType: "image/webp",
+      bytes: Buffer.concat([Buffer.from("RIFF", "ascii"), Buffer.alloc(4), Buffer.from("WEBP")]),
+    },
+  ])("previews sniffed $format bytes as a base64 image without a CAS hash", async (fixture) => {
+    const fileName = `preview-${fixture.format.toLowerCase()}.bin`;
+    fs.writeFileSync(path.join(workspaceRoot, fileName), fixture.bytes);
 
     const payload = expectOkPayload(
       await invokeSessionFilesHandler("sessions.files.get", {
         sessionKey: "agent:main:main",
-        path: "logo.png",
+        path: fileName,
       }),
     );
 
-    expect(typeof payload.file.content).toBe("string");
+    expect(payload.file).toMatchObject({
+      content: fixture.bytes.toString("base64"),
+      contentEncoding: "base64",
+      mimeType: fixture.mimeType,
+      path: fileName,
+      previewKind: "image",
+    });
     expect(payload.file.hash).toBeUndefined();
+  });
+
+  it.each([
+    { format: "RTF", mimeType: "application/rtf", content: "{\\rtf1\\ansi hello}" },
+    { format: "XML", mimeType: "application/xml", content: '<?xml version="1.0"?><root/>' },
+    { format: "WebVTT", mimeType: "text/vtt", content: "WEBVTT\n\n00:00.000 --> 00:01.000\nHi" },
+    { format: "vCard", mimeType: "text/vcard", content: "BEGIN:VCARD\nVERSION:4.0\nEND:VCARD\n" },
+    {
+      format: "iCalendar",
+      mimeType: "text/calendar",
+      content: "BEGIN:VCALENDAR\nVERSION:2.0\nEND:VCALENDAR\n",
+    },
+    {
+      format: "registry",
+      mimeType: "application/x-ms-regedit",
+      content: "REGEDIT4\r\n\r\n[HKEY_CURRENT_USER\\Software]",
+    },
+    {
+      format: "ASCII STL",
+      mimeType: "model/stl",
+      content: "solid test\nfacet normal 0 0 0\nendfacet\nendsolid test\n",
+    },
+  ])("keeps detected $format text editable", async (fixture) => {
+    const fileName = `detected-${fixture.format.toLowerCase().replaceAll(" ", "-")}.bin`;
+    fs.writeFileSync(path.join(workspaceRoot, fileName), fixture.content, "utf8");
+
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: fileName,
+      }),
+    );
+
+    expect(payload.file).toMatchObject({
+      content: fixture.content,
+      contentEncoding: "utf8",
+      hash: hashContent(fixture.content),
+      mimeType: fixture.mimeType,
+      path: fileName,
+      previewKind: "text",
+    });
+  });
+
+  it("returns unsupported binary metadata without lossy inline content", async () => {
+    const binary = Buffer.concat([Buffer.from("SQLite format 3\0"), Buffer.alloc(64, 7)]);
+    fs.writeFileSync(path.join(workspaceRoot, "cache.db"), binary);
+
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: "cache.db",
+      }),
+    );
+
+    expect(payload.file).toMatchObject({
+      mimeType: "application/x-sqlite3",
+      missing: false,
+      path: "cache.db",
+      previewKind: "unsupported",
+      size: binary.length,
+    });
+    expect(payload.file.content).toBeUndefined();
+    expect(payload.file.contentEncoding).toBeUndefined();
+    expect(payload.file.hash).toBeUndefined();
+  });
+
+  it.each([
+    {
+      format: "BMP",
+      bytes: Buffer.concat([Buffer.from("BM", "ascii"), Buffer.alloc(16)]),
+      mimeType: "image/bmp",
+    },
+    {
+      format: "HEIC",
+      bytes: Buffer.from([
+        0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63, 0x00, 0x00, 0x00,
+        0x00, 0x6d, 0x69, 0x66, 0x31,
+      ]),
+      mimeType: "image/heic",
+    },
+  ])("keeps browser-incompatible $format images metadata-only", async (fixture) => {
+    const fileName = `preview-${fixture.format.toLowerCase()}.bin`;
+    fs.writeFileSync(path.join(workspaceRoot, fileName), fixture.bytes);
+
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: fileName,
+      }),
+    );
+
+    expect(payload.file).toMatchObject({
+      mimeType: fixture.mimeType,
+      path: fileName,
+      previewKind: "unsupported",
+      size: fixture.bytes.length,
+    });
+    expect(payload.file.content).toBeUndefined();
+    expect(payload.file.contentEncoding).toBeUndefined();
+  });
+
+  it("does not trust a supported image extension without supported image bytes", async () => {
+    const binary = Buffer.concat([Buffer.from("SQLite format 3\0"), Buffer.alloc(64, 7)]);
+    fs.writeFileSync(path.join(workspaceRoot, "disguised.png"), binary);
+
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: "disguised.png",
+      }),
+    );
+
+    expect(payload.file).toMatchObject({
+      mimeType: "application/x-sqlite3",
+      path: "disguised.png",
+      previewKind: "unsupported",
+    });
+    expect(payload.file.content).toBeUndefined();
   });
 
   it("rejects writes to binary files even with a matching byte hash", async () => {

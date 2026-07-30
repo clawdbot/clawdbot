@@ -808,7 +808,10 @@ describe("runEmbeddedAgent", () => {
         skipAgentDiscovery: true,
         allowBundledStaticCatalogFallback: true,
         preferBundledStaticCatalogTransport: true,
-        preparedRuntimeModels: expect.any(Array),
+        preparedModelRuntime: expect.objectContaining({
+          configuredRuntimeModels: expect.any(Array),
+          inlineProviderModels: expect.any(Array),
+        }),
       }),
     );
     expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);

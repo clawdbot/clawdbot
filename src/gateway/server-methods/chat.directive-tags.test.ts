@@ -998,6 +998,26 @@ function createSlashCommandMediaReply(
   return { kind, payload: { mediaUrls, trustedLocalMedia: true, ...payload } };
 }
 
+function managedAudioBlocks(content: Array<Record<string, unknown>>) {
+  return content.filter((block) => block.type === "audio");
+}
+
+function expectManagedAudioBlock(
+  block: Record<string, unknown> | undefined,
+  fileName: string,
+  isVoiceNote?: boolean,
+) {
+  expect(block).toEqual(
+    expect.objectContaining({
+      type: "audio",
+      artifactId: expect.stringMatching(/^artifact_managed_media_/u),
+      fileName,
+      mimeType: "audio/mpeg",
+      ...(isVoiceNote === undefined ? {} : { isVoiceNote }),
+    }),
+  );
+}
+
 async function runNonStreamingChatSend(params: {
   context: ChatContext;
   respond: ReturnType<typeof vi.fn>;
@@ -1068,6 +1088,60 @@ async function runNonStreamingChatSend(params: {
   const chatCall = mockCallAt(params.context.broadcast as unknown as ReturnType<typeof vi.fn>, 0);
   expect(chatCall?.[0]).toBe("chat");
   return chatCall?.[1] as Record<string, any> | undefined;
+}
+
+async function expectUnpersistedAgentRunFinal(params: {
+  transcriptPrefix: string;
+  idempotencyKey: string;
+  payload: (typeof mockState.dispatchedReplies)[number]["payload"];
+  staleAudio?: boolean;
+}) {
+  const transcriptDir = await createTranscriptFixture(params.transcriptPrefix);
+  const staleAudioPath = path.join(transcriptDir, "stale.mp3");
+  mockState.config = { agents: { defaults: { workspace: transcriptDir } } };
+  mockState.triggerAgentRunStart = true;
+  mockState.dispatchedReplies = [
+    {
+      kind: "final",
+      payload: {
+        ...params.payload,
+        ...(params.staleAudio
+          ? {
+              mediaUrl: staleAudioPath,
+              mediaUrls: [staleAudioPath],
+              trustedLocalMedia: true,
+            }
+          : {}),
+      },
+    },
+  ];
+  const { send } = createChatRequestFixture();
+  await send({ idempotencyKey: params.idempotencyKey, expectBroadcast: false, waitFor: "dedupe" });
+
+  // Agent-run delivery is a live projection; message_end alone owns persisted assistant turns.
+  expect(findAssistantTranscriptUpdates()).toStrictEqual([]);
+  expect(
+    readTranscriptJsonLines(mockState.transcriptPath).filter(
+      (entry) =>
+        (entry as { message?: { role?: string } }).message?.role === "assistant" ||
+        (entry as { role?: string }).role === "assistant",
+    ),
+  ).toStrictEqual([]);
+}
+
+async function expectImageOnlyFinal(params: {
+  transcriptPrefix: string;
+  idempotencyKey: string;
+  finalPayload: NonNullable<typeof mockState.finalPayload>;
+}) {
+  await createTranscriptFixture(params.transcriptPrefix);
+  mockState.finalPayload = params.finalPayload;
+  const { send } = createChatRequestFixture();
+  const payload = await send({ idempotencyKey: params.idempotencyKey });
+  const content = getMessageContent(payload);
+  expect(getMessage(payload)?.role).toBe("assistant");
+  expect(content[0]).toEqual({ type: "text", text: "Image reply" });
+  expect(content[1]).toEqual({ type: "input_image", image_url: "data:image/png;base64,cG5n" });
 }
 
 describe("chat directive tag stripping for non-streaming final payloads", () => {
@@ -1804,7 +1878,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     await waitForAssertion(() => {
-      const assistantUpdate = findAssistantUpdateWithBlock((block) => block.type === "attachment");
+      const assistantUpdate = findAssistantUpdateWithBlock((block) => block.type === "audio");
       const message = assistantUpdate?.message as Record<string, any> | undefined;
       const content = Array.isArray(message?.content)
         ? (message.content as Array<Record<string, any>>)
@@ -1812,15 +1886,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(message?.role).toBe("assistant");
       expect(message?.idempotencyKey).toBe("idem-agent-audio:assistant-media");
       expect(content[0]).toEqual({ type: "text", text: "Audio reply" });
-      expect(content[1]).toEqual({
-        type: "attachment",
-        attachment: {
-          url: fs.realpathSync(audioPath),
-          kind: "audio",
-          label: "reply.mp3",
+      expect(content[1]).toEqual(
+        expect.objectContaining({
+          type: "audio",
+          artifactId: expect.stringMatching(/^artifact_managed_media_/u),
+          fileName: "reply.mp3",
           mimeType: "audio/mpeg",
-        },
-      });
+        }),
+      );
+      expect(JSON.stringify(content[1])).not.toContain(fs.realpathSync(audioPath));
     });
   });
 
@@ -2076,101 +2150,37 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(message?.role).toBe("assistant");
     expect(message?.idempotencyKey).toBe("idem-agent-tts:assistant-media");
     expect(content[0]).toEqual({ type: "text", text: "Audio reply" });
-    expect(content[1]).toEqual({
-      type: "attachment",
-      attachment: {
-        url: fs.realpathSync(audioPath),
-        kind: "audio",
-        label: "tts.mp3",
+    expect(content[1]).toEqual(
+      expect.objectContaining({
+        type: "audio",
+        artifactId: expect.stringMatching(/^artifact_managed_media_/u),
+        fileName: "tts.mp3",
         mimeType: "audio/mpeg",
-        isVoiceNote: true,
-      },
-    });
+      }),
+    );
+    expect(JSON.stringify(content[1])).not.toContain(fs.realpathSync(audioPath));
     expect(JSON.stringify(assistantUpdates[0]?.message)).not.toContain(
       "This text is already in the model transcript.",
     );
   });
 
   it("does not mirror agent-run stale media final text from live delivery", async () => {
-    const transcriptDir = await createTranscriptFixture("openclaw-chat-send-agent-stale-tts-");
-    const staleAudioPath = path.join(transcriptDir, "stale.mp3");
-    mockState.config = {
-      agents: {
-        defaults: {
-          workspace: transcriptDir,
-        },
-      },
-    };
-    mockState.triggerAgentRunStart = true;
-    mockState.dispatchedReplies = [
-      {
-        kind: "final",
-        payload: {
-          text: "Text-only test: one clean reply, no TTS, no media, no tool narration.",
-          mediaUrl: staleAudioPath,
-          mediaUrls: [staleAudioPath],
-          trustedLocalMedia: true,
-        },
-      },
-    ];
-    const { send } = createChatRequestFixture();
-
-    await send({
+    await expectUnpersistedAgentRunFinal({
+      transcriptPrefix: "openclaw-chat-send-agent-stale-tts-",
       idempotencyKey: "idem-stale-agent-media",
-      expectBroadcast: false,
-      waitFor: "dedupe",
+      payload: {
+        text: "Text-only test: one clean reply, no TTS, no media, no tool narration.",
+      },
+      staleAudio: true,
     });
-
-    const assistantUpdates = findAssistantTranscriptUpdates();
-    // Agent-run delivery is a live projection; message_end owns persisted
-    // assistant transcript entries, including stale media/text final payloads.
-    expect(assistantUpdates).toStrictEqual([]);
-    const transcriptLines = readTranscriptJsonLines(mockState.transcriptPath);
-    const assistantEntries = transcriptLines.filter(
-      (entry) =>
-        (entry as { message?: { role?: string } }).message?.role === "assistant" ||
-        (entry as { role?: string }).role === "assistant",
-    );
-    expect(assistantEntries).toStrictEqual([]);
   });
 
   it("does not mirror normal agent-run final text from live delivery", async () => {
-    const transcriptDir = await createTranscriptFixture("openclaw-chat-send-agent-text-only-");
-    mockState.config = {
-      agents: {
-        defaults: {
-          workspace: transcriptDir,
-        },
-      },
-    };
-    mockState.triggerAgentRunStart = true;
-    mockState.dispatchedReplies = [
-      {
-        kind: "final",
-        payload: {
-          text: "It's 11:52 AM EDT.",
-        },
-      },
-    ];
-    const { send } = createChatRequestFixture();
-
-    await send({
+    await expectUnpersistedAgentRunFinal({
+      transcriptPrefix: "openclaw-chat-send-agent-text-only-",
       idempotencyKey: "idem-agent-text-only",
-      expectBroadcast: false,
-      waitFor: "dedupe",
+      payload: { text: "It's 11:52 AM EDT." },
     });
-
-    const assistantUpdates = findAssistantTranscriptUpdates();
-    // Normal agent-run final text must not be mirrored into JSONL by WebChat;
-    // The agent runtime persists the model-visible assistant turn from message_end.
-    expect(assistantUpdates).toStrictEqual([]);
-    const transcriptLines = readTranscriptJsonLines(mockState.transcriptPath);
-    const assistantEntries = transcriptLines.filter(
-      (entry) =>
-        (entry as { message?: { role?: string } }).message?.role === "assistant" ||
-        (entry as { role?: string }).role === "assistant",
-    );
-    expect(assistantEntries).toStrictEqual([]);
   });
 
   it("broadcasts agent-run internal-ui source replies without duplicating transcript", async () => {
@@ -3108,16 +3118,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const content = getMessageContent(payload);
     expect(getMessage(payload)?.role).toBe("assistant");
     expect(content[0]).toEqual({ type: "text", text: "Command result with TTS." });
-    expect(content[1]).toEqual({
-      type: "attachment",
-      attachment: {
-        url: fs.realpathSync(audioPath),
-        kind: "audio",
-        label: "tts.mp3",
-        mimeType: "audio/mpeg",
-        isVoiceNote: true,
-      },
-    });
+    expectManagedAudioBlock(content[1], "tts.mp3", true);
+    expect(JSON.stringify(content[1])).not.toContain(fs.realpathSync(audioPath));
     const assistantUpdates = findAssistantTranscriptUpdates();
     expect(assistantUpdates).toHaveLength(1);
     expect(JSON.stringify(assistantUpdates[0]?.message)).toContain("Command result with TTS.");
@@ -3200,13 +3202,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     const content = getMessageContent(payload);
     expect(content[0]).toEqual({ type: "text", text: "Trajectory exports can include prompts." });
-    expect(content[1]).toEqual({
-      type: "attachment",
-      attachment: expect.objectContaining({
-        kind: "audio",
-        label: "tts.mp3",
-      }),
-    });
+    expectManagedAudioBlock(content[1], "tts.mp3", true);
     const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
       (update) =>
         typeof update.message === "object" &&
@@ -3379,14 +3375,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           .filter(Boolean)
           .join("\n");
         expect(text.match(/Trajectory exports/gu)).toHaveLength(1);
-        expect(content[1]).toEqual({
-          type: "attachment",
-          attachment: expect.objectContaining({
-            isVoiceNote: true,
-            kind: "audio",
-            label: "tts.mp3",
-          }),
-        });
+        expectManagedAudioBlock(content[1], "tts.mp3", true);
       },
     },
     {
@@ -3403,14 +3392,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       ],
       verify: (content) => {
         expect(content).toHaveLength(2);
-        expect(content[1]).toEqual({
-          type: "attachment",
-          attachment: expect.objectContaining({
-            isVoiceNote: true,
-            kind: "audio",
-            label: "voice.mp3",
-          }),
-        });
+        expectManagedAudioBlock(content[1], "voice.mp3", true);
       },
     },
     {
@@ -3425,11 +3407,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         createSlashCommandMediaReply("final", [audio], { audioAsVoice: false }),
       ],
       verify: (content) => {
-        const attachments = content.filter((block) => block.type === "attachment");
+        const attachments = managedAudioBlocks(content);
         expect(attachments).toHaveLength(1);
-        expect(attachments[0]?.attachment).toEqual(
-          expect.objectContaining({ isVoiceNote: true, label: "voice.mp3" }),
-        );
+        expectManagedAudioBlock(attachments[0], "voice.mp3", true);
       },
     },
     {
@@ -3450,7 +3430,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           .join("\n");
         expect(text).toContain("preview");
         expect(text).toContain("done");
-        expect(content.filter((block) => block.type === "attachment")).toHaveLength(1);
+        expect(managedAudioBlocks(content)).toHaveLength(1);
         const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
           (update) =>
             typeof update.message === "object" &&
@@ -3473,15 +3453,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         }),
       ],
       verify: (content) => {
-        const attachments = content.filter((block) => block.type === "attachment");
+        const attachments = managedAudioBlocks(content);
         expect(attachments).toHaveLength(2);
-        expect(attachments[0]?.attachment).toEqual(expect.objectContaining({ label: "block.mp3" }));
-        expect(
-          (attachments[0]?.attachment as { isVoiceNote?: unknown } | undefined)?.isVoiceNote,
-        ).not.toBe(true);
-        expect(attachments[1]?.attachment).toEqual(
-          expect.objectContaining({ isVoiceNote: true, label: "final.mp3" }),
-        );
+        expectManagedAudioBlock(attachments[0], "block.mp3");
+        expect(attachments[0]?.isVoiceNote).not.toBe(true);
+        expectManagedAudioBlock(attachments[1], "final.mp3", true);
       },
     },
     {
@@ -3502,12 +3478,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           .filter(Boolean)
           .join("\n");
         expect(text.match(/shared caption/gu)).toHaveLength(2);
-        const attachments = content.filter((block) => block.type === "attachment");
+        const attachments = managedAudioBlocks(content);
         expect(attachments).toHaveLength(2);
-        expect(attachments[0]?.attachment).toEqual(expect.objectContaining({ label: "first.mp3" }));
-        expect(attachments[1]?.attachment).toEqual(
-          expect.objectContaining({ isVoiceNote: true, label: "second.mp3" }),
-        );
+        expectManagedAudioBlock(attachments[0], "first.mp3");
+        expectManagedAudioBlock(attachments[1], "second.mp3", true);
       },
     },
     {
@@ -3527,16 +3501,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           type: "text",
           text: expect.stringContaining("Trajectory exports can include prompts."),
         });
-        expect(content.slice(1)).toEqual([
-          {
-            type: "attachment",
-            attachment: expect.objectContaining({ kind: "audio", label: "block.mp3" }),
-          },
-          {
-            type: "attachment",
-            attachment: expect.objectContaining({ kind: "audio", label: "final.mp3" }),
-          },
-        ]);
+        const attachments = managedAudioBlocks(content);
+        expect(attachments).toHaveLength(2);
+        expectManagedAudioBlock(attachments[0], "block.mp3", true);
+        expectManagedAudioBlock(attachments[1], "final.mp3", true);
       },
     },
     {
@@ -3550,17 +3518,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         createSlashCommandMediaReply("final", [first], { audioAsVoice: true }),
       ],
       verify: (content) => {
-        const attachments = content.filter((block) => block.type === "attachment");
+        const attachments = managedAudioBlocks(content);
         expect(attachments).toHaveLength(3);
-        expect(attachments[0]?.attachment).toEqual(expect.objectContaining({ label: "first.mp3" }));
-        expect(attachments[0]?.attachment?.isVoiceNote).not.toBe(true);
-        expect(attachments[1]?.attachment).toEqual(
-          expect.objectContaining({ label: "second.mp3" }),
-        );
-        expect(attachments[1]?.attachment?.isVoiceNote).not.toBe(true);
-        expect(attachments[2]?.attachment).toEqual(
-          expect.objectContaining({ isVoiceNote: true, label: "first.mp3" }),
-        );
+        expectManagedAudioBlock(attachments[0], "first.mp3");
+        expect(attachments[0]?.isVoiceNote).not.toBe(true);
+        expectManagedAudioBlock(attachments[1], "second.mp3");
+        expect(attachments[1]?.isVoiceNote).not.toBe(true);
+        expectManagedAudioBlock(attachments[2], "first.mp3", true);
       },
     },
     {
@@ -3592,19 +3556,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         createSlashCommandMediaReply("final", [second, first], { audioAsVoice: true }),
       ],
       verify: (content) => {
-        const attachments = content.filter((block) => block.type === "attachment");
-        expect(attachments.map((block) => block.attachment?.label)).toEqual([
+        const attachments = managedAudioBlocks(content);
+        expect(attachments.map((block) => block.fileName)).toEqual([
           "first.mp3",
           "second.mp3",
           "second.mp3",
           "first.mp3",
         ]);
-        expect(
-          attachments.slice(0, 2).every((block) => block.attachment?.isVoiceNote !== true),
-        ).toBe(true);
-        expect(attachments.slice(2).every((block) => block.attachment?.isVoiceNote === true)).toBe(
-          true,
-        );
+        expect(attachments.slice(0, 2).every((block) => block.isVoiceNote !== true)).toBe(true);
+        expect(attachments.slice(2).every((block) => block.isVoiceNote === true)).toBe(true);
       },
     },
   ] satisfies SlashCommandMediaCase[])("$name", async ({ id, files, replies, verify }) => {
@@ -4850,54 +4810,27 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("preserves media-only final replies in the final broadcast message", async () => {
-    await createTranscriptFixture("openclaw-chat-send-media-only-final-");
-    mockState.finalPayload = { mediaUrl: "data:image/png;base64,cG5n" };
-    const { send } = createChatRequestFixture();
-
-    const payload = await send({
+    await expectImageOnlyFinal({
+      transcriptPrefix: "openclaw-chat-send-media-only-final-",
       idempotencyKey: "idem-media-only-final",
+      finalPayload: { mediaUrl: "data:image/png;base64,cG5n" },
     });
-
-    const content = getMessageContent(payload);
-    expect(getMessage(payload)?.role).toBe("assistant");
-    expect(content[0]).toEqual({ type: "text", text: "Image reply" });
-    expect(content[1]).toEqual({ type: "input_image", image_url: "data:image/png;base64,cG5n" });
   });
 
   it("strips NO_REPLY from transcript text when final replies only carry media", async () => {
-    await createTranscriptFixture("openclaw-chat-send-media-only-silent-final-");
-    mockState.finalPayload = {
-      text: "NO_REPLY",
-      mediaUrl: "data:image/png;base64,cG5n",
-    };
-    const { send } = createChatRequestFixture();
-
-    const payload = await send({
+    await expectImageOnlyFinal({
+      transcriptPrefix: "openclaw-chat-send-media-only-silent-final-",
       idempotencyKey: "idem-media-only-silent-final",
+      finalPayload: { text: "NO_REPLY", mediaUrl: "data:image/png;base64,cG5n" },
     });
-
-    const content = getMessageContent(payload);
-    expect(getMessage(payload)?.role).toBe("assistant");
-    expect(content[0]).toEqual({ type: "text", text: "Image reply" });
-    expect(content[1]).toEqual({ type: "input_image", image_url: "data:image/png;base64,cG5n" });
   });
 
   it("preserves reply tags in transcript updates for media replies while stripping them from the broadcast", async () => {
-    await createTranscriptFixture("openclaw-chat-send-media-reply-tags-");
-    mockState.finalPayload = {
-      replyToCurrent: true,
-      mediaUrl: "data:image/png;base64,cG5n",
-    };
-    const { send } = createChatRequestFixture();
-
-    const payload = await send({
+    await expectImageOnlyFinal({
+      transcriptPrefix: "openclaw-chat-send-media-reply-tags-",
       idempotencyKey: "idem-media-reply-tags",
+      finalPayload: { replyToCurrent: true, mediaUrl: "data:image/png;base64,cG5n" },
     });
-
-    const content = getMessageContent(payload);
-    expect(getMessage(payload)?.role).toBe("assistant");
-    expect(content[0]).toEqual({ type: "text", text: "Image reply" });
-    expect(content[1]).toEqual({ type: "input_image", image_url: "data:image/png;base64,cG5n" });
     const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
       (update) =>
         typeof update.message === "object" &&

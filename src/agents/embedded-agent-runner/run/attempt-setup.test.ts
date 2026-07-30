@@ -18,6 +18,27 @@ describe("prepareEmbeddedAttemptSetup", () => {
     resolveProviderRuntimePluginHandle.mockReset();
   });
 
+  it("prepares the default and session agent identities together", async () => {
+    const setup = await prepareEmbeddedAttemptSetup({
+      config: {
+        agents: {
+          list: [{ id: "main", default: true }, { id: "marketing" }],
+        },
+      },
+      modelId: "gpt-5.4",
+      provider: "openai",
+      runId: "run-prepared-agent-identities",
+      sessionId: "session-prepared-agent-identities",
+      sessionKey: "agent:marketing:main",
+      thinkLevel: "high",
+      timeoutMs: 30_000,
+      workspaceDir: path.join(os.tmpdir(), "openclaw-attempt-setup-agent-identities"),
+    } as unknown as EmbeddedRunAttemptParams);
+
+    expect(setup.defaultAgentId).toBe("main");
+    expect(setup.sessionAgentId).toBe("marketing");
+  });
+
   it("reuses lifecycle metadata and the provider handle from the runtime plan", async () => {
     const metadataSnapshot = { plugins: [] } as never;
     const workspaceDir = path.join(os.tmpdir(), "openclaw-attempt-setup-prepared");

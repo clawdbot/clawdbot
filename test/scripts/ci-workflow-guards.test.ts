@@ -510,6 +510,54 @@ function runDependencyCheckFixture(options: { historicalTarget: boolean; scripts
   }
 }
 
+function runControlUiI18nSourceFixture(options: {
+  compatibilityTarget: boolean;
+  hasVerifyScript: boolean;
+}): { calls: string[]; output: string; summary: string; status: number | null } {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-control-ui-i18n-"));
+  try {
+    const fakeBin = path.join(root, "bin");
+    const callsPath = path.join(root, "pnpm-calls.txt");
+    const summaryPath = path.join(root, "summary.md");
+    mkdirSync(fakeBin);
+    writeFileSync(
+      path.join(root, "package.json"),
+      `${JSON.stringify({
+        scripts: options.hasVerifyScript ? { "ui:i18n:verify": "true" } : {},
+      })}\n`,
+    );
+    writeExecutable(path.join(fakeBin, "pnpm"), [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
+    ]);
+    const sourceStep = readCiWorkflow().jobs["control-ui-i18n"].steps.find(
+      (step: WorkflowStep) => step.name === "Verify Control UI i18n source",
+    );
+    const run = spawnSync("bash", ["-c", sourceStep.run], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        COMPATIBILITY_TARGET: options.compatibilityTarget ? "true" : "false",
+        GITHUB_STEP_SUMMARY: summaryPath,
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        PNPM_CALLS: callsPath,
+      },
+    });
+    return {
+      calls: existsSync(callsPath)
+        ? readFileSync(callsPath, "utf8").trim().split("\n").filter(Boolean)
+        : [],
+      output: `${run.stdout}${run.stderr}`,
+      status: run.status,
+      summary: existsSync(summaryPath) ? readFileSync(summaryPath, "utf8") : "",
+    };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
 function runGeneratedPublisherScenario(
   baseChangePath: "a" | "b" | null,
   options: {
@@ -3240,6 +3288,20 @@ describe("ci workflow guards", () => {
     }
   });
 
+  it("bounds mantis discord smoke validation git fetches", () => {
+    const workflowPath = ".github/workflows/mantis-discord-smoke.yml";
+    const source = readFileSync(workflowPath, "utf8");
+    const gitFetchLines = source.split("\n").filter((line) => line.includes("git fetch"));
+
+    expect(gitFetchLines, workflowPath).toHaveLength(2);
+    expect(
+      gitFetchLines.every((line) =>
+        line.trimStart().startsWith("timeout --signal=TERM --kill-after=10s 120s git fetch"),
+      ),
+      workflowPath,
+    ).toBe(true);
+  });
+
   it("bounds release ref validation fetches across checkout auth modes", () => {
     const resolveTargetSteps = readReleaseChecksWorkflow().jobs.resolve_target.steps;
 
@@ -3518,6 +3580,26 @@ describe("ci workflow guards", () => {
     expect(buildStep.run.indexOf("swift package --package-path apps/macos reset")).toBeGreaterThan(
       buildStep.run.indexOf("swift build failed"),
     );
+  });
+
+  it("serializes macOS Swift tests only on hosted dispatches and retries", () => {
+    const workflow = readCiWorkflow();
+    const macosSwift = workflow.jobs["macos-swift"];
+    const testStep = macosSwift.steps.find((step: WorkflowStep) => step.name === "Swift test");
+
+    expect(macosSwift.env.SWIFT_TEST_EXECUTION).toBe(
+      "${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}",
+    );
+    expect(testStep.run).toContain(
+      "swift_test_args=(--package-path apps/macos --enable-code-coverage)",
+    );
+    expect(testStep.run).toContain('if [[ "$SWIFT_TEST_EXECUTION" == "parallel" ]]');
+    expect(testStep.run).toContain("swift_test_args+=(--parallel)");
+    expect(testStep.run).toContain('swift test "${swift_test_args[@]}"');
+    expect(testStep.run).not.toContain(
+      "swift test --package-path apps/macos --parallel --enable-code-coverage",
+    );
+    expect(testStep.run).toContain("for attempt in 1 2 3");
   });
 
   it("bounds the Windows Crabbox hydrate main fetch", () => {
@@ -4385,8 +4467,36 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(localeJob.needs).toEqual(["preflight"]);
     expect(localeJob.if).toBe("needs.preflight.outputs.run_control_ui_i18n == 'true'");
     expect(localeJob["continue-on-error"]).toBeUndefined();
+    expect(localeJob.env.COMPATIBILITY_TARGET).toBe(
+      "${{ needs.preflight.outputs.compatibility_target }}",
+    );
     expect(sourceStep["continue-on-error"]).toBeUndefined();
-    expect(sourceStep.run).toBe("pnpm ui:i18n:verify");
+    const compatibilityWithoutVerify = runControlUiI18nSourceFixture({
+      compatibilityTarget: true,
+      hasVerifyScript: false,
+    });
+    expect(compatibilityWithoutVerify.status, compatibilityWithoutVerify.output).toBe(0);
+    expect(compatibilityWithoutVerify.calls).toEqual([]);
+    expect(compatibilityWithoutVerify.summary).toContain(
+      "Skipping ui:i18n:verify: unavailable on the selected compatibility target.",
+    );
+
+    const currentWithoutVerify = runControlUiI18nSourceFixture({
+      compatibilityTarget: false,
+      hasVerifyScript: false,
+    });
+    expect(currentWithoutVerify.status).toBe(1);
+    expect(currentWithoutVerify.calls).toEqual([]);
+    expect(currentWithoutVerify.output).toContain(
+      "ui:i18n:verify is required for non-compatibility targets.",
+    );
+
+    const currentWithVerify = runControlUiI18nSourceFixture({
+      compatibilityTarget: false,
+      hasVerifyScript: true,
+    });
+    expect(currentWithVerify.status, currentWithVerify.output).toBe(0);
+    expect(currentWithVerify.calls).toEqual(["ui:i18n:verify"]);
     expect(localeStep["continue-on-error"]).toBe(
       "${{ needs.preflight.outputs.strict_control_ui_i18n != 'true' }}",
     );
@@ -4762,9 +4872,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile).not.toHaveProperty("options");
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile.default).toBe("all");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs.qa_profile.type).toBe("string");
-    expect(qaRunJob["timeout-minutes"]).toBe(60);
+    expect(qaRunJob["timeout-minutes"]).toBe(90);
     const validateProfileStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Validate QA profile input",
+    );
+    expect(validateProfileStep.run).toContain(
+      "readQaScorecardTaxonomyReport(readQaScenarioPack().scenarios)",
     );
     expect(validateProfileStep.run).toContain(
       "taxonomy.profiles.find((entry) => entry.id === requested)",

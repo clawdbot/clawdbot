@@ -376,6 +376,8 @@ export async function monitorLineProvider(
           if (body.events && body.events.length > 0) {
             logVerbose(`line: received ${body.events.length} webhook events`);
             await match.target.bot.handleWebhook(body);
+            // Only a committed event is adopted; signed LINE verification pings must stay unmarked.
+            res.setHeader("x-openclaw-delivery-accepted", "durable");
           }
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/json");

@@ -132,7 +132,7 @@ enum GatewayEnvironment {
         Semver.parse(versionString)
     }
 
-    static func check() -> GatewayEnvironmentStatus {
+    static func check() async -> GatewayEnvironmentStatus {
         let start = Date()
         defer {
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
@@ -148,7 +148,7 @@ enum GatewayEnvironment {
         let projectRoot = CommandResolver.projectRoot()
         let projectEntrypoint = CommandResolver.gatewayEntrypoint(in: projectRoot)
 
-        switch RuntimeLocator.resolve(searchPaths: CommandResolver.preferredPaths()) {
+        switch await RuntimeLocator.resolve(searchPaths: CommandResolver.preferredPaths()) {
         case let .failure(err):
             return GatewayEnvironmentStatus(
                 kind: .missingNode,
@@ -168,8 +168,9 @@ enum GatewayEnvironment {
                     message: "openclaw CLI not found in PATH; install the CLI.")
             }
 
-            let installedRaw = gatewayBin.flatMap { self.readGatewayVersion(binary: $0) }
-                ?? self.readLocalGatewayVersion(projectRoot: projectRoot)
+            let installedRaw = await self.installedGatewayVersion(
+                gatewayBin: gatewayBin,
+                projectRoot: projectRoot)
             let installed = Semver.parse(installedRaw)
 
             if let expected, let installedRaw, installed != nil,
@@ -205,7 +206,7 @@ enum GatewayEnvironment {
         }
     }
 
-    static func resolveGatewayCommand() -> GatewayCommandResolution {
+    static func resolveGatewayCommand() async -> GatewayCommandResolution {
         let start = Date()
         defer {
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
@@ -217,9 +218,9 @@ enum GatewayEnvironment {
         }
         let projectRoot = CommandResolver.projectRoot()
         let projectEntrypoint = CommandResolver.gatewayEntrypoint(in: projectRoot)
-        let status = self.check()
+        let status = await self.check()
         let gatewayBin = CommandResolver.openclawExecutable()
-        let runtime = RuntimeLocator.resolve(searchPaths: CommandResolver.preferredPaths())
+        let runtime = await RuntimeLocator.resolve(searchPaths: CommandResolver.preferredPaths())
 
         guard case .ok = status.kind else {
             return GatewayCommandResolution(status: status, command: nil)
@@ -284,18 +285,21 @@ enum GatewayEnvironment {
         return normalized
     }
 
-    private static func readGatewayVersion(binary: String) -> String? {
-        let start = Date()
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: binary)
-        process.arguments = ["--version"]
-        process.environment = ["PATH": CommandResolver.preferredPaths().joined(separator: ":")]
+    static func installedGatewayVersion(gatewayBin: String?, projectRoot: URL) async -> String? {
+        if let gatewayBin, let version = await self.readGatewayVersion(binary: gatewayBin) {
+            return version
+        }
+        return self.readLocalGatewayVersion(projectRoot: projectRoot)
+    }
 
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
+    private static func readGatewayVersion(binary: String) async -> String? {
+        let start = Date()
         do {
-            let data = try process.runAndReadToEnd(from: pipe)
+            let result = try await BoundedProcess.run(
+                path: binary,
+                arguments: ["--version"],
+                environment: ["PATH": CommandResolver.preferredPaths().joined(separator: ":")],
+                timeout: 2)
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             if elapsedMs > 500 {
                 self.logger.warning(
@@ -310,7 +314,7 @@ enum GatewayEnvironment {
                     bin=\(binary, privacy: .public)
                     """)
             }
-            let raw = String(data: data, encoding: .utf8)
+            let raw = String(data: result.output, encoding: .utf8)
             guard let normalized = self.normalizeGatewayVersionOutput(raw),
                   Semver.parse(normalized) != nil
             else { return nil }

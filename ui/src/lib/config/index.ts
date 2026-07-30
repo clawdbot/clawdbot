@@ -17,6 +17,18 @@ import { createAppliedConfigRefreshController } from "./applied-refresh.ts";
 
 export type ConfigAutoSaveStatus = "idle" | "saving" | "saved" | "error" | "conflict";
 
+type RuntimeConfigExternalMutationResult<T> =
+  | {
+      ok: true;
+      value: T;
+      refresh: { ok: true } | { ok: false; error: string };
+    }
+  | {
+      ok: false;
+      reason: "conflict" | "error" | "suspended" | "unavailable";
+      error: string;
+    };
+
 /** Debounce window between the last form edit and its automatic config.set. */
 const CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS = 800;
 
@@ -109,6 +121,14 @@ export type RuntimeConfigCapability = {
   stageDefaultAgent: (agentId: string) => boolean;
   patch: (options: ConfigPatchOptions) => Promise<boolean>;
   patchFromSnapshot: (build: ConfigPatchBuilder) => Promise<boolean>;
+  /**
+   * Serializes a config-writing RPC behind this capability's pending draft,
+   * then refreshes the authoritative snapshot before resolving.
+   */
+  runExternalMutation: <T>(
+    task: (client: GatewayBrowserClient) => Promise<T>,
+    options?: { waitForWritesResumed?: boolean },
+  ) => Promise<RuntimeConfigExternalMutationResult<T>>;
   lookupSchemaPath: (path: string) => Promise<unknown>;
   subscribe: (listener: (state: ConfigState) => void) => () => void;
   dispose: () => void;
@@ -127,6 +147,11 @@ type ConfigPatchOptions = {
 
 type ConfigPatchBuildResult = { options: ConfigPatchOptions } | { error: string };
 type ConfigPatchBuilder = (config: Readonly<Record<string, unknown>>) => ConfigPatchBuildResult;
+type ConfigPatchAck = {
+  config?: unknown;
+  hash?: unknown;
+  noop?: boolean;
+};
 
 type ConfigGatewayClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
@@ -135,18 +160,6 @@ type ConfigGatewayClient = {
 type ConfigConnectionState = {
   client: ConfigGatewayClient | null;
   connected: boolean;
-};
-
-type ConfigGatewayState = Pick<
-  ConfigState,
-  | "connected"
-  | "applySessionKey"
-  | "configNeedsApply"
-  | "configSnapshot"
-  | "lastError"
-  | "chatError"
-> & {
-  client: ConfigGatewayClient | null;
 };
 
 function createInitialConfigState(snapshot?: Partial<RuntimeConfigGatewaySnapshot>): ConfigState {
@@ -842,15 +855,17 @@ async function applyConfig(state: ConfigState): Promise<boolean> {
 }
 
 async function patchConfig(
-  state: ConfigGatewayState,
+  state: ConfigState,
   options: ConfigPatchOptions,
+  onAck?: (ack: ConfigPatchAck, snapshotAtDispatch: ConfigSnapshot) => Promise<void> | void,
 ): Promise<boolean> {
   const client = state.client;
-  if (!client || !state.connected) {
+  const currentSnapshot = state.configSnapshot;
+  if (!client || !state.connected || !currentSnapshot) {
     return false;
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);
-  const baseHash = state.configSnapshot?.hash;
+  const baseHash = currentSnapshot.hash;
   if (!baseHash) {
     state.lastError = "Config hash missing; refresh and retry.";
     return false;
@@ -858,7 +873,7 @@ async function patchConfig(
   state.lastError = null;
   state.chatError = null;
   try {
-    const ack = await client.request<{ noop?: boolean }>("config.patch", {
+    const ack = await client.request<ConfigPatchAck>("config.patch", {
       baseHash,
       raw: typeof options.raw === "string" ? options.raw : JSON.stringify(options.raw),
       sessionKey: state.applySessionKey,
@@ -868,7 +883,17 @@ async function patchConfig(
     if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
       return false;
     }
-    if (ack.noop !== true) {
+    const committed = ack.noop !== true;
+    if (committed) {
+      // The patch is committed once the gateway acknowledges it. Preserve
+      // that fact even if a legacy hash-only ack requires a fallible refresh.
+      state.configNeedsApply = true;
+    }
+    await onAck?.(ack, currentSnapshot);
+    if (committed) {
+      // A successful acknowledgement refresh may publish the previous
+      // applied revision. Keep the existing immediate apply-needed signal;
+      // reconcileAppliedRefresh replaces it with authoritative process truth.
       state.configNeedsApply = true;
     }
     return true;
@@ -878,6 +903,33 @@ async function patchConfig(
     }
     return false;
   }
+}
+
+function adoptConfigPatchAck(
+  state: ConfigState,
+  ack: ConfigPatchAck,
+  snapshotAtDispatch: ConfigSnapshot,
+) {
+  const ackConfig = asConfigRecord(ack.config);
+  const ackHash = readAckHash(ack);
+  if (!ackConfig) {
+    return;
+  }
+  const currentSnapshot = state.configSnapshot ?? snapshotAtDispatch;
+  const raw =
+    ack.noop === true
+      ? (currentSnapshot.raw ?? state.configRaw)
+      : ackConfig
+        ? serializeConfigForm(ackConfig)
+        : (currentSnapshot.raw ?? state.configRaw);
+  applyConfigSnapshot(state, {
+    ...currentSnapshot,
+    ...(ackConfig ? { config: ackConfig, sourceConfig: ackConfig } : {}),
+    hash: ackHash ?? currentSnapshot.hash ?? null,
+    raw,
+    valid: true,
+    issues: [],
+  });
 }
 
 async function lookupConfigSchemaPath(
@@ -1236,6 +1288,8 @@ export function createRuntimeConfigCapability(
   // App-updater interlock: config writes or gateway restarts mid-update can
   // corrupt the install, so all writes pause until the updater settles.
   let writesSuspended = false;
+  let writesResumed: (() => void) | null = null;
+  let writesResumedPromise: Promise<void> = Promise.resolve();
   // Submission info of the pending manual SAVE (applies never register:
   // a post-apply write is meaningless while the gateway restarts, so the
   // teardown flush fail-closes on them).
@@ -1350,6 +1404,14 @@ export function createRuntimeConfigCapability(
       });
     autoSaveInFlight = flight;
   };
+  const flushScheduledAutoSave = () => {
+    if (!autoSaveTimer) {
+      return;
+    }
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = null;
+    runAutoSave();
+  };
   const scheduleAutoSave = () => {
     // Only form-draft edits auto-save; raw-text drafts stay manual so a
     // half-typed JSON5 buffer never gets written to disk. Suspended writes
@@ -1379,9 +1441,15 @@ export function createRuntimeConfigCapability(
   // connection epoch.
   // Drains ALL pending config writes: the autosave chain (a settling flight
   // can spawn a trailing save) AND any manual Save still in flight.
-  const drainPendingWrites = async (): Promise<void> => {
-    let flight = autoSaveInFlight ?? manualSubmitInFlight;
-    while (flight) {
+  const drainPendingWrites = async (flushScheduledDraft = false): Promise<void> => {
+    while (true) {
+      if (flushScheduledDraft) {
+        flushScheduledAutoSave();
+      }
+      const flight = autoSaveInFlight ?? manualSubmitInFlight;
+      if (!flight) {
+        return;
+      }
       // Race the connection wake: a disconnect deregisters in-flight writes,
       // and a drain already awaiting one resumes from that deregistration
       // instead of depending on the transport's close-time rejection order.
@@ -1389,8 +1457,13 @@ export function createRuntimeConfigCapability(
       if (disposed) {
         return;
       }
-      cancelScheduledAutoSave();
-      flight = autoSaveInFlight ?? manualSubmitInFlight;
+      if (!flushScheduledDraft) {
+        // save/apply submit the latest full draft themselves. Edits made
+        // while the preceding flight settled may have armed a fresh debounce;
+        // cancel it before the explicit write starts or it can race the same
+        // post-flight base hash.
+        cancelScheduledAutoSave();
+      }
     }
   };
   // Discard barrier shared by discardDraft and refresh({discardPendingChanges}):
@@ -1411,13 +1484,21 @@ export function createRuntimeConfigCapability(
   // callers queued behind the same in-flight write would otherwise both
   // finish draining and dispatch against the same base hash.
   let explicitOpQueue: Promise<unknown> | null = null;
-  const afterPendingWritesSettled = (task: () => Promise<boolean>): Promise<boolean> => {
+  const afterPendingWritesSettled = <T>(
+    task: () => Promise<T>,
+    unavailable: T,
+    options: { flushScheduledDraft?: boolean } = {},
+  ): Promise<T> => {
     if (writesSuspended) {
-      return Promise.resolve(false);
+      return Promise.resolve(unavailable);
     }
     const client = state.client;
     const connectionEpoch = currentConfigConnectionEpoch(state);
-    cancelScheduledAutoSave();
+    if (options.flushScheduledDraft) {
+      flushScheduledAutoSave();
+    } else {
+      cancelScheduledAutoSave();
+    }
     // Start synchronously when no explicit op is queued so the submit binds
     // to the CURRENT connection epoch; only genuine queuing pays the hop.
     const start = () =>
@@ -1425,20 +1506,20 @@ export function createRuntimeConfigCapability(
         // Drain before the explicit op — otherwise an apply could race a
         // pending config.set on the same base hash into a CAS failure.
         if (autoSaveInFlight ?? manualSubmitInFlight) {
-          await drainPendingWrites();
+          await drainPendingWrites(options.flushScheduledDraft);
         }
         // The updater may have started while we drained; suspension must be a
         // real barrier or an apply could restart the gateway mid-update.
         if (writesSuspended || disposed) {
-          return false;
+          return unavailable;
         }
         if (!client || !isCurrentConfigConnection(state, client, connectionEpoch)) {
-          return false;
+          return unavailable;
         }
         manualFlightInfo = null;
         const submit = task();
         const settled = submit
-          .catch(() => false)
+          .catch(() => unavailable)
           .then(() => {
             if (manualSubmitInFlight !== settled) {
               return;
@@ -1598,24 +1679,46 @@ export function createRuntimeConfigCapability(
 
   const queueConfigPatch = (resolveOptions: () => ConfigPatchBuildResult): Promise<boolean> => {
     cancelAppliedRefresh();
-    if (autoSaveTimer) {
-      cancelScheduledAutoSave();
-      runAutoSave();
-    }
-    return afterPendingWritesSettled(async () => {
-      // A drained autosave can start its own refresh while this patch waits.
-      cancelAppliedRefresh();
-      try {
-        const resolved = resolveOptions();
-        if ("error" in resolved) {
-          state.lastError = resolved.error;
-          return false;
+    return afterPendingWritesSettled(
+      async () => {
+        // A drained autosave can start its own refresh while this patch waits.
+        cancelAppliedRefresh();
+        try {
+          const resolved = resolveOptions();
+          if ("error" in resolved) {
+            state.lastError = resolved.error;
+            return false;
+          }
+          return await patchConfig(state, resolved.options, async (ack, snapshotAtDispatch) => {
+            // The ack is newer than every config.get that began before it.
+            // Detach and invalidate those loads so stale pre-patch responses
+            // cannot replace the acknowledged config/hash.
+            configLoad = null;
+            nextRequestVersion(state, "config");
+            state.configLoading = false;
+            if (asConfigRecord(ack.config)) {
+              adoptConfigPatchAck(state, ack, snapshotAtDispatch);
+              return;
+            }
+            // Older/hash-only acknowledgements do not carry enough data to
+            // pair their new hash with a safe local document. Force a fresh
+            // snapshot instead of publishing an inconsistent hash/config.
+            const refresh = run(() => loadConfig(state));
+            void trackLoad("config", refresh);
+            if (!(await refresh)) {
+              throw new Error(
+                state.lastError ??
+                  "The configuration patch completed, but its authoritative refresh failed.",
+              );
+            }
+          });
+        } finally {
+          reconcileAppliedRefresh();
         }
-        return await patchConfig(state, resolved.options);
-      } finally {
-        reconcileAppliedRefresh();
-      }
-    }).finally(() => {
+      },
+      false,
+      { flushScheduledDraft: true },
+    ).finally(() => {
       scheduleAutoSave();
     });
   };
@@ -1696,12 +1799,24 @@ export function createRuntimeConfigCapability(
       writesSuspended = suspended;
       if (suspended) {
         cancelScheduledAutoSave();
+        writesResumedPromise = new Promise((resolve) => {
+          writesResumed = resolve;
+        });
       } else {
+        const resume = writesResumed;
+        writesResumed = null;
+        resume?.();
         // Edits made during the update save once it ends.
         scheduleAutoSave();
       }
     },
-    waitForPendingWrites: () => drainPendingWrites(),
+    waitForPendingWrites: () => {
+      // A debounce timer represents pending persisted intent too. Convert it
+      // into a tracked flight before draining so external writers cannot race
+      // the draft simply because the user clicked again within 800 ms.
+      flushScheduledAutoSave();
+      return drainPendingWrites(true);
+    },
     save: () =>
       afterPendingWritesSettled(async () => {
         cancelAppliedRefresh();
@@ -1712,7 +1827,7 @@ export function createRuntimeConfigCapability(
         } finally {
           reconcileAppliedRefresh();
         }
-      }),
+      }, false),
     apply: () =>
       afterPendingWritesSettled(async () => {
         cancelAppliedRefresh();
@@ -1731,7 +1846,7 @@ export function createRuntimeConfigCapability(
         } finally {
           reconcileAppliedRefresh();
         }
-      }),
+      }, false),
     openFile: () => run(() => openConfigFile(state)),
     ensureAgentEntry: (agentId) => {
       const index = ensureAgentConfigEntry(state, agentId);
@@ -1758,6 +1873,120 @@ export function createRuntimeConfigCapability(
           ? build(config)
           : { error: "Configuration is unavailable; refresh and try again." };
       }),
+    runExternalMutation: async <T>(
+      task: (client: GatewayBrowserClient) => Promise<T>,
+      options: { waitForWritesResumed?: boolean } = {},
+    ): Promise<RuntimeConfigExternalMutationResult<T>> => {
+      const mutationClient = state.client;
+      const mutationConnectionEpoch = currentConfigConnectionEpoch(state);
+      while (true) {
+        if (options.waitForWritesResumed && writesSuspended && !disposed) {
+          await writesResumedPromise;
+        }
+        const unavailable: RuntimeConfigExternalMutationResult<T> = {
+          ok: false,
+          reason: writesSuspended ? "suspended" : "unavailable",
+          error: writesSuspended
+            ? "Configuration writes are temporarily suspended."
+            : "Configuration is unavailable; reconnect and try again.",
+        };
+        if (
+          !mutationClient ||
+          !isCurrentConfigConnection(state, mutationClient, mutationConnectionEpoch)
+        ) {
+          return {
+            ok: false,
+            reason: "unavailable",
+            error: "Connection changed before the configuration update started.",
+          };
+        }
+        const result = await afterPendingWritesSettled<RuntimeConfigExternalMutationResult<T>>(
+          async (): Promise<RuntimeConfigExternalMutationResult<T>> => {
+            if (!isCurrentConfigConnection(state, mutationClient, mutationConnectionEpoch)) {
+              return unavailable;
+            }
+            let value: T;
+            try {
+              value = await task(mutationClient);
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              if (!isCurrentConfigConnection(state, mutationClient, mutationConnectionEpoch)) {
+                return {
+                  ok: false,
+                  reason: "unavailable",
+                  error: "Connection changed before the configuration update completed.",
+                };
+              }
+              return {
+                ok: false,
+                reason: isConfigBaseHashConflictError(error) ? "conflict" : "error",
+                error: message,
+              };
+            }
+            if (!isCurrentConfigConnection(state, mutationClient, mutationConnectionEpoch)) {
+              return {
+                ok: true,
+                value,
+                refresh: {
+                  ok: false,
+                  error: "Connection changed before the configuration update was refreshed.",
+                },
+              };
+            }
+            try {
+              // Do not join an older config.get that started before the external
+              // RPC. Start a fresh versioned load so only post-mutation state can
+              // satisfy this method's authoritative-refresh contract.
+              const refresh = run(() => loadConfig(state));
+              void trackLoad("config", refresh);
+              const refreshed = await refresh;
+              if (!isCurrentConfigConnection(state, mutationClient, mutationConnectionEpoch)) {
+                return {
+                  ok: true,
+                  value,
+                  refresh: {
+                    ok: false,
+                    error: "Connection changed before the configuration update was refreshed.",
+                  },
+                };
+              }
+              if (!refreshed) {
+                return {
+                  ok: true,
+                  value,
+                  refresh: {
+                    ok: false,
+                    error:
+                      state.lastError ??
+                      "The configuration update completed, but its authoritative refresh failed.",
+                  },
+                };
+              }
+              return { ok: true, value, refresh: { ok: true } };
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              return {
+                ok: true,
+                value,
+                refresh: { ok: false, error: message },
+              };
+            }
+          },
+          unavailable,
+          { flushScheduledDraft: true },
+        );
+        if (
+          !(
+            options.waitForWritesResumed &&
+            !disposed &&
+            !result.ok &&
+            (result.reason === "suspended" || writesSuspended)
+          )
+        ) {
+          return result;
+        }
+      }
+    },
     lookupSchemaPath: (path) => run(() => lookupConfigSchemaPath(state, path)),
     subscribe(listener) {
       listeners.add(listener);
@@ -1765,6 +1994,8 @@ export function createRuntimeConfigCapability(
     },
     dispose() {
       disposed = true;
+      writesResumed?.();
+      writesResumed = null;
       // Free any drain awaiting a flight that will never be reconciled now;
       // the disposed guard exits its loop.
       connectionWake?.();

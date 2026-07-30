@@ -90,6 +90,7 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
         getHealthCache: context.getHealthCache,
         refreshHealthSnapshot: context.refreshHealthSnapshot,
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+        loadGatewayModelCatalogSnapshot: context.loadGatewayModelCatalogSnapshot,
         authorizeNodeSystemRunEvent: (eventParams) =>
           context.nodeRegistry.authorizeSystemRunEvent({
             nodeId: eventParams.nodeId,

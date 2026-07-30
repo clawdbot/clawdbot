@@ -1,6 +1,7 @@
 // Coverage for the overflow compaction retry loop in runEmbeddedAgent.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage } from "../../llm/types.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import {
   makeAttemptResult,
   makeCompactionSuccess,
@@ -128,6 +129,20 @@ describe("overflow compaction in run loop", () => {
     expectLogIncludes(mockedLog.info, "auto-compaction succeeded");
     // Should not be an error result
     expect(result.meta.error).toBeUndefined();
+  });
+
+  it("preserves a caller-owned session manager across retry attempts", async () => {
+    const sessionManager = SessionManager.inMemory();
+    mockOverflowRetrySuccess({
+      runEmbeddedAttempt: mockedRunEmbeddedAttempt,
+      compactDirect: mockedCompactDirect,
+    });
+
+    await runEmbeddedAgent({ ...baseParams, sessionManager });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(requireMockCallArg(mockedRunEmbeddedAttempt, 0).sessionManager).toBe(sessionManager);
+    expect(requireMockCallArg(mockedRunEmbeddedAttempt, 1).sessionManager).toBe(sessionManager);
   });
 
   it("uses the canonical assistant classifier when the legacy text heuristic misses", async () => {

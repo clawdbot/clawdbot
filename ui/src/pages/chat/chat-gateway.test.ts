@@ -2251,28 +2251,23 @@ describe("authoritative terminal history identity", () => {
       runIdBeforeApply: "run-1",
     });
 
-    const currentMessages = [liveTerminal];
     const previousMessages = [liveTerminal];
     const collided = reconcileAuthoritativeTerminalHistory({
-      currentMessages,
       host,
       previousMessages,
       sessionKey: "main",
       visibleMessages: [collision],
     });
-    expect(collided.currentMessages).toEqual(currentMessages);
-    expect(collided.previousMessages).toEqual(previousMessages);
+    expect(collided).toEqual(previousMessages);
     expect(authoritativeHistoryAppliedForRun(host, "run-1")).toBe(false);
 
     const persisted = reconcileAuthoritativeTerminalHistory({
-      currentMessages,
       host,
       previousMessages,
       sessionKey: "main",
       visibleMessages: [collision, nativeTerminal],
     });
-    expect(persisted.currentMessages).toEqual([]);
-    expect(persisted.previousMessages).toEqual([]);
+    expect(persisted).toEqual([]);
     expect(authoritativeHistoryAppliedForRun(host, "run-1")).toBe(true);
   });
 });

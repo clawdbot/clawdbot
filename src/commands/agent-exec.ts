@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
+import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { mergeDeep } from "../infra/deep-merge.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { writeRuntimeJson, writeRuntimeStdout, type RuntimeEnv } from "../runtime.js";
@@ -19,9 +21,13 @@ export type AgentExecCliOptions = {
   messageFile?: string;
   cwd?: string;
   stateDir?: string;
+  config?: string;
+  isolated?: boolean;
   model?: string;
   thinking?: string;
   fallback?: string[];
+  codeMode?: "direct" | "auto" | "code";
+  localModelLean?: boolean;
   authEnvOnly?: boolean;
   timeout?: string;
   json?: boolean;
@@ -55,6 +61,7 @@ export type AgentExecEnvelope = {
   codeModeEngaged?: boolean;
   assistantTurns?: number;
   bridgeCalls?: NonNullable<NonNullable<EmbeddedAgentRunMeta["agentMeta"]>["bridgeCalls"]>;
+  toolSummary?: NonNullable<EmbeddedAgentRunMeta["toolSummary"]>;
   model: string | null;
   provider: string | null;
   sessionId: string;
@@ -239,6 +246,7 @@ export function classifyAgentExecResult(
       ? { assistantTurns: agentMeta.assistantTurns }
       : {}),
     ...(agentMeta?.bridgeCalls ? { bridgeCalls: agentMeta.bridgeCalls } : {}),
+    ...(meta.toolSummary ? { toolSummary: meta.toolSummary } : {}),
     model: agentMeta?.model ?? null,
     provider: agentMeta?.provider ?? null,
     sessionId: agentMeta?.sessionId ?? "",
@@ -250,22 +258,163 @@ function exitCodeForEnvelope(envelope: AgentExecEnvelope): 0 | 1 | 2 {
   return envelope.status === "ok" ? 0 : envelope.status === "timeout" ? 2 : 1;
 }
 
-function buildImplicitConfig(cwd: string): OpenClawConfig {
+function normalizeCodeMode(
+  value: AgentExecCliOptions["codeMode"],
+): false | "auto" | true | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === "direct") {
+    return false;
+  }
+  if (value === "auto") {
+    return "auto";
+  }
+  if (value === "code") {
+    return true;
+  }
+  throw new Error("--code-mode must be one of direct, auto, code.");
+}
+
+/**
+ * Facts owned by this invocation rather than by any config, so they win over
+ * both the ambient config and `--config`: exec is always scoped to the folder
+ * it was pointed at, a one-shot turn never bootstraps, and explicit flags
+ * outrank whatever the resolved config says.
+ */
+/**
+ * Drops inherited per-agent location overrides, which outrank the facts this
+ * invocation owns. `agentDir` beats the state dir for session and transcript
+ * storage, so an ephemeral run would write state into the operator's persistent
+ * agent directory where deleting the temp state dir cannot reach it; a native
+ * harness `runtime.acp.cwd` beats `--cwd`, so the turn could edit the wrong
+ * repository. `agents.bindings[].acp.cwd` needs no equivalent because exec runs
+ * no channel, so no binding matches.
+ */
+function stripInheritedAgentLocations(base: OpenClawConfig): OpenClawConfig {
+  const entries = base.agents?.entries;
+  if (!entries) {
+    return base;
+  }
   return {
-    env: { shellEnv: { enabled: false } },
+    ...base,
+    agents: {
+      ...base.agents,
+      entries: Object.fromEntries(
+        Object.entries(entries).map(([id, entry]) => {
+          const { agentDir: _agentDir, runtime, ...rest } = entry;
+          if (runtime?.type !== "acp" || runtime.acp?.cwd === undefined) {
+            return [id, { ...rest, ...(runtime ? { runtime } : {}) }];
+          }
+          const { cwd: _cwd, ...acp } = runtime.acp;
+          return [id, { ...rest, runtime: { ...runtime, acp } }];
+        }),
+      ),
+    },
+  } as OpenClawConfig;
+}
+
+function buildExecRunOverlay(params: {
+  base: OpenClawConfig;
+  cwd: string;
+  opts: Pick<AgentExecCliOptions, "codeMode" | "localModelLean">;
+}): OpenClawConfig {
+  const codeMode = normalizeCodeMode(params.opts.codeMode);
+  // A per-agent `workspace` outranks `agents.defaults`, so pinning only the
+  // defaults would let an inherited entry silently run the turn against a
+  // different repository. Override every configured entry as well.
+  const entries = Object.keys(params.base.agents?.entries ?? {});
+  return {
     agents: {
       defaults: {
-        workspace: cwd,
+        workspace: params.cwd,
         skipBootstrap: true,
-        sandbox: { mode: "off" },
+        ...(params.opts.localModelLean ? { experimental: { localModelLean: true } } : {}),
       },
+      ...(entries.length > 0
+        ? { entries: Object.fromEntries(entries.map((id) => [id, { workspace: params.cwd }])) }
+        : {}),
     },
+    ...(codeMode !== undefined ? { tools: { codeMode } } : {}),
+  } as OpenClawConfig;
+}
+
+/**
+ * Coding one-shot defaults. These merge *under* the resolved config so an
+ * operator who configured a tool profile, shell env, or sandbox keeps it;
+ * notably exec must never downgrade a configured sandbox to `off`.
+ */
+function buildExecConfigDefaults(): OpenClawConfig {
+  return {
+    env: { shellEnv: { enabled: false } },
+    agents: { defaults: { sandbox: { mode: "off" } } },
     tools: {
       profile: "coding",
       fs: { workspaceOnly: true },
-      exec: { host: "gateway", mode: "full" },
+      // No `exec.host`: the default `auto` already resolves to the gateway when
+      // no sandbox is configured, and pinning `gateway` here would route
+      // commands back onto the host for an inherited config that enables one.
+      // `mode: "full"` stays because a headless one-shot has no approval channel.
+      exec: { mode: "full" },
     },
   };
+}
+
+/**
+ * Resolves the config exec runs against. Default is the ambient config, so a
+ * one-shot turn behaves like other folder-scoped coding CLIs and can reach
+ * configured providers, credentials, and `agentRuntime` harness choices.
+ *
+ * `--auth-env-only` opts out of that inheritance entirely rather than trying to
+ * launder the resolved config. A config is a credential store by design -- API
+ * keys, secret headers, request auth, an inline `env` block, and login-shell
+ * import all feed provider auth -- so the only closed way to promise
+ * environment-only credentials is to not read it.
+ */
+export async function resolveExecBaseConfig(
+  opts: Pick<AgentExecCliOptions, "authEnvOnly" | "config" | "isolated">,
+): Promise<OpenClawConfig> {
+  // `--isolated` and `--auth-env-only` both mean "read no config", so pairing
+  // either with `--config` is a contradiction. Failing beats silently ignoring
+  // the pinned file, which would run a CI invocation on bare exec defaults.
+  if (opts.config && (opts.isolated || opts.authEnvOnly === true)) {
+    const conflicting = opts.isolated ? "--isolated" : "--auth-env-only";
+    throw new Error(`--config cannot be combined with ${conflicting}.`);
+  }
+  if (opts.isolated || opts.authEnvOnly === true) {
+    return {};
+  }
+  const { createConfigIO, getRuntimeConfig } = await import("../config/io.js");
+  if (!opts.config) {
+    // Ambient means "whatever this process considers effective", so this honors a
+    // runtime snapshot an in-process caller already published and otherwise loads
+    // the ordinary config file exactly as any other command does.
+    return getRuntimeConfig();
+  }
+  // `--config` pins an exact file. The factory loader reads that file directly --
+  // unlike the module-level loader it never resolves from a published runtime
+  // snapshot, so a pinned run cannot be shadowed by one. It throws on a config
+  // that exists but is invalid, so the run cannot silently degrade to exec
+  // defaults, and it finalizes the load (config `env` block, shell-env fallback).
+  const io = createConfigIO({ configPath: path.resolve(opts.config) });
+  if (!existsSync(io.configPath)) {
+    throw new Error(`--config file not found: ${io.configPath}`);
+  }
+  return io.loadConfig();
+}
+
+export function buildExecRunConfig(params: {
+  base: OpenClawConfig;
+  cwd: string;
+  opts?: Pick<AgentExecCliOptions, "codeMode" | "localModelLean">;
+}): OpenClawConfig {
+  const opts = params.opts ?? {};
+  const base = stripInheritedAgentLocations(params.base);
+  const withDefaults = mergeDeep(buildExecConfigDefaults(), base) as OpenClawConfig;
+  return mergeDeep(
+    withDefaults,
+    buildExecRunOverlay({ base, cwd: params.cwd, opts }),
+  ) as OpenClawConfig;
 }
 
 function normalizeTimeoutSeconds(value: string | undefined): string {
@@ -298,16 +447,15 @@ async function requireDirectory(value: string, label: string): Promise<string> {
   return resolved;
 }
 
-function setAgentExecEnvironment(params: {
-  stateDir: string;
-  configPath: string;
-  cwd: string;
-}): () => void {
+function setAgentExecEnvironment(params: { stateDir: string; cwd: string }): () => void {
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  // Repointing the state dir would otherwise make the config resolve relative to
+  // it (see `resolveConfigDir`), so clear any inherited path override and let the
+  // published runtime snapshot own config for this run.
   const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
   const previousWorkspaceDir = process.env.OPENCLAW_WORKSPACE_DIR;
   process.env.OPENCLAW_STATE_DIR = params.stateDir;
-  process.env.OPENCLAW_CONFIG_PATH = params.configPath;
+  delete process.env.OPENCLAW_CONFIG_PATH;
   process.env.OPENCLAW_WORKSPACE_DIR = params.cwd;
   return () => {
     if (previousStateDir === undefined) {
@@ -329,6 +477,9 @@ function setAgentExecEnvironment(params: {
 }
 
 function isStructuredTimeoutError(error: unknown): boolean {
+  if (findAgentRunTerminalOutcome(error)?.status === "timeout") {
+    return true;
+  }
   let candidate = error;
   for (let depth = 0; depth < 4; depth += 1) {
     if (!candidate || typeof candidate !== "object") {
@@ -393,8 +544,10 @@ export async function agentExecCommand(
 ): Promise<AgentExecCommandResult> {
   const sessionId = randomUUID();
   let commandResult: AgentExecCommandResult;
-  let cleanupRoot: string | undefined;
+  let temporaryStateDir: string | undefined;
   let restoreEnvironment: (() => void) | undefined;
+  let restoreConfigEnvironment: (() => void) | undefined;
+  let restoreRuntimeConfigSnapshot: (() => void) | undefined;
   let runtimePaths: typeof import("../config/paths.js") | undefined;
   let configIo: typeof import("../config/io.js") | undefined;
   try {
@@ -407,27 +560,61 @@ export async function agentExecCommand(
     const stateDir = opts.stateDir
       ? await requireDirectory(opts.stateDir, "State directory")
       : await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-exec-"));
-    cleanupRoot = opts.stateDir
-      ? await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-exec-config-"))
-      : stateDir;
-    const configPath = path.join(cleanupRoot, "openclaw.json");
-    await fs.writeFile(configPath, `${JSON.stringify(buildImplicitConfig(cwd), null, 2)}\n`, {
-      encoding: "utf8",
-      flag: "wx",
-      mode: 0o600,
-    });
+    // Only a state dir this command created is removed; `--state-dir` is the
+    // caller's and is left alone.
+    temporaryStateDir = opts.stateDir ? undefined : stateDir;
+    configIo = await import("../config/io.js");
+    // Both process globals are captured before the config is resolved: an ambient
+    // load publishes a runtime snapshot of its own, so reading "previous" after it
+    // would record exec's snapshot as the caller's.
+    const previousRuntimeConfigSnapshot = configIo.getRuntimeConfigSnapshot();
+    const snapshotIo = configIo;
+    restoreRuntimeConfigSnapshot = () => {
+      if (previousRuntimeConfigSnapshot) {
+        snapshotIo.setRuntimeConfigSnapshot(previousRuntimeConfigSnapshot);
+      } else {
+        snapshotIo.clearRuntimeConfigSnapshot();
+      }
+    };
+    // Resolve the config before the environment repoints the state dir, so the
+    // ordinary config location still applies. A successful load finalizes the
+    // config's `env` block and login-shell import against `process.env`, so undo
+    // exactly those mutations on the way out: otherwise an in-process caller's
+    // later isolated run would inherit provider keys from this one. A failed load
+    // needs no handling here -- the loader applies env vars as its last step and
+    // restores them from its own catch.
+    const { restoreEnvChangesIfUnchanged, snapshotEnv } = configIo;
+    const envBeforeConfigLoad = snapshotEnv(process.env);
+    const baseConfig = await resolveExecBaseConfig(opts);
+    const envAfterConfigLoad = snapshotEnv(process.env);
+    restoreConfigEnvironment = () =>
+      restoreEnvChangesIfUnchanged({
+        env: process.env,
+        before: envBeforeConfigLoad,
+        after: envAfterConfigLoad,
+      });
+    const runConfig = buildExecRunConfig({ base: baseConfig, cwd, opts });
     const timeout = normalizeTimeoutSeconds(opts.timeout);
     const fallbacks = normalizeFallbacks(opts.model, opts.fallback);
     const { resolveDefaultAgentDir } = await import("../agents/agent-scope-config.js");
-    const storedAuthAgentDir = resolveDefaultAgentDir({});
-    restoreEnvironment = setAgentExecEnvironment({ stateDir, configPath, cwd });
-    [runtimePaths, configIo] = await Promise.all([
-      import("../config/paths.js"),
-      import("../config/io.js"),
-    ]);
-    configIo.clearConfigCache();
-    configIo.clearRuntimeConfigSnapshot();
+    // Resolve from the inherited config, not `{}`: the default agent may declare
+    // its own `agentDir`, and that is where its stored auth profiles live. This
+    // reads `baseConfig` rather than `runConfig` because the run config
+    // deliberately strips agent directories to keep run state ephemeral, while
+    // credential ownership must still follow the operator's configuration.
+    // Computed before the environment repoints the state dir so the unconfigured
+    // case still resolves against the real one.
+    const storedAuthAgentDir = resolveDefaultAgentDir(baseConfig);
+    restoreEnvironment = setAgentExecEnvironment({ stateDir, cwd });
+    runtimePaths = await import("../config/paths.js");
     runtimePaths.pinRuntimePaths();
+    // The runtime snapshot is the only in-process config cache (`clearConfigCache`
+    // is a no-op shim), so publishing the composed config here is what makes the
+    // run use it. Serializing it to a temporary file and repointing
+    // OPENCLAW_CONFIG_PATH would only feed this same snapshot, while writing
+    // env-substituted provider keys to disk where the run's own exec tool
+    // could read them.
+    snapshotIo.setRuntimeConfigSnapshot(runConfig);
     const [
       { withAuthProfileStoreAgentDir, withEnvOnlyAuthProfileStore },
       { withHostExecInheritedEnvOmitted },
@@ -471,10 +658,13 @@ export async function agentExecCommand(
         },
         silentRuntime,
       );
+    // Stored credentials are the default so a folder-scoped run reaches the
+    // same logins as the rest of the CLI; `--auth-env-only` opts back into an
+    // environment-only scope for automation.
     const runWithAuthScope = () =>
-      opts.authEnvOnly === false
-        ? withAuthProfileStoreAgentDir(storedAuthAgentDir, invoke)
-        : withEnvOnlyAuthProfileStore(invoke);
+      opts.authEnvOnly === true
+        ? withEnvOnlyAuthProfileStore(invoke)
+        : withAuthProfileStoreAgentDir(storedAuthAgentDir, invoke);
     const result = await withHostExecInheritedEnvOmitted(
       listKnownProviderAuthEnvVarNames({ env: process.env }),
       runWithAuthScope,
@@ -501,12 +691,17 @@ export async function agentExecCommand(
     }
   };
   runCleanupStep(() => restoreEnvironment?.());
+  runCleanupStep(() => restoreConfigEnvironment?.());
   runCleanupStep(() => configIo?.clearConfigCache());
-  runCleanupStep(() => configIo?.clearRuntimeConfigSnapshot());
+  runCleanupStep(() =>
+    restoreRuntimeConfigSnapshot
+      ? restoreRuntimeConfigSnapshot()
+      : configIo?.clearRuntimeConfigSnapshot(),
+  );
   runCleanupStep(() => runtimePaths?.pinRuntimePaths());
-  if (cleanupRoot) {
+  if (temporaryStateDir) {
     try {
-      await fs.rm(cleanupRoot, { recursive: true, force: true });
+      await fs.rm(temporaryStateDir, { recursive: true, force: true });
     } catch (error) {
       cleanupError ??= error;
     }

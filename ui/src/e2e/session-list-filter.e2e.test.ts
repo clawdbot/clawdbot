@@ -131,7 +131,6 @@ describeControlUiE2e("Control UI session-list event scope", () => {
       ],
       ts: 1,
     };
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;

@@ -110,6 +110,34 @@ function requireFetchInitCall(index: number): {
   };
 }
 
+function mockXaiVideoRequest(requestId: string) {
+  postJsonRequestMock.mockResolvedValue({
+    response: { json: async () => ({ request_id: requestId }) },
+    release: vi.fn(async () => {}),
+  });
+}
+
+function mockXaiVideoTask(params: {
+  requestId: string;
+  videoUrl: string;
+  videoBytes: string;
+  mimeType?: string;
+}) {
+  mockXaiVideoRequest(params.requestId);
+  fetchWithTimeoutMock
+    .mockResolvedValueOnce({
+      json: async () => ({
+        request_id: params.requestId,
+        status: "done",
+        video: { url: params.videoUrl },
+      }),
+    })
+    .mockResolvedValueOnce({
+      headers: new Headers({ "content-type": params.mimeType ?? "video/mp4" }),
+      arrayBuffer: async () => Buffer.from(params.videoBytes),
+    });
+}
+
 function streamedVideoResponse(bytes: string, contentType = "video/mp4"): Response {
   return new Response(
     new ReadableStream({
@@ -316,26 +344,12 @@ describe("xai video generation provider", () => {
   });
 
   it("creates, polls, and downloads a generated video", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          request_id: "req_123",
-        }),
-      },
-      release: vi.fn(async () => {}),
+    mockXaiVideoTask({
+      requestId: "req_123",
+      videoUrl: "https://cdn.x.ai/video.mp4",
+      videoBytes: "webm-bytes",
+      mimeType: "video/webm",
     });
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
-          request_id: "req_123",
-          status: "done",
-          video: { url: "https://cdn.x.ai/video.mp4" },
-        }),
-      })
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/webm" }),
-        arrayBuffer: async () => Buffer.from("webm-bytes"),
-      });
 
     const provider = buildXaiVideoGenerationProvider();
     const result = await provider.generateVideo({
@@ -383,26 +397,11 @@ describe("xai video generation provider", () => {
       }),
       dispatcherPolicy: dispatcherPolicy as never,
     }));
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          request_id: "req_policy",
-        }),
-      },
-      release: vi.fn(async () => {}),
+    mockXaiVideoTask({
+      requestId: "req_policy",
+      videoUrl: "https://cdn.x.ai/policy.mp4",
+      videoBytes: "video-bytes",
     });
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
-          request_id: "req_policy",
-          status: "done",
-          video: { url: "https://cdn.x.ai/policy.mp4" },
-        }),
-      })
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("video-bytes"),
-      });
 
     await buildXaiVideoGenerationProvider().generateVideo({
       provider: "xai",
@@ -466,12 +465,7 @@ describe("xai video generation provider", () => {
   });
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({ request_id: "req_too_large" }),
-      },
-      release: vi.fn(async () => {}),
-    });
+    mockXaiVideoRequest("req_too_large");
     fetchWithTimeoutMock
       .mockResolvedValueOnce({
         json: async () => ({
@@ -575,12 +569,7 @@ describe("xai video generation provider", () => {
   });
 
   it("treats unknown xAI poll statuses as continue-polling and returns when terminal", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({ request_id: "req_unknown_then_done" }),
-      },
-      release: vi.fn(async () => {}),
-    });
+    mockXaiVideoRequest("req_unknown_then_done");
     fetchWithTimeoutMock
       .mockResolvedValueOnce({
         json: async () => ({
@@ -619,12 +608,7 @@ describe("xai video generation provider", () => {
   });
 
   it("treats `cancelled` as a terminal failure", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({ request_id: "req_cancelled" }),
-      },
-      release: vi.fn(async () => {}),
-    });
+    mockXaiVideoRequest("req_cancelled");
     fetchWithTimeoutMock.mockResolvedValueOnce({
       json: async () => ({
         request_id: "req_cancelled",
@@ -644,12 +628,7 @@ describe("xai video generation provider", () => {
   });
 
   it("rejects completed xAI poll responses without output URLs as malformed", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({ request_id: "req_no_video" }),
-      },
-      release: vi.fn(async () => {}),
-    });
+    mockXaiVideoRequest("req_no_video");
     fetchWithTimeoutMock.mockResolvedValueOnce({
       json: async () => ({
         request_id: "req_no_video",
@@ -670,14 +649,7 @@ describe("xai video generation provider", () => {
   });
 
   it("normalizes the xAI 'pending' poll status to 'processing' and keeps polling until done", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          request_id: "req_pending",
-        }),
-      },
-      release: vi.fn(async () => {}),
-    });
+    mockXaiVideoRequest("req_pending");
     fetchWithTimeoutMock
       // First poll: in-progress payload mirroring xAI's real shape
       .mockResolvedValueOnce({
@@ -720,26 +692,11 @@ describe("xai video generation provider", () => {
   });
 
   it("sends a single unroled image as xAI first-frame image-to-video", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          request_id: "req_image",
-        }),
-      },
-      release: vi.fn(async () => {}),
+    mockXaiVideoTask({
+      requestId: "req_image",
+      videoUrl: "https://cdn.x.ai/image-video.mp4",
+      videoBytes: "image-video-bytes",
     });
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
-          request_id: "req_image",
-          status: "done",
-          video: { url: "https://cdn.x.ai/image-video.mp4" },
-        }),
-      })
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("image-video-bytes"),
-      });
 
     const provider = buildXaiVideoGenerationProvider();
     const result = await provider.generateVideo({
@@ -762,26 +719,11 @@ describe("xai video generation provider", () => {
   });
 
   it("sends reference_image roles through xAI reference_images mode", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          request_id: "req_refs",
-        }),
-      },
-      release: vi.fn(async () => {}),
+    mockXaiVideoTask({
+      requestId: "req_refs",
+      videoUrl: "https://cdn.x.ai/reference-video.mp4",
+      videoBytes: "reference-video-bytes",
     });
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
-          request_id: "req_refs",
-          status: "done",
-          video: { url: "https://cdn.x.ai/reference-video.mp4" },
-        }),
-      })
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("reference-video-bytes"),
-      });
 
     const provider = buildXaiVideoGenerationProvider();
     const result = await provider.generateVideo({
@@ -833,26 +775,11 @@ describe("xai video generation provider", () => {
   });
 
   it("routes video inputs to the extension endpoint when duration is set", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          request_id: "req_extend",
-        }),
-      },
-      release: vi.fn(async () => {}),
+    mockXaiVideoTask({
+      requestId: "req_extend",
+      videoUrl: "https://cdn.x.ai/extended.mp4",
+      videoBytes: "extended-bytes",
     });
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
-          request_id: "req_extend",
-          status: "done",
-          video: { url: "https://cdn.x.ai/extended.mp4" },
-        }),
-      })
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("extended-bytes"),
-      });
 
     const provider = buildXaiVideoGenerationProvider();
     await provider.generateVideo({

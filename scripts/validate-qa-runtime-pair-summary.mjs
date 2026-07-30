@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { isRecord } from "./lib/record-shared.mjs";
 
 const RUNTIME_IDS = ["openclaw", "codex"];
 const HARD_RUNTIME_ERROR_CLASSES = new Set([
@@ -59,10 +60,6 @@ const FROZEN_RUNTIME_PAIR_MANIFESTS = new Map([
   ["311047822ecdde24e824d839ab105ef08f17be00:core", FROZEN_CORE_RUNTIME_PAIR_MANIFEST],
   ["c37af96b18776fecc9e24268f27fc89b563481bf:core", FROZEN_CORE_RUNTIME_PAIR_MANIFEST],
 ]);
-
-function isRecord(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 function isPassableCell(cell) {
   if (!isRecord(cell) || typeof cell.transportErrorClass === "string") {

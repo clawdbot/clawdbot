@@ -70,12 +70,17 @@ describe("skill research auto-capture", () => {
           },
         ],
       },
-      ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
+      ctx: {
+        workspaceDir,
+        agentId: "main",
+        sessionKey: SESSION_KEY,
+        skillWorkshopAvailable: true,
+      },
       config: {
         skills: {
           workshop: {
             autonomous: {
-              enabled: true,
+              mode: "propose",
             },
           },
         },
@@ -119,11 +124,11 @@ describe("skill research auto-capture", () => {
       skills: {
         workshop: {
           autonomous: {
-            enabled: false,
+            mode: "off",
           },
         },
       },
-    };
+    } as const;
 
     await runSkillResearchAutoCapture({
       event,
@@ -195,7 +200,7 @@ describe("skill research auto-capture", () => {
         skills: {
           workshop: {
             autonomous: {
-              enabled: true,
+              mode: "propose",
             },
           },
         },
@@ -241,7 +246,7 @@ describe("skill research auto-capture", () => {
         skills: {
           workshop: {
             autonomous: {
-              enabled: true,
+              mode: "propose",
             },
           },
         },
@@ -284,7 +289,7 @@ describe("skill research auto-capture", () => {
         skills: {
           workshop: {
             autonomous: {
-              enabled: true,
+              mode: "propose",
             },
           },
         },
@@ -343,7 +348,7 @@ describe("skill research auto-capture", () => {
         skills: {
           workshop: {
             autonomous: {
-              enabled: true,
+              mode: "propose",
             },
           },
         },
@@ -403,7 +408,7 @@ describe("skill research auto-capture", () => {
         skills: {
           workshop: {
             autonomous: {
-              enabled: true,
+              mode: "propose",
             },
           },
         },
@@ -446,7 +451,7 @@ describe("skill research auto-capture", () => {
         skills: {
           workshop: {
             autonomous: {
-              enabled: true,
+              mode: "propose",
             },
           },
         },
@@ -485,7 +490,7 @@ describe("skill research auto-capture", () => {
         skills: {
           workshop: {
             autonomous: {
-              enabled: true,
+              mode: "propose",
             },
           },
         },
@@ -521,7 +526,7 @@ describe("skill research auto-capture", () => {
       ],
     };
     const ctx = { workspaceDir, agentId: "main", sessionKey: SESSION_KEY };
-    const config = { skills: { workshop: { autonomous: { enabled: true } } } };
+    const config = { skills: { workshop: { autonomous: { mode: "propose" } } } } as const;
 
     await runSkillResearchAutoCapture({ event, ctx, config });
     await runSkillResearchAutoCapture({ event, ctx, config });
@@ -558,7 +563,7 @@ describe("skill research auto-capture", () => {
         ],
       },
       ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
-      config: { skills: { workshop: { autonomous: { enabled: true } } } },
+      config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
     });
 
     expect((await listSkillProposals({ workspaceDir })).proposals).toHaveLength(0);
@@ -598,7 +603,7 @@ describe("skill research auto-capture", () => {
         ],
       },
       ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
-      config: { skills: { workshop: { autonomous: { enabled: true } } } },
+      config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
     });
 
     const proposals = await listSkillProposals({ workspaceDir });
@@ -627,7 +632,7 @@ describe("skill research auto-capture", () => {
       },
     ];
     const ctx = { workspaceDir, agentId: "main", sessionKey: SESSION_KEY };
-    const config = { skills: { workshop: { autonomous: { enabled: true } } } };
+    const config = { skills: { workshop: { autonomous: { mode: "propose" } } } } as const;
 
     await runSkillResearchAutoCapture({
       event: { success: true, messages: learnedTurn },
@@ -667,16 +672,26 @@ describe("skill research auto-capture", () => {
       content:
         "You're still ignoring GitHub merge checks — always inspect the exact head before landing.",
     };
-    const config = { skills: { workshop: { autonomous: { enabled: true } } } };
+    const config = { skills: { workshop: { autonomous: { mode: "propose" } } } } as const;
 
     await runSkillResearchAutoCapture({
       event: { success: true, messages: [first] },
-      ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
+      ctx: {
+        workspaceDir,
+        agentId: "main",
+        sessionKey: SESSION_KEY,
+        skillWorkshopAvailable: true,
+      },
       config,
     });
     await runSkillResearchAutoCapture({
       event: { success: true, messages: [first, second] },
-      ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
+      ctx: {
+        workspaceDir,
+        agentId: "main",
+        sessionKey: SESSION_KEY,
+        skillWorkshopAvailable: true,
+      },
       config,
     });
 
@@ -708,7 +723,7 @@ describe("skill research auto-capture", () => {
       content: "Remember to always read GitHub review comments before landing a pull request.",
     };
     const ctx = { workspaceDir, agentId: "main", sessionKey: SESSION_KEY };
-    const config = { skills: { workshop: { autonomous: { enabled: true } } } };
+    const config = { skills: { workshop: { autonomous: { mode: "propose" } } } } as const;
 
     await runSkillResearchAutoCapture({
       event: { success: true, messages: [first] },
@@ -754,7 +769,7 @@ describe("skill research auto-capture", () => {
         ],
       };
       const ctx = { workspaceDir, agentId: "main", sessionKey: SESSION_KEY };
-      const config = { skills: { workshop: { autonomous: { enabled: true } } } };
+      const config = { skills: { workshop: { autonomous: { mode: "propose" } } } } as const;
 
       await runSkillResearchAutoCapture({ event, ctx, config });
       const proposalId = expectDefined(
@@ -787,7 +802,7 @@ describe("skill research auto-capture", () => {
       content: "Remember to always optimize screenshot assets before attaching them.",
     };
     const ctx = { workspaceDir, agentId: "main", sessionKey: SESSION_KEY };
-    const config = { skills: { workshop: { autonomous: { enabled: true } } } };
+    const config = { skills: { workshop: { autonomous: { mode: "propose" } } } } as const;
 
     await runSkillResearchAutoCapture({
       event: { success: true, messages: [previous] },
@@ -857,6 +872,7 @@ describe("skill research auto-capture", () => {
         ],
       },
       ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
+      config: { skills: { workshop: { autonomous: { mode: "off" } } } },
     });
 
     expect((await listSkillProposals({ workspaceDir })).proposals).toHaveLength(0);
@@ -893,6 +909,7 @@ describe("skill research auto-capture", () => {
         ],
       },
       ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
+      config: { skills: { workshop: { autonomous: { mode: "off" } } } },
     });
 
     expect(readSession()?.pendingSkillSuggestion).toMatchObject({
@@ -922,7 +939,7 @@ describe("skill research auto-capture", () => {
         ],
       },
       ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
-      config: { skills: { workshop: { autonomous: { enabled: true } } } },
+      config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
     });
 
     const proposals = await listSkillProposals({ workspaceDir });
@@ -957,7 +974,8 @@ describe("skill research auto-capture", () => {
     };
     const ctx = { workspaceDir, agentId: "main", sessionKey: SESSION_KEY };
 
-    await runSkillResearchAutoCapture({ event, ctx });
+    const config = { skills: { workshop: { autonomous: { mode: "off" } } } } as const;
+    await runSkillResearchAutoCapture({ event, ctx, config });
     expect(
       (
         await consumeSessionSkillSuggestion({
@@ -966,7 +984,7 @@ describe("skill research auto-capture", () => {
         })
       )?.suggestion,
     ).toBeDefined();
-    await runSkillResearchAutoCapture({ event, ctx });
+    await runSkillResearchAutoCapture({ event, ctx, config });
 
     expect(readSession()?.pendingSkillSuggestion).toBeUndefined();
     expect((await listSkillProposals({ workspaceDir })).proposals).toHaveLength(0);

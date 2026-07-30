@@ -41,12 +41,12 @@ import {
   buildFullBootstrapPromptLines,
   buildLimitedBootstrapPromptLines,
 } from "./bootstrap-prompt.js";
-import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type {
   EmbeddedFullAccessBlockedReason,
   EmbeddedSandboxInfo,
 } from "./embedded-agent-runner/types.js";
+import { filterProjectScopedCuratedContextFiles } from "./project-memory-bootstrap.js";
 import { buildPromisedWorkPromptSection } from "./promised-work-prompt.js";
 import {
   buildOpenClawToolFallbackText,
@@ -429,11 +429,23 @@ function buildOwnerIdentityLine(
   return `Allowlisted senders: ${displayOwnerNumbers.join(", ")}. Allowlisted != owner.`;
 }
 
-function buildTimeSection(params: { userTimezone?: string }) {
-  if (!params.userTimezone) {
+function buildTemporalContextSection(params: {
+  userDate?: string;
+  userTimezone?: string;
+  sessionStatusAvailable: boolean;
+}) {
+  const userDate = params.userDate?.trim();
+  const userTimezone = params.userTimezone?.trim();
+  if (!userDate || !userTimezone) {
     return [];
   }
-  return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
+  return [
+    "## Temporal Context",
+    `Current date: ${userDate}`,
+    `Time zone: ${userTimezone}`,
+    ...(params.sessionStatusAvailable ? ["For the exact current time, use `session_status`."] : []),
+    "",
+  ];
 }
 
 function buildAssistantOutputDirectivesSection(params: {
@@ -754,8 +766,7 @@ export function buildAgentSystemPrompt(params: {
   toolSummaries?: Record<string, string>;
   modelAliasLines?: string[];
   userTimezone?: string;
-  userTime?: string;
-  userTimeFormat?: ResolvedTimeFormat;
+  userDate?: string;
   contextFiles?: EmbeddedContextFile[];
   bootstrapMode?: BootstrapMode;
   bootstrapTruncationNotice?: string;
@@ -818,6 +829,10 @@ export function buildAgentSystemPrompt(params: {
   preparedMemoryPrompt?: PreparedMemoryPromptSection;
   /** Watched same-agent group sessions prepared before synchronous prompt assembly. */
   preparedWatchedSessions?: PreparedWatchedSessionsPrompt;
+  /** Per-turn learned facts restricted to the currently active repository. */
+  projectMemoryBootstrap?: string[];
+  /** Prepared repository identities used to filter curated raw context fail-closed. */
+  activeProjectKeys?: readonly string[];
   promptContribution?: ProviderSystemPromptContribution;
 }) {
   const acpEnabled = params.acpEnabled === true;
@@ -832,10 +847,12 @@ export function buildAgentSystemPrompt(params: {
     grep: "Search file contents",
     find: "Find files by glob",
     ls: "List directories",
-    exec:
-      promptSurface === "cli_backend"
+    exec: params.codeModeActive
+      ? "Run JavaScript/TypeScript Code Mode; call exact catalog tools from code, never shell/Python/imports"
+      : promptSurface === "cli_backend"
         ? "Run shell on connected node; sync; host=node"
         : "Run shell; pty for TTY CLIs",
+    wait: "Resume a suspended Code Mode exec",
     process: "Control background exec",
     web_search: "Web search",
     web_fetch: "Fetch/extract URL",
@@ -956,10 +973,11 @@ export function buildAgentSystemPrompt(params: {
     toolLines.push(summary ? `- ${name}: ${summary}` : `- ${name}`);
   }
   const toolSchemaDirectoryPrompt = params.toolSchemaDirectoryPrompt?.trim();
-  const renderOpenClawToolWorkflowHints = shouldRenderOpenClawToolWorkflowHints({
-    surface: promptSurface,
-    hasToolList: toolLines.length > 0,
-  });
+  const renderOpenClawToolWorkflowHints =
+    shouldRenderOpenClawToolWorkflowHints({
+      surface: promptSurface,
+      hasToolList: toolLines.length > 0,
+    }) && params.codeModeActive !== true;
 
   const hasGateway = availableTools.has("gateway");
   const hasOpenClaw = availableTools.has("openclaw");
@@ -996,6 +1014,7 @@ export function buildAgentSystemPrompt(params: {
     : undefined;
   const reasoningLevel = params.reasoningLevel ?? "off";
   const userTimezone = params.userTimezone?.trim();
+  const userDate = params.userDate?.trim();
   const skillsPrompt = params.skillsPrompt?.trim();
   const heartbeatPrompt = params.heartbeatPrompt?.trim();
   const runtimeInfo = params.runtimeInfo;
@@ -1057,16 +1076,19 @@ export function buildAgentSystemPrompt(params: {
   const skillWorkshopSection = availableTools.has(SKILL_WORKSHOP_TOOL_NAME)
     ? buildSkillWorkshopPromptSection()
     : [];
-  const memorySection = buildMemorySection({
-    isMinimal,
-    includeMemorySection: params.includeMemorySection,
-    availableTools,
-    citationsMode: params.memoryCitationsMode,
-    agentId: params.runtimeInfo?.agentId,
-    agentSessionKey: params.runtimeInfo?.sessionKey,
-    sandboxed: params.sandboxInfo?.enabled === true,
-    prepared: params.preparedMemoryPrompt,
-  });
+  const memorySection = [
+    ...buildMemorySection({
+      isMinimal,
+      includeMemorySection: params.includeMemorySection,
+      availableTools,
+      citationsMode: params.memoryCitationsMode,
+      agentId: params.runtimeInfo?.agentId,
+      agentSessionKey: params.runtimeInfo?.sessionKey,
+      sandboxed: params.sandboxInfo?.enabled === true,
+      prepared: params.preparedMemoryPrompt,
+    }),
+    ...normalizeStringEntries(params.projectMemoryBootstrap),
+  ];
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
@@ -1082,7 +1104,12 @@ export function buildAgentSystemPrompt(params: {
       .join("\n");
   }
 
-  const contextFiles = prepareContextFilesForPrompt(params.contextFiles);
+  const contextFiles = prepareContextFilesForPrompt(
+    filterProjectScopedCuratedContextFiles({
+      contextFiles: params.contextFiles,
+      activeProjectKeys: params.activeProjectKeys,
+    }),
+  );
   const bootstrapSystemPromptSections = buildAgentBootstrapSystemPromptSections({
     bootstrapMode: params.bootstrapMode,
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,
@@ -1254,7 +1281,6 @@ export function buildAgentSystemPrompt(params: {
         ? params.modelAliasLines.join("\n")
         : "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
-      userTimezone ? "Need date/time/day: `session_status`." : "",
       "## Workspace",
       `Working directory: ${displayWorkspaceDir}`,
       workspaceGuidance,
@@ -1324,9 +1350,6 @@ export function buildAgentSystemPrompt(params: {
             .join("\n")
         : "",
       params.sandboxInfo?.enabled ? "" : "",
-      ...buildTimeSection({
-        userTimezone,
-      }),
       ...bootstrapSystemPromptSections,
       "## Workspace Files (injected)",
       "User-editable; OpenClaw loads below as Project Context.",
@@ -1360,6 +1383,16 @@ export function buildAgentSystemPrompt(params: {
   });
 
   const lines = [stablePrefix];
+
+  // Local date and timezone can change between turns. Keep them at the front of
+  // the volatile suffix so rollover is visible without invalidating the stable prefix.
+  lines.push(
+    ...buildTemporalContextSection({
+      userDate,
+      userTimezone,
+      sessionStatusAvailable: availableTools.has("session_status"),
+    }),
+  );
 
   lines.push(
     ...buildProjectContextSection({

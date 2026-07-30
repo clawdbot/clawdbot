@@ -15,11 +15,6 @@ import {
   type SerializedWhatsAppDurableInboundMessage,
 } from "./durable-payload.js";
 
-const WHATSAPP_DURABLE_INBOUND_PENDING_MAX_ENTRIES = 450;
-const WHATSAPP_DURABLE_INBOUND_COMPLETED_MAX_ENTRIES = 5000;
-const WHATSAPP_DURABLE_INBOUND_PENDING_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const WHATSAPP_DURABLE_INBOUND_COMPLETED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const WHATSAPP_DURABLE_INBOUND_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 const WHATSAPP_DURABLE_INBOUND_PAYLOAD_VERSION = 1;
 
 export type WhatsAppReadReceiptTarget = {
@@ -137,13 +132,11 @@ export function createWhatsAppIngressMonitor(params: {
     deliver: (admission, lifecycle) => params.dispatch(admission, lifecycle),
     pollIntervalMs: params.pollIntervalMs,
     retention: {
-      pruneIntervalMs: WHATSAPP_DURABLE_INBOUND_PRUNE_INTERVAL_MS,
-      pendingTtlMs: WHATSAPP_DURABLE_INBOUND_PENDING_TTL_MS,
-      pendingMaxEntries: WHATSAPP_DURABLE_INBOUND_PENDING_MAX_ENTRIES,
-      completedTtlMs: WHATSAPP_DURABLE_INBOUND_COMPLETED_TTL_MS,
-      completedMaxEntries: WHATSAPP_DURABLE_INBOUND_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: WHATSAPP_DURABLE_INBOUND_PENDING_TTL_MS,
-      failedMaxEntries: WHATSAPP_DURABLE_INBOUND_PENDING_MAX_ENTRIES,
+      pendingTtlMs: 30 * 24 * 60 * 60 * 1_000,
+      pendingMaxEntries: 450,
+      completedTtlMs: 7 * 24 * 60 * 60 * 1_000,
+      completedMaxEntries: 5_000,
+      failedMaxEntries: 450,
     },
     drain: {
       resolveNonRetryableFailure: resolveWhatsAppIngressNonRetryableFailure,

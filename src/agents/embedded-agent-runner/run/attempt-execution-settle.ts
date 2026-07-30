@@ -140,6 +140,7 @@ export async function runEmbeddedAttemptSettledPhase(
     queueHandle,
     stopAcceptingSteerMessages,
     getBeforeAgentFinalizeRevisionReason,
+    getBeforeAgentFinalizeRevisionEntryId,
   } = preparedStream;
   const { unsubscribe, waitForPendingEvents } = subscription;
   const {
@@ -166,6 +167,10 @@ export async function runEmbeddedAttemptSettledPhase(
       state.terminal,
       error !== null && error !== undefined ? { error, source: source ?? "prompt" } : null,
     );
+  };
+  const promptToolPolicyBaseline = {
+    activeToolNames: activeSession.getActiveToolNames(),
+    catalogEntries: [...(toolBase.toolSearchCatalogRef?.current?.entries ?? [])],
   };
 
   try {
@@ -231,6 +236,18 @@ export async function runEmbeddedAttemptSettledPhase(
         trajectoryRecorder,
         transport: effectiveAgentTransport,
         uncompactedEffectiveTools,
+      },
+      toolPolicy: {
+        baseline: promptToolPolicyBaseline,
+        effectiveTools,
+        uncompactedEffectiveTools,
+        tools,
+        codeModeControlsEnabled: toolBase.codeModeControlsEnabledForRun,
+        toolSearchCatalogRef: toolBase.toolSearchCatalogRef,
+        forceToolNames: [
+          ...(toolBase.forceDirectMessageTool ? ["message"] : []),
+          ...(attempt.swarmCollector && attempt.swarmOutputSchema ? ["structured_output"] : []),
+        ],
       },
       preflight: {
         ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
@@ -305,6 +322,7 @@ export async function runEmbeddedAttemptSettledPhase(
       shouldFlushForContextEngine: () =>
         Boolean(input.activeContextEngine && !getBeforeAgentFinalizeRevisionReason()),
       getBeforeAgentFinalizeRevisionReason,
+      getBeforeAgentFinalizeRevisionEntryId,
       getContextEngineAfterTurnCheckpoint: contextGuards.getAfterTurnCheckpoint,
       onSettleErrorState: (settleState) => {
         setFailure(settleState.promptError, settleState.promptErrorSource);

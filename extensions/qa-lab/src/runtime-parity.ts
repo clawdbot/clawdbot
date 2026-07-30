@@ -1491,10 +1491,16 @@ export async function captureRuntimeParityCell(
 export async function runRuntimeParityScenario(params: {
   scenarioId: string;
   runtimeParityUsage?: RuntimeParityUsagePolicy;
+  runtimePair?: readonly [RuntimeId, RuntimeId];
   runCell: (runtime: RuntimeId) => Promise<RuntimeParityScenarioExecution>;
 }): Promise<RuntimeParityResult> {
-  const openclaw = await params.runCell("openclaw");
-  const codex = await params.runCell("codex");
+  const [firstRuntime, secondRuntime] = params.runtimePair ?? CANONICAL_RUNTIME_IDS;
+  if (firstRuntime === secondRuntime) {
+    throw new Error("Runtime parity must compare two different runtimes.");
+  }
+  const first = await params.runCell(firstRuntime);
+  const second = await params.runCell(secondRuntime);
+  const [openclaw, codex] = firstRuntime === "openclaw" ? [first, second] : [second, first];
   const drift = classifyRuntimeParityCells({
     openclaw: openclaw.cell,
     codex: codex.cell,

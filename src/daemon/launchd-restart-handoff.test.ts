@@ -17,7 +17,10 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-import { scheduleDetachedLaunchdRestartHandoff } from "./launchd-restart-handoff.js";
+import {
+  scheduleDetachedLaunchdMaintenancePark,
+  scheduleDetachedLaunchdRestartHandoff,
+} from "./launchd-restart-handoff.js";
 
 type SpawnCall = [string, string[], { env: Record<string, string | undefined> }];
 
@@ -41,8 +44,9 @@ function requireSpawnCall(callIndex = 0): SpawnCall {
 }
 
 async function executeHandoff(
-  mode: "reload" | "start-after-exit",
+  mode: "park" | "reload" | "start-after-exit",
   launchctlStub: string,
+  systemOwnership: "absent" | "loaded" = "absent",
 ): Promise<{
   calls: string[];
   exitCode: number;
@@ -56,18 +60,31 @@ async function executeHandoff(
     fs.mkdirSync(path.join(home, ".openclaw", "logs"), { recursive: true });
     fs.writeFileSync(
       path.join(stubDir, "launchctl"),
-      `#!/bin/sh\nprintf '%s\\n' "$*" >> "$LAUNCHCTL_CALLS_PATH"\n${launchctlStub}\n`,
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$LAUNCHCTL_CALLS_PATH"
+if [ "$1" = "print" ] && [ "$2" = "system/ai.openclaw.gateway" ]; then
+  ${systemOwnership === "loaded" ? "exit 0" : "printf 'Could not find service\\n' >&2; exit 113"}
+fi
+${launchctlStub}
+`,
     );
     fs.chmodSync(path.join(stubDir, "launchctl"), 0o755);
     fs.writeFileSync(path.join(stubDir, "sleep"), "#!/bin/sh\nexit 0\n");
     fs.chmodSync(path.join(stubDir, "sleep"), 0o755);
 
     spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock, once: vi.fn() });
-    scheduleDetachedLaunchdRestartHandoff({
-      env: { HOME: home, OPENCLAW_PROFILE: "default" },
-      mode,
-      waitForPid: noWaitPid,
-    });
+    if (mode === "park") {
+      scheduleDetachedLaunchdMaintenancePark({
+        env: { HOME: home, OPENCLAW_PROFILE: "default" },
+        waitForPid: noWaitPid,
+      });
+    } else {
+      scheduleDetachedLaunchdRestartHandoff({
+        env: { HOME: home, OPENCLAW_PROFILE: "default" },
+        mode,
+        waitForPid: noWaitPid,
+      });
+    }
     const [, args] = requireSpawnCall();
     const script = args[1];
     if (!script) {
@@ -104,7 +121,11 @@ async function executeHandoff(
       exitCode = code;
     }
 
-    const calls = fs.readFileSync(callsPath, "utf8").trim().split("\n");
+    const calls = fs
+      .readFileSync(callsPath, "utf8")
+      .trim()
+      .split("\n")
+      .filter((call) => call !== "print system/ai.openclaw.gateway");
     const log = fs.readFileSync(
       path.join(home, ".openclaw", "logs", "gateway-restart.log"),
       "utf8",
@@ -189,6 +210,30 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(result.calls.some((call) => call.includes("kickstart -k"))).toBe(false);
     expect(result.calls.some((call) => call.startsWith("bootstrap "))).toBe(false);
     expect(result.log).toContain("restart done");
+  });
+
+  it("refuses detached activation when the system domain owns the label", async () => {
+    const result = await executeHandoff(
+      "start-after-exit",
+      'case "$1" in enable|kickstart) exit 0 ;; *) exit 1 ;; esac',
+      "loaded",
+    );
+
+    expect(result.exitCode).toBe(78);
+    expect(result.calls).toEqual([]);
+    expect(result.log).toContain("restart blocked");
+    expect(result.log).toContain("loaded system LaunchDaemon system/ai.openclaw.gateway");
+  });
+
+  it("parks the service with bootout after the caller exits", async () => {
+    const result = await executeHandoff(
+      "park",
+      'case "$1" in bootout) exit 0 ;; *) exit 1 ;; esac',
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.calls).toEqual(["bootout gui/501/test.label"]);
+    expect(result.log).toContain("service park done");
   });
 
   it("outwaits launchd's stop window after bootout and retries bootstrap for reload mode", () => {

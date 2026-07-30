@@ -110,8 +110,11 @@ export class SessionManager extends SessionManagerBranching {
     return super.removeTrailingEntries(predicate, options);
   }
 
-  override persist(entry: SessionEntry, options?: AppendPersistenceOptions): void {
-    super.persist(entry, options);
+  override persist(
+    entry: SessionEntry,
+    options?: AppendPersistenceOptions,
+  ): string | null | undefined {
+    return super.persist(entry, options);
   }
 
   override mergePromptReleasedSessionEntries(
