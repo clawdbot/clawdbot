@@ -398,6 +398,8 @@ const config = {
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
+    // Exported for direct unit tests; production usage is internal to the same module.
+    "src/cli/native-hook-relay-cli.ts": ["exports"],
   },
   workspaces: {
     ".": {
