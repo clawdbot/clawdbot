@@ -423,6 +423,10 @@ openclaw [--dev] [--profile <name>] <command>
   terminal (alias: tui --local)
 ```
 
+The top-level `auth list` command is a fallback shortcut for `models auth list`.
+If an installed plugin owns the top-level `auth` command, the plugin command
+registers instead of the core fallback.
+
 Plugins can add additional top-level commands, such as
 [`openclaw workboard`](/cli/workboard) or `openclaw voicecall`.
 
