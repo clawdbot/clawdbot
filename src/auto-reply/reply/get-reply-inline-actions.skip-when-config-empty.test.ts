@@ -782,7 +782,12 @@ describe("handleInlineActions", () => {
   it("keeps normal prompt text while making $ skill references explicit to the model", async () => {
     const typing = createTypingController();
     const original = "Review this plan with $office_hours and $release_notes.";
-    const ctx = buildTestCtx({ Body: original, CommandBody: original });
+    const ctx = buildTestCtx({
+      Body: original,
+      CommandBody: original,
+      Provider: "webchat",
+      Surface: "webchat",
+    });
     const skillCommands: SkillCommandSpec[] = [
       {
         name: "office_hours",
@@ -840,7 +845,12 @@ describe("handleInlineActions", () => {
       description: `Skill ${index + 1}`,
     }));
     const original = skillCommands.map((skill) => `$${skill.name}`).join(" ");
-    const ctx = buildTestCtx({ Body: original, CommandBody: original });
+    const ctx = buildTestCtx({
+      Body: original,
+      CommandBody: original,
+      Provider: "webchat",
+      Surface: "webchat",
+    });
 
     const result = await handleInlineActions(
       createHandleInlineActionsInput({
@@ -866,6 +876,44 @@ describe("handleInlineActions", () => {
     });
     expect(typing.cleanup).toHaveBeenCalledOnce();
     expect(handleCommandsMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps $ skill references literal on message channels", async () => {
+    const typing = createTypingController();
+    const original = "Review with $office_hours.";
+    const ctx = buildTestCtx({ Body: original, CommandBody: original });
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: original,
+        command: {
+          isAuthorizedSender: true,
+          rawBodyNormalized: original,
+          commandBodyNormalized: original,
+        },
+        overrides: {
+          allowTextCommands: true,
+          cfg: { commands: { text: true } },
+          skillCommands: [
+            {
+              name: "office_hours",
+              skillName: "office-hours",
+              description: "Engineering office hours",
+              modelVisible: true,
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(result.kind).toBe("continue");
+    if (result.kind !== "continue") {
+      throw new Error("expected message-channel text to continue unchanged");
+    }
+    expect(result.cleanedBody).toBe(original);
+    expect(ctx.Body).toBe(original);
   });
 
   it("reloads preloaded skill commands when final exec overrides are present", async () => {

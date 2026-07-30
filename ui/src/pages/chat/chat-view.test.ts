@@ -3263,7 +3263,13 @@ describe("chat slash menu accessibility", () => {
   it("hydrates the skill catalog once per active $ reference", async () => {
     replaceSlashCommands([
       ...buildFallbackSlashCommands(),
-      { key: "prose", name: "prose", description: "Prose skill.", source: "skill" },
+      {
+        key: "prose",
+        name: "prose",
+        description: "Prose skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
     ]);
     let draft = "";
     const onSlashIntent = vi.fn(async () => undefined);
@@ -3309,6 +3315,7 @@ describe("chat slash menu accessibility", () => {
         name: "prose",
         description: "Draft polished prose.",
         source: "skill",
+        skillModelVisible: true,
       },
     ]);
     let draft = "";
@@ -3357,6 +3364,7 @@ describe("chat slash menu accessibility", () => {
         name: "prose",
         description: "Draft polished prose.",
         source: "skill",
+        skillModelVisible: true,
       },
     ]);
     let draft = "";
@@ -3403,6 +3411,7 @@ describe("chat slash menu accessibility", () => {
         name: "release_notes",
         description: "Draft release notes.",
         source: "skill",
+        skillModelVisible: true,
       },
     ]);
     let draft = "";
@@ -3441,12 +3450,14 @@ describe("chat slash menu accessibility", () => {
         name: "home",
         description: "Home skill.",
         source: "skill",
+        skillModelVisible: true,
       },
       {
         key: "editor",
         name: "editor",
         description: "Editor skill.",
         source: "skill",
+        skillModelVisible: true,
       },
     ]);
     let draft = "";
@@ -3479,7 +3490,13 @@ describe("chat slash menu accessibility", () => {
   it("does not offer skill references inside a slash-command draft", () => {
     replaceSlashCommands([
       ...buildFallbackSlashCommands(),
-      { key: "prose", name: "prose", description: "Prose skill.", source: "skill" },
+      {
+        key: "prose",
+        name: "prose",
+        description: "Prose skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
     ]);
     let draft = "";
     const container = document.createElement("div");
@@ -3549,8 +3566,20 @@ describe("chat slash menu accessibility", () => {
   it("keeps skill keyboard navigation and selection on the same highlighted item", () => {
     replaceSlashCommands([
       ...buildFallbackSlashCommands(),
-      { key: "alpha", name: "alpha", description: "Alpha skill.", source: "skill" },
-      { key: "beta", name: "beta", description: "Beta skill.", source: "skill" },
+      {
+        key: "alpha",
+        name: "alpha",
+        description: "Alpha skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+      {
+        key: "beta",
+        name: "beta",
+        description: "Beta skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
     ]);
     let draft = "";
     const container = document.createElement("div");
@@ -3588,7 +3617,13 @@ describe("chat slash menu accessibility", () => {
   it("does not reopen a dismissed skill picker after a slow refresh", async () => {
     replaceSlashCommands([
       ...buildFallbackSlashCommands(),
-      { key: "prose", name: "prose", description: "Prose skill.", source: "skill" },
+      {
+        key: "prose",
+        name: "prose",
+        description: "Prose skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
     ]);
     const refresh = createDeferred<void>();
     let draft = "";
@@ -3629,7 +3664,13 @@ describe("chat slash menu accessibility", () => {
   it("closes a stale skill picker when the caret leaves its token", () => {
     replaceSlashCommands([
       ...buildFallbackSlashCommands(),
-      { key: "prose", name: "prose", description: "Prose skill.", source: "skill" },
+      {
+        key: "prose",
+        name: "prose",
+        description: "Prose skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
     ]);
     let draft = "";
     const container = document.createElement("div");
@@ -3665,7 +3706,13 @@ describe("chat slash menu accessibility", () => {
   it("matches backend escape parity and absorbs rejected skill refreshes", async () => {
     replaceSlashCommands([
       ...buildFallbackSlashCommands(),
-      { key: "prose", name: "prose", description: "Prose skill.", source: "skill" },
+      {
+        key: "prose",
+        name: "prose",
+        description: "Prose skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
     ]);
     let draft = "";
     const container = document.createElement("div");

@@ -506,7 +506,7 @@ export function getSkillCommandCompletions(filter: string): SlashCommandDef[] {
   const lower = normalizeLowercaseStringOrEmpty(filter);
   const normalized = lower.replace(/-/gu, "_");
   return SLASH_COMMANDS.filter(
-    (command) => command.source === "skill" && command.skillModelVisible !== false,
+    (command) => command.source === "skill" && command.skillModelVisible === true,
   )
     .filter(
       (command) =>

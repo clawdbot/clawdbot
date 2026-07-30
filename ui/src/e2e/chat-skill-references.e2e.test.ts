@@ -50,6 +50,7 @@ describeControlUiE2e("Control UI skill references", () => {
         name: "autoreview",
         scope: "both",
         source: "skill",
+        skillModelVisible: true,
         textAliases: ["/autoreview"],
       },
       {
@@ -58,6 +59,7 @@ describeControlUiE2e("Control UI skill references", () => {
         name: "technical_documentation",
         scope: "both",
         source: "skill",
+        skillModelVisible: true,
         textAliases: ["/technical_documentation"],
       },
       {

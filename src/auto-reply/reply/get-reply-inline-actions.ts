@@ -20,6 +20,7 @@ import {
   resolveSkillReferenceInvocations,
 } from "../../skills/discovery/chat-commands.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { markCommandReplyForDelivery } from "../reply-payload.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type {
@@ -347,7 +348,9 @@ export async function handleInlineActions(params: {
 
   const slashCommandName = resolveSlashCommandName(command.commandBodyNormalized);
   const hasSkillReferences =
-    command.isAuthorizedSender && hasSkillReferenceCandidate(initialCleanedBody);
+    command.isAuthorizedSender &&
+    ctx.Surface === INTERNAL_MESSAGE_CHANNEL &&
+    hasSkillReferenceCandidate(initialCleanedBody);
   const shouldLoadSkillCommands =
     allowTextCommands &&
     (hasSkillReferences ||

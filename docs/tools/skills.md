@@ -169,6 +169,9 @@ Skills with `disable-model-invocation: true` stay out of the `$` picker because
 their instructions are intentionally absent from the model's prompt. Invoke
 those explicitly with their standalone slash command instead.
 
+`$` references are interpreted on WebChat/Control UI turns. Other messaging
+channels keep `$name` as ordinary text; use the skill's slash command there.
+
 ## Skill Workshop
 
 [Skill Workshop](/tools/skill-workshop) is a proposal queue between the agent

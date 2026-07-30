@@ -194,6 +194,7 @@ describe("parseSlashCommand", () => {
         textAliases: ["/release_notes"],
         description: "Draft release notes.",
         source: "skill",
+        skillModelVisible: true,
         scope: "both",
         acceptsArgs: true,
       },
@@ -219,6 +220,22 @@ describe("parseSlashCommand", () => {
 
     expectParsedSlash("/hidden_skill", { name: "hidden_skill" }, "");
     expect(getSkillCommandCompletions("hidden")).toEqual([]);
+  });
+
+  it("fails closed when an older gateway omits skill visibility metadata", () => {
+    applyRemoteEntries([
+      {
+        name: "legacy_skill",
+        textAliases: ["/legacy_skill"],
+        description: "Legacy skill command.",
+        source: "skill",
+        scope: "both",
+        acceptsArgs: true,
+      },
+    ]);
+
+    expectParsedSlash("/legacy_skill", { name: "legacy_skill" }, "");
+    expect(getSkillCommandCompletions("legacy")).toEqual([]);
   });
 
   it("does not let remote commands collide with reserved local commands", () => {
