@@ -9,6 +9,9 @@ import {
   replaceSessionEntry,
   type SessionAbortTargetResult,
 } from "../../config/sessions/session-accessor.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import type { TaskRecord } from "../../tasks/runtime-internal.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { resolveAbortCutoffFromContext, shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
 import { getAbortMemory } from "./abort-primitives.js";
@@ -73,6 +76,14 @@ const acpManagerMocks = vi.hoisted(() => ({
 const runtimeAbortMocks = vi.hoisted(() => ({
   abortEmbeddedAgentRun: vi.fn(() => true),
   resolveActiveEmbeddedRunSessionId: vi.fn(() => undefined as string | undefined),
+}));
+
+const taskRegistryMocks = vi.hoisted(() => ({
+  listFreshTasksForOwnerKey: vi.fn<(ownerKey: string) => TaskRecord[]>(() => []),
+  cancelTaskById: vi.fn(async () => ({
+    found: true,
+    cancelled: true,
+  })),
 }));
 
 vi.mock("../../acp/control-plane/manager.js", () => ({
@@ -220,6 +231,31 @@ describe("abort detection", () => {
     expect(commandQueueMocks.clearCommandLane).toHaveBeenCalledWith(`session:${sessionKey}`);
   }
 
+  function createAcpTask(params: {
+    taskId: string;
+    ownerKey: string;
+    childSessionKey: string;
+    status?: TaskRecord["status"];
+  }): TaskRecord {
+    const now = Date.now();
+    return {
+      taskId: params.taskId,
+      runtime: "acp",
+      requesterSessionKey: params.ownerKey,
+      ownerKey: params.ownerKey,
+      scopeKind: "session",
+      childSessionKey: params.childSessionKey,
+      runId: `run-${params.taskId}`,
+      task: "acp work",
+      status: params.status ?? "running",
+      deliveryStatus: "pending",
+      notifyPolicy: "done_only",
+      createdAt: now,
+      startedAt: now,
+      lastEventAt: now,
+    };
+  }
+
   beforeEach(() => {
     abortTesting.setDepsForTests({
       getAcpSessionManager: (() =>
@@ -233,6 +269,8 @@ describe("abort detection", () => {
         subagentRegistryMocks.getLatestSubagentRunByChildSessionKey,
       listSubagentRunsForController: subagentRegistryMocks.listSubagentRunsForRequester,
       markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
+      listFreshTasksForOwnerKey: taskRegistryMocks.listFreshTasksForOwnerKey,
+      cancelTaskById: taskRegistryMocks.cancelTaskById,
     });
     queueCleanupTesting.setDepsForTests({
       resolveEmbeddedSessionLane: (key) => `session:${key.trim() || "main"}`,
@@ -256,6 +294,13 @@ describe("abort detection", () => {
     runtimeAbortMocks.abortEmbeddedAgentRun.mockReset().mockReturnValue(true);
     runtimeAbortMocks.resolveActiveEmbeddedRunSessionId.mockReset().mockReturnValue(undefined);
     subagentRegistryMocks.getLatestSubagentRunByChildSessionKey.mockReset().mockReturnValue(null);
+    taskRegistryMocks.listFreshTasksForOwnerKey.mockReset().mockReturnValue([]);
+    taskRegistryMocks.cancelTaskById.mockReset().mockResolvedValue({
+      found: true,
+      cancelled: true,
+    });
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
   });
 
   it("isAbortTrigger matches standalone abort trigger phrases", () => {
@@ -1212,7 +1257,87 @@ describe("abort detection", () => {
     expectSessionLaneCleared(childKey);
   });
 
-  it("continues stopping siblings when one termination persistence write fails", () => {
+  it("fast-abort cancels owner-scoped ACP tasks without subagent registry rows", async () => {
+    const sessionKey = "telegram:acp-parent";
+    const childKey = "agent:codex:acp:child-1";
+    const { cfg } = await createAbortConfig({
+      sessionIdsByKey: {
+        [sessionKey]: "session-parent",
+        [childKey]: "session-child",
+      },
+    });
+    taskRegistryMocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
+      ownerKey === sessionKey
+        ? [createAcpTask({ taskId: "task-acp-1", ownerKey: sessionKey, childSessionKey: childKey })]
+        : [],
+    );
+
+    const result = await runStopCommand({
+      cfg,
+      sessionKey,
+      from: "telegram:acp-parent",
+      to: "telegram:acp-parent",
+    });
+
+    expect(result.stoppedSubagents).toBe(1);
+    expect(taskRegistryMocks.cancelTaskById).toHaveBeenCalledWith({
+      cfg,
+      taskId: "task-acp-1",
+      reason: "killed",
+    });
+  });
+
+  it("continues cancelling owner-scoped ACP siblings when one cancellation rejects", async () => {
+    const sessionKey = "telegram:acp-parent-siblings";
+    const firstChildKey = "agent:codex:acp:child-rejects";
+    const secondChildKey = "agent:codex:acp:child-stops";
+    const { cfg } = await createAbortConfig({
+      sessionIdsByKey: {
+        [sessionKey]: "session-parent",
+        [firstChildKey]: "session-child-rejects",
+        [secondChildKey]: "session-child-stops",
+      },
+    });
+    taskRegistryMocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
+      ownerKey === sessionKey
+        ? [
+            createAcpTask({
+              taskId: "task-acp-rejects",
+              ownerKey: sessionKey,
+              childSessionKey: firstChildKey,
+            }),
+            createAcpTask({
+              taskId: "task-acp-stops",
+              ownerKey: sessionKey,
+              childSessionKey: secondChildKey,
+            }),
+          ]
+        : [],
+    );
+    taskRegistryMocks.cancelTaskById
+      .mockRejectedValueOnce(new Error("store busy"))
+      .mockResolvedValueOnce({
+        found: true,
+        cancelled: true,
+      });
+
+    const result = await runStopCommand({
+      cfg,
+      sessionKey,
+      from: "telegram:acp-parent-siblings",
+      to: "telegram:acp-parent-siblings",
+    });
+
+    expect(result.stoppedSubagents).toBe(1);
+    expect(taskRegistryMocks.cancelTaskById).toHaveBeenCalledTimes(2);
+    expect(taskRegistryMocks.cancelTaskById).toHaveBeenNthCalledWith(2, {
+      cfg,
+      taskId: "task-acp-stops",
+      reason: "killed",
+    });
+  });
+
+  it("continues stopping siblings when one termination persistence write fails", async () => {
     subagentRegistryMocks.markSubagentRunTerminated.mockClear();
     const sessionKey = "telegram:persistence-failure-parent";
     const firstChildKey = "agent:main:subagent:persistence-failure-first";
@@ -1238,12 +1363,12 @@ describe("abort detection", () => {
       })
       .mockReturnValue(1);
 
-    expect(
+    await expect(
       stopSubagentsForRequester({
         cfg: {} as OpenClawConfig,
         requesterSessionKey: sessionKey,
       }),
-    ).toEqual({ stopped: 2 });
+    ).resolves.toEqual({ stopped: 2 });
     expect(subagentRegistryMocks.markSubagentRunTerminated).toHaveBeenCalledTimes(2);
     expectSessionLaneCleared(firstChildKey);
     expectSessionLaneCleared(secondChildKey);
@@ -1305,7 +1430,7 @@ describe("abort detection", () => {
     expectSessionLaneCleared(depth2Key);
   });
 
-  it("stops a subagent that is paused after yielding", () => {
+  it("stops a subagent that is paused after yielding", async () => {
     subagentRegistryMocks.listSubagentRunsForRequester.mockClear();
     subagentRegistryMocks.markSubagentRunTerminated.mockClear();
     const sessionKey = "telegram:yield-parent";
@@ -1327,7 +1452,7 @@ describe("abort detection", () => {
       ])
       .mockReturnValueOnce([]);
 
-    const result = stopSubagentsForRequester({
+    const result = await stopSubagentsForRequester({
       cfg: {} as OpenClawConfig,
       requesterSessionKey: sessionKey,
     });
@@ -1517,7 +1642,7 @@ describe("abort detection", () => {
     expect(terminatedRun.childSessionKey).toBe(depth2Key);
   });
 
-  it("stopSubagentsForRequester does not traverse a child that moved to a newer parent", () => {
+  it("stopSubagentsForRequester does not traverse a child that moved to a newer parent", async () => {
     subagentRegistryMocks.listSubagentRunsForRequester.mockClear();
     subagentRegistryMocks.markSubagentRunTerminated.mockClear();
     const oldParentKey = "agent:main:subagent:old-parent";
@@ -1581,7 +1706,7 @@ describe("abort detection", () => {
       return null;
     });
 
-    const result = stopSubagentsForRequester({
+    const result = await stopSubagentsForRequester({
       cfg: {} as OpenClawConfig,
       requesterSessionKey: oldParentKey,
     });

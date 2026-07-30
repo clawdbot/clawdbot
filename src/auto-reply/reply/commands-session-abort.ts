@@ -166,7 +166,7 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
   );
   await triggerInternalHook(hookEvent);
 
-  const { stopped } = stopSubagentsForRequester({
+  const { stopped } = await stopSubagentsForRequester({
     cfg: params.cfg,
     requesterSessionKey: abortTarget.key ?? params.sessionKey,
   });

@@ -32,6 +32,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isAcpSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
+import {
+  cancelTaskById,
+  listFreshTasksForOwnerKey,
+  type TaskRecord,
+} from "../../tasks/runtime-internal.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import {
@@ -57,6 +62,8 @@ const defaultAbortDeps = {
   getLatestSubagentRunByChildSessionKey,
   listSubagentRunsForController,
   markSubagentRunTerminated,
+  listFreshTasksForOwnerKey,
+  cancelTaskById,
 };
 
 const abortDeps = {
@@ -82,6 +89,9 @@ const abortTestApi = {
       deps?.listSubagentRunsForController ?? defaultAbortDeps.listSubagentRunsForController;
     abortDeps.markSubagentRunTerminated =
       deps?.markSubagentRunTerminated ?? defaultAbortDeps.markSubagentRunTerminated;
+    abortDeps.listFreshTasksForOwnerKey =
+      deps?.listFreshTasksForOwnerKey ?? defaultAbortDeps.listFreshTasksForOwnerKey;
+    abortDeps.cancelTaskById = deps?.cancelTaskById ?? defaultAbortDeps.cancelTaskById;
   },
   resetDepsForTests(): void {
     abortDeps.getAcpSessionManager = defaultAbortDeps.getAcpSessionManager;
@@ -94,6 +104,8 @@ const abortTestApi = {
       defaultAbortDeps.getLatestSubagentRunByChildSessionKey;
     abortDeps.listSubagentRunsForController = defaultAbortDeps.listSubagentRunsForController;
     abortDeps.markSubagentRunTerminated = defaultAbortDeps.markSubagentRunTerminated;
+    abortDeps.listFreshTasksForOwnerKey = defaultAbortDeps.listFreshTasksForOwnerKey;
+    abortDeps.cancelTaskById = defaultAbortDeps.cancelTaskById;
   },
 };
 
@@ -218,10 +230,10 @@ function markSubagentRunTerminatedBestEffort(
   }
 }
 
-export function stopSubagentsForRequester(params: {
+export async function stopSubagentsForRequester(params: {
   cfg: OpenClawConfig;
   requesterSessionKey?: string;
-}): { stopped: number } {
+}): Promise<{ stopped: number }> {
   const requesterKey = normalizeRequesterSessionKey(params.cfg, params.requesterSessionKey);
   if (!requesterKey) {
     return { stopped: 0 };
@@ -251,15 +263,10 @@ export function stopSubagentsForRequester(params: {
       dedupedRunsByChildKey.set(childKey, run);
     }
   }
-  const runs = Array.from(dedupedRunsByChildKey.values());
-  if (runs.length === 0) {
-    return { stopped: 0 };
-  }
-
   const seenChildKeys = new Set<string>();
   let stopped = 0;
 
-  for (const run of runs) {
+  for (const run of dedupedRunsByChildKey.values()) {
     const childKey = normalizeOptionalString(run.childSessionKey);
     if (!childKey || seenChildKeys.has(childKey)) {
       continue;
@@ -301,17 +308,67 @@ export function stopSubagentsForRequester(params: {
     }
 
     // Cascade: also stop any sub-sub-agents spawned by this child.
-    const cascadeResult = stopSubagentsForRequester({
+    const cascadeResult = await stopSubagentsForRequester({
       cfg: params.cfg,
       requesterSessionKey: childKey,
     });
     stopped += cascadeResult.stopped;
   }
 
+  stopped += await stopAcpTasksForRequester({
+    cfg: params.cfg,
+    requesterKey,
+    seenChildKeys,
+  });
+
   if (stopped > 0) {
-    logVerbose(`abort: stopped ${stopped} subagent run(s) for ${requesterKey}`);
+    logVerbose(`abort: stopped ${stopped} child run(s) for ${requesterKey}`);
   }
   return { stopped };
+}
+
+function isActiveAcpTask(task: TaskRecord): boolean {
+  return task.runtime === "acp" && (task.status === "queued" || task.status === "running");
+}
+
+async function stopAcpTasksForRequester(params: {
+  cfg: OpenClawConfig;
+  requesterKey: string;
+  seenChildKeys: Set<string>;
+}): Promise<number> {
+  let stopped = 0;
+  for (const task of abortDeps.listFreshTasksForOwnerKey(params.requesterKey)) {
+    if (!isActiveAcpTask(task)) {
+      continue;
+    }
+    const childKey = normalizeOptionalString(task.childSessionKey);
+    if (!childKey || params.seenChildKeys.has(childKey)) {
+      continue;
+    }
+    // ACP task rows are owner-scoped detached children. Route them through the
+    // task cancellation seam so ACP session cleanup stays mode-aware.
+    params.seenChildKeys.add(childKey);
+    let cancelled = false;
+    try {
+      const result = await abortDeps.cancelTaskById({
+        cfg: params.cfg,
+        taskId: task.taskId,
+        reason: "killed",
+      });
+      cancelled = result.cancelled;
+    } catch (error) {
+      logVerbose(`abort: failed to cancel ACP task ${task.taskId}: ${formatErrorMessage(error)}`);
+    }
+    if (cancelled) {
+      stopped += 1;
+    }
+    const cascadeResult = await stopSubagentsForRequester({
+      cfg: params.cfg,
+      requesterSessionKey: childKey,
+    });
+    stopped += cascadeResult.stopped;
+  }
+  return stopped;
 }
 
 export async function tryFastAbortFromMessage(params: {
@@ -465,7 +522,7 @@ export async function tryFastAbortFromMessage(params: {
         `abort: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
       );
     }
-    const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
+    const { stopped } = await stopSubagentsForRequester({ cfg, requesterSessionKey });
     if (activeAbortRejected && !aborted) {
       return {
         handled: true,
@@ -506,6 +563,6 @@ export async function tryFastAbortFromMessage(params: {
   if (abortKey) {
     setAbortMemory(abortKey, true);
   }
-  const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
+  const { stopped } = await stopSubagentsForRequester({ cfg, requesterSessionKey });
   return { handled: true, aborted: false, stoppedSubagents: stopped };
 }
