@@ -2,12 +2,12 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     future::Future,
     net::IpAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, Mutex as StdMutex,
     },
     time::Duration,
 };
@@ -145,6 +145,19 @@ pub struct Event {
     pub seq: Option<u64>,
 }
 
+/// Independent retained-event consumer that drains buffered events and then
+/// reports the session's terminal close reason.
+pub struct EventSubscription {
+    events: broadcast::Receiver<Arc<str>>,
+    closed: watch::Receiver<Option<SessionCloseCause>>,
+}
+
+impl EventSubscription {
+    pub async fn recv(&mut self) -> Result<Event, ClientError> {
+        receive_event(&mut self.events, &mut self.closed).await
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ClientError {
     #[error("invalid Gateway URL: {0}")]
@@ -256,23 +269,27 @@ impl GatewayClient {
         // pending requests even if the caller drops its future.
         let command_capacity = config.max_in_flight.max(1);
         let (command_tx, command_rx) = mpsc::channel(command_capacity);
-        let event_capacity = bounded_event_capacity(
-            config.event_capacity,
-            config.max_message_bytes,
-            config.max_event_buffer_bytes,
-        );
+        let (event_capacity, max_event_bytes) =
+            event_buffer_limits(config.event_capacity, config.max_event_buffer_bytes);
         let (event_tx, initial_event_rx) = broadcast::channel(event_capacity);
         let (activity_tx, activity_rx) = watch::channel(0_u64);
         let (closed_tx, closed_rx) = watch::channel(None);
         let (close_tx, close_rx) = watch::channel(false);
+        let cancellations = Arc::new(StdMutex::new(HashSet::new()));
         tokio::spawn(run_session(
             socket,
-            command_rx,
-            event_tx.clone(),
-            activity_tx,
-            closed_tx,
-            close_rx,
-            config.write_timeout,
+            SessionChannels {
+                commands: command_rx,
+                events: event_tx.clone(),
+                activity: activity_tx,
+                closed: closed_tx,
+                close: close_rx,
+                cancellations: Arc::clone(&cancellations),
+            },
+            SessionLimits {
+                write_timeout: config.write_timeout,
+                max_event_bytes,
+            },
         ));
 
         Ok(GatewaySession {
@@ -283,6 +300,7 @@ impl GatewayClient {
             activity_rx,
             closed_rx,
             close_tx,
+            cancellations,
             next_request_id: Arc::new(AtomicU64::new(1)),
             request_timeout: config.request_timeout,
             in_flight: Arc::new(Semaphore::new(config.max_in_flight.max(1))),
@@ -294,11 +312,12 @@ impl GatewayClient {
 pub struct GatewaySession {
     hello: Value,
     command_tx: mpsc::Sender<SessionCommand>,
-    event_tx: broadcast::WeakSender<Event>,
-    event_rx: Arc<Mutex<broadcast::Receiver<Event>>>,
+    event_tx: broadcast::WeakSender<Arc<str>>,
+    event_rx: Arc<Mutex<broadcast::Receiver<Arc<str>>>>,
     activity_rx: watch::Receiver<u64>,
     closed_rx: watch::Receiver<Option<SessionCloseCause>>,
     close_tx: watch::Sender<bool>,
+    cancellations: Arc<StdMutex<HashSet<String>>>,
     next_request_id: Arc<AtomicU64>,
     request_timeout: Duration,
     in_flight: Arc<Semaphore>,
@@ -311,10 +330,15 @@ impl GatewaySession {
     }
 
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
-        self.event_tx
+    pub fn subscribe(&self) -> EventSubscription {
+        let events = self
+            .event_tx
             .upgrade()
-            .map_or_else(closed_event_receiver, |events| events.subscribe())
+            .map_or_else(closed_event_receiver, |events| events.subscribe());
+        EventSubscription {
+            events,
+            closed: self.closed_rx.clone(),
+        }
     }
 
     #[must_use]
@@ -325,31 +349,7 @@ impl GatewaySession {
     pub async fn next_event(&self) -> Result<Event, ClientError> {
         let mut closed = self.closed_rx.clone();
         let mut events = self.event_rx.lock().await;
-        match events.try_recv() {
-            Ok(event) => return Ok(event),
-            Err(broadcast::error::TryRecvError::Lagged(count)) => {
-                return Err(ClientError::EventLagged(count));
-            }
-            Err(broadcast::error::TryRecvError::Closed) => return Err(self.closed_error()),
-            Err(broadcast::error::TryRecvError::Empty) => {}
-        }
-        if closed.borrow().is_some() {
-            return Err(self.closed_error());
-        }
-        tokio::select! {
-            biased;
-            event = events.recv() => match event {
-                Ok(event) => Ok(event),
-                Err(broadcast::error::RecvError::Lagged(count)) => {
-                    Err(ClientError::EventLagged(count))
-                }
-                Err(broadcast::error::RecvError::Closed) => Err(self.closed_error()),
-            },
-            changed = closed.changed() => {
-                let _ = changed;
-                Err(self.closed_error())
-            }
-        }
+        receive_event(&mut events, &mut closed).await
     }
 
     pub async fn request(
@@ -385,13 +385,22 @@ impl GatewaySession {
             }),
         )
         .await
-        .map_err(|_| ClientError::RequestTimeout(method))?
+        .map_err(|_| ClientError::RequestTimeout(method.clone()))?
         .map_err(|_| self.closed_error())?;
 
-        let mut cancellation = RequestCancellation::new(id, self.command_tx.clone());
-        let result = reply_rx.await.map_err(|_| self.closed_error())?;
-        cancellation.disarm();
-        result
+        let mut cancellation =
+            RequestCancellation::new(id, self.command_tx.clone(), Arc::clone(&self.cancellations));
+        match tokio::time::timeout_at(deadline, reply_rx).await {
+            Ok(Ok(result)) => {
+                cancellation.disarm();
+                result
+            }
+            Ok(Err(_)) => {
+                cancellation.disarm();
+                Err(self.closed_error())
+            }
+            Err(_) => Err(ClientError::RequestTimeout(method)),
+        }
     }
 
     pub async fn close(&self) {
@@ -418,22 +427,70 @@ impl GatewaySession {
     }
 }
 
-fn closed_event_receiver() -> broadcast::Receiver<Event> {
+fn closed_event_receiver() -> broadcast::Receiver<Arc<str>> {
     let (sender, receiver) = broadcast::channel(1);
     drop(sender);
     receiver
 }
 
+async fn receive_event(
+    events: &mut broadcast::Receiver<Arc<str>>,
+    closed: &mut watch::Receiver<Option<SessionCloseCause>>,
+) -> Result<Event, ClientError> {
+    match events.try_recv() {
+        Ok(event) => return parse_retained_event(&event),
+        Err(broadcast::error::TryRecvError::Lagged(count)) => {
+            return Err(ClientError::EventLagged(count));
+        }
+        Err(broadcast::error::TryRecvError::Closed) => return Err(closed_event_error(closed)),
+        Err(broadcast::error::TryRecvError::Empty) => {}
+    }
+    if closed.borrow().is_some() {
+        return Err(closed_event_error(closed));
+    }
+    tokio::select! {
+        biased;
+        event = events.recv() => match event {
+            Ok(event) => parse_retained_event(&event),
+            Err(broadcast::error::RecvError::Lagged(count)) => {
+                Err(ClientError::EventLagged(count))
+            }
+            Err(broadcast::error::RecvError::Closed) => Err(closed_event_error(closed)),
+        },
+        changed = closed.changed() => {
+            let _ = changed;
+            Err(closed_event_error(closed))
+        }
+    }
+}
+
+fn parse_retained_event(event: &str) -> Result<Event, ClientError> {
+    serde_json::from_str(event).map_err(|error| ClientError::InvalidFrame(error.to_string()))
+}
+
+fn closed_event_error(closed: &watch::Receiver<Option<SessionCloseCause>>) -> ClientError {
+    closed.borrow().as_ref().map_or_else(
+        || ClientError::Closed("session task ended".into()),
+        SessionCloseCause::to_client_error,
+    )
+}
+
 struct RequestCancellation {
     id: Option<String>,
     commands: mpsc::Sender<SessionCommand>,
+    cancellations: Arc<StdMutex<HashSet<String>>>,
 }
 
 impl RequestCancellation {
-    fn new(id: String, commands: mpsc::Sender<SessionCommand>) -> Self {
+    fn new(
+        id: String,
+        commands: mpsc::Sender<SessionCommand>,
+        cancellations: Arc<StdMutex<HashSet<String>>>,
+    ) -> Self {
         Self {
             id: Some(id),
             commands,
+            cancellations,
         }
     }
 
@@ -445,6 +502,10 @@ impl RequestCancellation {
 impl Drop for RequestCancellation {
     fn drop(&mut self) {
         if let Some(id) = self.id.take() {
+            self.cancellations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(id.clone());
             let _ = self.commands.try_send(SessionCommand::CancelRequest { id });
         }
     }
@@ -503,8 +564,6 @@ enum IncomingFrame {
         event: String,
         #[serde(default)]
         payload: Value,
-        #[serde(default)]
-        seq: Option<u64>,
     },
     #[serde(rename = "res")]
     Response {
@@ -640,28 +699,66 @@ where
         .map_err(|error| ClientError::Transport(error.to_string()))
 }
 
-fn bounded_event_capacity(
-    requested_capacity: usize,
-    max_message_bytes: usize,
-    max_event_buffer_bytes: usize,
-) -> usize {
-    let capacity_by_bytes = max_event_buffer_bytes.max(1) / max_message_bytes.max(1);
-    requested_capacity.max(1).min(capacity_by_bytes.max(1))
+fn event_buffer_limits(requested_capacity: usize, max_event_buffer_bytes: usize) -> (usize, usize) {
+    let budget = max_event_buffer_bytes.max(1);
+    let target_capacity = requested_capacity.max(1).min(budget);
+    let capacity = 1_usize << target_capacity.ilog2();
+    (capacity, budget / capacity)
+}
+
+struct SessionChannels {
+    commands: mpsc::Receiver<SessionCommand>,
+    events: broadcast::Sender<Arc<str>>,
+    activity: watch::Sender<u64>,
+    closed: watch::Sender<Option<SessionCloseCause>>,
+    close: watch::Receiver<bool>,
+    cancellations: Arc<StdMutex<HashSet<String>>>,
+}
+
+#[derive(Clone, Copy)]
+struct SessionLimits {
+    write_timeout: Duration,
+    max_event_bytes: usize,
 }
 
 async fn run_session<S>(
     mut socket: tokio_tungstenite::WebSocketStream<S>,
-    mut commands: mpsc::Receiver<SessionCommand>,
-    events: broadcast::Sender<Event>,
-    activity: watch::Sender<u64>,
-    closed: watch::Sender<Option<SessionCloseCause>>,
-    mut close: watch::Receiver<bool>,
-    write_timeout: Duration,
+    channels: SessionChannels,
+    limits: SessionLimits,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
+    let SessionChannels {
+        mut commands,
+        events,
+        activity,
+        closed,
+        mut close,
+        cancellations,
+    } = channels;
+    let SessionLimits {
+        write_timeout,
+        max_event_bytes,
+    } = limits;
     let mut pending: HashMap<String, PendingRequest> = HashMap::new();
     let close_reason = loop {
+        let cancelled_pending = pending
+            .keys()
+            .filter(|id| {
+                cancellations
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .contains(*id)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for id in cancelled_pending {
+            pending.remove(&id);
+            cancellations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&id);
+        }
         let next_deadline = pending
             .values()
             .map(|request: &PendingRequest| request.deadline)
@@ -689,6 +786,10 @@ async fn run_session<S>(
                     .collect::<Vec<_>>();
                 for id in expired {
                     if let Some(request) = pending.remove(&id) {
+                        cancellations
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .remove(&id);
                         let _ = request.reply.send(Err(ClientError::RequestTimeout(
                             request.method,
                         )));
@@ -698,16 +799,36 @@ async fn run_session<S>(
             command = commands.recv() => {
                 match command {
                     Some(SessionCommand::Request { id, method, params, reply, permit, deadline }) => {
+                        if cancellations
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .remove(&id)
+                        {
+                            continue;
+                        }
                         if deadline <= Instant::now() {
                             let _ = reply.send(Err(ClientError::RequestTimeout(method)));
                             continue;
                         }
-                        match send_request(&mut socket, &id, &method, params, write_timeout).await {
+                        let remaining = deadline.saturating_duration_since(Instant::now());
+                        let request_deadline_wins = remaining <= write_timeout;
+                        match send_request(
+                            &mut socket,
+                            &id,
+                            &method,
+                            params,
+                            write_timeout.min(remaining),
+                        ).await {
                             Ok(()) => {
                                 pending.insert(id, PendingRequest { method, reply, _permit: permit, deadline });
                             }
                             Err(ClientError::WriteTimeout(operation)) => {
-                                let _ = reply.send(Err(ClientError::WriteTimeout(operation.clone())));
+                                let result = if request_deadline_wins {
+                                    Err(ClientError::RequestTimeout(method))
+                                } else {
+                                    Err(ClientError::WriteTimeout(operation.clone()))
+                                };
+                                let _ = reply.send(result);
                                 break SessionCloseCause::WriteTimeout(operation);
                             }
                             Err(error) => {
@@ -719,6 +840,10 @@ async fn run_session<S>(
                     }
                     Some(SessionCommand::CancelRequest { id }) => {
                         pending.remove(&id);
+                        cancellations
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .remove(&id);
                     }
                     None => {
                         let _ = tokio::time::timeout(write_timeout, socket.close(None)).await;
@@ -733,11 +858,20 @@ async fn run_session<S>(
                 match message {
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<IncomingFrame>(text.as_str()) {
-                            Ok(IncomingFrame::Event { event, payload, seq }) => {
-                                let _ = events.send(Event { event, payload, seq });
+                            Ok(IncomingFrame::Event { .. }) => {
+                                if text.len() > max_event_bytes {
+                                    break SessionCloseCause::InvalidFrame(format!(
+                                        "Gateway event exceeds the retained-event limit of {max_event_bytes} bytes"
+                                    ));
+                                }
+                                let _ = events.send(Arc::from(text.as_str()));
                             }
                             Ok(IncomingFrame::Response { id, ok, payload, error }) => {
                                 if let Some(request) = pending.remove(&id) {
+                                    cancellations
+                                        .lock()
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                        .remove(&id);
                                     let _ = request.reply.send(response_result(
                                         &request.method,
                                         ok,
@@ -898,6 +1032,42 @@ fn format_close(frame: Option<&tokio_tungstenite::tungstenite::protocol::CloseFr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        pin::Pin,
+        task::{Context, Poll},
+    };
+    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+    use tokio_tungstenite::tungstenite::protocol::Role;
+
+    struct StalledIo;
+
+    impl AsyncRead for StalledIo {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Pending
+        }
+    }
+
+    impl AsyncWrite for StalledIo {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Pending
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Pending
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Pending
+        }
+    }
 
     #[test]
     fn secure_invalid_data_handshakes_are_tls_failures() {
@@ -918,12 +1088,100 @@ mod tests {
     }
 
     #[test]
-    fn event_capacity_is_bounded_by_the_memory_budget() {
+    fn event_buffer_preserves_count_with_an_aggregate_byte_budget() {
         assert_eq!(
-            bounded_event_capacity(256, 16 * 1024 * 1024, 64 * 1024 * 1024),
-            4
+            event_buffer_limits(256, 64 * 1024 * 1024),
+            (256, 256 * 1024)
         );
-        assert_eq!(bounded_event_capacity(2, 1024, 64 * 1024), 2);
-        assert_eq!(bounded_event_capacity(0, 0, 0), 1);
+        assert_eq!(event_buffer_limits(3, 64), (2, 32));
+        assert_eq!(event_buffer_limits(0, 0), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn stalled_writer_closes_session_and_releases_pending_request() {
+        let socket =
+            tokio_tungstenite::WebSocketStream::from_raw_socket(StalledIo, Role::Client, None)
+                .await;
+        let (command_tx, command_rx) = mpsc::channel(1);
+        let (event_tx, mut event_rx) = broadcast::channel(1);
+        let (activity_tx, _activity_rx) = watch::channel(0);
+        let (closed_tx, mut closed_rx) = watch::channel(None);
+        let (_close_tx, close_rx) = watch::channel(false);
+        let cancellations = Arc::new(StdMutex::new(HashSet::new()));
+        let task = tokio::spawn(run_session(
+            socket,
+            SessionChannels {
+                commands: command_rx,
+                events: event_tx,
+                activity: activity_tx,
+                closed: closed_tx,
+                close: close_rx,
+                cancellations,
+            },
+            SessionLimits {
+                write_timeout: Duration::from_millis(20),
+                max_event_bytes: 1024,
+            },
+        ));
+
+        let permits = Arc::new(Semaphore::new(1));
+        let permit = permits.clone().acquire_owned().await.unwrap();
+        let (reply_tx, reply_rx) = oneshot::channel();
+        command_tx
+            .send(SessionCommand::Request {
+                id: "stalled-request".into(),
+                method: "node.stalled".into(),
+                params: json!({}),
+                reply: reply_tx,
+                permit,
+                deadline: Instant::now() + Duration::from_secs(1),
+            })
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), reply_rx)
+                .await
+                .expect("stalled write must be bounded")
+                .unwrap(),
+            Err(ClientError::WriteTimeout(operation)) if operation == "node.stalled"
+        ));
+        closed_rx.changed().await.unwrap();
+        assert!(matches!(
+            closed_rx.borrow().as_ref(),
+            Some(SessionCloseCause::WriteTimeout(operation)) if operation == "node.stalled"
+        ));
+        assert!(matches!(
+            event_rx.recv().await,
+            Err(broadcast::error::RecvError::Closed)
+        ));
+        task.await.unwrap();
+        assert_eq!(permits.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn cancellation_state_survives_a_full_command_queue() {
+        let (commands, mut receiver) = mpsc::channel(1);
+        commands
+            .send(SessionCommand::CancelRequest {
+                id: "queue-filler".into(),
+            })
+            .await
+            .unwrap();
+        let cancellations = Arc::new(StdMutex::new(HashSet::new()));
+        drop(RequestCancellation::new(
+            "abandoned".into(),
+            commands,
+            Arc::clone(&cancellations),
+        ));
+
+        assert!(cancellations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains("abandoned"));
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(SessionCommand::CancelRequest { id }) if id == "queue-filler"
+        ));
     }
 }

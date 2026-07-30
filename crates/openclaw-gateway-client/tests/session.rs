@@ -164,7 +164,104 @@ async fn raw_event_subscription_closes_with_the_session() {
         tokio::time::timeout(Duration::from_secs(1), events.recv())
             .await
             .expect("subscription must terminate"),
-        Err(tokio::sync::broadcast::error::RecvError::Closed)
+        Err(ClientError::Closed(_))
+    ));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn default_buffer_retains_256_small_events() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(tcp).await.unwrap();
+        send_json(
+            &mut socket,
+            json!({
+                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-buffer"}
+            }),
+        )
+        .await;
+        let connect = receive_json(&mut socket).await;
+        send_json(
+            &mut socket,
+            json!({
+                "type":"res", "id":connect["id"], "ok":true,
+                "payload":{"type":"hello-ok","protocol":4}
+            }),
+        )
+        .await;
+        for seq in 0..256 {
+            send_json(
+                &mut socket,
+                json!({"type":"event", "event":"node.small", "seq":seq}),
+            )
+            .await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    });
+
+    let session = GatewayClient::connect(
+        GatewayClientConfig::new(format!("ws://{address}")).unwrap(),
+        |_| async { Ok::<_, io::Error>(json!({"role":"node"})) },
+    )
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    for seq in 0..256 {
+        let event = session.next_event().await.unwrap();
+        assert_eq!(event.event, "node.small");
+        assert_eq!(event.seq, Some(seq));
+    }
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn oversized_retained_event_closes_the_session() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(tcp).await.unwrap();
+        send_json(
+            &mut socket,
+            json!({
+                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-large-event"}
+            }),
+        )
+        .await;
+        let connect = receive_json(&mut socket).await;
+        send_json(
+            &mut socket,
+            json!({
+                "type":"res", "id":connect["id"], "ok":true,
+                "payload":{"type":"hello-ok","protocol":4}
+            }),
+        )
+        .await;
+        send_json(
+            &mut socket,
+            json!({
+                "type":"event", "event":"node.large",
+                "payload":{"value":"x".repeat(600)}
+            }),
+        )
+        .await;
+    });
+
+    let config = GatewayClientConfig::new(format!("ws://{address}"))
+        .unwrap()
+        .event_capacity(2)
+        .max_event_buffer_bytes(1024);
+    let session = GatewayClient::connect(config, |_| async {
+        Ok::<_, io::Error>(json!({"role":"node"}))
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        session.next_event().await,
+        Err(ClientError::InvalidFrame(message)) if message.contains("retained-event limit")
     ));
     server.await.unwrap();
 }
