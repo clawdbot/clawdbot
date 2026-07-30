@@ -608,7 +608,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   let initialSessionApplied = false;
   let rememberedSessionApplied = false;
   let currentSessionId: string | null = null;
-  let sessionGeneration = 0;
+  const sessionGenerations = new Map<string, number>();
+  const sessionIds = new Map<string, string>();
   let activeChatRunId: string | null = null;
   let pendingSubmit: TuiPendingSubmit | null = null;
   let historyLoaded = false;
@@ -644,6 +645,14 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   let invalidateSessionRunOwnership: () => void = () => undefined;
   let retireHistoryAbsentRun: (_runId: string) => void = () => undefined;
 
+  const currentSessionGenerationKey = (): string =>
+    JSON.stringify([currentAgentId, currentSessionKey]);
+  const readCurrentSessionGeneration = () =>
+    sessionGenerations.get(currentSessionGenerationKey()) ?? 0;
+  const writeCurrentSessionGeneration = (value: number) => {
+    sessionGenerations.set(currentSessionGenerationKey(), value);
+  };
+
   const state: TuiStateAccess = {
     get agentDefaultId() {
       return agentDefaultId;
@@ -676,7 +685,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       if (currentAgentId === value) {
         return;
       }
-      sessionGeneration += 1;
       currentAgentId = value;
       invalidateSessionRunOwnership();
       pluginApprovals?.sessionChanged();
@@ -686,9 +694,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       return currentSessionKey;
     },
     set currentSessionKey(value) {
-      if (currentSessionKey !== value) {
-        sessionGeneration += 1;
-      }
       currentSessionKey = value;
       pluginApprovals?.sessionChanged();
       taskSuggestions?.sessionChanged();
@@ -697,16 +702,22 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       return currentSessionId;
     },
     set currentSessionId(value) {
-      if (currentSessionId && value && currentSessionId !== value) {
-        sessionGeneration += 1;
+      if (value) {
+        const generationKey = currentSessionGenerationKey();
+        const previousSessionId = sessionIds.get(generationKey);
+        // The first ID binds an unresolved selection; reset/replacement owners bump explicitly.
+        if (previousSessionId && previousSessionId !== value) {
+          writeCurrentSessionGeneration(readCurrentSessionGeneration() + 1);
+        }
+        sessionIds.set(generationKey, value);
       }
       currentSessionId = value;
     },
     get sessionGeneration() {
-      return sessionGeneration;
+      return readCurrentSessionGeneration();
     },
     set sessionGeneration(value) {
-      sessionGeneration = value;
+      writeCurrentSessionGeneration(Math.max(readCurrentSessionGeneration(), value));
     },
     get activeChatRunId() {
       return activeChatRunId;

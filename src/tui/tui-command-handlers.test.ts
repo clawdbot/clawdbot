@@ -926,6 +926,29 @@ describe("tui command handlers", () => {
     expect(harness.addSystem).not.toHaveBeenCalled();
   });
 
+  it("accepts a delayed ACK after returning to the exact original session incarnation", async () => {
+    const deferred = createDeferred<{ runId: string }>();
+    const harness = createHarness({
+      currentSessionKey: "agent:main:a",
+      currentSessionId: "session-a",
+      sessionGeneration: 3,
+      sendChat: vi.fn(() => deferred.promise),
+    });
+    const sending = harness.handleCommand("original prompt");
+    const provisionalRunId = (firstMockArg(harness.sendChat, "sendChat") as { runId: string })
+      .runId;
+    harness.state.currentSessionKey = "agent:main:b";
+    harness.state.currentSessionId = "session-b";
+    harness.state.currentSessionKey = "agent:main:a";
+    harness.state.currentSessionId = "session-a";
+    deferred.resolve({ runId: provisionalRunId });
+
+    await sending;
+
+    expect(getPendingSubmitAcceptedRunId(harness.state)).toBe(provisionalRunId);
+    expect(harness.setActivityStatus).toHaveBeenLastCalledWith("waiting");
+  });
+
   it("cleans a delayed send rejection without reporting it in a new session", async () => {
     const deferred = createDeferred<never>();
     const harness = createHarness({ sendChat: vi.fn(() => deferred.promise) });
