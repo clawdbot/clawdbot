@@ -7,6 +7,45 @@ import { loadUndiciRuntimeDeps, type UndiciRuntimeDeps } from "./undici-runtime.
 
 export type DispatcherAwareRequestInit = RequestInit & { dispatcher?: Dispatcher };
 
+export type GuardedFetchSendTracker = {
+  state: "not-sent" | "sent" | "unknown";
+};
+
+export function resolveGuardedFetchSendDispatcher(params: {
+  dispatcher: Dispatcher | null;
+  sendTracker: GuardedFetchSendTracker | undefined;
+  useRuntimeFetch: boolean;
+}): Dispatcher | null {
+  const { dispatcher, sendTracker } = params;
+  if (!sendTracker) {
+    return dispatcher;
+  }
+  if (!dispatcher || !params.useRuntimeFetch) {
+    // A custom fetch can send bytes without invoking the supplied dispatcher,
+    // so absence of onRequestSent is not replay proof.
+    sendTracker.state = "unknown";
+    return dispatcher;
+  }
+  return dispatcher.compose(
+    (dispatch) => (options, handler) =>
+      dispatch(
+        options,
+        new Proxy(handler, {
+          get(target, property) {
+            if (property === "onRequestSent") {
+              return () => {
+                sendTracker.state = "sent";
+                return target.onRequestSent?.();
+              };
+            }
+            const value = Reflect.get(target, property, target) as unknown;
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        }),
+      ),
+  );
+}
+
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 type RuntimeFormDataCtor = NonNullable<UndiciRuntimeDeps["FormData"]>;

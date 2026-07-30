@@ -20,12 +20,12 @@ const HTTP1_ONLY_DISPATCHER_OPTIONS = Object.freeze({
   allowH2: false as const,
 });
 
-/**
- * Module-level bridge so `resolveDispatcherTimeoutMs` in fetch-guard.ts
- * can read the global dispatcher timeout without relying on Undici's
- * non-public `.options` field.
- */
+/** Process-wide timeout snapshot for dispatchers that cannot expose their options. */
 export let globalUndiciStreamTimeoutMs: number | undefined;
+
+export function resolveUndiciStreamTimeoutMs(timeoutMs: number | undefined): number | undefined {
+  return timeoutMs ?? globalUndiciStreamTimeoutMs;
+}
 
 let lastAppliedTimeoutKey: string | null = null;
 let lastAppliedProxyBootstrapKey: string | null = null;

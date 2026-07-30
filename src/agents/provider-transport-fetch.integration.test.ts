@@ -1,14 +1,20 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { redactSensitiveText } from "../logging/redact.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
+import {
+  closeProviderTransportDispatcherPool,
+  getProviderTransportDispatcherPool,
+} from "./provider-transport-dispatcher-pool.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 
 describe("guarded model fetch integration", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await closeProviderTransportDispatcherPool();
     resetSecretRedactionRegistryForTest();
   });
 
@@ -54,21 +60,83 @@ describe("guarded model fetch integration", () => {
     }
   });
 
-  it("retries an Anthropic socket close before response headers", async () => {
-    let requests = 0;
+  it("recovers from a pre-send Anthropic failure on the pooled dispatcher", async () => {
     const bodies: string[] = [];
     const server = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        bodies.push(Buffer.concat(chunks).toString("utf8"));
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end("data: ok\n\n");
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const pool = getProviderTransportDispatcherPool();
+      const acquire = pool.acquire.bind(pool);
+      const reused: boolean[] = [];
+      let injectPreSendFailure = true;
+      vi.spyOn(pool, "acquire").mockImplementation((params) => {
+        const lease = acquire(params);
+        if (!lease) {
+          return lease;
+        }
+        reused.push(lease.reused);
+        if (!injectPreSendFailure) {
+          return lease;
+        }
+        injectPreSendFailure = false;
+        return {
+          ...lease,
+          dispatcher: lease.dispatcher.compose(() => (_options, _handler) => {
+            throw Object.assign(new Error("injected pre-send socket failure"), {
+              code: "UND_ERR_SOCKET",
+            });
+          }),
+        };
+      });
+
+      const port = (server.address() as AddressInfo).port;
+      const baseUrl = `http://127.0.0.1:${port}/v1`;
+      const model = {
+        id: "claude-sonnet-4-6",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        baseUrl,
+      } as unknown as Model<"anthropic-messages">;
+      const body = JSON.stringify({ model: model.id, stream: true });
+
+      const response = await buildGuardedModelFetch(model)(`${baseUrl}/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      });
+
+      await expect(response.text()).resolves.toBe("data: ok\n\n");
+      expect(reused).toEqual([false, true]);
+      expect(bodies).toEqual([body]);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
+  it("does not retry an Anthropic POST received before the socket closes", async () => {
+    let requests = 0;
+    const bodies: string[] = [];
+    const server = createServer((request) => {
       requests += 1;
       const chunks: Buffer[] = [];
       request.on("data", (chunk: Buffer) => chunks.push(chunk));
       request.on("end", () => {
         bodies.push(Buffer.concat(chunks).toString("utf8"));
-        if (requests === 1) {
-          request.socket.destroy();
-          return;
-        }
-        response.writeHead(200, { "content-type": "text/event-stream" });
-        response.end('event: message_stop\ndata: {"type":"message_stop"}\n\n');
+        request.socket.destroy();
       });
     });
     await new Promise<void>((resolve, reject) => {
@@ -80,22 +148,23 @@ describe("guarded model fetch integration", () => {
       const port = (server.address() as AddressInfo).port;
       const baseUrl = `http://127.0.0.1:${port}/v1`;
       const model = {
-        id: "claude-opus-4-7",
+        id: "claude-sonnet-4-6",
         provider: "anthropic",
         api: "anthropic-messages",
         baseUrl,
       } as unknown as Model<"anthropic-messages">;
-      const body = JSON.stringify({ model: "claude-opus-4-7", stream: true });
+      const body = JSON.stringify({ model: "claude-sonnet-4-6", stream: true });
 
-      const response = await buildGuardedModelFetch(model)(`${baseUrl}/messages`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body,
-      });
+      await expect(
+        buildGuardedModelFetch(model)(`${baseUrl}/messages`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+        }),
+      ).rejects.toThrow();
 
-      await expect(response.text()).resolves.toContain('"type":"message_stop"');
-      expect(requests).toBe(2);
-      expect(bodies).toEqual([body, body]);
+      expect(requests).toBe(1);
+      expect(bodies).toEqual([body]);
     } finally {
       await new Promise<void>((resolve) => {
         server.close(() => resolve());

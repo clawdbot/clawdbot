@@ -21,6 +21,8 @@ import {
   fetchWithRuntimeDispatcher,
   isMockedFetch,
   type DispatcherAwareRequestInit,
+  resolveGuardedFetchSendDispatcher,
+  type GuardedFetchSendTracker,
 } from "./runtime-fetch.js";
 import {
   assertHostnameAllowedWithPolicy,
@@ -35,24 +37,12 @@ import {
   type SsrFPolicy,
 } from "./ssrf.js";
 import { resolveUndiciAutoSelectFamilyConnectOptions } from "./undici-family-policy.js";
-import { globalUndiciStreamTimeoutMs } from "./undici-global-dispatcher.js";
+import { resolveUndiciStreamTimeoutMs } from "./undici-global-dispatcher.js";
 import {
   createHttp1Agent,
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
 } from "./undici-runtime.js";
-
-function resolveDispatcherTimeoutMs(fromParams: number | undefined): number | undefined {
-  if (fromParams !== undefined) {
-    return fromParams;
-  }
-  // Fall back to module-level bridge set by ensureGlobalUndiciStreamTimeouts
-  // (avoids reading Undici's non-public `.options` field)
-  if (globalUndiciStreamTimeoutMs !== undefined) {
-    return globalUndiciStreamTimeoutMs;
-  }
-  return undefined;
-}
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -100,6 +90,8 @@ export type GuardedFetchOptions = {
   auditContext?: string;
   /** Internal opt-in for reusing freshly revalidated, direct pinned dispatchers. */
   dispatcherPool?: PinnedDispatcherPool;
+  /** Internal request-body send observation for replay-safe transport recovery. */
+  sendTracker?: GuardedFetchSendTracker;
 };
 
 export type GuardedFetchResult = {
@@ -504,6 +496,9 @@ export async function fetchConfiguredLocalOriginWithSsrFGuard({
 async function fetchWithSsrFGuardInternal(
   params: GuardedFetchInternalOptions,
 ): Promise<GuardedFetchResult> {
+  if (params.sendTracker) {
+    params.sendTracker.state = "not-sent";
+  }
   const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalThis.fetch;
   if (!defaultFetch) {
     throw new Error("fetch is not available");
@@ -607,7 +602,7 @@ async function fetchWithSsrFGuardInternal(
         !canUseManagedProxy &&
         !usesTrustedExplicitProxyMode &&
         params.pinDns !== false;
-      const timeoutMs = resolveDispatcherTimeoutMs(params.timeoutMs);
+      const timeoutMs = resolveUndiciStreamTimeoutMs(params.timeoutMs);
 
       // Trusted env-proxy, managed proxy, and pinDns=false can skip local DNS
       // pinning, so keep the pre-DNS hostname/IP policy checks from the pinned path.
@@ -689,13 +684,6 @@ async function fetchWithSsrFGuardInternal(
         }
       }
 
-      const init: DispatcherAwareRequestInit = {
-        ...(currentInit ? { ...currentInit } : {}),
-        redirect: "manual",
-        ...(dispatcher ? { dispatcher } : {}),
-        ...(signal ? { signal } : {}),
-      };
-
       const supportsDispatcherInit =
         (params.fetchImpl !== undefined &&
           !isAmbientGlobalFetch({
@@ -708,6 +696,18 @@ async function fetchWithSsrFGuardInternal(
       // because the default global fetch path will not honor per-request
       // dispatchers.
       const shouldUseRuntimeFetch = Boolean(dispatcher) && !supportsDispatcherInit;
+      const requestDispatcher = resolveGuardedFetchSendDispatcher({
+        dispatcher,
+        sendTracker: params.sendTracker,
+        useRuntimeFetch: shouldUseRuntimeFetch,
+      });
+      const init: DispatcherAwareRequestInit = {
+        ...(currentInit ? { ...currentInit } : {}),
+        redirect: "manual",
+        ...(requestDispatcher ? { dispatcher: requestDispatcher } : {}),
+        ...(signal ? { signal } : {}),
+      };
+
       const response = shouldUseRuntimeFetch
         ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
         : await defaultFetch(parsedUrl.toString(), init);
