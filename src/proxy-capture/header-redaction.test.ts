@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
-import { isSensitiveCaptureHeaderName, redactedCaptureHeaders } from "./header-redaction.js";
+import { redactedCaptureHeaders } from "./header-redaction.js";
 
 afterEach(() => {
   resetSecretRedactionRegistryForTest();
@@ -56,8 +56,15 @@ describe("redactedCaptureHeaders", () => {
   });
 
   it("treats token-ish name fragments as sensitive", () => {
-    expect(isSensitiveCaptureHeaderName("x-vendor-access-token")).toBe(true);
-    expect(isSensitiveCaptureHeaderName("x-session-id")).toBe(true);
-    expect(isSensitiveCaptureHeaderName("accept-language")).toBe(false);
+    const redacted = redactedCaptureHeaders({
+      "x-vendor-access-token": "abc",
+      "x-session-id": "s-1",
+      "accept-language": "en-US",
+    });
+    expect(redacted).toEqual({
+      "x-vendor-access-token": "[REDACTED]",
+      "x-session-id": "[REDACTED]",
+      "accept-language": "en-US",
+    });
   });
 });

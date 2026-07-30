@@ -34,7 +34,7 @@ const SENSITIVE_CAPTURE_HEADER_NAME_FRAGMENTS = [
   "session",
 ];
 
-export function isSensitiveCaptureHeaderName(name: string): boolean {
+function isSensitiveCaptureHeaderName(name: string): boolean {
   const normalized = name.trim().toLowerCase();
   if (!normalized) {
     return false;
