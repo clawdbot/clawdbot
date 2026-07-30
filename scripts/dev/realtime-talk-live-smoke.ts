@@ -191,7 +191,9 @@ function compareStrings(left: string | undefined, right: string | undefined): nu
 }
 
 function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function appendBounded<T>(items: T[], item: T, maxItems: number): void {
@@ -451,8 +453,8 @@ async function smokeOpenAIAudioRoundtrip(apiKey: string, cycleCount: number): Pr
           resolveRoundtrip?.();
         }
       };
-      let bridge: RealtimeVoiceBridge | undefined;
-      bridge = provider.createBridge({
+      const bridgeRef: { current?: RealtimeVoiceBridge } = {};
+      const bridge = provider.createBridge({
         providerConfig: {
           apiKey,
           model: OPENAI_REALTIME_MODEL,
@@ -473,7 +475,7 @@ async function smokeOpenAIAudioRoundtrip(apiKey: string, cycleCount: number): Pr
           maybeResolveRoundtrip();
         },
         onClearAudio: () => {},
-        onMark: (markName) => bridge?.acknowledgeMark(markName),
+        onMark: (markName) => bridgeRef.current?.acknowledgeMark(markName),
         onTranscript: (role, text, isFinal) => {
           if (!isFinal) {
             return;
@@ -499,6 +501,7 @@ async function smokeOpenAIAudioRoundtrip(apiKey: string, cycleCount: number): Pr
           }
         },
       });
+      bridgeRef.current = bridge;
 
       let chunksSent = 0;
       try {
@@ -513,6 +516,7 @@ async function smokeOpenAIAudioRoundtrip(apiKey: string, cycleCount: number): Pr
         closed = true;
         bridge.close();
         bridge.close();
+        bridgeRef.current = undefined;
         await delay(100);
       }
       if (lateAudioBytes > 0) {
