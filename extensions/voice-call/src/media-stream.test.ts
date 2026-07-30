@@ -253,6 +253,63 @@ describe("MediaStreamHandler security hardening", () => {
     }
   });
 
+  it("rejects duplicate start frames without creating another STT session", async () => {
+    const sttSession = {
+      ...createStubSession(),
+      close: vi.fn(),
+    };
+    const createSession = vi.fn(() => sttSession);
+    const shouldAcceptStream = vi.fn(() => true);
+    const onConnect = vi.fn();
+    const onDisconnect = vi.fn();
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: {
+        createSession,
+        id: "openai",
+        label: "OpenAI",
+        isConfigured: () => true,
+      },
+      providerConfig: {},
+      shouldAcceptStream,
+      onConnect,
+      onDisconnect,
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          streamSid: "MZ-first",
+          start: { callSid: "CA-first" },
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(onConnect).toHaveBeenCalledWith("CA-first", "MZ-first");
+      });
+
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          streamSid: "MZ-second",
+          start: { callSid: "CA-second" },
+        }),
+      );
+      const closed = await waitForClose(ws);
+
+      expect(closed).toEqual({ code: 1008, reason: "Duplicate start" });
+      expect(createSession).toHaveBeenCalledTimes(1);
+      expect(shouldAcceptStream).toHaveBeenCalledTimes(1);
+      expect(onConnect).toHaveBeenCalledTimes(1);
+      expect(sttSession.close).toHaveBeenCalledTimes(1);
+      expect(onDisconnect).toHaveBeenCalledWith("CA-first", "MZ-first");
+      expect(onDisconnect).toHaveBeenCalledTimes(1);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("emits common Talk events for telephony STT/TTS sessions", async () => {
     let callbacks: RealtimeTranscriptionSessionCreateRequest | undefined;
     const sentAudio: Buffer[] = [];
