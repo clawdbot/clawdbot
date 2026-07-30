@@ -140,6 +140,8 @@ describe("createCliDispatchTranscriptRecorder", () => {
         ],
       }),
     );
+  });
+
   it("persists network-result taint on the result and subsequent assistant", async () => {
     const recorder = createCliDispatchTranscriptRecorder(recorderParams());
     recorder.noteToolEvent({

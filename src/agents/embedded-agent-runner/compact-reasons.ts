@@ -22,7 +22,7 @@ export type CompactionReasonCode =
   | "no_real_conversation_messages"
   | "unknown_model"
   | "below_threshold"
-  | "already_compacted_recently"
+  | "already_compacted"
   | "deferred_background"
   | "live_context_still_exceeds_target"
   | "guard_blocked"
@@ -43,7 +43,7 @@ const SKIP_CODES: ReadonlySet<CompactionReasonCode> = new Set([
   "no_compactable_entries",
   "no_real_conversation_messages",
   "below_threshold",
-  "already_compacted_recently",
+  "already_compacted",
   "deferred_background",
 ]);
 

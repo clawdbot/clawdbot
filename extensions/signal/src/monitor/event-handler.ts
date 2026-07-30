@@ -1,4 +1,5 @@
 // Signal plugin module implements event handler behavior.
+import { setTimeout as sleep } from "node:timers/promises";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createStatusReactionController,

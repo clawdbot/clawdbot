@@ -546,6 +546,9 @@ describe("subagent registry persistence", () => {
       createdAt: now - 50,
       startedAt: now - 25,
       endedAt: now,
+      execution: { status: "terminal", startedAt: now - 25, endedAt: now },
+      completion: { required: false },
+      delivery: { status: "pending" },
       suppressAnnounceReason: "steer-restart",
       cleanupHandled: false,
     });

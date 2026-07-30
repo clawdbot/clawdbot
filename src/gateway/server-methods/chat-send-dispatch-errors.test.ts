@@ -135,6 +135,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           removeChatRun,
         } as never,
         isQueuedFollowupEnqueued: () => false,
+        markTerminalBroadcasted: vi.fn(),
         persistUserTurnTranscript: vi.fn(),
         session: {
           agentId: "main",
@@ -202,6 +203,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         removeChatRun: vi.fn(),
       } as never,
       isQueuedFollowupEnqueued: () => false,
+      markTerminalBroadcasted: vi.fn(),
       persistUserTurnTranscript: vi.fn(),
       session: {
         agentId: "main",
@@ -269,6 +271,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         removeChatRun: vi.fn(),
       } as never,
       isQueuedFollowupEnqueued: () => false,
+      markTerminalBroadcasted: vi.fn(),
       persistUserTurnTranscript: vi.fn(),
       session: {
         agentId: "main",

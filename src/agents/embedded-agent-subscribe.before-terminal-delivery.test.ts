@@ -325,6 +325,8 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
         audioAsVoice: true,
       }),
     );
+  });
+
   it("preserves original transcript media references on deferred block replies", async () => {
     const onBlockReply = vi.fn();
     const { emit } = createSubscribedSessionHarness({

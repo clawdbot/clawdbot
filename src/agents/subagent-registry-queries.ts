@@ -300,7 +300,7 @@ export function classifyChildSessionRunLivenessFromRuns(
   childSessionKey: string,
   options?: { now?: number; staleCutoffMs?: number },
 ): SubagentRunLiveness {
-  const latest = findLatestRunForChildSession(runs, childSessionKey);
+  const latest = getLatestSubagentRunByChildSessionKeyFromRuns(runs, childSessionKey);
   return classifySubagentRunLiveness(latest, options ?? {});
 }
 
@@ -367,7 +367,7 @@ export function listAncestorSessionKeysFromRuns(
   while (current && !visited.has(current)) {
     ancestors.push(current);
     visited.add(current);
-    const latest = findLatestRunForChildSession(runs, current);
+    const latest = getLatestSubagentRunByChildSessionKeyFromRuns(runs, current);
     const parent = latest?.requesterSessionKey.trim();
     if (!parent || parent === current) {
       break;

@@ -150,7 +150,7 @@ describe("isCompactionSkipCode", () => {
     "no_real_conversation_messages",
     "unknown_model",
     "below_threshold",
-    "already_compacted_recently",
+    "already_compacted",
     "live_context_still_exceeds_target",
     "guard_blocked",
     "summary_failed",
@@ -163,7 +163,7 @@ describe("isCompactionSkipCode", () => {
     "no_compactable_entries",
     "no_real_conversation_messages",
     "below_threshold",
-    "already_compacted_recently",
+    "already_compacted",
   ]);
 
   it.each(ALL_CODES)("classifies %s correctly as skip vs non-skip", (code) => {

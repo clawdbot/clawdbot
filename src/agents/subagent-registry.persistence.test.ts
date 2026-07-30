@@ -1025,43 +1025,4 @@ describe("subagent registry persistence", () => {
     expect(resolved?.endedAt).toBe(220);
   });
 
-  it("resume guard prunes orphan runs before announce retry", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
-    const runId = "run-orphan-resume-guard";
-    const childSessionKey = "agent:main:subagent:ghost-resume";
-    const now = Date.now();
-
-    await writeChildSessionEntry({
-      sessionKey: childSessionKey,
-      sessionId: "sess-resume-guard",
-      updatedAt: now,
-    });
-    addSubagentRunForTests({
-      runId,
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "resume orphan guard",
-      cleanup: "keep",
-      createdAt: now - 50,
-      startedAt: now - 25,
-      endedAt: now,
-      execution: { status: "terminal", startedAt: now - 25, endedAt: now },
-      completion: { required: false },
-      delivery: { status: "pending" },
-      suppressAnnounceReason: "steer-restart",
-      cleanupHandled: false,
-    });
-    await removeChildSessionEntry(childSessionKey);
-
-    const changed = clearSubagentRunSteerRestart(runId);
-    expect(changed).toBe(true);
-    await flushQueuedRegistryWork();
-
-    expect(announceSpy).not.toHaveBeenCalled();
-    expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
-    const persisted = loadSubagentRegistryFromSqlite();
-    expect(persisted.has(runId)).toBe(false);
-  });
 });
