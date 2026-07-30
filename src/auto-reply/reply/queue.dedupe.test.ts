@@ -468,6 +468,57 @@ describe("followup queue deduplication", () => {
     clearSessionQueues([key]);
   });
 
+  it("does not let a stale abandoned lifecycle release a newer same-id owner", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-07-30T00:00:00Z"));
+      const key = "test-dedup-stale-owner";
+      const stalledAdmission = createDeferred<void>();
+      const first = createRun({
+        prompt: "first",
+        messageId: "same-id",
+        originatingChannel: "line",
+        originatingTo: "group:G1",
+      });
+      first.turnAdoptionLifecycle = {
+        onAdopted: () => stalledAdmission.promise,
+        onAbandoned: vi.fn(),
+      };
+      expect(enqueueFollowupRun(key, first, collectSettings)).toBe(true);
+
+      const admission = admitFollowupRunLifecycle(first);
+      await vi.advanceTimersByTimeAsync(0);
+      clearSessionQueues([key]);
+
+      // Once the original key expires, a later delivery can legitimately own
+      // the same identity while the old lifecycle is still settling.
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      const replacement = createRun({
+        prompt: "replacement",
+        messageId: "same-id",
+        originatingChannel: "line",
+        originatingTo: "group:G1",
+      });
+      replacement.turnAdoptionLifecycle = { onAdopted: () => {} };
+      expect(enqueueFollowupRun(key, replacement, collectSettings)).toBe(true);
+
+      stalledAdmission.reject(new Error("admission failed"));
+      await expect(admission).rejects.toThrow("admission failed");
+      await vi.advanceTimersByTimeAsync(0);
+
+      const redelivery = createRun({
+        prompt: "duplicate",
+        messageId: "same-id",
+        originatingChannel: "line",
+        originatingTo: "group:G1",
+      });
+      expect(enqueueFollowupRun(key, redelivery, collectSettings)).toBe(false);
+      clearSessionQueues([key]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("still deduplicates redelivery of a message whose queued run was admitted", async () => {
     const key = `test-dedup-admitted-redelivery-${Date.now()}`;
     const onAbandoned = vi.fn();

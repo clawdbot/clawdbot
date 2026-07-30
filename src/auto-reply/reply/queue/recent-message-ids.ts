@@ -1,22 +1,33 @@
 // Recent-queue message-id dedupe shared by enqueue admission and abandonment release.
-import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
+import { pruneMapToMaxSize } from "../../../infra/map-size.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
+
+const RECENT_QUEUE_MESSAGE_ID_TTL_MS = 5 * 60 * 1000;
+const RECENT_QUEUE_MESSAGE_ID_MAX_SIZE = 10_000;
+
+type RecentQueueMessageIdRecord = {
+  ownerToken: object;
+  recordedAt: number;
+};
+
+type RecentQueueMessageIdOwnership = {
+  key: string;
+  ownerToken: object;
+};
 
 /**
  * Keep queued message-id dedupe shared across bundled chunks so redeliveries
  * are rejected no matter which chunk receives the enqueue call.
  */
-const RECENT_QUEUE_MESSAGE_IDS_KEY = Symbol.for("openclaw.recentQueueMessageIds");
-
-const RECENT_QUEUE_MESSAGE_IDS = resolveGlobalDedupeCache(RECENT_QUEUE_MESSAGE_IDS_KEY, {
-  ttlMs: 5 * 60 * 1000,
-  maxSize: 10_000,
-});
+const RECENT_QUEUE_MESSAGE_IDS = resolveGlobalSingleton(
+  Symbol.for("openclaw.recentQueueMessageIdOwners"),
+  () => new Map<string, RecentQueueMessageIdRecord>(),
+);
 
 /** Chunk-shared identity→key association so abandonment can free the entry. */
-const RUN_MESSAGE_ID_KEYS = resolveGlobalSingleton(
-  Symbol.for("openclaw.recentQueueMessageIdKeys"),
-  () => new WeakMap<object, string>(),
+const DEDUPE_IDENTITY_OWNERSHIPS = resolveGlobalSingleton(
+  Symbol.for("openclaw.recentQueueMessageIdOwnerships"),
+  () => new WeakMap<object, RecentQueueMessageIdOwnership>(),
 );
 
 type DedupeOwnedRun = { turnAdoptionLifecycle?: object };
@@ -32,13 +43,38 @@ function resolveDedupeIdentity(run: DedupeOwnedRun): object {
   return run.turnAdoptionLifecycle ?? run;
 }
 
-export function peekRecentQueueMessageId(key: string): boolean {
-  return RECENT_QUEUE_MESSAGE_IDS.peek(key);
+function pruneRecentQueueMessageIds(now: number): void {
+  const cutoff = now - RECENT_QUEUE_MESSAGE_ID_TTL_MS;
+  for (const [key, record] of RECENT_QUEUE_MESSAGE_IDS) {
+    if (record.recordedAt <= cutoff) {
+      RECENT_QUEUE_MESSAGE_IDS.delete(key);
+    }
+  }
+  pruneMapToMaxSize(RECENT_QUEUE_MESSAGE_IDS, RECENT_QUEUE_MESSAGE_ID_MAX_SIZE);
 }
 
-export function recordRecentQueueMessageId(run: DedupeOwnedRun, key: string): void {
-  RUN_MESSAGE_ID_KEYS.set(resolveDedupeIdentity(run), key);
-  RECENT_QUEUE_MESSAGE_IDS.check(key);
+export function peekRecentQueueMessageId(key: string, now = Date.now()): boolean {
+  const record = RECENT_QUEUE_MESSAGE_IDS.get(key);
+  if (!record) {
+    return false;
+  }
+  if (now - record.recordedAt >= RECENT_QUEUE_MESSAGE_ID_TTL_MS) {
+    RECENT_QUEUE_MESSAGE_IDS.delete(key);
+    return false;
+  }
+  return true;
+}
+
+export function recordRecentQueueMessageId(
+  run: DedupeOwnedRun,
+  key: string,
+  now = Date.now(),
+): void {
+  const ownerToken = {};
+  DEDUPE_IDENTITY_OWNERSHIPS.set(resolveDedupeIdentity(run), { key, ownerToken });
+  RECENT_QUEUE_MESSAGE_IDS.delete(key);
+  RECENT_QUEUE_MESSAGE_IDS.set(key, { ownerToken, recordedAt: now });
+  pruneRecentQueueMessageIds(now);
 }
 
 /**
@@ -48,12 +84,16 @@ export function recordRecentQueueMessageId(run: DedupeOwnedRun, key: string): vo
  */
 export function releaseRecentQueueMessageId(run: DedupeOwnedRun): void {
   const identity = resolveDedupeIdentity(run);
-  const key = RUN_MESSAGE_ID_KEYS.get(identity);
-  if (key === undefined) {
+  const ownership = DEDUPE_IDENTITY_OWNERSHIPS.get(identity);
+  if (!ownership) {
     return;
   }
-  RUN_MESSAGE_ID_KEYS.delete(identity);
-  RECENT_QUEUE_MESSAGE_IDS.delete(key);
+  DEDUPE_IDENTITY_OWNERSHIPS.delete(identity);
+  // The key may have expired and been re-recorded by a newer same-ID run.
+  // Only the lifecycle that installed the current owner may release it.
+  if (RECENT_QUEUE_MESSAGE_IDS.get(ownership.key)?.ownerToken === ownership.ownerToken) {
+    RECENT_QUEUE_MESSAGE_IDS.delete(ownership.key);
+  }
 }
 
 export function resetRecentQueuedMessageIdDedupe(): void {
