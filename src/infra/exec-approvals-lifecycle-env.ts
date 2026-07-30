@@ -1,4 +1,7 @@
 // Expands known shell environment references used in lifecycle-sensitive argv.
+import { splitShellArgs } from "../utils/shell-argv.js";
+import { splitLifecycleInlineCommands } from "./exec-approvals-lifecycle-shell.js";
+import { extractShellWrapperInlineCommand } from "./shell-wrapper-resolution.js";
 const POSIX_VARIABLE_RE = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/gu;
 const POWERSHELL_VARIABLE_RE = /\$env:([A-Za-z_][A-Za-z0-9_]*)/giu;
 const CMD_VARIABLE_RE = /%([A-Za-z_][A-Za-z0-9_]*)%/gu;
@@ -107,25 +110,28 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
       tokens[commandIndex] ?? "",
     );
   }
+  if (["ash", "bash", "dash", "fish", "ksh", "sh", "zsh"].includes(executable)) {
+    const inline = extractShellWrapperInlineCommand([...argv]);
+    if (inline === null) {
+      return false;
+    }
+    return splitLifecycleInlineCommands(inline).some((part) => {
+      const nestedArgv = splitShellArgs(part);
+      return nestedArgv ? unresolvedEnvironmentMayHideLifecycle(nestedArgv) : true;
+    });
+  }
   return [
     "",
     "kill",
     "killall",
-    "ash",
-    "bash",
-    "dash",
     "env",
-    "fish",
-    "ksh",
     "pkill",
     "powershell",
     "pwsh",
     "schtasks",
     "service",
-    "sh",
     "taskkill",
     "xargs",
-    "zsh",
   ].includes(executable);
 }
 

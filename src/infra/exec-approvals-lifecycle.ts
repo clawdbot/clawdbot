@@ -14,7 +14,12 @@ import {
   isOpenClawExecutablePattern,
   matchesOpenClawProcessPattern,
 } from "./exec-approvals-lifecycle-patterns.js";
+import { resolvePowerShellStartProcessOpenClawArgv } from "./exec-approvals-lifecycle-powershell.js";
 import { resolveLifecyclePackageRunnerArgv } from "./exec-approvals-lifecycle-runners.js";
+import {
+  splitLifecycleCommandText,
+  splitLifecycleInlineCommands,
+} from "./exec-approvals-lifecycle-shell.js";
 import {
   bindLifecyclePosixShellPositionals,
   extractShellSubstitutionCommands,
@@ -30,6 +35,7 @@ const MAX_NESTED_COMMAND_DEPTH = 8;
 const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "--version"]);
 const OPENCLAW_GLOBAL_FLAGS = new Set(["--dev", "--no-color"]);
 const OPENCLAW_GLOBAL_OPTIONS = new Set(["--container", "--log-level", "--profile"]);
+const UPDATE_OPTIONS_WITH_VALUE = new Set(["--channel", "--tag", "--timeout"]);
 const LAUNCHCTL_MUTATIONS = new Set([
   "attach",
   "bootstrap",
@@ -140,6 +146,24 @@ function hasHelpOrVersion(argv: readonly string[]): boolean {
   return argv.some((token) => HELP_OR_VERSION_FLAGS.has(token.trim()));
 }
 
+function hasEffectiveHelpOrVersion(
+  argv: readonly string[],
+  start: number,
+  optionsWithValue: ReadonlySet<string>,
+): boolean {
+  for (let index = start; index < argv.length; index += 1) {
+    const token = argv[index]?.trim() ?? "";
+    const name = optionName(token);
+    if (HELP_OR_VERSION_FLAGS.has(token)) {
+      return true;
+    }
+    if (optionsWithValue.has(name) && !token.includes("=")) {
+      index += 1;
+    }
+  }
+  return false;
+}
+
 function optionName(token: string): string {
   return normalizedToken(token).split("=", 1)[0] ?? "";
 }
@@ -166,14 +190,10 @@ function scanFirstPositional(
 }
 
 function classifyUpdateArgv(argv: readonly string[], start: number): boolean {
-  if (hasHelpOrVersion(argv.slice(start))) {
+  if (hasEffectiveHelpOrVersion(argv, start, UPDATE_OPTIONS_WITH_VALUE)) {
     return false;
   }
-  const positionalIndex = scanFirstPositional(
-    argv,
-    start,
-    new Set(["--channel", "--tag", "--timeout"]),
-  );
+  const positionalIndex = scanFirstPositional(argv, start, UPDATE_OPTIONS_WITH_VALUE);
   const action = normalizedToken(argv[positionalIndex]);
   if (action === "status") {
     return false;
@@ -233,10 +253,11 @@ function classifyOpenClawArgv(argv: readonly string[]): boolean {
 }
 
 function classifyLaunchctl(argv: readonly string[], raw: string, depth: number): boolean {
-  if (hasHelpOrVersion(argv)) {
+  const optionsWithValue = new Set(["-d", "-s"]);
+  if (hasEffectiveHelpOrVersion(argv, 1, optionsWithValue)) {
     return false;
   }
-  const actionIndex = scanFirstPositional(argv, 1, new Set(["-d", "-s"]));
+  const actionIndex = scanFirstPositional(argv, 1, optionsWithValue);
   const action = normalizedToken(argv[actionIndex]);
   if (["asuser", "bsexec"].includes(action)) {
     const commandArgv = argv.slice(actionIndex + 2);
@@ -275,7 +296,8 @@ function argvUsesSignalZero(argv: readonly string[]): boolean {
 
 function classifySystemctl(argv: readonly string[]): boolean {
   const endOfOptions = argv.indexOf("--");
-  if (hasHelpOrVersion(endOfOptions === -1 ? argv : argv.slice(0, endOfOptions))) {
+  const preSeparatorArgv = endOfOptions === -1 ? argv : argv.slice(0, endOfOptions);
+  if (hasEffectiveHelpOrVersion(preSeparatorArgv, 1, SYSTEMCTL_OPTIONS_WITH_VALUE)) {
     return false;
   }
   const actionIndex = scanFirstPositional(argv, 1, SYSTEMCTL_OPTIONS_WITH_VALUE);
@@ -364,7 +386,10 @@ function classifyProcessMutation(
     ) {
       return false;
     }
-    const normalizedRaw = raw.replace(/\[([a-z0-9])\]/giu, "$1");
+    const normalizedRaw = raw
+      .replace(/\[([a-z0-9])\]/giu, "$1")
+      .replace(/''|""/gu, "")
+      .replace(/\\([a-z0-9])/giu, "$1");
     return (
       /\b(?:pgrep|pidof)\b[\s\S]{0,120}\bopenclaw\b/iu.test(normalizedRaw) ||
       /\$\([^)]*\bopenclaw\b[^)]*\)|`[^`]*\bopenclaw\b[^`]*`/iu.test(normalizedRaw)
@@ -374,68 +399,6 @@ function classifyProcessMutation(
     return argv.slice(1).some(matchesOpenClawProcessPattern);
   }
   return false;
-}
-
-function splitCommandText(command: string, delimiters: ReadonlySet<string>): string[] {
-  const parts: string[] = [];
-  let start = 0;
-  let quote: "'" | '"' | null = null;
-  let escaped = false;
-  let parenDepth = 0;
-  for (let index = 0; index < command.length; index += 1) {
-    const char = command[index] ?? "";
-    if (quote === "'") {
-      if (char === "'") {
-        quote = null;
-      }
-      continue;
-    }
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === "\\" || char === "^" || char === "`") {
-      escaped = true;
-      continue;
-    }
-    if (quote === '"') {
-      if (char === quote) {
-        quote = null;
-      }
-      continue;
-    }
-    if (char === "'" || char === '"') {
-      quote = char;
-      continue;
-    }
-    if (char === "(") {
-      parenDepth += 1;
-      continue;
-    }
-    if (char === ")" && parenDepth > 0) {
-      parenDepth -= 1;
-      continue;
-    }
-    if (parenDepth === 0 && delimiters.has(char)) {
-      const part = command.slice(start, index).trim();
-      if (part) {
-        parts.push(part);
-      }
-      while (command[index + 1] === char) {
-        index += 1;
-      }
-      start = index + 1;
-    }
-  }
-  const tail = command.slice(start).trim();
-  if (tail) {
-    parts.push(tail);
-  }
-  return parts;
-}
-
-function splitInlineCommands(command: string): string[] {
-  return splitCommandText(command, new Set([";", "|", "&", "\n", "\r"]));
 }
 
 function isPowerShellSelection(argv: readonly string[]): boolean {
@@ -462,7 +425,7 @@ function isPowerShellPipelineMutation(argv: readonly string[]): boolean {
 }
 
 function commandHasPowerShellLifecyclePipeline(command: string): boolean {
-  const stages = splitCommandText(command, new Set(["|"]));
+  const stages = splitLifecycleCommandText(command, new Set(["|"]));
   if (stages.length < 2) {
     return false;
   }
@@ -494,7 +457,7 @@ function commandHasLifecycleSubstitution(
     return true;
   }
   return scan.commands.some((nested) =>
-    splitInlineCommands(nested).some((part) => {
+    splitLifecycleInlineCommands(nested).some((part) => {
       const argv = splitShellArgs(part);
       return argv ? classifyArgv(argv, part, depth + 1, shellContext, cwd) : true;
     }),
@@ -543,7 +506,7 @@ function classifyArgv(
       return true;
     }
     const positionalArgv = resolveLifecyclePosixShellPositionals(argv);
-    return splitInlineCommands(inline).some((part) => {
+    return splitLifecycleInlineCommands(inline).some((part) => {
       const nestedArgv = splitShellArgs(part);
       if (!nestedArgv) {
         return false;
@@ -586,6 +549,11 @@ function classifyArgv(
   const nodeArgv = resolveNodeOpenClawArgv(argv, cwd);
   if (nodeArgv) {
     return classifyOpenClawArgv(nodeArgv);
+  }
+  const powerShellStartArgv =
+    shellContext === "powershell" ? resolvePowerShellStartProcessOpenClawArgv(argv) : null;
+  if (powerShellStartArgv) {
+    return classifyOpenClawArgv(powerShellStartArgv);
   }
 
   const executable = normalizeExecutableToken(argv[0] ?? "");
@@ -660,7 +628,7 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
   if (params.segments.length > 0) {
     return false;
   }
-  return splitInlineCommands(expandedCommand).some((part) => {
+  return splitLifecycleInlineCommands(expandedCommand).some((part) => {
     const argv = splitShellArgs(part);
     return argv ? classifyArgv(argv, part, 0, shellContext, params.cwd) : false;
   });

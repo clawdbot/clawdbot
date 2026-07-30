@@ -28,6 +28,7 @@ const mutationCases: Array<[string, string[]]> = [
   ["openclaw gateway", ["openclaw", "gateway"]],
   ["openclaw gateway --token secret", ["openclaw", "gateway", "--token", "secret"]],
   ["openclaw gateway --token status", ["openclaw", "gateway", "--token", "status"]],
+  ["openclaw gateway --token --help", ["openclaw", "gateway", "--token", "--help"]],
   ["openclaw gateway --password health", ["openclaw", "gateway", "--password", "health"]],
   ["openclaw daemon stop", ["openclaw", "daemon", "stop"]],
   ["/usr/bin/opencla? gateway restart", ["/usr/bin/opencla?", "gateway", "restart"]],
@@ -69,6 +70,10 @@ const mutationCases: Array<[string, string[]]> = [
     ["systemctl", "--job-mode", "replace", "restart", "openclaw-gateway.service"],
   ],
   [
+    "systemctl -p --help restart openclaw-gateway.service",
+    ["systemctl", "-p", "--help", "restart", "openclaw-gateway.service"],
+  ],
+  [
     "systemctl $(printf restart) openclaw-gateway.service",
     ["systemctl", "$(printf restart)", "openclaw-gateway.service"],
   ],
@@ -94,6 +99,7 @@ const mutationCases: Array<[string, string[]]> = [
   ["pkill -TERM openclaw", ["pkill", "-TERM", "openclaw"]],
   ["pkill -f 'open.*claw'", ["pkill", "-f", "open.*claw"]],
   ["kill -TERM $(pidof openclaw)", ["kill", "-TERM", "$(pidof openclaw)"]],
+  [`kill "$(pidof open''claw)"`, ["kill", "$(pidof openclaw)"]],
   ["kill -TERM $(pgrep -f '[o]penclaw')", ["kill", "-TERM", "$(pgrep -f '[o]penclaw')"]],
   [
     "kill $(systemctl show --property MainPID --value openclaw-gateway.service)",
@@ -119,6 +125,7 @@ const mutationCases: Array<[string, string[]]> = [
     ["sh", "-c", "${1:-openclaw} gateway restart", "sh"],
   ],
   ["npx openclaw@latest gateway restart", ["npx", "openclaw@latest", "gateway", "restart"]],
+  ["pnpx openclaw gateway restart", ["pnpx", "openclaw", "gateway", "restart"]],
   [
     "npx --color always openclaw gateway restart",
     ["npx", "--color", "always", "openclaw", "gateway", "restart"],
@@ -153,6 +160,7 @@ const mutationCases: Array<[string, string[]]> = [
     ["pnpm", "-C", "repo", "dlx", "openclaw", "gateway", "restart"],
   ],
   ["yarn dlx openclaw gateway restart", ["yarn", "dlx", "openclaw", "gateway", "restart"]],
+  ["yarnpkg dlx openclaw gateway restart", ["yarnpkg", "dlx", "openclaw", "gateway", "restart"]],
   ["yarn run openclaw gateway restart", ["yarn", "run", "openclaw", "gateway", "restart"]],
   ["pnpm run openclaw gateway restart", ["pnpm", "run", "openclaw", "gateway", "restart"]],
   ["bun x openclaw gateway restart", ["bun", "x", "openclaw", "gateway", "restart"]],
@@ -486,6 +494,30 @@ describe("OpenClaw lifecycle exec approvals", () => {
     expect(requiresApproval("kill -Id 123", ["kill", "-Id", "123"], "win32")).toBe(false);
   });
 
+  it("uses PowerShell Start-Process layouts on Windows", () => {
+    expect(
+      requiresApproval(
+        "Start-Process -FilePath openclaw -ArgumentList 'gateway'",
+        ["Start-Process", "-FilePath", "openclaw", "-ArgumentList", "gateway"],
+        "win32",
+      ),
+    ).toBe(true);
+    expect(
+      requiresApproval(
+        "Start-Process openclaw 'gateway restart'",
+        ["Start-Process", "openclaw", "gateway restart"],
+        "win32",
+      ),
+    ).toBe(true);
+    expect(
+      requiresApproval(
+        "Start-Process notepad -ArgumentList 'openclaw gateway'",
+        ["Start-Process", "notepad", "-ArgumentList", "openclaw gateway"],
+        "win32",
+      ),
+    ).toBe(false);
+  });
+
   it("does not mistake an OpenClaw profile value for a read-only command", () => {
     expect(
       commandRequiresOpenClawLifecycleApproval({
@@ -526,6 +558,37 @@ describe("OpenClaw lifecycle exec approvals", () => {
           {
             raw: `sh -c "$SCRIPT"`,
             argv: ["sh", "-c", "$SCRIPT"],
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps benign unresolved shell data non-blocking", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `sh -c 'echo "$UNSET"'`,
+        env: {},
+        envComplete: false,
+        platform: "linux",
+        segments: [
+          {
+            raw: `sh -c 'echo "$UNSET"'`,
+            argv: ["sh", "-c", 'echo "$UNSET"'],
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `sh -c 'echo ok; $TOOL gateway restart'`,
+        env: {},
+        envComplete: false,
+        platform: "linux",
+        segments: [
+          {
+            raw: `sh -c 'echo ok; $TOOL gateway restart'`,
+            argv: ["sh", "-c", "echo ok; $TOOL gateway restart"],
           },
         ],
       }),

@@ -62,9 +62,26 @@ function scanFirstPositional(
   return argv.length;
 }
 
+function hasEffectiveHelpOrVersion(argv: readonly string[], start: number): boolean {
+  const optionsWithValue = new Set([
+    ...GATEWAY_OPTIONS_WITH_VALUE,
+    ...GATEWAY_CALL_OPTIONS_WITH_VALUE,
+  ]);
+  for (let index = start; index < argv.length; index += 1) {
+    const token = argv[index]?.trim() ?? "";
+    const name = normalizedToken(token).split("=", 1)[0] ?? "";
+    if (optionsWithValue.has(name) && !token.includes("=")) {
+      index += 1;
+    } else if (HELP_OR_VERSION_FLAGS.has(token)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Return true when gateway argv starts a process or invokes a lifecycle RPC. */
 export function classifyOpenClawGatewayArgv(argv: readonly string[], start: number): boolean {
-  if (argv.slice(start).some((token) => HELP_OR_VERSION_FLAGS.has(token.trim()))) {
+  if (hasEffectiveHelpOrVersion(argv, start)) {
     return false;
   }
   const actionIndex = scanFirstPositional(argv, start, GATEWAY_OPTIONS_WITH_VALUE);

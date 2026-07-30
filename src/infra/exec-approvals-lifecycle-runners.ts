@@ -145,7 +145,9 @@ function packageOperationMutatesOpenClaw(
 export function resolveLifecyclePackageRunnerArgv(
   argv: readonly string[],
 ): LifecyclePackageRunnerPlan {
-  const executable = normalizeExecutableToken(argv[0] ?? "");
+  const rawExecutable = normalizeExecutableToken(argv[0] ?? "");
+  const executable =
+    rawExecutable === "pnpx" ? "npx" : rawExecutable === "yarnpkg" ? "yarn" : rawExecutable;
   if (executable === "corepack") {
     return argv.length > 1 ? { kind: "argv", argv: argv.slice(1) } : { kind: "not-runner" };
   }
