@@ -9,6 +9,10 @@ import type {
   SignalReactionNotificationMode,
 } from "openclaw/plugin-sdk/config-contracts";
 import {
+  createConnectedChannelStatusPatch,
+  createTransportActivityStatusPatch,
+} from "openclaw/plugin-sdk/gateway-runtime";
+import {
   canonicalizeBase64,
   detectMime,
   estimateBase64DecodedBytes,
@@ -223,6 +227,42 @@ async function waitForSignalDaemonReady(params: {
       };
     },
   });
+}
+
+const SIGNAL_DAEMON_HEARTBEAT_INTERVAL_MS = 60_000;
+const SIGNAL_DAEMON_HEARTBEAT_TIMEOUT_MS = 5_000;
+
+/**
+ * Re-proves the managed signal-cli daemon still serves requests after startup.
+ * The daemon's SSE endpoint stays idle between inbound events, so a live child
+ * process is the only other liveness signal and a hung daemon looks healthy
+ * forever. Publishing transport activity lets the gateway health monitor treat
+ * an unresponsive daemon as disconnected and restart it (#116295).
+ */
+export function startSignalDaemonHeartbeat(params: {
+  baseUrl: string;
+  runtime: RuntimeEnv;
+  statusSink?: SignalStatusSink;
+}): { stop: () => void } {
+  const probe = async () => {
+    const res = await signalCheck(params.baseUrl, SIGNAL_DAEMON_HEARTBEAT_TIMEOUT_MS);
+    const at = Date.now();
+    if (res.ok) {
+      params.statusSink?.({
+        ...createConnectedChannelStatusPatch(at),
+        ...createTransportActivityStatusPatch(at),
+        lastError: null,
+      });
+      return;
+    }
+    const error = res.error ?? (res.status ? `HTTP ${res.status}` : "unreachable");
+    params.statusSink?.({ connected: false, lastError: `signal daemon unresponsive: ${error}` });
+    params.runtime.error?.(`signal daemon health probe failed: ${error}`);
+  };
+  void probe();
+  const timer = setInterval(() => void probe(), SIGNAL_DAEMON_HEARTBEAT_INTERVAL_MS);
+  timer.unref?.();
+  return { stop: () => clearInterval(timer) };
 }
 
 const SIGNAL_ATTACHMENT_RPC_RESPONSE_HEADROOM_BYTES = 64 * 1024;
@@ -559,6 +599,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const daemonLifecycle = createSignalDaemonLifecycle({ abortSignal: opts.abortSignal });
   const monitorTaskRunner = createSignalMonitorTaskRunner(runtime);
   let daemonHandle: SignalDaemonHandle | null = null;
+  let daemonHeartbeat: { stop: () => void } | null = null;
   let ingressMonitor: SignalIngressMonitor | undefined;
 
   if (autoStart) {
@@ -601,6 +642,11 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       if (daemonExitError) {
         throw daemonExitError;
       }
+      daemonHeartbeat = startSignalDaemonHeartbeat({
+        baseUrl,
+        runtime,
+        statusSink: opts.statusSink,
+      });
     }
 
     registerChannelRuntimeContext({
@@ -689,6 +735,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     }
     throw err;
   } finally {
+    daemonHeartbeat?.stop();
     await ingressMonitor?.stop();
     // Daemon attachment finishes before monitor tasks start. Keep teardown open until both the
     // child has exited and already-started reply work has drained.
