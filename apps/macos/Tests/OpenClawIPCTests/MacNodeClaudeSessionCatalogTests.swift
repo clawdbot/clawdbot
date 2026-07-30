@@ -4,6 +4,23 @@ import Testing
 
 @Suite(.serialized)
 struct MacNodeClaudeSessionCatalogTests {
+    private final class EnumerationCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+
+        func increment() {
+            lock.lock()
+            count += 1
+            lock.unlock()
+        }
+
+        func value() -> Int {
+            lock.lock()
+            defer { self.lock.unlock() }
+            return count
+        }
+    }
+
     private func makeHome() throws -> URL {
         let home = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-claude-home-\(UUID().uuidString)", isDirectory: true)
@@ -373,8 +390,7 @@ struct MacNodeClaudeSessionCatalogTests {
         #expect((refreshed["sessions"] as? [[String: Any]])?.first?["name"] as? String == "Bravo")
     }
 
-
-    @Test func `reads transcript pages backward without loading the whole history`() throws {
+    @Test func `reuses catalog discovery across transcript read pages`() throws {
         let home = try makeHome()
         defer { try? FileManager.default.removeItem(at: home) }
         let project = home.appendingPathComponent(".claude/projects/-workspace", isDirectory: true)
@@ -403,6 +419,16 @@ struct MacNodeClaudeSessionCatalogTests {
             message(sessionId: sessionId, role: "assistant", text: "new assistant", index: 4),
         ], to: transcript)
 
+        let enumerations = EnumerationCounter()
+        MacNodeClaudeSessionCatalog.setCatalogEnumerationObserverForTesting { rootPath in
+            if rootPath == home.appendingPathComponent(".claude/projects").standardizedFileURL.path {
+                enumerations.increment()
+            }
+        }
+        defer { MacNodeClaudeSessionCatalog.setCatalogEnumerationObserverForTesting(nil) }
+        _ = try MacNodeClaudeSessionCatalog.list(paramsJSON: nil, homeURL: home)
+        #expect(enumerations.value() == 1)
+
         let latestJSON = try MacNodeClaudeSessionCatalog.read(
             paramsJSON: #"{"threadId":"transcript-session","limit":2}"#,
             homeURL: home
@@ -413,6 +439,7 @@ struct MacNodeClaudeSessionCatalogTests {
         let latestItems = try #require(latest["items"] as? [[String: Any]])
         #expect(latestItems.map { $0["text"] as? String } == ["new assistant", "new user"])
         let cursor = try #require(latest["nextCursor"] as? String)
+        #expect(enumerations.value() == 1)
 
         let olderParams = try #require(String(
             data: JSONSerialization.data(withJSONObject: [
@@ -429,6 +456,87 @@ struct MacNodeClaudeSessionCatalogTests {
         let olderItems = try #require(older["items"] as? [[String: Any]])
         #expect(olderItems.map { $0["text"] as? String } == ["old assistant", oldUser])
         #expect(older["nextCursor"] == nil)
+        #expect(enumerations.value() == 1)
+    }
+
+    @Test func `missing and stale file snapshots refresh the catalog once`() throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let firstProject = home.appendingPathComponent(".claude/projects/-first", isDirectory: true)
+        let secondProject = home.appendingPathComponent(".claude/projects/-second", isDirectory: true)
+        try FileManager.default.createDirectory(at: firstProject, withIntermediateDirectories: true)
+        let sessionId = "moving-session"
+        let firstTranscript = firstProject.appendingPathComponent("\(sessionId).jsonl")
+        try writeTranscript([
+            message(sessionId: sessionId, role: "user", text: "first location", index: 1),
+            message(sessionId: sessionId, role: "assistant", text: "latest", index: 2),
+        ], to: firstTranscript)
+        try writeJSON(
+            [
+                "version": 1,
+                "entries": [[
+                    "sessionId": sessionId,
+                    "fullPath": firstTranscript.path,
+                    "summary": "Moving",
+                    "isSidechain": false,
+                ]],
+            ],
+            to: firstProject.appendingPathComponent("sessions-index.json")
+        )
+
+        let enumerations = EnumerationCounter()
+        MacNodeClaudeSessionCatalog.setCatalogEnumerationObserverForTesting { rootPath in
+            if rootPath == home.appendingPathComponent(".claude/projects").standardizedFileURL.path {
+                enumerations.increment()
+            }
+        }
+        defer { MacNodeClaudeSessionCatalog.setCatalogEnumerationObserverForTesting(nil) }
+
+        let firstRead = try MacNodeClaudeSessionCatalog.read(
+            paramsJSON: #"{"threadId":"moving-session","limit":1}"#,
+            homeURL: home
+        )
+        let firstPayload = try #require(
+            JSONSerialization.jsonObject(with: Data(firstRead.utf8)) as? [String: Any]
+        )
+        #expect((firstPayload["items"] as? [[String: Any]])?.first?["text"] as? String == "latest")
+        #expect(enumerations.value() == 1)
+
+        try FileManager.default.createDirectory(at: secondProject, withIntermediateDirectories: true)
+        let secondTranscript = secondProject.appendingPathComponent("\(sessionId).jsonl")
+        try FileManager.default.moveItem(at: firstTranscript, to: secondTranscript)
+        try writeJSON(
+            ["version": 1, "entries": []],
+            to: firstProject.appendingPathComponent("sessions-index.json")
+        )
+        try writeJSON(
+            [
+                "version": 1,
+                "entries": [[
+                    "sessionId": sessionId,
+                    "fullPath": secondTranscript.path,
+                    "summary": "Moving",
+                    "isSidechain": false,
+                ]],
+            ],
+            to: secondProject.appendingPathComponent("sessions-index.json")
+        )
+
+        let refreshedRead = try MacNodeClaudeSessionCatalog.read(
+            paramsJSON: #"{"threadId":"moving-session","limit":1}"#,
+            homeURL: home
+        )
+        let refreshedPayload = try #require(
+            JSONSerialization.jsonObject(with: Data(refreshedRead.utf8)) as? [String: Any]
+        )
+        #expect((refreshedPayload["items"] as? [[String: Any]])?.first?["text"] as? String == "latest")
+        #expect(enumerations.value() == 2)
+
+        _ = try MacNodeClaudeSessionCatalog.read(
+            paramsJSON: #"{"threadId":"moving-session","limit":1}"#,
+            homeURL: home
+        )
+        #expect(enumerations.value() == 2)
     }
 
     @Test func `bounds oversized transcript items by encoded response size`() throws {

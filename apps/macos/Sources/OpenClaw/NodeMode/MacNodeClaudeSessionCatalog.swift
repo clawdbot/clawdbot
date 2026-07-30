@@ -165,6 +165,79 @@ enum MacNodeClaudeSessionCatalog {
         }
     }
 
+    private struct SessionFileSnapshotKey: Hashable {
+        var rootPath: String
+        var threadId: String
+    }
+
+    private struct SessionFileSnapshotEntry {
+        var fileURL: URL
+        var generation: UInt64
+    }
+
+    private final class SessionFileSnapshot: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [SessionFileSnapshotKey: SessionFileSnapshotEntry] = [:]
+        private var generation: UInt64 = 0
+
+        func lookup(rootPath: String, threadId: String) -> URL? {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            let key = SessionFileSnapshotKey(rootPath: rootPath, threadId: threadId)
+            guard var entry = self.entries[key] else { return nil }
+            self.generation &+= 1
+            entry.generation = self.generation
+            self.entries[key] = entry
+            return entry.fileURL
+        }
+
+        func replace(rootPath: String, records: [SessionRecord]) {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            self.entries = self.entries.filter { $0.key.rootPath != rootPath }
+            for record in records.prefix(MacNodeClaudeSessionCatalog.maxSessionFileSnapshotEntries) {
+                self.generation &+= 1
+                let key = SessionFileSnapshotKey(rootPath: rootPath, threadId: record.threadId)
+                self.entries[key] = SessionFileSnapshotEntry(
+                    fileURL: record.fileURL,
+                    generation: self.generation)
+            }
+            let overflow = self.entries.count - MacNodeClaudeSessionCatalog.maxSessionFileSnapshotEntries
+            guard overflow > 0 else { return }
+            let oldest = self.entries.sorted { $0.value.generation < $1.value.generation }
+                .prefix(overflow)
+            for entry in oldest {
+                self.entries.removeValue(forKey: entry.key)
+            }
+        }
+
+        func remove(rootPath: String, threadId: String) {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            self.entries.removeValue(forKey: SessionFileSnapshotKey(
+                rootPath: rootPath,
+                threadId: threadId))
+        }
+    }
+
+    private final class CatalogEnumerationObserver: @unchecked Sendable {
+        private let lock = NSLock()
+        private var observer: (@Sendable (String) -> Void)?
+
+        func set(_ observer: (@Sendable (String) -> Void)?) {
+            self.lock.lock()
+            self.observer = observer
+            self.lock.unlock()
+        }
+
+        func notify(rootPath: String) {
+            self.lock.lock()
+            let observer = self.observer
+            self.lock.unlock()
+            observer?(rootPath)
+        }
+    }
+
     private static let defaultPageLimit = 50
     private static let maxPageLimit = 100
     private static let defaultReadLimit = 20
@@ -174,6 +247,7 @@ enum MacNodeClaudeSessionCatalog {
     private static let maxSearchLength = 500
     private static let maxCatalogDiscoveryFiles = 10000
     fileprivate static let maxCatalogDiscoveryCacheEntries = 20000
+    fileprivate static let maxSessionFileSnapshotEntries = 20000
     private static let metadataPrefixBytes = 1024 * 1024
     private static let metadataReadChunkBytes = 16 * 1024
     private static let maxCatalogMetadataScanBytes = 64 * 1024 * 1024
@@ -186,6 +260,14 @@ enum MacNodeClaudeSessionCatalog {
     private static let iso8601FractionalStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
     private static let iso8601Style = Date.ISO8601FormatStyle()
     private static let catalogDiscoveryCache = CatalogDiscoveryCache()
+    private static let sessionFileSnapshot = SessionFileSnapshot()
+    private static let catalogEnumerationObserver = CatalogEnumerationObserver()
+
+    static func setCatalogEnumerationObserverForTesting(
+        _ observer: (@Sendable (String) -> Void)?)
+    {
+        self.catalogEnumerationObserver.set(observer)
+    }
 
     static func shouldAdvertise(
         root: [String: Any]? = nil,
@@ -240,8 +322,9 @@ enum MacNodeClaudeSessionCatalog {
     static func read(paramsJSON: String?, homeURL: URL) throws -> String {
         try Task.checkCancellation()
         let params = try decodeReadParams(paramsJSON)
-        guard let fileURL = try sessions(homeURL: homeURL)
-            .first(where: { $0.threadId == params.threadId })?.fileURL
+        guard let fileURL = try sessionFileForRead(
+            homeURL: homeURL,
+            threadId: params.threadId)
         else { throw CatalogError.invalidParams("Claude session is unavailable") }
 
         let handle = try FileHandle(forReadingFrom: fileURL)
@@ -414,6 +497,52 @@ extension MacNodeClaudeSessionCatalog {
               !isDirectory.boolValue
         else { return nil }
         return resolvedCandidate
+    }
+
+    private static func revalidatedSessionFile(
+        homeURL: URL,
+        threadId: String,
+        candidate: URL) -> URL?
+    {
+        let resolvedRoot = self.projectsURL(homeURL: homeURL).resolvingSymlinksInPath()
+        guard let fileURL = self.safeSessionFile(
+            root: resolvedRoot,
+            resolvedRoot: resolvedRoot,
+            candidate: candidate,
+            sessionId: threadId),
+            FileManager.default.isReadableFile(atPath: fileURL.path)
+        else { return nil }
+        return fileURL
+    }
+
+    private static func sessionFileForRead(homeURL: URL, threadId: String) throws -> URL? {
+        let rootPath = self.projectsURL(homeURL: homeURL).standardizedFileURL.path
+        if let candidate = self.sessionFileSnapshot.lookup(
+            rootPath: rootPath,
+            threadId: threadId)
+        {
+            // Discovery owns archive, sidechain, and entrypoint eligibility.
+            // Reads only revalidate the selected file so transcript pagination
+            // does not rebuild the catalog; the next discovery replaces this snapshot.
+            if let fileURL = self.revalidatedSessionFile(
+                homeURL: homeURL,
+                threadId: threadId,
+                candidate: candidate)
+            {
+                return fileURL
+            }
+            self.sessionFileSnapshot.remove(rootPath: rootPath, threadId: threadId)
+        }
+
+        // A miss or stale path gets one complete refresh. Do not recurse if the
+        // refreshed record is already gone or fails the same security checks.
+        guard let candidate = try self.sessions(homeURL: homeURL)
+            .first(where: { $0.threadId == threadId })?.fileURL
+        else { return nil }
+        return self.revalidatedSessionFile(
+            homeURL: homeURL,
+            threadId: threadId,
+            candidate: candidate)
     }
 
     private static func desktopMetadata(homeURL: URL) throws -> (
@@ -685,6 +814,8 @@ extension MacNodeClaudeSessionCatalog {
     private static func sessions(homeURL: URL) throws -> [SessionRecord] {
         try Task.checkCancellation()
         let projectsURL = self.projectsURL(homeURL: homeURL)
+        let rootPath = projectsURL.standardizedFileURL.path
+        self.catalogEnumerationObserver.notify(rootPath: rootPath)
         let resolvedProjectsURL = projectsURL.resolvingSymlinksInPath()
         var records: [String: SessionRecord] = [:]
         var sidechainIds = Set<String>()
@@ -761,11 +892,13 @@ extension MacNodeClaudeSessionCatalog {
             record.source = "claude-desktop"
             records[sessionId] = record
         }
-        return records.values.sorted { left, right in
+        let sortedRecords = records.values.sorted { left, right in
             let leftTime = left.updatedAt ?? 0
             let rightTime = right.updatedAt ?? 0
             return leftTime == rightTime ? left.threadId < right.threadId : leftTime > rightTime
         }
+        self.sessionFileSnapshot.replace(rootPath: rootPath, records: sortedRecords)
+        return sortedRecords
     }
 
     private static func locateSessionFile(homeURL: URL, sessionId: String) throws -> URL? {
