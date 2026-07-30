@@ -1,4 +1,4 @@
-use std::fmt::Write as _;
+use std::fmt::{self, Write as _};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
@@ -25,13 +25,24 @@ pub enum IdentityError {
 /// platform credential store. The crate owns the exact payload construction;
 /// the embedding signs [`Self::payload`] and returns the raw Ed25519 signature
 /// to [`Self::finish`].
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct DeviceSigningRequest {
     device_id: String,
     public_key: [u8; 32],
     signed_at: u64,
     nonce: String,
     payload: String,
+}
+
+impl fmt::Debug for DeviceSigningRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DeviceSigningRequest")
+            .field("device_id", &self.device_id)
+            .field("signed_at", &self.signed_at)
+            .field("payload", &"<redacted>")
+            .finish_non_exhaustive()
+    }
 }
 
 impl DeviceSigningRequest {
@@ -269,5 +280,24 @@ mod tests {
             request.finish(wrong),
             Err(IdentityError::InvalidSignature)
         ));
+    }
+
+    #[test]
+    fn signing_request_debug_redacts_the_canonical_payload() {
+        let identity = NodeIdentity::from_secret_bytes([7; 32]);
+        let request = DeviceSigningRequest::new_at(
+            identity.signing_key.verifying_key().to_bytes(),
+            "sentinel-nonce",
+            "windows",
+            Some("desktop"),
+            Some("sentinel-bearer-token"),
+            1_700_000_000_000,
+        )
+        .unwrap();
+
+        let debug = format!("{request:?}");
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("sentinel-bearer-token"));
+        assert!(!debug.contains("sentinel-nonce"));
     }
 }
