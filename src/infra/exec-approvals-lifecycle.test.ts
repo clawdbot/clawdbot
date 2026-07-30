@@ -22,8 +22,16 @@ const mutationCases: Array<[string, string[]]> = [
     ["launchctl", "stop", "gui/$UID/com.openclaw.gateway"],
   ],
   [
+    "launchctl unload ~/Library/LaunchAgents/com.openclaw.gateway.plist",
+    ["launchctl", "unload", "~/Library/LaunchAgents/com.openclaw.gateway.plist"],
+  ],
+  [
     "systemctl --user restart openclaw-gateway.service",
     ["systemctl", "--user", "restart", "openclaw-gateway.service"],
+  ],
+  [
+    "systemctl -H host restart openclaw-gateway.service",
+    ["systemctl", "-H", "host", "restart", "openclaw-gateway.service"],
   ],
   ["service openclaw-gateway stop", ["service", "openclaw-gateway", "stop"]],
   ['schtasks /Run /TN "OpenClaw Gateway"', ["schtasks", "/Run", "/TN", "OpenClaw Gateway"]],
@@ -57,6 +65,11 @@ const mutationCases: Array<[string, string[]]> = [
     ["powershell", "-NoProfile", "-Command", "kill openclaw"],
   ],
   ["Get-Process OpenClaw | Stop-Process", ["Get-Process", "OpenClaw", "|", "Stop-Process"]],
+  ["Get-Service OpenClaw | Start-Service", ["Get-Service", "OpenClaw", "|", "Start-Service"]],
+  [
+    "env env env env env env env env openclaw gateway restart",
+    ["env", "env", "env", "env", "env", "env", "env", "env", "openclaw", "gateway", "restart"],
+  ],
 ];
 
 const nonMutationCases: Array<[string, string[]]> = [
@@ -73,6 +86,10 @@ const nonMutationCases: Array<[string, string[]]> = [
   [
     "systemctl --user status openclaw-gateway.service",
     ["systemctl", "--user", "status", "openclaw-gateway.service"],
+  ],
+  [
+    "systemctl -h restart openclaw-gateway.service",
+    ["systemctl", "-h", "restart", "openclaw-gateway.service"],
   ],
   [
     "systemctl --signal=0 kill openclaw-gateway.service",

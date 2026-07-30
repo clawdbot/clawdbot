@@ -41,10 +41,12 @@ const LAUNCHCTL_MUTATIONS = new Set([
   "enable",
   "kickstart",
   "kill",
+  "load",
   "remove",
   "start",
   "stop",
   "submit",
+  "unload",
 ]);
 const SYSTEMCTL_MUTATIONS = new Set([
   "bind",
@@ -128,7 +130,7 @@ function isOpenClawExecutable(value: string | undefined): boolean {
 }
 
 function hasHelpOrVersion(argv: readonly string[]): boolean {
-  return argv.some((token) => HELP_OR_VERSION_FLAGS.has(normalizedToken(token)));
+  return argv.some((token) => HELP_OR_VERSION_FLAGS.has(token.trim()));
 }
 
 function optionName(token: string): string {
@@ -497,9 +499,15 @@ function isPowerShellSelection(argv: readonly string[]): boolean {
 }
 
 function isPowerShellPipelineMutation(argv: readonly string[]): boolean {
-  return ["restart-service", "stop-process", "stop-service", "spps", "spsv"].includes(
-    normalizeExecutableToken(argv[0] ?? ""),
-  );
+  return [
+    "restart-service",
+    "sasv",
+    "start-service",
+    "stop-process",
+    "stop-service",
+    "spps",
+    "spsv",
+  ].includes(normalizeExecutableToken(argv[0] ?? ""));
 }
 
 function commandHasPowerShellLifecyclePipeline(command: string): boolean {
@@ -530,8 +538,11 @@ function classifyArgv(
   depth: number,
   shellContext?: ShellContext,
 ): boolean {
-  if (argv.length === 0 || depth >= MAX_NESTED_COMMAND_DEPTH) {
+  if (argv.length === 0) {
     return false;
+  }
+  if (depth >= MAX_NESTED_COMMAND_DEPTH) {
+    return true;
   }
   if (isOpenClawExecutable(argv[0])) {
     return classifyOpenClawArgv(["openclaw", ...argv.slice(1)]);
