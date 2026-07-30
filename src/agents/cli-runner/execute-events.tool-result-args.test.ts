@@ -1,10 +1,10 @@
 // CLI backends report a tool result without repeating the request, so the
 // terminal progress event has to carry the args the tool started with.
 import { describe, expect, it, vi } from "vitest";
-import type { AgentEvent } from "../../infra/agent-events.js";
-import { onAgentEvent } from "../../infra/agent-events.js";
+import { type AgentEventRuntimePayload, onAgentEvent } from "../../infra/agent-events.js";
 import { createCliEventHandlers } from "./execute-events.js";
-import type { CliToolTracking, PreparedCliRunContext } from "./types.js";
+import type { CliToolTracking } from "./execute-tool-tracking.js";
+import type { PreparedCliRunContext } from "./types.js";
 
 function buildContext(runId: string): PreparedCliRunContext {
   const backend = {
@@ -52,8 +52,11 @@ function buildToolTracking(): CliToolTracking {
   } as unknown as CliToolTracking;
 }
 
-function collectToolEvents(runId: string): { events: AgentEvent[]; dispose: () => void } {
-  const events: AgentEvent[] = [];
+function collectToolEvents(runId: string): {
+  events: AgentEventRuntimePayload[];
+  dispose: () => void;
+} {
+  const events: AgentEventRuntimePayload[] = [];
   const dispose = onAgentEvent((event) => {
     if (event.runId === runId && event.stream === "tool") {
       events.push(event);
@@ -110,9 +113,19 @@ describe("cli tool result events", () => {
         kind: "tool_use",
         args: { command: "first" },
       });
-      handlers.emitCliToolResult({ toolCallId: "call-1", name: "Bash", isError: false, result: "" });
+      handlers.emitCliToolResult({
+        toolCallId: "call-1",
+        name: "Bash",
+        isError: false,
+        result: "",
+      });
       // A second result for the same id must not reuse the first call's request.
-      handlers.emitCliToolResult({ toolCallId: "call-1", name: "Bash", isError: false, result: "" });
+      handlers.emitCliToolResult({
+        toolCallId: "call-1",
+        name: "Bash",
+        isError: false,
+        result: "",
+      });
 
       const results = events.filter((event) => event.data.phase === "result");
       expect(results[0]?.data.args).toEqual({ command: "first" });

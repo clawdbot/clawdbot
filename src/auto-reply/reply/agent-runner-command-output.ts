@@ -78,15 +78,15 @@ export function buildCommandOutputFromToolResultEvent(evt: {
     result?.durationMs ?? details?.durationMs ?? evt.data.durationMs,
   );
   const cwd = readStringValue(evt.data.cwd);
-  // A reported success/failure is a concrete outcome on its own. Requiring a
-  // structured field first dropped every text-only CLI result, so a failed
-  // command rendered exactly like one that succeeded.
   const errorStatus =
     evt.data.isError === true ? "failed" : evt.data.isError === false ? "completed" : undefined;
+  // A bare result carries no outcome of its own: runners that report one send a
+  // separate command_output event, and synthesizing here would duplicate it.
+  // A CLI result is different because its content *is* the outcome, which
+  // readToolResultText surfaces as output above.
   const hasConcreteCommandResult =
     output !== undefined ||
     explicitStatus !== undefined ||
-    errorStatus !== undefined ||
     exitCode !== undefined ||
     durationMs !== undefined ||
     cwd !== undefined ||
