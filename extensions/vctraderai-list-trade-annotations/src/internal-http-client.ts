@@ -40,7 +40,86 @@ export type BffError = {
   code: string;
   message: string;
   status: number;
+  /**
+   * The server's machine-readable "do this instead" hint, when it sent one.
+   * Surfaced in the thrown Error's message so the MODEL can read it. A contract
+   * mismatch the model cannot see is indistinguishable from a backend outage:
+   * it retries the same wrong shape and finally reports the outage to the user.
+   */
+  retrySuggestion?: string;
 };
+
+/** Long bodies are truncated: this text ends up in a model prompt. */
+const MAX_ERROR_BODY_CHARS = 2000;
+
+type FetchResponse = Awaited<ReturnType<typeof globalThis.fetch>>;
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/**
+ * Read the server's structured error envelope off a failed response.
+ *
+ * Previously this reported `response.statusText` and threw the BODY away, so a
+ * 422 reached the model as the bare word "Unprocessable Entity" — the BFF's
+ * `message` and `retry_suggestion`, which say exactly which key was wrong and
+ * what to send instead, never arrived. That is the generator of an entire class
+ * of silent contract drift.
+ *
+ * The BFF raises `{"detail": {"error": {code, message, retry_suggestion}}}`
+ * (FastAPI wraps `HTTPException.detail`); FastAPI's own request-validation
+ * failures use a list under `detail`. Every path here still yields a usable
+ * detail — a body that cannot be read must never mask the HTTP failure itself.
+ */
+async function readBffErrorDetail(response: FetchResponse): Promise<BffError> {
+  const fallback: BffError = {
+    code: `bff_${response.status}`,
+    message: response.statusText || `HTTP ${response.status}`,
+    status: response.status,
+  };
+
+  let raw = "";
+  try {
+    raw = await response.text();
+  } catch {
+    return fallback;
+  }
+  if (!raw) {
+    return fallback;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ...fallback, message: raw.slice(0, MAX_ERROR_BODY_CHARS) };
+  }
+
+  const root = asRecord(parsed);
+  const detail = asRecord(root?.detail);
+  // The envelope may sit under `detail.error`, under `detail`, or at the root.
+  const envelope = [asRecord(detail?.error), detail, asRecord(root?.error), root].find(
+    (candidate) => typeof candidate?.message === "string" && candidate.message.length > 0,
+  );
+  if (!envelope) {
+    return { ...fallback, message: raw.slice(0, MAX_ERROR_BODY_CHARS) };
+  }
+
+  const code = envelope.code;
+  const suggestion = envelope.retry_suggestion;
+  return {
+    code: typeof code === "string" && code.length > 0 ? code : fallback.code,
+    message: String(envelope.message).slice(0, MAX_ERROR_BODY_CHARS),
+    status: response.status,
+    retrySuggestion:
+      typeof suggestion === "string" && suggestion.length > 0
+        ? suggestion.slice(0, MAX_ERROR_BODY_CHARS)
+        : undefined,
+  };
+}
 
 export class BffEgressViolation extends Error {
   readonly path: string;
@@ -54,7 +133,14 @@ export class BffEgressViolation extends Error {
 export class BffRequestError extends Error {
   readonly detail: BffError;
   constructor(detail: BffError) {
-    super(`vctraderai bff request failed: ${detail.code} (${detail.status}) ${detail.message}`);
+    // The retry suggestion belongs in the MESSAGE, not just the detail object:
+    // the message is what the tool runner shows the model.
+    const summary = `vctraderai bff request failed: ${detail.code} (${detail.status}) ${detail.message}`;
+    super(
+      detail.retrySuggestion
+        ? `${summary} — retry_suggestion: ${detail.retrySuggestion}`
+        : summary,
+    );
     this.name = "BffRequestError";
     this.detail = detail;
   }
@@ -132,12 +218,7 @@ export function createBffFetch(deps: BffClientDeps = {}): BffFetchFn {
       signal: options.signal,
     });
     if (!response.ok) {
-      const detail: BffError = {
-        code: `bff_${response.status}`,
-        message: response.statusText || `HTTP ${response.status}`,
-        status: response.status,
-      };
-      throw new BffRequestError(detail);
+      throw new BffRequestError(await readBffErrorDetail(response));
     }
     return response.json();
   };

@@ -1,7 +1,7 @@
 {
   "id": "vctraderai-dispatch-strategy-experiment",
   "name": "VC Trader AI Dispatch Strategy Experiment (Propose)",
-  "description": "Stages a strategy-first experiment (backtest/walkforward) dispatch proposal for human review. Calls the propfirm_manager BFF at /api/v1/openclaw/stage with tool_name dispatch_strategy_experiment. PROPOSE_ONLY per ADR 0078 - it never dispatches directly; the staged descriptor is reviewed + Applied in the chat, which reuses the v3 dispatch_experiment service and threads the optional origin_signal_id learning-loop link.",
+  "description": "Stages a strategy-first experiment (backtest / prop-sim / walkforward) dispatch proposal for human review. Calls the propfirm_manager BFF at /api/v1/openclaw/stage with tool_name dispatch_strategy_experiment. PROPOSE_ONLY per ADR 0078 - it never dispatches directly; the staged descriptor is reviewed + Applied in the chat, which reuses the v3 dispatch_experiment service and threads the optional origin_signal_id learning-loop link.",
   "activation": {
     "onStartup": true
   },
