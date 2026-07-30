@@ -345,6 +345,97 @@ describe("skills gateway handlers (clawhub)", () => {
     });
   });
 
+  it("bounds concurrent owner-qualified verification fallbacks", async () => {
+    const skillCount = 5;
+    buildWorkspaceSkillStatusMock.mockReturnValue({
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/openclaw/skills",
+      skills: Array.from({ length: skillCount }, (_, index) => ({
+        name: `skill-${index}`,
+        skillKey: `skill-${index}`,
+        clawhub: {
+          status: "linked",
+          valid: true,
+          registry: "https://clawhub.ai",
+          slug: `skill-${index}`,
+          ownerHandle: `owner-${index}`,
+          installedVersion: "1.0.0",
+          installedAt: 123,
+        },
+      })),
+    });
+    fetchClawHubSkillSecurityVerdictsMock.mockResolvedValue({
+      schema: "clawhub.skill.security-verdicts.v1",
+      items: Array.from({ length: skillCount }, (_, index) => ({
+        ok: false,
+        decision: "fail",
+        reasons: ["skill.not_found"],
+        requestedSlug: `skill-${index}`,
+        requestedVersion: "1.0.0",
+        error: { code: "skill_not_found", message: "Skill not found" },
+      })),
+    });
+
+    let activeFallbacks = 0;
+    let maxActiveFallbacks = 0;
+    const releaseFallbacks: Array<() => void> = [];
+    fetchClawHubSkillVerificationMock.mockImplementation(
+      async (params: { slug: string; ownerHandle: string }) => {
+        activeFallbacks += 1;
+        maxActiveFallbacks = Math.max(maxActiveFallbacks, activeFallbacks);
+        await new Promise<void>((resolve) => {
+          releaseFallbacks.push(resolve);
+        });
+        activeFallbacks -= 1;
+        return {
+          schema: "clawhub.skill.verify.v1",
+          ok: true,
+          decision: "pass",
+          reasons: [],
+          slug: params.slug,
+          publisherHandle: params.ownerHandle,
+          version: { version: "1.0.0", createdAt: 123 },
+          skill: { slug: params.slug, displayName: params.slug },
+          publisher: { handle: params.ownerHandle },
+          card: {},
+          artifact: {},
+          provenance: {},
+          security: { status: "clean", passed: true },
+          signature: {},
+        };
+      },
+    );
+
+    const responsePromise = callSkillsHandler("skills.securityVerdicts", {});
+    await vi.waitFor(() => expect(releaseFallbacks).toHaveLength(4));
+    expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledTimes(4);
+
+    for (const release of releaseFallbacks.slice(0, 4)) {
+      release();
+    }
+    await vi.waitFor(() => expect(releaseFallbacks).toHaveLength(skillCount));
+    releaseFallbacks[4]?.();
+
+    const { ok, response, error } = await responsePromise;
+    expect(error).toBeUndefined();
+    expect(ok).toBe(true);
+    expect(maxActiveFallbacks).toBe(4);
+    expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledTimes(skillCount);
+    expect(response).toEqual({
+      schema: "openclaw.skills.security-verdicts.v1",
+      items: expect.arrayContaining(
+        Array.from({ length: skillCount }, (_, index) =>
+          expect.objectContaining({
+            ok: true,
+            requestedSlug: `skill-${index}`,
+            publisherHandle: `owner-${index}`,
+            securityStatus: "clean",
+          }),
+        ),
+      ),
+    });
+  });
+
   it("does not passively fetch verdicts from a non-default registry", async () => {
     buildWorkspaceSkillStatusMock.mockReturnValue({
       workspaceDir: "/tmp/workspace",

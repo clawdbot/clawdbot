@@ -8,7 +8,10 @@ import {
   resolveClawHubBaseUrl,
   type ClawHubSkillSecurityVerdictItem,
 } from "../../infra/clawhub.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import type { buildWorkspaceSkillStatus } from "../discovery/status.js";
+
+const OWNER_QUALIFIED_VERDICT_CONCURRENCY = 4;
 
 type ClawHubVerdictTarget = {
   registry: string;
@@ -201,14 +204,20 @@ export async function fetchOpenClawSkillSecurityVerdicts(
       items: registryTargets,
       skipAuth: true,
     });
-    for (const [index, item] of response.items.entries()) {
-      // The batch response mirrors request order but omits the requested owner,
-      // so also re-check slug and version before applying the owner fallback.
-      const resolvedItem = await resolveOwnerQualifiedVerdict({
-        item,
-        target: registryTargets[index],
-        registry,
-      });
+    const { results: resolvedItems } = await runTasksWithConcurrency({
+      limit: OWNER_QUALIFIED_VERDICT_CONCURRENCY,
+      tasks: response.items.map(
+        (item, index) => () =>
+          // The batch response mirrors request order but omits the requested owner,
+          // so also re-check slug and version before applying the owner fallback.
+          resolveOwnerQualifiedVerdict({
+            item,
+            target: registryTargets[index],
+            registry,
+          }),
+      ),
+    });
+    for (const resolvedItem of resolvedItems) {
       items.push(projectClawHubVerdictItem(resolvedItem, registry));
     }
   }
