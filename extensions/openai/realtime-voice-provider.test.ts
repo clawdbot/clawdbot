@@ -1517,6 +1517,75 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(bridge.isConnected()).toBe(true);
   });
 
+  it("bounds queued audio by aggregate bytes before session readiness", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    await Promise.resolve();
+
+    bridge.sendAudio(Buffer.alloc(512 * 1024, 0x01));
+    bridge.sendAudio(Buffer.alloc(512 * 1024, 0x02));
+    bridge.sendAudio(Buffer.from("overflow"));
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    const audioEvents = parseSent(socket).filter(
+      (event) => event.type === "input_audio_buffer.append",
+    );
+    expect(audioEvents).toHaveLength(2);
+    expect(
+      audioEvents.map((event) => Buffer.from(String(event.audio), "base64").byteLength),
+    ).toEqual([512 * 1024, 512 * 1024]);
+    bridge.close();
+  });
+
+  it("does not carry queued audio across terminal close and explicit reconnect", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const firstConnect = bridge.connect();
+    const firstSocket = FakeWebSocket.instances[0];
+    if (!firstSocket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+    firstSocket.readyState = FakeWebSocket.OPEN;
+    firstSocket.emit("open");
+    await Promise.resolve();
+
+    bridge.sendAudio(Buffer.from("queued-before-close"));
+    bridge.close();
+    await firstConnect;
+    bridge.sendAudio(Buffer.from("sent-after-close"));
+
+    const reconnecting = bridge.connect();
+    const secondSocket = FakeWebSocket.instances[1];
+    if (!secondSocket) {
+      throw new Error("expected bridge to reconnect");
+    }
+    secondSocket.readyState = FakeWebSocket.OPEN;
+    secondSocket.emit("open");
+    secondSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await reconnecting;
+
+    expect(
+      parseSent(secondSocket).filter((event) => event.type === "input_audio_buffer.append"),
+    ).toHaveLength(0);
+    bridge.close();
+  });
+
   it("shares an in-flight connection until session readiness", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const onReady = vi.fn();
