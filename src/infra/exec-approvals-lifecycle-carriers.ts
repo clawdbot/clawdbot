@@ -143,6 +143,19 @@ export function resolveLifecycleXargsArgv(argv: readonly string[]): LifecycleXar
       replacementToken = "{}";
       continue;
     }
+    if (token.startsWith("-i") && token.length > 2) {
+      replacementToken = token.slice(2);
+      continue;
+    }
+    if (token === "-J") {
+      replacementToken = argv[index + 1]?.trim();
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("-J") && token.length > 2) {
+      replacementToken = token.slice(2);
+      continue;
+    }
     if (token.startsWith("--replace=")) {
       replacementToken = token.slice("--replace=".length) || "{}";
       continue;

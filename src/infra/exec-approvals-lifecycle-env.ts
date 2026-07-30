@@ -3,8 +3,8 @@ const POSIX_VARIABLE_RE = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-
 const POWERSHELL_VARIABLE_RE = /\$env:([A-Za-z_][A-Za-z0-9_]*)/giu;
 const CMD_VARIABLE_RE = /%([A-Za-z_][A-Za-z0-9_]*)%/gu;
 const VARIABLE_REFERENCE_RE =
-  /\$(?:\{[A-Za-z_][A-Za-z0-9_]*[^}]*\}|[A-Za-z_][A-Za-z0-9_]*|env:[A-Za-z_][A-Za-z0-9_]*)|%[A-Za-z_][A-Za-z0-9_]*%/iu;
-const POSIX_PARAMETER_OPERATOR_RE = /\$\{[A-Za-z_][A-Za-z0-9_]*(?::?[-+=?]|:[0-9])[^}]*\}/u;
+  /\$\{[^}]+\}|\$(?:[A-Za-z_][A-Za-z0-9_]*|env:[A-Za-z_][A-Za-z0-9_]*)|%[A-Za-z_][A-Za-z0-9_]*%/iu;
+const POSIX_PARAMETER_OPERATOR_RE = /\$\{(?![A-Za-z_][A-Za-z0-9_]*\})[^}]+\}/u;
 const OPENCLAW_GLOBAL_FLAGS = new Set(["--dev", "--no-color"]);
 const OPENCLAW_GLOBAL_OPTIONS = new Set(["--container", "--log-level", "--profile"]);
 const SYSTEMCTL_OPTIONS_WITH_VALUE = new Set([

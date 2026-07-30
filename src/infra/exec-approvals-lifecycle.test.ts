@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { commandRequiresOpenClawLifecycleApproval } from "./exec-approvals.js";
 
-function requiresApproval(command: string, argv: string[]): boolean {
+function requiresApproval(
+  command: string,
+  argv: string[],
+  platform: NodeJS.Platform = "linux",
+): boolean {
   return commandRequiresOpenClawLifecycleApproval({
     command,
+    platform,
     segments: [{ raw: command, argv }],
   });
 }
@@ -18,6 +23,8 @@ function nestShellSubstitution(command: string, depth: number): string {
 
 const mutationCases: Array<[string, string[]]> = [
   ["openclaw gateway restart", ["openclaw", "gateway", "restart"]],
+  ["./openclaw.mjs gateway restart", ["./openclaw.mjs", "gateway", "restart"]],
+  ["./opencla?.mjs gateway restart", ["./opencla?.mjs", "gateway", "restart"]],
   ["openclaw gateway", ["openclaw", "gateway"]],
   ["openclaw gateway --token secret", ["openclaw", "gateway", "--token", "secret"]],
   ["openclaw daemon stop", ["openclaw", "daemon", "stop"]],
@@ -119,6 +126,11 @@ const mutationCases: Array<[string, string[]]> = [
   [`npx -c "openclaw gateway restart"`, ["npx", "-c", "openclaw gateway restart"]],
   ["npm exec -- openclaw gateway restart", ["npm", "exec", "--", "openclaw", "gateway", "restart"]],
   ["npm install -g openclaw@latest", ["npm", "install", "-g", "openclaw@latest"]],
+  [
+    "npm install -g github:openclaw/openclaw#main",
+    ["npm", "install", "-g", "github:openclaw/openclaw#main"],
+  ],
+  ["npm install -g file:../openclaw", ["npm", "install", "-g", "file:../openclaw"]],
   ["npm install -g oc@npm:openclaw@latest", ["npm", "install", "-g", "oc@npm:openclaw@latest"]],
   ["npm install --prefix /tmp openclaw", ["npm", "install", "--prefix", "/tmp", "openclaw"]],
   ["npm rm -g openclaw", ["npm", "rm", "-g", "openclaw"]],
@@ -190,6 +202,8 @@ const mutationCases: Array<[string, string[]]> = [
   ["pgrep openclaw | xargs kill", ["xargs", "kill"]],
   ["pgrep openclaw | xargs --no-run-if-empty kill", ["xargs", "--no-run-if-empty", "kill"]],
   ["xargs -I{} {} gateway restart", ["xargs", "-I{}", "{}", "gateway", "restart"]],
+  ["xargs -i{} {} gateway restart", ["xargs", "-i{}", "{}", "gateway", "restart"]],
+  ["xargs -J{} {} gateway restart", ["xargs", "-J{}", "{}", "gateway", "restart"]],
   ["xargs -I{} env {} gateway restart", ["xargs", "-I{}", "env", "{}", "gateway", "restart"]],
   [
     "xargs env -a '' openclaw gateway restart",
@@ -377,6 +391,38 @@ describe("OpenClaw lifecycle exec approvals", () => {
         ],
       }),
     ).toBe(true);
+  });
+
+  it("fails closed for unsupported parameter transformations", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: "${TOOL,,} gateway restart",
+        env: { TOOL: "OPENCLAW" },
+        platform: "linux",
+        segments: [
+          {
+            raw: "${TOOL,,} gateway restart",
+            argv: ["${TOOL,,}", "gateway", "restart"],
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      requiresApproval("sh -c '${1,,} gateway restart' sh OPENCLAW", [
+        "sh",
+        "-c",
+        "${1,,} gateway restart",
+        "sh",
+        "OPENCLAW",
+      ]),
+    ).toBe(true);
+  });
+
+  it("uses PowerShell semantics for the Windows kill alias", () => {
+    expect(requiresApproval("kill -Name OpenClaw", ["kill", "-Name", "OpenClaw"], "win32")).toBe(
+      true,
+    );
+    expect(requiresApproval("kill -Id 123", ["kill", "-Id", "123"], "win32")).toBe(false);
   });
 
   it("does not mistake an OpenClaw profile value for a read-only command", () => {

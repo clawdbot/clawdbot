@@ -216,7 +216,7 @@ export function lifecyclePositionalBindingRequiresApproval(
   command: string,
   positionalArgv: readonly string[],
 ): boolean {
-  if (/\$\{(?:[0-9]+|[@*])(?::?[-+=?])[^}]*\}/u.test(command)) {
+  if (/\$\{(?:[0-9]+|[@*])[^0-9}][^}]*\}/u.test(command)) {
     return true;
   }
   if (

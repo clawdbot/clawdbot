@@ -640,12 +640,15 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   envComplete?: boolean;
+  platform?: NodeJS.Platform;
   segments: LifecycleSegment[];
 }): boolean {
   const envComplete = params.envComplete ?? params.env !== undefined;
+  const shellContext: ShellContext =
+    (params.platform ?? process.platform) === "win32" ? "powershell" : undefined;
   if (
     commandHasPowerShellLifecyclePipeline(params.command) ||
-    commandHasLifecycleSubstitution(params.command, 0)
+    commandHasLifecycleSubstitution(params.command, 0, shellContext)
   ) {
     return true;
   }
@@ -679,7 +682,7 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
         return (
           ((expanded.unresolved || expanded.fieldSplitUncertain) &&
             unresolvedEnvironmentMayHideLifecycle(argv)) ||
-          classifyArgv(expanded.argv, segment.raw ?? params.command, 0)
+          classifyArgv(expanded.argv, segment.raw ?? params.command, 0, shellContext)
         );
       })
     ) {
@@ -691,6 +694,6 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
   }
   return splitInlineCommands(params.command).some((part) => {
     const argv = splitShellArgs(part);
-    return argv ? classifyArgv(argv, part, 0) : false;
+    return argv ? classifyArgv(argv, part, 0, shellContext) : false;
   });
 }

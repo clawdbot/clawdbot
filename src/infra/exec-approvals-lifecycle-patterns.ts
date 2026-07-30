@@ -30,8 +30,17 @@ function globPatternToRegExp(pattern: string): RegExp {
 /** Return true when an executable token is or can glob-expand to OpenClaw. */
 export function isOpenClawExecutablePattern(value: string | undefined): boolean {
   const executable = normalizeExecutableToken(value ?? "");
-  if (executable === "openclaw" || executable.startsWith("openclaw@")) {
+  if (
+    executable === "openclaw" ||
+    executable === "openclaw.mjs" ||
+    executable.startsWith("openclaw@")
+  ) {
     return true;
   }
-  return /[*?[]/u.test(executable) && globPatternToRegExp(executable).test("openclaw");
+  return (
+    /[*?[]/u.test(executable) &&
+    ["openclaw", "openclaw.mjs"].some((candidate) =>
+      globPatternToRegExp(executable).test(candidate),
+    )
+  );
 }

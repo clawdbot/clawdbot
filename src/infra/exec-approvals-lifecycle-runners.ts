@@ -124,6 +124,12 @@ function looksLikeUnresolvedLifecycleRunner(argv: readonly string[]): boolean {
   return text.includes("openclaw") && /\b(?:daemon|gateway|uninstall|update)\b/u.test(text);
 }
 
+function isOpenClawPackageTarget(token: string): boolean {
+  return /^(?:openclaw|[^@\s]+@npm:openclaw)(?:@|$)|(?:^|[/\\:@])openclaw(?:[/\\.@#:]|$)/iu.test(
+    token.trim(),
+  );
+}
+
 function packageOperationMutatesOpenClaw(
   argv: readonly string[],
   subcommandIndex: number,
@@ -132,9 +138,7 @@ function packageOperationMutatesOpenClaw(
   if (!PACKAGE_MUTATION_ALIASES.has(operation)) {
     return false;
   }
-  return packageTargets(argv, subcommandIndex + 1).some((token) =>
-    /^(?:openclaw|[^@\s]+@npm:openclaw)(?:@|$)/iu.test(token.trim()),
-  );
+  return packageTargets(argv, subcommandIndex + 1).some(isOpenClawPackageTarget);
 }
 
 /** Resolve command argv launched by npm-compatible package runners. */
