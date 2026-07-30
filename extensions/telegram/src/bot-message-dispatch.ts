@@ -43,8 +43,10 @@ import {
   type TelegramNativeQuoteCandidateByMessageId,
 } from "./bot/native-quote.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
+import { formatTelegramFallbackError } from "./telegram-error-presenter.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
 
 async function resolveStickerVisionSupport(
@@ -454,7 +456,7 @@ export const dispatchTelegramMessage = async ({
       try {
         await delivery.finalizePendingAnswerBlockDraft(state);
       } catch (err) {
-        state.dispatchError ??= err;
+        state.deliveryError ??= err;
         runtime.error?.(danger(`telegram terminal block delivery failed: ${String(err)}`));
       }
       await draft.cleanup(isDispatchSuperseded());
@@ -489,12 +491,18 @@ export const dispatchTelegramMessage = async ({
     !suppressFailureFallback &&
     !progress.finalAnswerDelivered() &&
     (state.dispatchError ||
-      deliverySummary.skippedNonSilent > 0 ||
-      deliverySummary.failedNonSilent > 0);
+      state.deliveryError ||
+      deliverySummary.failedNonSilent > 0 ||
+      (deliverySummary.skippedNonSilent > 0 && !state.suppressSilentReplyFallback));
   if (shouldSendFailureFallback) {
+    // Provider/agent errors are classified by the allowlisted presenter.
+    // Telegram delivery errors get the generic fallback to avoid misattributing
+    // transport failures (e.g. flood-limit 429) as provider problems.
     const fallbackText = state.dispatchError
-      ? "Something went wrong while processing your request. Please try again."
-      : EMPTY_RESPONSE_FALLBACK;
+      ? formatTelegramFallbackError(state.dispatchError)
+      : state.deliveryError
+        ? "Something went wrong while processing your request. Please try again."
+        : EMPTY_RESPONSE_FALLBACK;
     const result = await delivery.deliverFallback(
       [{ text: fallbackText }],
       telegramCfg.silentErrorReplies === true &&
@@ -549,6 +557,7 @@ export const dispatchTelegramMessage = async ({
     (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0);
   const retryableDispatchFailure =
     state.dispatchError ??
+    state.deliveryError ??
     (deliveryFailureWithoutFinalResponse
       ? new Error(
           `Telegram reply delivery failed without a final response (failed=${deliverySummary.failedNonSilent}, skipped=${deliverySummary.skippedNonSilent})`,
@@ -560,8 +569,11 @@ export const dispatchTelegramMessage = async ({
   }
   const shouldReturnRetryableDispatchFailure =
     retryDispatchErrors &&
-    ((state.dispatchError != null && !hasFinalResponse) ||
-      (state.dispatchError == null && deliveryFailureWithoutFinalResponse && !hasVisibleResponse));
+    (((state.dispatchError != null || state.deliveryError != null) && !hasFinalResponse) ||
+      (state.dispatchError == null &&
+        state.deliveryError == null &&
+        deliveryFailureWithoutFinalResponse &&
+        !hasVisibleResponse));
   if (retryableDispatchFailure && shouldReturnRetryableDispatchFailure) {
     return { kind: "failed-retryable", error: retryableDispatchFailure };
   }
@@ -580,7 +592,8 @@ export const dispatchTelegramMessage = async ({
     status.finalizeInBackground(
       {
         outcome:
-          !progress.finalAnswerDelivered() && (state.dispatchError != null || sentFallback)
+          !progress.finalAnswerDelivered() &&
+          (state.dispatchError != null || state.deliveryError != null || sentFallback)
             ? "error"
             : "done",
       },

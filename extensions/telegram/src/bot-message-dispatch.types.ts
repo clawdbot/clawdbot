@@ -68,5 +68,8 @@ export type TelegramDispatchTurnState = {
   queuedFinal: boolean;
   suppressSilentReplyFallback: boolean;
   hadErrorReplyFailureOrSkip: boolean;
+  /** Error from the agent/provider dispatch turn (provider failures). */
   dispatchError?: unknown;
+  /** Error from terminal Telegram delivery (transport failures). */
+  deliveryError?: unknown;
 };
