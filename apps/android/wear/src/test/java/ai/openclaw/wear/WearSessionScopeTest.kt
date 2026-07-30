@@ -154,6 +154,36 @@ class WearSessionScopeTest {
   }
 
   @Test
+  fun delayedControlsRequireTheOriginalPhoneRouteGeneration() {
+    val phoneA = WearUiState(phoneNodeId = "phone-a", controlBusy = true)
+
+    assertTrue(
+      wearControlRouteIsCurrent(
+        requestedPhoneNodeId = "phone-a",
+        currentState = phoneA,
+        requestedRouteGeneration = 3,
+        currentRouteGeneration = 3,
+      ),
+    )
+    assertFalse(
+      wearControlRouteIsCurrent(
+        requestedPhoneNodeId = "phone-a",
+        currentState = WearUiState(phoneNodeId = "phone-b", controlBusy = true),
+        requestedRouteGeneration = 3,
+        currentRouteGeneration = 4,
+      ),
+    )
+    assertFalse(
+      wearControlRouteIsCurrent(
+        requestedPhoneNodeId = "phone-a",
+        currentState = phoneA,
+        requestedRouteGeneration = 3,
+        currentRouteGeneration = 5,
+      ),
+    )
+  }
+
+  @Test
   fun snapshotResponsesRequireTheSamePhoneAndEventStream() {
     assertEquals(true, wearSnapshotSourcesMatch("phone-a", "stream-a", "phone-a", "stream-a"))
     assertEquals(false, wearSnapshotSourcesMatch("phone-a", "stream-a", "phone-b", "stream-a"))
