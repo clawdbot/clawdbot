@@ -721,6 +721,88 @@ describe("handleCommands reset hooks", () => {
     );
   });
 
+  it.each(["/new --name=", "/new --name", "/new name:"])(
+    "replies with a missing-name error for %s without resetting or labeling",
+    async (commandBody) => {
+      const storePath = await createStorePath();
+      await upsertSessionEntry(
+        { storePath, sessionKey: "agent:main:main" },
+        { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+      );
+      const params = buildResetParams(commandBody, {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig);
+      params.storePath = storePath;
+      params.sessionStore = {
+        "agent:main:main": {
+          sessionId: "fresh-session",
+          updatedAt: 1,
+          totalTokens: 0,
+          totalTokensFresh: true,
+        },
+      };
+      params.sessionEntry = params.sessionStore["agent:main:main"];
+
+      const result = await maybeHandleResetCommand(params);
+
+      expect(result).toEqual({
+        shouldContinue: false,
+        reply: {
+          text: "⚠️ Missing session name. Usage: /new --name <session name> (or /new name:<session name>).",
+        },
+      });
+      // The validation error must short-circuit before the reset hooks run.
+      expect(triggerInternalHookMock).not.toHaveBeenCalled();
+      expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBeUndefined();
+    },
+  );
+
+  it("replies with a missing-name error for a native empty --name= title instead of labeling", async () => {
+    // Regression: native surfaces put the raw tail into CommandArgs.values.title. An empty
+    // `--name=` used to fall through the explicit-name parse and get persisted verbatim as
+    // the session label.
+    const storePath = await createStorePath();
+    await upsertSessionEntry(
+      { storePath, sessionKey: "agent:main:main" },
+      { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    );
+    const params = buildResetParams(
+      "/new --name=",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "--name=" } },
+        Provider: "discord",
+        Surface: "discord",
+      },
+    );
+    params.storePath = storePath;
+    params.sessionStore = {
+      "agent:main:main": {
+        sessionId: "fresh-session",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    };
+    params.sessionEntry = params.sessionStore["agent:main:main"];
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "⚠️ Missing session name. Usage: /new --name <session name> (or /new name:<session name>).",
+      },
+    });
+    expect(triggerInternalHookMock).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBeUndefined();
+  });
+
   it("keeps model-like /new tails available for the existing fallthrough path", async () => {
     const params = buildResetParams("/new gpt-5.5", {
       commands: { text: true },
@@ -1624,6 +1706,231 @@ describe("handleCommands reset hooks", () => {
       reply: { text: "✅ New session started as “weekly planning notes”." },
     });
     expect(preparedCatalogMock.loadPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("escalates a bare cold tail to an on-demand load when a plugin declares runtime discovery", async () => {
+    // Runtime/refreshable-discovery catalogs (e.g. LM Studio) publish no static manifest
+    // rows, so their bare model ids are invisible to cold manifest facts. Classification
+    // must escalate to the on-demand load for such installs or `/new mistral-nemo …` would
+    // be frozen as a session name cold and become a model directive once warm.
+    const cfg = {
+      commands: { text: true },
+      channels: { discord: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const policyHash = resolveInstalledPluginIndexPolicyHash(cfg);
+    setCurrentPluginMetadataSnapshot(
+      {
+        policyHash,
+        index: {
+          version: 1,
+          hostContractVersion: "test",
+          compatRegistryVersion: "test",
+          migrationVersion: 1,
+          policyHash,
+          generatedAtMs: 0,
+          installRecords: {},
+          plugins: [],
+          diagnostics: [],
+        },
+        plugins: [
+          {
+            id: "lmstudio-plugin",
+            origin: "bundled",
+            modelCatalog: {
+              discovery: { lmstudio: "refreshable" },
+            },
+          },
+        ],
+      } as never,
+      { config: cfg },
+    );
+    try {
+      preparedCatalogMock.getPreparedModelCatalogSnapshot.mockReturnValue(undefined);
+      preparedCatalogMock.loadPreparedModelCatalogSnapshot.mockResolvedValue({
+        entries: [{ id: "mistral-nemo", name: "Mistral Nemo", provider: "lmstudio" }],
+        routeVariants: [],
+      });
+      const storePath = await createStorePath();
+      await upsertSessionEntry(
+        { storePath, sessionKey: "agent:main:main" },
+        { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+      );
+      const params = buildResetParams("/new mistral-nemo summarize this", cfg, {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "mistral-nemo summarize this" } },
+        Provider: "discord",
+        Surface: "discord",
+      });
+      params.storePath = storePath;
+      params.sessionStore = {
+        "agent:main:main": {
+          sessionId: "fresh-session",
+          updatedAt: 1,
+          totalTokens: 0,
+          totalTokensFresh: true,
+        },
+      };
+      params.sessionEntry = params.sessionStore["agent:main:main"];
+
+      const result = await maybeHandleResetCommand(params);
+
+      expect(result).toBeNull();
+      expect(preparedCatalogMock.loadPreparedModelCatalogSnapshot).toHaveBeenCalled();
+      expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBeUndefined();
+    } finally {
+      clearCurrentPluginMetadataSnapshot();
+    }
+  });
+
+  it("still names the session when the escalated cold load finds no matching runtime model", async () => {
+    // With a runtime-discovery plugin installed, a cold bare tail is genuinely ambiguous, so
+    // the one-time load runs; when the loaded catalog has no exact id match the tail stays a
+    // session name. Fuzzy matching is deliberately not applied to bare tokens here so
+    // ordinary titles cannot be swallowed by resembling a runtime model id.
+    const cfg = {
+      commands: { text: true },
+      channels: { discord: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const policyHash = resolveInstalledPluginIndexPolicyHash(cfg);
+    setCurrentPluginMetadataSnapshot(
+      {
+        policyHash,
+        index: {
+          version: 1,
+          hostContractVersion: "test",
+          compatRegistryVersion: "test",
+          migrationVersion: 1,
+          policyHash,
+          generatedAtMs: 0,
+          installRecords: {},
+          plugins: [],
+          diagnostics: [],
+        },
+        plugins: [
+          {
+            id: "lmstudio-plugin",
+            origin: "bundled",
+            modelCatalog: {
+              discovery: { lmstudio: "refreshable" },
+            },
+          },
+        ],
+      } as never,
+      { config: cfg },
+    );
+    try {
+      preparedCatalogMock.getPreparedModelCatalogSnapshot.mockReturnValue(undefined);
+      preparedCatalogMock.loadPreparedModelCatalogSnapshot.mockResolvedValue({
+        entries: [{ id: "mistral-nemo", name: "Mistral Nemo", provider: "lmstudio" }],
+        routeVariants: [],
+      });
+      const storePath = await createStorePath();
+      await upsertSessionEntry(
+        { storePath, sessionKey: "agent:main:main" },
+        { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+      );
+      const params = buildResetParams("/new weekly planning notes", cfg, {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "weekly planning notes" } },
+        Provider: "discord",
+        Surface: "discord",
+      });
+      params.storePath = storePath;
+      params.sessionStore = {
+        "agent:main:main": {
+          sessionId: "fresh-session",
+          updatedAt: 1,
+          totalTokens: 0,
+          totalTokensFresh: true,
+        },
+      };
+      params.sessionEntry = params.sessionStore["agent:main:main"];
+
+      const result = await maybeHandleResetCommand(params);
+
+      expect(result).toEqual({
+        shouldContinue: false,
+        reply: { text: "✅ New session started as “weekly planning notes”." },
+      });
+      expect(preparedCatalogMock.loadPreparedModelCatalogSnapshot).toHaveBeenCalled();
+      expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBe(
+        "weekly planning notes",
+      );
+    } finally {
+      clearCurrentPluginMetadataSnapshot();
+    }
+  });
+
+  it("does not escalate short bare tails even when runtime discovery is declared", async () => {
+    // The bare-token escalation reuses the resolver's fuzzy precondition (provider word or
+    // >= 6 chars); short words can never fuzzy-resolve downstream, so loading for them
+    // would be a pure hot-path cost with no classification benefit.
+    const cfg = {
+      commands: { text: true },
+      channels: { discord: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const policyHash = resolveInstalledPluginIndexPolicyHash(cfg);
+    setCurrentPluginMetadataSnapshot(
+      {
+        policyHash,
+        index: {
+          version: 1,
+          hostContractVersion: "test",
+          compatRegistryVersion: "test",
+          migrationVersion: 1,
+          policyHash,
+          generatedAtMs: 0,
+          installRecords: {},
+          plugins: [],
+          diagnostics: [],
+        },
+        plugins: [
+          {
+            id: "lmstudio-plugin",
+            origin: "bundled",
+            modelCatalog: {
+              discovery: { lmstudio: "refreshable" },
+            },
+          },
+        ],
+      } as never,
+      { config: cfg },
+    );
+    try {
+      preparedCatalogMock.getPreparedModelCatalogSnapshot.mockReturnValue(undefined);
+      const storePath = await createStorePath();
+      await upsertSessionEntry(
+        { storePath, sessionKey: "agent:main:main" },
+        { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+      );
+      const params = buildResetParams("/new memo", cfg, {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "memo" } },
+        Provider: "discord",
+        Surface: "discord",
+      });
+      params.storePath = storePath;
+      params.sessionStore = {
+        "agent:main:main": {
+          sessionId: "fresh-session",
+          updatedAt: 1,
+          totalTokens: 0,
+          totalTokensFresh: true,
+        },
+      };
+      params.sessionEntry = params.sessionStore["agent:main:main"];
+
+      const result = await maybeHandleResetCommand(params);
+
+      expect(result).toEqual({
+        shouldContinue: false,
+        reply: { text: "✅ New session started as “memo”." },
+      });
+      expect(preparedCatalogMock.loadPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
+      expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBe("memo");
+    } finally {
+      clearCurrentPluginMetadataSnapshot();
+    }
   });
 
   it("names a fresh session from a model-brand word that no configured provider serves", async () => {
