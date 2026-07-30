@@ -663,6 +663,8 @@ export const en: TranslationMap = {
     loadError: "Could not load dashboards: {error}",
   },
   sessionsView: {
+    subagentPrefix: "Subagent:",
+    automationPrefix: "Automation:",
     deletePreservedWorktrees:
       "{count} thread worktree(s) with uncommitted or unpushed work were kept ({branches}). Manage them under Settings -> Worktrees.",
     deletePreservedWorktreeConfirm:
@@ -1186,7 +1188,7 @@ export const en: TranslationMap = {
         description: "Session management and persistence",
       },
       cron: {
-        label: "Cron",
+        label: "Automations",
         description: "Scheduled tasks and automation",
       },
       discovery: {
@@ -1365,7 +1367,7 @@ export const en: TranslationMap = {
       commands: "Commands",
       hooks: "Hooks",
       bindings: "Bindings",
-      cron: "Cron",
+      cron: "Automations",
       approvals: "Approvals",
       security: "Security Policy",
       plugins: "Plugins",
@@ -2456,7 +2458,7 @@ export const en: TranslationMap = {
     },
     dreaming: {
       intro:
-        "Dreaming runs as one managed cron job across every agent workspace, so these settings are global. They are owned by the {plugin} plugin.",
+        "Dreaming runs as one managed automation across every agent workspace, so these settings are global. They are owned by the {plugin} plugin.",
       schedule: {
         title: "Schedule",
         description: "When the full sweep runs and which model narrates it.",
