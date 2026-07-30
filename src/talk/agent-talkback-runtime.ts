@@ -175,12 +175,12 @@ export function createRealtimeVoiceAgentTalkbackQueue(
       active = false;
       if (shouldStop()) {
         clearPendingQuestions();
-        return;
-      }
-      const queuedQuestion = shiftPendingQuestion();
-      if (queuedQuestion) {
-        // Continue draining any questions queued while the active consult ran.
-        void run(queuedQuestion);
+      } else {
+        const queuedQuestion = shiftPendingQuestion();
+        if (queuedQuestion) {
+          // Continue draining any questions queued while the active consult ran.
+          void run(queuedQuestion);
+        }
       }
     }
   };
