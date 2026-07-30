@@ -826,9 +826,18 @@ export function resolveChannelStreamingPreviewToolProgress(
 export function resolveChannelStreamingProgressCommentary(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue = false,
+  /**
+   * The channel's resolved stream mode, for the same reason
+   * resolveChannelStreamingPreviewToolProgress takes one: only the caller knows
+   * which default applies when `streaming.mode` is unset. Guessing "partial"
+   * here made `progress.commentary: true` a silent no-op on the progress-draft
+   * channels, whose own default is "progress".
+   */
+  mode?: StreamingMode,
 ): boolean {
   const config = getChannelStreamingConfigObject(entry);
-  if (resolveChannelPreviewStreamMode(entry, "partial") !== "progress") {
+  const effectiveMode = mode ?? resolveChannelPreviewStreamMode(entry, "partial");
+  if (effectiveMode !== "progress") {
     return false;
   }
   const progress = asObjectRecord(config?.progress);

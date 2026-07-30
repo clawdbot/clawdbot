@@ -331,6 +331,144 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(rendered).toContain("Shelling\n\n💬 _Checking the workspace_");
   });
 
+  it("collapses cumulative id-less commentary snapshots onto one line", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling", commentary: true } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      commentaryLinePrefix: "💬 ",
+      update,
+    });
+
+    expect(await progress.pushCommentaryProgress("Checking")).toBe(true);
+    expect(await progress.pushCommentaryProgress("Checking the workspace")).toBe(true);
+    expect(await progress.pushCommentaryProgress("Checking the workspace before answering.")).toBe(
+      true,
+    );
+
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\n💬 _Checking the workspace before answering._",
+      {
+        lines: [
+          expect.objectContaining({
+            text: "💬 _Checking the workspace before answering._",
+            kind: "item",
+            label: "Commentary",
+          }),
+        ],
+      },
+    );
+    expect(progress.getSnapshot().lines).toHaveLength(1);
+  });
+
+  it("appends genuinely distinct id-less commentary as separate lines", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling", commentary: true } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      commentaryLinePrefix: "💬 ",
+      update,
+    });
+
+    expect(await progress.pushCommentaryProgress("Checking the workspace")).toBe(true);
+    expect(await progress.pushCommentaryProgress("Writing the patch next")).toBe(true);
+
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\n💬 _Checking the workspace_\n💬 _Writing the patch next_",
+      {
+        lines: [
+          expect.objectContaining({ text: "💬 _Checking the workspace_" }),
+          expect.objectContaining({ text: "💬 _Writing the patch next_" }),
+        ],
+      },
+    );
+  });
+
+  it("updates an id-less commentary line in place after a later tool line", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling", commentary: true } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      commentaryLinePrefix: "💬 ",
+      update,
+    });
+
+    await progress.pushCommentaryProgress("Checking");
+    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    await progress.pushCommentaryProgress("Checking the workspace");
+
+    expect(update).toHaveBeenLastCalledWith("Shelling\n\n💬 _Checking the workspace_\n🛠️ Exec", {
+      lines: [expect.objectContaining({ text: "💬 _Checking the workspace_" }), "🛠️ Exec"],
+    });
+  });
+
+  it("keeps id-less commentary when a later snapshot sanitizes to empty", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling", commentary: true } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      commentaryLinePrefix: "💬 ",
+      update,
+    });
+
+    expect(await progress.pushCommentaryProgress("Checking the workspace")).toBe(true);
+    const callsAfterValid = update.mock.calls.length;
+    expect(
+      await progress.pushCommentaryProgress("[[reply_to_current]] _NO_REPLY_ [[audio_as_voice]]"),
+    ).toBe(false);
+
+    expect(update).toHaveBeenCalledTimes(callsAfterValid);
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\n💬 _Checking the workspace_",
+      expect.objectContaining({
+        lines: [expect.objectContaining({ text: "💬 _Checking the workspace_" })],
+      }),
+    );
+    expect(progress.getSnapshot().lines).toHaveLength(1);
+  });
+
+  it("replaces and retracts commentary by itemId", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling", commentary: true } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      commentaryLinePrefix: "💬 ",
+      update,
+    });
+
+    expect(await progress.pushCommentaryProgress("First note", { itemId: "c1" })).toBe(true);
+    expect(await progress.pushCommentaryProgress("Updated note", { itemId: "c1" })).toBe(true);
+    expect(await progress.pushCommentaryProgress("Other note", { itemId: "c2" })).toBe(true);
+    expect(progress.getSnapshot().lines).toHaveLength(2);
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\n💬 _Updated note_\n💬 _Other note_",
+      expect.objectContaining({
+        lines: [
+          expect.objectContaining({ id: "commentary:c1", text: "💬 _Updated note_" }),
+          expect.objectContaining({ id: "commentary:c2", text: "💬 _Other note_" }),
+        ],
+      }),
+    );
+
+    expect(await progress.pushCommentaryProgress("", { itemId: "c1" })).toBe(false);
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\n💬 _Other note_",
+      expect.objectContaining({
+        lines: [expect.objectContaining({ id: "commentary:c2", text: "💬 _Other note_" })],
+      }),
+    );
+  });
+
   it("interleaves reasoning bursts with tool calls in arrival order", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({

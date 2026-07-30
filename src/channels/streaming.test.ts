@@ -12,6 +12,7 @@ import {
   resolveChannelStreamingChunkMode,
   resolveChannelStreamingNativeTransport,
   resolveChannelStreamingPreviewChunk,
+  resolveChannelStreamingProgressCommentary,
   resolveChannelStreamingProgressNarration,
 } from "./streaming.js";
 
@@ -290,6 +291,20 @@ describe("progress narration", () => {
     expect(text.endsWith("…")).toBe(true);
     expect(Array.from(text).length).toBeLessThanOrEqual(280);
     expect(text).not.toContain("\n");
+  });
+
+  it("honors the caller's mode when resolving commentary", () => {
+    // The progress-draft channels default to "progress" when streaming.mode is
+    // unset, so guessing "partial" here made progress.commentary a silent no-op.
+    const entry = { streaming: { progress: { commentary: true } } };
+    expect(resolveChannelStreamingProgressCommentary(entry, false, "progress")).toBe(true);
+    expect(resolveChannelStreamingProgressCommentary(entry, false, "partial")).toBe(false);
+    expect(
+      resolveChannelStreamingProgressCommentary(
+        { streaming: { mode: "progress", progress: { commentary: true } } },
+        false,
+      ),
+    ).toBe(true);
   });
 
   it("resolves the narration toggle with default on", () => {
