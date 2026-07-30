@@ -3850,7 +3850,8 @@ export const en: TranslationMap = {
     emptyTitle: "No model providers configured",
     emptySubtitle: "Sign in to a provider or add an API key, then refresh.",
     status: {
-      ok: "Connected",
+      ok: "Signed in",
+      ready: "Ready",
       expiring: "Expiring",
       expired: "Expired",
       missing: "Not signed in",
@@ -3901,8 +3902,18 @@ export const en: TranslationMap = {
         timeout: "Timed out",
         format: "Invalid response",
         unknown: "Connection failed",
-        no_model: "No model available",
+        no_model: "No models available",
       },
+    },
+    readiness: {
+      title: "AI setup",
+      heading: "Connect your AI",
+      signedInNoModels:
+        "You're signed in, but this account exposes no usable models. Choose another provider or account to continue.",
+      notConfigured: "Choose a provider and verify the model OpenClaw will use.",
+      noModels: "No models available",
+      modelRequired: "Model required",
+      chooseProvider: "Choose another provider",
     },
     logout: {
       action: "Log out",
