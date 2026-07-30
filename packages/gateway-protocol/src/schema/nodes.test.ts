@@ -89,4 +89,24 @@ describe("node protocol schemas", () => {
       }),
     ).toBe(false);
   });
+
+  it("enforces duplex input payload limits in UTF-8 bytes", () => {
+    expect(
+      validateNodeInvokeInputEvent({
+        id: "invoke-1",
+        nodeId: "node-1",
+        seq: 0,
+        payloadJSON: "é".repeat(8 * 1024),
+      }),
+    ).toBe(true);
+
+    expect(
+      validateNodeInvokeInputEvent({
+        id: "invoke-1",
+        nodeId: "node-1",
+        seq: 0,
+        payloadJSON: "é".repeat(8 * 1024 + 1),
+      }),
+    ).toBe(false);
+  });
 });

@@ -12,6 +12,24 @@ import type {
 import type { ValidationError } from "./validation-errors.js";
 
 // Validator names mirror schemas so callers can pair them with wire contracts.
+function utf8FieldLimitPrecheck(field: string, limit: number) {
+  return (data: unknown) => {
+    if (typeof data !== "object" || data === null || !(field in data)) {
+      return undefined;
+    }
+    const value = (data as Record<string, unknown>)[field];
+    if (typeof value !== "string" || new TextEncoder().encode(value).byteLength <= limit) {
+      return undefined;
+    }
+    return {
+      keyword: "maxUtf8Bytes",
+      instancePath: `/${field}`,
+      params: { limit },
+      message: `must not exceed ${limit} UTF-8 bytes`,
+    };
+  };
+}
+
 export const validateCommandsListParams = compile(S.CommandsListParamsSchema);
 export const validateConnectParams = compile(S.ConnectParamsSchema);
 export const validateWorkerAdmissionHandshake = compile(S.WorkerAdmissionHandshakeSchema);
@@ -160,27 +178,14 @@ export const validateNodePendingAckParams = compile(S.NodePendingAckParamsSchema
 export const validateNodeDescribeParams = compile(S.NodeDescribeParamsSchema);
 export const validateNodeInvokeParams = compile(S.NodeInvokeParamsSchema);
 export const validateNodeInvokeRequestEvent = compile(S.NodeInvokeRequestEventSchema);
-export const validateNodeInvokeInputEvent = compile(S.NodeInvokeInputEventSchema);
+export const validateNodeInvokeInputEvent = compile(
+  S.NodeInvokeInputEventSchema,
+  utf8FieldLimitPrecheck("payloadJSON", 16 * 1024),
+);
 export const validateNodeInvokeResultParams = compile(S.NodeInvokeResultParamsSchema);
 export const validateNodeInvokeProgressParams = compile(
   S.NodeInvokeProgressParamsSchema,
-  (data) => {
-    if (
-      typeof data === "object" &&
-      data !== null &&
-      "chunk" in data &&
-      typeof data.chunk === "string" &&
-      new TextEncoder().encode(data.chunk).byteLength > 16 * 1024
-    ) {
-      return {
-        keyword: "maxUtf8Bytes",
-        instancePath: "/chunk",
-        params: { limit: 16 * 1024 },
-        message: "must not exceed 16384 UTF-8 bytes",
-      };
-    }
-    return undefined;
-  },
+  utf8FieldLimitPrecheck("chunk", 16 * 1024),
 );
 export const validateNodeEventParams = compile(S.NodeEventParamsSchema);
 export const validateNodePresenceActivityPayload = compile(S.NodePresenceActivityPayloadSchema);
