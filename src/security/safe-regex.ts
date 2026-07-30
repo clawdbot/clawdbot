@@ -17,6 +17,7 @@ type TokenState = {
 
 type ParseFrame = {
   zeroWidth: boolean;
+  opaque: boolean;
   lastToken: TokenState | null;
   containsRepetition: boolean;
   hasAmbiguousAlternation: boolean;
@@ -32,8 +33,8 @@ type ParseFrame = {
 };
 
 type PatternToken =
-  | { kind: "simple-token"; source: string; zeroWidth: boolean }
-  | { kind: "group-open"; zeroWidth: boolean }
+  | { kind: "simple-token"; source: string; zeroWidth: boolean; opaque?: boolean }
+  | { kind: "group-open"; zeroWidth: boolean; opaque: boolean }
   | { kind: "group-close" }
   | { kind: "alternation" }
   | { kind: "quantifier"; quantifier: QuantifierRead };
@@ -61,9 +62,10 @@ export type SafeRegexCompileResult =
 
 const safeRegexCache = new Map<string, SafeRegexCompileResult>();
 
-function createParseFrame(zeroWidth = false): ParseFrame {
+function createParseFrame(zeroWidth = false, opaque = false): ParseFrame {
   return {
     zeroWidth,
+    opaque,
     lastToken: null,
     containsRepetition: false,
     hasAmbiguousAlternation: false,
@@ -141,7 +143,7 @@ function readEscapedLiteral(source: string, index: number): { value: string; nex
   return null;
 }
 
-function finiteCharacterClassValues(source: string): string[] | null {
+function finiteCharacterClassValues(source: string, flags: string): string[] | null {
   if (!source.startsWith("[") || !source.endsWith("]") || source.startsWith("[^")) {
     return null;
   }
@@ -157,11 +159,10 @@ function finiteCharacterClassValues(source: string): string[] | null {
       index = escaped.next;
       continue;
     }
-    const codePoint = source.codePointAt(index);
-    if (codePoint === undefined) {
-      return null;
-    }
-    const value = String.fromCodePoint(codePoint);
+    const unicodeAware = flags.includes("u") || flags.includes("v");
+    const value = unicodeAware
+      ? String.fromCodePoint(expectDefined(source.codePointAt(index), "character class code point"))
+      : source.charAt(index);
     elements.push({ value, escaped: false });
     index += value.length;
   }
@@ -189,8 +190,8 @@ function finiteCharacterClassValues(source: string): string[] | null {
   return [...values];
 }
 
-function finiteAtomValues(source: string): string[] | null {
-  const classValues = finiteCharacterClassValues(source);
+function finiteAtomValues(source: string, flags: string): string[] | null {
+  const classValues = finiteCharacterClassValues(source, flags);
   if (classValues) {
     return classValues;
   }
@@ -250,8 +251,8 @@ function atomsMayOverlap(left: string, right: string, flags: string): boolean {
     const safeFlags = flags.replace(/[gy]/g, "");
     const leftRegex = new RegExp(`^(?:${left})$`, safeFlags);
     const rightRegex = new RegExp(`^(?:${right})$`, safeFlags);
-    const leftValues = finiteAtomValues(left);
-    const rightValues = finiteAtomValues(right);
+    const leftValues = finiteAtomValues(left, safeFlags);
+    const rightValues = finiteAtomValues(right, safeFlags);
     const candidates = new Set([
       ...ASCII_ATOM_SAMPLES,
       ...Array.from(left),
@@ -401,6 +402,7 @@ function tokenizePattern(source: string, flags: string): PatternToken[] {
         kind: "simple-token",
         source: atom,
         zeroWidth: atom === "\\b" || atom === "\\B",
+        opaque: flags.includes("v") && (atom.startsWith("\\p{") || atom.startsWith("\\P{")),
       });
       continue;
     }
@@ -414,12 +416,21 @@ function tokenizePattern(source: string, flags: string): PatternToken[] {
           break;
         }
       }
-      tokens.push({ kind: "simple-token", source: source.slice(start, i + 1), zeroWidth: false });
+      const atom = source.slice(start, i + 1);
+      tokens.push({
+        kind: "simple-token",
+        source: atom,
+        zeroWidth: false,
+        opaque:
+          flags.includes("v") &&
+          (atom.includes("\\q{") || atom.includes("\\p{") || atom.includes("\\P{")),
+      });
       continue;
     }
 
     if (ch === "(") {
       let zeroWidth = false;
+      let opaque = false;
       const shortPrefix = source.slice(i + 1, i + 3);
       const longPrefix = source.slice(i + 1, i + 4);
       if (longPrefix === "?<=" || longPrefix === "?<!") {
@@ -430,13 +441,21 @@ function tokenizePattern(source: string, flags: string): PatternToken[] {
         i += 2;
       } else if (shortPrefix === "?:") {
         i += 2;
-      } else if (shortPrefix === "?<") {
-        const closing = source.indexOf(">", i + 3);
-        if (closing >= 0) {
-          i = closing;
+      } else {
+        const modifierPrefix = source.slice(i + 1).match(/^\?[ims]*(?:-[ims]+)?:/);
+        if (modifierPrefix) {
+          // Scoped modifiers change atom semantics inside the group. Keep the
+          // language opaque so repeated alternatives fail closed.
+          opaque = true;
+          i += modifierPrefix[0].length;
+        } else if (shortPrefix === "?<") {
+          const closing = source.indexOf(">", i + 3);
+          if (closing >= 0) {
+            i = closing;
+          }
         }
       }
-      tokens.push({ kind: "group-open", zeroWidth });
+      tokens.push({ kind: "group-open", zeroWidth, opaque });
       continue;
     }
 
@@ -497,25 +516,25 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
     frame.branchSignatures.push(token.signature);
   };
 
-  const emitSimpleToken = (source: string, zeroWidth: boolean) => {
+  const emitSimpleToken = (source: string, zeroWidth: boolean, opaque = false) => {
     emitToken({
       containsRepetition: false,
       hasAmbiguousAlternation: false,
       minLength: zeroWidth ? 0 : 1,
       maxLength: zeroWidth ? 0 : 1,
-      paths: zeroWidth ? [[]] : [[source]],
+      paths: zeroWidth ? [[]] : opaque ? null : [[source]],
       signature: source,
     });
   };
 
   for (const token of tokens) {
     if (token.kind === "simple-token") {
-      emitSimpleToken(token.source, token.zeroWidth);
+      emitSimpleToken(token.source, token.zeroWidth, token.opaque);
       continue;
     }
 
     if (token.kind === "group-open") {
-      frames.push(createParseFrame(token.zeroWidth));
+      frames.push(createParseFrame(token.zeroWidth, token.opaque));
       continue;
     }
 
@@ -545,11 +564,12 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
             (frame.hasAlternation &&
               frame.altMinLength !== null &&
               frame.altMaxLength !== null &&
-              (alternativesOverlap(frame.alternativePaths, flags) ||
+              (frame.opaque ||
+                alternativesOverlap(frame.alternativePaths, flags) ||
                 alternativesRepeatExactly(frame.alternativeSignatures))),
           minLength: frame.zeroWidth ? 0 : groupMinLength,
           maxLength: frame.zeroWidth ? 0 : groupMaxLength,
-          paths: frame.zeroWidth ? [[]] : consumingGroupPaths,
+          paths: frame.zeroWidth ? [[]] : frame.opaque ? null : consumingGroupPaths,
           signature: JSON.stringify(
             frame.hasAlternation ? frame.alternativeSignatures : frame.branchSignatures,
           ),
