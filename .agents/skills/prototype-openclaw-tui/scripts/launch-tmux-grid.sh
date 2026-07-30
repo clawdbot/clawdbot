@@ -190,6 +190,25 @@ open_external_terminal() {
   return 1
 }
 
+tmux_session_has_client() {
+  local session_id=$1
+  [[ -n $(tmux list-clients -t "$session_id" -F '#{client_name}' 2>/dev/null) ]]
+}
+
+wait_for_tmux_client() {
+  local session_id=$1
+  local attempt=0
+
+  while ((attempt < 100)); do
+    if tmux_session_has_client "$session_id"; then
+      return 0
+    fi
+    sleep 0.1
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
 open_external=false
 refresh_session=false
 while [[ ${1:-} == --* ]]; do
@@ -271,6 +290,10 @@ if [[ $refresh_session == true ]]; then
     exit 1
   fi
   configure_tmux_session "$session_id" "$window_id"
+  client_attached=false
+  if tmux_session_has_client "$session_id"; then
+    client_attached=true
+  fi
 
   pane_ids=()
   while IFS= read -r pane_id; do
@@ -303,7 +326,25 @@ else
   window_id=$(tmux display-message -p -t "$first_pane" '#{window_id}')
   configure_tmux_session "$session_id" "$window_id"
   tmux select-pane -t "$first_pane" -T "${pane_titles[0]}"
+  client_attached=false
+  if [[ $open_external == true ]]; then
+    if open_external_terminal "$session_name"; then
+      if wait_for_tmux_client "$session_id"; then
+        client_attached=true
+      else
+        echo "external terminal opened but did not attach in time; run --refresh after attaching" >&2
+      fi
+    else
+      echo "could not open an external terminal; attach manually with:" >&2
+      printf "  tmux attach-session -t %q\n" "=$session_name" >&2
+    fi
+  fi
   build_comparison_grid "$window_id" "$first_pane"
+fi
+
+if [[ $client_attached == false ]]; then
+  # Allow a later manual attachment to replace tmux's detached default size.
+  tmux set-window-option -t "$window_id" window-size latest
 fi
 
 tmux select-pane -t "$first_pane"
@@ -315,10 +356,3 @@ else
   echo "tmux session ready: $session_name"
 fi
 echo "attach with: tmux attach-session -t '=$session_name'"
-
-if [[ $open_external == true ]]; then
-  if ! open_external_terminal "$session_name"; then
-    echo "could not open an external terminal; attach manually with:" >&2
-    printf "  tmux attach-session -t %q\n" "=$session_name" >&2
-  fi
-fi
