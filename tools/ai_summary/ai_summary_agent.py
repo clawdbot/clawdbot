@@ -2,7 +2,6 @@ import json
 import os
 import redis
 import requests
-import psycopg2
 import subprocess
 
 from datetime import datetime
@@ -14,13 +13,9 @@ OLLAMA_URL = os.environ.get(
 
 MODEL = "llama3.2:3b"
 
-DB = {
-    "host": os.environ.get("OPENCLAW_DB_HOST", "127.0.0.1"),
-    "port": int(os.environ.get("OPENCLAW_DB_PORT", "5432")),
-    "dbname": os.environ.get("OPENCLAW_DB_NAME", "openclaw"),
-    "user": os.environ.get("OPENCLAW_DB_USER", "openclaw"),
-    "password": os.environ.get("OPENCLAW_DB_PASSWORD"),
-}
+DB_CONTAINER = os.environ.get("OPENCLAW_DB_CONTAINER", "postgres")
+DB_NAME = os.environ.get("OPENCLAW_DB_NAME", "openclaw")
+DB_USER = os.environ.get("OPENCLAW_DB_USER", "openclaw")
 
 r = redis.Redis(
     host="127.0.0.1",
@@ -65,28 +60,35 @@ def recent_events(limit=15):
     return "\n".join(events)
 
 def recent_memories(limit=5):
-
-    conn = psycopg2.connect(**DB)
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT agent_name, category, LEFT(content, 400)
+    safe_limit = max(1, min(int(limit), 50))
+    query = f"""
+        SELECT json_build_object(
+            'agent_name', agent_name,
+            'category', category,
+            'content', LEFT(content, 400)
+        )::text
         FROM long_term_memory
         WHERE category != 'gmail_summary'
         ORDER BY created_at DESC
-        LIMIT %s
-    """, (limit,))
-
-    rows = cur.fetchall()
-
-    cur.close()
-    conn.close()
+        LIMIT {safe_limit}
+    """
+    result = subprocess.run(
+        [
+            "docker", "exec", DB_CONTAINER,
+            "psql", "-U", DB_USER, "-d", DB_NAME,
+            "-v", "ON_ERROR_STOP=1", "-At", "-c", query,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
 
     output = []
-
-    for row in rows:
+    for line in result.stdout.splitlines():
+        row = json.loads(line)
         output.append(
-            f"[{row[0]}:{row[1]}] {row[2]}"
+            f"[{row['agent_name']}:{row['category']}] {row['content']}"
         )
 
     return "\n".join(output)
