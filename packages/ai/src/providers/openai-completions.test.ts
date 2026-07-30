@@ -973,17 +973,27 @@ describe("OpenAI-compatible completions params", () => {
   it("omits prompt cache retention when third-party models have not opted into cache keys", async () => {
     let capturedCacheKey: unknown;
     let capturedRetention: unknown;
-    const stream = streamOpenAICompletions(createModel(32_000), context, {
-      apiKey: "sk-test",
-      sessionId: "session-123",
-      cacheRetention: "long",
-      onPayload(payload) {
-        capturedCacheKey = (payload as { prompt_cache_key?: unknown }).prompt_cache_key;
-        capturedRetention = (payload as { prompt_cache_retention?: unknown })
-          .prompt_cache_retention;
-        throw new Error("stop before network");
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        compat: {
+          supportsPromptCacheKey: false,
+          supportsLongCacheRetention: true,
+        },
       },
-    });
+      context,
+      {
+        apiKey: "sk-test",
+        sessionId: "session-123",
+        cacheRetention: "long",
+        onPayload(payload) {
+          capturedCacheKey = (payload as { prompt_cache_key?: unknown }).prompt_cache_key;
+          capturedRetention = (payload as { prompt_cache_retention?: unknown })
+            .prompt_cache_retention;
+          throw new Error("stop before network");
+        },
+      },
+    );
 
     const result = await stream.result();
 
