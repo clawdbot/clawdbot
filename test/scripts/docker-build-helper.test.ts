@@ -4357,6 +4357,26 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(pluginsAssertions).toContain("expected modern installRecords in installed plugin index");
   });
 
+  it("keeps the doctor switch systemctl shim system scope empty", () => {
+    const home = tempDirs.make("openclaw-doctor-systemctl-shim-");
+    const env = { ...process.env, HOME: home };
+    const loadState = spawnSync(
+      DOCTOR_SWITCH_SYSTEMCTL_SHIM_PATH,
+      ["show", "--property=LoadState", "--value", "openclaw-gateway.service"],
+      { encoding: "utf8", env },
+    );
+    const unitPath = spawnSync(
+      DOCTOR_SWITCH_SYSTEMCTL_SHIM_PATH,
+      ["show", "--property=UnitPath", "--value"],
+      { encoding: "utf8", env },
+    );
+
+    expect(loadState.status).toBe(0);
+    expect(loadState.stdout.trim()).toBe("not-found");
+    expect(unitPath.status).toBe(0);
+    expect(unitPath.stdout).toContain("/etc/systemd/system");
+  });
+
   it("routes doctor install switch commands through the E2E timeout helper", () => {
     const runner = readFileSync(DOCTOR_SWITCH_DOCKER_E2E_PATH, "utf8");
     const scenario = readFileSync(DOCTOR_SWITCH_SCENARIO_PATH, "utf8");
@@ -4370,16 +4390,8 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
 
     expectTextToIncludeAll(scenario, [
       'command_timeout="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-900s}"',
-      [
-        'openclaw_test_state_create "switch-${name}" empty',
-        '  account_home="$(getent passwd "$(id -u)" | cut -d: -f6)"',
-        '  if [ -z "$account_home" ]; then',
-        '    echo "Could not resolve the current account home" >&2',
-        "    exit 1",
-        "  fi",
-        '  export HOME="$account_home"',
-        "  unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH",
-      ].join("\n"),
+      'openclaw_test_state_create "$account_home" empty\n  unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH',
+      "create_default_service_state",
       'openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$install_cmd"',
       'openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$doctor_cmd"',
       'openclaw_e2e_maybe_timeout "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper" --force',
@@ -4389,9 +4401,6 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(
       scenario.match(/unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH/gu),
     ).toHaveLength(1);
-    expect(scenario.match(/getent passwd "\$\(id -u\)"/gu)).toHaveLength(1);
-    expect(scenario.match(/export HOME="\$account_home"/gu)).toHaveLength(1);
-
     expect(scenario).not.toMatch(/^\s*if ! timeout "\$command_timeout"/mu);
   });
 
