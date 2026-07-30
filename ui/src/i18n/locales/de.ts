@@ -38,7 +38,7 @@ export const de: TranslationMap = {
     copied: "Kopiert!",
     copyFailed: "Kopieren fehlgeschlagen",
     copyCode: "Code kopieren",
-    resizeSplitView: "Geteilte Ansicht skalieren",
+    resizeSplitView: "Geteilte Ansicht anpassen",
     delete: "Löschen",
     remove: "Entfernen",
     dismiss: "Schließen",
@@ -132,12 +132,12 @@ export const de: TranslationMap = {
     unavailable: "MCP-App nicht verfügbar: {error}",
     errors: {
       gatewayUnavailable: "MCP App-Gateway nicht verfügbar",
-      mountUnavailable: "MCP App-Einhängepunkt nicht verfügbar",
+      mountUnavailable: "MCP App-Mount nicht verfügbar",
       sandboxTimedOut: "Zeitüberschreitung der MCP App-Sandbox",
       sandboxUnavailable: "MCP App-Sandbox nicht verfügbar",
       initializationTimedOut: "Zeitüberschreitung bei der Initialisierung der MCP App",
       requestFailed: "Anfrage fehlgeschlagen",
-      invalidSandboxUrl: "Die Sandbox-URL der MCP App ist ungültig",
+      invalidSandboxUrl: "MCP App-Sandbox-URL ist ungültig",
     },
   },
   githubPreview: {
@@ -353,15 +353,15 @@ export const de: TranslationMap = {
       },
       notices: {
         timeout:
-          "Zeitüberschreitung der Anfrage nach 30 Sekunden; der Server hat die Änderung möglicherweise dennoch übernommen — prüfen Sie das Profil, bevor Sie es erneut versuchen.",
+          "Anfrage nach 30 Sekunden abgelaufen; der Server hat die Änderung möglicherweise dennoch übernommen – überprüfe das Profil, bevor du es erneut versuchst.",
         operationFailed: "{prefix}: {error}",
         updateFailed: "Profilaktualisierung fehlgeschlagen",
         updateFailedStatus: "Profilaktualisierung fehlgeschlagen ({status})",
-        publishFailed: "Veröffentlichung des Profils auf allen Relays fehlgeschlagen.",
-        published: "Profil auf Relays veröffentlicht.",
+        publishFailed: "Profilveröffentlichung auf allen Relays fehlgeschlagen.",
+        published: "Profil an Relays veröffentlicht.",
         importFailed: "Profilimport fehlgeschlagen",
         importFailedStatus: "Profilimport fehlgeschlagen ({status})",
-        importedFromRelays: "Profil aus Relays importiert. Überprüfen und veröffentlichen.",
+        importedFromRelays: "Profil von Relays importiert. Überprüfen und veröffentlichen.",
         imported: "Profil importiert. Überprüfen und veröffentlichen.",
       },
     },
@@ -376,56 +376,54 @@ export const de: TranslationMap = {
     reloading: "Wird neu geladen…",
     retry: "Erneut versuchen",
     stylesFailed:
-      "Stile konnten nicht geladen werden, daher wird die Seite möglicherweise fehlerhaft dargestellt.",
+      "Die Stile konnten nicht geladen werden, daher wirkt die Seite möglicherweise fehlerhaft.",
   },
   updates: {
-    refreshRequired: "Server aktualisiert — für den vollen Funktionsumfang aktualisieren",
+    refreshRequired: "Server aktualisiert — für alle Funktionen aktualisieren",
     coalescedRestart:
-      "Update installiert. Ein Neustart des Gateways wird bereits ausgeführt; der Status wird nach der erneuten Verbindung aktualisiert.",
+      "Update installiert. Ein Neustart des Gateways läuft bereits; der Status wird nach der erneuten Verbindung aktualisiert.",
     error: "Update-Fehler: {error}",
     status: "Update {status}: {reason}. {guidance}",
     verificationFailed:
-      "Update installiert, aber die ausgeführte Version hat sich nicht geändert — der Neustart wurde möglicherweise blockiert.",
+      "Update installiert, aber die laufende Version hat sich nicht geändert — der Neustart wurde möglicherweise blockiert.",
     verificationFailedWithVersions:
-      "Update installiert, aber die ausgeführte Version hat sich nicht geändert — der Neustart wurde möglicherweise blockiert. Erwartet: v{expectedVersion}, ausgeführt: v{actualVersion}.",
+      "Update installiert, aber die laufende Version hat sich nicht geändert — der Neustart wurde möglicherweise blockiert. Erwartet v{expectedVersion}, läuft v{actualVersion}.",
     handoffTimeout:
-      "Update-Übergabe gestartet, aber nach der erneuten Verbindung wurde kein Abschluss gemeldet. Führen Sie `openclaw update status` aus, um das endgültige Ergebnis abzurufen.",
-    outcomeUnknown:
-      "Die Update-Anfrage wurde möglicherweise angenommen, aber das Gateway hat nach der erneuten Verbindung kein endgültiges Ergebnis gemeldet. Führen Sie vor einem erneuten Versuch `openclaw update status` aus.",
+      "Update-Übergabe gestartet, aber der Abschluss wurde nach der erneuten Verbindung nicht gemeldet. Führen Sie `openclaw update status` für das Endergebnis aus.",
     failureReasons: {
-      dirty: "Änderungen committen oder stashen und dann erneut versuchen.",
-      noUpstream: "Einen Upstream-Branch festlegen und dann erneut versuchen.",
+      dirty: "Änderungen committen oder stashen, dann erneut versuchen.",
+      noUpstream: "Einen Upstream-Branch festlegen, dann erneut versuchen.",
       notGitInstall:
-        "Kein Git-Checkout. Führen Sie für eine globale Neuinstallation `openclaw update` über die CLI aus.",
+        "Kein Git-Checkout. Führen Sie `openclaw update` über die CLI für eine globale Neuinstallation aus.",
       notOpenclawRoot:
-        "Führen Sie das Update aus einem OpenClaw-Checkout aus oder verwenden Sie den globalen Neuinstallationspfad der CLI.",
+        "Führen Sie das Update aus einem OpenClaw-Checkout aus oder verwenden Sie den CLI-Pfad zur globalen Neuinstallation.",
       depsInstallFailed:
-        "Installation der Abhängigkeiten fehlgeschlagen. Beheben Sie den Installationsfehler und versuchen Sie es erneut.",
+        "Abhängigkeitsinstallation fehlgeschlagen. Beheben Sie den Installationsfehler und versuchen Sie es erneut.",
       buildFailed:
         "Build fehlgeschlagen. Beheben Sie den Build-Fehler und versuchen Sie es erneut.",
       buildDirty:
-        "Der Build der ausgewählten Revision hat Dateien im Checkout geändert. Versuchen Sie es erneut mit einer Revision, die ihre generierten Artefakte enthält.",
+        "Der Build der ausgewählten Revision hat Checkout-Dateien verändert. Wiederholen Sie den Vorgang mit einer Revision, die ihre generierten Artefakte enthält.",
       uiBuildFailed:
-        "Der Neuaufbau der Control UI ist fehlgeschlagen. Beheben Sie den UI-Buildfehler und versuchen Sie es erneut.",
+        "Der Neuaufbau der Control UI ist fehlgeschlagen. Beheben Sie den UI-Build-Fehler und versuchen Sie es erneut.",
       globalInstallFailed:
-        "Die globale Paketinstallation konnte auf dem Datenträger nicht verifiziert werden. Versuchen Sie es erneut oder installieren Sie sie über die CLI neu.",
+        "Die globale Paketinstallation konnte auf dem Datenträger nicht verifiziert werden. Wiederholen Sie den Vorgang oder installieren Sie über die CLI neu.",
       restartDisabled:
-        "Das Update wurde nicht angewendet, da Gateway-Neustarts deaktiviert sind. Aktivieren Sie Neustarts in der Konfiguration und versuchen Sie es dann erneut.",
+        "Das Update wurde nicht angewendet, da Gateway-Neustarts deaktiviert sind. Aktivieren Sie Neustarts in der Konfiguration und versuchen Sie es erneut.",
       restartUnavailable:
-        "Diese globale Installation kann nicht sicher ersetzt werden, solange Neustarts deaktiviert sind und kein Supervisor vorhanden ist.",
+        "Diese globale Installation kann nicht sicher ersetzt werden, während Neustarts deaktiviert sind und kein Supervisor vorhanden ist.",
       restartUnhealthy:
-        "Der Ersatzprozess erreichte nie einen fehlerfreien Zustand. Der vorherige Prozess lief weiter, damit Sie das System wiederherstellen können.",
+        "Der Ersatzprozess wurde nie funktionsfähig. Der vorherige Prozess blieb aktiv, damit Sie eine Wiederherstellung durchführen können.",
       managedServiceHandoffAlreadyRunning:
-        "Ein weiteres verwaltetes Update wird bereits ausgeführt. Warten Sie, bis es abgeschlossen ist, und aktualisieren Sie dann den Update-Status.",
+        "Ein weiteres verwaltetes Update läuft bereits. Warten Sie, bis es abgeschlossen ist, und aktualisieren Sie dann den Update-Status.",
       doctorFailed:
         "Die Doctor-Reparatur ist fehlgeschlagen. Führen Sie `openclaw doctor --non-interactive` aus und versuchen Sie es erneut.",
       default:
-        "Den genauen Fehler finden Sie in den Gateway-Protokollen. Versuchen Sie es erneut, sobald die Ursache behoben ist.",
+        "Prüfen Sie die Gateway-Logs auf den genauen Fehler und wiederholen Sie den Vorgang, sobald die Ursache behoben ist.",
     },
     postRestart: {
       restartUnhealthy:
-        "Der Ersatzprozess erreichte nie einen fehlerfreien Zustand und der vorherige Prozess lief weiter.",
-      default: "Prüfen Sie die Gateway-Protokolle auf den Fehler des Ersatzprozesses.",
+        "Der Ersatzprozess wurde nie funktionsfähig und der vorherige Prozess blieb aktiv.",
+      default: "Prüfen Sie die Gateway-Logs auf den Fehler beim Ersetzen.",
     },
   },
   nodes: {
@@ -706,8 +704,6 @@ export const de: TranslationMap = {
     loadError: "Dashboards konnten nicht geladen werden: {error}",
   },
   sessionsView: {
-    subagentPrefix: "Unteragent:",
-    automationPrefix: "Automatisierung:",
     deletePreservedWorktrees:
       "{count} Sitzungs-Worktree(s) mit nicht committeter oder nicht gepushter Arbeit wurden beibehalten ({branches}). Verwalten Sie sie unter Einstellungen -> Worktrees.",
     deletePreservedWorktreeConfirm:
@@ -884,7 +880,7 @@ export const de: TranslationMap = {
     groupBy: "Gruppieren nach",
     groupByNone: "Keine",
     groupByCategory: "Benutzerdefinierte Gruppen",
-    showCronSessions: "Automatisierungssitzungen anzeigen",
+    showCronSessions: "Cron-Sitzungen anzeigen",
     groupByChannel: "Kanal",
     groupByKind: "Art",
     groupByAgent: "Agent",
@@ -920,9 +916,8 @@ export const de: TranslationMap = {
   agents: {
     noAgents: "No agents",
     defaults: {
-      title: "Agenten-Standardeinstellungen",
-      description:
-        "Standardeinstellungen, die jeder Agent übernimmt, sofern sie nicht überschrieben werden.",
+      title: "Agent-Standardwerte",
+      description: "Standardwerte, die jeder Agent erbt, sofern nicht überschrieben.",
     },
     copyId: "Copy ID",
     copyIdTitle: "Copy agent ID to clipboard",
@@ -1061,10 +1056,10 @@ export const de: TranslationMap = {
     },
     cronPanel: {
       schedulerTitle: "Scheduler",
-      schedulerSubtitle: "Status der Gateway-Automatisierungen.",
+      schedulerSubtitle: "Gateway cron status.",
       jobs: "Jobs",
       nextWake: "Nächstes Aufwachen",
-      agentJobsTitle: "Agentenautomatisierungen",
+      agentJobsTitle: "Agent Cron Jobs",
       agentJobsSubtitle: "Scheduled jobs targeting this agent.",
       noJobs: "No jobs assigned.",
       runNow: "Run Now",
@@ -1130,8 +1125,8 @@ export const de: TranslationMap = {
     noEvents: "No events yet.",
   },
   configForm: {
-    redactedPlaceholder: "[ausgeblendet – zum Anzeigen klicken]",
-    sectionHelp: "Hilfe zu {section}",
+    redactedPlaceholder: "[unkenntlich gemacht – zum Anzeigen auf „Aufdecken“ klicken]",
+    sectionHelp: "Hilfe für {section}",
     readGuide: "Anleitung lesen",
     showAdvanced: "Erweitert anzeigen",
     advancedHidden: "{count} erweiterte Einstellung ausgeblendet",
@@ -1250,7 +1245,7 @@ export const de: TranslationMap = {
         description: "Sitzungsverwaltung und Persistenz",
       },
       cron: {
-        label: "Automatisierungen",
+        label: "Cron",
         description: "Geplante Aufgaben und Automatisierung",
       },
       discovery: {
@@ -1327,7 +1322,7 @@ export const de: TranslationMap = {
     },
     security: {
       intro:
-        "Überprüfen Sie den Gateway-Zugriff, die Tool-Richtlinie, die Geräteauthentifizierung und die Genehmigungen.",
+        "Gateway-Zugriff, Tool-Richtlinie, Geräteauthentifizierung und Genehmigungen überprüfen.",
       title: "Sicherheit",
       gatewayAuth: "Gateway-Authentifizierung",
       execPolicy: "Ausführungsrichtlinie",
@@ -1428,7 +1423,7 @@ export const de: TranslationMap = {
       commands: "Befehle",
       hooks: "Hooks",
       bindings: "Bindings",
-      cron: "Automatisierungen",
+      cron: "Cron",
       approvals: "Genehmigungen",
       security: "Sicherheitsrichtlinie",
       plugins: "Plugins",
@@ -1496,7 +1491,7 @@ export const de: TranslationMap = {
         "Benachrichtigungen sind für OpenClaw in macOS deaktiviert. Erlaube sie unter Systemeinstellungen > Mitteilungen.",
     },
     appearance: {
-      intro: "Einstellungen für Design, Chat und Seitenleiste dieses Control UI-Clients.",
+      intro: "Design-, Chat- und Seitenleisteneinstellungen für diesen Control-UI-Client.",
       theme: "Design",
       chooseTheme: "Wählen Sie eine Design-Familie.",
       importedTheme: "Importiertes Design",
@@ -1878,11 +1873,11 @@ export const de: TranslationMap = {
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
     unavailable: "The terminal is not available on this gateway.",
-    uploadTooLarge: "Die Datei überschreitet das Upload-Limit des Terminals von 16 MiB: {file}",
+    uploadTooLarge: "Datei überschreitet das Terminal-Upload-Limit von 16 MiB: {file}",
     uploadUnsafeCmdPath:
-      "Ein hochgeladener Pfad, der % oder ! enthält, kann nicht sicher in cmd.exe eingefügt werden",
+      "Ein hochgeladener Pfad mit % oder ! kann nicht sicher in cmd.exe eingefügt werden",
     uploadUnsupportedShell:
-      "Ein hochgeladener Pfad kann nicht sicher in eine nicht unterstützte Shell eingefügt werden: {shell}",
+      "Ein hochgeladener Pfad kann nicht sicher in nicht unterstützte Shell eingefügt werden: {shell}",
   },
   browser: {
     title: "Browser",
@@ -1923,7 +1918,7 @@ export const de: TranslationMap = {
     annotationSent: "Annotation zum Chat-Composer hinzugefügt.",
     errors: {
       requestFailed: "Browser-Anfrage fehlgeschlagen: {error}",
-      screenshotPathMissing: "Der Browser-Screenshot hat keinen Medienpfad zurückgegeben.",
+      screenshotPathMissing: "Browser-Screenshot hat keinen Medienpfad zurückgegeben.",
       screenshotFetchTimedOut: "Zeitüberschreitung beim Abrufen des Screenshots.",
       screenshotFetchFailed: "Abrufen des Screenshots fehlgeschlagen ({status}).",
       screenshotReadFailed: "Lesen des Screenshots fehlgeschlagen.",
@@ -2001,7 +1996,7 @@ export const de: TranslationMap = {
     sessions: "Aktive Sitzungen inspizieren und Standardeinstellungen pro Sitzung anpassen.",
     usage: "API-Nutzung und Kosten überwachen.",
     cron: "Aufweckzeiten und wiederkehrende Agent-Läufe planen.",
-    tasks: "Hintergrundaufgaben: Unteragenten, Automatisierungsläufe, CLI.",
+    tasks: "Hintergrundaufgaben: Subagents, Cron-Läufe, CLI.",
     skills: "Skill-Verfügbarkeit und API-Schlüsselinjektion verwalten.",
     plugins: "Optionale Funktionen installieren und verwalten.",
     skillWorkshop:
@@ -2015,10 +2010,10 @@ export const de: TranslationMap = {
     communications: "Kanäle, Nachrichten und Audioeinstellungen.",
     appearance: "Design-, UI- und Einrichtungsassistent-Einstellungen.",
     lobsterdex: "Jede Lobster-Palette, die diesen Browser besucht hat.",
-    automation: "Befehle, Hooks, Automatisierungen und Plugins.",
+    automation: "Befehle, Hooks, Cron und Plugins.",
     mcp: "MCP-Server, Authentifizierung, Tools und Diagnosen.",
     memory: "Memory-Engine, Backend, Suche und Dreaming.",
-    talk: "Echtzeitstimme: Anbieter, Modell und Sprecherstimme.",
+    talk: "Echtzeit-Sprache: Anbieter, Modell und Sprecherstimme.",
     infrastructure: "Gateway-, Web-, Browser- und Medieneinstellungen.",
     labs: "Experimentelle Agent- und Tool-Funktionen.",
     about: "Control UI und verbundene Gateway-Build-Identität.",
@@ -2039,12 +2034,12 @@ export const de: TranslationMap = {
       "OpenClaw verwendet bereits vorhandenen KI-Zugriff – eine CLI-Anmeldung, einen API-Schlüssel oder eine Anbieteranmeldung.",
     required: {
       title: "Kein KI-Anbieter konfiguriert",
-      body: "OpenClaw konnte für diesen Agenten keinen konfigurierten Anbieter und kein konfiguriertes Modell finden. Fügen Sie beides hinzu, bevor Sie eine Unterhaltung beginnen.",
+      body: "OpenClaw konnte für diesen Agenten keinen konfigurierten Anbieter und kein Modell finden. Fügen Sie eines hinzu, bevor Sie eine Konversation starten.",
       action: "Anbieter konfigurieren",
     },
     connectionFailure: {
       title: "OpenClaw konnte Ihre konfigurierte KI nicht verwenden",
-      body: "Für diesen Agenten sind ein Anbieter und ein Modell ausgewählt, aber die Verbindung ist fehlgeschlagen. Überprüfen Sie die Anmeldung beim Anbieter oder den API-Schlüssel, den Modellzugriff und den Dienststatus und versuchen Sie es erneut.",
+      body: "Für diesen Agenten sind ein Anbieter und ein Modell ausgewählt, aber die Verbindung ist fehlgeschlagen. Überprüfen Sie die Anbieteranmeldung oder den API-Schlüssel, den Modellzugriff und den Dienststatus, und versuchen Sie es erneut.",
       action: "Anbietereinstellungen prüfen",
     },
     loading: "Dieser Gateway wird auf verfügbaren KI-Zugriff geprüft…",
@@ -2078,7 +2073,7 @@ export const de: TranslationMap = {
     },
     unavailable: {
       title: "Erkannt, aber nicht automatisch getestet",
-      signIn: "Bei {provider} anmelden",
+      signIn: "Mit {provider} anmelden",
       useApiKey: "API-Schlüssel verwenden",
     },
     signIn: {
@@ -2109,7 +2104,6 @@ export const de: TranslationMap = {
       title: "Ihre KI ist bereit",
       detail: "{modelRef} · {latencyMs} ms",
       openChat: "Chat öffnen",
-      continueSetup: "Einrichtung fortsetzen",
       configuredModel: "Konfiguriertes Modell",
     },
     failure: {
@@ -2191,36 +2185,36 @@ export const de: TranslationMap = {
     backfill: {
       title: "Aus vergangenen Sitzungen",
       subtitle:
-        "Vertrauenswürdige Erinnerungen aus früheren Agentensitzungen vormerken. Dreaming überführt die nützlichen davon ins Langzeitgedächtnis.",
-      dateRange: "Datumsbereich der Sitzungen",
+        "Stellen Sie vertrauenswürdige Erinnerungen aus früheren Agentensitzungen bereit. Beim Träumen werden die nützlichen ins Langzeitgedächtnis übernommen.",
+      dateRange: "Datumsbereich der Sitzung",
       dateRangeHint:
-        "Lassen Sie eines der Datumsfelder leer, um den gesamten verfügbaren Zeitraum zu durchsuchen.",
+        "Lassen Sie eines der Daten leer, um den gesamten verfügbaren Bereich zu durchsuchen.",
       from: "Von",
       to: "Bis",
-      actions: "Nachträglich importieren",
+      actions: "Nachfüllen",
       preview: "Vorschau",
-      previewing: "Vorschau wird erstellt…",
+      previewing: "Vorschau…",
       apply: "Anwenden",
       applying: "Wird angewendet…",
-      rollback: "Zurücksetzen",
-      previewSummary: "{candidates} Kandidaten an {days} Tagen",
+      rollback: "Rückgängig machen",
+      previewSummary: "{candidates} Kandidaten über {days} Tage",
       previewTruncated:
-        "Diese Vorschau zeigt den ersten begrenzten Stapel. Beim Anwenden werden die verbleibenden Kandidaten weiterverarbeitet.",
+        "Diese Vorschau zeigt den ersten begrenzten Stapel. Beim Anwenden werden die verbleibenden Kandidaten weiter verarbeitet.",
       candidateCount: "{count} Kandidaten",
       noCandidates: "Es wurden keine neuen vertrauenswürdigen Sitzungskandidaten gefunden.",
-      progress: "{days} Tage verarbeitet · {staged} vorgemerkt",
+      progress: "{days} Tage verarbeitet · {staged} bereitgestellt",
       processedCandidates: "{count} Sitzungskandidaten verarbeitet",
       processedDayCountOne: "{count} Tag verarbeitet",
       processedDayCount: "{count} Tage verarbeitet",
-      complete: "{count} vorgemerkt; die Übernahme erfolgt durch Dreaming",
-      rollbackConfirmTitle: "Sitzungsrückfüllung rückgängig machen?",
+      complete: "{count} bereitgestellt; die Übernahme erfolgt durch Träumen",
+      rollbackConfirmTitle: "Session-Backfill rückgängig machen?",
       rollbackConfirmDescription:
-        "Tagebucheinträge und vorgemerkte Erinnerungen entfernen, die durch die Sitzungsrückfüllung für diesen Agenten erstellt wurden.",
+        "Tagebucheinträge und bereitgestellte Erinnerungen entfernen, die durch den Session-Backfill für diesen Agenten erstellt wurden.",
       rollbackWarning:
-        "Erfasste Sitzungscursor bleiben bestehen, daher werden entfernte Einträge nicht erneut vorgemerkt.",
-      rollbackComplete: "Sitzungsrückfüllung rückgängig gemacht",
-      rollbackCounts: "{diary} Tagebucheinträge und {staged} vorgemerkte Einträge entfernt",
-      unavailable: "Die Sitzungsrückfüllung ist auf diesem Gateway nicht verfügbar.",
+        "Nachverfolgte Session-Cursor bleiben erhalten, sodass entfernte Einträge nicht erneut bereitgestellt werden.",
+      rollbackComplete: "Session-Backfill rückgängig gemacht",
+      rollbackCounts: "{diary} Tagebucheinträge und {staged} bereitgestellte Einträge entfernt",
+      unavailable: "Session-Backfill ist auf diesem Gateway nicht verfügbar.",
     },
   },
   onboarding: {
@@ -2268,7 +2262,7 @@ export const de: TranslationMap = {
       title: "OpenClaw",
       toggle: "OpenClaw fragen",
       close: "Ask OpenClaw schließen",
-      resize: "Größe von Ask OpenClaw ändern",
+      resize: "Ask OpenClaw skalieren",
       dockBottom: "Ask OpenClaw unten andocken",
       dockRight: "Ask OpenClaw rechts andocken",
     },
@@ -2302,11 +2296,6 @@ export const de: TranslationMap = {
       channelDegraded: "{channel} ist beeinträchtigt – frag mich, was passiert ist",
       channelFallback: "Ein Kanal",
       dismiss: "Dieses Update ausblenden",
-      channelSetupTitle: "OpenClaw außerhalb dieser App erreichen",
-      channelSetupBody:
-        "Die Web-App funktioniert bereits. Fügen Sie nur dann einen Kanal hinzu, wenn Sie OpenClaw über einen anderen Dienst Nachrichten senden möchten.",
-      channelSetupAction: "Kanal einrichten",
-      channelSetupDismiss: "Web-App weiterverwenden",
     },
   },
   mcpServers: {
@@ -2322,11 +2311,6 @@ export const de: TranslationMap = {
       "Servernamen verwenden Buchstaben, Zahlen, Punkte, Bindestriche oder Unterstriche.",
     targetInvalid:
       "Geben Sie eine URL für HTTP-Transporte oder eine gültige Befehlszeile für Stdio ein.",
-    sessionEnableFailed:
-      "Der Server wurde global deaktiviert gespeichert, aber die Aktivierung für diese Sitzung ist fehlgeschlagen: {error}",
-    sessionChanged: "Die aktive Sitzung wurde geändert, bevor der Server aktiviert werden konnte.",
-    sessionUnavailable:
-      "Die aktive Sitzung ist nicht verfügbar. Aktualisieren Sie die Seite und versuchen Sie es erneut.",
     nameTaken: "Ein MCP-Server mit dem Namen „{name}“ existiert bereits.",
     missing: "MCP-Server „{name}“ wurde in der Konfiguration nicht gefunden.",
     missingTransport: "fehlender Transport",
@@ -2343,7 +2327,7 @@ export const de: TranslationMap = {
     working: "Arbeitet…",
   },
   mcpPage: {
-    intro: "Verbinden und verwalten Sie MCP-Server, die OpenClaw Tools bereitstellen.",
+    intro: "MCP-Server verbinden und verwalten, die OpenClaw Tools bereitstellen.",
     connectorsLink: "Entdecken Sie Ein-Klick-Konnektoren auf der Plugins-Seite.",
     servers: "Server",
     oauth: "OAuth",
@@ -2361,11 +2345,11 @@ export const de: TranslationMap = {
     mtls: "mTLS",
   },
   talkPage: {
-    intro: "Konfigurieren Sie Echtzeit-Sprachanbieter, Modelle und Sprecherstimmen.",
+    intro: "Echtzeit-Sprachanbieter, Modelle und Sprecherstimmen konfigurieren.",
     voiceSection: {
       title: "Echtzeit-Sprache",
       description:
-        "Kontinuierliche Sprachunterhaltungen mit Ihrem Agenten. Die Auswahlfelder unten schreiben die Einstellungen für talk.realtime; das vollständige Formular weiter unten deckt alles Weitere ab.",
+        "Kontinuierliche Sprachkonversationen mit deinem Agenten. Die Auswahlfelder unten schreiben talk.realtime-Einstellungen; das vollständige Formular weiter unten deckt alles andere ab.",
     },
     status: {
       title: "Status",
@@ -2373,35 +2357,35 @@ export const de: TranslationMap = {
       notReady: "Nicht konfiguriert",
       unavailable: "Nicht verfügbar",
       unavailableHint:
-        "Stellen Sie eine Verbindung zum Gateway her, um die Bereitschaft für Echtzeit-Sprache zu prüfen.",
+        "Mit dem Gateway verbinden, um die Bereitschaft für Echtzeit-Sprache zu prüfen.",
       activeProvider: "Aktiver Anbieter: {provider}",
-      noProvider: "Es ist noch kein Anbieter für Echtzeit-Sprache konfiguriert.",
+      noProvider: "Es ist noch kein Echtzeit-Sprachanbieter konfiguriert.",
     },
     provider: {
       title: "Anbieter",
-      description: "Auto wählt den ersten Anbieter mit gültigen Anmeldedaten aus.",
+      description: "Auto wählt den ersten Anbieter mit funktionierenden Anmeldedaten.",
       auto: "Automatisch",
     },
     model: {
       title: "Modell",
       description: "Echtzeit-Sprachmodell für Talk-Sitzungen im Browser.",
-      default: "Anbieterstandard",
+      default: "Provider-Standard",
       defaultNamed: "Standard ({model})",
     },
     voice: {
       title: "Sprecherstimme",
       description:
-        "Für gesprochene Antworten verwendete Stimme. GPT-Live legt die Stimme fest, sobald ein Anruf beginnt.",
-      default: "Anbieterstandard",
+        "Stimme für gesprochene Antworten. GPT-Live sperrt die Stimme, sobald ein Anruf beginnt.",
+      default: "Provider-Standard",
     },
     gptLive: {
       title: "GPT-Live",
-      hint: "GPT-Live funktioniert mit einem ChatGPT-Abonnement: Melden Sie sich einmal mit „openclaw models auth login --provider openai“ an. Kein Platform-API-Schlüssel erforderlich. Nur für Talk im Browser. Delegierte Aufgaben können während der Ausführung gesteuert werden und erfordern bei Aktionen mit weitreichenden Auswirkungen eine exakte mündliche Bestätigung.",
+      hint: "GPT-Live funktioniert mit einem ChatGPT-Abonnement: Melde dich einmal mit „openclaw models auth login --provider openai“ an. Kein Platform-API-Schlüssel nötig. Nur Browser Talk. Delegierte Arbeit kann während der Ausführung gesteuert werden und erfordert eine exakte gesprochene Bestätigung für Aktionen mit hoher Auswirkung.",
       ready: "Bereit",
     },
   },
   memoryPage: {
-    intro: "Legen Sie fest, wie OpenClaw den Agentenspeicher speichert, durchsucht und verwaltet.",
+    intro: "Lege fest, wie OpenClaw den Agenten-Speicher ablegt, durchsucht und pflegt.",
     tablistLabel: "Memory-Bereiche",
     tabs: {
       overview: "Übersicht",
@@ -2411,20 +2395,18 @@ export const de: TranslationMap = {
     },
     overview: {
       hero: {
-        awake: "Der Speicher ist aktiv",
-        waking: "Speicher wird aktiviert…",
-        hibernating: "Der Speicher befindet sich im Ruhezustand",
-        needsAttention: "Der Speicher erfordert Aufmerksamkeit",
+        awake: "Speicher ist wach",
+        waking: "Speicher wird geweckt …",
+        hibernating: "Speicher befindet sich im Ruhezustand",
+        needsAttention: "Speicher benötigt Aufmerksamkeit",
         activeDescription: "{engine} · {mode}",
-        loadingDescription:
-          "Die Speicher-Engine und der Traumzyklus dieses Agenten werden überprüft.",
-        offDescription:
-          "Wählen Sie in den Einstellungen eine Speicher-Engine aus, um den Speicher zu aktivieren.",
+        loadingDescription: "Speicher-Engine und Traumzyklus dieses Agenten werden geprüft.",
+        offDescription: "Wähle in den Einstellungen eine Speicher-Engine, um sie zu wecken.",
         disabledDescription:
-          "Die ausgewählte Speicher-Engine ist deaktiviert. Aktivieren Sie sie in den Einstellungen erneut.",
+          "Die ausgewählte Speicher-Engine ist deaktiviert. Aktiviere sie in den Einstellungen erneut.",
         gatewayOffline: "Das Gateway ist offline, daher ist der Speicherstatus nicht verfügbar.",
-        hybridSearch: "Hybridsuche",
-        keywordSearch: "Schlüsselwortsuche (ohne Einbettungen)",
+        hybridSearch: "Hybride Suche",
+        keywordSearch: "Schlüsselwortsuche (keine Embeddings)",
         openSettings: "Einstellungen öffnen",
         retry: "Erneut versuchen",
         refresh: "Status aktualisieren",
@@ -2432,25 +2414,25 @@ export const de: TranslationMap = {
       schedule: {
         title: "Schlafplan",
         lightDescription:
-          "Sortiert neue Kurzzeitnotizen und stellt vielversprechende Kandidaten bereit, ohne das Langzeitgedächtnis zu verändern.",
+          "Sortiert frische Kurzzeitnotizen und bereitet vielversprechende Kandidaten vor, ohne das Langzeitgedächtnis zu verändern.",
         remDescription:
-          "Reflektiert Themen und wiederkehrende Ideen aus jüngsten Aktivitäten, um die Rangfolge zu verbessern, ohne das Langzeitgedächtnis zu verändern.",
+          "Reflektiert Themen und wiederkehrende Ideen aus der jüngsten Aktivität, um das Ranking zu stärken, ohne das Langzeitgedächtnis zu verändern.",
         deepDescription:
-          "Bewertet bereitgestellte Kandidaten, überführt die besten ins Langzeitgedächtnis (MEMORY.md) und schreibt das Traumtagebuch.",
-        nextRun: "nächster Lauf {time}",
-        lastRun: "letzter Lauf {time}",
+          "Bewertet vorbereitete Kandidaten, überträgt die besten ins Langzeitgedächtnis (MEMORY.md) und schreibt das Traumtagebuch.",
+        nextRun: "nächster {time}",
+        lastRun: "letzter {time}",
         notScheduled: "Nicht geplant",
         learnMore: "So funktioniert das Träumen",
-        openDocs: "Anleitung zum Träumen öffnen",
+        openDocs: "Traum-Anleitung öffnen",
       },
       activity: {
         title: "Aktivität",
-        promotedToday: "Heute übernommen",
-        promotedTotal: "Insgesamt übernommen",
+        promotedToday: "Heute übertragen",
+        promotedTotal: "Insgesamt übertragen",
         shortTermCount: "Ausstehende Kurzzeiteinträge",
         phaseHitCount: "Phasensignale",
-        lightPhaseHitCount: "Treffer in der Leichtschlafphase",
-        remPhaseHitCount: "Treffer in der REM-Phase",
+        lightPhaseHitCount: "Leichtphasen-Treffer",
+        remPhaseHitCount: "REM-Phasen-Treffer",
       },
       health: {
         title: "Engine-Zustand",
@@ -2461,47 +2443,45 @@ export const de: TranslationMap = {
         unavailable: "Nicht verfügbar",
         notChecked: "Nicht geprüft",
         notCheckedDescription: "Die Embedding-Bereitschaft wurde noch nicht geprüft.",
-        checking: "Wird überprüft…",
+        checking: "Wird geprüft…",
         test: "Testen",
         testing: "Wird getestet…",
       },
       shortcuts: {
-        title: "Erinnerungen erkunden",
+        title: "Speicher erkunden",
         memories: "Erinnerungen durchsuchen",
         diary: "Traumtagebuch lesen",
-        settings: "Erinnerungen konfigurieren",
+        settings: "Speicher konfigurieren",
       },
     },
     memories: {
       searchLabel: "Erinnerungen durchsuchen",
       searchPlaceholder: "Erinnerungen dieses Agenten durchsuchen",
       searchButton: "Suchen",
-      idle: "Suchen Sie nach einer Person, einem Projekt, einer Entscheidung oder etwas anderem, an das sich dieser Agent erinnert.",
+      idle: "Suche nach einer Person, einem Projekt, einer Entscheidung oder allem anderen, woran sich dieser Agent erinnert.",
       searching: "Erinnerungen werden durchsucht…",
       results: "{count} Ergebnisse",
       empty: "Keine Erinnerungen stimmen mit „{query}“ überein.",
-      error: "Erinnerungssuche fehlgeschlagen: {message}",
+      error: "Speichersuche fehlgeschlagen: {message}",
       retry: "Erneut versuchen",
       gatewayUpdateRequired:
-        "Aktualisieren Sie das Gateway, um Erinnerungen über die Control UI zu durchsuchen.",
+        "Aktualisiere das Gateway, um Erinnerungen über die Control UI zu durchsuchen.",
       hybridSearch: "Hybridsuche",
       keywordSearch: "Stichwortsuche",
       lineRange: "Zeilen {start}–{end}",
       score: "Bewertung {score}",
-      sourceMemory: "Erinnerung",
+      sourceMemory: "Speicher",
       sourceSessions: "Sitzungen",
-      fileLoading: "Die vollständige Erinnerungsdatei wird geladen…",
-      fileError: "Diese Memory-Datei konnte nicht geladen werden: {message}",
-      fileUnsupported: "Diese Memory-Datei kann nicht als Text angezeigt werden.",
+      fileLoading: "Vollständige Speicherdatei wird geladen…",
+      fileError: "Diese Speicherdatei konnte nicht geladen werden: {message}",
+      fileUnsupported: "Diese Speicherdatei kann nicht als Text angezeigt werden.",
     },
     engine: {
       title: "Engine",
       description:
         "Genau ein Memory-Plugin belegt den Memory-Slot. Beim Auswählen einer Engine wird diese aktiviert und die anderen deaktiviert.",
       rowTitle: "Memory-Engine",
-      openClawMemory: "OpenClaw Memory",
       off: "Aus",
-      unavailable: "Nicht verfügbar",
       autoHint:
         "In der Konfiguration ist keine Engine fixiert, daher fällt der Slot auf seinen Standard-Besitzer zurück.",
       explicitHint: "Diese Engine ist in der Konfiguration unter plugins.slots.memory fixiert.",
@@ -2551,7 +2531,7 @@ export const de: TranslationMap = {
     },
     dreaming: {
       intro:
-        "Dreaming wird als eine zentral verwaltete Automatisierung in allen Agenten-Workspaces ausgeführt, daher gelten diese Einstellungen global. Sie werden vom Plugin {plugin} verwaltet.",
+        "Dreaming läuft als ein verwalteter Cron-Job über alle Agenten-Workspaces hinweg, daher sind diese Einstellungen global. Sie gehören zum {plugin}-Plugin.",
       schedule: {
         title: "Zeitplan",
         description:
@@ -2824,11 +2804,6 @@ export const de: TranslationMap = {
       description:
         "Halten Sie ein begrenztes Tool-Verzeichnis sichtbar und verschieben Sie den Rest hinter die Suche, damit große MCP- und Plugin-Kataloge den Prompt nicht mehr überfüllen.",
     },
-    loopDetection: {
-      title: "Erkennung von Tool-Schleifen",
-      description:
-        "Aktiviert Schutzmechanismen mit gleitendem Verlauf, die bei wiederholten Tool-Aufrufen warnen oder diese blockieren, wenn ein Agent keine Fortschritte mehr macht.",
-    },
     localModelLean: {
       title: "Schlanke Tools für lokale Modelle",
       description:
@@ -2994,7 +2969,7 @@ export const de: TranslationMap = {
     },
     runtime: {
       subagent: "Subagent",
-      cron: "Automatisierung",
+      cron: "Cron",
       acp: "ACP",
       cli: "CLI",
       unknown: "Aufgabe",
@@ -3036,9 +3011,9 @@ export const de: TranslationMap = {
       next: "Weiter",
       apply: "Anwenden",
       applying: "Wird angewendet…",
-      evaluate: "Bewerten",
-      evaluating: "Wird bewertet…",
-      evaluated: "Bewertet",
+      evaluate: "Auswerten",
+      evaluating: "Wird ausgewertet…",
+      evaluated: "Ausgewertet",
       revise: "Überarbeiten",
       tweak: "Anpassen",
       opening: "Wird geöffnet…",
@@ -3078,7 +3053,7 @@ export const de: TranslationMap = {
       clickToPreview: "· zum Vorschauen klicken",
     },
     evaluation: {
-      title: "Bewertung",
+      title: "Auswertung",
       version: "Vorschlag {version}",
       completedAt: "Abgeschlossen {time}",
       status: {
@@ -3103,8 +3078,8 @@ export const de: TranslationMap = {
       fileLine: "{file}:{line}",
       errors: {
         revisionHashUnavailable:
-          "Die aktuelle Revision des Vorschlags konnte nicht ermittelt werden.",
-        revisionChanged: "Die Revision des Vorschlags wurde während der Evaluierung geändert.",
+          "Die aktuelle Vorschlagsrevision konnte nicht identifiziert werden.",
+        revisionChanged: "Die Vorschlagsrevision hat sich während der Auswertung geändert.",
       },
     },
     empty: {
@@ -3170,7 +3145,7 @@ export const de: TranslationMap = {
       comeWithIt: "sind dabei.",
       useIt: "Verwenden",
       addToSkills: "Zu deinen Skills hinzufügen",
-      evaluate: "Evaluieren",
+      evaluate: "Auswerten",
       runChecks: "Vorschlagsprüfungen ausführen",
       tweakIt: "Anpassen",
       askAgent: "Den Agenten bitten, etwas zu ändern",
@@ -3650,8 +3625,8 @@ export const de: TranslationMap = {
   },
   attention: {
     cronErrorUnknown: "Unbekannter Fehler",
-    cronFailed: "{count} Automatisierung(en) fehlgeschlagen",
-    cronOverdue: "{count} Automatisierung(en) überfällig",
+    cronFailed: "{count} Cronjob(s) fehlgeschlagen",
+    cronOverdue: "{count} Cronjob(s) überfällig",
     modelAuthExpired: "Modellauthentifizierung abgelaufen: {providers}",
     pendingApproval: "{count} ausstehende Genehmigung",
     pendingApprovals: "{count} ausstehende Genehmigungen",
@@ -3715,7 +3690,7 @@ export const de: TranslationMap = {
     items: {
       apps: "Apps",
       sessions: "Sitzungen",
-      scheduled: "Automatisierungen",
+      scheduled: "Geplant",
       skills: "Skills",
       plugins: "Plugins",
       settings: "Einstellungen",
@@ -3836,34 +3811,31 @@ export const de: TranslationMap = {
       reloading: "Wird neu geladen…",
     },
     actions: {
-      dedupeRemovedOneAndKept:
-        "{removed} doppelter Traumeintrag wurde entfernt und {kept} wurde beibehalten.",
-      dedupeRemovedManyAndKept:
-        "{removed} doppelte Traumeinträge wurden entfernt und {kept} wurden beibehalten.",
-      dedupeRemovedOne: "{removed} doppelter Traumeintrag wurde entfernt.",
-      dedupeRemovedMany: "{removed} doppelte Traumeinträge wurden entfernt.",
-      repairArchivedThreadCorpus: "archivierter Thread-Korpus",
-      repairArchivedIngestionState: "archivierter Importstatus",
+      dedupeRemovedOneAndKept: "{removed} doppelten Traumeintrag entfernt und {kept} behalten.",
+      dedupeRemovedManyAndKept: "{removed} doppelte Traumeinträge entfernt und {kept} behalten.",
+      dedupeRemovedOne: "{removed} doppelten Traumeintrag entfernt.",
+      dedupeRemovedMany: "{removed} doppelte Traumeinträge entfernt.",
+      repairArchivedThreadCorpus: "archiviertes Thread-Korpus",
+      repairArchivedIngestionState: "archivierter Ingestion-Status",
       repairArchivedDreamDiary: "archiviertes Traumtagebuch",
-      repairNoChanges: "Die Reparatur des Traum-Caches wurde ohne Änderungen abgeschlossen.",
+      repairNoChanges: "Reparatur des Traum-Caches ohne Änderungen abgeschlossen.",
       repairCompleteWithArchive:
         "Reparatur des Traum-Caches abgeschlossen: {actions}. Archiv: {archiveDir}",
       repairComplete: "Reparatur des Traum-Caches abgeschlossen: {actions}.",
-      backfillComplete: "{count} Traumtagebucheinträge wurden nachträglich ergänzt.",
-      resetDiaryComplete: "{count} nachträglich ergänzte Traumtagebucheinträge wurden entfernt.",
-      clearReplayedComplete: "{count} wiedergegebene Kurzzeiteinträge wurden gelöscht.",
-      complete: "Traumtagebuchaktion abgeschlossen.",
+      backfillComplete: "{count} Traumtagebuch-Einträge nachgetragen.",
+      resetDiaryComplete: "{count} nachgetragene Traumtagebuch-Einträge entfernt.",
+      clearReplayedComplete: "{count} wiedergegebene Kurzzeit-Einträge gelöscht.",
+      complete: "Traumtagebuch-Aktion abgeschlossen.",
       confirmRepair:
-        "Traum-Cache reparieren? Dadurch werden abgeleitete Traum-Cache-Dateien archiviert und aus unveränderten Eingabedaten neu erstellt. Ihr Traumtagebuch bleibt unberührt.",
+        "Traum-Cache reparieren? Dabei werden abgeleitete Traum-Cache-Dateien archiviert und aus sauberen Eingaben neu aufgebaut. Ihr Traumtagebuch bleibt unberührt.",
       confirmDedupe:
-        "Duplikate im Traumtagebuch entfernen? Dadurch wird DREAMS.md neu geschrieben, wobei nur exakt identische Tagebucheinträge entfernt werden.",
+        "Traumtagebuch entduplizieren? Dabei wird DREAMS.md neu geschrieben und nur exakte doppelte Tagebuch-Einträge werden entfernt.",
       archivePathCopied: "Archivpfad kopiert.",
       archivePathCopyFailed: "Archivpfad konnte nicht kopiert werden.",
-      updateFailed: "Traumeinstellungen konnten nicht aktualisiert werden.",
+      updateFailed: "Traum-Einstellungen konnten nicht aktualisiert werden.",
       unsupportedPlugin:
-        "Das ausgewählte Speicher-Plugin „{pluginId}“ unterstützt keine Traumeinstellungen.",
-      configHashMissing:
-        "Konfigurations-Hash fehlt; aktualisieren Sie die Ansicht und versuchen Sie es erneut.",
+        'Das ausgewählte Speicher-Plugin "{pluginId}" unterstützt keine Traum-Einstellungen.',
+      configHashMissing: "Konfigurations-Hash fehlt; aktualisieren und erneut versuchen.",
     },
     wiki: {
       previewFallbackTitle: "Wiki-Seite",
@@ -3871,12 +3843,12 @@ export const de: TranslationMap = {
       loadingPage: "Wiki-Seite wird geladen…",
       dreamsTab: "Träume",
       insightsTab: "Importierte Erkenntnisse",
-      wikiTab: "Speicher-Wiki",
+      palaceTab: "Gedächtnispalast",
       dreamsExplainer:
         "Dies ist das rohe Traumtagebuch, das das System beim Wiedergeben und Konsolidieren des Gedächtnisses schreibt; nutze es, um zu überprüfen, was das Gedächtnissystem bemerkt und wo es noch verrauscht oder dünn wirkt.",
       insightsExplainer:
         "Dies sind importierte Erkenntnisse, die aus externem Verlauf geclustert wurden; nutze sie, um zu prüfen, was Importe aufgedeckt haben, bevor etwas davon zu dauerhaftem Gedächtnis wird.",
-      wikiExplainer:
+      palaceExplainer:
         "Dies ist die kompilierte Gedächtnis-Wiki-Fläche, die das System durchsuchen und verarbeiten kann; nutze sie, um tatsächliche Gedächtnisseiten, Aussagen, offene Fragen und Widersprüche zu untersuchen statt roher importierter Quell-Chats.",
       copyArchivePath: "Archivpfad kopieren",
       loadingInsights: "Importierte Erkenntnisse werden geladen…",
@@ -3892,9 +3864,9 @@ export const de: TranslationMap = {
       riskReasons: "Risikogründe:",
       labels: "Labels:",
       openSourcePage: "Quellseite öffnen",
-      loadingWiki: "Speicher-Wiki wird geladen…",
-      emptyWiki: "Das Speicher-Wiki enthält noch keine Inhalte",
-      emptyWikiHint:
+      loadingPalace: "Gedächtnispalast wird geladen…",
+      emptyPalace: "Der Gedächtnispalast ist noch nicht befüllt",
+      emptyPalaceHint:
         "Derzeit enthält das Wiki hauptsächlich rohe Quellimporte und Betriebsberichte. Dieser Tab wird nützlich, sobald Synthesen, Entitäten oder Konzepte geschrieben werden.",
       claims: "Aussagen",
       openQuestions: "Offene Fragen",
@@ -3927,8 +3899,8 @@ export const de: TranslationMap = {
       counts: {
         pageOne: "{count} Seite",
         pages: "{count} Seiten",
-        claimRowOne: "{count} Behauptungszeile",
-        claimRows: "{count} Behauptungszeilen",
+        claimRowOne: "{count} Aussagezeile",
+        claimRows: "{count} Aussagezeilen",
         openQuestionOne: "{count} offene Frage",
         openQuestions: "{count} offene Fragen",
         contradictionOne: "{count} Widerspruch",
@@ -3937,7 +3909,7 @@ export const de: TranslationMap = {
         sensitive: "{count} sensibel",
         signals: "{count} Signale",
         messages: "{count} Nachrichten",
-        userMessages: "{count} Benutzer",
+        userMessages: "{count} Nutzer",
         assistantMessages: "{count} Assistent",
       },
       pageGroupSummary: "{label} · {count}",
@@ -3954,16 +3926,16 @@ export const de: TranslationMap = {
       pageNotFound: "Keine Wiki-Seite für {lookup} gefunden.",
       previewTruncated: "Der erste Abschnitt dieser Seite wird angezeigt.",
       previewTruncatedWithTotal:
-        "Der erste Abschnitt dieser Seite wird angezeigt (insgesamt {count} Zeilen).",
-      importedClusterSummary: "Importierte Chats gruppiert nach {label}.",
+        "Der erste Abschnitt dieser Seite wird angezeigt ({count} Zeilen insgesamt).",
+      importedClusterSummary: "Importierte Chats gruppiert um {label}.",
       withheldDigestOne: "{count} Zusammenfassung wurde bis zur Überprüfung zurückgehalten.",
       withheldDigests: "{count} Zusammenfassungen wurden bis zur Überprüfung zurückgehalten.",
       details: "Details",
       hideDetails: "Details ausblenden",
-      vault: "Tresor",
-      fullVaultBreakdown: "Vollständige Tresoraufschlüsselung: {breakdown}.",
+      vault: "Vault",
+      fullVaultBreakdown: "Vollständige Vault-Aufschlüsselung: {breakdown}.",
       selectedSection: "Ausgewählter Abschnitt: {summary}.",
-      latestUpdate: "Letzte Aktualisierung: {date}.",
+      latestUpdate: "Letzte Aktualisierung {date}.",
       noContent: "Keine Wiki-Inhalte verfügbar.",
     },
     phrases: {
@@ -3971,7 +3943,7 @@ export const de: TranslationMap = {
       tidyingKnowledgeGraph: "der Wissensgraph wird aufgeräumt…",
       replayingConversations: "die heutigen Gespräche werden erneut durchlaufen…",
       weavingShortTerm: "Kurzfristiges wird ins Langfristige eingewebt…",
-      defragmentingMemoryLane: "Erinnerungen werden defragmentiert…",
+      defragmentingMindPalace: "der Gedächtnispalast wird defragmentiert…",
       filingLooseThoughts: "lose Gedanken werden abgelegt…",
       connectingDots: "entfernte Punkte werden verbunden…",
       compostingContext: "alte Kontextfenster werden kompostiert…",
@@ -3996,7 +3968,6 @@ export const de: TranslationMap = {
     emptySubtitle: "Sign in to a provider or add an API key, then refresh.",
     status: {
       ok: "Verbunden",
-      ready: "Bereit",
       expiring: "Expiring",
       expired: "Abgelaufen",
       missing: "Not signed in",
@@ -4052,17 +4023,6 @@ export const de: TranslationMap = {
         unknown: "Verbindung fehlgeschlagen",
         no_model: "Kein Modell verfügbar",
       },
-    },
-    readiness: {
-      title: "KI-Einrichtung",
-      heading: "KI verbinden",
-      signedInNoModels:
-        "Sie sind angemeldet, aber dieses Konto stellt keine verwendbaren Modelle bereit. Wählen Sie einen anderen Anbieter oder ein anderes Konto aus, um fortzufahren.",
-      notConfigured:
-        "Wählen Sie einen Anbieter aus und überprüfen Sie das Modell, das OpenClaw verwenden soll.",
-      noModels: "Keine Modelle verfügbar",
-      modelRequired: "Modell erforderlich",
-      chooseProvider: "Anderen Anbieter auswählen",
     },
     logout: {
       action: "Abmelden",
@@ -4127,8 +4087,8 @@ export const de: TranslationMap = {
     },
     heatmap: {
       title: "Token-Aktivität",
-      subtitle: "Tägliche Token-Intensität für den ausgewählten Zeitraum von bis zu einem Jahr.",
-      cellTokens: "{tokens} Token",
+      subtitle: "Tägliche Token-Intensität für den ausgewählten Zeitraum, bis zu einem Jahr.",
+      cellTokens: "{tokens} Tokens",
       less: "Weniger",
       more: "Mehr",
     },
@@ -4528,7 +4488,7 @@ export const de: TranslationMap = {
     commandResults: {
       startingNewThread: "Neuer Thread wird gestartet...",
       resettingThread: "Thread wird zurückgesetzt...",
-      stoppingCurrentRun: "Aktueller Durchlauf wird gestoppt...",
+      stoppingCurrentRun: "Aktueller Lauf wird gestoppt...",
       chatHistoryCleared: "Chatverlauf gelöscht.",
       exportingThread: "Thread wird exportiert...",
       unknownCommand: "Unbekannter Befehl: `{command}`",
@@ -4537,41 +4497,41 @@ export const de: TranslationMap = {
       help: {
         availableCommands: "Verfügbare Befehle",
         agentCommand: "Agent",
-        openMenu: "Geben Sie `/` ein, um das Befehlsmenü zu öffnen.",
+        openMenu: "Gib `/` ein, um das Befehlsmenü zu öffnen.",
       },
       compaction: {
-        failed: "Kompaktierung fehlgeschlagen.",
-        failedWithReason: "Kompaktierung fehlgeschlagen: {reason}",
-        tokenSummary: " ({before} -> {after} Token)",
-        succeeded: "Kontext erfolgreich kompaktiert",
-        skipped: "Kompaktierung übersprungen.",
-        skippedWithReason: "Kompaktierung übersprungen: {reason}",
+        failed: "Komprimierung fehlgeschlagen.",
+        failedWithReason: "Komprimierung fehlgeschlagen: {reason}",
+        tokenSummary: " ({before} -> {after} Tokens)",
+        succeeded: "Kontext erfolgreich komprimiert",
+        skipped: "Komprimierung übersprungen.",
+        skippedWithReason: "Komprimierung übersprungen: {reason}",
       },
       model: {
         current: "**Aktuelles Modell:** {model}",
         available: "**Verfügbar:** {models}",
         more: "+{count} weitere",
         getFailed: "Modellinformationen konnten nicht abgerufen werden: {error}",
-        set: "Modell auf {model} festgelegt.",
-        setFailed: "Modell konnte nicht festgelegt werden: {error}",
+        set: "Modell auf {model} gesetzt.",
+        setFailed: "Modell konnte nicht gesetzt werden: {error}",
       },
       thinking: {
         current: "Aktuelle Denkstufe: {level}.",
         getFailed: "Denkstufe konnte nicht abgerufen werden: {error}",
         reset: "Denkstufe auf Standard zurückgesetzt.",
         resetFailed: "Denkstufe konnte nicht zurückgesetzt werden: {error}",
-        unrecognized: "Unbekannte Denkstufe „{level}“. Gültige Stufen: {options}.",
+        unrecognized: 'Unbekannte Denkstufe "{level}". Gültige Stufen: {options}.',
         unsupported:
-          "Die Denkstufe „{level}“ wird von diesem Modell nicht unterstützt. Gültige Stufen: {options}.",
-        set: "Denkstufe auf {level} festgelegt.",
-        setFailed: "Denkstufe konnte nicht festgelegt werden: {error}",
+          'Nicht unterstützte Denkstufe "{level}" für dieses Modell. Gültige Stufen: {options}.',
+        set: "Denkstufe auf {level} gesetzt.",
+        setFailed: "Denkstufe konnte nicht gesetzt werden: {error}",
       },
       verbose: {
-        current: "Aktuelle Ausführlichkeitsstufe: {level}.",
-        getFailed: "Ausführlichkeitsstufe konnte nicht abgerufen werden: {error}",
-        unrecognized: "Unbekannte Ausführlichkeitsstufe „{level}“. Gültige Stufen: off, on, full.",
-        set: "Ausführlicher Modus auf {level} festgelegt.",
-        setFailed: "Ausführlicher Modus konnte nicht festgelegt werden: {error}",
+        current: "Aktuelle ausführliche Stufe: {level}.",
+        getFailed: "Ausführliche Stufe konnte nicht abgerufen werden: {error}",
+        unrecognized: 'Unbekannte ausführliche Stufe "{level}". Gültige Stufen: off, on, full.',
+        set: "Ausführlicher Modus auf {level} gesetzt.",
+        setFailed: "Ausführlicher Modus konnte nicht gesetzt werden: {error}",
       },
       fast: {
         autoValue: "auto ({seconds} Sek.)",
@@ -4581,40 +4541,39 @@ export const de: TranslationMap = {
         sourceAgent: " (Standard: Agent)",
         sourceModel: " (Standard: Modell)",
         sourceDefault: " (Standard)",
-        current: "Aktueller Schnellmodus: {value}",
-        options: "ein, aus, auto ({seconds} Sek.), Standard, Status",
-        getFailed: "Schnellmodus konnte nicht abgerufen werden: {error}",
-        reset: "Schnellmodus auf Standard zurückgesetzt.",
-        resetFailed: "Schnellmodus konnte nicht auf Standard zurückgesetzt werden: {error}",
+        current: "Aktueller Fast-Modus: {value}",
+        options: "on, off, auto ({seconds} Sek.), default, status",
+        getFailed: "Fast-Modus konnte nicht abgerufen werden: {error}",
+        reset: "Fast-Modus auf Standard zurückgesetzt.",
+        resetFailed: "Fast-Modus konnte nicht zurückgesetzt werden: {error}",
         unrecognized:
-          "Unbekannter Schnellmodus „{mode}“. Gültige Stufen: ein, aus, auto, Standard, Status.",
-        setAuto: "Schnellmodus auf auto eingestellt.",
-        enabled: "Schnellmodus aktiviert.",
-        disabled: "Schnellmodus deaktiviert.",
-        setFailed: "Schnellmodus konnte nicht eingestellt werden: {error}",
+          'Unbekannter Fast-Modus "{mode}". Gültige Stufen: on, off, auto, default, status.',
+        setAuto: "Fast-Modus auf auto gesetzt.",
+        enabled: "Fast-Modus aktiviert.",
+        disabled: "Fast-Modus deaktiviert.",
+        setFailed: "Fast-Modus konnte nicht gesetzt werden: {error}",
       },
       usage: {
         noActiveThread: "Kein aktiver Thread.",
-        notAvailable: "k. A.",
+        notAvailable: "n. v.",
         title: "Thread-Nutzung",
-        inputTokens: "Eingabe: {count} Token",
-        outputTokens: "Ausgabe: {count} Token",
-        totalTokens: "Gesamt: {count} Token",
+        inputTokens: "Eingabe: {count} Tokens",
+        outputTokens: "Ausgabe: {count} Tokens",
+        totalTokens: "Gesamt: {count} Tokens",
         context: "Kontext: {percent} von {total}",
         model: "Modell: {model}",
         failed: "Nutzung konnte nicht abgerufen werden: {error}",
       },
       agents: {
         none: "Keine Agenten konfiguriert.",
-        title: "**Agenten** ({count})",
+        title: "**Agents** ({count})",
         default: "Standard",
         runtime: " · Laufzeit {runtime}",
-        failed: "Agenten konnten nicht aufgelistet werden: {error}",
+        failed: "Agents konnten nicht aufgelistet werden: {error}",
       },
       steer: {
-        timeout: "Der aktive Lauf wurde beendet, bevor die Steuerungsnachricht angenommen wurde.",
-        failed:
-          "Die Steuerung ist fehlgeschlagen, bevor sie den Lauf erreichte. Versuchen Sie es erneut.",
+        timeout: "Der aktive Lauf wurde beendet, bevor die Steuernachricht angenommen wurde.",
+        failed: "Steuerung fehlgeschlagen, bevor sie den Lauf erreichte; bitte erneut versuchen.",
         usage: "Verwendung: `/steer <message>`",
         noActiveRun:
           "Kein aktiver Lauf. Verwenden Sie stattdessen die Chat-Eingabe oder `/redirect`.",
@@ -4623,8 +4582,7 @@ export const de: TranslationMap = {
       },
       redirect: {
         timeout: "Der aktive Lauf wurde beendet, bevor die Umleitungsnachricht angenommen wurde.",
-        failed:
-          "Die Umleitung ist fehlgeschlagen, bevor sie den Lauf erreichte. Versuchen Sie es erneut.",
+        failed: "Umleitung fehlgeschlagen, bevor sie den Lauf erreichte; bitte erneut versuchen.",
         usage: "Verwendung: `/redirect <message>`",
         succeeded: "Umgeleitet.",
         requestFailed: "Umleitung fehlgeschlagen: {error}",
@@ -4890,7 +4848,7 @@ export const de: TranslationMap = {
       threads: "Threads",
       groups: "Gruppen",
       coding: "Coding",
-      noSessionsForAgent: "Keine Sitzungen für diesen Agenten gefunden",
+      noSessionsForAgent: "Keine Sitzungen für diesen Agent gefunden",
       catalogViewOptions: "Ansichtsoptionen",
       catalogGroupByProject: "Projekt",
       catalogGroupByPerson: "Person",
@@ -4940,7 +4898,7 @@ export const de: TranslationMap = {
       states: {
         steering: "Steuerung",
         applyingSettings: "Chat-Einstellungen werden angewendet",
-        waitingForRun: "Warten auf den Abschluss der aktuellen Ausführung",
+        waitingForRun: "Warten auf aktuellen Durchlauf",
         runningCommand: "Befehl wird ausgeführt",
         waitingForReconnect: "Warten auf erneute Verbindung",
         needsReview: "Überprüfung erforderlich",
@@ -4979,7 +4937,7 @@ export const de: TranslationMap = {
       unavailable: "Nicht verfügbar",
       expired: "Abgelaufen",
       cancelled: "Abgebrochen",
-      disconnected: "Nicht verbunden. Versuchen Sie es nach der erneuten Verbindung noch einmal.",
+      disconnected: "Nicht verbunden. Versuche es nach dem erneuten Verbinden noch einmal.",
     },
     imageLightbox: {
       label: "Bildvorschau: {title}",
@@ -5001,7 +4959,7 @@ export const de: TranslationMap = {
       replyToMessage: "Auf Nachricht antworten",
       replyingTo: "Antwort an {name}",
       message: "Nachricht",
-      currentMessage: "Aktuelle Nachricht",
+      currentMessage: "aktuelle Nachricht",
       actions: "Nachrichtenaktionen",
       selectionActions: "Auswahlaktionen",
       moreDetails: "Weitere Details",
@@ -5015,16 +4973,15 @@ export const de: TranslationMap = {
       showMore: "Mehr anzeigen",
       unknownDate: "Unbekanntes Datum",
       voiceNote: "Sprachnachricht",
-      duplicatesCollapsed: "{count} aufeinanderfolgende identische Nachrichten zusammengefasst",
+      duplicatesCollapsed: "{count} aufeinanderfolgende identische Nachrichten reduziert",
       contextFor: "Nachrichtenkontext für {timestamp}",
     },
     mediaPlayer: {
-      play: "Wiedergeben",
+      play: "Wiedergabe",
       pause: "Pausieren",
       seek: "Medien durchsuchen",
       download: "{filename} herunterladen",
-      preparing: "Wiedergabe wird vorbereitet…",
-      videoUnavailable: "Dieses Format kann nicht abgespielt werden — stattdessen herunterladen.",
+      videoUnavailable: "Dieses Format kann nicht abgespielt werden – stattdessen herunterladen.",
     },
     modelControls: {
       current: "Aktuell",
@@ -5038,12 +4995,12 @@ export const de: TranslationMap = {
       defaultWithModel: "Standard ({model})",
       defaultWithLevel: "Standard ({level})",
       fastHelp:
-        "Schnelle Antworten werden früher abgeschlossen und können Ihre Nutzungslimits stärker beanspruchen.",
+        "Schnelle Antworten werden früher fertig und können mehr Ihres Nutzungslimits verbrauchen.",
       speedUnsupported: "Die Geschwindigkeitssteuerung wird für dieses Modell nicht unterstützt.",
       contextWindow: "{count} Kontext",
       providerModels: "{provider}-Modelle",
       resetReasoning: "Auf Standard zurücksetzen ({level})",
-      useDefaultReasoning: "Standard-Schlussfolgerung verwenden ({level})",
+      useDefaultReasoning: "Standard-Reasoning verwenden ({level})",
       fastResponsesAria: "Schnelle Antworten: {state}",
     },
     rail: {
@@ -5115,21 +5072,21 @@ export const de: TranslationMap = {
       noPreviewableMarkdown: "Kein vorschaubarer Markdown-Inhalt.",
       noContent: "Kein Inhalt verfügbar",
       fullContentOversized:
-        "Der vollständige Inhalt ist nicht verfügbar, da der gespeicherte Transkripteintrag zu groß ist, um ihn sicher zurückzugeben.",
+        "Der vollständige Inhalt ist nicht verfügbar, da der gespeicherte Transkripteintrag zu groß ist, um sicher zurückgegeben zu werden.",
       fullContentNotVisible:
-        "Der vollständige Inhalt ist nicht verfügbar, da dieser Transkripteintrag keine sichtbare WebChat-Darstellung hat.",
+        "Der vollständige Inhalt ist nicht verfügbar, da dieser Transkripteintrag keine sichtbare WebChat-Projektion hat.",
       fullContentUnavailable:
         "Der vollständige Inhalt ist für diesen Transkripteintrag nicht mehr verfügbar.",
-      copyContents: "Dateiinhalte kopieren",
-      fileChanged: "Die Datei wurde seit dem Laden auf dem Datenträger geändert.",
+      copyContents: "Dateiinhalt kopieren",
+      fileChanged: "Die Datei wurde seit dem Laden auf der Festplatte geändert.",
       renderPreview: "Vorschau rendern",
       imagePreview: "Bildvorschau",
       file: "Datei",
       markdownPreview: "Markdown-Vorschau",
-      toolDetails: "Tooldetails",
-      reloadFailed: "Die neueste Datei konnte nicht erneut geladen werden.",
-      overwriteLoadFailed: "Die neueste Datei konnte vor dem Überschreiben nicht geladen werden.",
-      fullContentLoadFailed: "Der vollständige Inhalt konnte nicht geladen werden: {error}",
+      toolDetails: "Tool-Details",
+      reloadFailed: "Die aktuelle Datei konnte nicht neu geladen werden.",
+      overwriteLoadFailed: "Die aktuelle Datei konnte vor dem Überschreiben nicht geladen werden.",
+      fullContentLoadFailed: "Vollständiger Inhalt konnte nicht geladen werden: {error}",
     },
     sidebarColumns: {
       chat: "Chat",
@@ -5175,14 +5132,14 @@ export const de: TranslationMap = {
       compact: "Komprimieren",
       contextCompacted: "Kontext komprimiert",
       fallbackActive: "Fallback aktiv: {model}",
-      fallbackCleared: "Fallback aufgehoben: {model}",
+      fallbackCleared: "Fallback zurückgesetzt: {model}",
       fallbackSelected: "Ausgewählt: {model}",
       fallbackCurrent: "Aktiv: {model}",
-      fallbackPrevious: "Vorheriges Fallback-Modell: {model}",
+      fallbackPrevious: "Vorheriger Fallback: {model}",
       fallbackReason: "Grund: {reason}",
       fallbackAttempts: "Versuche: {attempts}",
       cancelReply: "Antwort abbrechen",
-      attachmentPreview: "Vorschau des Anhangs",
+      attachmentPreview: "Anhangvorschau",
       compactRecommendedContext: "Empfohlenen Sitzungskontext komprimieren",
       removeAttachment: "Anhang entfernen",
       addAttachment: "Anhang hinzufügen",
@@ -5198,24 +5155,8 @@ export const de: TranslationMap = {
         manageSkills: "Skills verwalten",
         browseConnectors: "Konnektoren durchsuchen",
         addMcpServer: "MCP-Server hinzufügen…",
-        addMcpServerTitle: "MCP-Server hinzufügen",
-        addMcpServerDescription:
-          "Konfigurieren Sie den Server und wählen Sie aus, wo er aktiviert wird.",
-        scopeLabel: "Verfügbarkeit",
-        scopeSession: "Diese Sitzung",
-        scopeEverywhere: "Überall",
-        scopeSessionHint:
-          "Der Server wird global deaktiviert gespeichert und nur für diese Sitzung aktiviert.",
-        scopeEverywhereHint: "Der Server wird gespeichert und für jede Sitzung aktiviert.",
-        toolAccess: {
-          label: "Tool-Zugriff",
-          loading: "Tools werden geladen…",
-          loadFailed: "Tools konnten nicht geladen werden.",
-          noTools: "Für diesen Connector sind keine Tools verfügbar.",
-          summary: "{enabled} von {total} Tools aktiviert",
-          summaryOne: "{enabled} von {total} Tool aktiviert",
-        },
-        enabledCount: "{count} aktiviert",
+        toolAccess: "Tool-Zugriff",
+        enabledCount: "{count} aktiv",
         loadingSkills: "Skills werden geladen…",
         skillsLoadFailed: "Skills konnten nicht geladen werden.",
         noSkills: "Keine Skills verfügbar.",
@@ -5223,17 +5164,15 @@ export const de: TranslationMap = {
         depsMissing: "Abhängigkeiten fehlen",
         skillBlocked: "für diesen Agenten nicht verfügbar",
         sessionTag: "Sitzung",
-        offlineBlocked:
-          "Stellen Sie eine Verbindung zum Gateway her, um die Sitzungsfunktionen zu ändern.",
-        readOnlyBlocked: "Zum Ändern der Sitzungsfunktionen ist Schreibzugriff erforderlich.",
-        adminBlocked: "Zum Verwalten von Connectors ist Administratorzugriff erforderlich.",
-        savingBlocked:
-          "Warten Sie, bis die aktuelle Änderung der Sitzungsfunktionen abgeschlossen ist.",
+        offlineBlocked: "Verbinde dich mit dem Gateway, um Sitzungsfunktionen zu ändern.",
+        readOnlyBlocked: "Schreibzugriff ist erforderlich, um Sitzungsfunktionen zu ändern.",
+        adminBlocked: "Admin-Zugriff ist erforderlich, um Konnektoren zu verwalten.",
+        savingBlocked: "Warte, bis die aktuelle Änderung der Sitzungsfunktionen abgeschlossen ist.",
       },
       overrides: {
-        count: "{count} Sitzungsüberschreibungen",
-        countOne: "{count} Sitzungsüberschreibung",
-        clear: "Sitzungsüberschreibungen löschen",
+        count: "{count} Sitzungs-Overrides",
+        countOne: "{count} Sitzungs-Override",
+        clear: "Sitzungs-Overrides löschen",
       },
       contextUsage: {
         title: "Details zur Kontextnutzung",
@@ -5318,7 +5257,7 @@ export const de: TranslationMap = {
     voice: {
       asking: "OpenClaw wird gefragt...",
       connecting: "Spracheingabe wird verbunden...",
-      listening: "Hört zu...",
+      listening: "Höre zu...",
     },
     selectors: {
       session: "Chat session",
@@ -5523,8 +5462,7 @@ export const de: TranslationMap = {
     ru: "Русский (Russisch)",
   },
   cron: {
-    adminRequired:
-      "Nur Lesezugriff. Änderungen an Automatisierungen erfordern operator.admin-Zugriff.",
+    adminRequired: "Nur Anzeigen. Automatisierungsänderungen erfordern operator.admin-Zugriff.",
     tabs: {
       filterLabel: "Automatisierungsstatus",
       all: "Alle",

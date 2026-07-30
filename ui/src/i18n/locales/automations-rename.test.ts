@@ -10,6 +10,12 @@ import { en } from "./en.ts";
 // Feature-name keys renamed by RFC 0026. Schedule-syntax strings ("Cron
 // schedule {expr}", cron expression help) intentionally keep the word cron
 // and are excluded: that is syntax terminology, not the feature name.
+//
+// Non-English catalogs are generated: CI forbids committing locale bundles
+// alongside source changes, and the post-merge control-ui-locale-refresh
+// workflow retranslates renamed keys from this English source. These
+// assertions therefore pin the English source of truth; the workflow-owned
+// bundles inherit them on refresh.
 const RENAMED_FEATURE_KEYS = [
   "sessionsView.showCronSessions",
   "sessionsView.subagentPrefix",
@@ -37,7 +43,7 @@ describe("automations rename locale catalogs", () => {
     }
   });
 
-  it("no locale overrides a renamed key with stale cron wording", async () => {
+  it("typed-session prefixes are catalog keys in every locale that carries them", async () => {
     for (const entry of CONTROL_UI_LOCALE_ENTRIES) {
       if (entry.locale === "en") {
         continue;
@@ -47,10 +53,10 @@ describe("automations rename locale catalogs", () => {
         TranslationMap
       >;
       const flat = flattenTranslations(mod[entry.exportName] ?? {}, "", new Map());
-      for (const key of RENAMED_FEATURE_KEYS) {
+      for (const key of ["sessionsView.subagentPrefix", "sessionsView.automationPrefix"]) {
         const value = flat.get(key);
         if (value === undefined) {
-          continue; // Missing key falls back to corrected English.
+          continue; // Not yet refreshed; falls back to the English catalog value.
         }
         expect(value, `${entry.locale}: ${key}`).not.toMatch(/\bcron\b/i);
       }
