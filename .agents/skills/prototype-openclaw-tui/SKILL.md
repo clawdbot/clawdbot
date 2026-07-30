@@ -8,7 +8,7 @@ disable-model-invocation: true
 # Prototype OpenClaw TUI
 
 Use this skill to isolate one OpenClaw terminal surface, render it with the
-real OpenClaw TUI stack, and compare two to four design variants in tmux.
+real OpenClaw TUI stack, and compare two to six design variants in tmux.
 
 ## Rules
 
@@ -40,8 +40,8 @@ recipes joined only by the tmux comparison loop.
 2. Create the smallest executable harness that reaches the target surface.
 3. If the surface already exists, make the no-argument invocation render its
    current implementation unchanged as `--variant=baseline`.
-4. Add two or three structurally different alternatives behind
-   `--variant=<id>`, for two to four total variants including the baseline.
+4. Add structurally different alternatives behind `--variant=<id>`, for two
+   to six total variants including the baseline.
 5. Give every variant the same fixture data and terminal dimensions.
 6. Run each variant directly in its own tmux pane. Do not pipe interactive TUI
    output; tmux must provide the PTY.

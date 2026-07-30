@@ -2,8 +2,118 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 [--open | --refresh] <session> <cwd> <title> <command> [<title> <command> ...]" >&2
+  echo "usage: $0 [--open | --refresh] <session> <cwd> <title> <command> <title> <command> [<title> <command> ...] (2-6 variants)" >&2
   exit 2
+}
+
+configure_tmux_session() {
+  local session_id=$1
+  local window_id=$2
+
+  tmux set-option -t "$session_id" mouse on
+  tmux set-option -t "$session_id" status-left " TUI PROTOTYPES "
+  tmux set-option -t "$session_id" status-right "Ctrl-b z: zoom"
+  tmux set-option -t "$session_id" pane-border-status top
+  tmux set-option -t "$session_id" pane-border-format ' #[bold]#{pane_title} #[default]'
+  tmux set-window-option -t "$window_id" allow-rename off
+  tmux set-window-option -t "$window_id" automatic-rename off
+  tmux set-window-option -t "$window_id" remain-on-exit on
+}
+
+prepare_grid_geometry() {
+  local window_id=$1
+  local pane_count=$2
+  local window_width window_height normalized_width normalized_height
+
+  case $pane_count in
+    2)
+      grid_columns=2
+      grid_rows=1
+      ;;
+    3)
+      grid_columns=3
+      grid_rows=1
+      ;;
+    4)
+      grid_columns=2
+      grid_rows=2
+      ;;
+    5)
+      grid_columns=5
+      grid_rows=1
+      ;;
+    6)
+      grid_columns=3
+      grid_rows=2
+      ;;
+    *)
+      echo "expected 2-6 prototype panes, got: $pane_count" >&2
+      return 1
+      ;;
+  esac
+
+  # Restore the attached session size before normalizing it so repeated
+  # refreshes do not progressively shrink the prototype window.
+  tmux resize-window -A -t "$window_id"
+  read -r window_width window_height < <(
+    tmux display-message -p -t "$window_id" '#{window_width} #{window_height}'
+  )
+  grid_pane_width=$(((window_width - grid_columns + 1) / grid_columns))
+  # pane-border-status=top consumes the outer top line, while row separators
+  # carry the remaining titles. Account for both so pane content heights match.
+  grid_pane_height=$(((window_height - grid_rows) / grid_rows))
+  if ((grid_pane_width < 1 || grid_pane_height < 1)); then
+    echo "terminal is too small for $pane_count equal prototype panes" >&2
+    return 1
+  fi
+  normalized_width=$((grid_pane_width * grid_columns + grid_columns - 1))
+  normalized_height=$((grid_pane_height * grid_rows + grid_rows))
+
+  tmux resize-window -t "$window_id" -x "$normalized_width" -y "$normalized_height"
+}
+
+build_comparison_grid() {
+  local window_id=$1
+  local first_pane=$2
+  local pane_count=${#pane_commands[@]}
+  local row column index remaining_columns right_width pane_id bottom_index
+  local current_pane first_dimensions dimensions
+  local row_anchors=()
+
+  prepare_grid_geometry "$window_id" "$pane_count"
+  row_anchors[0]=$first_pane
+  if ((grid_rows == 2)); then
+    bottom_index=$grid_columns
+    pane_id=$(tmux split-window -d -v -l "$grid_pane_height" -P -F '#{pane_id}' \
+      -t "$first_pane" -c "$prototype_cwd" \
+      "${pane_command_prefix[@]}" "${pane_commands[bottom_index]}")
+    tmux select-pane -t "$pane_id" -T "${pane_titles[bottom_index]}"
+    row_anchors[1]=$pane_id
+  fi
+
+  for ((row = 0; row < grid_rows; row++)); do
+    current_pane=${row_anchors[row]}
+    for ((column = 1; column < grid_columns; column++)); do
+      index=$((row * grid_columns + column))
+      remaining_columns=$((grid_columns - column))
+      right_width=$((grid_pane_width * remaining_columns + remaining_columns - 1))
+      pane_id=$(tmux split-window -d -h -l "$right_width" -P -F '#{pane_id}' \
+        -t "$current_pane" -c "$prototype_cwd" \
+        "${pane_command_prefix[@]}" "${pane_commands[index]}")
+      tmux select-pane -t "$pane_id" -T "${pane_titles[index]}"
+      current_pane=$pane_id
+    done
+  done
+
+  first_dimensions=""
+  while read -r dimensions; do
+    if [[ -z $first_dimensions ]]; then
+      first_dimensions=$dimensions
+    elif [[ $dimensions != "$first_dimensions" ]]; then
+      echo "tmux could not create equal prototype pane dimensions" >&2
+      return 1
+    fi
+  done < <(tmux list-panes -t "$window_id" -F '#{pane_width}x#{pane_height}')
 }
 
 open_external_terminal() {
@@ -16,7 +126,7 @@ open_external_terminal() {
     attach_dir=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-tui-prototype.XXXXXX")
     attach_command="$attach_dir/attach.command"
     printf '#!/usr/bin/env bash\nattach_file=$0\nrm -f -- "$attach_file"\nrmdir -- "$(dirname "$attach_file")" 2>/dev/null || true\nexec tmux attach-session -t %q\n' \
-      "$session_name" >"$attach_command"
+      "=$session_name" >"$attach_command"
     chmod +x "$attach_command"
 
     terminal_app=""
@@ -32,7 +142,7 @@ open_external_terminal() {
     if [[ $terminal_app == */Ghostty.app ]]; then
       tmux_path=$(command -v tmux)
       if open -n -a "$terminal_app" --args -e \
-        "$tmux_path" attach-session -t "$session_name"; then
+        "$tmux_path" attach-session -t "=$session_name"; then
         rm -f -- "$attach_command"
         rmdir -- "$attach_dir" 2>/dev/null || true
         return 0
@@ -51,7 +161,7 @@ open_external_terminal() {
     command -v wt.exe >/dev/null 2>&1; then
     if wt.exe new-tab --title "OpenClaw TUI prototypes" \
       wsl.exe --distribution "$WSL_DISTRO_NAME" --exec \
-      tmux attach-session -t "$session_name"; then
+      tmux attach-session -t "=$session_name"; then
       return 0
     fi
   fi
@@ -59,19 +169,19 @@ open_external_terminal() {
   if [[ $system_name == "Linux" ]]; then
     if command -v xdg-terminal-exec >/dev/null 2>&1; then
       if xdg-terminal-exec --title="OpenClaw TUI prototypes" \
-        tmux attach-session -t "$session_name"; then
+        tmux attach-session -t "=$session_name"; then
         return 0
       fi
     fi
 
     if [[ -n ${TERMINAL:-} ]] && command -v "$TERMINAL" >/dev/null 2>&1; then
-      if "$TERMINAL" -e tmux attach-session -t "$session_name"; then
+      if "$TERMINAL" -e tmux attach-session -t "=$session_name"; then
         return 0
       fi
     fi
 
     if command -v x-terminal-emulator >/dev/null 2>&1; then
-      if x-terminal-emulator -e tmux attach-session -t "$session_name"; then
+      if x-terminal-emulator -e tmux attach-session -t "=$session_name"; then
         return 0
       fi
     fi
@@ -102,7 +212,7 @@ if [[ $open_external == true && $refresh_session == true ]]; then
   exit 2
 fi
 
-if (( $# < 4 || ($# - 2) % 2 != 0 )); then
+if (( $# < 6 || $# > 14 || ($# - 2) % 2 != 0 )); then
   usage
 fi
 
@@ -119,7 +229,7 @@ if [[ ! -d $prototype_cwd ]]; then
   exit 1
 fi
 session_exists=false
-if tmux has-session -t "$session_name" 2>/dev/null; then
+if tmux has-session -t "=$session_name" 2>/dev/null; then
   session_exists=true
 fi
 if [[ $refresh_session == true && $session_exists == false ]]; then
@@ -129,7 +239,7 @@ if [[ $refresh_session == true && $session_exists == false ]]; then
 fi
 if [[ $refresh_session == false && $session_exists == true ]]; then
   echo "tmux session already exists: $session_name" >&2
-  echo "attach with: tmux attach-session -t '$session_name'" >&2
+  echo "attach with: tmux attach-session -t '=$session_name'" >&2
   echo "refresh it with: $0 --refresh '$session_name' '$prototype_cwd' ..." >&2
   exit 1
 fi
@@ -148,15 +258,24 @@ if [[ ${TERM:-} == "dumb" && -n ${NO_COLOR:-} ]]; then
 fi
 
 if [[ $refresh_session == true ]]; then
-  if ! tmux display-message -p -t "$session_name:prototypes" '#{window_id}' >/dev/null 2>&1; then
+  session_id=$(tmux display-message -p -t "=$session_name" '#{session_id}')
+  window_id=""
+  while read -r candidate_id candidate_name; do
+    if [[ $candidate_name == prototypes ]]; then
+      window_id=$candidate_id
+      break
+    fi
+  done < <(tmux list-windows -t "$session_id" -F '#{window_id} #{window_name}')
+  if [[ -z $window_id ]]; then
     echo "tmux session has no prototypes window: $session_name" >&2
     exit 1
   fi
+  configure_tmux_session "$session_id" "$window_id"
 
   pane_ids=()
   while IFS= read -r pane_id; do
     pane_ids[${#pane_ids[@]}]=$pane_id
-  done < <(tmux list-panes -t "$session_name:prototypes" -F '#{pane_id}')
+  done < <(tmux list-panes -t "$window_id" -F '#{pane_id}')
   first_pane=${pane_ids[0]}
   tmux select-pane -t "$first_pane"
   for ((index = ${#pane_ids[@]} - 1; index >= 1; index--)); do
@@ -166,22 +285,12 @@ if [[ $refresh_session == true ]]; then
   tmux respawn-pane -k -t "$first_pane" -c "$prototype_cwd" \
     "${pane_command_prefix[@]}" "${pane_commands[0]}"
   tmux select-pane -t "$first_pane" -T "${pane_titles[0]}"
-  last_pane=$first_pane
-  for ((index = 1; index < ${#pane_commands[@]}; index++)); do
-    pane_id=$(tmux split-window -d -v -P -F '#{pane_id}' \
-      -t "$last_pane" -c "$prototype_cwd" \
-      "${pane_command_prefix[@]}" "${pane_commands[index]}")
-    tmux select-pane -t "$pane_id" -T "${pane_titles[index]}"
-    last_pane=$pane_id
-    # Rebalance after every split so larger grids do not exhaust the last
-    # vertically chained pane before the final tiled layout is applied.
-    tmux select-layout -t "$session_name:prototypes" tiled >/dev/null
-  done
+  build_comparison_grid "$window_id" "$first_pane"
 else
   created_session=false
   cleanup_partial_session() {
-    if [[ $created_session == true ]] && tmux has-session -t "$session_name" 2>/dev/null; then
-      tmux kill-session -t "$session_name"
+    if [[ $created_session == true ]] && tmux has-session -t "=$session_name" 2>/dev/null; then
+      tmux kill-session -t "=$session_name"
     fi
   }
   trap cleanup_partial_session ERR
@@ -190,27 +299,13 @@ else
     -s "$session_name" -n prototypes -c "$prototype_cwd" \
     "${pane_command_prefix[@]}" "${pane_commands[0]}")
   created_session=true
+  session_id=$(tmux display-message -p -t "$first_pane" '#{session_id}')
+  window_id=$(tmux display-message -p -t "$first_pane" '#{window_id}')
+  configure_tmux_session "$session_id" "$window_id"
   tmux select-pane -t "$first_pane" -T "${pane_titles[0]}"
-  last_pane=$first_pane
-  for ((index = 1; index < ${#pane_commands[@]}; index++)); do
-    pane_id=$(tmux split-window -d -v -P -F '#{pane_id}' \
-      -t "$last_pane" -c "$prototype_cwd" \
-      "${pane_command_prefix[@]}" "${pane_commands[index]}")
-    tmux select-pane -t "$pane_id" -T "${pane_titles[index]}"
-    last_pane=$pane_id
-    tmux select-layout -t "$session_name:prototypes" tiled >/dev/null
-  done
+  build_comparison_grid "$window_id" "$first_pane"
 fi
 
-tmux set-option -t "$session_name" mouse on
-tmux set-option -t "$session_name" status-left " TUI PROTOTYPES "
-tmux set-option -t "$session_name" status-right "Ctrl-b z: zoom"
-tmux set-option -t "$session_name" pane-border-status top
-tmux set-option -t "$session_name" pane-border-format ' #[bold]#{pane_title} #[default]'
-tmux set-window-option -t "$session_name:prototypes" allow-rename off
-tmux set-window-option -t "$session_name:prototypes" automatic-rename off
-tmux set-window-option -t "$session_name:prototypes" remain-on-exit on
-tmux select-layout -t "$session_name:prototypes" tiled >/dev/null
 tmux select-pane -t "$first_pane"
 
 trap - ERR
@@ -219,11 +314,11 @@ if [[ $refresh_session == true ]]; then
 else
   echo "tmux session ready: $session_name"
 fi
-echo "attach with: tmux attach-session -t '$session_name'"
+echo "attach with: tmux attach-session -t '=$session_name'"
 
 if [[ $open_external == true ]]; then
   if ! open_external_terminal "$session_name"; then
     echo "could not open an external terminal; attach manually with:" >&2
-    printf "  tmux attach-session -t %q\n" "$session_name" >&2
+    printf "  tmux attach-session -t %q\n" "=$session_name" >&2
   fi
 fi
