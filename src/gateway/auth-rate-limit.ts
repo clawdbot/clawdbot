@@ -179,8 +179,12 @@ function resolvePruneIntervalMs(value: number | undefined): number {
 
 export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter {
   const maxAttempts = resolveIntegerOption(config?.maxAttempts, DEFAULT_MAX_ATTEMPTS, { min: 1 });
-  const windowMs = resolveTimerTimeoutMs(config?.windowMs, DEFAULT_WINDOW_MS);
-  const lockoutMs = resolveTimerTimeoutMs(config?.lockoutMs, DEFAULT_LOCKOUT_MS);
+  // A 1ms floor (this helper's generic default) is real-clock-flaky here: two
+  // sequential recordFailure() calls can legitimately land more than 1ms
+  // apart, so slideWindow would evict the first attempt before the second is
+  // recorded. 1s cannot realistically be raced by same-request-cycle timing.
+  const windowMs = resolveTimerTimeoutMs(config?.windowMs, DEFAULT_WINDOW_MS, 1_000);
+  const lockoutMs = resolveTimerTimeoutMs(config?.lockoutMs, DEFAULT_LOCKOUT_MS, 1_000);
   const exemptLoopback = config?.exemptLoopback ?? true;
   const pruneIntervalMs = resolvePruneIntervalMs(config?.pruneIntervalMs);
   const maxEntries = resolveIntegerOption(config?.maxEntries, DEFAULT_MAX_ENTRIES, { min: 1 });

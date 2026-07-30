@@ -287,6 +287,22 @@ describe("auth rate limiter", () => {
     expect(result.retryAfterMs).toBeGreaterThan(0);
   });
 
+  it("clamps a non-positive windowMs to a 1s floor, not the generic 1ms minimum", () => {
+    // A 1ms floor is real-clock-flaky: two sequential recordFailure() calls
+    // can legitimately land more than 1ms apart. Assert the actual clamp
+    // deterministically with fake timers instead of relying on real timing.
+    vi.useFakeTimers();
+    try {
+      limiter = createAuthRateLimiter({ maxAttempts: 2, windowMs: 0, lockoutMs: 60_000 });
+      limiter.recordFailure("10.0.6.3");
+      vi.advanceTimersByTime(999);
+      limiter.recordFailure("10.0.6.3");
+      expect(limiter.check("10.0.6.3").allowed).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("treats ipv4 and ipv4-mapped ipv6 forms as the same client", () => {
     limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
     limiter.recordFailure("1.2.3.4");
