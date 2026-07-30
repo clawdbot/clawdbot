@@ -3678,9 +3678,10 @@ describe("diagnostics-otel service", () => {
   ] as const)(
     "parents late %s spans into the run trace after retention elapses",
     async (spanName, childEvent) => {
-      // Fake only setTimeout so the retained-context timers can be advanced while
-      // the setImmediate-driven diagnostic queue keeps draining for real.
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      // Fake setTimeout so any retained-context timer can be advanced, and Date so a
+      // Date.now()-based lazy expiry cannot pass either. setImmediate stays real so the
+      // diagnostic queue keeps draining. This test asserts no timings itself.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       try {
         await startOtelService({ traces: true, metrics: true });
 

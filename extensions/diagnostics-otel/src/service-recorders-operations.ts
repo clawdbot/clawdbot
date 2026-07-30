@@ -326,7 +326,7 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       });
     }
     if (trackedSpan && trustedTrace?.spanId) {
-      completeTrackedLifecycleSpan(trustedTrace.traceId, trustedTrace.spanId, trackedSpan, evt.ts);
+      completeTrackedLifecycleSpan(trustedTrace, trustedTrace.spanId, trackedSpan, evt.ts);
       return;
     }
     span.end(evt.ts);

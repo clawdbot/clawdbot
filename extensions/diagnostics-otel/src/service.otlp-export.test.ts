@@ -1,9 +1,10 @@
 // Boundary test: unlike service.test.ts this file does NOT mock @opentelemetry/api,
 // so the real OTel SDK and OTLP/protobuf exporter run against a local receiver.
 //
-// This is the only place the two id spaces stay distinct. The mocked suite makes
-// every span report the same trace id it feeds in, which hides a parent lookup
-// keyed by OTel ids but queried with diagnostic ids. Assert on exported bytes here.
+// It exists because the mocked suite makes every span report back the same trace id
+// the test feeds in, collapsing the diagnostic and OTel id spaces into one value. That
+// hides a parent lookup keyed by one id space and queried with the other, so the only
+// way to catch that class of bug is to assert on the exported bytes.
 import { createServer, type Server } from "node:http";
 import { gunzipSync } from "node:zlib";
 import {
@@ -13,10 +14,8 @@ import {
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { onTrustedInternalDiagnosticEvent } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, expect, test } from "vitest";
-import type { OpenClawPluginServiceContext } from "../api.js";
-import { createDiagnosticsOtelService } from "./service.js";
+import { startOtelService, stopStartedOtelServices } from "./service.test-helpers.js";
 
 type ExportedSpan = { traceId: string; spanId: string; parentSpanId: string; name: string };
 
@@ -142,97 +141,141 @@ async function stopServer(server: Server) {
   });
 }
 
-afterEach(() => {
+// This file starts a real NodeSDK, which registers a global tracer provider and a
+// live BatchSpanProcessor. Vitest runs with isolate=false, so an assertion failure
+// must not leave either behind for sibling files.
+afterEach(async () => {
+  await stopStartedOtelServices();
   resetDiagnosticEventsForTest();
 });
 
+// Covers all three completeTrackedLifecycleSpan owners at the real export boundary:
+// run.completed, harness.run.completed, and message.processed. The mocked suite cannot
+// tell the two id spaces apart, so a regression at any one of them is only visible here.
 test("exports a turn as one nested trace through the real OTLP exporter", async () => {
   const exported: ExportedSpan[] = [];
   const { server, port } = await startOtlpReceiver(exported);
-  const service = createDiagnosticsOtelService();
-  const ctx = {
-    config: {
-      diagnostics: {
-        enabled: true,
-        otel: {
-          enabled: true,
-          endpoint: `http://127.0.0.1:${port}`,
-          protocol: "http/protobuf",
-          traces: true,
-          metrics: false,
-          logs: false,
-        },
-      },
-    },
-    logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
-    stateDir: "/tmp/openclaw-diagnostics-otel-otlp-export-test",
-    internalDiagnostics: {
-      emit: emitTrustedDiagnosticEventWithPrivateData,
-      onEvent: onTrustedInternalDiagnosticEvent,
-    },
-  } as unknown as OpenClawPluginServiceContext;
+  // startOtelService owns the typed context and registers the service for teardown.
+  const { service, ctx } = await startOtelService({
+    endpoint: `http://127.0.0.1:${port}`,
+    traces: true,
+  });
 
   try {
-    await service.start(ctx);
+    const emit = (event: Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0]) =>
+      emitTrustedDiagnosticEventWithPrivateData(event, {});
 
-    const runTrace = createChildDiagnosticTraceContext(createDiagnosticTraceContext());
+    const messageTrace = createDiagnosticTraceContext();
+    const harnessTrace = createChildDiagnosticTraceContext(messageTrace);
+    const runTrace = createChildDiagnosticTraceContext(harnessTrace);
     const base = { runId: "run-otlp-1", provider: "openai", model: "gpt-5.6-luna" };
+    const harnessBase = { ...base, harnessId: "claude-cli" };
 
-    emitTrustedDiagnosticEventWithPrivateData(
-      { type: "run.started", ...base, trace: runTrace },
-      {},
-    );
-    emitTrustedDiagnosticEventWithPrivateData(
-      {
-        type: "model.call.completed",
-        ...base,
-        callId: "call-1",
-        durationMs: 1_200,
-        trace: createChildDiagnosticTraceContext(runTrace),
-      },
-      {},
-    );
+    emit({
+      type: "message.dispatch.started",
+      channel: "telegram",
+      source: "webhook",
+      trace: messageTrace,
+    });
+    emit({ type: "harness.run.started", ...harnessBase, trace: harnessTrace });
+    emit({ type: "run.started", ...base, trace: runTrace });
+    emit({
+      type: "model.call.completed",
+      ...base,
+      callId: "call-1",
+      durationMs: 1_200,
+      trace: createChildDiagnosticTraceContext(runTrace),
+    });
     await waitForDiagnosticEventsDrained();
 
-    emitTrustedDiagnosticEventWithPrivateData(
-      {
-        type: "run.completed",
-        ...base,
-        outcome: "completed",
-        durationMs: 9_000,
-        trace: runTrace,
-      },
-      {},
-    );
+    // Each lifecycle span below ends, then receives a straggler. Those stragglers must
+    // join the same trace instead of each minting a fresh single-span trace.
+    emit({
+      type: "run.completed",
+      ...base,
+      outcome: "completed",
+      durationMs: 9_000,
+      trace: runTrace,
+    });
+    emit({
+      type: "tool.execution.completed",
+      runId: base.runId,
+      toolName: "write",
+      durationMs: 120,
+      trace: createChildDiagnosticTraceContext(runTrace),
+    });
 
-    // Stragglers dispatch after run.completed already ended the parent span. They
-    // must still join its trace instead of each minting a fresh single-span trace.
-    emitTrustedDiagnosticEventWithPrivateData(
-      {
-        type: "tool.execution.completed",
-        runId: base.runId,
-        toolName: "write",
-        durationMs: 120,
-        trace: createChildDiagnosticTraceContext(runTrace),
-      },
-      {},
-    );
+    emit({
+      type: "harness.run.completed",
+      ...harnessBase,
+      outcome: "completed",
+      durationMs: 9_500,
+      trace: harnessTrace,
+    });
+    emit({
+      type: "context.assembled",
+      ...base,
+      sessionKey: "session-key",
+      channel: "telegram",
+      trigger: "message",
+      messageCount: 3,
+      historyTextChars: 100,
+      historyImageBlocks: 0,
+      maxMessageTextChars: 100,
+      systemPromptChars: 50,
+      promptChars: 150,
+      promptImages: 0,
+      trace: createChildDiagnosticTraceContext(harnessTrace),
+    });
+
+    emit({
+      type: "message.processed",
+      channel: "telegram",
+      outcome: "completed",
+      durationMs: 10_000,
+      trace: messageTrace,
+    });
+    emit({
+      type: "model.usage",
+      ...base,
+      usage: { input: 10, output: 5, total: 15 },
+      durationMs: 30,
+      trace: createChildDiagnosticTraceContext(messageTrace),
+    });
     await waitForDiagnosticEventsDrained();
 
     await service.stop?.(ctx);
 
-    const runSpan = exported.find((span) => span.name === "openclaw.run");
-    expect(runSpan).toBeDefined();
-    expect(exported.length).toBeGreaterThanOrEqual(3);
-    expect(new Set(exported.map((span) => span.traceId)).size).toBe(1);
-    // Diagnostic ids must never leak into exported OTel ids.
-    expect(runSpan?.traceId).not.toBe(runTrace.traceId);
-    for (const span of exported) {
-      if (span.name === "openclaw.run") {
-        continue;
-      }
-      expect(span.parentSpanId).toBe(runSpan?.spanId);
-    }
+    // Scope to the spans this turn emits: ambient spans such as
+    // openclaw.diagnostic.phase are roots by design and would otherwise read as a
+    // second trace and fail this as a flake.
+    const turnSpanNames = new Set([
+      "openclaw.message.processed",
+      "openclaw.harness.run",
+      "openclaw.run",
+      "openclaw.model.call",
+      "openclaw.tool.execution",
+      "openclaw.context.assembled",
+      "openclaw.model.usage",
+    ]);
+    const turnSpans = exported.filter((span) => turnSpanNames.has(span.name));
+    const spanByName = (name: string) => turnSpans.find((span) => span.name === name);
+    const messageSpan = spanByName("openclaw.message.processed");
+    const harnessSpan = spanByName("openclaw.harness.run");
+    const runSpan = spanByName("openclaw.run");
+
+    expect(turnSpans).toHaveLength(7);
+    expect(new Set(turnSpans.map((span) => span.traceId)).size).toBe(1);
+    // A run with no exported ancestor starts a fresh OTel root rather than reusing the
+    // diagnostic trace id. Spans parented from an upstream traceparent do adopt it.
+    expect(messageSpan?.traceId).not.toBe(messageTrace.traceId);
+    expect(messageSpan?.parentSpanId).toBe("");
+    expect(harnessSpan?.parentSpanId).toBe(messageSpan?.spanId);
+    expect(runSpan?.parentSpanId).toBe(harnessSpan?.spanId);
+    // Stragglers land on the lifecycle span that owned them, not on a new root.
+    expect(spanByName("openclaw.tool.execution")?.parentSpanId).toBe(runSpan?.spanId);
+    expect(spanByName("openclaw.context.assembled")?.parentSpanId).toBe(harnessSpan?.spanId);
+    expect(spanByName("openclaw.model.usage")?.parentSpanId).toBe(messageSpan?.spanId);
   } finally {
     await stopServer(server);
   }

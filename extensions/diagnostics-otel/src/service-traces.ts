@@ -12,7 +12,11 @@ import type {
 } from "../api.js";
 import { redactOtelAttributes } from "./service-attributes.js";
 import { MAX_RETAINED_TRUSTED_SPAN_CONTEXTS } from "./service-constants.js";
-import { contextForTraceContext, normalizeTraceContext } from "./service-trace-context.js";
+import {
+  contextForTraceContext,
+  normalizedTrustedTraceContext,
+  normalizeTraceContext,
+} from "./service-trace-context.js";
 import type { TrustedSpanAliasOwner } from "./service-types.js";
 
 export function createDiagnosticsTraceRuntime(tracer: Tracer) {
@@ -75,15 +79,16 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
   };
   const trustedTraceContext = (evt: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) =>
     metadata.trusted ? normalizeTraceContext(evt.trace) : undefined;
-  // trustedTraceContext marks an untrusted payload whose trace context still came
-  // from OpenClaw-owned scope, which is all these helpers need to link spans.
+  // Internal-dispatcher events are linkable on their own; everything else defers to
+  // the shared trusted-trace-context rule, which also accepts an untrusted payload
+  // whose trace context came from OpenClaw-owned scope (metadata.trustedTraceContext).
   const internalOrTrustedTraceContext = (
     evt: DiagnosticEventPayload,
     metadata: DiagnosticEventMetadata,
   ) =>
-    metadata.trusted || metadata.internal || metadata.trustedTraceContext === true
+    metadata.internal
       ? normalizeTraceContext(evt.trace)
-      : undefined;
+      : normalizedTrustedTraceContext(evt, metadata);
   const trustedSpanAliasOwner = (
     evt: DiagnosticEventPayload,
   ): TrustedSpanAliasOwner | undefined => {
@@ -118,8 +123,11 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
           )
         : undefined) ??
       retainedTrustedSpanContexts.get(retainedTrustedSpanContextKey(traceContext.traceId, spanId));
-    // Keys already carry the diagnostic trace id, so a hit is the right trace. The
-    // stored SpanContext holds OTel ids, which never equal the diagnostic ids.
+    // Both sides key on the diagnostic trace id, so a hit is already trace-correct.
+    // Re-comparing against the stored OTel SpanContext.traceId would wrongly reject
+    // root lifecycle spans, whose OTel trace id is SDK-generated; spans parented from
+    // an upstream traceparent do adopt the diagnostic trace id, so the two are equal
+    // there and unequal here.
     if (!retained) {
       return undefined;
     }
@@ -284,10 +292,13 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
       retainedTrustedSpanContexts.delete(oldestKey);
     }
   };
-  // traceId is the event's diagnostic trace id, which is what later children carry
-  // and look up by. The OTel trace id on the span is a different id space.
+  // Takes the whole diagnostic trace context, not a bare trace id: later children
+  // look the parent up by the ids they carry on their own event, and DiagnosticTraceContext
+  // is the only shape that cannot be satisfied by an OTel SpanContext (traceFlags is
+  // string here, number there). Passing span.spanContext() would key retention under
+  // the OTel trace id and silently split every late child into its own trace.
   const completeTrackedLifecycleSpan = (
-    traceId: string,
+    traceContext: DiagnosticTraceContext,
     spanId: string,
     span: ReturnType<typeof tracer.startSpan>,
     endTimeMs: number,
@@ -311,7 +322,12 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     }
     span.end(endTimeMs);
     for (const retainedKey of retainedKeys) {
-      retainTrustedSpanContext(traceId, retainedKey.spanId, spanContext, retainedKey.owner);
+      retainTrustedSpanContext(
+        traceContext.traceId,
+        retainedKey.spanId,
+        spanContext,
+        retainedKey.owner,
+      );
     }
   };
 
