@@ -421,6 +421,7 @@ export function createContinueDelegateTool(opts: {
       const attachmentValidationError = validateSubagentAttachments({
         config: runtimeConfig,
         attachments,
+        redactContinuationErrorDetails: true,
       });
       if (attachmentValidationError) {
         throw new ToolInputError(attachmentValidationError);

@@ -105,13 +105,14 @@ describe("createCliDispatchTranscriptRecorder", () => {
   it("redacts continue_delegate attachment bytes at the transcript persistence boundary", async () => {
     const recorder = createCliDispatchTranscriptRecorder(recorderParams());
     const secret = "CLI_TRANSCRIPT_CONTINUATION_ATTACHMENT_SECRET";
+    const attachmentName = "CLI_TRANSCRIPT_ATTACHMENT_NAME_MUST_NOT_ECHO.md";
     recorder.noteToolEvent({
       phase: "start",
       toolName: "continue_delegate",
       toolCallId: "continue-attachment-call",
       args: {
         task: "carry this snapshot",
-        attachments: [{ name: "brief.md", content: secret, mimeType: "text/markdown" }],
+        attachments: [{ name: attachmentName, content: secret, mimeType: "text/markdown" }],
       },
     });
     // sessions_spawn owns its regular transcript semantics; only continuation
@@ -129,6 +130,7 @@ describe("createCliDispatchTranscriptRecorder", () => {
     const calls = appendedRecords().map((record) => record.message);
     const persistedContinueDelegateBytes = JSON.stringify(calls[1]);
     expect(persistedContinueDelegateBytes).not.toContain(secret);
+    expect(persistedContinueDelegateBytes).not.toContain(attachmentName);
     expect(persistedContinueDelegateBytes).toContain("__OPENCLAW_REDACTED__");
     expect(calls).toContainEqual(
       expect.objectContaining({

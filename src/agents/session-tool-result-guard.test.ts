@@ -85,10 +85,11 @@ function getToolResultText(messages: AgentMessage[]): string {
 }
 
 describe("installSessionToolResultGuard", () => {
-  it("redacts continue_delegate attachment content before persistence", () => {
+  it("redacts continue_delegate attachment names and content before persistence", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);
     const secret = "PERSISTED_CONTINUE_DELEGATE_SECRET";
+    const attachmentName = "PERSISTED_ATTACHMENT_NAME_MUST_NOT_ECHO.md";
 
     sm.appendMessage(
       asAppendMessage({
@@ -102,7 +103,7 @@ describe("installSessionToolResultGuard", () => {
               task: "use durable input",
               attachments: [
                 {
-                  name: "brief.md",
+                  name: attachmentName,
                   content: secret,
                   encoding: "utf8",
                   mimeType: "text/markdown",
@@ -116,8 +117,8 @@ describe("installSessionToolResultGuard", () => {
 
     const serialized = JSON.stringify(getPersistedMessages(sm));
     expect(serialized).not.toContain(secret);
+    expect(serialized).not.toContain(attachmentName);
     expect(serialized).toContain('"content":"__OPENCLAW_REDACTED__"');
-    expect(serialized).toContain('"name":"brief.md"');
     expect(serialized).toContain("use durable input");
   });
 
@@ -157,7 +158,7 @@ describe("installSessionToolResultGuard", () => {
     expect(serialized).not.toContain("PERSISTED_CONTENT_SECRET");
     expect(serialized).not.toContain('"extra"');
     expect(serialized).toContain('"content":"__OPENCLAW_REDACTED__"');
-    expect(serialized).toContain('"name":"brief.md"');
+    expect(serialized).not.toContain('"name":"brief.md"');
   });
 
   it("inserts synthetic toolResult before non-tool message when pending", () => {

@@ -130,9 +130,11 @@ describe("sanitizeToolCallInputs preserves sessions_spawn payloads", () => {
 });
 
 describe("sanitizeToolCallInputs redacts continue_delegate snapshots", () => {
-  it("redacts content in arguments and input while preserving attachment metadata", () => {
+  it("redacts attachment names and content while preserving replay-safe metadata", () => {
     const argumentsSecret = "CONTINUE_ARGUMENTS_SECRET";
     const inputSecret = "CONTINUE_INPUT_SECRET";
+    const argumentsName = "CONTINUE_ARGUMENTS_NAME_MUST_NOT_ECHO.md";
+    const inputName = "CONTINUE_INPUT_NAME_MUST_NOT_ECHO.txt";
     const input = castAgentMessages([
       {
         role: "assistant",
@@ -145,7 +147,7 @@ describe("sanitizeToolCallInputs redacts continue_delegate snapshots", () => {
               task: "use the argument snapshot",
               attachments: [
                 {
-                  name: "brief.md",
+                  name: argumentsName,
                   content: argumentsSecret,
                   encoding: "utf8",
                   mimeType: "text/markdown",
@@ -159,7 +161,7 @@ describe("sanitizeToolCallInputs redacts continue_delegate snapshots", () => {
             name: "continue_delegate",
             input: {
               task: "use the input snapshot",
-              attachments: [{ name: "input.txt", content: inputSecret }],
+              attachments: [{ name: inputName, content: inputSecret }],
             },
           },
         ],
@@ -169,8 +171,9 @@ describe("sanitizeToolCallInputs redacts continue_delegate snapshots", () => {
     const serialized = JSON.stringify(sanitizeToolCallInputs(input));
     expect(serialized).not.toContain(argumentsSecret);
     expect(serialized).not.toContain(inputSecret);
+    expect(serialized).not.toContain(argumentsName);
+    expect(serialized).not.toContain(inputName);
     expect(serialized).toContain('"content":"__OPENCLAW_REDACTED__"');
-    expect(serialized).toContain('"name":"brief.md"');
     expect(serialized).toContain('"mimeType":"text/markdown"');
     expect(serialized).toContain("use the input snapshot");
   });
@@ -211,7 +214,7 @@ describe("sanitizeToolCallInputs redacts continue_delegate snapshots", () => {
     expect(serialized).not.toContain("CONTINUE_CONTENT_SECRET");
     expect(serialized).not.toContain('"extra"');
     expect(serialized).toContain('"content":"__OPENCLAW_REDACTED__"');
-    expect(serialized).toContain('"name":"brief.md"');
+    expect(serialized).not.toContain('"name":"brief.md"');
     expect(serialized).toContain('"encoding":"utf8"');
     expect(serialized).toContain('"mimeType":"text/markdown"');
   });

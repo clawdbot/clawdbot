@@ -8,7 +8,14 @@ import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 
 const TOOL_CALL_NAME_MAX_CHARS = 64;
 const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_:.-]+$/;
-const CONTINUE_DELEGATE_ATTACHMENT_METADATA_KEYS = ["name", "encoding", "mimeType"] as const;
+// A continuation snapshot is private child input. Transcript repair can retain
+// only replay-safe descriptor metadata; the original filename is not needed to
+// replay the parent tool call and must not escape the handoff boundary.
+const CONTINUE_DELEGATE_ATTACHMENT_METADATA_KEYS = ["encoding", "mimeType"] as const;
+const LEGACY_CONTINUE_DELEGATE_ATTACHMENT_METADATA_KEYS = [
+  "name",
+  ...CONTINUE_DELEGATE_ATTACHMENT_METADATA_KEYS,
+] as const;
 const TRANSCRIPT_TOOL_CALL_BLOCK_TYPES = new Set([
   "toolCall",
   "toolUse",
@@ -162,7 +169,7 @@ function isRedactedContinueDelegateAttachment(value: unknown): boolean {
     if (key === "content") {
       continue;
     }
-    if (!(CONTINUE_DELEGATE_ATTACHMENT_METADATA_KEYS as readonly string[]).includes(key)) {
+    if (!(LEGACY_CONTINUE_DELEGATE_ATTACHMENT_METADATA_KEYS as readonly string[]).includes(key)) {
       return false;
     }
     const metadata = attachment[key];

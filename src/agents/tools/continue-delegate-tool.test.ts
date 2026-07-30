@@ -418,12 +418,23 @@ describe("continue_delegate tool", () => {
         },
       },
     });
+    const sensitiveName = "../ATTACHMENT_NAME_MUST_NOT_ECHO.txt";
+    let invalidNameError: unknown;
     await expect(
       tool.execute("call-invalid-name", {
         task: "invalid attachment name",
-        attachments: [{ name: "../handoff.txt", content: "data" }],
+        attachments: [{ name: sensitiveName, content: "data" }],
       }),
     ).rejects.toThrow("attachments_invalid_name");
+    try {
+      await tool.execute("call-invalid-name-no-echo", {
+        task: "invalid attachment name must not echo",
+        attachments: [{ name: sensitiveName, content: "data" }],
+      });
+    } catch (err) {
+      invalidNameError = err;
+    }
+    expect(String(invalidNameError)).not.toContain("ATTACHMENT_NAME_MUST_NOT_ECHO");
     await expect(
       tool.execute("call-invalid-base64", {
         task: "invalid attachment encoding",

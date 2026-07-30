@@ -131,9 +131,20 @@ function prepareSubagentAttachments(params: {
   return prepareInlineAttachmentSnapshots(params);
 }
 
+/**
+ * Delegate input is private parent-to-child state. Its model-visible errors
+ * retain a stable structural category but never interpolate caller metadata.
+ */
+function redactContinuationAttachmentValidationError(error: unknown): string {
+  const message = typeof error === "string" ? error : error instanceof Error ? error.message : "";
+  const code = message.match(/^(attachments_[a-z0-9_]+)/)?.[1];
+  return code ?? "attachments_validation_failed";
+}
+
 export function validateSubagentAttachments(params: {
   config: OpenClawConfig;
   attachments?: SubagentInlineAttachment[];
+  redactContinuationErrorDetails?: boolean;
 }): string | undefined {
   const request = resolveSubagentAttachmentRequest(params);
   if (request.status === "none") {
@@ -142,10 +153,13 @@ export function validateSubagentAttachments(params: {
   if (request.status !== "ok") {
     return request.error;
   }
-  return validateInlineAttachmentSnapshots({
+  const error = validateInlineAttachmentSnapshots({
     attachments: request.attachments,
     limits: request.limits,
   });
+  return params.redactContinuationErrorDetails && error
+    ? redactContinuationAttachmentValidationError(error)
+    : error;
 }
 
 export function resolveAcpSessionsSpawnImageAttachments(params: {
@@ -191,6 +205,7 @@ export async function materializeSubagentAttachments(params: {
   workspaceDir?: string;
   attachments?: SubagentInlineAttachment[];
   mountPathHint?: string;
+  redactContinuationErrorDetails?: boolean;
 }): Promise<MaterializeSubagentAttachmentsResult | null> {
   const request = resolveSubagentAttachmentRequest(params);
   if (request.status === "none") {
@@ -208,6 +223,24 @@ export async function materializeSubagentAttachments(params: {
   const relDir = path.posix.join(".openclaw", "attachments", attachmentId);
   const absDir = path.join(absRootDir, attachmentId);
 
+  let prepared: { attachments: PreparedSubagentAttachment[]; totalBytes: number };
+  try {
+    prepared = prepareSubagentAttachments({
+      attachments: request.attachments,
+      limits: request.limits,
+    });
+  } catch (err) {
+    // Validation errors have stable structural categories and are filename-free.
+    return {
+      status: "error",
+      error: params.redactContinuationErrorDetails
+        ? redactContinuationAttachmentValidationError(err)
+        : err instanceof Error
+          ? err.message
+          : "attachments_validation_failed",
+    };
+  }
+
   try {
     await fs.mkdir(absDir, { recursive: true, mode: 0o700 });
     const store = privateFileStore(absDir);
@@ -215,10 +248,6 @@ export async function materializeSubagentAttachments(params: {
     const files: SubagentAttachmentReceiptFile[] = [];
     const writeJobs: Array<{ outPath: string; buf: Buffer }> = [];
 
-    const prepared = prepareSubagentAttachments({
-      attachments: request.attachments,
-      limits: request.limits,
-    });
     for (const { name, buf, bytes } of prepared.attachments) {
       const sha256 = crypto.createHash("sha256").update(buf).digest("hex");
       writeJobs.push({ outPath: name, buf });
@@ -251,7 +280,7 @@ export async function materializeSubagentAttachments(params: {
         `In this sandbox, they are available at: ${relDir} (relative to workspace).\n` +
         (params.mountPathHint ? `Requested mountPath hint: ${params.mountPathHint}.\n` : ""),
     };
-  } catch (err) {
+  } catch {
     try {
       await fs.rm(absDir, { recursive: true, force: true });
     } catch {
@@ -259,7 +288,7 @@ export async function materializeSubagentAttachments(params: {
     }
     return {
       status: "error",
-      error: err instanceof Error ? err.message : "attachments_materialization_failed",
+      error: "attachments_materialization_failed",
     };
   }
 }
