@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
 import { FailoverError } from "../../failover-error.js";
-import { handleAssistantFailover } from "./assistant-failover.js";
+import { handleAssistantFailover, isShortWindowRateLimitMessage } from "./assistant-failover.js";
 
 type Params = Parameters<typeof handleAssistantFailover>[0];
 type Outcome = Awaited<ReturnType<typeof handleAssistantFailover>>;
@@ -14,15 +14,12 @@ function makeParams(overrides: Partial<Params> = {}): Params {
   const model = "claude-haiku-4-5-20251001";
   const defaults: Params = {
     initialDecision: { action: "surface_error", reason: "billing" },
-    aborted: false,
-    externalAbort: false,
+    terminal: { kind: "ok" },
+    signalOwnedInterruption: false,
     fallbackConfigured: false,
     failoverFailure: true,
     failoverReason: "billing",
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
+    harnessOwnsTransport: false,
     allowSameModelIdleTimeoutRetry: false,
     allowSameModelRateLimitRetry: true,
     assistantProfileFailureReason: null,
@@ -165,7 +162,7 @@ describe("handleAssistantFailover", () => {
       if (outcome.action !== "retry") {
         return;
       }
-      expect(outcome.retryKind).toBeUndefined();
+      expect(outcome.retryKind).toBe("profile_rotation");
       expect(maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
       expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
       expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
@@ -196,7 +193,7 @@ describe("handleAssistantFailover", () => {
       if (outcome.action !== "retry") {
         return;
       }
-      expect(outcome.retryKind).toBeUndefined();
+      expect(outcome.retryKind).toBe("profile_rotation");
       expect(maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
       expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
       expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
@@ -226,7 +223,7 @@ describe("handleAssistantFailover", () => {
       if (outcome.action !== "retry") {
         return;
       }
-      expect(outcome.retryKind).toBeUndefined();
+      expect(outcome.retryKind).toBe("profile_rotation");
       expect(maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
       expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
       expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
@@ -256,10 +253,41 @@ describe("handleAssistantFailover", () => {
       if (outcome.action !== "retry") {
         return;
       }
-      expect(outcome.retryKind).toBeUndefined();
+      expect(outcome.retryKind).toBe("profile_rotation");
       expect(maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
       expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
       expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries the same model on a status-prefixed 429 with no window wording", async () => {
+      const maybeRetrySameModelRateLimit = vi.fn(async () => true);
+      const maybeEscalateRateLimitProfileFallback = vi.fn();
+      const advanceAuthProfile = vi.fn(async () => true);
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "rate_limit" },
+          failoverReason: "rate_limit",
+          billingFailure: false,
+          rateLimitFailure: true,
+          lastAssistant: {
+            errorMessage: "429 Provider returned error",
+          } as Params["lastAssistant"],
+          maybeRetrySameModelRateLimit,
+          maybeEscalateRateLimitProfileFallback,
+          advanceAuthProfile,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      if (outcome.action !== "retry") {
+        return;
+      }
+      expect(outcome.retryKind).toBe("same_model_rate_limit");
+      expect(maybeRetrySameModelRateLimit).toHaveBeenCalledTimes(1);
+      expect(maybeRetrySameModelRateLimit).toHaveBeenCalledWith({});
+      expect(maybeEscalateRateLimitProfileFallback).not.toHaveBeenCalled();
+      expect(advanceAuthProfile).not.toHaveBeenCalled();
     });
 
     it("does not spend same-model retry budget when Retry-After is long", async () => {
@@ -286,7 +314,7 @@ describe("handleAssistantFailover", () => {
       if (outcome.action !== "retry") {
         return;
       }
-      expect(outcome.retryKind).toBeUndefined();
+      expect(outcome.retryKind).toBe("profile_rotation");
       expect(maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
       expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
       expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
@@ -319,7 +347,7 @@ describe("handleAssistantFailover", () => {
         if (outcome.action !== "retry") {
           return;
         }
-        expect(outcome.retryKind).toBeUndefined();
+        expect(outcome.retryKind).toBe("profile_rotation");
         expect(maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
         expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
         expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
@@ -444,7 +472,7 @@ describe("handleAssistantFailover", () => {
       if (outcome.action !== "retry") {
         return;
       }
-      expect(outcome.retryKind).toBeUndefined();
+      expect(outcome.retryKind).toBe("profile_rotation");
       expect(maybeRetrySameModelRateLimit).toHaveBeenCalledTimes(1);
       expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
       expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
@@ -456,7 +484,7 @@ describe("handleAssistantFailover", () => {
         makeParams({
           initialDecision: { action: "rotate_profile", reason: "timeout" },
           failoverReason: "timeout",
-          timedOut: true,
+          terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
           cloudCodeAssistFormatError: true,
           lastProfileId: undefined,
           billingFailure: false,
@@ -476,7 +504,7 @@ describe("handleAssistantFailover", () => {
         makeParams({
           initialDecision: { action: "rotate_profile", reason: "timeout" },
           failoverReason: "timeout",
-          timedOut: true,
+          terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
           assistantProfileFailureReason: "timeout",
           lastProfileId: "profile-timeout",
           advanceAuthProfile: vi.fn(async () => true),
@@ -490,6 +518,22 @@ describe("handleAssistantFailover", () => {
         reason: "timeout",
         modelId: "claude-haiku-4-5-20251001",
       });
+    });
+
+    it("preserves harness-owned timeout policy when profile rotation is exhausted", async () => {
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "timeout" },
+          terminal: { kind: "ok" },
+          harnessOwnsTransport: true,
+          fallbackConfigured: true,
+          failoverReason: "timeout",
+          billingFailure: false,
+          advanceAuthProfile: vi.fn(async () => false),
+        }),
+      );
+
+      expect(outcome.action).toBe("continue_normal");
     });
   });
 
@@ -546,6 +590,29 @@ describe("handleAssistantFailover", () => {
       expect(err.status).toBe(429);
     });
 
+    it("throws format-classified provider rejections to the outer model fallback", async () => {
+      const rawError =
+        '{"type":"error","error":{"type":"invalid_request_error","message":"thinking blocks cannot be modified"}}';
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "surface_error", reason: "format" },
+          fallbackConfigured: true,
+          failoverReason: "format",
+          billingFailure: false,
+          lastAssistant: {
+            errorMessage: rawError,
+            model: "claude-haiku-4-5-20251001",
+            provider: "Anthropic",
+          } as Params["lastAssistant"],
+        }),
+      );
+
+      const err = expectThrownFailoverError(outcome);
+      expect(err.reason).toBe("format");
+      expect(err.status).toBe(400);
+      expect(err.rawError).toBe(rawError);
+    });
+
     it("preserves the raw provider error on surfaced failures", async () => {
       const rawError = '  400 {"error":{"message":"credit balance is too low"}}  ';
       const outcome = await handleAssistantFailover(
@@ -571,7 +638,6 @@ describe("handleAssistantFailover", () => {
         makeParams({
           initialDecision: { action: "surface_error", reason: null },
           failoverReason: null,
-          timedOut: false,
           billingFailure: false,
           authFailure: true,
         }),
@@ -616,8 +682,7 @@ describe("handleAssistantFailover", () => {
       const outcome = await handleAssistantFailover(
         makeParams({
           initialDecision: { action: "surface_error", reason: null },
-          externalAbort: true,
-          aborted: true,
+          terminal: { kind: "aborted", source: "external" },
           failoverReason: null,
           billingFailure: false,
         }),
@@ -639,7 +704,7 @@ describe("handleAssistantFailover", () => {
         makeParams({
           initialDecision: { action: "surface_error", reason: null },
           failoverReason: null,
-          timedOut: true,
+          terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
           billingFailure: false,
         }),
       );
@@ -652,8 +717,7 @@ describe("handleAssistantFailover", () => {
         makeParams({
           initialDecision: { action: "surface_error", reason: null },
           failoverReason: null,
-          timedOut: true,
-          idleTimedOut: true,
+          terminal: { kind: "timeout", phase: "prompt", source: "idle" },
           allowSameModelIdleTimeoutRetry: true,
           billingFailure: false,
         }),
@@ -725,5 +789,17 @@ describe("handleAssistantFailover", () => {
       expect(err.message).toBe(formatBillingErrorMessage("Anthropic", "claude-haiku-4-5-20251001"));
       expect(logDecision).toHaveBeenCalledWith("fallback_model", { status: 402 });
     });
+  });
+});
+
+describe("isShortWindowRateLimitMessage", () => {
+  it.each([
+    ["429 Provider returned error", true],
+    ["429 insufficient_quota: You exceeded your current quota", false],
+    ["429 usage limit reached for this billing period", false],
+    ["Provider API error (429): Provider returned error", false],
+    ["rate limit exceeded", false],
+  ])("classifies %s", (message, expected) => {
+    expect(isShortWindowRateLimitMessage(message)).toBe(expected);
   });
 });

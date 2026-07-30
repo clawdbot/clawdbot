@@ -1,9 +1,14 @@
 // Start-time service repair: rebuilds stale service definitions before starting Gateway.
+import path from "node:path";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
 import { readConfigFileSnapshotForWrite } from "../../config/io.js";
-import { resolveGatewayPort } from "../../config/paths.js";
+import {
+  resolveConfigPathCandidate,
+  resolveGatewayPort,
+  resolveStateDir,
+} from "../../config/paths.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
 import type { GatewayServiceEnv } from "../../daemon/service-types.js";
 import type {
@@ -12,29 +17,149 @@ import type {
   GatewayServiceState,
 } from "../../daemon/service.js";
 import { formatGatewayServiceStartRepairIssues } from "../../daemon/service.js";
+import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
+import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
 import { mergeInstallInvocationEnv } from "./install.js";
 
-/** Repair a loaded but stale Gateway service definition and report the start result. */
-export async function repairLoadedGatewayServiceForStart(params: {
+type GatewayServiceRepairParams = {
   service: GatewayService;
   state: GatewayServiceState;
   issues: GatewayServiceStartRepairIssue[];
   json: boolean;
   stdout: NodeJS.WritableStream;
   warn?: (message: string) => void;
-}): Promise<{ result: "started"; message: string; warnings?: string[]; loaded: boolean }> {
+};
+
+type GatewayServiceRepairResult<TResult extends "restarted" | "started"> = {
+  result: TResult;
+  message: string;
+  warnings?: string[];
+  loaded: boolean;
+};
+
+const GATEWAY_TARGET_ENV_KEYS = [
+  "HOME",
+  "USERPROFILE",
+  "OPENCLAW_HOME",
+  "OPENCLAW_PROFILE",
+  "OPENCLAW_STATE_DIR",
+  "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_GATEWAY_PORT",
+] as const;
+
+function resolveInstalledGatewayTargetEnvironment(
+  existingEnvironment: Record<string, string> | undefined,
+): NodeJS.ProcessEnv {
+  const installedEnv: NodeJS.ProcessEnv = {};
+  for (const key of GATEWAY_TARGET_ENV_KEYS) {
+    const value = existingEnvironment?.[key]?.trim();
+    if (value) {
+      installedEnv[key] = value;
+    }
+  }
+  return installedEnv;
+}
+
+function normalizeTargetPath(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+// Start/restart may rewrite a stale service. Refuse before planning when that
+// rewrite would adopt a different state, config, or port from the invoking shell.
+function assertGatewayRepairTargetMatches(params: {
+  action: "restart" | "start";
+  config: Parameters<typeof resolveGatewayPort>[0];
+  existingEnvironment: Record<string, string> | undefined;
+  installedPort: number | null;
+}): number {
+  const installedEnv = resolveInstalledGatewayTargetEnvironment(params.existingEnvironment);
+  const installedStateOverride = installedEnv.OPENCLAW_STATE_DIR?.trim();
+  const installedHome =
+    installedEnv.OPENCLAW_HOME?.trim() ||
+    installedEnv.HOME?.trim() ||
+    installedEnv.USERPROFILE?.trim();
+  if (!installedStateOverride && !installedHome) {
+    throw new Error(
+      `Refusing to repair the managed Gateway service because its installed state directory cannot be determined from the service definition. Run \`openclaw gateway install --force\` to replace it intentionally.`,
+    );
+  }
+  const installedStateDir = resolveStateDir(installedEnv);
+  const installedConfigPath = resolveConfigPathCandidate(installedEnv);
+  const ambientStateDir = resolveStateDir(process.env);
+  const ambientConfigPath = resolveConfigPathCandidate(process.env);
+  const ambientPort = resolveGatewayPort(params.config, process.env);
+  const sameConfigPath =
+    normalizeTargetPath(installedConfigPath) === normalizeTargetPath(ambientConfigPath);
+  const installedPort =
+    params.installedPort ??
+    (sameConfigPath ? resolveGatewayPort(params.config, installedEnv) : null);
+  const differences: Array<{ name: string; installed: string; ambient: string }> = [];
+
+  for (const [name, installed, ambient] of [
+    ["OPENCLAW_STATE_DIR", installedStateDir, ambientStateDir],
+    ["OPENCLAW_CONFIG_PATH", installedConfigPath, ambientConfigPath],
+  ] as const) {
+    if (normalizeTargetPath(installed) !== normalizeTargetPath(ambient)) {
+      differences.push({ name, installed, ambient });
+    }
+  }
+  if (installedPort !== null && installedPort !== ambientPort) {
+    differences.push({
+      name: "gateway.port",
+      installed: String(installedPort),
+      ambient: String(ambientPort),
+    });
+  }
+  if (differences.length === 0) {
+    return installedPort ?? ambientPort;
+  }
+
+  const details = differences
+    .map(
+      ({ name, installed, ambient }) =>
+        `- ${name}: installed=${JSON.stringify(installed)}, ambient=${JSON.stringify(ambient)}`,
+    )
+    .join("\n");
+  throw new Error(
+    `Refusing to repair the managed Gateway service because the current invocation targets a different Gateway:\n${details}\nRun \`openclaw gateway ${params.action}\` with the installed state directory, config path, and port (or unset conflicting environment overrides). To retarget intentionally, run \`openclaw gateway install --force\`.`,
+  );
+}
+
+/** Repair a loaded but stale Gateway service definition and report the start result. */
+export function repairLoadedGatewayServiceForStart(
+  params: GatewayServiceRepairParams & { action: "restart" },
+): Promise<GatewayServiceRepairResult<"restarted">>;
+export function repairLoadedGatewayServiceForStart(
+  params: GatewayServiceRepairParams & { action?: "start" },
+): Promise<GatewayServiceRepairResult<"started">>;
+export async function repairLoadedGatewayServiceForStart(
+  params: GatewayServiceRepairParams & { action?: "restart" | "start" },
+): Promise<{
+  result: "restarted" | "started";
+  message: string;
+  warnings?: string[];
+  loaded: boolean;
+}> {
+  assertGatewayServiceMutationAllowed("repair the gateway service");
   const { snapshot: configSnapshot, writeOptions: configWriteOptions } =
     await readConfigFileSnapshotForWrite();
   const cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
   const existingEnvironment = params.state.command?.environment;
   const existingEnvironmentValueSources = params.state.command?.environmentValueSources;
+  const installedPort = parseTcpPortFromArgs(params.state.command?.programArguments);
+  const port = assertGatewayRepairTargetMatches({
+    action: params.action ?? "start",
+    config: cfg,
+    existingEnvironment,
+    installedPort,
+  });
   const installEnv = mergeInstallInvocationEnv({
     env: process.env,
     existingServiceEnv: existingEnvironment,
   });
   const wrapperPath = await resolveOpenClawWrapperPath(installEnv[OPENCLAW_WRAPPER_ENV_KEY]);
-  const port = resolveGatewayPort(cfg);
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,
@@ -94,9 +219,11 @@ export async function repairLoadedGatewayServiceForStart(params: {
   }
 
   return {
-    result: "started",
+    result: params.action === "restart" ? "restarted" : "started",
     message:
-      "Gateway service definition repaired and started. Reopen the Control UI with `openclaw dashboard` or copy a fresh auth URL with `openclaw dashboard --no-open`.",
+      params.action === "restart"
+        ? "Gateway service definition repaired and restarted."
+        : "Gateway service definition repaired and started. Reopen the Control UI with `openclaw dashboard` or copy a fresh auth URL with `openclaw dashboard --no-open`.",
     warnings: warnings.length ? warnings : undefined,
     loaded,
   };

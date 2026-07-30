@@ -69,7 +69,7 @@ describe("Mistral bounded-stream-read real wire proof (loopback http.createServe
         /mistral: stream body exceeds \d+ bytes \(got (\d+)\)/,
       );
       expect(match).not.toBeNull();
-      const got = Number(match![1]);
+      const got = Number(match?.[1]);
       expect(got).toBeGreaterThan(MAX);
       expect(got).toBeLessThan(TOTAL);
       // Print to vitest stdout for PR-body real behavior proof capture.
@@ -128,7 +128,6 @@ describe("Mistral bounded-stream-read real wire proof (loopback http.createServe
 // parser (`EventStream`) would see when a streaming body exceeds 16 MiB.
 describe("Mistral bounded-stream-read direct (synthetic ReadableStream)", () => {
   it("caps an oversized synthetic ReadableStream at 16 MiB", async () => {
-    const fetcher = createBoundedMistralFetcher(MAX);
     const CHUNK = 1024 * 1024;
     let sent = 0;
     const synthetic = new ReadableStream<Uint8Array>({
@@ -147,38 +146,23 @@ describe("Mistral bounded-stream-read direct (synthetic ReadableStream)", () => 
       status: 200,
       headers: { "content-type": "application/octet-stream" },
     });
+    const fetcher = createBoundedMistralFetcher(MAX, async () => syntheticResponse);
 
     let captured: Error | undefined;
+    const wrapped = await fetcher("http://unused.invalid/");
     try {
-      // Replace the fetcher's internal `fetch` call by exercising the
-      // post-fetchResponse code path directly: build a `Wrapped`
-      // that re-enters `fetcher` as if a real fetch returned our
-      // synthetic Response, by patching the global fetch.
-      const originalFetch = globalThis.fetch;
-      globalThis.fetch = (() => Promise.resolve(syntheticResponse)) as typeof globalThis.fetch;
-      try {
-        const wrapped = await fetcher("http://unused.invalid/");
-        try {
-          await readAllChunks(wrapped.body);
-        } catch (err) {
-          captured = err as Error;
-        }
-      } finally {
-        globalThis.fetch = originalFetch;
-      }
-      expect(captured).toBeInstanceOf(Error);
-      const match = (captured as Error).message.match(
-        /mistral: stream body exceeds \d+ bytes \(got (\d+)\)/,
-      );
-      expect(match).not.toBeNull();
-      const got = Number(match![1]);
-      // Synthetic stream chunks are exactly 1 MiB aligned, so cap+1 reads
-      // give exactly cap + 1 MiB = 16 MiB + 1 MiB = 17 825 792 bytes.
-      expect(got).toBe(16777216 + CHUNK);
-    } finally {
-      // Best-effort cleanup if the test threw mid-flight.
-      // No intervals to clear for this test; the synthetic stream closes
-      // automatically when `sent >= 18`.
+      await readAllChunks(wrapped.body);
+    } catch (err) {
+      captured = err as Error;
     }
+    expect(captured).toBeInstanceOf(Error);
+    const match = (captured as Error).message.match(
+      /mistral: stream body exceeds \d+ bytes \(got (\d+)\)/,
+    );
+    expect(match).not.toBeNull();
+    const got = Number(match?.[1]);
+    // Synthetic stream chunks are exactly 1 MiB aligned, so cap+1 reads
+    // give exactly cap + 1 MiB = 16 MiB + 1 MiB = 17 825 792 bytes.
+    expect(got).toBe(16777216 + CHUNK);
   });
 });

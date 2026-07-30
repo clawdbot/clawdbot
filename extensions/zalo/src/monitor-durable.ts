@@ -3,7 +3,7 @@ import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { OutboundReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 
-export type ZaloDurableReplyOptions = {
+type ZaloDurableReplyOptions = {
   to: string;
 };
 

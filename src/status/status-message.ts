@@ -1,5 +1,4 @@
 // Status message helpers read and format stored status messages.
-import fs from "node:fs";
 import {
   type FastMode,
   normalizeLowercaseStringOrEmpty,
@@ -37,15 +36,16 @@ import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import {
   resolveMainSessionKey,
   resolveFreshSessionTotalTokens,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
 import { resolveSessionLifecycleTimestamps } from "../config/sessions/lifecycle.js";
-import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
+import {
+  hasSessionActiveAutoModelFallback,
+  hasSessionAutoModelFallbackProvenance,
+} from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readRecentSessionUsageFromTranscript } from "../gateway/session-transcript-readers.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
@@ -59,6 +59,7 @@ import type { MediaUnderstandingDecision } from "../media-understanding/types.js
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { formatFastModeStatusValue } from "../shared/fast-mode.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
+import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
 import {
   estimateUsageCost,
   formatTokenCount,
@@ -83,7 +84,7 @@ type QueueStatus = {
   showDetails?: boolean;
 };
 
-export type StatusArgs = {
+type StatusArgs = {
   config?: OpenClawConfig;
   agent: AgentConfig;
   agentId?: string;
@@ -306,28 +307,13 @@ const readUsageFromSessionLog = (
   if (!sessionId) {
     return undefined;
   }
-  let logPath: string;
   try {
     const resolvedAgentId =
       agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
-    logPath = resolveSessionFilePath(
-      sessionId,
-      sessionEntry,
-      resolveSessionFilePathOptions({ agentId: resolvedAgentId, storePath }),
-    );
-  } catch {
-    return undefined;
-  }
-  if (!fs.existsSync(logPath)) {
-    return undefined;
-  }
-
-  try {
     const snapshot = readRecentSessionUsageFromTranscript(
       {
-        agentId: agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined),
+        agentId: resolvedAgentId,
         sessionEntry,
-        sessionFile: logPath,
         sessionId,
         sessionKey,
         storePath,
@@ -419,8 +405,19 @@ const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandi
         const chosen = decision.attachments.find((entry) => entry.chosen)?.chosen;
         const provider = chosen?.provider?.trim();
         const model = chosen?.model?.trim();
-        const modelLabel = provider ? (model ? `${provider}/${model}` : provider) : null;
-        return `${decision.capability}${countLabel} ok${modelLabel ? ` (${modelLabel})` : ""}`;
+        const modelLabel = provider
+          ? model && model !== provider
+            ? `${provider}/${model}`
+            : provider
+          : null;
+        const backendLabel = chosen?.observedBackend
+          ? ` observed=${chosen.observedBackend}`
+          : chosen?.requestedBackend
+            ? ` requested=${chosen.requestedBackend}`
+            : "";
+        return `${decision.capability}${countLabel} ok${
+          modelLabel ? ` (${modelLabel}${backendLabel})` : ""
+        }`;
       }
       if (decision.outcome === "no-attachment") {
         return `${decision.capability} none`;
@@ -511,16 +508,16 @@ function resolveChannelModelNote(params: {
   }
   const channelOverride = resolveChannelModelOverride({
     cfg: params.config,
-    channel: params.entry.channel ?? params.entry.origin?.provider,
+    channel: sessionDeliveryChannel(params.entry),
     groupId: params.entry.groupId,
-    groupChatType: params.entry.chatType ?? params.entry.origin?.chatType,
+    groupChatType: params.entry.chatType ?? sessionDeliveryOrigin(params.entry)?.chatType,
     groupChannel: params.entry.groupChannel,
     groupSubject: params.entry.subject,
     parentSessionKey: params.parentSessionKey,
     directUserIds: [
-      params.entry.origin?.nativeDirectUserId,
-      params.entry.origin?.from,
-      params.entry.origin?.to,
+      sessionDeliveryOrigin(params.entry)?.nativeDirectUserId,
+      sessionDeliveryOrigin(params.entry)?.from,
+      sessionDeliveryOrigin(params.entry)?.to,
     ],
   });
   if (!channelOverride) {
@@ -630,7 +627,7 @@ export function buildStatusMessage(args: StatusArgs): string {
       initialFallbackState.active &&
       normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
         normalizeLowercaseStringOrEmpty(
-          normalizeOptionalString(entry?.fallbackNoticeActiveModel ?? "") ?? "",
+          normalizeOptionalString(entry?.fallbackNotice?.activeModel ?? "") ?? "",
         );
     const runtimeMatchesSelectedModel =
       normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
@@ -929,6 +926,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const sessionStartedAt = resolveSessionLifecycleTimestamps({
     entry,
     agentId: args.agentId,
+    sessionKey: args.sessionKey,
     storePath: args.sessionStorePath,
   }).sessionStartedAt;
   const sessionDuration =
@@ -1074,18 +1072,24 @@ export function buildStatusMessage(args: StatusArgs): string {
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
   const configuredDefaultModelLabel = normalizeOptionalString(args.configuredDefaultModelLabel);
   const sessionHasPersistedModelSelection = hasUserPinnedModelSelection(entry);
+  const sessionHasAutoFallback = hasSessionActiveAutoModelFallback(entry);
   const configDefaultDiffersFromSession =
-    sessionHasPersistedModelSelection &&
+    (sessionHasPersistedModelSelection || sessionHasAutoFallback) &&
     configuredDefaultModelLabel &&
     selectedModelLabel !== configuredDefaultModelLabel &&
     !areRuntimeModelRefsEquivalent(selectedModelLabel, configuredDefaultModelLabel, {
       config: args.config,
     });
   const overrideLabel = configDefaultDiffersFromSession
-    ? ` · pinned session; config primary ${configuredDefaultModelLabel} · clear /model default`
+    ? sessionHasPersistedModelSelection
+      ? ` · pinned session; config primary ${configuredDefaultModelLabel} · clear /model default`
+      : ` · auto fallback; config primary ${configuredDefaultModelLabel} · check provider`
     : "";
+  // A user-driven live switch that no completed turn has applied yet: surface
+  // it so /status does not imply the new selection is already running.
+  const liveSwitchNote = entry?.liveModelSwitchPending ? " · ⏳ live switch pending" : "";
   const modelLines = [
-    `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}${overrideLabel}`,
+    `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}${overrideLabel}${liveSwitchNote}`,
   ];
 
   // Show configured fallback models (from agent model config)
@@ -1141,3 +1145,4 @@ export function buildStatusMessage(args: StatusArgs): string {
     .filter((line): line is string => Boolean(line))
     .join("\n");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

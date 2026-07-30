@@ -74,7 +74,7 @@ describe("plugin-sdk provider-auth-runtime", () => {
       callbackPath: "/callback",
       redirectUri: `http://127.0.0.1:${port}/callback`,
       hostname: "127.0.0.1",
-      successTitle: "OAuth complete",
+      successTitle: `OAuth <complete>&"'`,
       corsOriginAllowlist: ["auth.x.ai", "accounts.x.ai"],
     });
 
@@ -101,7 +101,27 @@ describe("plugin-sdk provider-auth-runtime", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("access-control-allow-origin")).toBe("https://auth.x.ai");
+    await expect(response.text()).resolves.toContain("OAuth &lt;complete&gt;&amp;&quot;&#39;");
     await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
+  });
+
+  it("closes a pending localhost callback when its owner cancels", async () => {
+    const controller = new AbortController();
+    const port = await getFreePort();
+    const callback = providerAuthRuntime.waitForLocalOAuthCallback({
+      expectedState: "state-1",
+      timeoutMs: 5_000,
+      port,
+      callbackPath: "/callback",
+      redirectUri: `http://127.0.0.1:${port}/callback`,
+      hostname: "127.0.0.1",
+      successTitle: "OAuth complete",
+      signal: controller.signal,
+    });
+
+    controller.abort();
+
+    await expect(callback).rejects.toThrow("OAuth callback cancelled");
   });
 
   it("does not echo CORS for unallowlisted callback origins but keeps waiting", async () => {

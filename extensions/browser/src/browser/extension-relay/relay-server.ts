@@ -8,23 +8,32 @@
  *   WS  /extension     -> the Chrome extension's relay transport
  * Both sides authenticate with the derived relay token: CDP clients send it as
  * Basic auth (flows from the profile cdpUrl userinfo via getHeadersWithAuth),
- * the extension sends `Authorization: Bearer` or `?token=`.
+ * the extension sends the token in its WebSocket subprotocol list.
  */
 import http, { type IncomingMessage, type Server } from "node:http";
 import type { Duplex } from "node:stream";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isLoopbackHost } from "../../gateway/net.js";
+import { rawDataToString } from "../../infra/ws.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { extensionRelayTokenMatches } from "./relay-auth.js";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
+import type { PageSharePayload } from "./relay-protocol.js";
 
 const log = createSubsystemLogger("browser").child("extension-relay");
+const EXTENSION_RELAY_PROTOCOL = "openclaw-extension-relay";
+const EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX = "openclaw-extension-token.";
 
 /**
  * Cap relay frame size to bound memory from a hostile/buggy peer while leaving
  * headroom for CDP payloads (base64 screenshots, DOM snapshots, network bodies).
  */
-const EXTENSION_RELAY_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
+export const EXTENSION_RELAY_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
+
+/** Wire an accepted extension WebSocket to a bridge (shared by loopback + gateway paths). */
+export function attachExtensionWebSocket(bridge: ExtensionRelayBridge, ws: WebSocket): void {
+  bindSocket(ws, bridge.attachExtensionSocket(ws));
+}
 
 /** Running relay server handle owned by the profile runtime state. */
 export type ExtensionRelayHandle = {
@@ -39,6 +48,21 @@ function firstHeader(value: string | string[] | undefined): string {
   return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
 }
 
+/** Extract a relay token carried by the extension's WebSocket subprotocol list. */
+export function requestExtensionProtocolToken(req: IncomingMessage): string {
+  const protocols = firstHeader(req.headers["sec-websocket-protocol"])
+    .split(",")
+    .map((value) => value.trim());
+  if (!protocols.includes(EXTENSION_RELAY_PROTOCOL)) {
+    return "";
+  }
+  const tokenProtocol = protocols.find((value) =>
+    value.startsWith(EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX),
+  );
+  return tokenProtocol?.slice(EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX.length) ?? "";
+}
+
+/** Extract relay auth from a CDP header, extension subprotocol, or legacy query. */
 function requestToken(req: IncomingMessage): string {
   const auth = firstHeader(req.headers.authorization);
   if (auth.startsWith("Bearer ")) {
@@ -48,6 +72,10 @@ function requestToken(req: IncomingMessage): string {
     const decoded = Buffer.from(auth.slice("Basic ".length), "base64").toString("utf8");
     const separator = decoded.indexOf(":");
     return separator >= 0 ? decoded.slice(separator + 1) : decoded;
+  }
+  const protocolToken = requestExtensionProtocolToken(req);
+  if (protocolToken) {
+    return protocolToken;
   }
   try {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -59,11 +87,11 @@ function requestToken(req: IncomingMessage): string {
 
 function isAuthorized(req: IncomingMessage, token: string): boolean {
   const candidate = requestToken(req);
-  return candidate.length > 0 && extensionRelayTokenMatches(token, candidate);
+  return candidate.length > 0 && safeEqualSecret(token, candidate);
 }
 
 /** Reject cross-origin websocket upgrades; the extension side must come from Chrome. */
-function isAllowedExtensionOrigin(req: IncomingMessage): boolean {
+export function isAllowedExtensionOrigin(req: IncomingMessage): boolean {
   const origin = firstHeader(req.headers.origin);
   // Chrome MV3 service workers send their chrome-extension:// origin. Absent
   // origin is allowed for non-browser clients such as tests and diagnostics.
@@ -93,8 +121,12 @@ export async function startExtensionRelayServer(params: {
   port: number;
   token: string;
   onStateChange?: () => void;
+  onPageShare?: (payload: PageSharePayload) => Promise<void>;
 }): Promise<ExtensionRelayHandle> {
-  const bridge = new ExtensionRelayBridge({ onStateChange: params.onStateChange });
+  const bridge = new ExtensionRelayBridge({
+    onStateChange: params.onStateChange,
+    onPageShare: params.onPageShare,
+  });
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
@@ -158,14 +190,14 @@ export async function startExtensionRelayServer(params: {
         return;
       }
       wss.handleUpgrade(req, socket, head, (ws) => {
-        bindSocket(ws, bridge.attachExtensionSocket(toBridgeSocket(ws)));
+        attachExtensionWebSocket(bridge, ws);
         log.info("extension connected to relay");
       });
       return;
     }
     if (path === "/cdp") {
       wss.handleUpgrade(req, socket, head, (ws) => {
-        bindSocket(ws, bridge.attachCdpClientSocket(toBridgeSocket(ws)));
+        bindSocket(ws, bridge.attachCdpClientSocket(ws));
       });
       return;
     }
@@ -196,40 +228,12 @@ export async function startExtensionRelayServer(params: {
   };
 }
 
-function toBridgeSocket(ws: WebSocket) {
-  return {
-    send: (data: string) => {
-      if (ws.readyState === ws.OPEN) {
-        ws.send(data);
-      }
-    },
-    close: (code?: number, reason?: string) => {
-      try {
-        ws.close(code, reason);
-      } catch {
-        // already closing
-      }
-    },
-  };
-}
-
-/** Decode a ws frame (string | Buffer | Buffer[] | ArrayBuffer) to text. */
-function decodeWsData(data: import("ws").RawData | string): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  return Buffer.from(data as ArrayBuffer).toString("utf8");
-}
-
 function bindSocket(
   ws: WebSocket,
   handlers: { onMessage: (raw: string) => void; onClose: () => void },
 ): void {
   ws.on("message", (data) => {
-    handlers.onMessage(decodeWsData(data));
+    handlers.onMessage(rawDataToString(data));
   });
   ws.on("close", handlers.onClose);
   ws.on("error", (err) => {

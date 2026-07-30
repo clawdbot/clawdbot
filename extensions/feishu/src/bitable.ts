@@ -23,7 +23,7 @@ type BitableRecordUpdateFields = NonNullable<
   NonNullable<BitableRecordUpdatePayload["data"]>["fields"]
 >;
 
-export class LarkApiError extends Error {
+class LarkApiError extends Error {
   readonly code: number;
   readonly api: string;
   readonly context?: Record<string, unknown>;
@@ -82,13 +82,19 @@ function parseBitableUrl(url: string): { token: string; tableId?: string; isWiki
     // Wiki format: /wiki/XXXXX?table=YYY
     const wikiMatch = u.pathname.match(/\/wiki\/([A-Za-z0-9]+)/);
     if (wikiMatch) {
-      return { token: wikiMatch[1], tableId, isWiki: true };
+      const wikiPathSegment = wikiMatch[1];
+      return wikiPathSegment === undefined
+        ? null
+        : { token: wikiPathSegment, tableId, isWiki: true };
     }
 
     // Base format: /base/XXXXX?table=YYY
     const baseMatch = u.pathname.match(/\/base\/([A-Za-z0-9]+)/);
     if (baseMatch) {
-      return { token: baseMatch[1], tableId, isWiki: false };
+      const basePathSegment = baseMatch[1];
+      return basePathSegment === undefined
+        ? null
+        : { token: basePathSegment, tableId, isWiki: false };
     }
 
     return null;
@@ -407,7 +413,7 @@ async function createApp(
       path: { app_token: appToken },
     });
     if (tablesRes.code === 0 && tablesRes.data?.items && tablesRes.data.items.length > 0) {
-      tableId = tablesRes.data.items[0].table_id ?? undefined;
+      tableId = tablesRes.data.items.at(0)?.table_id;
       if (tableId) {
         const cleanup = await cleanupNewBitable(client, appToken, tableId, name, log);
         cleanedRows = cleanup.cleanedRows;

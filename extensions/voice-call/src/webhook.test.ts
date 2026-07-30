@@ -2,11 +2,7 @@
 import { request, type IncomingMessage } from "node:http";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  VoiceCallConfigSchema,
-  type VoiceCallConfig,
-  type VoiceCallConfigInput,
-} from "./config.js";
+import { VoiceCallConfigSchema, resolveVoiceCallConfig, type VoiceCallConfig } from "./config.js";
 import type { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import { PlivoProvider } from "./providers/plivo.js";
@@ -76,6 +72,8 @@ type TwilioProviderTestDouble = VoiceCallProvider &
     | "hasRegisteredStream"
     | "clearTtsQueue"
   >;
+
+type VoiceCallConfigInput = Parameters<typeof resolveVoiceCallConfig>[0];
 
 const createConfig = (overrides: VoiceCallConfigInput = {}): VoiceCallConfig => {
   const base = VoiceCallConfigSchema.parse({});
@@ -164,6 +162,31 @@ function requireFirstMockCall(calls: readonly unknown[][], label: string): unkno
     throw new Error(`expected ${label} call`);
   }
   return call;
+}
+
+function createCapturingLogger() {
+  const messages: string[] = [];
+  const capture = (message: string) => messages.push(message);
+  return {
+    messages,
+    logger: { info: capture, warn: capture, error: capture },
+  };
+}
+
+function expectPrivateLogMetadata(params: {
+  messages: readonly string[];
+  identifiers: readonly string[];
+  privateText: readonly string[];
+}) {
+  const output = params.messages.join(" ");
+  expect(output).toContain("[voice-call]");
+  expect(output).toContain("chars=");
+  for (const identifier of params.identifiers) {
+    expect(output).toContain(identifier);
+  }
+  for (const privateText of params.privateText) {
+    expect(output).not.toContain(privateText);
+  }
 }
 
 function expectWebhookUrl(url: string, expectedPath: string) {
@@ -326,6 +349,54 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
       await server.stop();
     }
   });
+});
+
+describe("VoiceCallWebhookServer media stream authorization", () => {
+  it.each(["telnyx", "plivo", "mock"] as const)(
+    "rejects active provider=%s calls before consulting their call id",
+    async (providerName) => {
+      const call = createCall(Date.now());
+      const getCallByProviderCallId = vi.fn(() => call);
+      const manager = {
+        getActiveCalls: () => [call],
+        getCallByProviderCallId,
+        endCall: vi.fn(async () => ({ success: true })),
+        processEvent: vi.fn(),
+        speakInitialMessage: vi.fn(async () => {}),
+      } as unknown as CallManager;
+      const config = createConfig({
+        provider: providerName,
+        streaming: {
+          ...createConfig().streaming,
+          enabled: true,
+        },
+      });
+      const server = new VoiceCallWebhookServer(config, manager, {
+        ...provider,
+        name: providerName,
+      });
+
+      try {
+        await server.start();
+        const handler = server.getMediaStreamHandler() as unknown as {
+          config: {
+            shouldAcceptStream?: (input: { callId: string; streamSid: string }) => boolean;
+          };
+        };
+        const shouldAcceptStream = handler?.config.shouldAcceptStream;
+        if (!shouldAcceptStream) {
+          throw new Error("expected media stream acceptance validator");
+        }
+
+        expect(
+          shouldAcceptStream({ callId: call.providerCallId ?? "", streamSid: "stream-1" }),
+        ).toBe(false);
+        expect(getCallByProviderCallId).not.toHaveBeenCalled();
+      } finally {
+        await server.stop();
+      }
+    },
+  );
 });
 
 describe("VoiceCallWebhookServer media stream client IP resolution", () => {
@@ -1659,8 +1730,9 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
 });
 
 describe("VoiceCallWebhookServer classic response routing", () => {
-  it("keeps outbound calls on the top-level agent when the dialed number has an inbound route", async () => {
+  it("keeps outbound calls on their frozen agent when the dialed number has an inbound route", async () => {
     const call = createCall(Date.now());
+    call.agentId = "support";
     call.direction = "outbound";
     call.to = "+15550001111";
     call.sessionKey = "agent:top:voice:15550001111";
@@ -1696,8 +1768,9 @@ describe("VoiceCallWebhookServer classic response routing", () => {
     const params = requireFirstMockCall(
       mocks.generateVoiceResponse.mock.calls,
       "classic voice response",
-    )[0] as { voiceConfig?: VoiceCallConfig } | undefined;
+    )[0] as { agentId?: string; voiceConfig?: VoiceCallConfig } | undefined;
     expect(params?.voiceConfig?.agentId).toBe("top");
+    expect(params?.agentId).toBe("support");
     expect(speak).toHaveBeenCalledWith(call.callId, "Hello back", {
       listenAfterPlayback: true,
     });
@@ -1735,6 +1808,47 @@ describe("VoiceCallWebhookServer classic response routing", () => {
     expect(speak.mock.calls).toEqual([
       [call.callId, "Spoken before compaction. Final detail.", { listenAfterPlayback: true }],
     ]);
+  });
+
+  it("logs only char counts for inbound user text, early AI text, and final AI text", async () => {
+    const call = createCall(Date.now());
+    const speak = vi.fn(async () => ({ success: true }));
+    const manager = {
+      getCall: (callId: string) => (callId === call.callId ? call : undefined),
+      speak,
+    } as unknown as CallManager;
+
+    const { logger, messages } = createCapturingLogger();
+
+    const server = new VoiceCallWebhookServer(
+      createConfig({ agentId: "main" }),
+      manager,
+      provider,
+      {} as never,
+      undefined,
+      {} as never,
+      logger,
+    );
+
+    const userMessage = "sensitive user speech content";
+    const earlyText = "confidential early AI response";
+    const finalText = "private final AI response";
+    mocks.generateVoiceResponse.mockReset().mockImplementationOnce(async (params) => {
+      await params?.onEarlyText?.(earlyText);
+      return { text: finalText, deliveredEarly: false };
+    });
+
+    await (
+      server as unknown as {
+        handleInboundResponse: (callId: string, message: string) => Promise<void>;
+      }
+    ).handleInboundResponse(call.callId, userMessage);
+
+    expectPrivateLogMetadata({
+      messages,
+      identifiers: [call.callId],
+      privateText: [userMessage, earlyText, finalText],
+    });
   });
 });
 
@@ -1927,8 +2041,60 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       config: {
         onSpeechStart?: (providerCallId: string) => void;
         onTranscript?: (providerCallId: string, transcript: string) => void;
+        onPartialTranscript?: (providerCallId: string, partial: string) => void;
       };
     };
+
+  it("logs transcript counts without logging transcript content", async () => {
+    const manager = {
+      getActiveCalls: () => [],
+      getCallByProviderCallId: vi.fn(() => undefined),
+      endCall: vi.fn(async () => ({ success: true })),
+      speakInitialMessage: vi.fn(async () => {}),
+      processEvent: vi.fn(),
+    } as unknown as CallManager;
+    const config = createConfig({
+      provider: "twilio",
+      streaming: {
+        ...createConfig().streaming,
+        enabled: true,
+        providers: {
+          openai: {
+            apiKey: "test-key", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+
+    const { logger, messages } = createCapturingLogger();
+
+    const server = new VoiceCallWebhookServer(
+      config,
+      manager,
+      createTwilioProvider(vi.fn()),
+      undefined,
+      undefined,
+      undefined,
+      logger,
+    );
+    await server.start();
+
+    try {
+      const transcript = `${"a".repeat(199)}\uD83D\uDE80tail`;
+      const partialText = "user is saying something sensitive";
+      const callbacks = getMediaCallbacks(server).config;
+      callbacks.onTranscript?.("CA-utf16", transcript);
+      callbacks.onPartialTranscript?.("CA-partial", partialText);
+
+      expectPrivateLogMetadata({
+        messages,
+        identifiers: ["CA-utf16", "CA-partial"],
+        privateText: [transcript, partialText],
+      });
+    } finally {
+      await server.stop();
+    }
+  });
 
   it("suppresses barge-in clear while outbound conversation initial message is pending", async () => {
     const call = createCall(Date.now() - 1_000);
@@ -2184,3 +2350,4 @@ describe("VoiceCallWebhookServer webhook event path auto-response (#79118)", () 
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

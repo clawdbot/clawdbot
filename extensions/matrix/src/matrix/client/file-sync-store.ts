@@ -31,7 +31,7 @@ const SYNC_CACHE_STATE_KEY = "current";
 // PluginState serializes this string inside a row object; 24KB leaves room for JSON escaping.
 const SYNC_CACHE_CHUNK_BYTES = 24_000;
 
-export type PersistedMatrixSyncStore = {
+type PersistedMatrixSyncStore = {
   version: number;
   savedSync: ISyncData | null;
   clientOptions?: IStoredClientOpts;

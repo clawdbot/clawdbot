@@ -1,11 +1,16 @@
 // LLM Runtime tests cover api registry behavior.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createApiRegistry,
   createAssistantMessageEventStream,
   createLlmRuntime,
   type Model,
 } from "./index.js";
+import {
+  defaultApiRegistry,
+  getApiProvider,
+  streamSimple as streamSimpleDefault,
+} from "./internal/default-runtime.js";
 
 const TEST_SOURCE_ID = "test:llm-runtime-api-registry";
 const emptyStream = () => createAssistantMessageEventStream();
@@ -24,6 +29,10 @@ const model = {
 } satisfies Model;
 
 describe("LLM API registry", () => {
+  afterEach(() => {
+    defaultApiRegistry.unregisterApiProviders(TEST_SOURCE_ID);
+  });
+
   it("rejects mismatched model API calls", () => {
     const registry = createApiRegistry();
     registry.registerApiProvider(
@@ -54,6 +63,30 @@ describe("LLM API registry", () => {
     expect(() => second.streamSimple(model, { messages: [] })).toThrow(
       "No API provider registered for api: test-api",
     );
+  });
+
+  it("shares default runtime registrations across duplicated module instances", async () => {
+    // File URLs preserve the cache-busting query through Vitest project shards.
+    // Computed relative imports can escape into unresolved Vite /@fs paths.
+    const duplicateRuntime = (await import(
+      /* @vite-ignore */ new URL("./internal/default-runtime.ts?duplicate-runtime", import.meta.url)
+        .href
+    )) as typeof import("./internal/default-runtime.js");
+    const streamSimple = vi.fn(emptyStream);
+    duplicateRuntime.defaultApiRegistry.registerApiProvider(
+      {
+        api: "test-api",
+        stream: emptyStream,
+        streamSimple,
+      },
+      TEST_SOURCE_ID,
+    );
+
+    expect(getApiProvider("test-api")).toBeDefined();
+
+    streamSimpleDefault(model, { messages: [] });
+
+    expect(streamSimple).toHaveBeenCalledOnce();
   });
 
   it("unregisters every provider owned by one source", () => {

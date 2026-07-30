@@ -11,12 +11,12 @@ export type IMessageAttachment = {
   uti?: string | null;
 };
 
-export type IMessagePollOption = {
+type IMessagePollOption = {
   id: string;
   text: string;
 };
 
-export type IMessagePollVote = {
+type IMessagePollVote = {
   option_id?: string | null;
   option_text?: string | null;
   participant?: string | null;
@@ -41,7 +41,6 @@ export type IMessagePayload = {
   chat_id?: number | null;
   sender?: string | null;
   destination_caller_id?: string | null;
-  balloon_bundle_id?: string | null;
   is_from_me?: boolean | null;
   text?: string | null;
   reply_to_id?: number | string | null;

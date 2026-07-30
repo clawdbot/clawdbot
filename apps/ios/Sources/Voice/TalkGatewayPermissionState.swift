@@ -1,9 +1,11 @@
+import Foundation
+
 enum TalkGatewayPermissionState: Equatable {
     case unknown
     case ready
     case missingScope(String)
     case requestingUpgrade
-    case upgradeRequested(requestId: String?)
+    case upgradeRequested
     case requestFailed(String)
     case apiKeyMissing
     case loadFailed(String)
@@ -11,21 +13,21 @@ enum TalkGatewayPermissionState: Equatable {
     var statusLabel: String {
         switch self {
         case .unknown:
-            "Not checked"
+            String(localized: "Not checked")
         case .ready:
-            "Ready"
+            String(localized: "Ready")
         case let .missingScope(scope):
-            "Missing \(scope)"
+            String(format: String(localized: "Missing %@"), scope)
         case .requestingUpgrade:
-            "Requesting approval"
+            String(localized: "Requesting approval")
         case .upgradeRequested:
-            "Approval requested"
+            String(localized: "Approval requested")
         case .requestFailed:
-            "Request failed"
+            String(localized: "Request failed")
         case .apiKeyMissing:
-            "API key missing"
+            String(localized: "API key missing")
         case .loadFailed:
-            "Load failed"
+            String(localized: "Load failed")
         }
     }
 
@@ -45,19 +47,5 @@ enum TalkGatewayPermissionState: Equatable {
         default:
             false
         }
-    }
-
-    var failureMessage: String? {
-        if case let .requestFailed(message) = self {
-            return message
-        }
-        return nil
-    }
-
-    var requestId: String? {
-        if case let .upgradeRequested(requestId) = self {
-            return requestId
-        }
-        return nil
     }
 }

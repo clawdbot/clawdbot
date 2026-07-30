@@ -9,6 +9,7 @@ import type {
 import {
   asObject,
   parseSpeechDirectiveNumberOverride,
+  resolveSpeechProviderApiKey,
   trimToUndefined,
 } from "openclaw/plugin-sdk/speech-core";
 import { asFiniteNumberInRange } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -46,7 +47,7 @@ function normalizeInworldProviderConfig(rawConfig: Record<string, unknown>): Inw
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.inworld.apiKey",
+      path: "tts.providers.inworld.apiKey",
     }),
     baseUrl: normalizeInworldBaseUrl(trimToUndefined(raw?.baseUrl)),
     voiceId: trimToUndefined(raw?.voiceId) ?? DEFAULT_INWORLD_VOICE_ID,
@@ -64,6 +65,10 @@ function readInworldProviderConfig(config: SpeechProviderConfig): InworldProvide
     modelId: trimToUndefined(config.modelId) ?? defaults.modelId,
     temperature: normalizeInworldTemperature(config.temperature) ?? defaults.temperature,
   };
+}
+
+function resolveInworldApiKey(primary?: string, fallback?: string): string | undefined {
+  return resolveSpeechProviderApiKey(primary, fallback, process.env.INWORLD_API_KEY);
 }
 
 function readInworldOverrides(
@@ -164,21 +169,22 @@ export function buildInworldSpeechProvider(): SpeechProviderPlugin {
     }),
     listVoices: async (req) => {
       const config = req.providerConfig ? readInworldProviderConfig(req.providerConfig) : undefined;
-      const apiKey = req.apiKey || config?.apiKey || process.env.INWORLD_API_KEY;
+      const apiKey = resolveInworldApiKey(req.apiKey, config?.apiKey);
       if (!apiKey) {
         throw new Error("Inworld API key missing");
       }
       return listInworldVoices({
         apiKey,
         baseUrl: req.baseUrl ?? config?.baseUrl,
+        timeoutMs: req.timeoutMs,
       });
     },
     isConfigured: ({ providerConfig }) =>
-      Boolean(readInworldProviderConfig(providerConfig).apiKey || process.env.INWORLD_API_KEY),
+      Boolean(resolveInworldApiKey(readInworldProviderConfig(providerConfig).apiKey)),
     synthesize: async (req) => {
       const config = readInworldProviderConfig(req.providerConfig);
       const overrides = readInworldOverrides(req.providerOverrides);
-      const apiKey = config.apiKey || process.env.INWORLD_API_KEY;
+      const apiKey = resolveInworldApiKey(config.apiKey);
       if (!apiKey) {
         throw new Error("Inworld API key missing");
       }
@@ -207,7 +213,7 @@ export function buildInworldSpeechProvider(): SpeechProviderPlugin {
     synthesizeTelephony: async (req) => {
       const config = readInworldProviderConfig(req.providerConfig);
       const overrides = readInworldOverrides(req.providerOverrides);
-      const apiKey = config.apiKey || process.env.INWORLD_API_KEY;
+      const apiKey = resolveInworldApiKey(config.apiKey);
       if (!apiKey) {
         throw new Error("Inworld API key missing");
       }

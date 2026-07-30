@@ -2,7 +2,7 @@
 // extension-browser vitest glob (extensions/browser/**/*.test.ts).
 import { describe, expect, it } from "vitest";
 import {
-  buildRelayWsUrl,
+  buildRelayWsProtocols,
   nearestGroupColor,
   parsePairingString,
   reconnectDelayMs,
@@ -25,9 +25,11 @@ describe("parsePairingString", () => {
     if (!parsed) {
       throw new Error("expected pairing string to parse");
     }
-    expect(buildRelayWsUrl(parsed.relayUrl, parsed.token)).toBe(
-      `ws://127.0.0.1:${port}/extension?token=${token}`,
-    );
+    expect(parsed.relayUrl).toBe(`ws://127.0.0.1:${port}/extension`);
+    expect(buildRelayWsProtocols(parsed.token)).toEqual([
+      "openclaw-extension-relay",
+      `openclaw-extension-token.${token}`,
+    ]);
   });
 
   it("rejects malformed strings", () => {
@@ -36,6 +38,16 @@ describe("parsePairingString", () => {
     expect(parsePairingString("ws://127.0.0.1/other#tok")).toBeNull();
     expect(parsePairingString("ws://127.0.0.1/extension#")).toBeNull();
     expect(parsePairingString("ws://127.0.0.1/extension")).toBeNull();
+  });
+
+  it("extracts the additive direct Gateway hint without passing it to the relay", () => {
+    const gatewayUrl = "wss://gateway.example.com/base";
+    const pairing = `ws://127.0.0.1:18797/extension?gateway=${encodeURIComponent(gatewayUrl)}#tok`;
+    expect(parsePairingString(pairing)).toEqual({
+      relayUrl: "ws://127.0.0.1:18797/extension",
+      token: "tok",
+      gatewayUrl,
+    });
   });
 });
 

@@ -354,14 +354,15 @@ enum ChatCodeHighlighter {
 
 /// Content-keyed memo so streaming re-renders reuse finished highlight work
 /// instead of re-tokenizing every completed block on each delta tick.
+/// Public so app file previews reuse the chat renderer's highlighting.
 @MainActor
-enum ChatCodeHighlightCache {
+public enum ChatCodeHighlightCache {
     private static var cache: [String: AttributedString] = [:]
     // Bounded: wholesale reset past the cap keeps long sessions flat; a miss
     // just re-tokenizes one visible block, which is cheap.
     private static let capacity = 160
 
-    static func highlighted(code: String, languageId: String?) -> AttributedString {
+    public static func highlighted(code: String, languageId: String?) -> AttributedString {
         guard ChatCodeHighlighter.language(for: languageId) != nil,
               ChatCodeHighlighter.isWithinHighlightLimits(code)
         else {

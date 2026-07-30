@@ -1,6 +1,7 @@
 // Discord plugin module implements native command model picker ui behavior.
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  resolveEffectiveAgentRuntime,
   resolveStoredModelOverride,
   serializeCommandArgs,
   type ChatCommandDefinition,
@@ -28,11 +29,13 @@ import {
 import {
   findProviderBucketLocation,
   loadDiscordModelPickerData,
-  renderDiscordModelPickerModelsView,
   resolveDiscordModelPickerPageForModel,
-  toDiscordModelPickerMessagePayload,
   type DiscordModelPickerCommandContext,
-} from "./model-picker.js";
+} from "./model-picker.state.js";
+import {
+  renderDiscordModelPickerModelsView,
+  toDiscordModelPickerMessagePayload,
+} from "./model-picker.view.js";
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 import type { SafeDiscordInteractionCall } from "./native-command-ui.types.js";
 import { resolveDiscordNativeInteractionChannelContext } from "./native-interaction-channel-context.js";
@@ -182,7 +185,12 @@ export async function resolveDiscordNativeChoiceContext(params: {
   cfg: OpenClawConfig;
   accountId: string;
   threadBindings: ThreadBindingManager;
-}): Promise<{ provider?: string; model?: string } | null> {
+}): Promise<{
+  provider?: string;
+  model?: string;
+  agentRuntime?: string;
+  agentId: string;
+} | null> {
   try {
     const resolved = await resolveDiscordModelPickerRouteState({
       interaction: params.interaction,
@@ -209,15 +217,20 @@ export async function resolveDiscordNativeChoiceContext(params: {
       sessionKey: route.sessionKey,
       defaultProvider: fallback.provider,
     });
-    if (!override?.model) {
-      return {
-        provider: fallback.provider,
-        model: fallback.model,
-      };
-    }
+    const provider = override?.provider || fallback.provider;
+    const model = override?.model || fallback.model;
     return {
-      provider: override.provider || fallback.provider,
-      model: override.model,
+      provider,
+      model,
+      agentId: route.agentId,
+      agentRuntime: resolveEffectiveAgentRuntime({
+        cfg: params.cfg,
+        provider,
+        modelId: model,
+        agentId: route.agentId,
+        sessionKey: route.sessionKey,
+        sessionEntry,
+      }),
     };
   } catch {
     return null;

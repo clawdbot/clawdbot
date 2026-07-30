@@ -7,7 +7,6 @@ import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env"
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import {
   loadConfigMock,
-  readAllowFromStoreMock as pairingReadAllowFromStoreMock,
   resetPairingSecurityMocks,
   upsertPairingRequestMock as pairingUpsertPairingRequestMock,
 } from "./pairing-security.test-harness.js";
@@ -17,7 +16,7 @@ type AnyMockFn = any;
 
 export const DEFAULT_ACCOUNT_ID = "default";
 
-export const DEFAULT_WEB_INBOX_CONFIG = {
+const DEFAULT_WEB_INBOX_CONFIG = {
   channels: {
     whatsapp: {
       // Allow all in tests by default.
@@ -30,15 +29,15 @@ export const DEFAULT_WEB_INBOX_CONFIG = {
   },
 } as const;
 export const mockLoadConfig: typeof loadConfigMock = loadConfigMock;
-export const readAllowFromStoreMock = pairingReadAllowFromStoreMock;
 export const upsertPairingRequestMock = pairingUpsertPairingRequestMock;
 
-export type MockSock = {
+type MockSock = {
   ev: EventEmitter;
   end: AnyMockFn;
   ws: { close: AnyMockFn };
   sendPresenceUpdate: AnyMockFn;
   sendMessage: AnyMockFn;
+  fetchAccountReachoutTimelock: AnyMockFn;
   readMessages: AnyMockFn;
   groupMetadata: AnyMockFn;
   groupFetchAllParticipating: AnyMockFn;
@@ -119,10 +118,6 @@ const pluginRuntimeMocks = vi.hoisted(() => {
 
 export function getRecordChannelActivityMock(): AnyMockFn {
   return channelActivityMocks.recordChannelActivity;
-}
-
-export function failNextWhatsAppPluginStateRegisterIfAbsent(error: Error) {
-  pluginRuntimeMocks.failNextRegisterIfAbsent(error);
 }
 
 vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
@@ -217,6 +212,7 @@ function createMockSock(): MockSock {
     ws: { close: vi.fn() },
     sendPresenceUpdate: createResolvedMock(),
     sendMessage: createResolvedMock(),
+    fetchAccountReachoutTimelock: vi.fn().mockResolvedValue({ isActive: false }),
     readMessages: createResolvedMock(),
     groupMetadata: vi.fn().mockImplementation(async (jid: string) => ({
       id: jid,

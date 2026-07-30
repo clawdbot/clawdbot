@@ -5,11 +5,11 @@ import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 
-export type WebProviderContract = "webSearchProviders" | "webFetchProviders";
-export type WebProviderConfigKey = "webSearch" | "webFetch";
+type WebProviderContract = "webSearchProviders" | "webFetchProviders";
+type WebProviderConfigKey = "webSearch" | "webFetch";
 
 /** Manifest-backed plugin id candidates for a web provider family. */
-export type WebProviderCandidateResolution = {
+type WebProviderCandidateResolution = {
   pluginIds: string[] | undefined;
   manifestRecords?: readonly PluginManifestRecord[];
 };

@@ -1,10 +1,12 @@
 // Docs i18n tests cover the Go module and behavior fixtures backing docs translation.
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { promisify } from "node:util";
+import { afterAll, beforeAll, describe, it } from "vitest";
 
+const execFileAsync = promisify(execFile);
 const hasGoToolchain = spawnSync("go", ["version"], { encoding: "utf8" }).status === 0;
 
 describe.skipIf(!hasGoToolchain)("docs-i18n Go module", () => {
@@ -33,20 +35,17 @@ describe.skipIf(!hasGoToolchain)("docs-i18n Go module", () => {
     }
   });
 
-  it.each([
+  it.concurrent.each([
     ["A-F", "^Test[A-F]"],
     ["G-L", "^Test[G-L]"],
     ["M-R", "^Test[M-R]"],
     ["S-Z", "^Test[S-Z]"],
-  ])("passes Go tests in the %s partition", (_partition, pattern) => {
-    const result = spawnSync(binaryPath, ["-test.count=1", `-test.run=${pattern}`], {
+  ])("passes Go tests in the %s partition", async (partition, pattern) => {
+    await execFileAsync(binaryPath, ["-test.count=1", `-test.run=${pattern}`], {
       cwd: "scripts/docs-i18n",
       encoding: "utf8",
       // The fixture verifies Codex auth never lands under the shared system temp directory.
-      env: { ...process.env, XDG_CACHE_HOME: path.join(tempDir, "cache") },
+      env: { ...process.env, XDG_CACHE_HOME: path.join(tempDir, "cache", partition) },
     });
-
-    expect(result.error).toBeUndefined();
-    expect(result.status, [result.stderr, result.stdout].filter(Boolean).join("\n")).toBe(0);
   });
 });

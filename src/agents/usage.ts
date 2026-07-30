@@ -4,10 +4,9 @@
  * output, cache, reasoning, and total token accounting fields.
  */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import type { Usage } from "../llm/types.js";
 
-export type ContextUsage =
-  | { state: "available"; promptTokens: number; totalTokens: number }
-  | { state: "unavailable" };
+export type ContextUsage = NonNullable<Usage["contextUsage"]>;
 
 /** Provider/SDK usage payload variants accepted by usage normalization. */
 export type UsageLike = {
@@ -50,6 +49,8 @@ export type UsageLike = {
     prompt_n?: number;
     predicted_n?: number;
   };
+  // Optional cost metadata carried through transcripts for downstream cost accounting.
+  cost?: Partial<Usage["cost"]>;
 };
 
 /** Normalized token counts used by runtime accounting. */
@@ -73,21 +74,7 @@ export type OpenAiChatCompletionsUsage = {
 };
 
 /** Assistant usage snapshot with token counts and computed cost buckets. */
-export type AssistantUsageSnapshot = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  contextUsage?: ContextUsage;
-  totalTokens: number;
-  cost: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    total: number;
-  };
-};
+export type AssistantUsageSnapshot = Usage;
 
 /** Build a zeroed assistant usage snapshot. */
 export function makeZeroUsageSnapshot(): AssistantUsageSnapshot {
@@ -350,14 +337,8 @@ export function deriveContextPromptTokens(params: {
 
 /** Derive the session prompt-token snapshot stored for context display. */
 export function deriveSessionTotalTokens(params: {
-  usage?: {
-    input?: number;
-    output?: number;
-    total?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    contextUsage?: ContextUsage;
-  };
+  lastCallUsage?: NormalizedUsage;
+  usage?: NormalizedUsage;
   contextTokens?: number;
   promptTokens?: number;
 }): number | undefined {
@@ -366,13 +347,14 @@ export function deriveSessionTotalTokens(params: {
     typeof promptOverride === "number" && Number.isFinite(promptOverride) && promptOverride > 0;
 
   const usage = params.usage;
-  if (!usage && !hasPromptOverride) {
+  if (!params.lastCallUsage && !usage && !hasPromptOverride) {
     return undefined;
   }
 
   // NOTE: SessionEntry.totalTokens is used as a prompt/context snapshot.
   // It intentionally excludes completion/output tokens.
   const promptTokens = deriveContextPromptTokens({
+    lastCallUsage: params.lastCallUsage,
     promptTokens: hasPromptOverride ? promptOverride : undefined,
     usage,
   });

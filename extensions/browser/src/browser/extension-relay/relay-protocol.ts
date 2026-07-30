@@ -13,8 +13,24 @@ export type RelayTabInfo = {
   active: boolean;
 };
 
+export const PAGE_SHARE_MAX_NOTE_CHARS = 2_000;
+export const PAGE_SHARE_MAX_TITLE_CHARS = 500;
+export const PAGE_SHARE_MAX_URL_CHARS = 2_000;
+
+/** Page-share payload captured by the extension on explicit user action. */
+export type PageSharePayload = {
+  url: string;
+  title: string;
+  /** Extracted readable page text (already truncated extension-side). */
+  content: string;
+  /** User-highlighted selection; preferred over content when present. */
+  selection?: string;
+  /** Short user-typed note; trusted (typed by the user in the popup). */
+  note?: string;
+};
+
 /** First message the extension sends after the WebSocket opens. */
-export type ExtensionHelloMessage = {
+type ExtensionHelloMessage = {
   type: "hello";
   userAgent: string;
   /** Full browser product string, e.g. "Chrome/144.0.7204.49". */
@@ -24,13 +40,13 @@ export type ExtensionHelloMessage = {
 };
 
 /** Full refresh of shared tabs; sent on any group membership or tab change. */
-export type ExtensionTabsMessage = {
+type ExtensionTabsMessage = {
   type: "tabs";
   tabs: RelayTabInfo[];
 };
 
 /** CDP event emitted by an attached tab (child sessions carry sessionId). */
-export type ExtensionCdpEventMessage = {
+type ExtensionCdpEventMessage = {
   type: "cdpEvent";
   tabId: number;
   sessionId?: string;
@@ -39,29 +55,35 @@ export type ExtensionCdpEventMessage = {
 };
 
 /** Successful response to a relay command (cdp/attach/createTab/...). */
-export type ExtensionResultMessage = {
+type ExtensionResultMessage = {
   type: "result";
   seq: number;
   result?: unknown;
 };
 
 /** Failed response to a relay command. */
-export type ExtensionErrorMessage = {
+type ExtensionErrorMessage = {
   type: "error";
   seq: number;
   message: string;
 };
 
 /** chrome.debugger detached outside relay control (infobar cancel, tab gone). */
-export type ExtensionDetachedMessage = {
+type ExtensionDetachedMessage = {
   type: "detached";
   tabId: number;
   reason: string;
 };
 
 /** Keepalive reply; message traffic keeps the MV3 service worker alive. */
-export type ExtensionPongMessage = {
+type ExtensionPongMessage = {
   type: "pong";
+};
+
+type ExtensionPageShareMessage = {
+  type: "pageShare";
+  requestId: number;
+  payload: PageSharePayload;
 };
 
 export type ExtensionToRelayMessage =
@@ -71,7 +93,8 @@ export type ExtensionToRelayMessage =
   | ExtensionResultMessage
   | ExtensionErrorMessage
   | ExtensionDetachedMessage
-  | ExtensionPongMessage;
+  | ExtensionPongMessage
+  | ExtensionPageShareMessage;
 
 /**
  * Command bodies sent to the extension. The bridge assigns the `seq` used to
@@ -85,18 +108,28 @@ export type RelayCommandBody =
   /** Detach chrome.debugger from a tab (tab left the group or client detached). */
   | { type: "detach"; tabId: number }
   /** Open a new tab inside the OpenClaw tab group. Result: { tabId: number }. */
-  | { type: "createTab"; url: string; background?: boolean }
+  | { type: "createTab"; url: string; background?: boolean; focus?: boolean }
   /** Close a shared tab. Result: {}. */
   | { type: "closeTab"; tabId: number }
   /** Focus a shared tab (window + tab activation). Result: {}. */
   | { type: "activateTab"; tabId: number };
 
 /** Keepalive probe; the extension answers with pong. */
-export type RelayPingMessage = {
+type RelayPingMessage = {
   type: "ping";
 };
 
-export type RelayToExtensionMessage = (RelayCommandBody & { seq: number }) | RelayPingMessage;
+export type RelayPageShareResultMessage = {
+  type: "pageShareResult";
+  requestId: number;
+  ok: boolean;
+  error?: string;
+};
+
+export type RelayToExtensionMessage =
+  | (RelayCommandBody & { seq: number })
+  | RelayPingMessage
+  | RelayPageShareResultMessage;
 
 /** Parse one extension frame; returns null for malformed input. */
 export function parseExtensionMessage(raw: string): ExtensionToRelayMessage | null {
@@ -121,6 +154,7 @@ export function parseExtensionMessage(raw: string): ExtensionToRelayMessage | nu
     case "error":
     case "detached":
     case "pong":
+    case "pageShare":
       return parsed as ExtensionToRelayMessage;
     default:
       return null;

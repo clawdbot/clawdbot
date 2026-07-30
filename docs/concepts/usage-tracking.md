@@ -8,7 +8,7 @@ title: "Usage tracking"
 
 ## What it is
 
-- Pulls provider usage/quota directly from each provider's usage endpoint. No estimated provider billing; only provider-reported plan names, quota windows, balances, spend, budgets, or account-state summaries.
+- Pulls provider usage/quota directly from each provider's usage endpoint. No estimated provider billing; only provider-reported plan names, quota windows, balances, spend, budgets, daily cost history, token/model attribution, or account-state summaries.
 - Human-readable quota-window output is normalized to `X% left`, even when a provider reports consumed quota, remaining quota, or only raw counts. Providers without resettable quota windows show provider summary text instead (for example a balance).
 - Session-level `/status` and the `session_status` tool fall back to the session's transcript log when the live session snapshot is missing token/model data. That fallback fills missing token/cache counters, can recover the active runtime model label, and prefers the larger prompt-oriented total when session metadata is missing or smaller (`totalTokensFresh !== true`, zero, or below the transcript-derived value). Nonzero live values always win over the fallback.
 
@@ -19,10 +19,20 @@ title: "Usage tracking"
 - `/usage cost` in chats: local cost summary aggregated from OpenClaw session logs.
 - CLI: `openclaw status --usage` prints a full per-provider usage/quota breakdown.
 - CLI: `openclaw models status` lists OAuth/token auth profiles and shows a usage-window summary next to each provider that has one.
-- Control UI: **Usage** shows provider plan and billing cards above OpenClaw's session-derived token and estimated-cost analysis.
+- Control UI: **Usage** shows provider plan and billing cards above OpenClaw's session-derived token and estimated-cost analysis. Anthropic and OpenAI Admin API credentials add provider-reported today, 7-day, and 30-day spend, daily trends, token totals, top models, and cost categories.
+- Control UI: the chat composer's context ring popover shows **plan usage** for subscription providers — per-window bars (5-hour, weekly, model-scoped) with reset times, the provider plan when known (for example `Max (20x)`), and extra-usage credits. Sessions billed through a plan hide per-token dollar estimates; API-billed sessions keep `Est. cost` and the cost-by-type breakdown. Claude Code CLI (`claude-cli`) setups reuse the same Anthropic subscription usage.
 - macOS menu bar: a root "Usage" section appears below Context when provider usage snapshots are available. See [Menu bar](/platforms/mac/menu-bar).
 
 `openclaw channels list` no longer prints provider usage; it points users to `openclaw status` or `openclaw models list` instead.
+
+## Anthropic and OpenAI cost history
+
+Subscription quota and API billing are different provider surfaces:
+
+- Anthropic subscription/setup credentials continue to show Claude quota windows and optional extra-usage budgets. Set `ANTHROPIC_ADMIN_KEY` or `ANTHROPIC_ADMIN_API_KEY` to show organization Usage and Cost API history instead. An Anthropic provider credential beginning with `sk-ant-admin` is detected automatically.
+- OpenAI ChatGPT/Codex OAuth continues to show plan, quota windows, and credit balance. Set `OPENAI_ADMIN_KEY` to show organization cost and completions-usage history instead; optionally set `OPENAI_PROJECT_ID` to scope it to one project. OpenClaw never sends inference credentials from `OPENAI_API_KEY`, provider config, or auth profiles to organization APIs because those keys may belong to custom endpoints.
+
+Admin credentials take precedence because they provide actual organization billing. OpenClaw does not combine these provider-reported totals with its local session estimates; the two sections intentionally answer different questions.
 
 ## Default usage footer mode
 
@@ -186,16 +196,10 @@ change:
   "aliases": { "<table>": { "<value>": "<label>" } },
   "output": {
     "sep": "", // joins surviving pieces
-    "default": [
-      /* pieces */
-    ], // fallback for any surface
+    "default": [/* pieces */], // fallback for any surface
     "surfaces": {
-      "discord": [
-        /* pieces */
-      ],
-      "telegram": [
-        /* pieces */
-      ],
+      "discord": [/* pieces */],
+      "telegram": [/* pieces */],
     },
   },
 }
@@ -242,12 +246,18 @@ Pipe a value through verbs left to right; a non-verb segment is the fallback.
 | Verb            | Effect                                | Example                           |
 | --------------- | ------------------------------------- | --------------------------------- |
 | `num`           | compact count                         | `272000 -> 272k`                  |
-| `fixed:N`       | N decimals (default 2)                | `0.0377`                          |
+| `fixed:N`       | N decimals (`0..100`, default 2)      | `0.0377`                          |
 | `dur`           | seconds to duration                   | `14820 -> 4h07m`                  |
 | `pct`           | append `%`                            | `96 -> 96%`                       |
 | `inv`           | `100 - x`                             | for used to remaining             |
 | `alias:TABLE`   | lookup in `aliases`, echo if unlisted | `medium -> 🌗`                    |
 | `meter:W:SCALE` | W-cell glyph bar over a 0-100 value   | `[⣿⣿⠐⠐⠐]` (`meter:1` = one glyph) |
+
+`fixed:N` accepts only a complete decimal integer from 0 through 100. Invalid
+precision arguments make that interpolation empty.
+
+`meter:W:SCALE` accepts only a complete decimal integer width from 1 through 100. Leave the width blank to use the default 5 (`meter::braille`); invalid
+widths make that interpolation empty.
 
 ### Piece forms
 
@@ -296,7 +306,9 @@ provider-neutral for CLI, app, and Control UI consumers.
   `user:profile` scope, falls back to a `claude.ai` web session (`CLAUDE_AI_SESSION_KEY`,
   `CLAUDE_WEB_SESSION_KEY`, or a `sessionKey=` cookie in `CLAUDE_WEB_COOKIE`) when set.
   Model-scoped limits and enabled extra-usage monthly spend/budgets are included
-  when Anthropic reports them.
+  when Anthropic reports them. An explicit Anthropic Admin API key, or an
+  auto-detected `sk-ant-admin...` provider profile, instead shows 30-day
+  organization cost and Messages API history.
 - **ClawRouter**: API key (`CLAWROUTER_API_KEY`). Shows a monthly budget window
   and typed USD budget when configured; otherwise shows aggregate spend and a
   request/token/cost summary.
@@ -323,8 +335,9 @@ provider-neutral for CLI, app, and Control UI consumers.
 - **OpenAI (Codex/ChatGPT plan)**: OAuth tokens in auth profiles (`ChatGPT-Account-Id`
   header sent when an account id is present). Shows the ChatGPT plan, resettable
   Codex windows, and a credit balance when reported. Credits remain provider
-  credits; OpenClaw does not label them as dollars. API-key-only OpenAI usage is
-  not tracked.
+  credits; OpenClaw does not label them as dollars. `OPENAI_ADMIN_KEY` adds
+  30-day organization cost and completions-usage history when the key has Usage
+  Dashboard access. Inference credentials are never forwarded to organization APIs.
 - **OpenRouter**: API key or OAuth-backed API key (`OPENROUTER_API_KEY` or an auth
   profile). Combines the account credits endpoint with the key quota endpoint,
   so account balance/spend, key budget, and daily/weekly/monthly usage appear

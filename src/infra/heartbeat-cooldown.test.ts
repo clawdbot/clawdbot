@@ -1,11 +1,6 @@
 // Covers heartbeat wake cooldown and flood-deferral decisions.
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_FLOOD_THRESHOLD,
-  DEFAULT_MIN_WAKE_SPACING_MS,
-  recordRunStart,
-  shouldDeferWake,
-} from "./heartbeat-cooldown.js";
+import { recordRunStart, shouldDeferWake } from "./heartbeat-cooldown.js";
 
 describe("shouldDeferWake", () => {
   type Input = Parameters<typeof shouldDeferWake>[0];
@@ -116,6 +111,7 @@ describe("shouldDeferWake", () => {
       expect(decide({ ...afterRun, source: "acp-spawn", reason: "acp:spawn:stream" })).toEqual({
         defer: true,
         reason: "not-due",
+        retryAtMs: 79_000,
       });
     });
 
@@ -137,7 +133,7 @@ describe("shouldDeferWake", () => {
           recentRunStarts,
           reason: "wake",
         }),
-      ).toEqual({ defer: true, reason: "flood" });
+      ).toEqual({ defer: true, reason: "flood", retryAtMs: 1_010_001 });
     });
 
     it("flood guard still applies to 'background-task' as a backstop", () => {
@@ -158,7 +154,7 @@ describe("shouldDeferWake", () => {
           recentRunStarts,
           reason: "background-task",
         }),
-      ).toEqual({ defer: true, reason: "flood" });
+      ).toEqual({ defer: true, reason: "flood", retryAtMs: 1_010_001 });
     });
 
     it("flood guard still applies to explicit wake-now bypass calls", () => {
@@ -179,7 +175,7 @@ describe("shouldDeferWake", () => {
           recentRunStarts,
           reason: "hook:wake",
         }),
-      ).toEqual({ defer: true, reason: "flood" });
+      ).toEqual({ defer: true, reason: "flood", retryAtMs: 1_010_001 });
     });
   });
 
@@ -188,6 +184,7 @@ describe("shouldDeferWake", () => {
       expect(decide({ ...afterRun, intent: "scheduled", reason: "interval" })).toEqual({
         defer: true,
         reason: "not-due",
+        retryAtMs: 100_000,
       });
     });
 
@@ -195,6 +192,7 @@ describe("shouldDeferWake", () => {
       expect(decide({ ...beforeFirstRun, intent: "scheduled", reason: "interval" })).toEqual({
         defer: true,
         reason: "not-due",
+        retryAtMs: 100_000,
       });
     });
 
@@ -211,11 +209,49 @@ describe("shouldDeferWake", () => {
     });
   });
 
+  describe("independently scheduled task intent", () => {
+    it("ignores the base heartbeat due slot but keeps the minimum spacing guard", () => {
+      expect(
+        decide({
+          ...afterRun,
+          intent: "task",
+          now: 80_000,
+          lastRunStartedAtMs: 40_000,
+          reason: "heartbeat-task:inbox",
+        }),
+      ).toEqual({ defer: false });
+      expect(
+        decide({
+          ...afterRun,
+          intent: "task",
+          now: 80_000,
+          lastRunStartedAtMs: 79_000,
+          reason: "heartbeat-task:inbox",
+        }),
+      ).toEqual({ defer: true, reason: "min-spacing", retryAtMs: 109_000 });
+    });
+
+    it("keeps the flood guard", () => {
+      const now = 1_000_000;
+      expect(
+        decide({
+          intent: "task",
+          now,
+          nextDueMs: now + 60_000,
+          lastRunStartedAtMs: now - 40_000,
+          recentRunStarts: [now - 50_000, now - 40_000, now - 30_000, now - 20_000, now - 10_000],
+          reason: "heartbeat-task:inbox",
+        }),
+      ).toEqual({ defer: true, reason: "flood", retryAtMs: 1_010_001 });
+    });
+  });
+
   describe("event-driven wakes after a prior run (regression for #75436)", () => {
     it("defers exec-event wakes when now < nextDueMs", () => {
       expect(decide({ ...afterRun, source: "exec-event", reason: "exec-event" })).toEqual({
         defer: true,
         reason: "not-due",
+        retryAtMs: 79_000,
       });
     });
 
@@ -223,6 +259,7 @@ describe("shouldDeferWake", () => {
       expect(decide({ ...afterRun, source: "cron", reason: "cron:morning-brief" })).toEqual({
         defer: true,
         reason: "not-due",
+        retryAtMs: 79_000,
       });
     });
 
@@ -230,6 +267,7 @@ describe("shouldDeferWake", () => {
       expect(decide({ ...afterRun, source: "hook", reason: "hook:wake" })).toEqual({
         defer: true,
         reason: "not-due",
+        retryAtMs: 79_000,
       });
     });
 
@@ -237,6 +275,7 @@ describe("shouldDeferWake", () => {
       expect(decide({ ...afterRun, source: "acp-spawn", reason: "acp:spawn:stream" })).toEqual({
         defer: true,
         reason: "not-due",
+        retryAtMs: 79_000,
       });
     });
 
@@ -244,6 +283,7 @@ describe("shouldDeferWake", () => {
       expect(decide({ ...afterRun, source: "other", reason: "something-new" })).toEqual({
         defer: true,
         reason: "not-due",
+        retryAtMs: 79_000,
       });
     });
   });
@@ -268,28 +308,35 @@ describe("shouldDeferWake", () => {
     });
   });
 
+  it("admits retained event work after the spacing floor even before nextDueMs", () => {
+    expect(
+      decide({
+        ...afterRun,
+        now: 80_000,
+        retainedWork: true,
+        source: "exec-event",
+        reason: "exec-event",
+      }),
+    ).toEqual({ defer: false });
+  });
+
   describe("min-spacing floor", () => {
-    it("defers with 'min-spacing' when last run started within floor (post-cooldown race)", () => {
-      // nextDueMs has just been crossed, but a run started ~10s ago — second
-      // wake landed before the schedule advanced.
+    it("defers recent runs at the default spacing floor", () => {
       expect(
         decide({
           source: "exec-event",
           now: 200_000,
           nextDueMs: 199_999,
-          lastRunStartedAtMs: 200_000 - DEFAULT_MIN_WAKE_SPACING_MS + 100,
+          lastRunStartedAtMs: 170_100,
           reason: "exec-event",
         }),
-      ).toEqual({ defer: true, reason: "min-spacing" });
-    });
-
-    it("does not defer when last run is older than min-spacing", () => {
+      ).toEqual({ defer: true, reason: "min-spacing", retryAtMs: 200_100 });
       expect(
         decide({
           source: "exec-event",
           now: 200_000,
           nextDueMs: 199_999,
-          lastRunStartedAtMs: 200_000 - DEFAULT_MIN_WAKE_SPACING_MS - 1,
+          lastRunStartedAtMs: 169_999,
           reason: "exec-event",
         }),
       ).toEqual({ defer: false });
@@ -305,7 +352,7 @@ describe("shouldDeferWake", () => {
           minSpacingMs: 1_000,
           reason: "exec-event",
         }),
-      ).toEqual({ defer: true, reason: "min-spacing" });
+      ).toEqual({ defer: true, reason: "min-spacing", retryAtMs: 200_500 });
     });
 
     it("does not gate manual wakes on min-spacing", () => {
@@ -322,58 +369,25 @@ describe("shouldDeferWake", () => {
   });
 
   describe("flood guard", () => {
-    it("defers with 'flood' when threshold runs land within window", () => {
+    it("defers at the default threshold only while starts remain in the flood window", () => {
       const now = 1_000_000;
-      const recentRunStarts = [
-        now - 50_000,
-        now - 40_000,
-        now - 30_000,
-        now - 20_000,
-        now - 10_000,
-      ];
       expect(
         decide({
           source: "exec-event",
           now,
           nextDueMs: 0,
-          lastRunStartedAtMs: now - DEFAULT_MIN_WAKE_SPACING_MS - 1,
-          recentRunStarts,
+          lastRunStartedAtMs: now - 30_001,
+          recentRunStarts: [now - 50_000, now - 40_000, now - 30_000, now - 20_000, now - 10_000],
           reason: "exec-event",
         }),
-      ).toEqual({ defer: true, reason: "flood" });
-    });
-
-    it("does not flood-defer when recent runs are spread outside window", () => {
-      const now = 1_000_000;
-      const recentRunStarts = [
-        now - 300_000,
-        now - 240_000,
-        now - 180_000,
-        now - 120_000,
-        now - 65_000, // just outside default 60s window
-      ];
+      ).toEqual({ defer: true, reason: "flood", retryAtMs: 1_010_001 });
       expect(
         decide({
           source: "exec-event",
           now,
           nextDueMs: 0,
-          lastRunStartedAtMs: now - DEFAULT_MIN_WAKE_SPACING_MS - 1,
-          recentRunStarts,
-          reason: "exec-event",
-        }),
-      ).toEqual({ defer: false });
-    });
-
-    it("does not flood-defer below threshold", () => {
-      const now = 1_000_000;
-      const recentRunStarts = [now - 30_000, now - 20_000, now - 10_000];
-      expect(
-        decide({
-          source: "exec-event",
-          now,
-          nextDueMs: 0,
-          lastRunStartedAtMs: now - DEFAULT_MIN_WAKE_SPACING_MS - 1,
-          recentRunStarts,
+          lastRunStartedAtMs: now - 30_001,
+          recentRunStarts: [now - 65_000, now - 40_000, now - 30_000, now - 20_000, now - 10_000],
           reason: "exec-event",
         }),
       ).toEqual({ defer: false });
@@ -382,13 +396,12 @@ describe("shouldDeferWake", () => {
 });
 
 describe("recordRunStart", () => {
-  it("trims buffer to threshold + 1 entries", () => {
+  it("bounds the default flood buffer", () => {
     const buffer: number[] = [];
-    for (let i = 1; i <= DEFAULT_FLOOD_THRESHOLD + 5; i++) {
-      recordRunStart(buffer, i);
+    for (let value = 1; value <= 10; value += 1) {
+      recordRunStart(buffer, value);
     }
-    expect(buffer.length).toBe(DEFAULT_FLOOD_THRESHOLD + 1);
-    expect(buffer[buffer.length - 1]).toBe(DEFAULT_FLOOD_THRESHOLD + 5);
+    expect(buffer).toEqual([5, 6, 7, 8, 9, 10]);
   });
 
   it("preserves insertion order", () => {

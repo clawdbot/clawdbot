@@ -24,15 +24,15 @@ import {
   POSIX_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
 } from "./shell-inline-command.js";
-import { POSIX_SHELL_WRAPPERS } from "./shell-wrapper-resolution.js";
+import { POSIX_PARSEABLE_SHELL_WRAPPERS } from "./shell-wrapper-resolution.js";
 
-const POSIX_SHELL_NAMES: ReadonlySet<string> = new Set(POSIX_SHELL_WRAPPERS);
+const POSIX_SHELL_NAMES: ReadonlySet<string> = new Set(POSIX_PARSEABLE_SHELL_WRAPPERS);
 
-export type ExecAuthorizationDialect = "argv" | "posix-shell" | "windows-cmd" | "powershell";
+type ExecAuthorizationDialect = "argv" | "posix-shell" | "windows-cmd" | "powershell";
 
 type ExecAuthorizationRelationship = "simple" | "pipeline";
 
-export type ExecAuthorizationTransport =
+type ExecAuthorizationTransport =
   | { kind: "direct" }
   | {
       kind: "shell-wrapper";
@@ -42,7 +42,7 @@ export type ExecAuthorizationTransport =
       inlineCommand: string;
     };
 
-export type ExecAuthorizationTrustMode = "executable" | "exact-command" | "prompt-only";
+type ExecAuthorizationTrustMode = "executable" | "exact-command" | "prompt-only";
 
 export type ExecAuthorizationCandidate = {
   sourceSegment: ExecCommandSegment;
@@ -54,7 +54,7 @@ export type ExecAuthorizationCandidate = {
   reasons: string[];
 };
 
-export type ExecAuthorizationGroup = {
+type ExecAuthorizationGroup = {
   opToNext?: ShellChainOperator | null;
   candidates: ExecAuthorizationCandidate[];
 };
@@ -110,7 +110,7 @@ const UNANALYZABLE_RISKS = new Set<CommandRisk["kind"]>([
 
 const POWERSHELL_NAMES = new Set(["powershell", "pwsh"]);
 const WINDOWS_CMD_NAMES = new Set(["cmd", "cmd.exe"]);
-export const POSITIONAL_CARRIER_BLOCKED_EXECUTABLES = new Set(["find", "xargs"]);
+const POSITIONAL_CARRIER_BLOCKED_EXECUTABLES = new Set(["find", "xargs"]);
 const SHELL_WRAPPER_PRELUDE_REASON = "shell-env-assignment";
 const UNSUPPORTED_DIRECT_SHELL_TOPOLOGY_SHAPES = new Set<CommandExplanation["shapes"][number]>([
   "background",
@@ -918,3 +918,4 @@ export async function planExecAuthorization(params: {
     operators: [],
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -43,4 +43,15 @@ describe("crypto digest helpers", () => {
       await expect(sha256File(filePath)).resolves.toBe(HOSTILE_BYTES_SHA256);
     });
   });
+
+  it("preserves stream failure context when hashing a file", async () => {
+    await withTempDir({ prefix: "openclaw-crypto-digest-" }, async (dir) => {
+      const filePath = path.join(dir, "missing.bin");
+
+      await expect(sha256File(filePath)).rejects.toMatchObject({
+        message: expect.stringContaining(`Failed to hash file ${filePath}:`),
+        cause: expect.objectContaining({ code: "ENOENT" }),
+      });
+    });
+  });
 });

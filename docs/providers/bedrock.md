@@ -51,7 +51,7 @@ Choose your preferred auth method and follow the setup steps.
                 auth: "aws-sdk",
                 models: [
                   {
-                    id: "us.anthropic.claude-opus-4-6-v1:0",
+                    id: "us.anthropic.claude-opus-4-6-v1",
                     name: "Claude Opus 4.6 (Bedrock)",
                     reasoning: true,
                     input: ["text", "image"],
@@ -65,7 +65,7 @@ Choose your preferred auth method and follow the setup steps.
           },
           agents: {
             defaults: {
-              model: { primary: "amazon-bedrock/us.anthropic.claude-opus-4-6-v1:0" },
+              model: { primary: "amazon-bedrock/us.anthropic.claude-opus-4-6-v1" },
             },
           },
         }
@@ -262,8 +262,8 @@ openclaw models list
     first in `openclaw models list` since they generally offer better capacity
     and automatic failover.
 
-    Inference profile IDs look like `us.anthropic.claude-opus-4-6-v1:0` (regional)
-    or `anthropic.claude-opus-4-6-v1:0` (global). If the backing model is already
+    Inference profile IDs look like `us.anthropic.claude-opus-4-6-v1` (regional)
+    or `anthropic.claude-opus-4-6-v1` (global). If the backing model is already
     in the discovery results, the profile inherits its full capability set;
     otherwise safe defaults apply.
 
@@ -308,9 +308,9 @@ openclaw models list
     ```
 
     Valid values are `default`, `flex`, `priority`, and `reserved`. Claude
-    Fable 5 only supports the `default` tier; OpenClaw warns and ignores
-    `flex`, `priority`, or `reserved` requested for that model. For other
-    models, not every model supports every tier -- an unsupported tier
+    Fable 5, Opus 5, and Sonnet 5 only support the `default` tier; OpenClaw warns and
+    ignores `flex`, `priority`, or `reserved` requested for those models. For
+    other models, not every model supports every tier -- an unsupported tier
     returns a Bedrock validation error, and the error message can be
     misleading (for example "The provided model identifier is invalid"
     rather than naming the tier as the problem). If you see this error, check
@@ -318,15 +318,29 @@ openclaw models list
 
   </Accordion>
 
-  <Accordion title="Claude Opus 4.7 and 4.8 temperature">
-    Bedrock rejects the `temperature` parameter for Claude Opus 4.7 and Opus
-    4.8. OpenClaw omits `temperature` automatically for any matching Bedrock
+  <Accordion title="Claude Opus 5, 4.8, and 4.7 temperature">
+    Bedrock rejects the `temperature` parameter for Claude Opus 5, Opus 4.8,
+    and Opus 4.7. OpenClaw omits `temperature` automatically for any matching Bedrock
     ref, including foundation model ids, named inference profiles, application
-    inference profiles whose underlying model resolves to Opus 4.7/4.8 via
+    inference profiles whose underlying model resolves to Opus 5/4.8/4.7 via
     `bedrock:GetInferenceProfile`, and dotted `opus-4.7`/`opus-4.8` variants
     with optional region prefixes (`us.`, `eu.`, `ap.`, `apac.`, `au.`, `jp.`,
     `global.`). No config knob is required, and the omission applies to both
     the request options object and the `inferenceConfig` payload field.
+  </Accordion>
+
+  <Accordion title="Claude Opus 5">
+    Use `amazon-bedrock/anthropic.claude-opus-5` on the Messages-API Bedrock
+    endpoint, or a regional/global inference profile such as
+    `global.anthropic.claude-opus-5` when it appears in Bedrock discovery.
+    OpenClaw applies the 1,000,000-token context window, 128,000-token output
+    limit, image input, prompt caching, refusal-safe streaming, and native
+    `xhigh`/`max` effort levels.
+
+    Adaptive thinking defaults to `high`. `/think off` disables thinking, while
+    `/think xhigh|max` keeps adaptive thinking enabled. OpenClaw omits custom
+    sampling parameters and unsupported non-default service tiers.
+
   </Accordion>
 
   <Accordion title="Claude Fable 5">
@@ -344,6 +358,36 @@ openclaw models list
     retained for up to 30 days for trust and safety. Review and configure
     [Bedrock data retention](https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html)
     before enabling the model.
+
+  </Accordion>
+
+  <Accordion title="Claude Mythos 5">
+    Claude Mythos 5 is available through Bedrock only for accounts with the
+    required limited-access approval. OpenClaw recognizes the foundation model
+    `anthropic.claude-mythos-5` and regional or global inference profiles such
+    as `us.anthropic.claude-mythos-5`.
+
+    OpenClaw applies the 1,000,000-token context window, 128,000-token output
+    limit, image input, prompt caching, refusal-safe streaming, and native
+    effort levels. Adaptive thinking is always enabled: `/think off` and
+    `/think minimal` map to `low`, while `xhigh` and `max` remain available.
+    Custom sampling and forced tool choice values are omitted.
+
+  </Accordion>
+
+  <Accordion title="Claude Sonnet 5">
+    AWS documents Sonnet 5 for both the
+    [`bedrock-runtime` and `bedrock-mantle` endpoints](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html).
+    OpenClaw recognizes the Bedrock foundation model
+    `anthropic.claude-sonnet-5` and regional or global inference profiles such
+    as `us.anthropic.claude-sonnet-5`. It applies the 1,000,000-token context
+    window, 128,000-token output limit, image input, native effort levels,
+    prompt caching, and refusal-safe streaming.
+
+    Bedrock keeps adaptive thinking enabled for Sonnet 5. OpenClaw defaults to
+    `high`; `/think off` and `/think minimal` map to `low` because this route
+    cannot disable thinking. Custom temperature and forced tool choice values
+    are omitted while adaptive thinking is active.
 
   </Accordion>
 
@@ -391,16 +435,14 @@ openclaw models list
   <Accordion title="Embeddings for memory search">
     Bedrock can also serve as the embedding provider for
     [memory search](/concepts/memory-search). This is configured separately from the
-    inference provider -- set `agents.defaults.memorySearch.provider` to `"bedrock"`:
+    inference provider -- set `memory.search.provider` to `"bedrock"`:
 
     ```json5
     {
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "bedrock",
-            model: "amazon.titan-embed-text-v2:0", // default
-          },
+      memory: {
+        search: {
+          provider: "bedrock",
+          model: "amazon.titan-embed-text-v2:0", // default
         },
       },
     }

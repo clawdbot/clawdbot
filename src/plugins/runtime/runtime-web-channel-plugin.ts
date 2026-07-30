@@ -5,6 +5,7 @@ import {
   loadWebMediaRaw as loadWebMediaRawImpl,
   optimizeImageToJpeg as optimizeImageToJpegImpl,
 } from "../../media/web-media.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugin-metadata-lifecycle.js";
 import {
   createPluginModuleLoaderCache,
   type PluginModuleLoaderCache,
@@ -22,14 +23,6 @@ type WebChannelPluginRecord = {
   source: string;
 };
 
-type WebChannelConnectionWaitOptions =
-  | {
-      timeout: "none";
-    }
-  | {
-      timeoutMs: number;
-    };
-
 type WebChannelLightRuntimeModule = {
   getActiveWebListener: (accountId?: string | null) => unknown;
   getWebAuthAgeMs: (authDir?: string) => number | null;
@@ -45,7 +38,6 @@ type WebChannelLightRuntimeModule = {
     lid: string | null;
   };
   webAuthExists: (authDir?: string) => Promise<boolean>;
-  formatError: (error: unknown) => string;
   getStatusCode: (error: unknown) => number | undefined;
   pickWebChannel: (pref: string, authDir?: string) => Promise<string>;
   resolveDefaultWebAuthDir?: () => string;
@@ -62,15 +54,12 @@ type WebChannelHeavyRuntimeModule = {
   monitorWebChannel: (...args: unknown[]) => Promise<unknown>;
   monitorWebInbox: (...args: unknown[]) => Promise<unknown>;
   startWebLoginWithQr: (...args: unknown[]) => Promise<unknown>;
-  waitForWaConnection: (sock: unknown, options: WebChannelConnectionWaitOptions) => Promise<void>;
   waitForWebLogin: (...args: unknown[]) => Promise<unknown>;
-  extractMediaPlaceholder: (...args: unknown[]) => unknown;
   extractText: (...args: unknown[]) => unknown;
 };
 
 type WebChannelRuntimeModuleKind = "heavy" | "light";
 type CachedWebChannelRuntimeModule = {
-  modulePath: string;
   module: WebChannelHeavyRuntimeModule | WebChannelLightRuntimeModule;
 };
 
@@ -80,6 +69,11 @@ const webChannelRuntimeModuleCache = new Map<
 >();
 
 const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
+
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  webChannelRuntimeModuleCache.clear();
+  moduleLoaders.clear();
+});
 
 /** Resolves the active web-channel plugin record that provides runtime APIs. */
 function resolveWebChannelPluginRecord(): WebChannelPluginRecord {
@@ -103,46 +97,41 @@ function resolveWebChannelRuntimeModulePath(
   return modulePath;
 }
 
-function loadCurrentHeavyModuleSync(): WebChannelHeavyRuntimeModule {
-  const record = resolveWebChannelPluginRecord();
-  const modulePath = resolveWebChannelRuntimeModulePath(record, "runtime-api");
-  return loadPluginBoundaryModule<WebChannelHeavyRuntimeModule>(modulePath, moduleLoaders, {
-    origin: record.origin,
-  });
-}
-
 function getCachedWebChannelRuntimeModule<T extends CachedWebChannelRuntimeModule["module"]>(
   kind: WebChannelRuntimeModuleKind,
-  modulePath: string,
   load: () => T,
 ): T {
   const cached = webChannelRuntimeModuleCache.get(kind);
-  if (cached?.modulePath === modulePath) {
+  if (cached) {
     return cached.module as T;
   }
   const loaded = load();
-  webChannelRuntimeModuleCache.set(kind, { modulePath, module: loaded });
+  webChannelRuntimeModuleCache.set(kind, { module: loaded });
   return loaded;
 }
 
 function loadWebChannelLightModule(): WebChannelLightRuntimeModule {
-  const record = resolveWebChannelPluginRecord();
-  const modulePath = resolveWebChannelRuntimeModulePath(record, "light-runtime-api");
-  return getCachedWebChannelRuntimeModule("light", modulePath, () =>
-    loadPluginBoundaryModule<WebChannelLightRuntimeModule>(modulePath, moduleLoaders, {
+  return getCachedWebChannelRuntimeModule("light", () => {
+    const record = resolveWebChannelPluginRecord();
+    const modulePath = resolveWebChannelRuntimeModulePath(record, "light-runtime-api");
+    return loadPluginBoundaryModule<WebChannelLightRuntimeModule>(modulePath, moduleLoaders, {
       origin: record.origin,
-    }),
-  );
+    });
+  });
+}
+
+function loadWebChannelHeavyModuleSync(): WebChannelHeavyRuntimeModule {
+  return getCachedWebChannelRuntimeModule("heavy", () => {
+    const record = resolveWebChannelPluginRecord();
+    const modulePath = resolveWebChannelRuntimeModulePath(record, "runtime-api");
+    return loadPluginBoundaryModule<WebChannelHeavyRuntimeModule>(modulePath, moduleLoaders, {
+      origin: record.origin,
+    });
+  });
 }
 
 async function loadWebChannelHeavyModule(): Promise<WebChannelHeavyRuntimeModule> {
-  const record = resolveWebChannelPluginRecord();
-  const modulePath = resolveWebChannelRuntimeModulePath(record, "runtime-api");
-  return getCachedWebChannelRuntimeModule("heavy", modulePath, () =>
-    loadPluginBoundaryModule<WebChannelHeavyRuntimeModule>(modulePath, moduleLoaders, {
-      origin: record.origin,
-    }),
-  );
+  return loadWebChannelHeavyModuleSync();
 }
 
 function getLightExport<K extends keyof WebChannelLightRuntimeModule>(
@@ -214,13 +203,6 @@ export function webAuthExists(
   ...args: Parameters<WebChannelLightRuntimeModule["webAuthExists"]>
 ): ReturnType<WebChannelLightRuntimeModule["webAuthExists"]> {
   return getLightExport("webAuthExists")(...args);
-}
-
-/** Formats a web-channel runtime error through the light runtime API. */
-export function formatError(
-  ...args: Parameters<WebChannelLightRuntimeModule["formatError"]>
-): ReturnType<WebChannelLightRuntimeModule["formatError"]> {
-  return getLightExport("formatError")(...args);
 }
 
 /** Reads a web-channel status code from the light runtime API. */
@@ -296,13 +278,6 @@ export async function startWebLoginWithQr(
   return (await getHeavyExport("startWebLoginWithQr"))(...args);
 }
 
-/** Waits for web-channel socket connection through the heavy runtime API. */
-export async function waitForWebChannelConnection(
-  ...args: Parameters<WebChannelHeavyRuntimeModule["waitForWaConnection"]>
-): ReturnType<WebChannelHeavyRuntimeModule["waitForWaConnection"]> {
-  return (await getHeavyExport("waitForWaConnection"))(...args);
-}
-
 /** Waits for web-channel login through the heavy runtime API. */
 export async function waitForWebLogin(
   ...args: Parameters<WebChannelHeavyRuntimeModule["waitForWebLogin"]>
@@ -310,14 +285,9 @@ export async function waitForWebLogin(
   return (await getHeavyExport("waitForWebLogin"))(...args);
 }
 
-/** Extracts media placeholders through the heavy runtime API. */
-export const extractMediaPlaceholder = (
-  ...args: Parameters<WebChannelHeavyRuntimeModule["extractMediaPlaceholder"]>
-) => loadCurrentHeavyModuleSync().extractMediaPlaceholder(...args);
-
 /** Extracts text through the heavy runtime API. */
 export const extractText = (...args: Parameters<WebChannelHeavyRuntimeModule["extractText"]>) =>
-  loadCurrentHeavyModuleSync().extractText(...args);
+  loadWebChannelHeavyModuleSync().extractText(...args);
 
 /** Returns default local media roots through the core media helper. */
 export function getDefaultLocalRoots(

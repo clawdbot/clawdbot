@@ -1,5 +1,5 @@
 // Removes installed plugins and updates plugin index records.
-import { realpathSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,9 +18,9 @@ import {
   resolvePluginNpmProjectsDir,
 } from "./install-paths.js";
 import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "./plugin-peer-link.js";
-import { defaultSlotIdForKey } from "./slots.js";
+import { defaultSlotIdForKey, resetPluginSlotsToDefaults } from "./slots.js";
 
-export type UninstallActions = {
+type UninstallActions = {
   entry: boolean;
   install: boolean;
   allowlist: boolean;
@@ -56,9 +56,7 @@ const UNINSTALL_ACTION_ORDER = [
   "directory",
 ] as const satisfies ReadonlyArray<keyof UninstallActions>;
 
-export function createEmptyUninstallActions(
-  overrides: Partial<UninstallActions> = {},
-): UninstallActions {
+function createEmptyUninstallActions(overrides: Partial<UninstallActions> = {}): UninstallActions {
   return {
     entry: false,
     install: false,
@@ -84,6 +82,26 @@ export function formatUninstallActionLabels(actions: UninstallActions): string[]
   );
 }
 
+/** Keep a staged plugin disabled until its managed directory is removed. */
+export function prepareConfigForPendingPluginDirectoryRemoval(
+  config: OpenClawConfig,
+  pluginId: string,
+): OpenClawConfig {
+  return {
+    ...config,
+    plugins: {
+      ...config.plugins,
+      entries: {
+        ...config.plugins?.entries,
+        [pluginId]: {
+          ...config.plugins?.entries?.[pluginId],
+          enabled: false,
+        },
+      },
+    },
+  };
+}
+
 function hasUninstallAction(actions: Omit<UninstallActions, "directory">): boolean {
   return Object.values(actions).some(Boolean);
 }
@@ -92,16 +110,6 @@ export function formatUninstallSlotResetPreview(slotKey: "memory" | "contextEngi
   const actionKey = slotKey === "memory" ? "memorySlot" : "contextEngineSlot";
   return `${UNINSTALL_ACTION_LABELS[actionKey]} (will reset to "${defaultSlotIdForKey(slotKey)}")`;
 }
-
-export type UninstallPluginResult =
-  | {
-      ok: true;
-      config: OpenClawConfig;
-      pluginId: string;
-      actions: UninstallActions;
-      warnings: string[];
-    }
-  | { ok: false; error: string };
 
 export type PluginUninstallDirectoryRemoval = {
   target: string;
@@ -117,7 +125,7 @@ export type PluginUninstallDirectoryRemoval = {
       };
 };
 
-export type PluginUninstallPlanResult =
+type PluginUninstallPlanResult =
   | {
       ok: true;
       config: OpenClawConfig;
@@ -127,7 +135,7 @@ export type PluginUninstallPlanResult =
     }
   | { ok: false; error: string };
 
-export function resolveUninstallDirectoryTarget(params: {
+function resolveUninstallDirectoryTarget(params: {
   pluginId: string;
   hasInstall: boolean;
   installRecord?: PluginInstallRecord;
@@ -392,7 +400,7 @@ export function removePluginFromConfig(
 
   // Remove from entries
   let entries = pluginsConfig.entries;
-  if (entries && pluginId in entries) {
+  if (entries && Object.hasOwn(entries, pluginId)) {
     const { [pluginId]: _, ...rest } = entries;
     entries = Object.keys(rest).length > 0 ? rest : undefined;
     actions.entry = true;
@@ -400,8 +408,9 @@ export function removePluginFromConfig(
 
   // Remove from installs
   let installs = pluginsConfig.installs;
-  const installRecord = installs?.[pluginId];
-  if (installs && pluginId in installs) {
+  const hasInstallRecord = Object.hasOwn(installs ?? {}, pluginId);
+  const installRecord = hasInstallRecord ? installs?.[pluginId] : undefined;
+  if (installs && hasInstallRecord) {
     const { [pluginId]: _, ...rest } = installs;
     installs = Object.keys(rest).length > 0 ? rest : undefined;
     actions.install = true;
@@ -448,19 +457,12 @@ export function removePluginFromConfig(
   // Reset slots if this plugin was selected.
   let slots = pluginsConfig.slots;
   if (slots?.memory === pluginId) {
-    slots = {
-      ...slots,
-      memory: defaultSlotIdForKey("memory"),
-    };
     actions.memorySlot = true;
   }
   if (slots?.contextEngine === pluginId) {
-    slots = {
-      ...slots,
-      contextEngine: defaultSlotIdForKey("contextEngine"),
-    };
     actions.contextEngineSlot = true;
   }
+  slots = resetPluginSlotsToDefaults(slots, pluginId);
   if (slots && Object.keys(slots).length === 0) {
     slots = undefined;
   }
@@ -498,7 +500,6 @@ export function removePluginFromConfig(
 
   // Remove channel config owned by this installed plugin.
   // Built-in channels have no install record, so keep their config untouched.
-  const hasInstallRecord = Object.hasOwn(cfg.plugins?.installs ?? {}, pluginId);
   let channels = cfg.channels as Record<string, unknown> | undefined;
   if (hasInstallRecord && channels) {
     for (const key of resolveUninstallChannelConfigKeys(pluginId, opts)) {
@@ -523,7 +524,7 @@ export function removePluginFromConfig(
   return { config, actions };
 }
 
-export type UninstallPluginParams = {
+type UninstallPluginParams = {
   config: OpenClawConfig;
   pluginId: string;
   channelIds?: string[];
@@ -539,9 +540,11 @@ export type UninstallPluginParams = {
 export function planPluginUninstall(params: UninstallPluginParams): PluginUninstallPlanResult {
   const { config, pluginId, channelIds, deleteFiles = true, extensionsDir } = params;
 
-  const hasEntry = pluginId in (config.plugins?.entries ?? {});
-  const hasInstall = pluginId in (config.plugins?.installs ?? {});
-  const installRecord = config.plugins?.installs?.[pluginId];
+  const entries = config.plugins?.entries ?? {};
+  const installs = config.plugins?.installs ?? {};
+  const hasEntry = Object.hasOwn(entries, pluginId);
+  const hasInstall = Object.hasOwn(installs, pluginId);
+  const installRecord = hasInstall ? installs[pluginId] : undefined;
   const isLinked = isLinkedPathInstallRecord(installRecord);
 
   // Remove from config
@@ -612,6 +615,15 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
   };
 }
 
+export function pluginUninstallTargetExists(target: string): boolean {
+  try {
+    lstatSync(target);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+  }
+}
+
 export async function applyPluginUninstallDirectoryRemoval(
   removal: PluginUninstallDirectoryRemoval | null,
 ): Promise<{ directoryRemoved: boolean; warnings: string[] }> {
@@ -619,11 +631,7 @@ export async function applyPluginUninstallDirectoryRemoval(
     return { directoryRemoved: false, warnings: [] };
   }
 
-  const existed =
-    (await fs
-      .access(removal.target)
-      .then(() => true)
-      .catch(() => false)) ?? false;
+  const existed = pluginUninstallTargetExists(removal.target);
   const warnings: string[] = [];
   if (!existed && removal.cleanup?.kind !== "npm") {
     return { directoryRemoved: false, warnings };
@@ -755,24 +763,4 @@ export async function applyPluginUninstallDirectoryRemoval(
       ],
     };
   }
-}
-
-export async function uninstallPlugin(
-  params: UninstallPluginParams,
-): Promise<UninstallPluginResult> {
-  const plan = planPluginUninstall(params);
-  if (!plan.ok) {
-    return plan;
-  }
-  const directory = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
-  return {
-    ok: true,
-    config: plan.config,
-    pluginId: plan.pluginId,
-    actions: {
-      ...plan.actions,
-      directory: directory.directoryRemoved,
-    },
-    warnings: directory.warnings,
-  };
 }

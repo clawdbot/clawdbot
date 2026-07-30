@@ -473,7 +473,7 @@ export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHan
   };
 }
 
-export function isUnhandledRejectionHandled(reason: unknown): boolean {
+function isUnhandledRejectionHandled(reason: unknown): boolean {
   for (const handler of handlers) {
     try {
       if (handler(reason)) {

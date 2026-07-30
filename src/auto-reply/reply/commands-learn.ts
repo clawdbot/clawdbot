@@ -15,6 +15,7 @@ import { isToolAllowedByPolicyName } from "../../agents/tool-policy-match.js";
 import { resolveConfiguredModelCompat } from "../../agents/tools-effective-inventory.js";
 import { buildLearnPrompt, DEFAULT_LEARN_REQUEST } from "../../skills/workshop/learn-prompt.js";
 import { resolveSkillWorkshopToolPolicyAvailability } from "../../skills/workshop/tool-policy-diagnostic.js";
+import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type {
   CommandHandler,
@@ -37,32 +38,6 @@ function parseLearnRequest(raw: string): string | null {
   }
   const request = commandEnd === -1 ? "" : trimmed.slice(commandEnd).trim();
   return request || DEFAULT_LEARN_REQUEST;
-}
-
-function applyLearnPromptToContext(ctx: HandleCommandsParams["ctx"], instruction: string): void {
-  const mutableCtx = ctx as HandleCommandsParams["ctx"] & {
-    Body?: string;
-    RawBody?: string;
-    CommandBody?: string;
-    BodyForCommands?: string;
-    BodyForAgent?: string;
-    BodyStripped?: string;
-  };
-  mutableCtx.Body = instruction;
-  mutableCtx.RawBody = instruction;
-  mutableCtx.CommandBody = instruction;
-  mutableCtx.BodyForCommands = instruction;
-  mutableCtx.BodyForAgent = instruction;
-  mutableCtx.BodyStripped = instruction;
-}
-
-function applyLearnPrompt(params: HandleCommandsParams, instruction: string): void {
-  applyLearnPromptToContext(params.ctx, instruction);
-  if (params.rootCtx && params.rootCtx !== params.ctx) {
-    applyLearnPromptToContext(params.rootCtx, instruction);
-  }
-  params.command.rawBodyNormalized = instruction;
-  params.command.commandBodyNormalized = instruction;
 }
 
 function workshopIsAvailable(params: HandleCommandsParams): boolean {
@@ -148,6 +123,7 @@ function workshopIsAvailable(params: HandleCommandsParams): boolean {
       senderName: params.ctx.SenderName,
       senderUsername: params.ctx.SenderUsername,
       senderE164: params.ctx.SenderE164,
+      senderIsOwner: params.command.senderIsOwner,
       agentAccountId: params.command.accountId ?? params.ctx.AccountId,
       modelProvider: params.provider,
       modelId: params.model,
@@ -188,6 +164,6 @@ export const handleLearnCommand: CommandHandler = async (params, allowTextComman
     return unavailableReply();
   }
 
-  applyLearnPrompt(params, buildLearnPrompt(request));
+  applyCommandTextToParams(params, buildLearnPrompt(request));
   return { shouldContinue: true };
 };

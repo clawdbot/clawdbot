@@ -3,7 +3,6 @@ export {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-  normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 export {
   normalizeStringEntries,

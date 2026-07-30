@@ -150,7 +150,7 @@ export function readPositiveInt(raw, fallback, label = "value") {
   return parsed;
 }
 
-export function clampKitchenSinkTimerTimeoutMs(value) {
+function clampKitchenSinkTimerTimeoutMs(value) {
   if (!Number.isFinite(value)) {
     return 1;
   }
@@ -212,7 +212,7 @@ export function resolveKitchenSinkRpcConfig(env = process.env) {
   };
 }
 
-export async function findAvailableLoopbackPort(options = {}) {
+async function findAvailableLoopbackPort(options = {}) {
   const createServer = options.createServer ?? (() => net.createServer());
   const server = createServer();
   return await new Promise((resolve, reject) => {
@@ -718,7 +718,7 @@ export function parseGatewayCliRequestFailure(error) {
   return payload?.ok === false ? createGatewayClientRequestError(payload.error) : null;
 }
 
-export function createGatewayClientRequestError(requestError) {
+function createGatewayClientRequestError(requestError) {
   if (
     requestError?.type !== "gateway_request_error" ||
     !isNonEmptyString(requestError.code) ||
@@ -1268,16 +1268,13 @@ function configureKitchenSink(env, port) {
     profile: config.tools?.profile ?? "full",
     alsoAllow: [...new Set([...(config.tools?.alsoAllow ?? []), ...EXPECTED_TOOLS])],
   };
-  config.messages = {
-    ...config.messages,
-    tts: {
-      ...config.messages?.tts,
-      provider: config.messages?.tts?.provider ?? EXPECTED_SPEECH_PROVIDERS[0],
-      providers: {
-        ...config.messages?.tts?.providers,
-        [EXPECTED_SPEECH_PROVIDERS[0]]: {
-          ...config.messages?.tts?.providers?.[EXPECTED_SPEECH_PROVIDERS[0]],
-        },
+  config.tts = {
+    ...config.tts,
+    provider: config.tts?.provider ?? EXPECTED_SPEECH_PROVIDERS[0],
+    providers: {
+      ...config.tts?.providers,
+      [EXPECTED_SPEECH_PROVIDERS[0]]: {
+        ...config.tts?.providers?.[EXPECTED_SPEECH_PROVIDERS[0]],
       },
     },
   };
@@ -1540,7 +1537,7 @@ export function extractPluginCommandNames(payload) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-export function extractToolEntries(payload) {
+function extractToolEntries(payload) {
   return (Array.isArray(payload?.groups) ? payload.groups : []).flatMap((group) =>
     Array.isArray(group?.tools) ? group.tools : [],
   );
@@ -2583,7 +2580,7 @@ export async function main() {
   let sampleTimer;
   try {
     console.log(`Kitchen Sink RPC walk using ${PLUGIN_SPEC} via ${runner.label}`);
-    await runOpenClaw(runner, ["plugins", "install", PLUGIN_SPEC], env, {
+    await runOpenClaw(runner, ["plugins", "install", PLUGIN_SPEC, "--force"], env, {
       ...commandResourceOptions,
       requireResourceSample: true,
       resourceLabel: "plugins install",

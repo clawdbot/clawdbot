@@ -38,10 +38,10 @@ import {
 export type OutboundChannel = DeliverableMessageChannel;
 
 /** Heartbeat target channel id from agent/default heartbeat config. */
-export type HeartbeatTarget = OutboundChannel;
+type HeartbeatTarget = OutboundChannel;
 
 /** Resolved outbound delivery destination and routing hints. */
-export type OutboundTarget = {
+type OutboundTarget = {
   channel: OutboundChannel;
   to?: string;
   chatType?: ChatType;
@@ -53,7 +53,7 @@ export type OutboundTarget = {
 };
 
 /** Sender identity context used when a heartbeat needs channel-compatible metadata. */
-export type HeartbeatSenderContext = {
+type HeartbeatSenderContext = {
   sender: string;
   provider?: DeliverableMessageChannel;
   allowFrom: string[];
@@ -61,6 +61,7 @@ export type HeartbeatSenderContext = {
 
 export type { OutboundTargetResolution } from "./targets-resolve-shared.js";
 export { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
 
 /** Resolves a user-supplied outbound destination through the channel plugin. */
@@ -545,9 +546,9 @@ export function resolveHeartbeatSenderContext(params: {
   const sender = resolveHeartbeatSenderId({
     allowFrom,
     deliveryTo: params.delivery.to,
-    lastTo: params.entry?.lastTo,
+    lastTo: deliveryContextFromSession(params.entry)?.to,
     provider,
   });
 
-  return { sender, provider, allowFrom };
+  return { sender: expectDefined(sender, "resolved sender"), provider, allowFrom };
 }

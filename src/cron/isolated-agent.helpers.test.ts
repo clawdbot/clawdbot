@@ -50,6 +50,31 @@ describe("resolveCronPayloadOutcome", () => {
     ]);
   });
 
+  it("lets final assistant text recover multiple plain tool warnings globally", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        {
+          text: "⚠️ 🛠️ zsh (agent) failed",
+          isError: true,
+        },
+        {
+          text: "⚠️ 🛠️ node (agent) failed",
+          isError: true,
+        },
+      ],
+      finalAssistantVisibleText: "**Daily GTM analytics**\nPostHog and revenue summary complete.",
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+    expect(result.outputText).toBe(
+      "**Daily GTM analytics**\nPostHog and revenue summary complete.",
+    );
+    expect(result.deliveryPayloads).toEqual([
+      { text: "**Daily GTM analytics**\nPostHog and revenue summary complete." },
+    ]);
+  });
+
   it("treats transient error payloads as non-fatal when a later success exists", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [

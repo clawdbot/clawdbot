@@ -148,11 +148,16 @@ class VoiceE2eService : Service() {
     runtime.setManualHost(host)
     runtime.setManualPort(port)
     runtime.setManualTls(intent.getBooleanExtra("tls", false))
-    runtime.setGatewayToken(intent.getDecodedStringExtra("token").orEmpty())
-    runtime.setGatewayBootstrapToken(intent.getDecodedStringExtra("bootstrapToken").orEmpty())
-    runtime.setGatewayPassword(intent.getDecodedStringExtra("password").orEmpty())
     runtime.setOnboardingCompleted(true)
-    runtime.connectManual()
+    runtime.connect(
+      ai.openclaw.app.gateway.GatewayEndpoint
+        .manual(host, port),
+      NodeRuntime.GatewayConnectAuth(
+        token = intent.getDecodedStringExtra("token"),
+        bootstrapToken = intent.getDecodedStringExtra("bootstrapToken"),
+        password = intent.getDecodedStringExtra("password"),
+      ),
+    )
   }
 
   private suspend fun awaitGateway(

@@ -35,7 +35,7 @@ class ChatControllerStreamReplayTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
-  fun cleanRunStreamsThenConvergesToHistoryWithoutDuplicates() =
+  fun cleanRunStreamsV3AndV4DeltasThenConvergesToHistoryWithoutDuplicates() =
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondChatSend(status = "started")
@@ -50,7 +50,8 @@ class ChatControllerStreamReplayTest {
           .single { it.role == "user" }
           .id
 
-      controller.handleGatewayEvent("chat", chatDeltaPayload("main", runId, 1, "Str", "Str"))
+      // V3 deltas carry the accumulated message without v4's deltaText field.
+      controller.handleGatewayEvent("chat", chatDeltaPayload("main", runId, 1, null, "Str"))
       assertEquals("Str", controller.streamingAssistantText.value)
       controller.handleGatewayEvent(
         "chat",
@@ -353,6 +354,93 @@ class ChatControllerStreamReplayTest {
       // The stale "main" response resolved after the switch and must be dropped.
       assertEquals(listOf("assistant" to "other transcript"), transcript(controller))
       assertEquals("session-other", controller.sessionId.value)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun loadOfCurrentLiveSessionDoesNotRefreshOrMarkHistoryLoading() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = newController(gateway)
+
+      gateway.respondWith(
+        "chat.history",
+        historyResponse(
+          sessionId = "session-main",
+          messages = listOf(ReplayHistoryMessage("assistant", "main transcript", 1_000)),
+        ),
+      )
+      controller.load("main")
+      advanceUntilIdle()
+      val historyCallsAfterLiveLoad = gateway.callCount("chat.history")
+      assertFalse(controller.historyLoading.value)
+      assertEquals(listOf("assistant" to "main transcript"), transcript(controller))
+
+      controller.load("main")
+
+      assertEquals(historyCallsAfterLiveLoad, gateway.callCount("chat.history"))
+      assertFalse(controller.historyLoading.value)
+      assertEquals(listOf("assistant" to "main transcript"), transcript(controller))
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun explicitRefreshFetchesAfterSameSessionLoadGate() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = newController(gateway)
+
+      gateway.respondWith(
+        "chat.history",
+        historyResponse(
+          sessionId = "session-main",
+          messages = listOf(ReplayHistoryMessage("assistant", "main transcript", 1_000)),
+        ),
+      )
+      controller.load("main")
+      advanceUntilIdle()
+      val historyCallsAfterLiveLoad = gateway.callCount("chat.history")
+
+      controller.load("main")
+      assertEquals(historyCallsAfterLiveLoad, gateway.callCount("chat.history"))
+
+      gateway.respondWith(
+        "chat.history",
+        historyResponse(
+          sessionId = "session-main",
+          messages = listOf(ReplayHistoryMessage("assistant", "refreshed transcript", 2_000)),
+        ),
+      )
+      controller.refresh()
+      advanceUntilIdle()
+
+      assertEquals(historyCallsAfterLiveLoad + 1, gateway.callCount("chat.history"))
+      assertEquals(listOf("assistant" to "refreshed transcript"), transcript(controller))
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun loadOfCurrentUnhealthyLiveSessionRefreshesToRecoverHealth() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = newController(gateway)
+      gateway.respond("health") { error("gateway down") }
+      gateway.respondWith(
+        "chat.history",
+        historyResponse(
+          sessionId = "session-main",
+          messages = listOf(ReplayHistoryMessage("assistant", "main transcript", 1_000)),
+        ),
+      )
+
+      controller.load("main")
+      advanceUntilIdle()
+      assertFalse(controller.healthOk.value)
+      assertFalse(controller.historyLoading.value)
+
+      controller.load("main")
+
+      assertTrue(controller.historyLoading.value)
     }
 
   @Test

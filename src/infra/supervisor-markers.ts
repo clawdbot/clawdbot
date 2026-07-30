@@ -1,5 +1,6 @@
 // Defines process supervisor marker labels for gateway diagnostics.
 import { GATEWAY_LAUNCH_AGENT_LABEL, resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
+import { isGatewayExternallySupervised } from "./gateway-supervision.js";
 
 const SUPERVISOR_HINTS = {
   launchd: ["OPENCLAW_LAUNCHD_LABEL"],
@@ -9,6 +10,7 @@ const SUPERVISOR_HINTS = {
 
 /** Environment keys that imply the gateway process is supervised by an external respawner. */
 export const SUPERVISOR_HINT_ENV_VARS = [
+  "OPENCLAW_SUPERVISOR_MODE",
   "LAUNCH_JOB_LABEL",
   "LAUNCH_JOB_NAME",
   "XPC_SERVICE_NAME",
@@ -21,8 +23,9 @@ export const SUPERVISOR_HINT_ENV_VARS = [
 
 /** Supported supervisor families that can respawn the gateway after update/restart handoff. */
 export type RespawnSupervisor = "launchd" | "systemd" | "schtasks";
+type GatewayRespawnSupervisor = RespawnSupervisor | "external";
 
-export interface DetectRespawnSupervisorOptions {
+interface DetectRespawnSupervisorOptions {
   includeLinuxOpenClawGatewayServiceMarker?: boolean;
 }
 
@@ -77,4 +80,16 @@ export function detectRespawnSupervisor(
     return marker && serviceKind === "gateway" ? "schtasks" : null;
   }
   return null;
+}
+
+/** Resolves gateway restart ownership without treating external mode as a native service manager. */
+export function detectGatewayRespawnSupervisor(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+  options: DetectRespawnSupervisorOptions = {},
+): GatewayRespawnSupervisor | null {
+  if (isGatewayExternallySupervised(env)) {
+    return "external";
+  }
+  return detectRespawnSupervisor(env, platform, options);
 }

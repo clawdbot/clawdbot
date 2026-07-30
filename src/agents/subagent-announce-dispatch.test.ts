@@ -1,26 +1,7 @@
 // Subagent announce dispatch tests lock down direct-vs-steer ordering for
 // progress updates and completion messages.
 import { describe, expect, it, vi } from "vitest";
-import {
-  mapSteerOutcomeToDeliveryResult,
-  runSubagentAnnounceDispatch,
-} from "./subagent-announce-dispatch.js";
-
-describe("mapSteerOutcomeToDeliveryResult", () => {
-  it("maps steered to delivered", () => {
-    expect(mapSteerOutcomeToDeliveryResult({ status: "steered" })).toEqual({
-      delivered: true,
-      path: "steered",
-    });
-  });
-
-  it("maps none to not-delivered", () => {
-    expect(mapSteerOutcomeToDeliveryResult({ status: "none" })).toEqual({
-      delivered: false,
-      path: "none",
-    });
-  });
-});
+import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
 
 describe("runSubagentAnnounceDispatch", () => {
   async function runNonCompletionDispatch(params: {

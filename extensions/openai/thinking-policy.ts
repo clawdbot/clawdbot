@@ -1,5 +1,11 @@
 // Openai plugin module implements thinking policy behavior.
-import type { ProviderThinkingProfile } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  ProviderDefaultThinkingPolicyContext,
+  ProviderThinkingProfile,
+} from "openclaw/plugin-sdk/plugin-entry";
+
+type OpenAIThinkingCompat = ProviderDefaultThinkingPolicyContext["compat"];
+type OpenAIThinkingApi = ProviderDefaultThinkingPolicyContext["api"];
 
 const OPENAI_THINKING_BASE_LEVELS = [
   { id: "off" },
@@ -8,6 +14,18 @@ const OPENAI_THINKING_BASE_LEVELS = [
   { id: "medium" },
   { id: "high" },
 ] as const satisfies ProviderThinkingProfile["levels"];
+
+const OPENAI_THINKING_LEVEL_ORDER = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+] as const;
+type OpenAIThinkingLevelId = (typeof OPENAI_THINKING_LEVEL_ORDER)[number];
 
 const OPENAI_CODEX_XHIGH_MODEL_IDS = [
   "gpt-5.6",
@@ -36,26 +54,108 @@ function matchesExactOrPrefix(id: string, values: readonly string[]): boolean {
   });
 }
 
+function normalizeCodexReasoningEffort(value: string): OpenAIThinkingLevelId | undefined {
+  const normalized = normalizeModelId(value);
+  if (normalized === "none") {
+    return "off";
+  }
+  return OPENAI_THINKING_LEVEL_ORDER.find((level) => level === normalized);
+}
+
+function buildAuthoritativeCodexLevels(
+  efforts: readonly string[],
+): ProviderThinkingProfile["levels"] {
+  // Omitting an effort remains a valid Codex choice even when model/list has
+  // no reasoning presets. Every other picker stop must come from that list.
+  const supported = new Set<OpenAIThinkingLevelId>(["off"]);
+  for (const effort of efforts) {
+    const level = normalizeCodexReasoningEffort(effort);
+    if (level) {
+      supported.add(level);
+    }
+  }
+  return OPENAI_THINKING_LEVEL_ORDER.filter((level) => supported.has(level)).map((id) => ({ id }));
+}
+
 function buildOpenAIThinkingProfile(params: {
   modelId: string;
   xhighModelIds: readonly string[];
+  agentRuntime?: string | null;
+  api?: OpenAIThinkingApi;
+  compat?: OpenAIThinkingCompat;
 }): ProviderThinkingProfile {
-  const supportsMax = normalizeModelId(params.modelId).startsWith("gpt-5.6");
+  const modelId = normalizeModelId(params.modelId);
+  const agentRuntime = normalizeModelId(params.agentRuntime ?? "");
+  const isBare = modelId === "gpt-5.6";
+  const isSol = modelId === "gpt-5.6-sol";
+  const isTerra = modelId === "gpt-5.6-terra";
+  const isLuna = modelId === "gpt-5.6-luna";
+  const codexEfforts = params.compat?.supportedReasoningEfforts?.map(normalizeModelId);
+  const authoritativeCodexEfforts =
+    params.api === "openai-chatgpt-responses" ? codexEfforts : undefined;
+  const fallbackCodexMax = isSol || isTerra || isLuna;
+  const codexSupportsMax = authoritativeCodexEfforts
+    ? authoritativeCodexEfforts.includes("max")
+    : fallbackCodexMax;
+  const supportsMax =
+    modelId.startsWith("gpt-5.6") && (agentRuntime !== "codex" || codexSupportsMax);
+  const fallbackCodexUltra = isSol || isTerra;
+  const codexSupportsUltra = authoritativeCodexEfforts
+    ? authoritativeCodexEfforts.includes("ultra")
+    : fallbackCodexUltra;
+  // OpenClaw owns its logical Ultra orchestration. Native Codex capabilities
+  // come only from the selected ChatGPT route's catalog metadata.
+  const supportsUltra =
+    (isBare || isSol || isTerra || isLuna) &&
+    (agentRuntime === "openclaw" ||
+      agentRuntime === "auto" ||
+      (agentRuntime === "codex" && codexSupportsUltra));
+  const defaultLevel = isSol || isTerra || isLuna ? "medium" : undefined;
+  const fallbackLevels: ProviderThinkingProfile["levels"] = [
+    ...OPENAI_THINKING_BASE_LEVELS,
+    ...(matchesExactOrPrefix(params.modelId, params.xhighModelIds)
+      ? [{ id: "xhigh" as const }]
+      : []),
+    ...(supportsMax ? [{ id: "max" as const }] : []),
+    ...(supportsUltra ? [{ id: "ultra" as const }] : []),
+  ];
+  const levels =
+    agentRuntime === "codex" && authoritativeCodexEfforts !== undefined
+      ? buildAuthoritativeCodexLevels(authoritativeCodexEfforts)
+      : fallbackLevels;
+  const supportedDefault = defaultLevel && levels.some((level) => level.id === defaultLevel);
   return {
-    levels: [
-      ...OPENAI_THINKING_BASE_LEVELS,
-      ...(matchesExactOrPrefix(params.modelId, params.xhighModelIds)
-        ? [{ id: "xhigh" as const }]
-        : []),
-      ...(supportsMax ? [{ id: "max" as const }] : []),
-    ],
+    levels,
+    ...(supportedDefault ? { defaultLevel } : {}),
   };
 }
 
-export function resolveOpenAICodexThinkingProfile(modelId: string): ProviderThinkingProfile {
-  return buildOpenAIThinkingProfile({ modelId, xhighModelIds: OPENAI_CODEX_XHIGH_MODEL_IDS });
+export function resolveOpenAICodexThinkingProfile(
+  modelId: string,
+  agentRuntime?: string | null,
+  compat?: OpenAIThinkingCompat,
+  api?: OpenAIThinkingApi,
+): ProviderThinkingProfile {
+  return buildOpenAIThinkingProfile({
+    modelId,
+    xhighModelIds: OPENAI_CODEX_XHIGH_MODEL_IDS,
+    agentRuntime,
+    api,
+    compat,
+  });
 }
 
-export function resolveUnifiedOpenAIThinkingProfile(modelId: string): ProviderThinkingProfile {
-  return buildOpenAIThinkingProfile({ modelId, xhighModelIds: OPENAI_UNIFIED_XHIGH_MODEL_IDS });
+export function resolveUnifiedOpenAIThinkingProfile(
+  modelId: string,
+  agentRuntime?: string | null,
+  compat?: OpenAIThinkingCompat,
+  api?: OpenAIThinkingApi,
+): ProviderThinkingProfile {
+  return buildOpenAIThinkingProfile({
+    modelId,
+    xhighModelIds: OPENAI_UNIFIED_XHIGH_MODEL_IDS,
+    agentRuntime,
+    api,
+    compat,
+  });
 }

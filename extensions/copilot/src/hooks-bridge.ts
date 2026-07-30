@@ -17,7 +17,7 @@ type SessionStartHandler = NonNullable<SdkSessionHooks["onSessionStart"]>;
 type SessionEndHandler = NonNullable<SdkSessionHooks["onSessionEnd"]>;
 type ErrorOccurredHandler = NonNullable<SdkSessionHooks["onErrorOccurred"]>;
 
-export interface CopilotHooksBridgeOptions {
+interface CopilotHooksBridgeOptions {
   onUserPromptSubmitted?: (submission: { prompt: string; additionalContext?: string }) => void;
 }
 

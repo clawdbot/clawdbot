@@ -11,7 +11,7 @@ type Timer = ReturnType<typeof setTimeout>;
 export type CodexAttemptTurnWatchTimeoutKind = "progress" | "completion" | "terminal";
 
 /** Structured timeout event emitted when a watch fires. */
-export type CodexAttemptTurnWatchTimeout = {
+type CodexAttemptTurnWatchTimeout = {
   kind: CodexAttemptTurnWatchTimeoutKind;
   idleMs: number;
   timeoutMs: number;
@@ -371,6 +371,12 @@ export function createCodexAttemptTurnWatchController(params: {
   }
 
   function fireTerminalIdleTimeout() {
+    // Physical-client liveness backstop. A terminal timeout retires the shared
+    // client, so it must only measure silence the client owns: while a
+    // server->client request is pending (approval/elicitation/tool call) the
+    // app-server legitimately says nothing until we respond. The response path
+    // touches activity when the request settles, so a wedged client is still
+    // caught within one terminal window after our response.
     if (
       params.isCompleted() ||
       params.isTerminalTurnNotificationQueued() ||
@@ -478,9 +484,17 @@ export function createCodexAttemptTurnWatchController(params: {
         details?: Record<string, unknown>;
         attemptProgress?: boolean;
         attemptTimeoutMs?: number;
+        receivedAtMs?: number;
       },
     ) => {
-      completionLastActivityAt = Date.now();
+      // Buffered pre-bind notifications flush later than they arrived; honor
+      // the wire timestamp but never move recorded activity backwards, or the
+      // completion/terminal idle watches could fire early after a flush.
+      const now = Date.now();
+      completionLastActivityAt = Math.max(
+        completionLastActivityAt,
+        Math.min(now, options?.receivedAtMs ?? now),
+      );
       completionLastActivityReason = `notification:${method}`;
       if (options?.details !== undefined) {
         completionLastActivityDetails = options.details;

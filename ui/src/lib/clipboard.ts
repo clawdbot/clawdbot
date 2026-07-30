@@ -41,7 +41,7 @@ function copyWithExecCommand(text: string): boolean {
       window.setTimeout(() => {
         const activeElement = document.activeElement;
         if (previouslyFocused.isConnected && (!activeElement || activeElement === document.body)) {
-          previouslyFocused.focus();
+          previouslyFocused.focus({ preventScroll: true });
         }
       }, 0);
     }

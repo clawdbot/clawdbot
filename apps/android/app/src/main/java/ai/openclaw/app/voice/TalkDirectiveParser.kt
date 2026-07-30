@@ -204,8 +204,7 @@ object TalkDirectiveParser {
     return null
   }
 
-  private fun JsonObject.valueForKey(key: String): JsonElement? =
-    this[key] ?: entries.firstOrNull { it.key.equals(key, ignoreCase = true) }?.value
+  private fun JsonObject.valueForKey(key: String): JsonElement? = this[key] ?: entries.firstOrNull { it.key.equals(key, ignoreCase = true) }?.value
 }
 
 private fun JsonElement?.asStringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content

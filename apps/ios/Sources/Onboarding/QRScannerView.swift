@@ -120,29 +120,82 @@ struct QRScannerView: UIViewControllerRepresentable {
             context.coordinator.reportError("Camera scanning is currently unavailable.")
             return UIViewController()
         }
-        let scanner = DataScannerViewController(
-            recognizedDataTypes: [.barcode(symbologies: [.qr])],
-            isHighlightingEnabled: true)
-        scanner.delegate = context.coordinator
-        do {
-            try scanner.startScanning()
-        } catch {
-            context.coordinator.reportError("Could not start QR scanner.")
-        }
-        return scanner
+        return QRScannerContainerViewController(coordinator: context.coordinator)
     }
 
     func updateUIViewController(_: UIViewController, context _: Context) {}
 
     static func dismantleUIViewController(_ uiViewController: UIViewController, coordinator: Coordinator) {
-        if let scanner = uiViewController as? DataScannerViewController {
-            scanner.stopScanning()
+        if let scanner = uiViewController as? QRScannerContainerViewController {
+            scanner.stopScannerCapture()
         }
         coordinator.parent.onDismiss()
     }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
+    }
+
+    final class QRScannerContainerViewController: UIViewController {
+        private let coordinator: Coordinator
+        private let scanner: DataScannerViewController
+        private var didStartScanning = false
+
+        init(coordinator: Coordinator) {
+            self.coordinator = coordinator
+            self.scanner = DataScannerViewController(
+                recognizedDataTypes: [.barcode(symbologies: [.qr])],
+                isHighlightingEnabled: true)
+            super.init(nibName: nil, bundle: nil)
+            self.scanner.delegate = coordinator
+        }
+
+        @available(*, unavailable)
+        required init?(coder _: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        override func viewDidLoad() {
+            super.viewDidLoad()
+            self.view.backgroundColor = .systemBackground
+            self.addChild(self.scanner)
+            self.scanner.view.translatesAutoresizingMaskIntoConstraints = false
+            self.view.addSubview(self.scanner.view)
+            NSLayoutConstraint.activate([
+                self.scanner.view.leadingAnchor.constraint(equalTo: self.view.leadingAnchor),
+                self.scanner.view.trailingAnchor.constraint(equalTo: self.view.trailingAnchor),
+                self.scanner.view.topAnchor.constraint(equalTo: self.view.topAnchor),
+                self.scanner.view.bottomAnchor.constraint(equalTo: self.view.bottomAnchor),
+            ])
+            self.scanner.didMove(toParent: self)
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            // VisionKit owns the camera session; start it only after UIKit has
+            // presented the scanner so sheet teardown cannot race construction.
+            self.startScanningIfNeeded()
+        }
+
+        override func viewWillDisappear(_ animated: Bool) {
+            self.stopScannerCapture()
+            super.viewWillDisappear(animated)
+        }
+
+        func stopScannerCapture() {
+            self.scanner.stopScanning()
+            self.didStartScanning = false
+        }
+
+        private func startScanningIfNeeded() {
+            guard !self.didStartScanning else { return }
+            do {
+                try self.scanner.startScanning()
+                self.didStartScanning = true
+            } catch {
+                self.coordinator.reportError("Could not start QR scanner.")
+            }
+        }
     }
 
     final class Coordinator: NSObject, DataScannerViewControllerDelegate {

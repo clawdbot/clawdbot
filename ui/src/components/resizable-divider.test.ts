@@ -2,11 +2,17 @@
 
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ResizableDivider } from "./resizable-divider.ts";
+import { i18n } from "../i18n/index.ts";
 import "./resizable-divider.ts";
 
 let container: HTMLDivElement;
 const originalPointerEvent = globalThis.PointerEvent;
+
+type ResizableDivider = HTMLElement & {
+  orientation: "horizontal" | "vertical";
+  splitRatio: number;
+  updateComplete: Promise<boolean>;
+};
 
 class TestPointerEvent extends MouseEvent {
   readonly pointerId: number;
@@ -128,6 +134,23 @@ describe("resizable-divider", () => {
     expect(divider.getAttribute("aria-valuenow")).toBe("65");
   });
 
+  it("localizes the fallback separator label", async () => {
+    i18n.registerTranslation("pt-BR", {
+      common: {
+        resizeSplitView: "Redimensionar visualização dividida",
+      },
+    });
+    await i18n.setLocale("pt-BR");
+    try {
+      render(html`<resizable-divider></resizable-divider>`, container);
+      const divider = container.querySelector<ResizableDivider>("resizable-divider");
+      await divider?.updateComplete;
+      expect(divider?.getAttribute("aria-label")).toBe("Redimensionar visualização dividida");
+    } finally {
+      await i18n.setLocale("en");
+    }
+  });
+
   it("resizes with keyboard arrows, Home, and End", async () => {
     const divider = await renderDivider();
     const resized = vi.fn();
@@ -157,6 +180,22 @@ describe("resizable-divider", () => {
 
     divider.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
     expectLastResizeRatio(resized, 0.7);
+  });
+
+  it("supports horizontal semantics and Up/Down keyboard resizing", async () => {
+    const divider = await renderDivider();
+    const resized = vi.fn();
+    divider.orientation = "horizontal";
+    divider.addEventListener("resize", resized);
+    await divider.updateComplete;
+
+    expect(divider.getAttribute("aria-orientation")).toBe("horizontal");
+    divider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+    expectLastResizeRatio(resized, 0.58);
+    divider.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", shiftKey: true, bubbles: true }),
+    );
+    expectLastResizeRatio(resized, 0.65);
   });
 
   it("uses pointer events for mouse, pen, and touch dragging", async () => {

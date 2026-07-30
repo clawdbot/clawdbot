@@ -28,7 +28,7 @@ export type RuntimeContextCustomMessage = {
   customType: string;
   content: string;
   display: false;
-  details: { source: "openclaw-runtime-context" };
+  details: { source: "openclaw-runtime-context"; runtimeContextCarrier: true };
   timestamp: number;
 };
 
@@ -279,7 +279,7 @@ export function buildRuntimeContextCustomMessage(
       kind: "next-turn",
     }),
     display: false,
-    details: { source: "openclaw-runtime-context" },
+    details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
     timestamp: Date.now(),
   };
 }

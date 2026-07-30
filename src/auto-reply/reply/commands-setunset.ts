@@ -3,13 +3,13 @@ import { parseSlashCommandOrNull } from "./commands-slash-parse.js";
 import { parseConfigValue } from "./config-value.js";
 
 /** Parsed set/unset action or a user-facing parse error. */
-export type SetUnsetParseResult =
+type SetUnsetParseResult =
   | { kind: "set"; path: string; value: unknown }
   | { kind: "unset"; path: string }
   | { kind: "error"; message: string };
 
 /** Parses `set path=value` or `unset path` command arguments. */
-export function parseSetUnsetCommand(params: {
+function parseSetUnsetCommand(params: {
   slash: string;
   action: "set" | "unset";
   args: string;
@@ -42,7 +42,7 @@ export function parseSetUnsetCommand(params: {
 }
 
 /** Dispatches parsed set/unset action into caller-provided callbacks. */
-export function parseSetUnsetCommandAction<T>(params: {
+function parseSetUnsetCommandAction<T>(params: {
   slash: string;
   action: string;
   args: string;

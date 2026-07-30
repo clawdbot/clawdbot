@@ -6,7 +6,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackFileReference } from "../../file-reference.js";
 import type { SlackFile, SlackMessageEvent } from "../../types.js";
-import { chooseSlackPrimaryText, resolveSlackBlocksText } from "../block-text.js";
+import { resolveSlackMessageText } from "../block-text.js";
 import { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "../media-types.js";
 import type { SlackThreadStarter } from "../thread.js";
 
@@ -89,6 +89,7 @@ export async function resolveSlackMessageContent(params: {
   mediaReadIdleTimeoutMs?: number;
   mediaTotalTimeoutMs?: number;
   abortSignal?: AbortSignal;
+  preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
 }): Promise<SlackResolvedMessageContent | null> {
   const ownFiles = filterInheritedParentFiles({
     files: params.message.files,
@@ -107,6 +108,7 @@ export async function resolveSlackMessageContent(params: {
             readIdleTimeoutMs: params.mediaReadIdleTimeoutMs,
             totalTimeoutMs: params.mediaTotalTimeoutMs,
             abortSignal: params.abortSignal,
+            preloadedMedia: params.preloadedMedia,
           }),
         )
       : Promise.resolve(null);
@@ -158,11 +160,7 @@ export async function resolveSlackMessageContent(params: {
       botAttachmentTextParts.length > 0 ? botAttachmentTextParts.join("\n") : undefined;
   }
 
-  const blocksText = resolveSlackBlocksText(params.message.blocks);
-  const primaryText = chooseSlackPrimaryText({
-    messageText: normalizeOptionalString(params.message.text),
-    blocksText,
-  });
+  const primaryText = resolveSlackMessageText(params.message);
   const textParts = [primaryText, attachmentContent?.text, botAttachmentText];
   const renderedMentions = new Map<string, string | null>();
   const resolveUserName = params.resolveUserName;

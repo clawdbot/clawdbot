@@ -26,7 +26,10 @@ const livePackageBackedLanes = new Set([
 ]);
 // These lanes intentionally build a focused source-checkout image instead of
 // consuming the shared package E2E images.
-const sourceCheckoutImageLanes = new Set(["plugin-binding-command-escape"]);
+const sourceCheckoutImageLanes = new Set([
+  "docker-selected-plugins",
+  "plugin-binding-command-escape",
+]);
 
 function readText(relativePath) {
   return fs.readFileSync(path.join(ROOT_DIR, relativePath), "utf8");
@@ -44,13 +47,43 @@ function walk(dir, out = []) {
   return out;
 }
 
+function findRelativeModuleSpecifiers(text) {
+  const specifiers = new Set();
+  for (const pattern of [
+    /(?:\bfrom\s*|\bimport\s*\()\s*["']([^"']+)["']/gu,
+    /\bimport\s*["']([^"']+)["']/gu,
+  ]) {
+    for (const match of text.matchAll(pattern)) {
+      const specifier = match[1];
+      if (specifier?.startsWith(".")) {
+        specifiers.add(specifier);
+      }
+    }
+  }
+  return [...specifiers];
+}
+
+function isPathWithin(parent, candidate) {
+  const relative = path.relative(parent, candidate);
+  return (
+    relative === "" ||
+    (!path.isAbsolute(relative) && !relative.startsWith(`..${path.sep}`) && relative !== "..")
+  );
+}
+
 for (const relativePath of walk("scripts/e2e")) {
   if (!/\.(?:sh|ts|mjs|js)$/u.test(relativePath)) {
     continue;
   }
   const text = readText(relativePath);
-  if (/from\s+["']\.\.\/\.\.\/src\//u.test(text) || /import\(["']\.\.\/\.\.\/src\//u.test(text)) {
-    errors.push(`${relativePath}: Docker E2E harness must import built dist, not ../../src`);
+  const sourceImport = findRelativeModuleSpecifiers(text).find((specifier) => {
+    const resolved = path.resolve(ROOT_DIR, path.dirname(relativePath), specifier);
+    return isPathWithin(path.join(ROOT_DIR, "src"), resolved);
+  });
+  if (sourceImport) {
+    errors.push(
+      `${relativePath}: Docker E2E harness must import package exports, not ${sourceImport}`,
+    );
   }
   if (/-v\s+["']?\$ROOT_DIR:\/app(?::|["'\s]|$)/u.test(text)) {
     errors.push(`${relativePath}: do not mount the repo root as /app in Docker E2E`);

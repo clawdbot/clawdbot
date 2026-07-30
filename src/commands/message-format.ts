@@ -341,6 +341,22 @@ export function formatMessageCliText(
       const poll = result.pollResult;
       const pollId = (poll.result as { pollId?: string } | undefined)?.pollId;
       const msgId = poll.result?.messageId ?? null;
+      if (poll.via === "direct") {
+        const directResult = poll.result
+          ? ({ ...poll.result, channel: poll.channel } satisfies OutboundDeliveryResult)
+          : undefined;
+        const lines = [
+          ok(
+            formatOutboundDeliverySummary(poll.channel, directResult, {
+              action: "Poll sent",
+            }),
+          ),
+        ];
+        if (pollId) {
+          lines.push(ok(`Poll id: ${pollId}`));
+        }
+        return lines;
+      }
       const lines = [
         ok(
           formatGatewaySummary({

@@ -3,6 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { getFinishedSession, getSession } from "../../agents/bash-process-registry.js";
 import { createExecTool } from "../../agents/bash-tools.js";
@@ -54,7 +55,7 @@ function formatSessionSnippet(sessionId: string) {
   if (trimmed.length <= 12) {
     return trimmed;
   }
-  return `${trimmed.slice(0, 8)}…`;
+  return `${truncateUtf16Safe(trimmed, 8)}…`;
 }
 
 function formatOutputBlock(text: string) {
@@ -109,7 +110,7 @@ function resolveRawCommandBody(params: {
   agentId?: string;
   isGroup: boolean;
 }) {
-  const source = params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body ?? "";
+  const source = params.ctx.commandText ?? "";
   const stripped = stripStructuralPrefixes(source);
   return params.isGroup
     ? stripMentions(stripped, params.ctx, params.cfg, params.agentId)
@@ -346,7 +347,7 @@ export async function handleBashChatCommand(params: {
   try {
     const foregroundMs = resolveForegroundMs(params.cfg);
     const shouldBackgroundImmediately = foregroundMs <= 0;
-    const timeoutSec = params.cfg.tools?.exec?.timeoutSec;
+    const timeoutSec = params.cfg.tools?.exec?.timeoutSeconds;
     const notifyOnExit = params.cfg.tools?.exec?.notifyOnExit;
     const notifyOnExitEmptySuccess = params.cfg.tools?.exec?.notifyOnExitEmptySuccess;
     const execTool = createExecTool({

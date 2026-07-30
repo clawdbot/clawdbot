@@ -12,6 +12,9 @@ const resolveControlUiLinksMock = vi.hoisted(() =>
 );
 const isSystemdUnavailableDetailMock = vi.hoisted(() => vi.fn(() => false));
 const renderSystemdUnavailableHintsMock = vi.hoisted(() => vi.fn<() => string[]>(() => []));
+const renderGatewayServiceCleanupHintsMock = vi.hoisted(() =>
+  vi.fn<(_services: unknown) => string[]>(() => []),
+);
 const isWSLEnvMock = vi.hoisted(() =>
   vi.fn((env?: Record<string, string | undefined>) => Boolean(env?.WSL_DISTRO_NAME)),
 );
@@ -35,7 +38,7 @@ vi.mock("../../gateway/control-ui-links.js", () => ({
 }));
 
 vi.mock("../../daemon/inspect.js", () => ({
-  renderGatewayServiceCleanupHints: () => [],
+  renderGatewayServiceCleanupHints: renderGatewayServiceCleanupHintsMock,
 }));
 
 vi.mock("../../daemon/restart-logs.js", () => ({
@@ -93,10 +96,39 @@ describe("printDaemonStatus", () => {
   beforeEach(() => {
     runtime.log.mockReset();
     runtime.error.mockReset();
+    renderGatewayServiceCleanupHintsMock.mockReset().mockReturnValue([]);
     resolveControlUiLinksMock.mockClear();
     isSystemdUnavailableDetailMock.mockReset().mockReturnValue(false);
     renderSystemdUnavailableHintsMock.mockReset().mockReturnValue([]);
     isWSLEnvMock.mockClear();
+  });
+
+  it("prints the applied Gateway heap limit and derivation", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          gatewayHeap: {
+            appliedMiB: 6144,
+            maxOldSpaceSizeMiB: 4096,
+            availableMemoryMiB: 8192,
+            memorySource: "constrained",
+            floorMiB: 2048,
+            capMiB: 8192,
+            headroomCapMiB: 6144,
+          },
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.log, "Gateway heap: 6144 MiB");
+    expectMockLineContains(runtime.log, "adaptive default 4096 MiB");
+    expectMockLineContains(runtime.log, "8192 MiB constrained memory");
   });
 
   it("prints stale gateway pid guidance when runtime does not own the listener", () => {
@@ -327,6 +359,14 @@ describe("printDaemonStatus", () => {
             listeners: [],
             hints: [],
           },
+          rpc: {
+            ok: false,
+            kind: "connect",
+            capability: "unknown",
+            error: "gateway closed (1000): ",
+            url: "ws://127.0.0.1:18789",
+          },
+          lastError: "failed to bind gateway socket EADDRINUSE",
           extraServices: [],
         },
         { json: false },
@@ -338,6 +378,8 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, "Gateway port 18789 is not listening");
     expectMockLineContains(runtime.error, "/Users/test/Library/Logs/openclaw/gateway.log");
     expectMockLineContains(runtime.error, "Errors: suppressed");
+    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
+    expect(errors.match(/Last gateway error:/g)).toHaveLength(1);
   });
 
   it("prints GUI-session wording before generic missing-supervision wording", () => {
@@ -395,6 +437,50 @@ describe("printDaemonStatus", () => {
 
     expectMockLineContains(runtime.log, "Connectivity probe: ok");
     expectMockLineContains(runtime.log, "Capability: write-capable");
+  });
+
+  it("prints the last gateway error when a running service fails the RPC probe", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "systemd user",
+          loaded: true,
+          loadedText: "enabled",
+          notLoadedText: "disabled",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "lan",
+          bindHost: "0.0.0.0",
+          port: 2345,
+          portSource: "service args",
+          probeUrl: "ws://127.0.0.1:2345",
+        },
+        port: {
+          port: 2345,
+          status: "busy",
+          listeners: [{ pid: 8000, ppid: 1, address: "*:2345" }],
+          hints: [],
+        },
+        rpc: {
+          ok: false,
+          kind: "connect",
+          capability: "unknown",
+          error: "gateway closed (1000): ",
+          url: "ws://127.0.0.1:2345",
+        },
+        lastError: "parse/handle error: Error: ENOSPC: no space left on device, write",
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.error, "Connectivity probe: failed");
+    expectMockLineContains(runtime.error, "gateway closed (1000):");
+    expectMockLineContains(
+      runtime.error,
+      "Last gateway error: parse/handle error: Error: ENOSPC: no space left on device, write",
+    );
   });
 
   it("prints CLI and gateway versions with readable guidance when they differ", () => {
@@ -659,7 +745,14 @@ describe("printDaemonStatus", () => {
           listeners: [],
           hints: [],
         },
-        extraServices: [{ label: "ai.openclaw.gateway.rescue", scope: "user", detail: "loaded" }],
+        extraServices: [
+          {
+            platform: "darwin",
+            label: "ai.openclaw.gateway.rescue",
+            scope: "user",
+            detail: "loaded",
+          },
+        ],
       },
       { json: false },
     );
@@ -667,6 +760,42 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, "Other gateway-like services detected");
     expectMockLineContains(runtime.log, "ai.openclaw.gateway.rescue");
     expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("renders cleanup hints for the detected extra gateway without targeting the active gateway", () => {
+    const extraService = {
+      platform: "darwin" as const,
+      label: "com.example.openclaw-gateway",
+      scope: "user" as const,
+      detail: "plist: /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+    };
+    renderGatewayServiceCleanupHintsMock.mockReturnValue([
+      "launchctl bootout gui/$UID/com.example.openclaw-gateway",
+      "rm /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+    ]);
+
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        extraServices: [extraService],
+      },
+      { json: false },
+    );
+
+    expect(renderGatewayServiceCleanupHintsMock).toHaveBeenCalledWith([extraService]);
+    expectMockLineContains(
+      runtime.log,
+      "Cleanup hint: launchctl bootout gui/$UID/com.example.openclaw-gateway",
+    );
+    expect(runtime.log.mock.calls.map(([line]) => line).join("\n")).not.toContain(
+      "ai.openclaw.gateway",
+    );
   });
 
   it("prints a terse plugin drift warning outside deep mode", () => {
@@ -1025,3 +1154,4 @@ describe("printDaemonStatus", () => {
     expect(logged).not.toContain("Gateway process is");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

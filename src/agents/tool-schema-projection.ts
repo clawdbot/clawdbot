@@ -38,9 +38,12 @@ type RuntimeToolEntryRead<TTool extends Pick<AnyAgentTool, "name" | "parameters"
 
 type ToolSchemaInspectionMode = "runtime" | "provider-normalizable";
 
-function unreadableRuntimeToolEntry(
-  toolIndex: number,
-): RuntimeToolEntryRead<Pick<AnyAgentTool, "name" | "parameters">> {
+function unreadableRuntimeToolEntry<
+  TTool extends Pick<AnyAgentTool, "name" | "parameters"> = Pick<
+    AnyAgentTool,
+    "name" | "parameters"
+  >,
+>(toolIndex: number): RuntimeToolEntryRead<TTool> {
   return {
     ok: false,
     diagnostic: {
@@ -58,14 +61,19 @@ function readRuntimeToolEntries<TTool extends Pick<AnyAgentTool, "name" | "param
   try {
     length = tools.length;
   } catch {
-    return [unreadableRuntimeToolEntry(0) as RuntimeToolEntryRead<TTool>];
+    return [unreadableRuntimeToolEntry<TTool>(0)];
   }
   const entries: RuntimeToolEntryRead<TTool>[] = [];
   for (let toolIndex = 0; toolIndex < length; toolIndex += 1) {
     try {
-      entries.push({ ok: true, tool: tools[toolIndex], toolIndex });
+      const tool = tools.at(toolIndex);
+      entries.push(
+        tool === undefined
+          ? unreadableRuntimeToolEntry<TTool>(toolIndex)
+          : { ok: true, tool, toolIndex },
+      );
     } catch {
-      entries.push(unreadableRuntimeToolEntry(toolIndex) as RuntimeToolEntryRead<TTool>);
+      entries.push(unreadableRuntimeToolEntry<TTool>(toolIndex));
     }
   }
   return entries;

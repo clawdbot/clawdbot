@@ -1,16 +1,28 @@
 // Memory Wiki tests cover markdown plugin behavior.
 import { createHash } from "node:crypto";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createWikiPageFilename,
   parseWikiMarkdown,
-  extractWikiLinks,
   renderWikiMarkdown,
   scanWikiPageSummary,
   slugifyWikiSegment,
   toWikiPageSummary,
   WIKI_RAW_SOURCE_MARKER,
 } from "./markdown.js";
+
+function scanWikiLinkTargets(markdown: string, relativePath: string): string[] {
+  const result = scanWikiPageSummary({
+    absolutePath: path.join("/tmp/wiki", relativePath),
+    relativePath,
+    raw: markdown,
+  });
+  if (result.status !== "valid") {
+    throw new Error(`Expected valid wiki page scan, got ${result.status}`);
+  }
+  return result.page.linkTargets;
+}
 
 describe("slugifyWikiSegment", () => {
   it("preserves Unicode letters and numbers in wiki slugs", () => {
@@ -506,9 +518,12 @@ describe("toWikiPageSummary", () => {
   });
 });
 
-describe("extractWikiLinks", () => {
+describe("scanWikiPageSummary linkTargets", () => {
   it("extracts real wikilinks from prose", () => {
-    const links = extractWikiLinks("See [[Alpha]] and [[Beta]] for details.", "entities/test.md");
+    const links = scanWikiLinkTargets(
+      "See [[Alpha]] and [[Beta]] for details.",
+      "entities/test.md",
+    );
     expect(links).toEqual(["Alpha", "Beta"]);
   });
 
@@ -526,13 +541,13 @@ describe("extractWikiLinks", () => {
       "val x: Future[Option[User]] = handle(req)",
       "```",
     ].join("\n");
-    const links = extractWikiLinks(markdown, "entities/test.md");
+    const links = scanWikiLinkTargets(markdown, "entities/test.md");
     // Only the real wikilink — none from fenced code blocks.
     expect(links).toEqual(["RealPage"]);
   });
 
   it("does not extract [[…]] inside inline code spans (#97945)", () => {
-    const links = extractWikiLinks(
+    const links = scanWikiLinkTargets(
       'See [[RealPage]].  Never `[[ -z "$str" ]]` extract this.',
       "entities/test.md",
     );
@@ -549,7 +564,7 @@ describe("extractWikiLinks", () => {
       "",
       "Actual link: [[ActualPage]]",
     ].join("\n");
-    const links = extractWikiLinks(markdown, "entities/test.md");
+    const links = scanWikiLinkTargets(markdown, "entities/test.md");
     expect(links).toEqual(["ActualPage"]);
   });
 
@@ -563,7 +578,7 @@ describe("extractWikiLinks", () => {
       "",
       "Valid: [[ValidTarget]]",
     ].join("\n");
-    const links = extractWikiLinks(markdown, "entities/test.md");
+    const links = scanWikiLinkTargets(markdown, "entities/test.md");
     expect(links).toEqual(["ValidTarget"]);
   });
 
@@ -580,7 +595,7 @@ describe("extractWikiLinks", () => {
       "",
       "Prose: [[RealTarget]]",
     ].join("\n");
-    const links = extractWikiLinks(markdown, "entities/test.md");
+    const links = scanWikiLinkTargets(markdown, "entities/test.md");
     expect(links).toEqual(["RealTarget"]);
   });
 
@@ -598,7 +613,7 @@ describe("extractWikiLinks", () => {
       "",
       "After fence: [[RealPage]]",
     ].join("\n");
-    const links = extractWikiLinks(markdown, "entities/test.md");
+    const links = scanWikiLinkTargets(markdown, "entities/test.md");
     expect(links).toEqual(["RealPage"]);
   });
 
@@ -634,6 +649,6 @@ describe("extractWikiLinks", () => {
       expected: ["RealPage"],
     },
   ])("handles $name without hiding prose links", ({ markdown, expected }) => {
-    expect(extractWikiLinks(markdown, "entities/test.md")).toEqual(expected);
+    expect(scanWikiLinkTargets(markdown, "entities/test.md")).toEqual(expected);
   });
 });

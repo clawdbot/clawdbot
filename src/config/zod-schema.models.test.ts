@@ -6,6 +6,7 @@ describe("ModelsConfigSchema", () => {
   it.each([
     "claude-cli",
     "azure-openai-responses",
+    "clawrouter",
     "gmi",
     "gmi-cloud",
     "gmicloud",
@@ -15,9 +16,8 @@ describe("ModelsConfigSchema", () => {
     "novita-ai",
     "novitaai",
     "ollama-cloud",
-    "qwen-cli",
-    "qwen-oauth",
-    "qwen-portal",
+    "qwen-token-plan",
+    "x-ai",
     "z.ai",
     "z-ai",
   ])("accepts bundled provider overlay for %s without baseUrl or models", (providerId) => {
@@ -30,6 +30,40 @@ describe("ModelsConfigSchema", () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it.each(["qwen-cli", "qwen-oauth", "qwen-portal"])(
+    "rejects retired Qwen Portal provider overlay %s",
+    (providerId) => {
+      const result = ModelsConfigSchema.safeParse({
+        providers: {
+          [providerId]: {
+            timeoutSeconds: 600,
+          },
+        },
+      });
+
+      expect(result.success).toBe(false);
+    },
+  );
+
+  it("requires the legacy bailian-token-plan owner to remain an exact custom provider", () => {
+    expect(
+      ModelsConfigSchema.safeParse({
+        providers: { "bailian-token-plan": { timeoutSeconds: 600 } },
+      }).success,
+    ).toBe(false);
+    expect(
+      ModelsConfigSchema.safeParse({
+        providers: {
+          "bailian-token-plan": {
+            api: "anthropic-messages",
+            baseUrl: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic",
+            models: [{ id: "qwen3.7-plus", name: "qwen3.7-plus" }],
+          },
+        },
+      }).success,
+    ).toBe(true);
   });
 
   it("accepts google-vertex as a model API from MODEL_APIS", () => {
@@ -71,6 +105,26 @@ describe("ModelsConfigSchema", () => {
                 thinkingFormat: "deepseek",
                 requiresReasoningContentOnAssistantMessages: true,
               },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts catalog-declared temperature compatibility", () => {
+    const result = ModelsConfigSchema.safeParse({
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-responses",
+          models: [
+            {
+              id: "gpt-5.6-luna",
+              name: "GPT-5.6 Luna",
+              compat: { supportsTemperature: false },
             },
           ],
         },

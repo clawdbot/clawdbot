@@ -11,9 +11,7 @@ describe("check-docs-i18n-glossary", () => {
 
   it("rejects missing diff ref values", () => {
     expect(() => parseArgs(["--base", "--head", "HEAD"])).toThrow("--base requires a value");
-    expect(() => parseArgs(["--base", "-h", "--head", "HEAD"])).toThrow(
-      "--base requires a value",
-    );
+    expect(() => parseArgs(["--base", "-h", "--head", "HEAD"])).toThrow("--base requires a value");
     expect(() => parseArgs(["--head"])).toThrow("--head requires a value");
     expect(() => parseArgs(["--head", "-h"])).toThrow("--head requires a value");
     expect(() => parseArgs(["--base", ""])).toThrow("--base requires a value");

@@ -9,7 +9,7 @@ import {
 type CapturedDiagnosticLogRecord = Extract<DiagnosticEventPayload, { type: "log.record" }>;
 
 /** Flushes asynchronous diagnostic log record delivery. */
-export async function flushDiagnosticLogRecords(): Promise<void> {
+async function flushDiagnosticLogRecords(): Promise<void> {
   // The dispatcher drains 100 records per turn. A busy shared test process can
   // have several batches ahead of the log under test, so wait for queued log
   // records instead of assuming a fixed small number of turns.

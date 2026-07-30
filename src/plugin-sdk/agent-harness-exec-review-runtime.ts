@@ -4,6 +4,8 @@
 // reaches provider/auth discovery and would create an architecture cycle through
 // the broad harness barrel.
 
+import type { ExecAutoReviewHost } from "../infra/exec-auto-review.js";
+
 export async function reviewExecRequestWithConfiguredModel(params: {
   cfg?: import("../config/types.openclaw.js").OpenClawConfig;
   agentId?: string;
@@ -35,12 +37,15 @@ export async function buildExecAutoReviewInputForShellCommand(params: {
     { commandRequiresSecurityAuditSuppressionApproval, evaluateShellAllowlistWithAuthorization },
     { detectUnsafeExecControlShellCommand },
     { detectPolicyInlineEval },
+    { isBlockedShellWrapperCommand },
   ] = await Promise.all([
     import("../infra/exec-approvals.js"),
     import("../infra/exec-control-command-guard.js"),
     import("../infra/command-analysis/policy.js"),
+    import("../infra/exec-wrapper-resolution.js"),
   ]);
   const command = params.command.trim();
+  const host: ExecAutoReviewHost = params.host;
   if (!command) {
     return undefined;
   }
@@ -58,6 +63,10 @@ export async function buildExecAutoReviewInputForShellCommand(params: {
     segment !== undefined &&
     segment.raw.trim() === command;
   if (!boundSingleCommand) {
+    return undefined;
+  }
+  // Blocked carriers and startup files execute outside the reviewed payload.
+  if (segment.resolution?.policyBlocked === true || isBlockedShellWrapperCommand(segment.argv)) {
     return undefined;
   }
   if (
@@ -79,7 +88,7 @@ export async function buildExecAutoReviewInputForShellCommand(params: {
     argv: segment.argv,
     cwd: params.cwd ?? null,
     envKeys: params.envKeys,
-    host: params.host,
+    host,
     reason: inlineEval ? "strict-inline-eval" : heredoc ? "heredoc" : "approval-required",
     analysis: {
       parsed: true,

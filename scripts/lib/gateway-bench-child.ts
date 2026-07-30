@@ -9,7 +9,7 @@ const TEARDOWN_GRACE_MS = 2_000;
 const TEARDOWN_KILL_GRACE_MS = 1_000;
 const EXIT_POLL_MS = 10;
 
-export type ChildExit = {
+type ChildExit = {
   exitCode: number | null;
   signal: string | null;
 };
@@ -18,7 +18,7 @@ export type StopChildResult = ChildExit & {
   exitedBeforeTeardown: boolean;
 };
 
-export type StopChildOptions = {
+type StopChildOptions = {
   killGraceMs?: number;
   platform?: NodeJS.Platform;
   runTaskkill?: typeof spawnSync;

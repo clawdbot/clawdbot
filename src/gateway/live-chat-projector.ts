@@ -1,3 +1,4 @@
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Gateway live chat projector.
 // Converts streaming assistant events into display-safe live chat text.
 import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
@@ -11,9 +12,10 @@ import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import {
   isSuppressedControlReplyLeadFragment,
   isSuppressedControlReplyText,
+  stripSuppressedControlReplyToken,
 } from "./control-reply-text.js";
 
-export const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
+const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
 
 /** Normalizes assistant event payloads that contain a snapshot, a delta, or both. */
 export function resolveAssistantLiveChatInput(
@@ -36,7 +38,7 @@ function capLiveAssistantBuffer(text: string): string {
   if (text.length <= MAX_LIVE_CHAT_BUFFER_CHARS) {
     return text;
   }
-  return text.slice(-MAX_LIVE_CHAT_BUFFER_CHARS);
+  return sliceUtf16Safe(text, -MAX_LIVE_CHAT_BUFFER_CHARS);
 }
 
 /** Merges assistant full-text and delta events into a capped live buffer. */
@@ -86,9 +88,13 @@ export function projectLiveAssistantBufferedText(
   if (options?.suppressLeadFragments !== false && isSuppressedControlReplyLeadFragment(rawText)) {
     return { text: rawText, suppress: true, pendingLeadFragment: true };
   }
-  const text = startsWithSilentToken(rawText, SILENT_REPLY_TOKEN)
-    ? stripLeadingSilentToken(rawText, SILENT_REPLY_TOKEN)
-    : rawText;
+  const withoutTrailingControlToken = stripSuppressedControlReplyToken(rawText);
+  if (!withoutTrailingControlToken) {
+    return { text: "", suppress: true, pendingLeadFragment: false };
+  }
+  const text = startsWithSilentToken(withoutTrailingControlToken, SILENT_REPLY_TOKEN)
+    ? stripLeadingSilentToken(withoutTrailingControlToken, SILENT_REPLY_TOKEN)
+    : withoutTrailingControlToken;
   if (!text || isSuppressedControlReplyText(text)) {
     return { text: "", suppress: true, pendingLeadFragment: false };
   }

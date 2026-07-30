@@ -12,7 +12,7 @@ import {
   resolveSelectedPublishablePluginPackages,
 } from "./lib/plugin-npm-release.ts";
 
-export function runPluginNpmReleaseCheck(argv: string[]) {
+function runPluginNpmReleaseCheck(argv: string[]) {
   const { selection, selectionMode, npmDistTag, baseRef, headRef } =
     parsePluginNpmReleaseArgs(argv);
   const changedExtensionIds =

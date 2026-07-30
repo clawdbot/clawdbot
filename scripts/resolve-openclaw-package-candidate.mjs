@@ -1120,12 +1120,17 @@ function createPinnedLookup(hostname, addresses) {
       ? records.filter((record) => record.family === opts.family)
       : records;
     const usable = filtered.length > 0 ? filtered : records;
+    // Keep custom lookup delivery asynchronous so HTTPS owns immediate socket errors.
     if (opts.all) {
-      cb(null, usable);
+      process.nextTick(() => {
+        cb(null, usable);
+      });
       return;
     }
     const chosen = usable[0];
-    cb(null, chosen.address, chosen.family);
+    process.nextTick(() => {
+      cb(null, chosen.address, chosen.family);
+    });
   };
 }
 
@@ -1476,6 +1481,7 @@ async function resolveCandidate(options) {
       await installPackageSourceDeps(packageSource.sourceDir);
       await run("node", [
         "scripts/package-openclaw-for-docker.mjs",
+        "--allow-unreleased-changelog",
         "--source-dir",
         packageSource.sourceDir,
         "--output-dir",

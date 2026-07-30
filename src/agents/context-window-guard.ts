@@ -57,6 +57,7 @@ export function resolveContextWindowInfo(params: {
   modelId: string;
   modelContextTokens?: number;
   modelContextWindow?: number;
+  agentContextTokens?: number;
   defaultTokens: number;
 }): ContextWindowInfo {
   const fromModelsConfig = (() => {
@@ -88,9 +89,11 @@ export function resolveContextWindowInfo(params: {
       ? { tokens: fromModel, source: "model" as const }
       : { tokens: defaultTokens, source: "default" as const };
 
-  const capTokens = normalizePositiveInt(params.cfg?.agents?.defaults?.contextTokens);
+  const capTokens =
+    normalizePositiveInt(params.agentContextTokens) ??
+    normalizePositiveInt(params.cfg?.agents?.defaults?.contextTokens);
   if (capTokens && capTokens < baseInfo.tokens) {
-    // Agent defaults can intentionally cap a larger model context window.
+    // Agent settings can intentionally cap a larger model context window.
     return { tokens: capTokens, referenceTokens: baseInfo.tokens, source: "agentContextTokens" };
   }
 

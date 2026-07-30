@@ -11,7 +11,7 @@ type MockQaProviderDefinitionParams = {
 };
 
 function mockModelRef(providerId: string, alternate?: boolean) {
-  return `${providerId}/${alternate ? "gpt-5.5-alt" : "gpt-5.5"}`;
+  return `${providerId}/${alternate ? "gpt-5.6-luna-alt" : "gpt-5.6-luna"}`;
 }
 
 export function createMockQaProviderDefinition(
@@ -35,9 +35,12 @@ export function createMockQaProviderDefinition(
       openaiWsWarmup: false,
     }),
     resolveTurnTimeoutMs: ({ fallbackMs }) => fallbackMs,
-    buildGatewayModels: ({ providerBaseUrl }) => ({
+    buildGatewayModels: ({ providerBaseUrl, primaryModel, alternateModel }) => ({
       mode: "replace",
-      providers: createMockProviderMap(params.mode, providerBaseUrl),
+      providers: createMockProviderMap(params.mode, providerBaseUrl, [
+        primaryModel,
+        alternateModel,
+      ]),
     }),
     mockAuthProviders: params.mockAuthProviders,
     usesModelProviderPlugins: false,

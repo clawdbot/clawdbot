@@ -56,7 +56,7 @@ export function getRecentDiagnosticPhases(limit = 8): DiagnosticPhaseSnapshot[] 
 }
 
 /** Records a completed phase in memory and emits it when diagnostics are enabled. */
-export function recordDiagnosticPhase(snapshot: DiagnosticPhaseSnapshot): void {
+function recordDiagnosticPhase(snapshot: DiagnosticPhaseSnapshot): void {
   pushRecentPhase(snapshot);
   if (!areDiagnosticsEnabledForProcess()) {
     return;

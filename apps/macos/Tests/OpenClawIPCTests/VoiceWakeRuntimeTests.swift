@@ -4,6 +4,17 @@ import Testing
 @testable import OpenClaw
 
 struct VoiceWakeRuntimeTests {
+    @Test func `cancelled runtime delay does not continue`() async {
+        let task = Task {
+            await VoiceWakeRuntimeTaskSupport.wait(nanoseconds: 60_000_000_000)
+        }
+
+        await Task.yield()
+        task.cancel()
+
+        #expect(await task.value == false)
+    }
+
     @Test func `trims after trigger keeps post speech`() {
         let triggers = ["claude", "openclaw"]
         let text = "hey Claude how are you"

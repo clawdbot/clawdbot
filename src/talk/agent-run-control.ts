@@ -37,7 +37,6 @@ export {
   type RealtimeVoiceAgentControlIntent,
   type RealtimeVoiceAgentControlProviderResult,
   type RealtimeVoiceAgentControlResult,
-  type RealtimeVoiceAgentRunActivity,
 } from "./agent-run-control-shared.js";
 
 type RealtimeVoiceAgentControlDeps = {
@@ -45,7 +44,11 @@ type RealtimeVoiceAgentControlDeps = {
   queueEmbeddedAgentMessageWithOutcomeAsync: (
     sessionId: string,
     text: string,
-    options?: { steeringMode?: "all"; debounceMs?: number },
+    options?: {
+      steeringMode?: "all";
+      debounceMs?: number;
+      taskSuggestionDeliveryMode?: undefined;
+    },
   ) => Promise<EmbeddedAgentQueueMessageOutcome>;
   getDiagnosticSessionActivitySnapshot: (params: {
     sessionId?: string;
@@ -157,6 +160,9 @@ export async function controlRealtimeVoiceAgentRun(
   const outcome = await deps.queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, steerText, {
     steeringMode: "all",
     debounceMs: 0,
+    // Talk cannot present task suggestions, so spoken user input must not inherit
+    // a capable TUI run's model-facing task tools.
+    taskSuggestionDeliveryMode: undefined,
   });
   if (!outcome.queued) {
     return {

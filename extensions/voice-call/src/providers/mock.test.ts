@@ -85,6 +85,12 @@ describe("MockProvider", () => {
               transcript: "",
               isFinal: false,
             },
+            {
+              id: "evt-assistant-speech",
+              type: "call.assistant-speech",
+              callId: "call-4",
+              transcript: "",
+            },
           ],
         }),
       ),
@@ -120,6 +126,14 @@ describe("MockProvider", () => {
         transcript: "",
         isFinal: false,
         confidence: undefined,
+      },
+      {
+        id: "evt-assistant-speech",
+        type: "call.assistant-speech",
+        callId: "call-4",
+        providerCallId: undefined,
+        timestamp: expect.any(Number),
+        transcript: "",
       },
     ]);
     expect(endedTimestamp).toBeGreaterThanOrEqual(beforeParse);

@@ -1,18 +1,6 @@
 // Defines cron scheduling configuration types.
 import type { SecretInput } from "./types.secrets.js";
 
-/** Error types that can trigger retries for one-shot jobs. */
-export type CronRetryOn = "rate_limit" | "overloaded" | "network" | "timeout" | "server_error";
-
-export type CronRetryConfig = {
-  /** Max retries for transient errors before permanent disable (default: 3). */
-  maxAttempts?: number;
-  /** Backoff delays in ms for each retry attempt (default: [30000, 60000, 300000]). */
-  backoffMs?: number[];
-  /** Error types to retry; omit to retry all transient types. */
-  retryOn?: CronRetryOn[];
-};
-
 export type CronFailureAlertConfig = {
   enabled?: boolean;
   after?: number;
@@ -20,6 +8,8 @@ export type CronFailureAlertConfig = {
   includeSkipped?: boolean;
   mode?: "announce" | "webhook";
   accountId?: string;
+  channel?: string;
+  to?: string;
 };
 
 export type CronFailureDestinationConfig = {
@@ -31,17 +21,9 @@ export type CronFailureDestinationConfig = {
 
 export type CronConfig = {
   enabled?: boolean;
-  store?: string;
-  maxConcurrentRuns?: number;
-  /** Override default retry policy for one-shot jobs on transient errors. */
-  retry?: CronRetryConfig;
-  /**
-   * @deprecated Legacy fallback webhook URL used by doctor to migrate stored
-   * jobs with notify=true. Runtime delivery uses per-job delivery.mode="webhook"
-   * with delivery.to, or delivery.completionDestination when preserving announce
-   * delivery.
-   */
-  webhook?: string;
+  triggers?: {
+    enabled?: boolean;
+  };
   /** Bearer token for cron webhook POST delivery. */
   webhookToken?: SecretInput;
   /**
@@ -50,16 +32,5 @@ export type CronConfig = {
    * Default: "24h".
    */
   sessionRetention?: string | false;
-  /**
-   * Run-history pruning controls. History is stored in SQLite; maxBytes is
-   * retained for compatibility with older file-backed run logs.
-   * Defaults: `maxBytes=2_000_000`, `keepLines=2000`.
-   */
-  runLog?: {
-    maxBytes?: number | string;
-    keepLines?: number;
-  };
   failureAlert?: CronFailureAlertConfig;
-  /** Default destination for failure notifications across all cron jobs. */
-  failureDestination?: CronFailureDestinationConfig;
 };

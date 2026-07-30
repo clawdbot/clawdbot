@@ -20,7 +20,7 @@ const RAW_TASK_MUTATORS = [
 
 const RAW_TASK_MUTATOR_ALLOWED_CALLERS = new Set([
   "tasks/task-executor.ts",
-  "tasks/task-registry.ts",
+  "tasks/task-registry-record-api.ts",
   "tasks/task-registry.maintenance.ts",
 ]);
 
@@ -29,11 +29,13 @@ const TASK_FLOW_REGISTRY_ALLOWED_IMPORTERS = new Set([
   "tasks/task-flow-registry.audit.ts",
   "tasks/task-flow-registry.maintenance.ts",
   "tasks/task-flow-runtime-internal.ts",
+  "tasks/task-flow-registry.test-support.ts",
 ]);
 
 const TASK_REGISTRY_ALLOWED_IMPORTERS = new Set([
   "tasks/runtime-internal.ts",
   "tasks/task-owner-access.ts",
+  "tasks/task-registry.test-support.ts",
   "tasks/task-status-access.ts",
 ]);
 
@@ -49,6 +51,14 @@ beforeAll(async () => {
 });
 
 describe("task boundaries", () => {
+  it("ignores test entries and split utility modules", () => {
+    expect(
+      sources.filter(({ relative }) =>
+        /\.(?:test|test-harness|test-utils|e2e-harness)\.ts$/u.test(relative),
+      ),
+    ).toStrictEqual([]);
+  });
+
   it("keeps raw task lifecycle mutators behind task internals", () => {
     const offenders: string[] = [];
     for (const { relative, source } of sources) {

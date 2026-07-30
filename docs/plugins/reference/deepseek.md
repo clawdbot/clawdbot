@@ -16,7 +16,7 @@ Adds DeepSeek model provider support to OpenClaw.
 
 ## Surface
 
-providers: deepseek
+providers: `deepseek`; contracts: `usageProviders`
 
 ## Related docs
 

@@ -8,11 +8,15 @@ import {
   imageFileExtensionForMimeType,
   toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
   assertOkOrThrowProviderError,
+  createProviderOperationDeadline,
   readProviderJsonResponse,
+  resolveProviderOperationTimeoutMs,
+  type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
@@ -125,6 +129,7 @@ const GROK_IMAGINE_SUPPORTED_RESOLUTIONS: readonly ("1K" | "2K" | "4K")[] = ["1K
 const KREA_CREATIVITY_LEVELS = ["raw", "low", "medium", "high"] as const;
 
 const FAL_IMAGE_MALFORMED_RESPONSE = "fal image generation response malformed";
+const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
 const DEFAULT_GENERATED_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 
 type FalImageSize = string | { width: number; height: number };
@@ -151,8 +156,14 @@ type FalNetworkPolicy = {
 
 let falFetchGuard = fetchWithSsrFGuard;
 
-export function setFalFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
+function setFalFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
   falFetchGuard = impl ?? fetchWithSsrFGuard;
+}
+
+if (process.env.VITEST === "true") {
+  const key = Symbol.for("openclaw.falTestApi");
+  const api = (Reflect.get(globalThis, key) as Record<string, unknown> | undefined) ?? {};
+  Reflect.set(globalThis, key, { ...api, setImageFetchGuard: setFalFetchGuardForTesting });
 }
 
 function matchesTrustedHostSuffix(hostname: string, trustedSuffix: string): boolean {
@@ -579,18 +590,9 @@ function formatFalReferenceLimitError(
   return `${schema.referenceLimitLabel} supports at most ${limit} ${noun} (requested ${inputImageCount})`;
 }
 
-function resolveGeneratedImageMaxBytes(req: {
-  cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
-}): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_IMAGE_MAX_BYTES;
-}
-
 async function fetchImageBuffer(
   url: string,
+  deadline: ProviderOperationDeadline,
   networkPolicy?: FalNetworkPolicy,
   maxBytes = DEFAULT_GENERATED_IMAGE_MAX_BYTES,
 ): Promise<{ buffer: Buffer; mimeType: string }> {
@@ -609,6 +611,10 @@ async function fetchImageBuffer(
   })();
   const { response, release } = await falFetchGuard({
     url,
+    timeoutMs: resolveProviderOperationTimeoutMs({
+      deadline,
+      defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
+    }),
     policy: downloadPolicy,
     auditContext: "fal-image-download",
   });
@@ -705,6 +711,10 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       },
     },
     async generateImage(req) {
+      const deadline = createProviderOperationDeadline({
+        timeoutMs: req.timeoutMs,
+        label: "fal image generation",
+      });
       const inputImageCount = req.inputImages?.length ?? 0;
       const hasInputImages = inputImageCount > 0;
       const requestedModel = req.model?.trim() || DEFAULT_FAL_IMAGE_MODEL;
@@ -736,7 +746,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         await resolveFalHttpRequestConfig({ req, capability: "image" });
       const networkPolicy = resolveFalNetworkPolicy({ baseUrl, allowPrivateNetwork });
-      const maxImageBytes = resolveGeneratedImageMaxBytes(req);
+      const maxImageBytes = resolveGeneratedMediaMaxBytes(req.cfg, "image");
       const requestBody: Record<string, unknown> = {
         prompt: req.prompt,
         ...(schema.supportsCount ? { num_images: req.count ?? 1 } : {}),
@@ -774,7 +784,13 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
           headers,
           body: JSON.stringify(requestBody),
         },
-        timeoutMs: req.timeoutMs,
+        timeoutMs:
+          deadline.timeoutMs === undefined
+            ? undefined
+            : resolveProviderOperationTimeoutMs({
+                deadline,
+                defaultTimeoutMs: deadline.timeoutMs,
+              }),
         policy: networkPolicy.apiPolicy,
         dispatcherPolicy,
         auditContext: "fal-image-generate",
@@ -792,7 +808,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
           if (!url) {
             throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
           }
-          const downloaded = await fetchImageBuffer(url, networkPolicy, maxImageBytes);
+          const downloaded = await fetchImageBuffer(url, deadline, networkPolicy, maxImageBytes);
           imageIndex += 1;
           images.push({
             buffer: downloaded.buffer,
@@ -818,3 +834,4 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

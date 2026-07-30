@@ -2,7 +2,7 @@
 import { t } from "../../i18n/index.ts";
 import type { SessionsUsageResult } from "./data-types.ts";
 
-export type UsageCacheStatus = SessionsUsageResult["cacheStatus"];
+type UsageCacheStatus = SessionsUsageResult["cacheStatus"];
 
 export function mergeUsageCacheStatus(
   sessionsStatus: UsageCacheStatus,

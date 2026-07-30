@@ -12,13 +12,38 @@ public struct AnyCodable: Codable, @unchecked Sendable, Hashable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        if let boolVal = try? container.decode(Bool.self) { self.value = boolVal; return }
-        if let intVal = try? container.decode(Int.self) { self.value = intVal; return }
-        if let doubleVal = try? container.decode(Double.self) { self.value = doubleVal; return }
-        if let stringVal = try? container.decode(String.self) { self.value = stringVal; return }
-        if container.decodeNil() { self.value = NSNull(); return }
-        if let dict = try? container.decode([String: AnyCodable].self) { self.value = dict; return }
-        if let array = try? container.decode([AnyCodable].self) { self.value = array; return }
+        if let boolVal = try? container.decode(Bool.self) {
+            self.value = boolVal
+            return
+        }
+        if let intVal = try? container.decode(Int.self) {
+            self.value = intVal
+            return
+        }
+        if let int64Val = try? container.decode(Int64.self) {
+            self.value = int64Val
+            return
+        }
+        if let doubleVal = try? container.decode(Double.self) {
+            self.value = doubleVal
+            return
+        }
+        if let stringVal = try? container.decode(String.self) {
+            self.value = stringVal
+            return
+        }
+        if container.decodeNil() {
+            self.value = NSNull()
+            return
+        }
+        if let dict = try? container.decode([String: AnyCodable].self) {
+            self.value = dict
+            return
+        }
+        if let array = try? container.decode([AnyCodable].self) {
+            self.value = array
+            return
+        }
         throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unsupported type")
     }
 
@@ -27,6 +52,7 @@ public struct AnyCodable: Codable, @unchecked Sendable, Hashable {
         switch self.value {
         case let boolVal as Bool: try container.encode(boolVal)
         case let intVal as Int: try container.encode(intVal)
+        case let int64Val as Int64: try container.encode(int64Val)
         case let doubleVal as Double: try container.encode(doubleVal)
         case let stringVal as String: try container.encode(stringVal)
         case let number as NSNumber where CFGetTypeID(number) == CFBooleanGetTypeID():
@@ -66,6 +92,9 @@ public struct AnyCodable: Codable, @unchecked Sendable, Hashable {
         switch (lhs.value, rhs.value) {
         case let (l as Bool, r as Bool): l == r
         case let (l as Int, r as Int): l == r
+        case let (l as Int64, r as Int64): l == r
+        case let (l as Int, r as Int64): Int64(l) == r
+        case let (l as Int64, r as Int): l == Int64(r)
         case let (l as Double, r as Double): l == r
         case let (l as String, r as String): l == r
         case (_ as NSNull, _ as NSNull): true
@@ -79,13 +108,20 @@ public struct AnyCodable: Codable, @unchecked Sendable, Hashable {
     public func hash(into hasher: inout Hasher) {
         switch self.value {
         case let v as Bool:
-            hasher.combine(2); hasher.combine(v)
+            hasher.combine(2)
+            hasher.combine(v)
         case let v as Int:
-            hasher.combine(0); hasher.combine(v)
+            hasher.combine(0)
+            hasher.combine(Int64(v))
+        case let v as Int64:
+            hasher.combine(0)
+            hasher.combine(v)
         case let v as Double:
-            hasher.combine(1); hasher.combine(v)
+            hasher.combine(1)
+            hasher.combine(v)
         case let v as String:
-            hasher.combine(3); hasher.combine(v)
+            hasher.combine(3)
+            hasher.combine(v)
         case _ as NSNull:
             hasher.combine(4)
         case let v as [String: AnyCodable]:

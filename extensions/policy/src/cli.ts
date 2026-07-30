@@ -12,6 +12,7 @@ import {
   type HealthCheckContext,
   type HealthFinding,
 } from "openclaw/plugin-sdk/health";
+import { defaultRuntime as cliRuntime } from "openclaw/plugin-sdk/runtime";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./doctor/fix-metadata.js";
 import { POLICY_CHECK_IDS, evaluatePolicy } from "./doctor/register.js";
 import {
@@ -20,24 +21,24 @@ import {
 } from "./policy-conformance.js";
 import { createPolicyAttestation } from "./policy-state.js";
 
-export type PolicyCommandRuntime = {
+type PolicyCommandRuntime = {
   writeStdout(value: string): void;
   error(value: string): void;
   sleep?(ms: number): Promise<void>;
 };
 
-export interface PolicyCheckOptions {
+interface PolicyCheckOptions {
   readonly json?: boolean;
   readonly severityMin?: string;
   readonly cwd?: string;
 }
 
-export interface PolicyWatchOptions extends PolicyCheckOptions {
+interface PolicyWatchOptions extends PolicyCheckOptions {
   readonly intervalMs?: string | number;
   readonly once?: boolean;
 }
 
-export interface PolicyCompareOptions {
+interface PolicyCompareOptions {
   readonly baseline?: string;
   readonly policy?: string;
   readonly json?: boolean;
@@ -60,7 +61,7 @@ const defaultRuntime: PolicyCommandRuntime = {
     process.stdout.write(value);
   },
   error(value) {
-    process.stderr.write(`${value}\n`);
+    cliRuntime.error(value);
   },
   sleep(ms) {
     return sleep(ms);
@@ -101,7 +102,7 @@ export function registerPolicyCli(program: Command): void {
     });
 }
 
-export async function policyCompareCommand(
+async function policyCompareCommand(
   options: PolicyCompareOptions,
   runtime: PolicyCommandRuntime = defaultRuntime,
 ): Promise<number> {
@@ -123,7 +124,7 @@ export async function policyCompareCommand(
   }
 }
 
-export async function policyCheckCommand(
+async function policyCheckCommand(
   options: PolicyCheckOptions,
   runtime: PolicyCommandRuntime = defaultRuntime,
 ): Promise<number> {
@@ -137,7 +138,7 @@ export async function policyCheckCommand(
   }
 }
 
-export async function policyWatchCommand(
+async function policyWatchCommand(
   options: PolicyWatchOptions,
   runtime: PolicyCommandRuntime = defaultRuntime,
 ): Promise<number> {

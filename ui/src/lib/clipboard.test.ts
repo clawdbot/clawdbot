@@ -70,14 +70,17 @@ describe("copyToClipboard", () => {
     const button = document.createElement("button");
     document.body.append(button);
     button.focus();
+    const focus = vi.spyOn(button, "focus");
     button.disabled = true;
 
     expect(await copyToClipboard("hello")).toBe(true);
     button.disabled = false;
+    button.blur();
     await new Promise<void>((resolve) => {
       window.setTimeout(resolve, 0);
     });
     expect(document.activeElement).toBe(button);
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
 
     button.remove();
   });

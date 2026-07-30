@@ -4,7 +4,7 @@
 import { pathToFileURL } from "node:url";
 import { collectPluginReleasePlan, parsePluginNpmReleaseArgs } from "./lib/plugin-npm-release.ts";
 
-export function collectPluginNpmReleasePlan(argv: string[]) {
+function collectPluginNpmReleasePlan(argv: string[]) {
   const { selection, selectionMode, npmDistTag, baseRef, headRef } =
     parsePluginNpmReleaseArgs(argv);
   return collectPluginReleasePlan({

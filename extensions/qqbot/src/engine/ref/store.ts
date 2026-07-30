@@ -7,8 +7,7 @@ import { debugError } from "../utils/log.js";
 import { buildQQBotStateKey, openQQBotSyncKeyedStore } from "../utils/sqlite-state.js";
 import type { RefAttachmentSummary, RefIndexEntry } from "./types.js";
 
-// Re-export types and format function for convenience.
-export type { RefIndexEntry, RefAttachmentSummary } from "./types.js";
+// Re-export the formatter for convenience.
 export { formatRefEntryForAgent } from "./format-ref-entry.js";
 
 const MAX_ENTRIES = 50000;

@@ -23,7 +23,7 @@ export async function recordInboundSessionMetaSafe(params: {
     agentId: params.agentId,
   });
   try {
-    await runtime.recordSessionMetaFromInbound({
+    await runtime.recordInboundSessionMeta({
       storePath,
       sessionKey: params.sessionKey,
       ctx: params.ctx,

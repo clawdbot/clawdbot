@@ -1,14 +1,12 @@
 // Covers exec approval forwarding to channel plugins.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import {
-  buildExecApprovalRequestMessage,
-  createExecApprovalForwarder,
-} from "./exec-approval-forwarder.js";
+import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 
 const { mockLogError } = vi.hoisted(() => ({ mockLogError: vi.fn() }));
@@ -636,26 +634,6 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("Reply with: /approve req-1 allow-once|allow-always|deny");
   });
 
-  it("includes command analysis warnings in fallback delivery text", () => {
-    const text = buildExecApprovalRequestMessage(
-      {
-        ...baseRequest,
-        request: {
-          ...baseRequest.request,
-          commandAnalysis: {
-            commandCount: 1,
-            nestedCommandCount: 0,
-            riskKinds: ["inline-eval"],
-            warningLines: ["Contains inline-eval: python3 -c"],
-          },
-        },
-      },
-      1000,
-    );
-    expect(text).toContain("Command analysis:");
-    expect(text).toContain("- Contains inline-eval: python3 -c");
-  });
-
   it("omits allow-always from forwarded fallback text when ask=always", async () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
@@ -794,8 +772,11 @@ describe("exec approval forwarder", () => {
 
       expect(deliver).toHaveBeenCalledTimes(1);
       const expiryText =
-        (deliver.mock.calls[0][0] as { payloads?: Array<{ text?: string }> }).payloads?.[0]?.text ??
-        "";
+        (
+          expectDefined(deliver.mock.calls[0], "deliver.mock.calls[0] test invariant")[0] as {
+            payloads?: Array<{ text?: string }>;
+          }
+        ).payloads?.[0]?.text ?? "";
       expect(expiryText).toContain("expired");
 
       // After expiry, the pending entry should be cleaned up.

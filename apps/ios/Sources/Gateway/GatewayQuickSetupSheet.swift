@@ -1,3 +1,4 @@
+import OpenClawChatUI
 import OpenClawKit
 import SwiftUI
 
@@ -10,16 +11,27 @@ struct GatewayQuickSetupSheet: View {
     @Environment(GatewayConnectionController.self) private var gatewayController
     @Environment(\.dismiss) private var dismiss
 
+    let onUseManualSetup: () -> Void
+
     @AppStorage("onboarding.quickSetupDismissed") private var quickSetupDismissed: Bool = false
     @State private var connecting: Bool = false
     @State private var connectError: String?
     @State private var showGatewayProblemDetails: Bool = false
 
+    init(onUseManualSetup: @escaping () -> Void = {}) {
+        self.onUseManualSetup = onUseManualSetup
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    GatewayQuickSetupHeader(hasCandidate: self.bestCandidate != nil)
+                    GatewayQuickSetupHeader(
+                        hasCandidate: self.bestCandidate != nil,
+                        mood: Self.headerMood(
+                            connecting: self.connecting,
+                            hasError: self.hasVisibleError,
+                            hasCandidate: self.bestCandidate != nil))
 
                     if let gatewayProblem = self.appModel.lastGatewayProblem {
                         GatewayProblemBanner(
@@ -34,6 +46,7 @@ struct GatewayQuickSetupSheet: View {
                     }
 
                     if let candidate = self.bestCandidate {
+                        let availability = self.gatewayController.discoveredGatewayConnectionAvailability(candidate)
                         GatewayQuickSetupCandidatePanel(
                             name: candidate.name,
                             debugID: candidate.debugID,
@@ -44,33 +57,58 @@ struct GatewayQuickSetupSheet: View {
                             nodeStatusText: self.appModel.nodeStatusText,
                             operatorStatusText: self.appModel.operatorStatusText)
 
-                        Button {
-                            self.connectError = nil
-                            self.connecting = true
-                            Task {
-                                let err = await self.gatewayController.connectWithDiagnostics(candidate)
-                                await MainActor.run {
-                                    self.connecting = false
-                                    self.connectError = err
+                        if availability.canConnect {
+                            Button {
+                                self.connectError = nil
+                                self.connecting = true
+                                Task {
+                                    let err = await self.gatewayController.connectWithDiagnostics(candidate)
+                                    await MainActor.run {
+                                        self.connecting = false
+                                        self.connectError = err
+                                    }
                                 }
-                            }
-                        } label: {
-                            Group {
-                                if self.connecting {
-                                    HStack(spacing: 8) {
-                                        ProgressView().progressViewStyle(.circular)
-                                        Text("Connecting…")
+                            } label: {
+                                Group {
+                                    if self.connecting {
+                                        HStack(spacing: 8) {
+                                            ProgressView().progressViewStyle(.circular)
+                                            Text("Connecting…")
+                                                .font(OpenClawType.subheadSemiBold)
+                                        }
+                                    } else {
+                                        Text("Connect to this Gateway")
                                             .font(OpenClawType.subheadSemiBold)
                                     }
-                                } else {
-                                    Text("Connect to this Gateway")
+                                }
+                                .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(OpenClawPrimaryActionButtonStyle())
+                            .disabled(self.connecting)
+                        } else if let guidanceText = availability.guidanceText {
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: "lock.shield.fill")
+                                    .foregroundStyle(OpenClawBrand.warn)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(LocalizedStringKey(availability.actionTitle))
                                         .font(OpenClawType.subheadSemiBold)
+                                    Text(guidanceText)
+                                        .font(OpenClawType.caption)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
                             }
-                            .frame(maxWidth: .infinity)
+                            .accessibilityElement(children: .combine)
+
+                            Button {
+                                self.onUseManualSetup()
+                            } label: {
+                                Text("Use Manual Setup")
+                                    .font(OpenClawType.subheadSemiBold)
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(OpenClawSecondaryActionButtonStyle())
                         }
-                        .buttonStyle(OpenClawPrimaryActionButtonStyle())
-                        .disabled(self.connecting)
 
                         if let connectError {
                             GatewayQuickSetupErrorView(message: connectError)
@@ -124,7 +162,29 @@ struct GatewayQuickSetupSheet: View {
     }
 
     private var bestCandidate: GatewayDiscoveryModel.DiscoveredGateway? {
-        self.gatewayController.gateways.first
+        self.gatewayController.preferredDiscoveredGateway()
+    }
+
+    /// The sheet surfaces two error banners — the local connect error and the
+    /// app-level gateway problem — and the mascot mood must match both.
+    private var hasVisibleError: Bool {
+        self.connectError != nil || self.appModel.lastGatewayProblem != nil
+    }
+
+    static func headerMood(
+        connecting: Bool,
+        hasError: Bool,
+        hasCandidate: Bool) -> OpenClawMascotMood
+    {
+        if connecting {
+            .working
+        } else if hasError {
+            .sad
+        } else if hasCandidate {
+            .curious
+        } else {
+            .idle
+        }
     }
 
     private func fullRowToggle(_ title: LocalizedStringKey, isOn: Binding<Bool>) -> some View {
@@ -155,11 +215,16 @@ struct GatewayQuickSetupSheet: View {
             _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
             return
         }
-        if GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem) {
+        if GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem) {
             return
         }
         guard problem.retryable else { return }
         guard let candidate = self.bestCandidate else { return }
+        let availability = self.gatewayController.discoveredGatewayConnectionAvailability(candidate)
+        guard availability.canConnect else {
+            self.connectError = availability.guidanceText
+            return
+        }
         self.connectError = nil
         self.connecting = true
         let err = await self.gatewayController.connectWithDiagnostics(candidate)
@@ -170,11 +235,12 @@ struct GatewayQuickSetupSheet: View {
 
 private struct GatewayQuickSetupHeader: View {
     let hasCandidate: Bool
+    let mood: OpenClawMascotMood
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             ZStack(alignment: .bottomTrailing) {
-                OpenClawActivationGlyph(size: 70)
+                OpenClawActivationGlyph(size: 70, mood: self.mood, interactive: true)
                     .shadow(color: OpenClawBrand.activationGlow.opacity(0.18), radius: 10, x: 0, y: 5)
 
                 Image(systemName: "antenna.radiowaves.left.and.right")
@@ -332,7 +398,7 @@ private struct GatewayQuickSetupErrorView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(OpenClawBrand.warn)
                 .padding(.top, 1)
-            Text(self.message)
+            Text(verbatim: self.message)
                 .font(OpenClawType.footnote)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)

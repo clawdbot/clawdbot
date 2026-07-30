@@ -9,7 +9,7 @@ import type { ResolvedCopilotProvider } from "./provider-bridge.js";
 
 const LOOPBACK_HOST = "127.0.0.1";
 
-export type CopilotByokProxyHandle = {
+type CopilotByokProxyHandle = {
   close: () => Promise<void>;
   provider: ResolvedCopilotProvider;
 };

@@ -1,6 +1,18 @@
 // Tests for CLI message text formatting helpers (renderMessageList, formatMessageCliText).
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
 import { formatMessageCliText } from "./message-format.js";
+
+const getChannelPluginMock = vi.hoisted(() =>
+  vi.fn((channel: string) =>
+    channel === "directchat" ? { meta: { label: "Direct Chat" } } : undefined,
+  ),
+);
+
+vi.mock("../channels/plugins/index.js", () => ({
+  getChannelPlugin: getChannelPluginMock,
+  getLoadedChannelPlugin: getChannelPluginMock,
+}));
 
 function readResultPayload(payload: unknown) {
   return {
@@ -187,5 +199,39 @@ describe("renderPaginationHint", () => {
     const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
 
     expect(out).not.toContain("More results available");
+  });
+});
+
+describe("formatMessageCliText poll results", () => {
+  it("formats direct core poll results as direct deliveries", () => {
+    const result = {
+      kind: "poll",
+      action: "poll",
+      channel: "directchat",
+      to: "room-1",
+      handledBy: "core",
+      payload: {},
+      dryRun: false,
+      pollResult: {
+        channel: "directchat",
+        to: "room-1",
+        question: "Lunch?",
+        options: ["Pizza", "Sushi"],
+        maxSelections: 1,
+        durationSeconds: null,
+        durationHours: null,
+        via: "direct",
+        result: {
+          messageId: "p1",
+          conversationId: "conv-1",
+          pollId: "poll-1",
+        },
+      },
+    } satisfies MessageActionRunResult;
+
+    expect(formatMessageCliText(result)).toEqual([
+      "✅ Poll sent via Direct Chat. Message ID: p1 (conversation conv-1)",
+      "Poll id: poll-1",
+    ]);
   });
 });

@@ -49,22 +49,12 @@ final class NodesStore {
     private let logger = Logger(subsystem: "ai.openclaw", category: "nodes")
     private var task: Task<Void, Never>?
     private let interval: TimeInterval = 30
-    private var startCount = 0
 
     func start() {
-        self.startCount += 1
-        guard self.startCount == 1 else { return }
+        guard self.task == nil else { return }
         SimpleTaskSupport.startDetachedLoop(task: &self.task, interval: self.interval) { [weak self] in
             await self?.refresh()
         }
-    }
-
-    func stop() {
-        guard self.startCount > 0 else { return }
-        self.startCount -= 1
-        guard self.startCount == 0 else { return }
-        self.task?.cancel()
-        self.task = nil
     }
 
     func refresh() async {

@@ -225,6 +225,22 @@ describe("resolveSlackThreadContextData", () => {
     expect(result.threadHistoryBody).not.toContain("blocked follow-up");
   });
 
+  it("keeps a user-started thread label UTF-16 safe at the snippet limit", async () => {
+    const starterText = `${"a".repeat(79)}🐱tail`;
+    const { result } = await resolveAllowlistedThreadContext({
+      repliesMessages: [],
+      threadStarter: {
+        text: starterText,
+        userId: "U1",
+        ts: "100.000",
+      },
+      allowFromLower: ["u1"],
+      allowNameMatching: false,
+    });
+
+    expect(result.threadLabel).toBe(`Slack thread #general: ${"a".repeat(79)}`);
+  });
+
   it("includes bot-authored starter as assistant root context for a new thread session (default)", async () => {
     const { result } = await resolveAllowlistedThreadContext({
       repliesMessages: [

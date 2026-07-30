@@ -14,6 +14,7 @@ import {
   resolveTelegramForumThreadId,
   resolveTelegramMessageForumFlagHint,
 } from "./bot/helpers.js";
+import { parseTelegramQuestionCallbackData } from "./question-callback-data.js";
 
 const TELEGRAM_READ_ONLY_STATUS_COMMAND_KEYS = new Set([
   "commands",
@@ -126,10 +127,7 @@ function isTelegramActiveRunControlLaneText(params: {
   return command ? TELEGRAM_ACTIVE_RUN_CONTROL_COMMAND_KEYS.has(command.key) : false;
 }
 
-export function isTelegramControlLaneText(params: {
-  rawText?: string;
-  botUsername?: string;
-}): boolean {
+function isTelegramControlLaneText(params: { rawText?: string; botUsername?: string }): boolean {
   if (
     isAbortRequestText(
       params.rawText,
@@ -182,6 +180,12 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     return "telegram:btw";
   }
   const callbackData = ctx.update?.callback_query?.data;
+  if (parseTelegramQuestionCallbackData(callbackData)) {
+    if (typeof chatId === "number") {
+      return `telegram:${chatId}:question`;
+    }
+    return "telegram:question";
+  }
   if (callbackData && parseExecApprovalCommandText(callbackData) !== null) {
     if (typeof chatId === "number") {
       return `telegram:${chatId}:approval`;

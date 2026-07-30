@@ -36,14 +36,14 @@ const defaultDeps: RemindToolDeps = {
         return await callGatewayTool(
           "cron.add",
           { timeoutMs: DEFAULT_GATEWAY_TIMEOUT_MS },
-          { job: params.job },
+          params.job,
         );
     }
     return unexpectedCronParams(params);
   },
 };
 
-export function createRemindTool(
+function createRemindTool(
   toolContext: OpenClawPluginToolContext = {},
   deps: RemindToolDeps = defaultDeps,
 ): AnyAgentTool {

@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { escapeRegExp as escapeRegExpLiteral } from "../shared/regexp.js";
 import { expandHomePrefix } from "./home-dir.js";
 
 const GLOB_REGEX_CACHE_LIMIT = 512;
@@ -45,10 +46,6 @@ function normalizeDotPathSegments(value: string): string {
   return normalizeMatchTarget(normalized);
 }
 
-function escapeRegExpLiteral(input: string): string {
-  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function compileGlobRegex(pattern: string): RegExp {
   const cacheKey = `${process.platform}:${pattern}`;
   const cached = globRegexCache.get(cacheKey);
@@ -59,7 +56,7 @@ function compileGlobRegex(pattern: string): RegExp {
   let regex = "^";
   let i = 0;
   while (i < pattern.length) {
-    const ch = pattern[i];
+    const ch = pattern.charAt(i);
     if (ch === "*") {
       const next = pattern[i + 1];
       if (next === "*") {

@@ -93,7 +93,11 @@ private final class ScriptedChatTransport: @unchecked Sendable, OpenClawChatTran
         []
     }
 
-    func listSessions(limit _: Int?) async throws -> OpenClawChatSessionsListResponse {
+    func listSessions(
+        limit _: Int?,
+        search _: String?,
+        archived _: Bool) async throws -> OpenClawChatSessionsListResponse
+    {
         OpenClawChatSessionsListResponse(ts: nil, path: nil, count: 0, defaults: nil, sessions: [])
     }
 
@@ -496,7 +500,6 @@ struct ChatStreamReplayTests {
     }
 
     @Test func `reconnect mid-run converges via history refetch and drains pending run`() async throws {
-        let now = Date().timeIntervalSince1970 * 1000
         let harness = try await StreamReplayHarness.bootstrapped()
         let runId = try await harness.send("please finish")
 
@@ -505,17 +508,23 @@ struct ChatStreamReplayTests {
         // Stream stops here (no final, no lifecycle end). The gateway finished the
         // run while the client was away, so the next history fetch returns the
         // completed transcript keyed to this run.
+        // With no terminal event, the pending run drains only via the history
+        // poller, which requires the durable assistant row to be timestamped at
+        // or after the optimistic user echo. Anchor the transcript after the
+        // send instead of at test start, where slow bootstrap (>900ms on loaded
+        // CI runners) left the row "older" than the echo and the run never drained.
+        let reconnectNow = Date().timeIntervalSince1970 * 1000
         await harness.transport.setHistory(
             replayHistory(messages: [
                 replayRawMessage(
                     role: "user",
                     text: "please finish",
-                    timestamp: now + 100,
+                    timestamp: reconnectNow + 100,
                     idempotencyKey: "\(runId):user"),
                 replayRawMessage(
                     role: "assistant",
                     text: "Finished while you were away.",
-                    timestamp: now + 900,
+                    timestamp: reconnectNow + 900,
                     idempotencyKey: runId),
             ]))
         await MainActor.run { harness.vm.resumeFromForeground() }
@@ -571,6 +580,54 @@ struct ChatStreamReplayTests {
             #expect(rows.count == 1)
             let rowText = rows.first?.content.compactMap(\.text).joined() ?? ""
             #expect(Array(rowText.utf8) == Array(markdownShapesFixture.utf8))
+        }
+    }
+
+    @Test func `consecutive assistant streams keep independent full text`() async throws {
+        let now = Date().timeIntervalSince1970 * 1000 - 10000
+        let harness = try await StreamReplayHarness.bootstrapped()
+        let firstText = "First streamed response."
+        let secondText = "Second response starts fresh."
+
+        let firstRunId = try await harness.send("first")
+        try await harness.streamCumulativeChunks(
+            runId: firstRunId,
+            fullText: firstText,
+            chunkLength: 3)
+        harness.transport.emit(
+            replayFinalEvent(runId: firstRunId, text: firstText, timestamp: now + 1000))
+        harness.transport.emit(
+            replaySessionMessageEvent(
+                text: firstText,
+                timestamp: now + 1100,
+                idempotencyKey: firstRunId,
+                messageId: "durable-first"))
+        try await harness.converge("first stream finalized") { vm in
+            vm.streamingAssistantText == nil && vm.replayAssistantRows(text: firstText).count == 1
+        }
+
+        let secondRunId = try await harness.send("second")
+        try await harness.streamCumulativeChunks(
+            runId: secondRunId,
+            fullText: secondText,
+            chunkLength: 4)
+        await MainActor.run {
+            #expect(harness.vm.streamingAssistantText == secondText)
+            #expect(harness.vm.replayAssistantRows(text: firstText).count == 1)
+        }
+
+        harness.transport.emit(
+            replayFinalEvent(runId: secondRunId, text: secondText, timestamp: now + 2000))
+        harness.transport.emit(
+            replaySessionMessageEvent(
+                text: secondText,
+                timestamp: now + 2100,
+                idempotencyKey: secondRunId,
+                messageId: "durable-second"))
+        try await harness.converge("second stream finalized independently") { vm in
+            vm.streamingAssistantText == nil &&
+                vm.replayAssistantRows(text: firstText).count == 1 &&
+                vm.replayAssistantRows(text: secondText).count == 1
         }
     }
 }

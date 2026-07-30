@@ -1,5 +1,6 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
+import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 
 function loadChannelsRoute(context: ApplicationContext) {
@@ -16,8 +17,7 @@ function loadChannelsRoute(context: ApplicationContext) {
 }
 
 export const page = definePage({
-  id: "channels",
-  path: "/channels",
+  ...routePageSpec("channels"),
   loader: (context: ApplicationContext) => loadChannelsRoute(context),
   component: () =>
     import("./channels-page.ts").then(() => ({

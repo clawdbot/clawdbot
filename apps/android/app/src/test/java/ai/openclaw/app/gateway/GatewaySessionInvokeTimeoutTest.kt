@@ -39,4 +39,16 @@ class GatewaySessionInvokeTimeoutTest {
     assertEquals(120_000L, resolveInvokeResultAckTimeoutMs(121_000L))
     assertEquals(120_000L, resolveInvokeResultAckTimeoutMs(Long.MAX_VALUE))
   }
+
+  @Test
+  fun resolveInvokeExecutionTimeoutMs_defaultsAndAllowsExplicitDisable() {
+    assertEquals(30_000L, resolveInvokeExecutionTimeoutMs(null))
+    assertEquals(null, resolveInvokeExecutionTimeoutMs(0L))
+    assertEquals(null, resolveInvokeExecutionTimeoutMs(-1L))
+  }
+
+  @Test
+  fun resolveInvokeExecutionTimeoutMs_capsAtCoroutineTimerBound() {
+    assertEquals(Int.MAX_VALUE.toLong(), resolveInvokeExecutionTimeoutMs(Long.MAX_VALUE))
+  }
 }

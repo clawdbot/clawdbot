@@ -16,4 +16,4 @@ Adds BytePlus, BytePlus Plan model provider support to OpenClaw.
 
 ## Surface
 
-providers: byteplus, byteplus-plan; contracts: videoGenerationProviders
+providers: `byteplus`, `byteplus-plan`; contracts: `videoGenerationProviders`

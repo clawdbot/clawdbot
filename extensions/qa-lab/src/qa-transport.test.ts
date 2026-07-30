@@ -1,7 +1,50 @@
 // Qa Lab tests cover shared transport behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
-import { waitForQaTransportOutboundSequence } from "./qa-transport.js";
+import {
+  createQaStateBackedTransportAdapter,
+  waitForQaTransportOutboundSequence,
+} from "./qa-transport.js";
+
+describe("createQaStateBackedTransportAdapter", () => {
+  it("runs transport reset before clearing shared state", async () => {
+    const state = createQaBusState();
+    state.addInboundMessage({
+      conversation: { id: "alice", kind: "direct" },
+      senderId: "alice",
+      text: "hello",
+    });
+    const resetTransport = vi.fn(() => {
+      expect(state.getSnapshot().messages).toHaveLength(1);
+    });
+    const adapter = createQaStateBackedTransportAdapter(state, {
+      id: "live",
+      label: "Live",
+      accountId: "sut",
+      requiredPluginIds: [],
+      prepareFlow: vi.fn(),
+      supportedActions: [],
+      resetTransport,
+      sendInbound: async (input) => state.addInboundMessage(input),
+      createGatewayConfig: () => ({}),
+      waitReady: async () => undefined,
+      buildAgentDelivery: ({ target }) => ({
+        channel: "live",
+        to: target,
+        replyChannel: "live",
+        replyTo: target,
+      }),
+      handleAction: async () => undefined,
+      createReportNotes: () => [],
+    });
+
+    await adapter.reset();
+
+    expect(resetTransport).toHaveBeenCalledOnce();
+    expect(adapter.prepareFlow).toBeTypeOf("function");
+    expect(state.getSnapshot().messages).toHaveLength(0);
+  });
+});
 
 describe("waitForQaTransportOutboundSequence", () => {
   it("returns preview and final edit events for one threaded message", async () => {

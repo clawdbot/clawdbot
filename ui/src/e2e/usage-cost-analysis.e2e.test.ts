@@ -184,12 +184,89 @@ describeControlUiE2e("Control UI usage cost analysis mocked Gateway E2E", () => 
             {
               provider: "openai",
               displayName: "OpenAI",
-              plan: "Plus",
-              windows: [
-                { label: "5h", usedPercent: 35 },
-                { label: "Week", usedPercent: 62 },
-              ],
-              billing: [{ type: "balance", amount: 18, unit: "credits" }],
+              plan: "Admin API",
+              windows: [],
+              billing: [{ type: "spend", label: "30-day API spend", amount: 98.75, unit: "USD" }],
+              costHistory: {
+                unit: "USD",
+                periodDays: 30,
+                daily: [
+                  {
+                    date: dayOffset(-6),
+                    amount: 38.5,
+                    requests: 12_300,
+                    inputTokens: 4_200_000,
+                    cacheReadTokens: 2_100_000,
+                    cacheWriteTokens: 0,
+                    outputTokens: 850_000,
+                    totalTokens: 5_050_000,
+                  },
+                  {
+                    date: dayOffset(0),
+                    amount: 60.25,
+                    requests: 18_450,
+                    inputTokens: 6_100_000,
+                    cacheReadTokens: 3_400_000,
+                    cacheWriteTokens: 0,
+                    outputTokens: 1_200_000,
+                    totalTokens: 7_300_000,
+                  },
+                ],
+                models: [
+                  {
+                    name: "gpt-5.5",
+                    requests: 30_750,
+                    inputTokens: 10_300_000,
+                    cacheReadTokens: 5_500_000,
+                    cacheWriteTokens: 0,
+                    outputTokens: 2_050_000,
+                    totalTokens: 12_350_000,
+                  },
+                ],
+                categories: [{ name: "Responses", amount: 98.75 }],
+              },
+            },
+            {
+              provider: "anthropic",
+              displayName: "Anthropic",
+              plan: "Admin API",
+              windows: [],
+              billing: [{ type: "spend", label: "30-day API spend", amount: 42.4, unit: "USD" }],
+              costHistory: {
+                unit: "USD",
+                periodDays: 30,
+                daily: [
+                  {
+                    date: dayOffset(-6),
+                    amount: 17.15,
+                    inputTokens: 1_800_000,
+                    cacheReadTokens: 900_000,
+                    cacheWriteTokens: 200_000,
+                    outputTokens: 350_000,
+                    totalTokens: 3_250_000,
+                  },
+                  {
+                    date: dayOffset(0),
+                    amount: 25.25,
+                    inputTokens: 2_600_000,
+                    cacheReadTokens: 1_400_000,
+                    cacheWriteTokens: 300_000,
+                    outputTokens: 500_000,
+                    totalTokens: 4_800_000,
+                  },
+                ],
+                models: [
+                  {
+                    name: "claude-opus-4-8",
+                    inputTokens: 4_400_000,
+                    cacheReadTokens: 2_300_000,
+                    cacheWriteTokens: 500_000,
+                    outputTokens: 850_000,
+                    totalTokens: 8_050_000,
+                  },
+                ],
+                categories: [{ name: "Claude API", amount: 42.4 }],
+              },
             },
             {
               provider: "openrouter",
@@ -221,10 +298,20 @@ describeControlUiE2e("Control UI usage cost analysis mocked Gateway E2E", () => 
     try {
       await page.goto(`${server.baseUrl}usage`);
       await page.locator(".daily-chart-compact").waitFor({ state: "visible", timeout: 10_000 });
+      const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
+      await agentScope.locator(".agent-select__trigger").click();
+      await agentScope
+        .locator("wa-dropdown-item[data-agent-option]")
+        .filter({ hasText: "All agents" })
+        .click();
+      await expect
+        .poll(async () => (await gateway.getRequests("usage.cost")).at(-1)?.params)
+        .toMatchObject({ agentScope: "all" });
+      const costRequestsBeforeRangeChange = (await gateway.getRequests("usage.cost")).length;
       await page.getByRole("button", { name: "90d", exact: true }).click();
       await expect
         .poll(async () => (await gateway.getRequests("usage.cost")).length)
-        .toBeGreaterThan(1);
+        .toBeGreaterThan(costRequestsBeforeRangeChange);
       await page.getByRole("button", { name: "Cost", exact: true }).click();
 
       const windowCards = page.locator(".cost-window-card");
@@ -246,8 +333,32 @@ describeControlUiE2e("Control UI usage cost analysis mocked Gateway E2E", () => 
       await expect
         .poll(() => page.locator(".usage-insight-card", { hasText: "Top Providers" }).textContent())
         .toContain("openai");
+      const messagesHint = page.locator("#usage-summary-hint-messages");
+      const messagesTooltipHost = messagesHint.locator("xpath=..");
+      const messagesTooltip = messagesTooltipHost.locator("wa-tooltip");
+      await messagesHint.hover();
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+      await page.mouse.move(1, 1);
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+
+      await messagesHint.focus();
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+      await page.getByRole("button", { name: "Cost", exact: true }).focus();
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+
+      await messagesHint.click();
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+      await expect
+        .poll(() => messagesTooltipHost.locator('[slot="content"]').textContent())
+        .toContain("Total user and assistant messages in range.");
+      await page.getByRole("button", { name: "Cost", exact: true }).click();
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+      await messagesHint.focus();
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+      await messagesHint.press("Escape");
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
       const providerCards = page.locator(".provider-usage-card");
-      await expect.poll(() => providerCards.count()).toBe(2);
+      await expect.poll(() => providerCards.count()).toBe(3);
       await expect
         .poll(async () => (await gateway.getRequests("usage.status")).length)
         .toBeGreaterThan(0);
@@ -256,7 +367,16 @@ describeControlUiE2e("Control UI usage cost analysis mocked Gateway E2E", () => 
         .toContain("$64.50");
       await expect
         .poll(() => providerCards.filter({ hasText: "OpenAI" }).textContent())
-        .toContain("18 credits");
+        .toContain("$98.75");
+      await expect
+        .poll(() => providerCards.filter({ hasText: "Anthropic" }).textContent())
+        .toContain("claude-opus-4-8");
+
+      await page.locator(".usage-query-input").fill("missing-session");
+      await page.locator(".usage-query-input").press("Enter");
+      const topProviders = page.locator(".usage-insight-card", { hasText: "Top Providers" });
+      await expect.poll(() => topProviders.textContent()).toContain("No provider data");
+      await expect.poll(() => topProviders.textContent()).not.toContain("openai");
 
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
         const artifactDir = path.join(

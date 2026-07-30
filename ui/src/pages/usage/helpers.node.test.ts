@@ -27,10 +27,57 @@ describe("usage-helpers", () => {
   });
 
   it("supports numeric filters like minTokens/maxTokens", () => {
-    const a = { key: "a", label: "a", usage: { totalTokens: 100, totalCost: 0 } };
-    const b = { key: "b", label: "b", usage: { totalTokens: 5, totalCost: 0 } };
-    expect(filterSessionsByQuery([a, b], "minTokens:10").sessions).toEqual([a]);
-    expect(filterSessionsByQuery([a, b], "maxTokens:10").sessions).toEqual([b]);
+    const a = {
+      key: "a",
+      usage: { totalTokens: 100, totalCost: 20, messageCounts: { total: 30 } },
+    };
+    const b = {
+      key: "b",
+      usage: { totalTokens: 5, totalCost: 2, messageCounts: { total: 3 } },
+    };
+    const filters = [
+      "minTokens:10",
+      "minCost:10",
+      "minMessages:10",
+      "maxTokens:10",
+      "maxCost:10",
+      "maxMessages:10",
+    ];
+
+    for (const filter of filters.slice(0, 3)) {
+      const result = filterSessionsByQuery([a, b], filter);
+      expect(result.sessions).toEqual([a]);
+      expect(result.warnings).toEqual([]);
+    }
+    for (const filter of filters.slice(3)) {
+      const result = filterSessionsByQuery([a, b], filter);
+      expect(result.sessions).toEqual([b]);
+      expect(result.warnings).toEqual([]);
+    }
+  });
+
+  it("supports every has predicate and warns on unknown values", () => {
+    const populated = {
+      key: "populated",
+      contextWeight: 1,
+      modelProvider: "openai",
+      model: "gpt-5.2",
+      usage: {
+        messageCounts: { errors: 1 },
+        toolUsage: { totalCalls: 1 },
+      },
+    };
+    const empty = { key: "empty", usage: null };
+
+    for (const value of ["tools", "errors", "context", "usage", "model", "provider"]) {
+      const result = filterSessionsByQuery([populated, empty], `has:${value}`);
+      expect(result.sessions).toEqual([populated]);
+      expect(result.warnings).toEqual([]);
+    }
+    expect(filterSessionsByQuery([populated, empty], "has:__proto__")).toEqual({
+      sessions: [populated, empty],
+      warnings: ["Unknown has:__proto__"],
+    });
   });
 
   it("rejects non-decimal numeric filter values", () => {
@@ -50,8 +97,8 @@ describe("usage-helpers", () => {
 
   it("warns on unknown keys and invalid numbers", () => {
     const session = { key: "a", usage: { totalTokens: 10, totalCost: 0 } };
-    const res = filterSessionsByQuery([session], "wat:1 minTokens:wat");
-    expect(res.warnings).toEqual(["Unknown filter: wat", "Invalid number for minTokens"]);
+    const res = filterSessionsByQuery([session], "__proto__:1 minTokens:wat");
+    expect(res.warnings).toEqual(["Unknown filter: __proto__", "Invalid number for minTokens"]);
   });
 
   it("parses tool summaries from compact session logs", () => {

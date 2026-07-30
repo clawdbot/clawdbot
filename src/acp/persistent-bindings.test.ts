@@ -1,7 +1,9 @@
 /** Tests configured channel-to-ACP binding resolution and generated session keys. */
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import type { ChannelConfiguredBindingProvider, ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelConfiguredBindingProvider } from "../channels/plugins/types.adapters.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -52,6 +54,10 @@ const discordBindings: ChannelConfiguredBindingProvider = {
   },
 };
 
+function matchGroup(match: RegExpExecArray, index: number, context: string): string {
+  return expectDefined(match[index], context);
+}
+
 function parseTelegramTopicConversationForTest(params: {
   conversationId: string;
   parentConversationId?: string;
@@ -67,7 +73,8 @@ function parseTelegramTopicConversationForTest(params: {
   }
   const canonicalTopicMatch = /^(-[^:]+):topic:([^:]+)$/.exec(conversationId);
   if (canonicalTopicMatch) {
-    const [, chatId, topicId] = canonicalTopicMatch;
+    const chatId = matchGroup(canonicalTopicMatch, 1, "Telegram topic chat id");
+    const topicId = matchGroup(canonicalTopicMatch, 2, "Telegram topic id");
     return {
       canonicalConversationId: `${chatId}:topic:${topicId}`,
       chatId,
@@ -146,7 +153,9 @@ function parseFeishuConversationIdForTest(params: {
 
   const topicSenderMatch = /^(.+):topic:([^:]+):sender:([^:]+)$/.exec(conversationId);
   if (topicSenderMatch) {
-    const [, chatId, topicId, senderOpenId] = topicSenderMatch;
+    const chatId = matchGroup(topicSenderMatch, 1, "Feishu topic-sender chat id");
+    const topicId = matchGroup(topicSenderMatch, 2, "Feishu topic-sender topic id");
+    const senderOpenId = matchGroup(topicSenderMatch, 3, "Feishu topic-sender open id");
     return {
       canonicalConversationId: `${chatId}:topic:${topicId}:sender:${senderOpenId}`,
       chatId,
@@ -158,7 +167,8 @@ function parseFeishuConversationIdForTest(params: {
 
   const topicMatch = /^(.+):topic:([^:]+)$/.exec(conversationId);
   if (topicMatch) {
-    const [, chatId, topicId] = topicMatch;
+    const chatId = matchGroup(topicMatch, 1, "Feishu topic chat id");
+    const topicId = matchGroup(topicMatch, 2, "Feishu topic id");
     return {
       canonicalConversationId: `${chatId}:topic:${topicId}`,
       chatId,
@@ -169,7 +179,8 @@ function parseFeishuConversationIdForTest(params: {
 
   const senderMatch = /^(.+):sender:([^:]+)$/.exec(conversationId);
   if (senderMatch) {
-    const [, chatId, senderOpenId] = senderMatch;
+    const chatId = matchGroup(senderMatch, 1, "Feishu sender chat id");
+    const senderOpenId = matchGroup(senderMatch, 2, "Feishu sender open id");
     return {
       canonicalConversationId: `${chatId}:sender:${senderOpenId}`,
       chatId,

@@ -5,6 +5,7 @@ import type {
   SelectListTheme,
   SettingsListTheme,
 } from "@earendil-works/pi-tui";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import chalk from "chalk";
 import type { SearchableSelectListTheme } from "../components/searchable-select-list.js";
@@ -66,19 +67,27 @@ function isLightBackground(): boolean {
         return bg >= 244;
       }
       const cubeIndex = bg - 16;
-      const bVal = XTERM_LEVELS[cubeIndex % 6];
-      const gVal = XTERM_LEVELS[Math.floor(cubeIndex / 6) % 6];
-      const rVal = XTERM_LEVELS[Math.floor(cubeIndex / 36)];
+      const bVal = expectDefined(
+        XTERM_LEVELS[cubeIndex % 6],
+        "xterm levels entry at cube index % 6",
+      );
+      const gVal = expectDefined(
+        XTERM_LEVELS[Math.floor(cubeIndex / 6) % 6],
+        "xterm levels entry at math.floor(cube index / 6) % 6",
+      );
+      const rVal = expectDefined(
+        XTERM_LEVELS[Math.floor(cubeIndex / 36)],
+        "xterm levels entry at math.floor(cube index / 36)",
+      );
       return pickHigherContrastText(rVal, gVal, bVal);
     }
   }
   return false;
 }
 
-/** Whether the terminal has a light background. Exported for testing only. */
-export const lightMode = isLightBackground();
+const lightMode = isLightBackground();
 
-export const darkPalette = {
+const darkPalette = {
   text: "#E8E3D5",
   dim: "#7B7F87",
   accent: "#F6C453",
@@ -95,14 +104,13 @@ export const darkPalette = {
   quote: "#8CC8FF",
   quoteBorder: "#3B4D6B",
   code: "#F0C987",
-  codeBlock: "#1E232A",
   codeBorder: "#343A45",
   link: "#7DD3A5",
   error: "#F97066",
   success: "#7DD3A5",
 } as const;
 
-export const lightPalette = {
+const lightPalette = {
   text: "#1E1E1E",
   dim: "#5B6472",
   accent: "#B45309",
@@ -119,14 +127,13 @@ export const lightPalette = {
   quote: "#1D4ED8",
   quoteBorder: "#2563EB",
   code: "#92400E",
-  codeBlock: "#F9FAFB",
   codeBorder: "#92400E",
   link: "#047857",
   error: "#DC2626",
   success: "#047857",
 } as const;
 
-export const palette = lightMode ? lightPalette : darkPalette;
+const palette = lightMode ? lightPalette : darkPalette;
 
 const fg = (hex: string) => (text: string) => chalk.hex(hex)(text);
 const bg = (hex: string) => (text: string) => chalk.bgHex(hex)(text);

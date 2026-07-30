@@ -28,6 +28,38 @@ write_secret_file() {
   chmod 600 "$destination"
 }
 
+activate_claude_oauth_access_token() {
+  local credentials="${OPENCLAW_CLAUDE_CREDENTIALS_JSON:-}"
+  if [[ -z "$credentials" ]]; then
+    return
+  fi
+
+  local access_token expires_at now_ms
+  local min_remaining_ms="$(( 90 * 60 * 1000 ))"
+  access_token="$(jq -r '.claudeAiOauth.accessToken // empty' <<<"$credentials" 2>/dev/null || true)"
+  expires_at="$(jq -r '.claudeAiOauth.expiresAt // 0' <<<"$credentials" 2>/dev/null || true)"
+  now_ms="$(( $(date +%s) * 1000 ))"
+
+  if [[ "$access_token" != sk-ant-oat* ]]; then
+    echo "::warning::Claude credentials JSON has no usable OAuth access token; keeping the configured Anthropic fallback." >&2
+    return
+  fi
+  # Stable live shards can run for an hour, so never shadow the fallback with
+  # a token that could expire before setup, retries, and cleanup complete.
+  if ! [[ "$expires_at" =~ ^[0-9]+$ ]] || (( expires_at <= now_ms + min_remaining_ms )); then
+    echo "::warning::Claude credentials JSON OAuth access token lacks 90 minutes of remaining life; keeping the configured Anthropic fallback." >&2
+    return
+  fi
+
+  echo "::add-mask::$access_token"
+  export ANTHROPIC_OAUTH_TOKEN="$access_token"
+  if [[ -n "${GITHUB_ENV:-}" ]]; then
+    printf 'ANTHROPIC_OAUTH_TOKEN=%s\n' "$access_token" >>"$GITHUB_ENV"
+  fi
+}
+
+activate_claude_oauth_access_token
+
 for env_key in \
   OPENAI_API_KEY \
   OPENAI_BASE_URL \

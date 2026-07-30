@@ -1,5 +1,6 @@
-export type ReplyOperationAdmissionSnapshot =
+type ReplyOperationAdmissionSnapshot =
   | { status: "owned" }
+  | { status: "accepted"; mode: "steer" | "followup" }
   | { status: "skipped"; reason: "active-run" | "aborted" | "lifecycle-invalidated" };
 
 export type ReplyOperationRunState = {

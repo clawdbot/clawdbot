@@ -102,6 +102,80 @@ class AutoreviewCursorTests(unittest.TestCase):
         self.assertIn("review engine result was not structured JSON", str(exc_info.exception))
 
 
+class AutoreviewSecretScannerTests(unittest.TestCase):
+    def test_boolean_declarations_are_not_credential_material(self) -> None:
+        secret_field = "is" + "Secret"
+        client_secret_field = "hasClient" + "Secret"
+        cases = (
+            (f"val {secret_field}: Boolean? = null,", None),
+            (f"var {client_secret_field}: Boolean = false", None),
+            (f"abstract val {secret_field}: Boolean?", None),
+            (f"val {secret_field}: Boolean?", None),
+            (f"const {client_secret_field}: boolean = true;", "typescript"),
+            (f"declare const {client_secret_field}: boolean;", "typescript"),
+            (f"let {secret_field}: Bool? = nil", None),
+            (f"let {secret_field}: Bool?", None),
+        )
+
+        for content, javascript_dialect in cases:
+            with self.subTest(content=content):
+                self.assertFalse(
+                    AUTOREVIEW.secret_text_risk(
+                        content,
+                        javascript_dialect=javascript_dialect,
+                    )
+                )
+
+    def test_boolean_and_null_literal_values_are_not_credentials(self) -> None:
+        cases = (
+            ("is" + "Secret", "true"),
+            ("requires" + "Password", "false"),
+            ("access" + "Token", "null"),
+        )
+        for field_name, literal in cases:
+            content = f"{field_name} = {literal}"
+            with self.subTest(content=content):
+                self.assertFalse(AUTOREVIEW.secret_text_risk(content))
+
+    def test_boolean_annotation_does_not_hide_real_credential_literal(self) -> None:
+        literal_value = "actual-production-" + "secret"
+        secret_field = "is" + "Secret"
+        client_secret_field = "hasClient" + "Secret"
+        cases = (
+            (f'val {secret_field}: Boolean? = "{literal_value}",', None),
+            (f'var {client_secret_field}: Boolean = "{literal_value}"', None),
+            (
+                f'const {client_secret_field}: boolean = "{literal_value}";',
+                "typescript",
+            ),
+            (f'let {secret_field}: Bool? = "{literal_value}"', None),
+        )
+
+        for content, javascript_dialect in cases:
+            with self.subTest(content=content):
+                self.assertTrue(
+                    AUTOREVIEW.secret_text_risk(
+                        content,
+                        javascript_dialect=javascript_dialect,
+                    )
+                )
+
+    def test_boolean_prefix_values_remain_credentials(self) -> None:
+        field_name = "client" + "Secret"
+        for prefix in ("Boolean", "boolean", "Bool"):
+            literal_value = prefix + "-prod-credential"
+            content = f"{field_name}: {literal_value}"
+            with self.subTest(content=content):
+                self.assertTrue(AUTOREVIEW.secret_text_risk(content))
+
+    def test_boolean_type_tokens_in_config_remain_credentials(self) -> None:
+        field_name = "client" + "Secret"
+        for literal_value in ("Boolean?", "Boolean?=abc1234"):
+            content = f"{field_name}: {literal_value}"
+            with self.subTest(content=content):
+                self.assertTrue(AUTOREVIEW.secret_text_risk(content))
+
+
 class AutoreviewCompatibilityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -125,22 +199,11 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
                 os.environ[key] = value
         cls.home_dir.cleanup()
 
-    def test_harness_opts_both_cursor_aliases_into_trusted_fixture(self) -> None:
+    def test_harness_rejects_disabled_cursor_engine(self) -> None:
         harness_path = SCRIPT_PATH.with_name("test-review-harness.py")
         namespace = runpy.run_path(str(harness_path))
-        commands: list[list[str]] = []
-        run_reviews = namespace["run_reviews"]
-        with mock.patch.dict(
-            run_reviews.__globals__,
-            {
-                "run": lambda command, _cwd: commands.append(command),
-                "validate_prompt_policy": lambda _repo, _autoreview: None,
-            },
-        ), tempfile.TemporaryDirectory(prefix="autoreview-harness-test.") as tmpdir:
-            run_reviews(Path(tmpdir), SCRIPT_PATH.parent, "benign", ["cursor", "cursor-agent"])
-        self.assertEqual(len(commands), 2)
-        for command in commands:
-            self.assertIn("--cursor-allow-workspace-instructions", command)
+        with self.assertRaises(SystemExit):
+            namespace["parse_args"](["--engine", "cursor"])
 
     def test_cursor_agent_bin_cli_alias(self) -> None:
         with mock.patch.object(
@@ -175,8 +238,264 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
         )
 
     def test_codex_config_status_exposes_keys_only(self) -> None:
-        args = argparse.Namespace(codex_config=['model_provider="private-value"'])
-        self.assertEqual(AUTOREVIEW.codex_config_keys(args), ["model_provider"])
+        args = argparse.Namespace(codex_config=['model_verbosity="low"'])
+        self.assertEqual(AUTOREVIEW.codex_config_keys(args), ["model_verbosity"])
+
+    def test_codex_retries_terra_after_sol_access_failure(self) -> None:
+        args = argparse.Namespace(
+            codex_bin="codex",
+            codex_config=None,
+            codex_speed=None,
+            fallback_model="gpt-5.6-terra",
+            model="gpt-5.6-sol",
+            stream_engine_output=False,
+            thinking="high",
+            tools=True,
+            web_search=False,
+        )
+        models: list[str] = []
+
+        def fake_run(command: list[str], *_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            model = command[command.index("--model") + 1]
+            models.append(model)
+            if model == "gpt-5.6-sol":
+                return subprocess.CompletedProcess(
+                    command,
+                    1,
+                    "",
+                    "The model `gpt-5.6-sol` does not exist or you do not have access to it.",
+                )
+            output_path = Path(command[command.index("--output-last-message") + 1])
+            output_path.write_text(json.dumps(FINAL_REPORT))
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with tempfile.TemporaryDirectory(prefix="autoreview-codex-fallback.") as tmpdir, mock.patch.object(
+            AUTOREVIEW,
+            "resolve_command",
+            return_value="/usr/bin/codex",
+        ), mock.patch.object(AUTOREVIEW, "codex_auth_config_flags", return_value=[]), mock.patch.object(
+            AUTOREVIEW,
+            "prepare_codex_runtime_auth",
+            return_value=None,
+        ), mock.patch.object(
+            AUTOREVIEW,
+            "run_with_heartbeat",
+            side_effect=fake_run,
+        ):
+            output = AUTOREVIEW.run_codex(args, Path(tmpdir), "review")
+
+        self.assertEqual(json.loads(output), FINAL_REPORT)
+        self.assertEqual(models, ["gpt-5.6-sol", "gpt-5.6-terra"])
+
+    def test_codex_runs_outside_repo_with_bundle_only_workspace(self) -> None:
+        args = argparse.Namespace(
+            codex_bin="codex",
+            codex_config=None,
+            codex_speed=None,
+            fallback_model=None,
+            model="gpt-5.6-sol",
+            stream_engine_output=False,
+            thinking="high",
+            tools=True,
+            web_search=False,
+        )
+        observed: dict[str, object] = {}
+
+        def fake_run(
+            command: list[str],
+            cwd: Path,
+            *_args: object,
+            **kwargs: object,
+        ) -> subprocess.CompletedProcess[str]:
+            observed["cwd"] = cwd
+            observed["command"] = command
+            observed["command_cwd"] = Path(command[command.index("-C") + 1])
+            observed["workspace_entries"] = list(cwd.iterdir())
+            observed["env"] = kwargs["env"]
+            output_path = Path(command[command.index("--output-last-message") + 1])
+            output_path.write_text(json.dumps(FINAL_REPORT))
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with tempfile.TemporaryDirectory(prefix="autoreview-codex-workspace-test.") as tmpdir:
+            repo = Path(tmpdir)
+            (repo / ".env").write_text("OPENAI_API_KEY=ignored-secret\n")
+            with mock.patch.dict(
+                os.environ,
+                {"CODEX_HOME": ""},
+                clear=False,
+            ), mock.patch.object(
+                AUTOREVIEW,
+                "resolve_command",
+                return_value="/usr/bin/codex",
+            ), mock.patch.object(
+                AUTOREVIEW,
+                "codex_auth_config_flags",
+                return_value=[],
+            ), mock.patch.object(
+                AUTOREVIEW,
+                "prepare_codex_runtime_auth",
+                return_value=None,
+            ), mock.patch.object(
+                AUTOREVIEW,
+                "codex_source_home",
+                return_value=None,
+            ), mock.patch.object(
+                AUTOREVIEW,
+                "run_with_heartbeat",
+                side_effect=fake_run,
+            ):
+                output = AUTOREVIEW.run_codex(args, repo, "review")
+
+            self.assertEqual(json.loads(output), FINAL_REPORT)
+            observed_cwd = observed["cwd"]
+            command_cwd = observed["command_cwd"]
+            self.assertIsInstance(observed_cwd, Path)
+            self.assertIsInstance(command_cwd, Path)
+            assert isinstance(observed_cwd, Path)
+            assert isinstance(command_cwd, Path)
+            self.assertNotEqual(observed_cwd.resolve(), repo.resolve())
+            self.assertEqual(observed_cwd, command_cwd)
+            self.assertEqual(observed["workspace_entries"], [])
+            env = observed["env"]
+            self.assertIsInstance(env, dict)
+            assert isinstance(env, dict)
+            self.assertNotEqual(env["HOME"], os.environ.get("HOME"))
+            self.assertEqual(env["USERPROFILE"], env["HOME"])
+            self.assertNotEqual(env.get("CODEX_HOME"), str(repo.resolve()))
+            self.assertEqual(Path(env["CODEX_HOME"]).name, "codex-home")
+            self.assertNotEqual(env["CODEX_HOME"], str((Path.home() / ".codex").resolve()))
+            self.assertIn("features.shell_snapshot=false", observed["command"])
+            self.assertIn("features.hooks=false", observed["command"])
+            self.assertIn("features.plugins=false", observed["command"])
+            self.assertIn("skills.include_instructions=false", observed["command"])
+
+    def test_codex_does_not_fallback_after_unrelated_failure(self) -> None:
+        args = argparse.Namespace(
+            codex_bin="codex",
+            codex_config=None,
+            codex_speed=None,
+            fallback_model="gpt-5.6-terra",
+            model="gpt-5.6-sol",
+            stream_engine_output=False,
+            thinking="high",
+            tools=True,
+            web_search=False,
+        )
+        models: list[str] = []
+
+        def fake_run(command: list[str], *_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            models.append(command[command.index("--model") + 1])
+            return subprocess.CompletedProcess(command, 1, "", "network timeout")
+
+        with tempfile.TemporaryDirectory(prefix="autoreview-codex-fallback.") as tmpdir, mock.patch.object(
+            AUTOREVIEW,
+            "resolve_command",
+            return_value="/usr/bin/codex",
+        ), mock.patch.object(AUTOREVIEW, "codex_auth_config_flags", return_value=[]), mock.patch.object(
+            AUTOREVIEW,
+            "prepare_codex_runtime_auth",
+            return_value=None,
+        ), mock.patch.object(
+            AUTOREVIEW,
+            "run_with_heartbeat",
+            side_effect=fake_run,
+        ):
+            with self.assertRaisesRegex(SystemExit, "network timeout"):
+                AUTOREVIEW.run_codex(args, Path(tmpdir), "review")
+
+        self.assertEqual(models, ["gpt-5.6-sol"])
+
+    def test_codex_does_not_fallback_after_model_capacity_failure(self) -> None:
+        args = argparse.Namespace(
+            codex_bin="codex",
+            codex_config=None,
+            codex_speed=None,
+            fallback_model="gpt-5.6-terra",
+            model="gpt-5.6-sol",
+            stream_engine_output=False,
+            thinking="high",
+            tools=True,
+            web_search=False,
+        )
+        models: list[str] = []
+
+        def fake_run(command: list[str], *_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            models.append(command[command.index("--model") + 1])
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                "",
+                "model_not_available: gpt-5.6-sol is temporarily unavailable due to capacity",
+            )
+
+        with tempfile.TemporaryDirectory(prefix="autoreview-codex-fallback.") as tmpdir, mock.patch.object(
+            AUTOREVIEW,
+            "resolve_command",
+            return_value="/usr/bin/codex",
+        ), mock.patch.object(AUTOREVIEW, "codex_auth_config_flags", return_value=[]), mock.patch.object(
+            AUTOREVIEW,
+            "prepare_codex_runtime_auth",
+            return_value=None,
+        ), mock.patch.object(
+            AUTOREVIEW,
+            "run_with_heartbeat",
+            side_effect=fake_run,
+        ):
+            with self.assertRaisesRegex(SystemExit, "temporarily unavailable"):
+                AUTOREVIEW.run_codex(args, Path(tmpdir), "review")
+
+        self.assertEqual(models, ["gpt-5.6-sol"])
+
+    def test_codex_access_fallback_ignores_structured_output_text(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["codex"],
+            1,
+            '{"type":"agent_message","text":"gpt-5.6-sol does not exist or you do not have access"}',
+            '{"type":"agent_message","message":"gpt-5.6-sol does not exist or you do not have access"}',
+        )
+
+        self.assertFalse(
+            AUTOREVIEW.codex_model_access_failure(result, "gpt-5.6-sol")
+        )
+
+    def test_codex_access_fallback_accepts_terminal_error_event(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["codex"],
+            1,
+            '{"type":"error","message":"gpt-5.6-sol does not exist or you do not have access"}',
+            "",
+        )
+
+        self.assertTrue(
+            AUTOREVIEW.codex_model_access_failure(result, "gpt-5.6-sol")
+        )
+
+    def test_codex_access_fallback_accepts_account_model_list_error(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["codex"],
+            1,
+            "",
+            (
+                "The model gpt-5.6-sol does not appear in the list of models "
+                "available to your account"
+            ),
+        )
+
+        self.assertTrue(
+            AUTOREVIEW.codex_model_access_failure(result, "gpt-5.6-sol")
+        )
+
+    def test_codex_access_fallback_ignores_plain_stdout(self) -> None:
+        message = "gpt-5.6-sol does not exist or you do not have access"
+        stdout_result = subprocess.CompletedProcess(["codex"], 1, message, "")
+        stderr_result = subprocess.CompletedProcess(["codex"], 1, "", message)
+
+        self.assertFalse(
+            AUTOREVIEW.codex_model_access_failure(stdout_result, "gpt-5.6-sol")
+        )
+        self.assertTrue(
+            AUTOREVIEW.codex_model_access_failure(stderr_result, "gpt-5.6-sol")
+        )
 
     def test_extract_json_accepts_dict_result_payload(self) -> None:
         payload = {
@@ -188,32 +507,14 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
         }
         self.assertEqual(AUTOREVIEW.extract_json(json.dumps(payload)), FINAL_REPORT)
 
-    def test_extract_json_accepts_result_string_with_preamble(self) -> None:
+    def test_extract_json_rejects_result_string_with_preamble(self) -> None:
         payload = {
             "type": "result",
             "subtype": "success",
             "result": "Inspecting the diff first.\n" + json.dumps(FINAL_REPORT),
         }
-        self.assertEqual(AUTOREVIEW.extract_json(json.dumps(payload)), FINAL_REPORT)
-
-    def test_extract_findings_json_from_text_prefers_last_findings_object(self) -> None:
-        later_report = {
-            "findings": [
-                {
-                    "title": "Later finding",
-                    "body": "later",
-                    "priority": "P2",
-                    "confidence": 0.8,
-                    "category": "bug",
-                    "code_location": {"file_path": "later.js", "line": 2},
-                }
-            ],
-            "overall_correctness": "patch is incorrect",
-            "overall_explanation": "later",
-            "overall_confidence": 0.8,
-        }
-        text = f"{json.dumps(FINAL_REPORT)} separator {json.dumps(later_report)}"
-        self.assertEqual(AUTOREVIEW.extract_findings_json_from_text(text), later_report)
+        with self.assertRaisesRegex(SystemExit, "result was not structured JSON"):
+            AUTOREVIEW.extract_json(json.dumps(payload))
 
     def test_retry_filter_only_matches_parse_failures(self) -> None:
         self.assertTrue(AUTOREVIEW.is_structured_output_failure("review engine returned non-JSON output: nope"))
@@ -235,7 +536,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             )
             with self.assertRaises(SystemExit) as exc_info:
                 AUTOREVIEW.run_cursor(args, repo, "prompt")
-            self.assertIn("requires --cursor-allow-workspace-instructions", str(exc_info.exception))
+            self.assertIn("cursor engine is unavailable", str(exc_info.exception))
 
     def test_cursor_local_mcp_requires_explicit_approval(self) -> None:
         with tempfile.TemporaryDirectory(prefix="autoreview-cursor-test.") as tmpdir:
@@ -253,7 +554,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             )
             with self.assertRaises(SystemExit) as exc_info:
                 AUTOREVIEW.run_cursor(args, repo, "prompt")
-            self.assertIn("cursor engine refused project-local MCP config", str(exc_info.exception))
+            self.assertIn("cursor engine is unavailable", str(exc_info.exception))
 
     def test_cursor_local_hooks_are_always_refused(self) -> None:
         with tempfile.TemporaryDirectory(prefix="autoreview-cursor-test.") as tmpdir:
@@ -271,7 +572,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             )
             with self.assertRaises(SystemExit) as exc_info:
                 AUTOREVIEW.run_cursor(args, repo, "prompt")
-            self.assertIn("cursor engine refused project-local hooks", str(exc_info.exception))
+            self.assertIn("cursor engine is unavailable", str(exc_info.exception))
 
     def test_cursor_local_permissions_are_always_refused(self) -> None:
         with tempfile.TemporaryDirectory(prefix="autoreview-cursor-test.") as tmpdir:
@@ -289,15 +590,14 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             )
             with self.assertRaises(SystemExit) as exc_info:
                 AUTOREVIEW.run_cursor(args, repo, "prompt")
-            self.assertIn("cursor engine refused project-local permission config", str(exc_info.exception))
+            self.assertIn("cursor engine is unavailable", str(exc_info.exception))
 
-    def test_cursor_command_uses_current_print_contract(self) -> None:
+    def test_cursor_is_disabled_without_repo_only_read_sandbox(self) -> None:
         with tempfile.TemporaryDirectory(prefix="autoreview-cursor-test.") as tmpdir:
             root = Path(tmpdir)
             repo = root / "repo"
             repo.mkdir()
             cursor_bin = root / "cursor-agent"
-            record_path = root / "record.json"
             AUTOREVIEW.write_executable(cursor_bin, AUTOREVIEW.fake_cursor_script())
             args = argparse.Namespace(
                 thinking=None,
@@ -308,29 +608,11 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
                 model=None,
                 stream_engine_output=False,
             )
-            old_record = os.environ.get("AUTOREVIEW_FAKE_RECORD")
-            try:
-                os.environ["AUTOREVIEW_FAKE_RECORD"] = str(record_path)
-                AUTOREVIEW.run_cursor(args, repo, "prompt")
-            finally:
-                if old_record is None:
-                    os.environ.pop("AUTOREVIEW_FAKE_RECORD", None)
-                else:
-                    os.environ["AUTOREVIEW_FAKE_RECORD"] = old_record
-            record = json.loads(record_path.read_text())
-            self.assertEqual(Path(record["cwd"]).resolve(), repo.resolve())
-            self.assertEqual(record["stdin"], "prompt")
-            self.assertIn("--print", record["argv"])
-            self.assertIn("--output-format", record["argv"])
-            self.assertIn("json", record["argv"])
-            self.assertIn("--mode", record["argv"])
-            self.assertIn("ask", record["argv"])
-            self.assertIn("--sandbox", record["argv"])
-            self.assertIn("enabled", record["argv"])
-            for unsupported in ("--workspace", "--trust"):
-                self.assertNotIn(unsupported, record["argv"])
+            with mock.patch.object(AUTOREVIEW, "cursor_global_hook_paths", return_value=[]):
+                with self.assertRaisesRegex(SystemExit, "Cursor read permissions"):
+                    AUTOREVIEW.run_cursor(args, repo, "prompt")
 
-    def test_cursor_engine_runs_end_to_end_with_sanitized_environment(self) -> None:
+    def test_cursor_engine_fails_closed_end_to_end(self) -> None:
         with tempfile.TemporaryDirectory(prefix="autoreview-cursor-e2e.") as tmpdir:
             root = Path(tmpdir)
             repo = root / "repo"
@@ -345,8 +627,13 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             source.write_text("after\n")
 
             cursor_bin = root / "cursor-agent"
+            trufflehog_bin = root / "trufflehog"
             record_path = root / "record.json"
             AUTOREVIEW.write_executable(cursor_bin, AUTOREVIEW.fake_cursor_script())
+            AUTOREVIEW.write_executable(
+                trufflehog_bin,
+                "#!/usr/bin/env python3\nraise SystemExit(0)\n",
+            )
             env = os.environ.copy()
             env.update(
                 {
@@ -355,7 +642,12 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
                     "GIT_CONFIG_GLOBAL": str(root / "hostile-gitconfig"),
                     "NODE_OPTIONS": "--require=hostile.js",
                     "PYTHONPATH": str(root / "hostile-python"),
-                    "PATH": f"{repo}{os.pathsep}{env.get('PATH', '')}",
+                    "PATH": (
+                        f"{root}{os.pathsep}{repo}{os.pathsep}"
+                        f"{env.get('PATH', '')}"
+                    ),
+                    "HOME": str(root),
+                    "USERPROFILE": str(root),
                 }
             )
             result = subprocess.run(
@@ -377,33 +669,9 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
                 check=False,
             )
 
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("autoreview clean: no accepted/actionable findings reported", result.stdout)
-            record = json.loads(record_path.read_text())
-            self.assertEqual(Path(record["cwd"]).resolve(), repo.resolve())
-            self.assertIn("diff --git a/example.txt b/example.txt", record["stdin"])
-            self.assertIn("-before", record["stdin"])
-            self.assertIn("+after", record["stdin"])
-            self.assertEqual(record["environment"]["GIT_CONFIG_GLOBAL"], None)
-            self.assertEqual(record["environment"]["NODE_OPTIONS"], None)
-            self.assertEqual(record["environment"]["PYTHONPATH"], None)
-            self.assertNotIn(str(repo), record["environment"]["PATH"].split(os.pathsep))
-            cursor_config_dir = Path(record["environment"]["CURSOR_CONFIG_DIR"])
-            self.assertFalse(cursor_config_dir.exists())
-            cursor_config = json.loads(record["cursor_config"])
-            self.assertEqual(cursor_config["permissions"]["allow"], ["Read(**)"])
-            self.assertEqual(
-                cursor_config["permissions"]["deny"],
-                ["Shell(*)", "Write(**)", "Write(/**)"],
-            )
-
-            invocations = [json.loads(line) for line in (root / "cursor-invocations.jsonl").read_text().splitlines()]
-            help_invocation = next(invocation for invocation in invocations if "--help" in invocation["argv"])
-            self.assertNotEqual(Path(help_invocation["cwd"]).resolve(), repo.resolve())
-            self.assertEqual(help_invocation["environment"]["GIT_CONFIG_GLOBAL"], None)
-            self.assertEqual(help_invocation["environment"]["NODE_OPTIONS"], None)
-            self.assertEqual(help_invocation["environment"]["PYTHONPATH"], None)
-            self.assertNotIn(str(repo), help_invocation["environment"]["PATH"].split(os.pathsep))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Cursor read permissions", result.stderr)
+            self.assertFalse(record_path.exists())
 
 
 if __name__ == "__main__":

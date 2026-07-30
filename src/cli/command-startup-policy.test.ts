@@ -22,8 +22,11 @@ describe("command-startup-policy", () => {
   it("matches config guard bypass commands", () => {
     expect(shouldBypassConfigGuardForCommandPath(["backup", "create"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config"])).toBe(true);
+    expect(shouldBypassConfigGuardForCommandPath(["config", "file"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config", "validate"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config", "schema"])).toBe(true);
+    expect(shouldBypassConfigGuardForCommandPath(["docs"])).toBe(true);
+    expect(shouldBypassConfigGuardForCommandPath(["agent", "exec"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config", "set"])).toBe(false);
     expect(shouldBypassConfigGuardForCommandPath(["status"])).toBe(false);
   });
@@ -112,6 +115,12 @@ describe("command-startup-policy", () => {
         jsonOutputMode: true,
       }).loadPlugins,
     ).toBe(true);
+    expect(
+      resolvePolicy({
+        argv: ["node", "openclaw", "agent", "exec", "fix it"],
+        commandPath: ["agent", "exec"],
+      }).loadPlugins,
+    ).toBe(false);
     expect(
       resolvePolicy({
         argv: ["node", "openclaw", "agent"],
@@ -234,5 +243,36 @@ describe("command-startup-policy", () => {
       loadPlugins: false,
       pluginRegistry: { scope: "channels" },
     });
+  });
+
+  it("suppresses startup stdout for the mcp serve protocol", () => {
+    expect(resolvePolicy({ commandPath: ["mcp", "serve"] }).suppressDoctorStdout).toBe(true);
+  });
+
+  it("reserves stdout for the node worker protocol", () => {
+    const policy = resolvePolicy({ commandPath: ["node", "worker"] });
+
+    expect(policy.hideBanner).toBe(true);
+    expect(policy.loadPlugins).toBe(false);
+    expect(policy.suppressDoctorStdout).toBe(true);
+  });
+
+  it("isolates cloud worker startup", () => {
+    const policy = resolvePolicy({ commandPath: ["worker"] });
+
+    expect(shouldBypassConfigGuardForCommandPath(["worker"])).toBe(true);
+    expect(policy.hideBanner).toBe(true);
+    expect(policy.loadPlugins).toBe(false);
+    expect(policy.suppressDoctorStdout).toBe(true);
+  });
+
+  it("suppresses startup stdout for the bare acp protocol", () => {
+    expect(resolvePolicy({ commandPath: ["acp"] }).suppressDoctorStdout).toBe(true);
+  });
+
+  it("keeps startup stdout for non-protocol commands", () => {
+    expect(resolvePolicy({ commandPath: ["mcp", "list"] }).suppressDoctorStdout).toBe(false);
+    expect(resolvePolicy({ commandPath: ["acp", "client"] }).suppressDoctorStdout).toBe(false);
+    expect(resolvePolicy({ commandPath: ["status"] }).suppressDoctorStdout).toBe(false);
   });
 });

@@ -14,7 +14,7 @@ import type { TranscriptSourceProvider } from "./provider-types.js";
  * Transcript source provider registry.
  *
  * Transcript providers are plugin capability providers; this module exposes
- * canonical/alias lookup and keeps direct plugin resolution ahead of map fallback.
+ * canonical/alias lookup through the shared capability runtime.
  */
 /** Normalize transcript source provider ids for registry lookup. */
 export function normalizeTranscriptSourceProviderId(
@@ -51,13 +51,9 @@ export function getTranscriptSourceProvider(
   if (!normalized) {
     return undefined;
   }
-  const directProvider = resolvePluginCapabilityProvider({
+  return resolvePluginCapabilityProvider({
     key: "transcriptSourceProviders",
     providerId: normalized,
     cfg,
   });
-  if (directProvider) {
-    return directProvider;
-  }
-  return buildProviderMaps(cfg).aliases.get(normalized);
 }

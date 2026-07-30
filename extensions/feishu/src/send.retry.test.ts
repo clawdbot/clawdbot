@@ -6,11 +6,11 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
+import { requestFeishuApi } from "./comment-shared.js";
 import {
   getFeishuSendRateLimitCode,
   getFeishuSendRateLimitCodeFromResponse,
-  requestFeishuApi,
-} from "./comment-shared.js";
+} from "./send-rate-limit.js";
 
 /** Build an AxiosError-shaped object for a given Feishu body error code (HTTP 400). */
 function axiosError(code: number) {

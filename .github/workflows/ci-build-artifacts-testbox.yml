@@ -91,6 +91,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          install-trufflehog: "true"
 
       - name: Resolve release dist cache seeds
         id: dist-cache-seeds
@@ -98,7 +99,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          cache_prefix="${RUNNER_OS}-dist-build-"
+          cache_prefix="${RUNNER_OS}-dist-build-v2-"
           declare -A seen=()
 
           resolve_tag_sha() {
@@ -144,13 +145,14 @@ jobs:
 
       - name: Restore dist build cache
         id: dist-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             .artifacts/build-all-cache/
             dist/
             dist-runtime/
-          key: ${{ runner.os }}-dist-build-${{ github.sha }}
+            packages/*/dist/
+          key: ${{ runner.os }}-dist-build-v2-${{ github.sha }}
           restore-keys: ${{ steps.dist-cache-seeds.outputs.restore-keys }}
 
       - name: Build dist on cache miss
@@ -170,6 +172,7 @@ jobs:
 
           test -d dist
           test -d dist-runtime
+          test -f packages/ai/dist/internal/runtime.mjs
           if [[ ! -f dist/index.js && ! -f dist/index.mjs ]]; then
             echo "Missing dist/index.js or dist/index.mjs" >&2
             exit 1
@@ -179,13 +182,14 @@ jobs:
 
       - name: Save dist build cache
         if: steps.dist-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             .artifacts/build-all-cache/
             dist/
             dist-runtime/
-          key: ${{ runner.os }}-dist-build-${{ github.sha }}
+            packages/*/dist/
+          key: ${{ runner.os }}-dist-build-v2-${{ github.sha }}
 
       - name: Prepare Testbox shell
         shell: bash

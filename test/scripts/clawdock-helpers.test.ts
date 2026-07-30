@@ -1,5 +1,5 @@
 // Clawdock Helpers tests cover clawdock helpers script behavior.
-import { execFile } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,12 +9,69 @@ import { describe, expect, it } from "vitest";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const shellCases = [
+  { available: true, shell: "bash" },
+  {
+    available: spawnSync("zsh", ["--version"], { stdio: "ignore" }).status === 0,
+    shell: "zsh",
+  },
+];
 
 async function writeExecutable(file: string, content: string) {
   await writeFile(file, content, { mode: 0o755 });
 }
 
 describe("scripts/clawdock/clawdock-helpers.sh", () => {
+  for (const { available, shell } of shellCases) {
+    it.runIf(available)(
+      `preserves caller state while auto-detecting the checkout in ${shell}`,
+      async () => {
+        const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-clawdock-"));
+        try {
+          const homeDir = path.join(tempDir, "home");
+          const projectDir = path.join(homeDir, "openclaw");
+          const confirmFile = path.join(tempDir, "confirm.txt");
+          await mkdir(projectDir, { recursive: true });
+          await writeFile(path.join(projectDir, "docker-compose.yml"), "services: {}\n");
+          await writeFile(confirmFile, "\n");
+
+          await execFileAsync(
+            shell,
+            [
+              "-c",
+              [
+                'path_before="$PATH"',
+                'candidate="caller-value"',
+                'response="caller-response"',
+                "source scripts/clawdock/clawdock-helpers.sh || exit 1",
+                '_clawdock_ensure_dir < "$CLAWDOCK_CONFIRM_FILE" || exit 1',
+                '[[ "$PATH" == "$path_before" ]] || exit 1',
+                '[[ "$candidate" == "caller-value" ]] || exit 1',
+                '[[ "$response" == "caller-response" ]] || exit 1',
+                '[[ "$CLAWDOCK_DIR" == "$HOME/openclaw" ]] || exit 1',
+              ].join("\n"),
+            ],
+            {
+              cwd: repoRoot,
+              env: {
+                ...process.env,
+                CLAWDOCK_CONFIRM_FILE: confirmFile,
+                CLAWDOCK_DIR: "",
+                HOME: homeDir,
+              },
+            },
+          );
+
+          await expect(readFile(path.join(homeDir, ".clawdock", "config"), "utf8")).resolves.toBe(
+            `CLAWDOCK_DIR="${projectDir}"\n`,
+          );
+        } finally {
+          await rm(tempDir, { force: true, recursive: true });
+        }
+      },
+    );
+  }
+
   it("loads the standard docker-compose.override.yml before ClawDock extra overrides", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-clawdock-"));
     try {

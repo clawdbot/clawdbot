@@ -1,11 +1,18 @@
-/**
- * Public TTS runtime barrel exposed to core callers and plugin SDK facades.
- * Implementation stays in plugin-sdk/tts-runtime so provider surfaces share one contract.
- */
+/** Public TTS runtime barrel exposed to core callers and plugin SDK facades. */
+import {
+  setSpeechRuntimeAvailabilityGuard,
+  setTtsMachinePrefsPathResolver,
+} from "../../packages/speech-core/runtime-api.js";
+import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
+
+setSpeechRuntimeAvailabilityGuard(() => {
+  assertSecretOwnerAvailable("capability", "tts");
+});
+
+setTtsMachinePrefsPathResolver(() => readConfigMachineState<string>("tts.prefsPath"));
+
 export {
-  testApi as _test,
-  testApi,
-  buildTtsSystemPromptHint,
   getLastTtsAttempt,
   getResolvedSpeechProviderConfig,
   getTtsMaxLength,
@@ -24,23 +31,12 @@ export {
   resolveTtsProviderOrder,
   setLastTtsAttempt,
   setSummarizationEnabled,
-  setTtsAutoMode,
   setTtsEnabled,
   setTtsMaxLength,
   setTtsPersona,
   setTtsProvider,
   synthesizeSpeech,
-  streamSpeech,
   textToSpeech,
-  textToSpeechStream,
-  textToSpeechTelephony,
   type ResolvedTtsConfig,
-  type ResolvedTtsModelOverrides,
   type TtsDirectiveOverrides,
-  type TtsDirectiveParseResult,
-  type TtsResult,
-  type TtsSynthesisResult,
-  type TtsSynthesisStreamResult,
-  type TtsStreamResult,
-  type TtsTelephonyResult,
 } from "../plugin-sdk/tts-runtime.js";

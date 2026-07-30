@@ -11,12 +11,29 @@ class ChatSendAckTest {
   private val json = Json { ignoreUnknownKeys = true }
 
   @Test
-  fun parseChatSendAckPreservesNonTerminalStartedStatus() {
-    val ack = parseChatSendAck(json, """{"runId":"run-1","status":"started"}""")
+  fun parseChatSendAckPreservesNonTerminalPublicAdmissionStatuses() {
+    for (status in listOf("started", "in_flight")) {
+      val ack = parseChatSendAck(json, """{"runId":"run-1","status":"$status"}""")
 
-    assertEquals("run-1", ack.runId)
-    assertEquals("started", ack.normalizedStatus)
-    assertFalse(ack.isTerminal)
+      assertEquals("run-1", ack.runId)
+      assertEquals(status, ack.normalizedStatus)
+      assertFalse(ack.isTerminal)
+    }
+  }
+
+  @Test
+  fun parseChatSendAckNormalizesMissingAndMalformedStatusToEmpty() {
+    val missing = parseChatSendAck(json, """{"runId":"legacy"}""")
+    val malformed =
+      listOf(
+        parseChatSendAck(json, """{"runId":"number","status":42}"""),
+        parseChatSendAck(json, """{"runId":"null","status":null}"""),
+        parseChatSendAck(json, """{"runId":"blank","status":" "}"""),
+        parseChatSendAck(json, "not-json"),
+      )
+
+    assertEquals("", missing.normalizedStatus)
+    assertTrue(malformed.all { it.normalizedStatus.isEmpty() })
   }
 
   @Test

@@ -103,7 +103,7 @@ The wizard converts a friendly name into a normalized account ID (`Ops Bot` -> `
 
 ### Cached credentials
 
-Matrix caches credentials under `~/.openclaw/credentials/matrix/`: `credentials.json` for the default account, `credentials-<account>.json` for named accounts. When cached credentials exist, OpenClaw treats Matrix as configured even without an `accessToken` in the config file - this covers setup, `openclaw doctor`, and channel-status probes.
+Matrix caches account credentials in the shared `state/openclaw.sqlite` plugin state. When cached credentials exist, OpenClaw treats Matrix as configured even without an `accessToken` in the config file - this covers setup, `openclaw doctor`, and channel-status probes. Upgrades import the retired `~/.openclaw/credentials/matrix/credentials*.json` files through `openclaw doctor --fix`, verify the SQLite rows, then archive the files.
 
 ### Environment variables
 
@@ -153,7 +153,7 @@ A practical baseline with DM pairing, room allowlist, and E2EE:
       autoJoinAllowlist: ["!roomid:example.org"],
       threadReplies: "inbound",
       replyToMode: "off",
-      streaming: "partial",
+      streaming: { mode: "partial" },
     },
   },
 }
@@ -161,19 +161,19 @@ A practical baseline with DM pairing, room allowlist, and E2EE:
 
 ## Streaming previews
 
-Matrix reply streaming is opt-in. `streaming` controls how OpenClaw delivers the in-flight assistant reply; `blockStreaming` controls whether each completed block is kept as its own Matrix message.
+Matrix reply streaming is opt-in. `streaming.mode` controls how OpenClaw delivers the in-flight assistant reply; `streaming.block.enabled` controls whether each completed block is kept as its own Matrix message.
 
 ```json5
 {
   channels: {
     matrix: {
-      streaming: "partial",
+      streaming: { mode: "partial" },
     },
   },
 }
 ```
 
-To keep live answer previews but hide interim tool/progress lines, use object form:
+To keep live answer previews but hide interim tool/progress lines:
 
 ```json5
 {
@@ -190,7 +190,7 @@ To keep live answer previews but hide interim tool/progress lines, use object fo
 }
 ```
 
-Full object form accepts `{ mode, preview, progress }`:
+The full config accepts `{ mode, chunkMode, block, preview, progress }`:
 
 ```json5
 {
@@ -217,16 +217,16 @@ Full object form accepts `{ mode, preview, progress }`:
 - `progress.maxLineChars`: max characters per compact progress line before truncation.
 - `progress.toolProgress`: when `true` (default), live tool/progress activity appears in the draft.
 
-| `streaming`       | Behavior                                                                                                                                                 |
+| `streaming.mode`  | Behavior                                                                                                                                                 |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `"off"` (default) | Wait for the full reply, send once. `true` <-> `"partial"`, `false` <-> `"off"`.                                                                         |
+| `"off"` (default) | Wait for the full reply, send once.                                                                                                                      |
 | `"partial"`       | Edit one normal text message in place as the model writes the current block. Stock clients may notify on the first preview, not the final edit.          |
 | `"quiet"`         | Same as `"partial"` but the message is a non-notifying notice. Recipients are notified once a per-user push rule matches the finalized edit (see below). |
 | `"progress"`      | Sends individual compact progress lines using a progress draft.                                                                                          |
 
-`blockStreaming` (default `false`) is independent of `streaming`:
+`streaming.block.enabled` (default `false`) is independent of `streaming.mode`:
 
-| `streaming`             | `blockStreaming: true`                                              | `blockStreaming: false` (default)                    |
+| `streaming.mode`        | `block.enabled: true`                                               | `block.enabled: false` (default)                     |
 | ----------------------- | ------------------------------------------------------------------- | ---------------------------------------------------- |
 | `"partial"` / `"quiet"` | Live draft for the current block, completed blocks kept as messages | Live draft for the current block, finalized in place |
 | `"off"`                 | One notifying Matrix message per finished block                     | One notifying Matrix message for the full reply      |
@@ -236,7 +236,8 @@ Notes:
 - If a preview grows past Matrix's per-event size limit, OpenClaw stops preview streaming and falls back to final-only delivery.
 - Media replies always send attachments normally; if a stale preview cannot be reused safely, OpenClaw redacts it before sending the final media reply.
 - Tool-progress preview updates are on by default when preview streaming is active. Set `streaming.preview.toolProgress: false` to keep preview edits for answer text but leave tool progress on the normal delivery path.
-- Preview edits cost extra Matrix API calls. Leave `streaming: "off"` for the most conservative rate-limit profile.
+- Preview edits cost extra Matrix API calls. Leave `streaming.mode: "off"` for the most conservative rate-limit profile.
+- Legacy scalar/boolean `streaming` values and the flat `blockStreaming` / `chunkMode` keys are rewritten to this nested shape by `openclaw doctor --fix`.
 
 ## Voice messages
 
@@ -258,7 +259,7 @@ When a prompt is too long for one Matrix event, OpenClaw chunks the visible text
 
 ### Self-hosted push rules for quiet finalized previews
 
-`streaming: "quiet"` only notifies recipients once a block or turn is finalized - a per-user push rule must match the finalized preview marker. See [Matrix push rules for quiet previews](/channels/matrix-push-rules) for the full recipe.
+`streaming.mode: "quiet"` only notifies recipients once a block or turn is finalized - a per-user push rule must match the finalized preview marker. See [Matrix push rules for quiet previews](/channels/matrix-push-rules) for the full recipe.
 
 ## Bot-to-bot rooms
 
@@ -298,11 +299,12 @@ All `openclaw matrix` commands accept `--verbose` (full diagnostics), `--json` (
 
 ```bash
 openclaw matrix encryption setup
+printf '%s\n' "$MATRIX_RECOVERY_KEY" | openclaw matrix encryption setup --recovery-key-stdin
 ```
 
 Bootstraps secret storage and cross-signing, creates a room-key backup if needed, then prints status and next steps. Useful flags:
 
-- `--recovery-key <key>` apply a recovery key before bootstrapping (prefer the stdin form below)
+- `--recovery-key-stdin` reads a recovery key from stdin without exposing it in process arguments; `--recovery-key <key>` remains available for compatibility
 - `--force-reset-cross-signing` discard the current cross-signing identity and create a new one (intentional use only)
 
 For a new account, enable E2EE at creation time:
@@ -569,7 +571,7 @@ Matrix inherits global defaults from `session.threadBindings` and supports per-c
 - `threadBindings.idleHours`
 - `threadBindings.maxAgeHours`
 - `threadBindings.spawnSessions`: gates both subagent and ACP thread spawns.
-- `threadBindings.spawnSubagentSessions` / `threadBindings.spawnAcpSessions`: narrower overrides for subagent-only or ACP-only spawns.
+- Deprecated `threadBindings.spawnSubagentSessions` / `threadBindings.spawnAcpSessions` keys are migrated to `spawnSessions` by `openclaw doctor --fix`.
 - `threadBindings.defaultSpawnContext`
 
 Matrix thread-bound session spawns default on. Set `threadBindings.spawnSessions: false` to block top-level `/focus` and `/acp spawn --thread auto|here` from creating/binding Matrix threads. Set `threadBindings.defaultSpawnContext: "isolated"` when native subagent thread spawns should not fork the parent transcript.
@@ -862,7 +864,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 
 - `groupPolicy`: `"open"`, `"allowlist"`, or `"disabled"`. Default: `"allowlist"`.
 - `groupAllowFrom`: allowlist of user IDs for room traffic.
-- `mentionPatterns`: scoped regex patterns for room mentions. Object with `{ mode: "allow"|"deny", allowIn: [roomId, ...], denyIn: [roomId, ...] }`. Controls whether configured `agents.list[].groupChat.mentionPatterns` apply per-room.
+- `mentionPatterns`: scoped regex patterns for room mentions. Object with `{ mode: "allow"|"deny", allowIn: [roomId, ...], denyIn: [roomId, ...] }`. Controls whether configured `agents.entries.*.groupChat.mentionPatterns` apply per-room.
 - `dm.enabled`: when `false`, ignore all DMs. Default: `true`.
 - `dm.policy`: `"pairing"` (default), `"allowlist"`, `"open"`, or `"disabled"`. Applies after the bot has joined and classified the room as a DM; it does not affect invite handling.
 - `dm.allowFrom`: allowlist of user IDs for DM traffic.
@@ -880,12 +882,12 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 - `replyToMode`: `"off"` (default), `"first"`, `"all"`, or `"batched"`.
 - `threadReplies`: `"off"` (top-level default resolves to `"inbound"` unless explicitly set), `"inbound"`, or `"always"`.
 - `threadBindings`: per-channel overrides for thread-bound session routing and lifecycle.
-- `streaming`: `"off"` (default), `"partial"`, `"quiet"`, `"progress"`, or object form `{ mode, preview: { toolProgress }, progress: { label, labels, maxLines, maxLineChars, toolProgress } }`. `true` <-> `"partial"`, `false` <-> `"off"`.
-- `blockStreaming`: when `true`, completed assistant blocks are kept as separate progress messages. Default: `false`.
+- `streaming`: nested object `{ mode, chunkMode, block: { enabled, coalesce }, preview: { toolProgress }, progress: { label, labels, maxLines, maxLineChars, toolProgress } }`. `mode` is `"off"` (default), `"partial"`, `"quiet"`, or `"progress"`. Legacy scalar/boolean spellings migrate via `openclaw doctor --fix`.
+- `streaming.block.enabled`: when `true`, completed assistant blocks are kept as separate progress messages. Default: `false`.
 - `markdown`: optional Markdown rendering config for outbound text.
 - `responsePrefix`: optional string prepended to outbound replies.
-- `textChunkLimit`: outbound chunk size in characters when `chunkMode: "length"`. Default: `4000`.
-- `chunkMode`: `"length"` (default, splits by character count) or `"newline"` (splits at line boundaries).
+- `textChunkLimit`: outbound chunk size in characters when `streaming.chunkMode: "length"`. Default: `4000`.
+- `streaming.chunkMode`: `"length"` (default, splits by character count) or `"newline"` (splits at line boundaries).
 - `historyLimit`: number of recent room messages included as `InboundHistory` when a room message triggers the agent. Falls back to `messages.groupChat.historyLimit`; effective default `0` (disabled).
 - `mediaMaxMb`: media size cap in MB for outbound sends and inbound processing. Default: `20`.
 

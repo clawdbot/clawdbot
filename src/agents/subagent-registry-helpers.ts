@@ -5,6 +5,7 @@
  */
 import fsSync, { promises as fs } from "node:fs";
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../config/agent-limits.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveAgentIdFromSessionKey, resolveStorePath } from "../config/sessions.js";
@@ -30,12 +31,6 @@ import {
   resolveSubagentRunOrphanReason,
   type SubagentRunOrphanReason,
 } from "./subagent-session-reconciliation.js";
-
-export {
-  getSubagentSessionRuntimeMs,
-  getSubagentSessionStartedAt,
-  resolveSubagentSessionStatus,
-} from "./subagent-session-metrics.js";
 
 export const PROVISIONAL_KILL_RECONCILIATION_MS = 5 * 60_000;
 export const MIN_ANNOUNCE_RETRY_DELAY_MS = 1_000;
@@ -76,7 +71,9 @@ export function resolveAnnounceRetryDelayMs(retryCount: number) {
 
 function formatAnnounceGiveUpLogField(value: string): string {
   const normalized = value.replace(/\s+/g, " ").trim();
-  return JSON.stringify(normalized.length > 2_000 ? `${normalized.slice(0, 2_000)}…` : normalized);
+  return JSON.stringify(
+    normalized.length > 2_000 ? `${truncateUtf16Safe(normalized, 2_000)}…` : normalized,
+  );
 }
 
 /** Logs a sanitized final give-up line for failed subagent announce delivery. */
@@ -184,9 +181,9 @@ function isResolvedChildPath(params: { childPath: string; rootPath: string }) {
 }
 
 /** Best-effort async removal for a subagent attachment directory. */
-export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<void> {
+export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<boolean> {
   if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
-    return;
+    return true;
   }
 
   const resolveReal = async (targetPath: string): Promise<string | null> => {
@@ -206,17 +203,18 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
       resolveReal(entry.attachmentsDir),
     ]);
     if (!dirReal) {
-      return;
+      return true;
     }
 
     const rootBase = rootReal ?? path.resolve(entry.attachmentsRootDir);
     const dirBase = dirReal;
     if (!isResolvedChildPath({ childPath: dirBase, rootPath: rootBase })) {
-      return;
+      return false;
     }
     await fs.rm(dirBase, { recursive: true, force: true });
+    return true;
   } catch {
-    // best effort
+    return false;
   }
 }
 
@@ -318,9 +316,18 @@ export function reconcileOrphanedRestoredRuns(params: {
   const now = Date.now();
   let changed = false;
   for (const [runId, entry] of params.runs.entries()) {
-    if (entry.killReconciliation) {
-      // Provider completion may still repair this provisional kill. The
-      // sweeper owns its bounded reconciliation even when the session vanished.
+    if (entry.collect && entry.collectorCompletion) {
+      // Waitable collector tombstones intentionally outlive delete-mode sessions.
+      continue;
+    }
+    if (entry.requesterSettleWake) {
+      // Requester-settle outbox rows can intentionally outlive delete-mode
+      // child sessions. Restore replays the obligation before retiring them.
+      continue;
+    }
+    if (entry.killReconciliation || entry.terminalOwner === "interrupted-recovery") {
+      // Provider completion or interrupted recovery still owns these rows.
+      // Their bounded reconciliation runs even when the session vanished.
       continue;
     }
     const orphanReason = resolveSubagentRunOrphanReason({
@@ -348,7 +355,7 @@ export function reconcileOrphanedRestoredRuns(params: {
 }
 
 /** Resolves the completed subagent archive delay from config. */
-export function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
+function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
   const config = cfg ?? getRuntimeConfig();
   const minutes =
     config.agents?.defaults?.subagents?.archiveAfterMinutes ??
@@ -360,4 +367,52 @@ export function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
     return undefined;
   }
   return Math.max(1, Math.floor(minutes)) * 60_000;
+}
+
+/** Resolves the archive deadline for one newly registered run. */
+export function resolveSubagentArchiveAtMs(params: {
+  cfg?: OpenClawConfig;
+  now: number;
+  spawnMode: "run" | "session";
+  cleanup: "keep" | "delete";
+  collect?: boolean;
+}): number | undefined {
+  if (params.spawnMode === "session" || params.collect || params.cleanup === "keep") {
+    return undefined;
+  }
+  const archiveAfterMs = resolveArchiveAfterMs(params.cfg);
+  return archiveAfterMs ? params.now + archiveAfterMs : undefined;
+}
+
+/** Backfills the retention deadline added after collector groups first shipped. */
+export function backfillCollectorArchiveAtMs(
+  entry: SubagentRunRecord,
+  cfg?: OpenClawConfig,
+): boolean {
+  if (!entry.collect) {
+    return false;
+  }
+  const endedAt =
+    typeof entry.endedAt === "number" && Number.isFinite(entry.endedAt) ? entry.endedAt : undefined;
+  const capturedAt =
+    endedAt === undefined && !entry.collectorCompletion
+      ? undefined
+      : typeof entry.completion?.capturedAt === "number" &&
+          Number.isFinite(entry.completion.capturedAt)
+        ? entry.completion.capturedAt
+        : endedAt;
+  const archiveAfterMs = entry.spawnMode === "session" ? undefined : resolveArchiveAfterMs(cfg);
+  const expectedArchiveAt =
+    capturedAt !== undefined && archiveAfterMs !== undefined
+      ? capturedAt + archiveAfterMs
+      : undefined;
+  if (entry.archiveAtMs === expectedArchiveAt) {
+    return false;
+  }
+  if (expectedArchiveAt === undefined) {
+    delete entry.archiveAtMs;
+  } else {
+    entry.archiveAtMs = expectedArchiveAt;
+  }
+  return true;
 }

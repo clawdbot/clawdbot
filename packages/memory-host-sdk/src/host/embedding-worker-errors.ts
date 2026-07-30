@@ -8,14 +8,14 @@ export const LOCAL_EMBEDDING_WORKER_ERROR_CODES = {
 } as const;
 
 /** Error code union for local embedding worker failures. */
-export type LocalEmbeddingWorkerFailureCode =
+type LocalEmbeddingWorkerFailureCode =
   (typeof LOCAL_EMBEDDING_WORKER_ERROR_CODES)[keyof typeof LOCAL_EMBEDDING_WORKER_ERROR_CODES];
 
 /** Cause category for local embedding worker failures. */
-export type LocalEmbeddingWorkerFailureReason = "exit" | "signal" | "process-error" | "ipc";
+type LocalEmbeddingWorkerFailureReason = "exit" | "signal" | "process-error" | "ipc";
 
-/** Error shape used by callers that need retry/status decisions. */
-export type LocalEmbeddingWorkerFailureError = Error & {
+/** Error shape returned by the local embedding worker failure factory. */
+type LocalEmbeddingWorkerFailureError = Error & {
   code: LocalEmbeddingWorkerFailureCode;
   reason: LocalEmbeddingWorkerFailureReason;
   exitCode?: number | null;

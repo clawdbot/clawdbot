@@ -13,6 +13,14 @@ import {
 
 const LIVE_TEST_SUFFIX = ".live.test.ts";
 const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
+  [
+    "extensions/codex/src/app-server/native-subagent-monitor.live.test.ts",
+    ["OPENCLAW_LIVE_CODEX_NATIVE_SUBAGENT"],
+  ],
+  [
+    "extensions/codex/src/native-thread-coexistence.live.test.ts",
+    ["OPENCLAW_LIVE_CODEX_THREAD_COEXISTENCE"],
+  ],
   ["src/agents/agent-mcp-style.cache.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],
   ["src/agents/cli-runner/bundle-mcp.gemini.live.test.ts", ["OPENCLAW_LIVE_CLI_MCP_GEMINI"]],
   ["src/agents/embedded-agent-runner.cache.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],
@@ -21,7 +29,8 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ["src/agents/subagent-announce.live.test.ts", ["OPENCLAW_LIVE_SUBAGENT_E2E"]],
   ["src/agents/tools/image-tool.ollama.live.test.ts", ["OPENCLAW_LIVE_OLLAMA_IMAGE"]],
   ["src/agents/tools/image-tool.providers.live.test.ts", ["OPENCLAW_LIVE_IMAGE_TOOL_TEST"]],
-  ["src/crestodian/rescue-channel.live.test.ts", ["OPENCLAW_LIVE_CRESTODIAN_RESCUE_CHANNEL"]],
+  ["src/skills/workshop/experience-review.live.test.ts", ["OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"]],
+  ["src/system-agent/rescue-channel.live.test.ts", ["OPENCLAW_LIVE_SYSTEM_AGENT_RESCUE_CHANNEL"]],
   ["src/gateway/android-node.capabilities.live.test.ts", ["OPENCLAW_LIVE_ANDROID_NODE"]],
   ["src/gateway/gateway-acp-bind.live.test.ts", ["OPENCLAW_LIVE_ACP_BIND"]],
   ["src/gateway/gateway-acp-spawn-defaults.live.test.ts", ["OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS"]],
@@ -33,6 +42,8 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ["test/image-generation.infer-cli.live.test.ts", ["OPENCLAW_LIVE_INFER_CLI_TEST"]],
 ]);
 const SKIPPED_ASSERTION_STATUSES = new Set(["disabled", "pending", "skipped", "todo"]);
+const QA_RUNTIME_LIVE_TEST = "extensions/qa-lab/src/matrix-channel-driver.lifecycle.live.test.ts";
+const QA_RUNTIME_ARTIFACT = "dist/extensions/qa-lab/runtime-api.js";
 
 /** Live-test shards included in release validation. */
 export const RELEASE_LIVE_TEST_SHARDS = Object.freeze([
@@ -246,17 +257,22 @@ function isMoonshotLiveTest(file) {
 export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
   switch (shard) {
     case "native-live-src-agents":
-      return files.filter((file) => file.startsWith("src/agents/") || file.startsWith("src/llm/"));
+      return files.filter(
+        (file) =>
+          file.startsWith("src/agents/") ||
+          file.startsWith("src/llm/") ||
+          file.startsWith("src/skills/"),
+      );
     case "native-live-src-agents-zai-coding":
       return files.filter((file) => file === "src/agents/zai.live.test.ts");
     case "native-live-src-gateway":
       return files.filter(
-        (file) => file.startsWith("src/gateway/") || file.startsWith("src/crestodian/"),
+        (file) => file.startsWith("src/gateway/") || file.startsWith("src/system-agent/"),
       );
     case "native-live-src-gateway-core":
       return files.filter(
         (file) =>
-          (file.startsWith("src/gateway/") || file.startsWith("src/crestodian/")) &&
+          (file.startsWith("src/gateway/") || file.startsWith("src/system-agent/")) &&
           !isGatewayBackendLiveTest(file) &&
           !isGatewayProfilesLiveTest(file),
       );
@@ -354,6 +370,19 @@ export function parseLiveShardArgs(args) {
  */
 export function buildLiveShardPnpmArgs(files, passthroughArgs) {
   return ["test:live", "--", ...files, ...passthroughArgs];
+}
+
+/**
+ * Resolves build profiles required by selected live tests.
+ */
+export function resolveLiveShardPreparation(files) {
+  return files.includes(QA_RUNTIME_LIVE_TEST)
+    ? {
+        env: { OPENCLAW_BUILD_PRIVATE_QA: "1" },
+        profile: "qaRuntime",
+        requiredArtifact: QA_RUNTIME_ARTIFACT,
+      }
+    : null;
 }
 
 /**
@@ -586,7 +615,7 @@ export function validateLiveShardReportPayload(
 /**
  * Reads and validates the live-shard Vitest JSON report.
  */
-export function validateLiveShardReport(reportPath, expectedFiles = []) {
+function validateLiveShardReport(reportPath, expectedFiles = []) {
   let payload;
   try {
     payload = JSON.parse(fs.readFileSync(reportPath, "utf8"));
@@ -649,6 +678,36 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       console.log(file);
     }
     process.exit(0);
+  }
+
+  // Some live tests exercise built private surfaces. Prepare their owning profile so
+  // shard routing cannot select a test whose required runtime artifact is absent.
+  const preparation = resolveLiveShardPreparation(files);
+  if (preparation) {
+    console.log(
+      `[test:live:shard] preparing ${preparation.profile} for ${preparation.requiredArtifact}`,
+    );
+    const result = spawnSync(process.execPath, ["scripts/build-all.mjs", preparation.profile], {
+      env: { ...process.env, ...preparation.env },
+      stdio: "inherit",
+    });
+    if (result.error) {
+      console.error(result.error);
+      process.exit(1);
+    }
+    if (result.signal) {
+      process.kill(process.pid, result.signal);
+      process.exit(1);
+    }
+    if ((result.status ?? 1) !== 0) {
+      process.exit(result.status ?? 1);
+    }
+    if (!fs.existsSync(preparation.requiredArtifact)) {
+      console.error(
+        `[test:live:shard] ${preparation.profile} did not produce ${preparation.requiredArtifact}`,
+      );
+      process.exit(1);
+    }
   }
 
   console.log(`[test:live:shard] ${shard}: ${files.length} file(s)`);

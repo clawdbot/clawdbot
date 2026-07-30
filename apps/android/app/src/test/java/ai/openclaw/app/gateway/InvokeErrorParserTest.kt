@@ -26,17 +26,16 @@ class InvokeErrorParserTest {
   @Test
   fun parseInvokeErrorMessage_rejectsNonCanonicalCodePrefix() {
     listOf(
-        "IllegalStateException: boom",
-        "2FAST: boom",
-        "_PRIVATE: boom",
-        "CAMERA-PERMISSION: boom",
-      )
-      .forEach { raw ->
-        val parsed = parseInvokeErrorMessage(raw)
-        assertEquals("UNAVAILABLE", parsed.code)
-        assertEquals(raw, parsed.message)
-        assertFalse(parsed.hadExplicitCode)
-      }
+      "IllegalStateException: boom",
+      "2FAST: boom",
+      "_PRIVATE: boom",
+      "CAMERA-PERMISSION: boom",
+    ).forEach { raw ->
+      val parsed = parseInvokeErrorMessage(raw)
+      assertEquals("UNAVAILABLE", parsed.code)
+      assertEquals(raw, parsed.message)
+      assertFalse(parsed.hadExplicitCode)
+    }
   }
 
   @Test

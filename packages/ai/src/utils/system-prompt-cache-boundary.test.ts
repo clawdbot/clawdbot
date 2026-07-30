@@ -44,6 +44,17 @@ describe("system prompt cache boundary helpers", () => {
       `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Per-turn lab context\nSecond line\n\nDynamic suffix\n\nMore detail`,
     );
   });
+
+  it("normalizes malformed surrogates in dynamic prompt sections", () => {
+    const high = String.fromCharCode(0xd83d);
+
+    expect(
+      prependSystemPromptAdditionAfterCacheBoundary({
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic${high} suffix`,
+        systemPromptAddition: `Per-turn${high} context`,
+      }),
+    ).toBe(`Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Per-turn context\n\nDynamic suffix`);
+  });
 });
 
 describe("ensureSystemPromptCacheBoundary", () => {

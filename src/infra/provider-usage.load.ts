@@ -72,6 +72,9 @@ async function fetchProviderUsageSnapshot(params: {
       token: params.auth.token,
       accountId: params.auth.accountId,
       authProfileId: params.auth.authProfileId,
+      subscriptionType: params.auth.subscriptionType,
+      rateLimitTier: params.auth.rateLimitTier,
+      email: params.auth.email,
       timeoutMs: params.timeoutMs,
       fetchFn: params.fetchFn,
     },
@@ -169,6 +172,9 @@ export async function loadProviderUsageSummary(
       return true;
     }
     if (entry.billing && entry.billing.length > 0) {
+      return true;
+    }
+    if (entry.costHistory?.daily.length) {
       return true;
     }
     if (entry.summary?.trim()) {

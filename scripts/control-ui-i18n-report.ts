@@ -82,13 +82,13 @@ type ReportArgs = {
   top: number;
 };
 
-export type RawCopySummary = {
+type RawCopySummary = {
   entries: number;
   occurrences: number;
   topPaths: Array<{ count: number; path: string }>;
 };
 
-export type LocaleSummary = {
+type LocaleSummary = {
   fallbackKeysInScope: string[];
   meta: LocaleMeta;
 };

@@ -5,6 +5,11 @@ type PackageManifestContractParams = Parameters<typeof describePackageManifestCo
 
 const packageManifestContractTests: PackageManifestContractParams[] = [
   {
+    pluginId: "buzz",
+    pluginLocalRuntimeDeps: ["nostr-tools"],
+    minHostVersionBaseline: "2026.7.2",
+  },
+  {
     pluginId: "discord",
     pluginLocalRuntimeDeps: ["@discordjs/voice", "discord-api-types", "libopus-wasm"],
     minHostVersionBaseline: "2026.3.22",
@@ -18,7 +23,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "google-meet" },
   {
     pluginId: "googlechat",
-    pluginLocalRuntimeDeps: ["gaxios", "google-auth-library"],
+    pluginLocalRuntimeDeps: ["google-auth-library"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "irc", minHostVersionBaseline: "2026.3.22" },

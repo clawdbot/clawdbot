@@ -224,9 +224,9 @@ function formatCount(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-export function formatCompactPluginHealthLine(snapshot: StatusPluginHealthSnapshot):
-  | string
-  | undefined {
+export function formatCompactPluginHealthLine(
+  snapshot: StatusPluginHealthSnapshot,
+): string | undefined {
   const loadErrors = snapshot.plugins.filter((plugin) => plugin.status === "error").length;
   const dependencyIssues = snapshot.plugins.filter(hasDependencyIssue).length;
   const diagnosticErrors = countProblemDiagnostics(getReportableDiagnostics(snapshot)).errors;

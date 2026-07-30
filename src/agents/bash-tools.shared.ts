@@ -133,11 +133,17 @@ export function readEnvInt(key: string, legacyKey?: string) {
   return parseStrictInteger(raw);
 }
 
-/** Splits large output into fixed-size UTF-16 chunks for transport. */
+/** Splits output into bounded chunks without splitting UTF-16 surrogate pairs. */
 export function chunkString(input: string, limit = CHUNK_LIMIT) {
   const chunks: string[] = [];
-  for (let i = 0; i < input.length; i += limit) {
-    chunks.push(input.slice(i, i + limit));
+  const chunkLimit = Number.isNaN(limit) ? CHUNK_LIMIT : Math.max(1, Math.floor(limit));
+  let i = 0;
+  while (i < input.length) {
+    const firstCodePointWidth = (input.codePointAt(i) ?? 0) > 0xffff ? 2 : 1;
+    // A code point is indivisible; a tiny limit may require one chunk to exceed it.
+    const chunk = sliceUtf16Safe(input, i, i + Math.max(chunkLimit, firstCodePointWidth));
+    chunks.push(chunk);
+    i += chunk.length;
   }
   return chunks;
 }
@@ -187,6 +193,9 @@ export function deriveSessionName(command: string): string | undefined {
     return undefined;
   }
   const verb = tokens[0];
+  if (!verb) {
+    return "";
+  }
   let target = tokens.slice(1).find((t) => !t.startsWith("-"));
   if (!target) {
     target = tokens[1];

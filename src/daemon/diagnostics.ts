@@ -4,6 +4,8 @@ import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./rest
 
 // Error patterns worth surfacing from gateway service logs after failed starts.
 const GATEWAY_LOG_ERROR_PATTERNS = [
+  /\bENOSPC\b/i,
+  /no space left on device/i,
   /refusing to bind gateway/i,
   /gateway auth mode/i,
   /gateway start blocked/i,
@@ -83,7 +85,7 @@ function findLastNonEmptyLine(lines: string[]): string | null {
 
 export async function readLastGatewayErrorLine(
   env: NodeJS.ProcessEnv,
-  options?: { platform?: NodeJS.Platform },
+  options?: { platform?: NodeJS.Platform; requirePatternMatch?: boolean },
 ): Promise<string | null> {
   const platform = options?.platform ?? process.platform;
   const readStderr = platform !== "darwin";
@@ -107,6 +109,9 @@ export async function readLastGatewayErrorLine(
     if (GATEWAY_LOG_ERROR_PATTERNS.some((pattern) => pattern.test(line))) {
       return line;
     }
+  }
+  if (options?.requirePatternMatch) {
+    return null;
   }
   return readStderr
     ? (findLastNonEmptyLine(stderrLines) ?? findLastNonEmptyLine(stdoutLines))

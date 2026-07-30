@@ -48,7 +48,7 @@ function threadStartResult() {
       status: { type: "idle" },
       path: null,
       cwd: "/tmp/openclaw-agent",
-      cliVersion: "0.125.0",
+      cliVersion: "0.146.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -247,8 +247,8 @@ describe("codex web search provider", () => {
           clearEnv: ["CODEX_HOME", "KEEP_CLEARED"],
         },
       }),
-      clientFactory: async (startOptions) => {
-        isolatedStartOptions = startOptions;
+      clientFactory: async (options) => {
+        isolatedStartOptions = options?.startOptions;
         return client;
       },
     });

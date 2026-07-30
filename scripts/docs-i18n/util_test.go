@@ -1,6 +1,18 @@
 package main
 
-import "testing"
+import (
+	"strconv"
+	"strings"
+	"testing"
+)
+
+func TestCacheNamespaceIncludesPromptVersion(t *testing.T) {
+	t.Parallel()
+
+	if want := "prompt=" + strconv.Itoa(promptVersion); !strings.Contains(cacheNamespace(), want) {
+		t.Fatalf("expected cache namespace to contain %q, got %q", want, cacheNamespace())
+	}
+}
 
 func TestDocsI18nProviderUsesOpenAI(t *testing.T) {
 	t.Setenv(envDocsI18nProvider, "anthropic")
@@ -11,7 +23,7 @@ func TestDocsI18nProviderUsesOpenAI(t *testing.T) {
 	}
 }
 
-func TestDocsI18nModelKeepsOpenAIDefaultAtGPT55(t *testing.T) {
+func TestDocsI18nModelKeepsOpenAIDefault(t *testing.T) {
 	t.Setenv(envDocsI18nModel, "")
 
 	if got := docsI18nModel(); got != defaultOpenAIModel {

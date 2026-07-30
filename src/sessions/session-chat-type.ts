@@ -7,11 +7,6 @@ import {
 } from "./session-chat-type-shared.js";
 import { parseAgentSessionKey } from "./session-key-utils.js";
 
-export {
-  deriveSessionChatTypeFromKey,
-  type SessionKeyChatType,
-} from "./session-chat-type-shared.js";
-
 // Session chat-type derivation first uses generic key parsing, then falls back
 // to bootstrap channel plugins for legacy platform-specific session keys.
 type LegacySessionChatTypeDeriver = NonNullable<

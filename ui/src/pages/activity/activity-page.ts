@@ -1,15 +1,23 @@
 import { consume } from "@lit/context";
-import { html, LitElement } from "lit";
+import { html, type PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { titleForRoute } from "../../app-navigation.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationGatewaySnapshot,
+} from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
+import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { StreamAutoFollowController } from "../../lit/stream-auto-follow-controller.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
-  parseToolActivityEvent,
+  parseActivityEvent,
   updateToolActivity,
   type ActivityEntry,
   type ActivityStatus,
@@ -18,12 +26,8 @@ import { renderActivity } from "./view.ts";
 
 let activityClearBoundary: EventLogEntry | undefined;
 
-export class ActivityPage extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
-  @consume({ context: applicationContext, subscribe: false })
+class ActivityPage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @state() private entries: ActivityEntry[] = [];
@@ -36,72 +40,66 @@ export class ActivityPage extends LitElement {
   @state() private toolFilter = "";
   @state() private expandedIds = new Set<string>();
   @state() private autoFollow = true;
-  @state() private atBottom = true;
 
   private sessionKey = "";
-  private replayFrame: number | null = null;
-  private scrollFrame: number | null = null;
-  private stopGatewaySubscription?: () => void;
-  private stopGatewayEvents?: () => void;
+  private readonly streamFollow = new StreamAutoFollowController(this, {
+    selector: ".activity-stream",
+    isEnabled: () => this.autoFollow,
+  });
+  private readonly subscriptions = new SubscriptionsController(this).effect(
+    () => this.context?.gateway,
+    (gateway) => {
+      this.applyGatewaySnapshot(gateway, gateway.snapshot, true);
+      const stopEvents = gateway.subscribeEvents((event) => {
+        this.applyGatewayEvent(gateway, event, Date.now());
+      });
+      const stopGateway = gateway.subscribe((snapshot) =>
+        this.applyGatewaySnapshot(gateway, snapshot, false),
+      );
+      return () => {
+        stopGateway();
+        stopEvents();
+      };
+    },
+  );
 
-  override connectedCallback() {
-    super.connectedCallback();
-    this.syncSessionKey();
-    this.stopGatewayEvents = this.context.gateway.subscribeEvents((event) => {
-      this.applyGatewayEvent(event, Date.now());
-    });
-    this.stopGatewaySubscription = this.context.gateway.subscribe(() => {
-      const previousSessionKey = this.sessionKey;
-      this.syncSessionKey();
-      if (this.sessionKey !== previousSessionKey) {
-        this.rebuildEntries();
-      }
-    });
-  }
-
-  override firstUpdated() {
-    this.replayFrame = requestAnimationFrame(() => {
-      this.replayFrame = null;
-      if (this.isConnected) {
-        this.rebuildEntries();
-      }
-    });
-  }
-
-  override updated(changed: Map<PropertyKey, unknown>) {
-    if (this.autoFollow && this.atBottom && (changed.has("entries") || changed.has("autoFollow"))) {
-      this.scheduleScroll(changed.has("autoFollow"));
+  override updated(changed: PropertyValues) {
+    if (
+      this.autoFollow &&
+      this.streamFollow.atBottom &&
+      (changed.has("entries") || changed.has("autoFollow"))
+    ) {
+      this.streamFollow.schedule(changed.has("autoFollow"));
     }
   }
 
   override disconnectedCallback() {
-    this.stopGatewaySubscription?.();
-    this.stopGatewaySubscription = undefined;
-    this.stopGatewayEvents?.();
-    this.stopGatewayEvents = undefined;
-    if (this.replayFrame !== null) {
-      cancelAnimationFrame(this.replayFrame);
-      this.replayFrame = null;
-    }
-    if (this.scrollFrame !== null) {
-      cancelAnimationFrame(this.scrollFrame);
-      this.scrollFrame = null;
-    }
+    this.subscriptions.clear();
     super.disconnectedCallback();
   }
 
-  private syncSessionKey() {
-    const snapshot = this.context.gateway.snapshot;
+  private applyGatewaySnapshot(
+    gateway: ApplicationContext["gateway"],
+    snapshot: ApplicationGatewaySnapshot,
+    sourceChanged: boolean,
+  ) {
+    const previousSessionKey = this.sessionKey;
     this.sessionKey = resolveSessionKey(loadSettings().sessionKey, snapshot.hello);
+    if (sourceChanged || this.sessionKey !== previousSessionKey) {
+      this.rebuildEntries(gateway, snapshot);
+    }
   }
 
-  private rebuildEntries() {
+  private rebuildEntries(
+    gateway: ApplicationContext["gateway"],
+    snapshot: ApplicationGatewaySnapshot,
+  ) {
     let entries: ActivityEntry[] = [];
-    const eventLog = this.context.gateway.eventLog;
+    const eventLog = gateway.eventLog;
     const clearIndex = activityClearBoundary ? eventLog.indexOf(activityClearBoundary) : -1;
     const visibleEvents = clearIndex < 0 ? eventLog : eventLog.slice(0, clearIndex);
     for (const event of visibleEvents.toReversed()) {
-      entries = this.reduceGatewayEvent(entries, event.event, event.payload, event.ts);
+      entries = this.reduceGatewayEvent(entries, snapshot, event.event, event.payload, event.ts);
     }
     if (entries.length > 0 || this.entries.length > 0) {
       this.entries = entries;
@@ -109,12 +107,20 @@ export class ActivityPage extends LitElement {
     if (this.expandedIds.size > 0) {
       this.expandedIds = new Set();
     }
-    this.atBottom = true;
+    this.streamFollow.atBottom = true;
   }
 
-  private applyGatewayEvent(event: GatewayEventFrame, receivedAt: number) {
+  private applyGatewayEvent(
+    gateway: ApplicationContext["gateway"],
+    event: GatewayEventFrame,
+    receivedAt: number,
+  ) {
+    if (this.context.gateway !== gateway) {
+      return;
+    }
     const nextEntries = this.reduceGatewayEvent(
       this.entries,
+      gateway.snapshot,
       event.event,
       event.payload,
       receivedAt,
@@ -126,6 +132,7 @@ export class ActivityPage extends LitElement {
 
   private reduceGatewayEvent(
     entries: ActivityEntry[],
+    gateway: ApplicationGatewaySnapshot,
     eventName: string,
     payload: unknown,
     receivedAt: number,
@@ -133,11 +140,10 @@ export class ActivityPage extends LitElement {
     if (eventName !== "agent" && eventName !== "session.tool") {
       return entries;
     }
-    const event = parseToolActivityEvent(payload, receivedAt);
+    const event = parseActivityEvent(payload, receivedAt);
     if (!event) {
       return entries;
     }
-    const gateway = this.context.gateway.snapshot;
     if (
       !uiSessionEventMatches(
         {
@@ -154,94 +160,61 @@ export class ActivityPage extends LitElement {
     return updateToolActivity(entries, event);
   }
 
-  private scheduleScroll(force = false) {
-    if (this.scrollFrame !== null) {
-      cancelAnimationFrame(this.scrollFrame);
-    }
-    void this.updateComplete.then(() => {
-      if (!this.isConnected) {
-        return;
-      }
-      this.scrollFrame = requestAnimationFrame(() => {
-        this.scrollFrame = null;
-        const container = this.querySelector<HTMLElement>(".activity-stream");
-        if (!container) {
-          return;
-        }
-        const distanceFromBottom =
-          container.scrollHeight - container.scrollTop - container.clientHeight;
-        if (!force && (!this.autoFollow || (!this.atBottom && distanceFromBottom >= 120))) {
-          return;
-        }
-        container.scrollTop = container.scrollHeight;
-        this.atBottom = true;
-      });
-    });
-  }
-
-  private handleScroll(event: Event) {
-    const container = event.currentTarget as HTMLElement | null;
-    if (!container) {
-      return;
-    }
-    const distanceFromBottom =
-      container.scrollHeight - container.scrollTop - container.clientHeight;
-    this.atBottom = distanceFromBottom < 120;
-  }
-
   private clearEntries() {
     activityClearBoundary = this.context.gateway.eventLog[0];
     this.entries = [];
     this.expandedIds = new Set();
-    this.atBottom = true;
+    this.streamFollow.atBottom = true;
   }
 
   override render() {
+    const body = renderActivity({
+      entries: this.entries,
+      filterText: this.filterText,
+      statusFilters: this.statusFilters,
+      toolFilter: this.toolFilter,
+      expandedIds: this.expandedIds,
+      autoFollow: this.autoFollow,
+      onFilterTextChange: (next) => (this.filterText = next),
+      onToolFilterChange: (next) => (this.toolFilter = next),
+      onStatusToggle: (status, enabled) => {
+        this.statusFilters = { ...this.statusFilters, [status]: enabled };
+      },
+      onToggleAutoFollow: (next) => {
+        this.autoFollow = next;
+        if (next) {
+          this.streamFollow.schedule(true);
+        }
+      },
+      onClear: () => this.clearEntries(),
+      onExpandAll: () => {
+        this.expandedIds = new Set(this.entries.map((entry) => entry.id));
+      },
+      onCollapseAll: () => {
+        this.expandedIds = new Set();
+      },
+      onEntryToggle: (id, open) => {
+        const next = new Set(this.expandedIds);
+        if (open) {
+          next.add(id);
+        } else {
+          next.delete(id);
+        }
+        this.expandedIds = next;
+      },
+      onScroll: (event) => this.streamFollow.handleScroll(event),
+    });
     return html`
-      <section class="content-header content-header--page">
+      <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("activity")}</div>
-          <div class="page-sub">${subtitleForRoute("activity")}</div>
         </div>
       </section>
-      ${renderActivity({
-        entries: this.entries,
-        filterText: this.filterText,
-        statusFilters: this.statusFilters,
-        toolFilter: this.toolFilter,
-        expandedIds: this.expandedIds,
-        autoFollow: this.autoFollow,
-        onFilterTextChange: (next) => (this.filterText = next),
-        onToolFilterChange: (next) => (this.toolFilter = next),
-        onStatusToggle: (status, enabled) => {
-          this.statusFilters = { ...this.statusFilters, [status]: enabled };
-        },
-        onToggleAutoFollow: (next) => {
-          this.autoFollow = next;
-          if (next) {
-            this.scheduleScroll(true);
-          }
-        },
-        onClear: () => this.clearEntries(),
-        onExpandAll: () => {
-          this.expandedIds = new Set(this.entries.map((entry) => entry.id));
-        },
-        onCollapseAll: () => {
-          this.expandedIds = new Set();
-        },
-        onEntryToggle: (id, open) => {
-          const next = new Set(this.expandedIds);
-          if (open) {
-            next.add(id);
-          } else {
-            next.delete(id);
-          }
-          this.expandedIds = next;
-        },
-        onScroll: (event) => this.handleScroll(event),
-      })}
+      ${renderSettingsWorkspace(body, { fillHeight: true })}
     `;
   }
 }
 
-customElements.define("openclaw-activity-page", ActivityPage);
+if (!customElements.get("openclaw-activity-page")) {
+  customElements.define("openclaw-activity-page", ActivityPage);
+}

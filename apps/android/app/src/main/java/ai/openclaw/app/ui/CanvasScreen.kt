@@ -1,12 +1,16 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.node.CanvasController
 import ai.openclaw.app.node.CanvasNavigationPolicy
 import android.annotation.SuppressLint
+import android.content.Context
 import android.net.Uri
 import android.util.Log
 import android.view.View
+import android.view.ViewGroup
 import android.webkit.ConsoleMessage
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -14,11 +18,9 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.WebMessageCompat
@@ -37,28 +39,69 @@ fun CanvasScreen(
   visible: Boolean,
   modifier: Modifier = Modifier,
 ) {
-  val context = LocalContext.current
-  val isDebuggable = (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
-  val webViewRef = remember { arrayOfNulls<WebView>(1) }
-  val currentPageUrlRef = remember { AtomicReference<String?>(null) }
-
-  DisposableEffect(viewModel) {
-    onDispose {
-      val webView = webViewRef[0] ?: return@onDispose
-      viewModel.canvas.detach(webView)
-      if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-        WebViewCompat.removeWebMessageListener(webView, CanvasA2UIActionBridge.interfaceName)
+  AndroidView(
+    modifier = modifier,
+    factory = { context ->
+      CanvasHostView(
+        context = context,
+        controller = viewModel.canvas,
+        isTrustedPage = viewModel::isTrustedCanvasActionUrl,
+        onA2uiMessage = viewModel::handleCanvasA2UIActionFromWebView,
+      ).apply {
+        updateVisible(visible)
       }
-      webView.stopLoading()
-      webView.destroy()
-      webViewRef[0] = null
+    },
+    update = { host -> host.updateVisible(visible) },
+    onRelease = CanvasHostView::release,
+  )
+}
+
+/**
+ * Retained shell host whose WebView child can be replaced after renderer death.
+ *
+ * Compose creates this host directly; XML inflation cannot supply its controller and callbacks.
+ */
+@SuppressLint("SetJavaScriptEnabled", "ViewConstructor")
+@Suppress("DEPRECATION")
+internal class CanvasHostView(
+  context: Context,
+  private val controller: CanvasController,
+  private val isTrustedPage: (String?) -> Boolean,
+  private val onA2uiMessage: (String) -> Unit,
+) : FrameLayout(context) {
+  internal var currentWebView: WebView? = null
+    private set
+
+  private val isDebuggable =
+    (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+  private val currentPageUrlRef = AtomicReference<String?>(null)
+
+  init {
+    visibility = View.INVISIBLE
+  }
+
+  fun updateVisible(visible: Boolean) {
+    if (visible) {
+      val webView = currentWebView ?: createWebView()
+      visibility = View.VISIBLE
+      webView.visibility = View.VISIBLE
+      webView.onResume()
+      return
+    }
+    visibility = View.INVISIBLE
+    currentWebView?.let { webView ->
+      webView.visibility = View.INVISIBLE
+      webView.onPause()
     }
   }
 
-  AndroidView(
-    modifier = modifier,
-    factory = {
-      val webView = WebView(context)
+  fun release() {
+    controller.releaseHost()
+    currentWebView?.let(::destroyWebView)
+  }
+
+  private fun createWebView(): WebView =
+    WebView(context).also { webView ->
       val webSettings = webView.settings
       webSettings.setAllowContentAccess(false)
       webSettings.setAllowFileAccess(false)
@@ -73,7 +116,7 @@ fun CanvasScreen(
       webSettings.builtInZoomControls = false
       webSettings.displayZoomControls = false
       webSettings.setSupportZoom(false)
-      webView.visibility = if (visible) View.VISIBLE else View.INVISIBLE
+      webView.visibility = View.INVISIBLE
       // targetSdk 33+ ignores Force Dark APIs, so only opt out through the supported
       // algorithmic darkening flag when this WebView implementation exposes it.
       if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
@@ -93,7 +136,7 @@ fun CanvasScreen(
             request: WebResourceRequest,
           ): Boolean {
             if (!request.isForMainFrame) return false
-            return blockUnsafeCanvasNavigation(viewModel, currentPageUrlRef, request.url.toString())
+            return blockUnsafeCanvasNavigation(controller, currentPageUrlRef, request.url.toString())
           }
 
           override fun shouldInterceptRequest(
@@ -109,7 +152,7 @@ fun CanvasScreen(
             // shouldOverrideUrlLoading excludes POST navigations and their redirects. WebView does
             // not expose those redirect targets, so non-GET main-frame loads fail closed here.
             currentPageUrlRef.set(null)
-            view.post { viewModel.canvas.navigate("") }
+            view.post { controller.navigate("") }
             return blockedCanvasResponse()
           }
 
@@ -150,18 +193,23 @@ fun CanvasScreen(
             if (isDebuggable) {
               Log.d("OpenClawWebView", "onPageFinished: $url")
             }
-            viewModel.canvas.onPageFinished()
+            controller.onPageFinished()
           }
 
           override fun onRenderProcessGone(
             view: WebView,
-            detail: android.webkit.RenderProcessGoneDetail,
+            detail: RenderProcessGoneDetail,
           ): Boolean {
             if (isDebuggable) {
               Log.e(
                 "OpenClawWebView",
                 "onRenderProcessGone didCrash=${detail.didCrash()} priorityAtExit=${detail.rendererPriorityAtExit()}",
               )
+            }
+            if (view === currentWebView) {
+              controller.onRenderProcessGone(view)
+              destroyWebView(view)
+              visibility = View.INVISIBLE
             }
             return true
           }
@@ -183,10 +231,9 @@ fun CanvasScreen(
       // dispatch still requires the live URL to be an app-owned bundled page.
       val bridge =
         CanvasA2UIActionBridge(
-          isTrustedPage = { viewModel.isTrustedCanvasActionUrl(currentPageUrlRef.get()) },
-        ) { payload ->
-          viewModel.handleCanvasA2UIActionFromWebView(payload)
-        }
+          isTrustedPage = { isTrustedPage(currentPageUrlRef.get()) },
+          onMessage = onA2uiMessage,
+        )
       if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
         WebViewCompat.addWebMessageListener(
           webView,
@@ -197,32 +244,38 @@ fun CanvasScreen(
       } else if (isDebuggable) {
         Log.w("OpenClawWebView", "WebMessageListener unsupported; canvas actions disabled")
       }
-      viewModel.canvas.attach(webView)
-      webViewRef[0] = webView
-      webView
-    },
-    update = { webView ->
-      webView.visibility = if (visible) View.VISIBLE else View.INVISIBLE
-      if (visible) {
-        webView.resumeTimers()
-        webView.onResume()
-      } else {
-        webView.onPause()
-        webView.pauseTimers()
-      }
-    },
-  )
+      addView(
+        webView,
+        ViewGroup.LayoutParams(
+          ViewGroup.LayoutParams.MATCH_PARENT,
+          ViewGroup.LayoutParams.MATCH_PARENT,
+        ),
+      )
+      currentWebView = webView
+      controller.attach(webView)
+    }
+
+  private fun destroyWebView(webView: WebView) {
+    if (currentWebView !== webView) return
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+      WebViewCompat.removeWebMessageListener(webView, CanvasA2UIActionBridge.interfaceName)
+    }
+    removeView(webView)
+    webView.stopLoading()
+    webView.destroy()
+    currentWebView = null
+  }
 }
 
 private fun blockUnsafeCanvasNavigation(
-  viewModel: MainViewModel,
+  controller: CanvasController,
   currentPageUrlRef: AtomicReference<String?>,
   rawUrl: String,
 ): Boolean {
   val url = rawUrl.trim()
   if (!CanvasNavigationPolicy.shouldBlock(url)) return false
   currentPageUrlRef.set(null)
-  viewModel.canvas.navigate("")
+  controller.navigate("")
   return true
 }
 

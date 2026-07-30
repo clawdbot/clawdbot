@@ -1,4 +1,4 @@
-// Control UI controller manages models gateway state.
+// Control UI model metadata boundary.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 
@@ -12,29 +12,39 @@ type ModelCatalogCacheEntry = {
 
 const modelCatalogCache = new WeakMap<GatewayBrowserClient, ModelCatalogCacheEntry>();
 
-/**
- * Fetch the model catalog from the gateway.
- *
- * Accepts a {@link GatewayBrowserClient} (matching the existing ui/ controller
- * convention).  Returns an array of {@link ModelCatalogEntry}; on failure the
- * caller receives an empty array rather than throwing.
- */
-export async function loadModels(client: GatewayBrowserClient): Promise<ModelCatalogEntry[]> {
+export async function loadModels(
+  client: GatewayBrowserClient,
+  opts?: { refresh?: boolean },
+): Promise<ModelCatalogEntry[]> {
   const cached = modelCatalogCache.get(client);
   const now = Date.now();
-  if (cached?.models && cached.expiresAt > now) {
+  if (!opts?.refresh && cached?.models && cached.expiresAt > now) {
     return cached.models;
   }
-  if (cached?.inFlight) {
+  if (!opts?.refresh && cached?.inFlight) {
     return cached.inFlight;
   }
 
-  const inFlight = requestModels(client, cached?.models).finally(() => {
-    const latest = modelCatalogCache.get(client);
-    if (latest?.inFlight === inFlight) {
-      delete latest.inFlight;
-    }
-  });
+  // The cache write happens here, gated on inFlight identity: a refresh call
+  // replaces inFlight, so an older request resolving late cannot clobber the
+  // fresher result with pre-mutation catalog data.
+  const inFlight: Promise<ModelCatalogEntry[]> = requestModels(client, cached?.models)
+    .then((result) => {
+      const latest = modelCatalogCache.get(client);
+      if (!latest || latest.inFlight === inFlight) {
+        modelCatalogCache.set(client, {
+          expiresAt: result.fresh ? Date.now() + MODEL_CATALOG_CACHE_TTL_MS : 0,
+          models: result.models,
+        });
+      }
+      return result.models;
+    })
+    .finally(() => {
+      const latest = modelCatalogCache.get(client);
+      if (latest?.inFlight === inFlight) {
+        delete latest.inFlight;
+      }
+    });
   modelCatalogCache.set(client, {
     expiresAt: cached?.expiresAt ?? 0,
     models: cached?.models ?? [],
@@ -53,18 +63,14 @@ export function applyModelCatalogResult(models: unknown): ModelCatalogEntry[] | 
 async function requestModels(
   client: GatewayBrowserClient,
   fallback: ModelCatalogEntry[] | undefined,
-): Promise<ModelCatalogEntry[]> {
+): Promise<{ models: ModelCatalogEntry[]; fresh: boolean }> {
   try {
     const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {
       view: "configured",
     });
-    const models = result?.models ?? [];
-    modelCatalogCache.set(client, {
-      expiresAt: Date.now() + MODEL_CATALOG_CACHE_TTL_MS,
-      models,
-    });
-    return models;
+    return { models: result?.models ?? [], fresh: true };
   } catch {
-    return fallback ?? [];
+    // Failed loads fall back without extending the TTL so the next call retries.
+    return { models: fallback ?? [], fresh: false };
   }
 }

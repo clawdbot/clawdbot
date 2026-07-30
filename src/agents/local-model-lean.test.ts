@@ -55,6 +55,7 @@ describe("local model lean tool filtering", () => {
   it("keeps explicitly preserved tools when lean mode is enabled", () => {
     const cfg: OpenClawConfig = {
       agents: {
+        entries: { main: { default: true } },
         defaults: {
           experimental: {
             localModelLean: true,
@@ -97,6 +98,7 @@ describe("local model lean tool filtering", () => {
   it("keeps image understanding while trimming optional media production tools", () => {
     const cfg: OpenClawConfig = {
       agents: {
+        entries: { main: { default: true } },
         defaults: {
           experimental: {
             localModelLean: true,
@@ -135,6 +137,7 @@ describe("local model lean tool filtering", () => {
   it("does not treat wildcard preservation as disabling lean mode", () => {
     const cfg: OpenClawConfig = {
       agents: {
+        entries: { main: { default: true } },
         defaults: {
           experimental: {
             localModelLean: true,
@@ -154,7 +157,10 @@ describe("local model lean tool filtering", () => {
 
   it("matches wildcard preservation without treating a bare wildcard as an override", () => {
     const cfg: OpenClawConfig = {
-      agents: { defaults: { experimental: { localModelLean: true } } },
+      agents: {
+        defaults: { experimental: { localModelLean: true } },
+        entries: { main: { default: true } },
+      },
     };
     expect(
       filterLocalModelLeanTools({

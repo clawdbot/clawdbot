@@ -1,8 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // JSON schema default helpers fill object values from TypeBox schema defaults.
 import { Compile } from "typebox/compile";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { JsonSchemaObject } from "./json-schema.types.js";
-import { parseConfigPathArrayIndex } from "./path-array-index.js";
 
 type JsonSchemaValue = JsonSchemaObject | boolean;
 type LocalRefResolution =
@@ -79,6 +79,7 @@ const schemaIntegerKeywords = new Set([
   "minProperties",
 ]);
 const schemaBooleanKeywords = new Set(["deprecated", "readOnly", "uniqueItems", "writeOnly"]);
+const JSON_POINTER_ARRAY_INDEX_SEGMENT = /^(0|[1-9]\d*)$/;
 
 function schemaTypeIncludes(schema: Record<string, unknown>, type: string): boolean {
   return schema.type === type || (Array.isArray(schema.type) && schema.type.includes(type));
@@ -120,7 +121,7 @@ function compilesUnicodePattern(pattern: string): boolean {
 }
 
 /** Repair JSON Schema regex patterns that fail TypeBox's unicode RegExp compile. */
-export function repairJsonSchemaPatternForUnicodeRegExp(pattern: string): string {
+function repairJsonSchemaPatternForUnicodeRegExp(pattern: string): string {
   if (compilesUnicodePattern(pattern)) {
     return pattern;
   }
@@ -255,6 +256,14 @@ function decodePointerSegment(segment: string): string {
   return decodedSegment.replace(/~1/g, "/").replace(/~0/g, "~");
 }
 
+function parseJsonPointerArrayIndex(segment: string): number | undefined {
+  if (!JSON_POINTER_ARRAY_INDEX_SEGMENT.test(segment)) {
+    return undefined;
+  }
+  const index = Number(segment);
+  return Number.isSafeInteger(index) ? index : undefined;
+}
+
 function resolveLocalAnchor(
   schema: JsonSchemaValue,
   anchor: string,
@@ -347,7 +356,7 @@ function resolveLocalRef(
     let currentResourceBaseId = resourceBaseId;
     for (const segment of ref.slice(2).split("/").map(decodePointerSegment)) {
       if (Array.isArray(current)) {
-        const index = parseConfigPathArrayIndex(segment);
+        const index = parseJsonPointerArrayIndex(segment);
         if (index === undefined) {
           return { found: false };
         }
@@ -918,6 +927,9 @@ function applyObjectPropertyDefaults(
 ): Record<string, unknown> {
   const properties = isRecord(schema.properties) ? schema.properties : {};
   for (const [key, propertySchema] of Object.entries(properties)) {
+    if (isBlockedObjectKey(key)) {
+      continue;
+    }
     const currentValue = value[key];
     const defaultedValue = applySchemaDefaults(
       propertySchema as JsonSchemaValue,
@@ -943,7 +955,7 @@ function applyObjectPropertyDefaults(
         continue;
       }
       for (const key of Object.keys(value)) {
-        if (!regex.test(key)) {
+        if (isBlockedObjectKey(key) || !regex.test(key)) {
           continue;
         }
         patternMatchedKeys.add(key);
@@ -961,7 +973,11 @@ function applyObjectPropertyDefaults(
   if (isRecord(schema.additionalProperties)) {
     const additionalSchema = schema.additionalProperties as JsonSchemaValue;
     for (const key of Object.keys(value)) {
-      if (Object.hasOwn(properties, key) || patternMatchedKeys.has(key)) {
+      if (
+        isBlockedObjectKey(key) ||
+        Object.hasOwn(properties, key) ||
+        patternMatchedKeys.has(key)
+      ) {
         continue;
       }
       value[key] = applySchemaDefaults(
@@ -1309,3 +1325,4 @@ function applySchemaDefaults(
 export function applyJsonSchemaDefaults<T>(schema: JsonSchemaValue, value: T): T {
   return applySchemaDefaults(schema, value) as T;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

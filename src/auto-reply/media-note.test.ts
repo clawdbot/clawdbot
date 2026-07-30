@@ -1,12 +1,38 @@
 /** Tests prompt media-note rendering for inbound attachments. */
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveMediaFacts, type MediaFactLegacyProjection } from "../media/media-facts.js";
 import { getMediaDir } from "../media/store.js";
-import { buildInboundMediaNote } from "./media-note.js";
+import { buildInboundMediaNoteProjection } from "./media-note.js";
 import {
   createSuccessfulAudioMediaDecision,
   createSuccessfulImageMediaDecision,
 } from "./media-understanding.test-fixtures.js";
+import type { MsgContext } from "./templating.js";
+
+type MediaNoteFixture = MsgContext & MediaFactLegacyProjection;
+
+const buildProjection = (ctx: MediaNoteFixture) => {
+  const normalized = { ...ctx, media: ctx.media ?? resolveMediaFacts(ctx) } as Record<
+    string,
+    unknown
+  >;
+  for (const key of [
+    "MediaPath",
+    "MediaUrl",
+    "MediaType",
+    "MediaPaths",
+    "MediaUrls",
+    "MediaTypes",
+    "MediaTranscribedIndexes",
+  ]) {
+    delete normalized[key];
+  }
+  return buildInboundMediaNoteProjection(normalized as MsgContext);
+};
+
+const buildInboundMediaNote = (ctx: MediaNoteFixture): string | undefined =>
+  buildProjection(ctx).text;
 
 describe("buildInboundMediaNote", () => {
   it("formats single MediaPath as a media note (collapses redundant duplicate URL, #47587)", () => {
@@ -107,7 +133,7 @@ describe("buildInboundMediaNote", () => {
   });
 
   it("keeps image attachments after image descriptions are added", () => {
-    const note = buildInboundMediaNote({
+    const projection = buildProjection({
       MediaPaths: ["/tmp/photo.png"],
       MediaUrls: ["https://example.com/photo.png"],
       MediaTypes: ["image/png"],
@@ -120,9 +146,20 @@ describe("buildInboundMediaNote", () => {
         },
       ],
     });
-    expect(note).toBe(
+    expect(projection.text).toBe(
       "[media attached: /tmp/photo.png (image/png) | https://example.com/photo.png]",
     );
+    expect(projection.media).toEqual([
+      {
+        path: "/tmp/photo.png",
+        url: "https://example.com/photo.png",
+        contentType: "image/png",
+        kind: "image",
+        transcribed: false,
+        messageId: undefined,
+        hydrationSuppressed: true,
+      },
+    ]);
   });
 
   it("keeps image attachments when image understanding succeeds via decisions", () => {
@@ -317,6 +354,36 @@ describe("buildInboundMediaNote", () => {
     expect(note).toBe("[media attached: /tmp/document.pdf]");
   });
 
+  it("strips transcribed MPEG-2 audio by extension", () => {
+    const note = buildInboundMediaNote({
+      MediaPaths: ["/tmp/recording.m2a", "/tmp/document.pdf"],
+      MediaUnderstanding: [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: "Transcribed audio content",
+          provider: "whisper",
+        },
+      ],
+    });
+    expect(note).toBe("[media attached: /tmp/document.pdf]");
+  });
+
+  it("strips a transcribed kind-only audio fact without relying on its filename", () => {
+    const projection = buildInboundMediaNoteProjection({
+      media: [
+        {
+          path: "/tmp/opaque-upload",
+          kind: "audio",
+          contentType: "application/octet-stream",
+          transcribed: true,
+        },
+      ],
+    });
+
+    expect(projection).toEqual({ media: [] });
+  });
+
   it("keeps audio attachments when no transcription is available", () => {
     const note = buildInboundMediaNote({
       MediaPaths: ["/tmp/voice.ogg"],
@@ -358,5 +425,55 @@ describe("buildInboundMediaNote", () => {
       MediaUrl: "/tmp/a.png   ",
     });
     expect(note).toBe("[media attached: /tmp/a.png (image/png)]");
+  });
+
+  it("pairs byte-stable single and multi notes with their ordered facts", () => {
+    const single = buildInboundMediaNoteProjection({
+      media: [
+        {
+          path: "/tmp/a.png",
+          url: "https://example.com/a.png",
+          contentType: "image/png",
+          kind: "image",
+        },
+      ],
+    });
+    expect(single).toEqual({
+      text: "[media attached: /tmp/a.png (image/png) | https://example.com/a.png]",
+      media: [
+        {
+          path: "/tmp/a.png",
+          url: "https://example.com/a.png",
+          contentType: "image/png",
+          kind: "image",
+          transcribed: false,
+          messageId: undefined,
+        },
+      ],
+    });
+
+    const multi = buildInboundMediaNoteProjection({
+      media: [
+        { path: "/tmp/a.png", contentType: "image/png" },
+        { path: "/tmp/b.pdf", contentType: "application/pdf" },
+      ],
+    });
+    expect(multi.text).toBe(
+      [
+        "[media attached: 2 files]",
+        "[media attached 1/2: /tmp/a.png (image/png)]",
+        "[media attached 2/2: /tmp/b.pdf (application/pdf)]",
+      ].join("\n"),
+    );
+    expect(
+      multi.media.map(({ path: pathValue, contentType, kind }) => ({
+        path: pathValue,
+        contentType,
+        kind,
+      })),
+    ).toEqual([
+      { path: "/tmp/a.png", contentType: "image/png", kind: "image" },
+      { path: "/tmp/b.pdf", contentType: "application/pdf", kind: "document" },
+    ]);
   });
 });

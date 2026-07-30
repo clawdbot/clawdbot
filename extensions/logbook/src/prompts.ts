@@ -2,8 +2,8 @@
 // timeline cards) adapted from the approach popularized by Dayflow (MIT).
 import type { LogbookCard, LogbookObservation } from "./types.js";
 
-export const CARD_MIN_MINUTES = 10;
-export const CARD_MAX_MINUTES = 60;
+const CARD_MIN_MINUTES = 10;
+const CARD_MAX_MINUTES = 60;
 export const CARD_CATEGORIES = [
   "coding",
   "review",

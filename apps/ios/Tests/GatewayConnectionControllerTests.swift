@@ -1,10 +1,221 @@
 import Foundation
+import Network
+import OpenClawChatUI
+import os
 import Testing
 import UIKit
 @testable import OpenClaw
 @testable import OpenClawKit
 
+@discardableResult
+private func saveActiveManualGateway(
+    host: String,
+    port: Int,
+    useTLS: Bool,
+    stableID: String) -> Bool
+{
+    let entry = GatewaySettingsStore.GatewayRegistryEntry(
+        stableID: stableID,
+        kind: .manual,
+        name: "\(host):\(port)",
+        host: host,
+        port: port,
+        useTLS: useTLS,
+        lastConnectedAtMs: nil)
+    return GatewaySettingsStore.upsertGatewayRegistryEntry(entry, activate: true)
+}
+
+private struct GatewayRegistryTestIsolation {
+    private static let service = GatewaySettingsStore._testGatewayService
+    private static let registryAccount = "gateway-registry"
+    private static let legacyAccount = "lastConnection"
+    private static let legacyDefaultsKeys = [
+        "gateway.last.kind",
+        "gateway.last.host",
+        "gateway.last.port",
+        "gateway.last.tls",
+        "gateway.last.stableID",
+    ]
+
+    private let previousRegistry: String?
+    private let previousLegacyConnection: String?
+    private let previousDefaults: [String: Any?]
+
+    init() {
+        gatewayPersistenceTestSemaphore.wait()
+        self.previousRegistry = KeychainStore.loadString(
+            service: Self.service,
+            account: Self.registryAccount)
+        self.previousLegacyConnection = KeychainStore.loadString(
+            service: Self.service,
+            account: Self.legacyAccount)
+        self.previousDefaults = Dictionary(uniqueKeysWithValues: Self.legacyDefaultsKeys.map { key in
+            (key, UserDefaults.standard.object(forKey: key))
+        })
+        _ = KeychainStore.delete(service: Self.service, account: Self.registryAccount)
+        _ = KeychainStore.delete(service: Self.service, account: Self.legacyAccount)
+        for key in Self.legacyDefaultsKeys {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+    }
+
+    func restore() {
+        if let previousRegistry {
+            _ = KeychainStore.saveString(
+                previousRegistry,
+                service: Self.service,
+                account: Self.registryAccount)
+        } else {
+            _ = KeychainStore.delete(service: Self.service, account: Self.registryAccount)
+        }
+        if let previousLegacyConnection {
+            _ = KeychainStore.saveString(
+                previousLegacyConnection,
+                service: Self.service,
+                account: Self.legacyAccount)
+        } else {
+            _ = KeychainStore.delete(service: Self.service, account: Self.legacyAccount)
+        }
+        for (key, value) in self.previousDefaults {
+            if let value {
+                UserDefaults.standard.set(value, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+        gatewayPersistenceTestSemaphore.signal()
+    }
+}
+
+@MainActor
+private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) async {
+    let deadline = ContinuousClock().now.advanced(by: .seconds(3))
+    while appModel.activeGatewayConnectConfig?.effectiveStableID != stableID,
+          ContinuousClock().now < deadline
+    {
+        await Task.yield()
+    }
+}
+
+@Suite(.serialized) struct GatewayReconnectErrorRetentionTests {
+    @Test @MainActor func `retained display problem does not control next retry`() {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let problem = GatewayConnectionProblem(
+            kind: .pairingScopeUpgradeRequired,
+            owner: .gateway,
+            title: "Additional permissions required",
+            message: "Approve the requested permissions on the gateway.",
+            requestId: "req-admin",
+            retryable: false,
+            pauseReconnect: true)
+        appModel._test_applyOperatorGatewayConnectionProblem(problem)
+
+        appModel._test_prepareForGatewayConnect(
+            stableID: "manual|gateway.example.com|443",
+            preservingGatewayProblem: true)
+
+        #expect(appModel.lastGatewayProblem == problem)
+        #expect(appModel.gatewayDisplayStatusText == problem.localizedStatusText)
+        #expect(!appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == nil)
+
+        let cancelled = NSError(
+            domain: URLError.errorDomain,
+            code: URLError.cancelled.rawValue,
+            userInfo: [NSLocalizedDescriptionKey: "gateway receive: cancelled"])
+        let mapped = appModel._test_mapNodeGatewayConnectionError(cancelled)
+        #expect(mapped?.kind == .websocketCancelled)
+        #expect(mapped?.requestId == nil)
+        #expect(mapped?.pauseReconnect == false)
+    }
+
+    @Test @MainActor func `active operator problem survives node cancellation`() {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let problem = GatewayConnectionProblem(
+            kind: .pairingScopeUpgradeRequired,
+            owner: .gateway,
+            title: "Additional permissions required",
+            message: "Approve the requested permissions on the gateway.",
+            requestId: "req-admin",
+            retryable: false,
+            pauseReconnect: true)
+        appModel._test_applyOperatorGatewayConnectionProblem(problem)
+
+        let cancelled = NSError(
+            domain: URLError.errorDomain,
+            code: URLError.cancelled.rawValue,
+            userInfo: [NSLocalizedDescriptionKey: "gateway receive: cancelled"])
+        let applied = appModel._test_applyNodeGatewayConnectionError(cancelled)
+
+        #expect(applied == problem)
+        #expect(appModel.lastGatewayProblem == problem)
+        #expect(appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == "req-admin")
+
+        appModel._test_clearOperatorGatewayConnectionProblemIfCurrent()
+        #expect(appModel.lastGatewayProblem == nil)
+        #expect(!appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == nil)
+    }
+}
+
 @Suite(.serialized) struct GatewayConnectionControllerTests {
+    @Test @MainActor func `background cancels operator fleet reconciliation`() {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+        controller.setScenePhase(.active)
+        #expect(controller._test_hasOperatorFleetReconcileTask())
+        controller.setScenePhase(.background)
+
+        #expect(!controller._test_hasOperatorFleetReconcileTask())
+        #expect(controller.operatorFleet.statuses.isEmpty)
+    }
+
+    @Test @MainActor func `chat owner survives reconnect while session refresh identity changes`() {
+        let appModel = NodeAppModel()
+        let disconnectedOwner = appModel.chatViewModelOwnerID
+        let disconnectedRefreshIdentity = appModel.chatViewModelIdentityID
+
+        appModel._test_setOperatorConnected(true)
+        #expect(appModel.chatViewModelOwnerID == disconnectedOwner)
+        #expect(appModel.chatViewModelIdentityID != disconnectedRefreshIdentity)
+
+        appModel._test_setOperatorConnected(false)
+        #expect(appModel.chatViewModelOwnerID == disconnectedOwner)
+        #expect(appModel.chatViewModelIdentityID == disconnectedRefreshIdentity)
+    }
+
+    @Test func `direct push registration dedupe includes gateway identity`() {
+        #expect(!NodeAppModel.shouldPublishDirectAPNsRegistration(
+            token: "device-token",
+            gatewayStableID: "gateway-a",
+            lastToken: "device-token",
+            lastGatewayStableID: "gateway-a"))
+        #expect(NodeAppModel.shouldPublishDirectAPNsRegistration(
+            token: "device-token",
+            gatewayStableID: "gateway-b",
+            lastToken: "device-token",
+            lastGatewayStableID: "gateway-a"))
+        #expect(NodeAppModel.shouldPublishDirectAPNsRegistration(
+            token: "device-token",
+            gatewayStableID: "gateway-\u{00E9}",
+            lastToken: "device-token",
+            lastGatewayStableID: "gateway-e\u{0301}"))
+    }
+
+    @Test func `push relay identity preserves exact opaque gateway bytes`() throws {
+        for deviceID in ["\u{0085}gateway-\u{00E9}", " gateway", "gateway\u{FEFF}"] {
+            let identity = try NodeAppModel._test_decodePushRelayGatewayIdentity(
+                #"{"deviceId":"\#(deviceID)","publicKey":"public-key"}"#)
+
+            #expect(Array(identity.deviceId.utf8) == Array(deviceID.utf8))
+        }
+    }
+
     @Test @MainActor func `resolved display name sets default when missing`() {
         let defaults = UserDefaults.standard
         let displayKey = "node.displayName"
@@ -33,6 +244,7 @@ import UIKit
 
             #expect(caps.contains(OpenClawCapability.canvas.rawValue))
             #expect(caps.contains(OpenClawCapability.screen.rawValue))
+            #expect(!caps.contains(OpenClawGatewayClientCapability.inlineWidgets))
             #expect(caps.contains(OpenClawCapability.camera.rawValue))
             #expect(caps.contains(OpenClawCapability.location.rawValue))
             #expect(caps.contains(OpenClawCapability.voiceWake.rawValue))
@@ -66,6 +278,20 @@ import UIKit
         #expect(!GatewayConnectionController._test_isLocationAvailable(
             servicesEnabled: true,
             status: .denied))
+    }
+
+    @Test @MainActor func `registration permissions exclude watch availability`() async {
+        let appModel = NodeAppModel()
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        let permissions = await controller._test_currentPermissions()
+
+        #expect(!permissions.keys.contains(where: { $0.hasPrefix("watch") }))
+    }
+
+    @Test @MainActor func `legacy EventKit permission means readable access`() {
+        #expect(GatewayConnectionController._test_hasEventKitReadAccess(.fullAccess))
+        #expect(!GatewayConnectionController._test_hasEventKitReadAccess(.writeOnly))
+        #expect(!GatewayConnectionController._test_hasEventKitReadAccess(.denied))
     }
 
     @Test @MainActor func `current commands exclude dangerous system exec commands`() {
@@ -108,10 +334,16 @@ import UIKit
         #expect(withoutApprovalScope.scopes.contains("operator.read"))
         #expect(withoutApprovalScope.scopes.contains("operator.write"))
         #expect(!withoutApprovalScope.scopes.contains("operator.approvals"))
+        #expect(!withoutApprovalScope.scopes.contains("operator.questions"))
         #expect(withoutApprovalScope.scopes.contains("operator.talk.secrets"))
         #expect(!withoutApprovalScope.scopesAreExplicit)
+        #expect(withoutApprovalScope.caps == [
+            OpenClawGatewayClientCapability.agentKind,
+            OpenClawGatewayClientCapability.inlineWidgets,
+        ])
 
         #expect(withApprovalScope.scopes.contains("operator.approvals"))
+        #expect(withApprovalScope.scopes.contains("operator.questions"))
         #expect(withAdminScope.scopes.contains("operator.admin"))
     }
 
@@ -129,6 +361,33 @@ import UIKit
         #expect(options.scopes.contains("operator.read"))
         #expect(options.scopes.contains("operator.write"))
         #expect(options.scopes.contains("operator.talk.secrets"))
+    }
+
+    @Test func `permission upgrade polling preserves active connection attempts`() {
+        #expect(NodeAppModel.shouldRestartTalkPermissionUpgradePoll(
+            hasOperatorGatewayTask: false,
+            hasReconnectTask: false))
+        #expect(!NodeAppModel.shouldRestartTalkPermissionUpgradePoll(
+            hasOperatorGatewayTask: true,
+            hasReconnectTask: false))
+        #expect(!NodeAppModel.shouldRestartTalkPermissionUpgradePoll(
+            hasOperatorGatewayTask: false,
+            hasReconnectTask: true))
+    }
+
+    @Test func `automatic talk permission upgrade retries recoverable failures`() {
+        #expect(NodeAppModel.shouldRequestTalkPermissionUpgrade(
+            isTalkEnabled: true,
+            state: .missingScope("operator.talk.secrets")))
+        #expect(NodeAppModel.shouldRequestTalkPermissionUpgrade(
+            isTalkEnabled: true,
+            state: .requestFailed("Gateway is not connected")))
+        #expect(!NodeAppModel.shouldRequestTalkPermissionUpgrade(
+            isTalkEnabled: false,
+            state: .requestFailed("Gateway is not connected")))
+        #expect(!NodeAppModel.shouldRequestTalkPermissionUpgrade(
+            isTalkEnabled: true,
+            state: .upgradeRequested))
     }
 
     @Test func `operator admin scope requests only when shared auth or already granted`() {
@@ -252,56 +511,63 @@ import UIKit
         #expect(appModel.gatewayStatusText == "Connected")
     }
 
-    @Test @MainActor func `saved manual endpoint fallback uses onboarding host when auto connect is enabled`() {
-        withUserDefaults([
-            "gateway.autoconnect": true,
-            "gateway.manual.enabled": true,
-            "gateway.manual.host": "forges-mac-mini.taila96df5.ts.net",
-            "gateway.manual.port": 0,
-            "gateway.manual.tls": false,
-            "node.instanceId": "ios-test",
-        ]) {
-            let appModel = NodeAppModel()
-            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+    @Test @MainActor func `retained gateway problem clears only when explicit target changes`() throws {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let currentConfig = Self.makeGatewayConnectConfig()
+        appModel.applyGatewayConnectConfig(currentConfig)
+        let problem = GatewayConnectionProblem(
+            kind: .connectionRefused,
+            owner: .network,
+            title: "Connection refused",
+            message: "The gateway refused the connection.",
+            retryable: true,
+            pauseReconnect: false)
+        appModel._test_applyOperatorGatewayConnectionProblem(problem)
 
-            let endpoint = controller._test_savedManualEndpointFallback()
+        #expect(appModel.lastGatewayProblem == problem)
 
-            #expect(endpoint?.host == "forges-mac-mini.taila96df5.ts.net")
-            #expect(endpoint?.port == 443)
-            #expect(endpoint?.useTLS == true)
-        }
+        appModel.applyGatewayConnectConfig(currentConfig, forceReconnect: true)
+        #expect(appModel.lastGatewayProblem == problem)
+        #expect(appModel.gatewayDisplayStatusText == problem.localizedStatusText)
+
+        let replacementURL = try #require(URL(string: "wss://replacement.example.com:443"))
+        let replacementConfig = Self.makeGatewayConnectConfig(
+            url: replacementURL,
+            stableID: "manual|replacement.example.com|443")
+        appModel.beginGatewayPreconnectVerification(statusText: "Verifying gateway TLS fingerprint…")
+        #expect(appModel.lastGatewayProblem == problem)
+        #expect(appModel.gatewayDisplayStatusText == problem.localizedStatusText)
+
+        appModel.applyGatewayConnectConfig(replacementConfig, forceReconnect: true)
+        #expect(appModel.lastGatewayProblem == nil)
+        #expect(appModel.gatewayStatusText == "Connecting…")
+        #expect(appModel.gatewayDisplayStatusText == "Connecting…")
+        #expect(!appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == nil)
     }
 
-    @Test @MainActor func `saved manual endpoint fallback requires manual gateway enabled`() {
-        withUserDefaults([
-            "gateway.autoconnect": true,
-            "gateway.manual.enabled": false,
-            "gateway.manual.host": "forges-mac-mini.taila96df5.ts.net",
-            "gateway.manual.port": 443,
-            "gateway.manual.tls": true,
-            "node.instanceId": "ios-test",
-        ]) {
-            let appModel = NodeAppModel()
-            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+    @Test @MainActor func `stable gateway owner preserves focused chat across route changes`() throws {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let currentConfig = Self.makeGatewayConnectConfig()
+        let focusedSessionKey = "agent:main:ios-focused"
+        appModel.applyGatewayConnectConfig(currentConfig)
+        appModel.focusChatSession(focusedSessionKey)
 
-            #expect(controller._test_savedManualEndpointFallback() == nil)
-        }
-    }
+        let replacementURL = try #require(URL(string: "wss://127.0.0.1:2"))
+        let refreshedRoute = Self.makeGatewayConnectConfig(
+            url: replacementURL,
+            stableID: currentConfig.stableID)
+        appModel.applyGatewayConnectConfig(refreshedRoute, forceReconnect: true)
+        #expect(appModel.chatSessionKey == focusedSessionKey)
 
-    @Test @MainActor func `saved manual endpoint fallback requires auto connect`() {
-        withUserDefaults([
-            "gateway.autoconnect": false,
-            "gateway.manual.enabled": true,
-            "gateway.manual.host": "forges-mac-mini.taila96df5.ts.net",
-            "gateway.manual.port": 443,
-            "gateway.manual.tls": true,
-            "node.instanceId": "ios-test",
-        ]) {
-            let appModel = NodeAppModel()
-            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        let replacementConfig = Self.makeGatewayConnectConfig(
+            url: replacementURL,
+            stableID: "manual|replacement.example.com|443")
+        appModel.applyGatewayConnectConfig(replacementConfig, forceReconnect: true)
 
-            #expect(controller._test_savedManualEndpointFallback() == nil)
-        }
+        #expect(appModel.chatSessionKey != focusedSessionKey)
     }
 
     @Test func `gateway connect config matches equivalent inputs`() {
@@ -324,6 +590,156 @@ import UIKit
                 clientDisplayName: "Phone"))
 
         #expect(lhs.hasSameConnectionInputs(as: rhs))
+    }
+
+    @Test @MainActor func `operator fleet retains enabled runtime during endpoint gap`() {
+        let fleet = GatewayOperatorFleet()
+        let config = Self.makeGatewayConnectConfig(stableID: "bonjour|secondary")
+        defer { fleet.stopAll() }
+
+        fleet.reconcile(
+            desiredStableIDs: [config.stableID],
+            configs: [(config: config, name: "Secondary")])
+        #expect(fleet.statuses.map(\.stableID) == [config.stableID])
+
+        fleet.reconcile(desiredStableIDs: [config.stableID], configs: [])
+        #expect(fleet.statuses.map(\.stableID) == [config.stableID])
+
+        fleet.reconcile(desiredStableIDs: [], configs: [])
+        #expect(fleet.statuses.isEmpty)
+    }
+
+    @Test @MainActor func `operator fleet preserves auth pause across same-config reconciles`() {
+        let fleet = GatewayOperatorFleet()
+        let config = Self.makeGatewayConnectConfig(stableID: "bonjour|approval-required")
+        defer { fleet.stopAll() }
+
+        fleet.reconcile(
+            desiredStableIDs: [config.stableID],
+            configs: [(config: config, name: "Approval Required")])
+        fleet._test_pauseRuntimeForAttention(stableID: config.stableID)
+
+        fleet.reconcile(
+            desiredStableIDs: [config.stableID],
+            configs: [(config: config, name: "Renamed While Paused")])
+
+        #expect(fleet.statuses == [
+            GatewayOperatorFleet.Status(
+                stableID: config.stableID,
+                name: "Renamed While Paused",
+                state: .needsAttention,
+                detail: "Approval required"),
+        ])
+    }
+
+    @Test @MainActor func `same target retry unpauses retained pairing problem`() {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let config = Self.makeGatewayConnectConfig()
+        appModel.applyGatewayConnectConfig(config)
+        let problem = GatewayConnectionProblem(
+            kind: .pairingScopeUpgradeRequired,
+            owner: .gateway,
+            title: "Additional permissions required",
+            message: "Approve the requested permissions on the gateway.",
+            requestId: "req-admin",
+            retryable: false,
+            pauseReconnect: true)
+        appModel._test_applyOperatorGatewayConnectionProblem(problem)
+        #expect(appModel.gatewayPairingPaused)
+
+        appModel.applyGatewayConnectConfig(config, forceReconnect: true)
+
+        #expect(appModel.lastGatewayProblem == problem)
+        #expect(appModel.gatewayDisplayStatusText == problem.localizedStatusText)
+        #expect(!appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == nil)
+
+        appModel._test_clearGatewayConnectionProblem()
+
+        #expect(appModel.lastGatewayProblem == nil)
+        #expect(!appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == nil)
+    }
+
+    @Test @MainActor func `gateway preflight retains only the readable problem snapshot`() {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let config = Self.makeGatewayConnectConfig()
+        appModel.applyGatewayConnectConfig(config)
+        let problem = GatewayConnectionProblem(
+            kind: .pairingScopeUpgradeRequired,
+            owner: .gateway,
+            title: "Additional permissions required",
+            message: "Approve the requested permissions on the gateway.",
+            requestId: "req-admin",
+            retryable: false,
+            pauseReconnect: true)
+        appModel._test_applyOperatorGatewayConnectionProblem(problem)
+
+        appModel.beginGatewayPreconnectVerification(statusText: "Verifying gateway TLS fingerprint…")
+
+        #expect(appModel.lastGatewayProblem == problem)
+        #expect(appModel.gatewayDisplayStatusText == problem.localizedStatusText)
+        #expect(appModel.gatewayStatusText == "Verifying gateway TLS fingerprint…")
+        #expect(!appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == nil)
+
+        appModel._test_clearGatewayConnectionProblem()
+        #expect(appModel.lastGatewayProblem == nil)
+    }
+
+    @Test func `gateway connect config keeps stable owner bytes exact`() {
+        let composedID = "gateway-\u{00E9}"
+        let decomposedID = "gateway-e\u{0301}"
+        let boundaryID = "\u{0085}gateway"
+        let composed = Self.makeGatewayConnectConfig(stableID: composedID)
+        let decomposed = Self.makeGatewayConnectConfig(stableID: decomposedID)
+        let boundary = Self.makeGatewayConnectConfig(stableID: boundaryID)
+
+        #expect(composedID == decomposedID)
+        #expect(Array(composed.effectiveStableID.utf8) == Array(composedID.utf8))
+        #expect(Array(boundary.effectiveStableID.utf8) == Array(boundaryID.utf8))
+        #expect(!composed.hasSameConnectionInputs(as: decomposed))
+
+        var composedOptions = composed.nodeOptions
+        composedOptions.deviceAuthGatewayID = composedID
+        var decomposedOptions = composed.nodeOptions
+        decomposedOptions.deviceAuthGatewayID = decomposedID
+        let composedAuthOwner = GatewayConnectConfig(
+            url: composed.url,
+            stableID: "shared-route",
+            tls: composed.tls,
+            token: composed.token,
+            bootstrapToken: composed.bootstrapToken,
+            password: composed.password,
+            nodeOptions: composedOptions)
+        let decomposedAuthOwner = GatewayConnectConfig(
+            url: composed.url,
+            stableID: "shared-route",
+            tls: composed.tls,
+            token: composed.token,
+            bootstrapToken: composed.bootstrapToken,
+            password: composed.password,
+            nodeOptions: decomposedOptions)
+        #expect(!composedAuthOwner.hasSameConnectionInputs(as: decomposedAuthOwner))
+    }
+
+    @Test @MainActor func `gateway reconnect options stay scoped to exact owner bytes`() {
+        let composedID = "gateway-\u{00E9}"
+        let decomposedID = "gateway-e\u{0301}"
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let config = Self.makeGatewayConnectConfig(stableID: composedID)
+        appModel.applyGatewayConnectConfig(config)
+        var fallback = config.nodeOptions
+        fallback.clientId = "fallback-client"
+
+        let selected = appModel._test_currentGatewayReconnectOptions(
+            stableID: decomposedID,
+            fallback: fallback)
+
+        #expect(selected.clientId == "fallback-client")
     }
 
     @Test func `setup auth override is scoped to scanned endpoint`() {
@@ -380,7 +796,7 @@ import UIKit
 
     @Test func `persisted setup auth stays scoped after view recreation`() throws {
         let instanceID = "setup-auth-owner-\(UUID().uuidString)"
-        defer { GatewaySettingsStore.deleteGatewayCredentials(instanceId: instanceID) }
+        defer { GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID) }
         let firstStableID = "manual|first.gateway.example.com|443"
         let secondStableID = "manual|second.gateway.example.com|443"
         GatewaySettingsStore.saveGatewayCredentials(
@@ -392,7 +808,9 @@ import UIKit
             instanceId: instanceID)
 
         let relaunchedOverride = try #require(
-            GatewayConnectionController.ManualAuthOverride.persisted(instanceId: instanceID))
+            GatewayConnectionController.ManualAuthOverride.persisted(
+                instanceId: instanceID,
+                targetStableID: firstStableID))
         let sameTargetRetryOverride = try #require(
             GatewayConnectionController.ManualAuthOverride.persisted(
                 instanceId: instanceID,
@@ -420,19 +838,23 @@ import UIKit
         #expect(secondGatewayAuth.password == nil)
         #expect(GatewaySettingsStore.loadGatewayCredentials(
             instanceId: instanceID,
-            gatewayStableID: firstStableID) == .empty)
+            gatewayStableID: firstStableID).bootstrapToken == "source-bootstrap-token")
         let persistedCredentiallessHandoff = GatewaySettingsStore.loadGatewayCredentials(
             instanceId: instanceID,
             gatewayStableID: secondStableID)
         #expect(!persistedCredentiallessHandoff.hasCredentials)
         #expect(persistedCredentiallessHandoff.suppressStoredDeviceAuth)
         let nextRelaunchOverride = try #require(
-            GatewayConnectionController.ManualAuthOverride.persisted(instanceId: instanceID))
+            GatewayConnectionController.ManualAuthOverride.persisted(
+                instanceId: instanceID,
+                targetStableID: secondStableID))
         #expect(nextRelaunchOverride.targetStableID == secondStableID)
         #expect(nextRelaunchOverride.suppressStoredDeviceAuth)
     }
 
     @Test @MainActor func `empty setup auth does not reuse stored gateway credentials`() async throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -450,7 +872,7 @@ import UIKit
             suppressStoredDeviceAuth: false,
             instanceId: instanceID)
         defer {
-            GatewaySettingsStore.deleteGatewayCredentials(instanceId: instanceID)
+            GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID)
             if let previousInstanceID {
                 defaults.set(previousInstanceID, forKey: "node.instanceId")
             } else {
@@ -495,6 +917,8 @@ import UIKit
     }
 
     @Test @MainActor func `legacy auth preserves proven relay credentials and otherwise requires full re-pair`() throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -502,8 +926,8 @@ import UIKit
         let defaults = UserDefaults.standard
         let previousInstanceID = defaults.string(forKey: "node.instanceId")
         let instanceID = "legacy-relay-\(UUID().uuidString)"
-        let gatewayService = "ai.openclawfoundation.app.gateway"
-        let lastConnectionAccount = "lastConnection"
+        let gatewayService = GatewaySettingsStore._testGatewayService
+        let lastConnectionAccount = "gateway-registry"
         let previousLastConnection = KeychainStore.loadString(
             service: gatewayService,
             account: lastConnectionAccount)
@@ -511,7 +935,7 @@ import UIKit
         setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
         defaults.set(instanceID, forKey: "node.instanceId")
         defer {
-            GatewaySettingsStore.deleteGatewayCredentials(instanceId: instanceID)
+            GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID)
             if let previousInstanceID {
                 defaults.set(previousInstanceID, forKey: "node.instanceId")
             } else {
@@ -557,7 +981,7 @@ import UIKit
         GatewaySettingsStore.saveLegacyGatewayTokenForMigrationTest(
             "unproven-field-token",
             instanceId: instanceID)
-        GatewaySettingsStore.saveLastGatewayConnectionManual(
+        saveActiveManualGateway(
             host: "gateway.example.com",
             port: 443,
             useTLS: true,
@@ -624,7 +1048,7 @@ import UIKit
         GatewaySettingsStore.saveLegacyGatewayTokenForMigrationTest(
             "unproven-field-token",
             instanceId: instanceID)
-        GatewaySettingsStore.saveLastGatewayConnectionManual(
+        saveActiveManualGateway(
             host: "pair-again.example.com",
             port: 443,
             useTLS: true,
@@ -671,7 +1095,7 @@ import UIKit
         let previousInstanceID = UserDefaults.standard.string(forKey: "node.instanceId")
         UserDefaults.standard.set(instanceID, forKey: "node.instanceId")
         defer {
-            GatewaySettingsStore.deleteGatewayCredentials(instanceId: instanceID)
+            GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID)
             if let previousInstanceID {
                 UserDefaults.standard.set(previousInstanceID, forKey: "node.instanceId")
             } else {
@@ -718,20 +1142,22 @@ import UIKit
         defer { appModel.disconnectGateway() }
         appModel.applyGatewayConnectConfig(config)
 
-        let emptyIssuanceOptions = appModel._test_completeSuccessfulGatewayAuthHandoff(
+        let emptyIssuanceOptions = try appModel._test_completeSuccessfulGatewayAuthHandoff(
             issuedRoles: [],
             nodeOptions: nodeOptions)
-        let operatorOnlyOptions = appModel._test_completeSuccessfulGatewayAuthHandoff(
+        let operatorOnlyOptions = try appModel._test_completeSuccessfulGatewayAuthHandoff(
             issuedRoles: ["operator"],
             nodeOptions: nodeOptions)
-        let nodeOnlyOptions = appModel._test_completeSuccessfulGatewayAuthHandoff(
+        let nodeOnlyOptions = try appModel._test_completeSuccessfulGatewayAuthHandoff(
             issuedRoles: ["node"],
             nodeOptions: nodeOptions)
         #expect(emptyIssuanceOptions == nil)
         #expect(operatorOnlyOptions == nil)
         #expect(nodeOnlyOptions == nil)
         #expect(appModel.activeGatewayConnectConfig?.bootstrapToken == "one-time-bootstrap")
-        #expect(GatewaySettingsStore.loadGatewayCredentialMetadata(instanceId: instanceID) != nil)
+        #expect(GatewaySettingsStore.loadGatewayCredentialMetadata(
+            instanceId: instanceID,
+            gatewayStableID: stableID) != nil)
 
         _ = DeviceAuthStore.storeToken(
             deviceId: identity.deviceId,
@@ -745,14 +1171,17 @@ import UIKit
             gatewayID: stableID)
         let bootstrapOptions = nodeOptions
         appModel._test_setGatewayLoopTasks(node: nil, operator: Task {})
-        nodeOptions = try #require(appModel._test_completeSuccessfulGatewayAuthHandoff(
+        let completedOptions = try appModel._test_completeSuccessfulGatewayAuthHandoff(
             issuedRoles: ["node", "operator"],
-            nodeOptions: nodeOptions))
+            nodeOptions: nodeOptions)
+        nodeOptions = try #require(completedOptions)
 
         #expect(nodeOptions.allowStoredDeviceAuth)
         #expect(appModel.activeGatewayConnectConfig?.nodeOptions.allowStoredDeviceAuth == true)
         #expect(appModel.activeGatewayConnectConfig?.bootstrapToken == nil)
-        #expect(GatewaySettingsStore.loadGatewayCredentialMetadata(instanceId: instanceID) == nil)
+        #expect(GatewaySettingsStore.loadGatewayCredentialMetadata(
+            instanceId: instanceID,
+            gatewayStableID: stableID) == nil)
         #expect(DeviceAuthStore.loadToken(
             deviceId: identity.deviceId,
             role: "node",
@@ -970,6 +1399,8 @@ import UIKit
     }
 
     @Test @MainActor func `target switch reset clears previous reconnect route`() async {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
         let defaults = UserDefaults.standard
         let reconnectDefaults: [String: Any?] = [
             "gateway.autoconnect": true,
@@ -982,8 +1413,8 @@ import UIKit
         for key in reconnectDefaults.keys {
             reconnectDefaultsSnapshot[key] = defaults.object(forKey: key)
         }
-        let gatewayService = "ai.openclawfoundation.app.gateway"
-        let lastConnectionAccount = "lastConnection"
+        let gatewayService = GatewaySettingsStore._testGatewayService
+        let lastConnectionAccount = "gateway-registry"
         let priorLastConnection = KeychainStore.loadString(
             service: gatewayService,
             account: lastConnectionAccount)
@@ -1015,7 +1446,7 @@ import UIKit
         for (key, value) in reconnectDefaults {
             defaults.set(value, forKey: key)
         }
-        GatewaySettingsStore.saveLastGatewayConnectionManual(
+        saveActiveManualGateway(
             host: "previous.gateway.invalid",
             port: 443,
             useTLS: true,
@@ -1037,6 +1468,7 @@ import UIKit
         #expect(appModel.gatewayServerName == nil)
         #expect(!appModel._test_hasGatewayLoopTasks().node)
         #expect(!appModel._test_hasGatewayLoopTasks().operator)
+        #expect(!appModel._test_hasChatSessionRoutingRestoreTask())
         #expect(ShareGatewayRelaySettings.loadConfig() == nil)
 
         let relaunchedModel = NodeAppModel()
@@ -1129,6 +1561,8 @@ import UIKit
     }
 
     @Test @MainActor func `newer explicit connect immediately invalidates queued config`() async throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
         let host = "new-target.gateway.invalid"
         let stableID = "manual|\(host.lowercased())|443"
         defer { GatewayTLSStore.clearFingerprint(stableID: stableID) }
@@ -1179,6 +1613,8 @@ import UIKit
     }
 
     @Test @MainActor func `trusted certificate keeps device auth route scoped`() async throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
         let host = "127.0.0.1"
         let stableID = "manual|\(host)|1"
         defer { GatewayTLSStore.clearFingerprint(stableID: stableID) }
@@ -1201,7 +1637,57 @@ import UIKit
         #expect(appModel.activeGatewayConnectConfig?.nodeOptions.deviceAuthGatewayID == stableID)
     }
 
+    @Test @MainActor func `discovered connect preserves exact device auth owner bytes`() async throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let stableID = "\u{0085}gateway-e\u{0301}"
+        let endpoint: NWEndpoint = .service(
+            name: "Exact Owner",
+            type: "_openclaw-gw._tcp",
+            domain: "local.",
+            interface: nil)
+        let gateway = GatewayDiscoveryModel.DiscoveredGateway(
+            name: "Exact Owner",
+            endpoint: endpoint,
+            stableID: stableID,
+            debugID: "exact-owner",
+            lanHost: nil,
+            tailnetDns: nil,
+            gatewayPort: nil,
+            canvasPort: nil,
+            tlsEnabled: true,
+            tlsFingerprintSha256: nil,
+            cliPath: nil)
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let persistedOwnerBytes = OSAllocatedUnfairLock<[UInt8]?>(initialState: nil)
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            tcpReachabilityProbe: { _, _, _, _ in true },
+            tlsFingerprintProbe: { _ in .fingerprint("exact-owner-fingerprint") },
+            serviceEndpointResolver: { _ in (host: "127.0.0.1", port: 1) },
+            persistTLSFingerprint: { _, owner in
+                persistedOwnerBytes.withLock { $0 = Array(owner.utf8) }
+                return true
+            })
+
+        #expect(await controller.connectWithDiagnostics(gateway) == nil)
+        await controller.acceptPendingTrustPrompt()
+        for _ in 0..<100 where appModel.activeGatewayConnectConfig == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(persistedOwnerBytes.withLock { $0 } == Array(stableID.utf8))
+        #expect(appModel.activeGatewayConnectConfig.map { Array($0.stableID.utf8) } == Array(stableID.utf8))
+        #expect(appModel.activeGatewayConnectConfig
+            .flatMap(\.nodeOptions.deviceAuthGatewayID)
+            .map { Array($0.utf8) } == Array(stableID.utf8))
+    }
+
     @Test @MainActor func `first trust aborts when certificate pin is not durable`() async {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
         let host = "127.0.0.1"
         let stableID = "manual|\(host)|2"
         defer { GatewayTLSStore.clearFingerprint(stableID: stableID) }
@@ -1274,6 +1760,8 @@ import UIKit
     }
 
     @Test @MainActor func `cancel during forced reset restores current gateway`() async throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
         let host = "replacement.gateway.invalid"
         let stableID = "manual|\(host)|443"
         defer { GatewayTLSStore.clearFingerprint(stableID: stableID) }
@@ -1343,6 +1831,8 @@ import UIKit
     }
 
     @Test @MainActor func `new connect waits for superseded forced reset`() async throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
         let forceHost = "192.168.1.39"
 
         let resetRelease = AsyncStream<Void>.makeStream()
@@ -1392,6 +1882,8 @@ import UIKit
     }
 
     @Test @MainActor func `new connect waits for model owned reset barrier`() async throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
         let resetRelease = AsyncStream<Void>.makeStream()
         let appModel = NodeAppModel()
         defer {
@@ -1429,6 +1921,8 @@ import UIKit
     }
 
     @Test @MainActor func `trust decline releases suppression without reconnecting unpinned target`() async {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
         let defaults = UserDefaults.standard
         let updates: [String: Any?] = [
             "gateway.autoconnect": false,
@@ -1498,14 +1992,13 @@ import UIKit
         #expect(appModel.activeGatewayConnectConfig == nil)
     }
 
-    @Test @MainActor func `manual TLS auto connect requires stored pin`() {
+    @Test @MainActor func `active manual TLS auto connect wins over legacy manual defaults`() async {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
         let host = "manual-autoconnect-\(UUID().uuidString).example.com"
         let stableID = "manual|\(host.lowercased())|443"
         let previousStableID = "manual|previous-gateway.example.com|443"
         let priorPreviousFingerprint = GatewayTLSStore.loadFingerprint(stableID: previousStableID)
-        let priorLastConnection = KeychainStore.loadString(
-            service: "ai.openclawfoundation.app.gateway",
-            account: "lastConnection")
         defer {
             GatewayTLSStore.clearFingerprint(stableID: stableID)
             if let priorPreviousFingerprint {
@@ -1513,28 +2006,18 @@ import UIKit
             } else {
                 GatewayTLSStore.clearFingerprint(stableID: previousStableID)
             }
-            if let priorLastConnection {
-                _ = KeychainStore.saveString(
-                    priorLastConnection,
-                    service: "ai.openclawfoundation.app.gateway",
-                    account: "lastConnection")
-            } else {
-                _ = KeychainStore.delete(
-                    service: "ai.openclawfoundation.app.gateway",
-                    account: "lastConnection")
-            }
         }
         GatewayTLSStore.saveFingerprint("previous-certificate", stableID: previousStableID)
-        GatewaySettingsStore.saveLastGatewayConnectionManual(
-            host: "previous-gateway.example.com",
+        saveActiveManualGateway(
+            host: host,
             port: 443,
             useTLS: true,
-            stableID: previousStableID)
+            stableID: stableID)
 
-        withUserDefaults([
+        await withUserDefaults([
             "gateway.autoconnect": true,
             "gateway.manual.enabled": true,
-            "gateway.manual.host": host,
+            "gateway.manual.host": "previous-gateway.example.com",
             "gateway.manual.port": 443,
             "gateway.manual.tls": true,
             "node.instanceId": "ios-test",
@@ -1556,7 +2039,376 @@ import UIKit
             GatewayTLSStore.saveFingerprint("trusted-certificate", stableID: stableID)
             controller._test_triggerAutoConnect()
             #expect(controller._test_didAutoConnect())
+            await waitForActiveGateway(stableID: stableID, appModel: appModel)
+            #expect(appModel.activeGatewayConnectConfig?.effectiveStableID == stableID)
         }
+    }
+
+    @Test @MainActor func `active local manual gateway auto connects without TLS pin`() async {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let stableID = "manual|127.0.0.1|1"
+        defer {
+            GatewayTLSStore.clearFingerprint(stableID: stableID)
+        }
+        GatewayTLSStore.clearFingerprint(stableID: stableID)
+        saveActiveManualGateway(host: "127.0.0.1", port: 1, useTLS: false, stableID: stableID)
+
+        await withUserDefaults([
+            "gateway.autoconnect": true,
+            "gateway.manual.enabled": false,
+            "node.instanceId": "ios-test",
+        ]) {
+            let appModel = NodeAppModel()
+            defer { appModel.disconnectGateway() }
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+            controller._test_triggerAutoConnect()
+
+            #expect(controller._test_didAutoConnect())
+            await waitForActiveGateway(stableID: stableID, appModel: appModel)
+            #expect(appModel.activeGatewayConnectConfig?.effectiveStableID == stableID)
+            #expect(appModel.activeGatewayConnectConfig?.url == URL(string: "ws://127.0.0.1:1"))
+        }
+    }
+
+    @Test @MainActor func `missing active discovered gateway auto connects to latest manual gateway`() async {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let manualID = "manual|127.0.0.1|1"
+        saveActiveManualGateway(host: "127.0.0.1", port: 1, useTLS: false, stableID: manualID)
+        _ = GatewaySettingsStore.markGatewayConnected(stableID: manualID, atMs: 42)
+        let discoveredID = "bonjour|missing"
+        _ = GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: discoveredID,
+            kind: .discovered,
+            name: "Missing Gateway",
+            host: nil,
+            port: nil,
+            useTLS: true,
+            lastConnectedAtMs: 84))
+        _ = GatewaySettingsStore.setActiveGateway(stableID: discoveredID)
+
+        await withUserDefaults([
+            "gateway.autoconnect": true,
+            "gateway.manual.enabled": false,
+            "node.instanceId": "ios-test",
+        ]) {
+            let appModel = NodeAppModel()
+            defer { appModel.disconnectGateway() }
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+            controller._test_triggerAutoConnect()
+
+            #expect(controller._test_didAutoConnect())
+            await waitForActiveGateway(stableID: manualID, appModel: appModel)
+            #expect(appModel.activeGatewayConnectConfig?.effectiveStableID == manualID)
+            #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == manualID)
+        }
+    }
+
+    @Test @MainActor func `forget gateway clears matching share relay only`() async {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let priorRelay = ShareGatewayRelaySettings.loadConfig()
+        defer {
+            if let priorRelay {
+                ShareGatewayRelaySettings.saveConfig(priorRelay)
+            } else {
+                ShareGatewayRelaySettings.clearConfig()
+            }
+        }
+        let stableID = "manual|forgotten.example.com|443"
+        ShareGatewayRelaySettings.saveConfig(.init(
+            gatewayURLString: "wss://forgotten.example.com",
+            gatewayStableID: stableID,
+            token: "relay-token",
+            password: nil,
+            sessionKey: "main"))
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+        await controller.forgetGateway(stableID: stableID)
+
+        #expect(ShareGatewayRelaySettings.loadConfig() == nil)
+    }
+
+    @Test @MainActor func `forget manual gateway clears matching legacy auto connect defaults`() async {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let host = "forgotten.example.com"
+        let port = 443
+        let stableID = GatewayConnectionController.ManualAuthOverride.manualStableID(host: host, port: port)
+        await withUserDefaults([
+            "gateway.manual.enabled": true,
+            "gateway.manual.host": host,
+            "gateway.manual.port": port,
+            "gateway.manual.tls": true,
+        ]) {
+            let appModel = NodeAppModel()
+            defer { appModel.disconnectGateway() }
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+            await controller.forgetGateway(stableID: stableID)
+
+            let defaults = UserDefaults.standard
+            #expect(!defaults.bool(forKey: "gateway.manual.enabled"))
+            #expect(defaults.object(forKey: "gateway.manual.host") == nil)
+            #expect(defaults.object(forKey: "gateway.manual.port") == nil)
+            #expect(defaults.object(forKey: "gateway.manual.tls") == nil)
+        }
+    }
+
+    @Test @MainActor func `forget gateway preserves legacy defaults for another manual gateway`() async {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        await withUserDefaults([
+            "gateway.manual.enabled": true,
+            "gateway.manual.host": "kept.example.com",
+            "gateway.manual.port": 443,
+            "gateway.manual.tls": true,
+        ]) {
+            let appModel = NodeAppModel()
+            defer { appModel.disconnectGateway() }
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+            await controller.forgetGateway(stableID: "manual|forgotten.example.com|443")
+
+            let defaults = UserDefaults.standard
+            #expect(defaults.bool(forKey: "gateway.manual.enabled"))
+            #expect(defaults.string(forKey: "gateway.manual.host") == "kept.example.com")
+            #expect(defaults.integer(forKey: "gateway.manual.port") == 443)
+            #expect(defaults.bool(forKey: "gateway.manual.tls"))
+        }
+    }
+
+    @Test @MainActor func `forget connected gateway disconnects and repeats device auth cleanup`() async throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let service = GatewaySettingsStore._testGatewayService
+        let account = "gateway-registry"
+        let prior = KeychainStore.loadString(service: service, account: account)
+        defer {
+            if let prior {
+                _ = KeychainStore.saveString(prior, service: service, account: account)
+            } else {
+                _ = KeychainStore.delete(service: service, account: account)
+            }
+        }
+        _ = KeychainStore.delete(service: service, account: account)
+        let connectedID = "manual|connected.example.com|443"
+        let selectedID = "manual|selected.example.com|443"
+        saveActiveManualGateway(host: "selected.example.com", port: 443, useTLS: true, stableID: selectedID)
+        let appModel = NodeAppModel()
+        try appModel.applyGatewayConnectConfig(Self.makeGatewayConnectConfig(
+            url: #require(URL(string: "wss://connected.example.com")),
+            stableID: connectedID))
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        let identity = DeviceIdentityStore.loadOrCreate()
+        defer { DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: "node", gatewayID: connectedID) }
+
+        await controller.forgetGateway(stableID: connectedID)
+        _ = DeviceAuthStore.storeToken(
+            deviceId: identity.deviceId,
+            role: "node",
+            token: "late-handshake-token",
+            gatewayID: connectedID)
+        let deadline = ContinuousClock().now.advanced(by: .seconds(3))
+        while DeviceAuthStore.loadToken(
+            deviceId: identity.deviceId,
+            role: "node",
+            gatewayID: connectedID) != nil,
+            ContinuousClock().now < deadline
+        {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(appModel.activeGatewayConnectConfig == nil)
+        #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == selectedID)
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: identity.deviceId,
+            role: "node",
+            gatewayID: connectedID) == nil)
+    }
+
+    @Test @MainActor func `forget selected gateway preserves a different live route`() async throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let service = GatewaySettingsStore._testGatewayService
+        let account = "gateway-registry"
+        let prior = KeychainStore.loadString(service: service, account: account)
+        defer {
+            if let prior {
+                _ = KeychainStore.saveString(prior, service: service, account: account)
+            } else {
+                _ = KeychainStore.delete(service: service, account: account)
+            }
+        }
+        _ = KeychainStore.delete(service: service, account: account)
+        let selectedID = "manual|selected.example.com|443"
+        let connectedID = "manual|connected.example.com|443"
+        saveActiveManualGateway(host: "selected.example.com", port: 443, useTLS: true, stableID: selectedID)
+        _ = GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: connectedID,
+            kind: .manual,
+            name: "connected.example.com:443",
+            host: "connected.example.com",
+            port: 443,
+            useTLS: true,
+            lastConnectedAtMs: nil))
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let connectedConfig = try Self.makeGatewayConnectConfig(
+            url: #require(URL(string: "wss://connected.example.com")),
+            stableID: connectedID)
+        appModel.applyGatewayConnectConfig(connectedConfig)
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+        await controller.forgetGateway(stableID: selectedID)
+
+        #expect(appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: connectedConfig) == true)
+        #expect(GatewaySettingsStore.activeGatewayEntry() == nil)
+        #expect(GatewaySettingsStore.loadGatewayRegistry().entries.map(\.stableID) == [connectedID])
+    }
+
+    @Test @MainActor func `forget gateway clears only matching legacy discovery selectors`() async {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let service = GatewaySettingsStore._testGatewayService
+        let preferredAccount = "preferredStableID"
+        let lastAccount = "lastDiscoveredStableID"
+        let priorPreferred = KeychainStore.loadString(service: service, account: preferredAccount)
+        let priorLast = KeychainStore.loadString(service: service, account: lastAccount)
+        defer {
+            if let priorPreferred {
+                _ = KeychainStore.saveString(priorPreferred, service: service, account: preferredAccount)
+            } else {
+                _ = KeychainStore.delete(service: service, account: preferredAccount)
+            }
+            if let priorLast {
+                _ = KeychainStore.saveString(priorLast, service: service, account: lastAccount)
+            } else {
+                _ = KeychainStore.delete(service: service, account: lastAccount)
+            }
+        }
+        let forgottenID = "bonjour|forgotten"
+        let keptID = "bonjour|kept"
+        _ = KeychainStore.saveString(forgottenID, service: service, account: preferredAccount)
+        _ = KeychainStore.saveString(keptID, service: service, account: lastAccount)
+
+        await withUserDefaults([
+            "gateway.preferredStableID": forgottenID,
+            "gateway.lastDiscoveredStableID": keptID,
+        ]) {
+            let appModel = NodeAppModel()
+            defer { appModel.disconnectGateway() }
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+            await controller.forgetGateway(stableID: forgottenID)
+
+            let defaults = UserDefaults.standard
+            #expect(defaults.object(forKey: "gateway.preferredStableID") == nil)
+            #expect(defaults.string(forKey: "gateway.lastDiscoveredStableID") == keptID)
+            #expect(KeychainStore.loadString(service: service, account: preferredAccount) == nil)
+            #expect(KeychainStore.loadString(service: service, account: lastAccount) == keptID)
+        }
+    }
+
+    @Test @MainActor func `forget gateway cancels its pending trust handoff`() async {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let service = GatewaySettingsStore._testGatewayService
+        let account = "gateway-registry"
+        let prior = KeychainStore.loadString(service: service, account: account)
+        defer {
+            if let prior {
+                _ = KeychainStore.saveString(prior, service: service, account: account)
+            } else {
+                _ = KeychainStore.delete(service: service, account: account)
+            }
+        }
+        _ = KeychainStore.delete(service: service, account: account)
+        let host = "pending-trust.example.com"
+        let port = 443
+        let stableID = GatewayConnectionController.ManualAuthOverride.manualStableID(host: host, port: port)
+        defer { GatewayTLSStore.clearFingerprint(stableID: stableID) }
+        GatewayTLSStore.clearFingerprint(stableID: stableID)
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            tcpReachabilityProbe: { _, _, _, _ in true },
+            tlsFingerprintProbe: { _ in .fingerprint("forgotten-fingerprint") })
+
+        await controller.connectManual(host: host, port: port, useTLS: true)
+        #expect(controller.pendingTrustPrompt?.stableID == stableID)
+        await controller.forgetGateway(stableID: stableID)
+        await controller.acceptPendingTrustPrompt()
+
+        #expect(controller.pendingTrustPrompt == nil)
+        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID) == nil)
+        #expect(!GatewaySettingsStore.loadGatewayRegistry().entries.contains { $0.stableID == stableID })
+    }
+
+    @Test @MainActor func `forget gateway preserves another gateway pending trust handoff`() async {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let pendingHost = "pending-kept.example.com"
+        let pendingID = GatewayConnectionController.ManualAuthOverride.manualStableID(
+            host: pendingHost,
+            port: 443)
+        defer { GatewayTLSStore.clearFingerprint(stableID: pendingID) }
+        GatewayTLSStore.clearFingerprint(stableID: pendingID)
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            tcpReachabilityProbe: { _, _, _, _ in true },
+            tlsFingerprintProbe: { _ in .fingerprint("kept-fingerprint") })
+
+        await controller.connectManual(host: pendingHost, port: 443, useTLS: true)
+        #expect(controller.pendingTrustPrompt?.stableID == pendingID)
+        await controller.forgetGateway(stableID: "bonjour|unrelated-forgotten")
+
+        #expect(controller.pendingTrustPrompt?.stableID == pendingID)
+    }
+
+    @Test @MainActor func `forget live gateway preserves replacement pending trust generation`() async throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let connectedID = "manual|connected-before-forget.example.com|443"
+        let replacementHost = "replacement-after-forget.example.com"
+        let replacementID = GatewayConnectionController.ManualAuthOverride.manualStableID(
+            host: replacementHost,
+            port: 443)
+        defer { GatewayTLSStore.clearFingerprint(stableID: replacementID) }
+        GatewayTLSStore.clearFingerprint(stableID: replacementID)
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        try appModel.applyGatewayConnectConfig(Self.makeGatewayConnectConfig(
+            url: #require(URL(string: "wss://connected-before-forget.example.com")),
+            stableID: connectedID))
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            tcpReachabilityProbe: { _, _, _, _ in true },
+            tlsFingerprintProbe: { _ in .fingerprint("replacement-fingerprint") })
+
+        await controller.connectManual(host: replacementHost, port: 443, useTLS: true)
+        #expect(controller.pendingTrustPrompt?.stableID == replacementID)
+        await controller.forgetGateway(stableID: connectedID)
+        await controller.acceptPendingTrustPrompt()
+        let deadline = ContinuousClock().now.advanced(by: .seconds(3))
+        while appModel.activeGatewayConnectConfig?.effectiveStableID != replacementID,
+              ContinuousClock().now < deadline
+        {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(appModel.activeGatewayConnectConfig?.effectiveStableID == replacementID)
     }
 
     @Test @MainActor func `stale cancellation lease cannot release newer suppression`() {
@@ -1635,6 +2487,8 @@ import UIKit
     }
 
     @Test @MainActor func `failed replacement restores inherited scanner reconnect state`() async throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
         let defaults = UserDefaults.standard
         let updates: [String: Any?] = [
             "gateway.autoconnect": true,
@@ -1688,6 +2542,8 @@ import UIKit
     }
 
     @Test @MainActor func `foreground reconnect cannot replace queued explicit handoff`() async {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
         let defaults = UserDefaults.standard
         let updates: [String: Any?] = [
             "gateway.autoconnect": false,
@@ -1757,6 +2613,8 @@ import UIKit
     }
 
     @Test @MainActor func `clearing trust prompt invalidates in flight probe`() async {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
         let probeStarted = AsyncStream<Void>.makeStream()
         let probeResults = AsyncStream<GatewayTLSFingerprintProbeResult>.makeStream()
         let appModel = NodeAppModel()
@@ -1790,67 +2648,151 @@ import UIKit
         defer { appModel.disconnectGateway() }
 
         let config = Self.makeGatewayConnectConfig()
+        let focusedSessionKey = "agent:main:ios-foreground-focused"
         appModel.applyGatewayConnectConfig(config)
+        appModel.focusChatSession(focusedSessionKey)
         await appModel._test_restartGatewaySessionsAfterForegroundStaleConnection()
 
         #expect(appModel.gatewayStatusText == "Reconnecting…")
         #expect(appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: config) == true)
+        #expect(appModel.chatSessionKey == focusedSessionKey)
         #expect(appModel._test_hasGatewayLoopTasks().node)
         #expect(appModel._test_hasGatewayLoopTasks().operator)
     }
 
-    @Test @MainActor func `load last connection reads saved values`() {
-        let prior = KeychainStore.loadString(service: "ai.openclawfoundation.app.gateway", account: "lastConnection")
+    @Test @MainActor func `switch to manual gateway applies its stable I D and URL`() async {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let service = GatewaySettingsStore._testGatewayService
+        let account = "gateway-registry"
+        let prior = KeychainStore.loadString(service: service, account: account)
         defer {
             if let prior {
-                _ = KeychainStore.saveString(
-                    prior,
-                    service: "ai.openclawfoundation.app.gateway",
-                    account: "lastConnection")
+                _ = KeychainStore.saveString(prior, service: service, account: account)
             } else {
-                _ = KeychainStore.delete(service: "ai.openclawfoundation.app.gateway", account: "lastConnection")
+                _ = KeychainStore.delete(service: service, account: account)
             }
         }
-        _ = KeychainStore.delete(service: "ai.openclawfoundation.app.gateway", account: "lastConnection")
+        _ = KeychainStore.delete(service: service, account: account)
+        let stableID = "manual|127.0.0.1|1"
+        saveActiveManualGateway(host: "127.0.0.1", port: 1, useTLS: false, stableID: stableID)
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            forceReconnectReset: { _ in })
 
-        GatewaySettingsStore.saveLastGatewayConnectionManual(
-            host: "gateway.example.com",
-            port: 443,
-            useTLS: true,
-            stableID: "manual|gateway.example.com|443")
-        let loaded = GatewaySettingsStore.loadLastGatewayConnection()
-        #expect(loaded == .manual(
-            host: "gateway.example.com",
-            port: 443,
-            useTLS: true,
-            stableID: "manual|gateway.example.com|443"))
+        let failure = await controller.switchToGateway(stableID: stableID)
+        let deadline = ContinuousClock().now.advanced(by: .seconds(3))
+        while appModel.activeGatewayConnectConfig == nil, ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+
+        #expect(failure == nil)
+        #expect(appModel.activeGatewayConnectConfig?.effectiveStableID == stableID)
+        #expect(appModel.activeGatewayConnectConfig?.url == URL(string: "ws://127.0.0.1:1"))
+        #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == stableID)
     }
 
-    @Test @MainActor func `load last connection returns nil for invalid data`() {
-        let prior = KeychainStore.loadString(service: "ai.openclawfoundation.app.gateway", account: "lastConnection")
+    @Test @MainActor func `switch to undiscoverable gateway returns failure without changing active gateway`() async {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let service = GatewaySettingsStore._testGatewayService
+        let account = "gateway-registry"
+        let prior = KeychainStore.loadString(service: service, account: account)
         defer {
             if let prior {
-                _ = KeychainStore.saveString(
-                    prior,
-                    service: "ai.openclawfoundation.app.gateway",
-                    account: "lastConnection")
+                _ = KeychainStore.saveString(prior, service: service, account: account)
             } else {
-                _ = KeychainStore.delete(service: "ai.openclawfoundation.app.gateway", account: "lastConnection")
+                _ = KeychainStore.delete(service: service, account: account)
             }
         }
-        _ = KeychainStore.delete(service: "ai.openclawfoundation.app.gateway", account: "lastConnection")
+        _ = KeychainStore.delete(service: service, account: account)
+        let activeID = "manual|127.0.0.1|1"
+        let discoveredID = "bonjour|missing"
+        saveActiveManualGateway(host: "127.0.0.1", port: 1, useTLS: false, stableID: activeID)
+        _ = GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: discoveredID,
+            kind: .discovered,
+            name: "Kitchen Gateway",
+            host: nil,
+            port: nil,
+            useTLS: true,
+            lastConnectedAtMs: nil))
+        let appModel = NodeAppModel()
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-        // Plant legacy UserDefaults with invalid host/port to exercise migration + validation.
-        withUserDefaults([
-            "gateway.last.kind": "manual",
-            "gateway.last.host": "",
-            "gateway.last.port": 0,
-            "gateway.last.tls": false,
-            "gateway.last.stableID": "manual|invalid|0",
-        ]) {
-            let loaded = GatewaySettingsStore.loadLastGatewayConnection()
-            #expect(loaded == nil)
+        let failure = await controller.switchToGateway(stableID: discoveredID)
+
+        #expect(failure == "Kitchen Gateway is not currently discoverable on this network.")
+        #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == activeID)
+        #expect(appModel.activeGatewayConnectConfig == nil)
+    }
+
+    @Test @MainActor func `chat cache remains isolated when active gateway switches`() async throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let service = GatewaySettingsStore._testGatewayService
+        let account = "gateway-registry"
+        let prior = KeychainStore.loadString(service: service, account: account)
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
+        defer {
+            if let prior {
+                _ = KeychainStore.saveString(prior, service: service, account: account)
+            } else {
+                _ = KeychainStore.delete(service: service, account: account)
+            }
+            if let previousStateDir {
+                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
+            } else {
+                unsetenv("OPENCLAW_STATE_DIR")
+            }
+            try? FileManager.default.removeItem(at: tempDir)
         }
+        _ = KeychainStore.delete(service: service, account: account)
+        let gatewayA = "manual|gateway-a|18789"
+        let gatewayB = "manual|gateway-b|18789"
+        saveActiveManualGateway(host: "gateway-a", port: 18789, useTLS: false, stableID: gatewayA)
+        _ = GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: gatewayB,
+            kind: .manual,
+            name: "Gateway B",
+            host: "gateway-b",
+            port: 18789,
+            useTLS: false,
+            lastConnectedAtMs: nil))
+        let appModel = NodeAppModel()
+        let session = OpenClawChatSessionEntry(
+            key: "agent:main:a",
+            kind: nil,
+            displayName: "Gateway A session",
+            surface: nil,
+            subject: nil,
+            room: nil,
+            space: nil,
+            updatedAt: 1,
+            sessionId: nil,
+            systemSent: nil,
+            abortedLastRun: nil,
+            thinkingLevel: nil,
+            verboseLevel: nil,
+            inputTokens: nil,
+            outputTokens: nil,
+            totalTokens: nil,
+            modelProvider: nil,
+            model: nil,
+            contextTokens: nil)
+
+        await appModel.storeCachedChatSessions([session])
+        _ = GatewaySettingsStore.setActiveGateway(stableID: gatewayB)
+        #expect(await appModel.loadCachedChatSessions().isEmpty)
+        _ = GatewaySettingsStore.setActiveGateway(stableID: gatewayA)
+        #expect(await appModel.loadCachedChatSessions() == [session])
     }
 
     private static func makeGatewayConnectConfig(

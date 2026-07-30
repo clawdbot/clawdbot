@@ -3,13 +3,16 @@ import { definePluginEntry } from "openclaw/plugin-sdk/core";
 
 export default definePluginEntry({
   id: "memory-core",
-  name: "Memory (Core)",
+  name: "OpenClaw Memory",
   description: "File-backed memory search tools and CLI",
   register(api) {
     api.registerCli(
       async ({ program }) => {
         const { registerMemoryCli } = await import("./cli.js");
-        registerMemoryCli(program);
+        registerMemoryCli(program, {
+          acquireLocalService: api.runtime.llm?.acquireLocalService,
+          withLease: api.runtime.state.withLease.bind(api.runtime.state),
+        });
       },
       {
         descriptors: [

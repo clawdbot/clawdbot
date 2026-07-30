@@ -7,7 +7,7 @@ import { writeExternalFileWithinOutputRoot } from "./output-files.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 import { sanitizeUntrustedFileName } from "./safe-filename.js";
 
-export type BrowserDownloadCaptureState = {
+type BrowserDownloadCaptureState = {
   downloadWaiterDepth: number;
 };
 

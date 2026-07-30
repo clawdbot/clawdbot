@@ -1,4 +1,29 @@
 import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
+import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-contract.js";
+import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths.ts";
+
+type WindowWithControlUiBasePath = Window &
+  typeof globalThis & {
+    [key: string]: unknown;
+  };
+
+export function resolveControlUiBasePath(pathname: string): string {
+  if (typeof window !== "undefined") {
+    const windowValue = (window as WindowWithControlUiBasePath)[
+      "__OPENCLAW_CONTROL_UI_BASE_PATH__"
+    ];
+    if (typeof windowValue === "string") {
+      return normalizeBasePath(windowValue);
+    }
+  }
+  if (typeof document !== "undefined") {
+    const documentValue = document.documentElement.getAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE);
+    if (documentValue !== null) {
+      return normalizeBasePath(documentValue);
+    }
+  }
+  return inferBasePathFromPathname(pathname);
+}
 
 function readLocation(): RouteLocation {
   return {

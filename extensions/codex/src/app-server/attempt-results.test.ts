@@ -1,5 +1,4 @@
 // Codex tests cover attempt results plugin behavior.
-import type { EmbeddedRunAttemptResult } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import {
   buildCodexAppServerPromptTimeoutOutcome,
@@ -7,15 +6,11 @@ import {
   isInvalidCodexImagePayloadError,
   resolveCodexAppServerReplayBlockedReason,
 } from "./attempt-results.js";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 
 function createResult(overrides: Partial<EmbeddedRunAttemptResult> = {}): EmbeddedRunAttemptResult {
   return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
+    terminal: { kind: "ok" },
     sessionIdUsed: "session-1",
     messagesSnapshot: [],
     assistantTexts: [],
@@ -67,7 +62,7 @@ describe("Codex app-server attempt results", () => {
     expect(
       buildCodexAppServerPromptTimeoutOutcome({
         result: createResult({
-          toolMetas: [{ toolName: "exec" }],
+          assistantTexts: ["Salvaged answer."],
         }),
         turnCompletionIdleTimedOut: true,
         turnWatchTimeoutKind: "terminal",
@@ -127,6 +122,29 @@ describe("Codex app-server attempt results", () => {
     ).toEqual({
       message:
         "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
+      replayInvalid: true,
+      livenessState: "abandoned",
+    });
+  });
+
+  it("builds an honest terminal-idle outcome instead of budget advice", () => {
+    expect(
+      buildCodexAppServerPromptTimeoutOutcome({
+        result: createResult({}),
+        turnCompletionIdleTimedOut: true,
+        turnWatchTimeoutKind: "terminal",
+      }),
+    ).toEqual({
+      message:
+        "Codex stopped responding: no activity arrived for the turn's liveness window, so the turn was ended and the connection was replaced. Retry to continue on a fresh session.",
+    });
+    expect(
+      buildCodexAppServerPromptTimeoutOutcome({
+        result: createResult({ toolMetas: [{ toolName: "exec" }] }),
+        turnCompletionIdleTimedOut: true,
+        turnWatchTimeoutKind: "terminal",
+      }),
+    ).toMatchObject({
       replayInvalid: true,
       livenessState: "abandoned",
     });

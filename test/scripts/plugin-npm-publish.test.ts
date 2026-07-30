@@ -46,7 +46,7 @@ describe("plugin npm publish wrapper", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(
-      "usage: bash scripts/plugin-npm-publish.sh [--dry-run|--pack-dry-run|--publish] <package-dir>",
+      "usage: bash scripts/plugin-npm-publish.sh [--dry-run|--pack|--pack-dry-run|--publish] <package-dir>",
     );
     expect(result.stderr).toBe("");
   });
@@ -57,8 +57,16 @@ describe("plugin npm publish wrapper", () => {
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr.trim()).toBe(
-      "usage: bash scripts/plugin-npm-publish.sh [--dry-run|--pack-dry-run|--publish] <package-dir>",
+      "usage: bash scripts/plugin-npm-publish.sh [--dry-run|--pack|--pack-dry-run|--publish] <package-dir>",
     );
+  });
+
+  it("requires an explicit artifact directory for real pack mode", () => {
+    const result = runPluginPublishWrapper(["--pack", "extensions/telegram"]);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("--pack requires OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR");
   });
 
   it("rejects option-like package dirs before package checks", () => {

@@ -1,6 +1,8 @@
 // Covers wired hook inbound-claim dispatch behavior.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
+import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 
 const inboundClaimEvent = {
   content: "who are you",
@@ -105,7 +107,8 @@ describe("inbound_claim hook runner", () => {
       { hookName: "inbound_claim", handler: first },
       { hookName: "inbound_claim", handler: second },
     ]);
-    registry.typedHooks[1].pluginId = "other-plugin";
+    expectDefined(registry.typedHooks[1], "registry.typedHooks[1] test invariant").pluginId =
+      "other-plugin";
 
     const result = await runner.runInboundClaimForPlugin(
       "test-plugin",
@@ -194,7 +197,7 @@ describe("inbound_claim hook runner", () => {
         [{ hookName: "inbound_claim", handler: slow }],
         { logger },
       );
-      registry.typedHooks[0].timeoutMs = 5;
+      expectDefined(registry.typedHooks[0], "registry.typedHooks[0] test invariant").timeoutMs = 5;
 
       const run = runner.runInboundClaimForPluginOutcome(
         "test-plugin",

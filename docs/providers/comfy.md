@@ -206,7 +206,11 @@ Comfy supports shared top-level connection settings plus per-capability workflow
 | `mode`                | `"local"` or `"cloud"` | Connection mode. Defaults to `"local"`.                                               |
 | `baseUrl`             | string                 | Defaults to `http://127.0.0.1:8188` for local or `https://cloud.comfy.org` for cloud. |
 | `apiKey`              | string                 | Optional inline key, alternative to `COMFY_API_KEY` / `COMFY_CLOUD_API_KEY` env vars. |
-| `allowPrivateNetwork` | boolean                | Allow a private/LAN `baseUrl` in cloud mode.                                          |
+| `allowPrivateNetwork` | boolean                | Allow a private/LAN `baseUrl` in cloud mode or a local private-DNS FQDN.              |
+
+<Note>
+In `local` mode, loopback/private IP literals and single-label service names such as `http://comfyui:8188` work without `allowPrivateNetwork`. Public-looking private-DNS FQDNs such as `https://comfy.local.example.com` require `allowPrivateNetwork: true`. Private-origin trust stays scoped to the configured scheme, hostname, and port; local redirects cannot leave the configured hostname, while cloud redirects to public CDNs are checked with the default SSRF policy.
+</Note>
 
 ### Per-capability keys
 

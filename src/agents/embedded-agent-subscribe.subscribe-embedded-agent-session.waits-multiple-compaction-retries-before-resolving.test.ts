@@ -1,5 +1,6 @@
 // Compaction retry subscription tests cover retry wait accounting, compaction
 // event emission, abort-on-unsubscribe, and verbose tool summary behavior.
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
@@ -73,6 +74,24 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
     expect(subscription.getCompactionCount()).toBe(2);
     expect(subscription.getLastCompactionTokensAfter()).toBe(6_789);
+  });
+
+  it("clears the completed assistant when compaction schedules a retry", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-compaction-assistant",
+    });
+    const assistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "Reply before compaction" }],
+    } as AssistantMessage;
+
+    emit({ type: "message_end", message: assistant });
+    expect(subscription.getCurrentAttemptAssistant()).toEqual(assistant);
+    expect(subscription.assistantTexts).toEqual(["Reply before compaction"]);
+
+    emit({ type: "compaction_end", willRetry: true });
+    expect(subscription.getCurrentAttemptAssistant()).toBeUndefined();
+    expect(subscription.assistantTexts).toEqual([]);
   });
 
   it("does not count compaction when result is absent", () => {

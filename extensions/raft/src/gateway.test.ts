@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
-import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
+import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedRaftAccount } from "./accounts.js";
@@ -30,33 +30,35 @@ function createContext(accountId = "default") {
     lastStopAt: null,
     lastError: null,
   };
-  const run = vi.fn(async (params: {
-    raw: unknown;
-    adapter: {
-      ingest: (raw: unknown) => {
-        id: string;
-        timestamp: number;
-        rawText: string;
-        textForAgent: string;
-        textForCommands: string;
-      };
-      resolveTurn: (input: {
-        id: string;
-        timestamp: number;
-        rawText: string;
-        textForAgent: string;
-        textForCommands: string;
-      }) => Promise<{
-        delivery: {
-          deliver: () => Promise<{ visibleReplySent: false }>;
+  const run = vi.fn(
+    async (params: {
+      raw: unknown;
+      adapter: {
+        ingest: (raw: unknown) => {
+          id: string;
+          timestamp: number;
+          rawText: string;
+          textForAgent: string;
+          textForCommands: string;
         };
-      }>;
-    };
-  }) => {
-    const input = params.adapter.ingest(params.raw);
-    const turn = await params.adapter.resolveTurn(input);
-    await turn.delivery.deliver();
-  });
+        resolveTurn: (input: {
+          id: string;
+          timestamp: number;
+          rawText: string;
+          textForAgent: string;
+          textForCommands: string;
+        }) => Promise<{
+          delivery: {
+            deliver: () => Promise<{ visibleReplySent: false }>;
+          };
+        }>;
+      };
+    }) => {
+      const input = params.adapter.ingest(params.raw);
+      const turn = await params.adapter.resolveTurn(input);
+      await turn.delivery.deliver();
+    },
+  );
   const ctx = {
     cfg: {},
     accountId,
@@ -102,21 +104,26 @@ function createContext(accountId = "default") {
     ctx: ctx as unknown as ChannelGatewayContext<ResolvedRaftAccount>,
     controller: new AbortController(),
     run,
-    wakeDedupe: createClaimableDedupe({
-      ttlMs: 0,
-      memoryMaxSize: 10_000,
+    wakeDedupe: createChannelReplayGuard<{ accountId: string; key: string }>({
+      dedupe: { ttlMs: 0, memoryMaxSize: 10_000 },
+      buildReplayKey: (event) => event.key,
+      namespace: (event) => event.accountId,
     }),
   };
 }
 
 function createPersistentWakeDedupe(stateDir: string) {
-  return createClaimableDedupe({
-    ttlMs: 24 * 60 * 60 * 1000,
-    memoryMaxSize: 1_000,
-    pluginId: "raft",
-    namespacePrefix: "raft-wake-dedupe",
-    stateMaxEntries: 10_000,
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  return createChannelReplayGuard<{ accountId: string; key: string }>({
+    dedupe: {
+      ttlMs: 24 * 60 * 60 * 1000,
+      memoryMaxSize: 1_000,
+      pluginId: "raft",
+      namespacePrefix: "raft-wake-dedupe",
+      stateMaxEntries: 10_000,
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    },
+    buildReplayKey: (event) => event.key,
+    namespace: (event) => event.accountId,
   });
 }
 
@@ -195,6 +202,18 @@ describe("Raft wake gateway", () => {
       status: 200,
     });
     await expect(fetch(wakeEndpoint, { method: "POST" })).resolves.toMatchObject({ status: 401 });
+    await expect(
+      fetch(wakeEndpoint, {
+        method: "POST",
+        headers: { "x-raft-bridge-token": "x".repeat(bridgeToken.length) },
+      }),
+    ).resolves.toMatchObject({ status: 401 });
+    await expect(
+      fetch(wakeEndpoint, {
+        method: "POST",
+        headers: { "x-raft-bridge-token": "short" },
+      }),
+    ).resolves.toMatchObject({ status: 401 });
     await expect(
       fetch(wakeEndpoint, {
         method: "POST",
@@ -485,5 +504,4 @@ describe("Raft wake gateway", () => {
       resetPluginStateStoreForTests();
     }
   });
-
 });

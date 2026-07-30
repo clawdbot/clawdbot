@@ -5,6 +5,7 @@
  */
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
@@ -16,7 +17,7 @@ import {
   toToolDefinitions,
 } from "./agent-tool-definition-adapter.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
-import { createExecTool } from "./bash-tools.exec.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
@@ -104,7 +105,7 @@ describe("agent tool definition adapter", () => {
     const [definition] = toToolDefinitions([tool]);
     const missingWorkdir = path.join(os.tmpdir(), `openclaw-missing-denied-cwd-${Date.now()}`);
 
-    const existing = await definition.execute(
+    const existing = await expectDefined(definition, "definition test invariant").execute(
       "call-denied-existing-cwd",
       {
         command: "echo denied",
@@ -114,7 +115,7 @@ describe("agent tool definition adapter", () => {
       undefined,
       extensionContext,
     );
-    const missing = await definition.execute(
+    const missing = await expectDefined(definition, "definition test invariant").execute(
       "call-denied-missing-cwd",
       {
         command: "echo denied",
@@ -150,7 +151,7 @@ describe("agent tool definition adapter", () => {
     });
     const [definition] = toToolDefinitions([tool]);
 
-    const result = await definition.execute(
+    const result = await expectDefined(definition, "definition test invariant").execute(
       "call-denied-backend-cwd",
       {
         command: "echo denied",
@@ -175,7 +176,7 @@ describe("agent tool definition adapter", () => {
     });
     const [definition] = toToolDefinitions([tool]);
 
-    const result = await definition.execute(
+    const result = await expectDefined(definition, "definition test invariant").execute(
       "call-malformed-exec-params",
       "not-an-object",
       undefined,
@@ -205,7 +206,7 @@ describe("agent tool definition adapter", () => {
     });
     const [definition] = toToolDefinitions([tool]);
 
-    const result = await definition.execute(
+    const result = await expectDefined(definition, "definition test invariant").execute(
       "call-malformed-backend-sandbox-exec-params",
       "not-an-object",
       undefined,
@@ -229,7 +230,7 @@ describe("agent tool definition adapter", () => {
     });
     const [definition] = toToolDefinitions([tool]);
 
-    const result = await definition.execute(
+    const result = await expectDefined(definition, "definition test invariant").execute(
       "call-malformed-elevated-exec-params",
       {},
       undefined,
@@ -259,7 +260,7 @@ describe("agent tool definition adapter", () => {
     });
     const [definition] = toToolDefinitions([tool]);
 
-    const result = await definition.execute(
+    const result = await expectDefined(definition, "definition test invariant").execute(
       "call-malformed-backend-sandbox-exec-params",
       {
         workdir: "/remote/workspace/generated",

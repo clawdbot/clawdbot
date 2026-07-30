@@ -1,13 +1,13 @@
 // Cron protocol conformance tests cover schema compatibility for cron messages.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   CronDeliverySchema,
   CronJobStateSchema,
   CronRunLogEntrySchema,
 } from "../../packages/gateway-protocol/src/schema.js";
-import { MACOS_APP_SOURCES_DIR } from "../compat/legacy-names.js";
 
 type SchemaLike = {
   anyOf?: Array<SchemaLike>;
@@ -42,6 +42,7 @@ function extractConstUnionValues(schema: SchemaLike): string[] {
 
 const UI_FILES = ["ui/src/api/types.ts", "ui/src/lib/cron/index.ts", "ui/src/pages/cron/view.ts"];
 
+const MACOS_APP_SOURCES_DIR = "apps/macos/Sources/OpenClaw";
 const SWIFT_MODEL_CANDIDATES = [`${MACOS_APP_SOURCES_DIR}/CronModels.swift`];
 const SWIFT_STATUS_CANDIDATES = [`${MACOS_APP_SOURCES_DIR}/GatewayConnection.swift`];
 
@@ -92,7 +93,7 @@ describe("cron protocol conformance", () => {
     expect(uiTypes).not.toContain("jobCount");
 
     const [swiftRelPath] = await resolveSwiftFiles(cwd, SWIFT_STATUS_CANDIDATES);
-    const swiftPath = path.join(cwd, swiftRelPath);
+    const swiftPath = path.join(cwd, expectDefined(swiftRelPath, "swiftRelPath test invariant"));
     const swift = await fs.readFile(swiftPath, "utf-8");
     expect(swift).toContain("struct CronSchedulerStatus");
     expect(swift).toContain("let jobs:");

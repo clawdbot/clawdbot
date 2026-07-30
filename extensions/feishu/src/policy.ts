@@ -226,60 +226,47 @@ export async function resolveFeishuGroupSenderActivationIngressAccess(params: {
   });
 }
 
-export function resolveFeishuGroupConfig(params: { cfg?: FeishuConfig; groupId?: string | null }) {
+function resolveFeishuExplicitGroupConfigKey(params: {
+  cfg?: FeishuConfig;
+  groupId?: string | null;
+}): string | undefined {
   const groups = params.cfg?.groups ?? {};
-  const wildcard = groups["*"];
   const groupId = params.groupId?.trim();
-  if (!groupId) {
+  if (!groupId || groupId === "*") {
     return undefined;
   }
-
-  const direct = groups[groupId];
-  if (direct) {
-    return direct;
+  if (Object.hasOwn(groups, groupId)) {
+    return groupId;
   }
-
   const lowered = normalizeOptionalLowercaseString(groupId) ?? "";
-  const matchKey = Object.keys(groups).find(
-    (key) => normalizeOptionalLowercaseString(key) === lowered,
+  return Object.keys(groups).find(
+    (key) => key !== "*" && normalizeOptionalLowercaseString(key) === lowered,
   );
-  if (matchKey) {
-    return groups[matchKey];
+}
+
+export function resolveFeishuGroupConfig(params: { cfg?: FeishuConfig; groupId?: string | null }) {
+  if (!params.groupId?.trim()) {
+    return undefined;
   }
-  return wildcard;
+  const groups = params.cfg?.groups ?? {};
+  const key = resolveFeishuExplicitGroupConfigKey(params);
+  return key ? groups[key] : groups["*"];
 }
 
 export function hasExplicitFeishuGroupConfig(params: {
   cfg?: FeishuConfig;
   groupId?: string | null;
 }): boolean {
-  const groups = params.cfg?.groups ?? {};
-  const groupId = params.groupId?.trim();
-  if (!groupId) {
-    return false;
-  }
-  if (Object.hasOwn(groups, groupId) && groupId !== "*") {
-    return true;
-  }
-
-  const lowered = normalizeOptionalLowercaseString(groupId) ?? "";
-  return Object.keys(groups).some(
-    (key) => key !== "*" && normalizeOptionalLowercaseString(key) === lowered,
-  );
+  return resolveFeishuExplicitGroupConfigKey(params) !== undefined;
 }
 
 export function resolveFeishuGroupToolPolicy(params: ChannelGroupContext) {
-  const cfg = params.cfg.channels?.feishu;
-  if (!cfg) {
-    return undefined;
-  }
-
-  const groupConfig = resolveFeishuGroupConfig({
-    cfg,
+  // This adapter intentionally reads root channels.feishu without account merge;
+  // reply mention policy merges accounts, and changing that asymmetry is product behavior.
+  return resolveFeishuGroupConfig({
+    cfg: params.cfg.channels?.feishu,
     groupId: params.groupId,
-  });
-
-  return groupConfig?.tools;
+  })?.tools;
 }
 
 export function resolveFeishuReplyPolicy(params: {

@@ -27,7 +27,7 @@ import { repairMissingPluginInstallsForIds } from "./missing-configured-plugin-i
 import { asObjectRecord } from "./object.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
 
-export const CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION = "2026.5.2-beta.1";
+const CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION = "2026.5.2-beta.1";
 
 const AGENT_HARNESS_RUNTIME_PLUGIN_IDS: Readonly<Record<string, string>> = {
   // Codex can be selected as a harness for OpenAI models without a plugin entry.
@@ -255,7 +255,7 @@ function addEligiblePluginId(cfg: OpenClawConfig, pluginIds: Set<string>, plugin
 }
 
 /** Return true when this config has not yet crossed the configured-plugin install release gate. */
-export function shouldRunConfiguredPluginInstallReleaseStep(params: {
+function shouldRunConfiguredPluginInstallReleaseStep(params: {
   currentVersion?: string | null;
   touchedVersion?: string | null;
   releaseVersion?: string;
@@ -273,7 +273,7 @@ export function shouldRunConfiguredPluginInstallReleaseStep(params: {
 }
 
 /** Collect plugin/channel ids implied by config for the release install backfill step. */
-export function collectReleaseConfiguredPluginIds(params: {
+function collectReleaseConfiguredPluginIds(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): ReleaseConfiguredPluginIds {

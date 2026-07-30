@@ -1,48 +1,24 @@
-import { LitElement, html, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
-import type { NavigationRouteId } from "../app-navigation.ts";
-import type { ThemeMode } from "../app/theme.ts";
-import "./dashboard-header.ts";
-import "./theme-mode-toggle.ts";
-import "./tooltip.ts";
+import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
+import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
+import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
+import "./tooltip.ts";
 
-export class AppTopbar extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
-  @property({ attribute: false }) routeId?: NavigationRouteId;
-  @property({ attribute: false }) basePath = "";
-  @property({ attribute: false }) agentLabel = "";
+/** Narrow-viewport header: drawer toggle, brand, and command-palette search.
+ * Desktop hides it entirely (layout.css) — the sidebar owns navigation there. */
+class AppTopbar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) navDrawerOpen = false;
   @property({ attribute: false }) onboarding = false;
-  @property({ attribute: false }) routeOwnsHeader = false;
-  @property({ attribute: false }) headerError: string | null = null;
-  @property({ attribute: false }) themeMode: ThemeMode = "system";
-  @property({ attribute: false }) navCollapsed = false;
+  @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) onToggleDrawer?: (trigger: HTMLElement) => void;
   @property({ attribute: false }) onOpenPalette?: () => void;
-  @property({ attribute: false }) onToggleSidebar?: () => void;
-  @property({ attribute: false }) onToggleTerminal?: () => void;
-  @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
-  @property({ attribute: false }) overviewHref = "";
   @property({ attribute: false }) searchDisabled = false;
-  @property({ attribute: false }) terminalAvailable = false;
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.style.display = "contents";
-  }
-
-  private readonly handleNavigate = (event: CustomEvent<NavigationRouteId>) => {
-    this.onNavigate?.(event.detail);
-  };
 
   override render() {
     const drawerLabel = this.navDrawerOpen ? t("nav.collapse") : t("nav.expand");
-    const paletteLabel = t("chat.commandPaletteTitle");
     return html`
       <header
         class="topbar"
@@ -53,67 +29,39 @@ export class AppTopbar extends LitElement {
           <openclaw-tooltip .content=${drawerLabel}>
             <button
               type="button"
-              class="sidebar-menu-trigger topbar-nav-toggle"
+              class="topbar-icon-btn topbar-nav-toggle"
               @click=${(event: MouseEvent) =>
                 this.onToggleDrawer?.(event.currentTarget as HTMLElement)}
               aria-label=${drawerLabel}
-              aria-expanded=${this.navDrawerOpen}
+              aria-expanded=${String(this.navDrawerOpen)}
             >
               <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.menu}</span>
             </button>
           </openclaw-tooltip>
-          <div class="topnav-shell__content">
-            <dashboard-header
-              .routeId=${this.routeId}
-              .basePath=${this.basePath}
-              .agentLabel=${this.agentLabel}
-              .overviewHref=${this.overviewHref}
-              @navigate=${this.handleNavigate}
-            ></dashboard-header>
+          <!-- The Mac app used to float a native drag strip over this brand
+               row; the web now asks the host to move the window itself. -->
+          <div class="topnav-shell__content" @mousedown=${beginNativeWindowDrag}>
+            <div class="topbar-brand" aria-label="OpenClaw">
+              <img
+                class="topbar-brand__logo"
+                src=${controlUiPublicAssetPath("apple-touch-icon.png", this.basePath)}
+                alt=""
+                aria-hidden="true"
+              />
+              <span class="topbar-brand__title">OpenClaw</span>
+            </div>
           </div>
           <div class="topnav-shell__actions">
-            <openclaw-tooltip .content=${paletteLabel}>
+            <openclaw-tooltip .content=${t("chat.commandPaletteTitle")}>
               <button
                 class="topbar-search"
                 ?disabled=${this.searchDisabled || !this.onOpenPalette}
                 @click=${() => this.onOpenPalette?.()}
                 aria-label=${t("chat.openCommandPalette")}
               >
-                <span class="topbar-search__label">${t("common.search")}</span>
-                <kbd class="topbar-search__kbd">⌘K</kbd>
+                ${icons.search}
               </button>
             </openclaw-tooltip>
-            <openclaw-tooltip .content=${this.navCollapsed ? t("nav.expand") : t("nav.collapse")}>
-              <button
-                class="topbar-icon-btn topbar-sidebar-toggle"
-                type="button"
-                @click=${() => this.onToggleSidebar?.()}
-                aria-label=${this.navCollapsed ? t("nav.expand") : t("nav.collapse")}
-                aria-expanded=${String(!this.navCollapsed)}
-              >
-                ${this.navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose}
-              </button>
-            </openclaw-tooltip>
-            ${this.terminalAvailable
-              ? html`
-                  <openclaw-tooltip .content=${t("terminal.toggle")}>
-                    <button
-                      class="topbar-icon-btn"
-                      type="button"
-                      @click=${() => this.onToggleTerminal?.()}
-                      aria-label=${t("terminal.toggle")}
-                    >
-                      ${icons.terminal}
-                    </button>
-                  </openclaw-tooltip>
-                `
-              : nothing}
-            <div class="topbar-status">
-              ${this.routeOwnsHeader && this.headerError
-                ? html`<div class="pill danger">${this.headerError}</div>`
-                : nothing}
-              <openclaw-theme-mode-toggle .mode=${this.themeMode}></openclaw-theme-mode-toggle>
-            </div>
           </div>
         </div>
       </header>

@@ -5,28 +5,16 @@
 
 import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
-import * as Diff from "diff";
+import { createPatch, FILE_HEADERS_ONLY, structuredPatch } from "diff";
+import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
+import { normalizeToLF } from "../../line-endings.js";
+import {
+  applyReplacements,
+  applyReplacementsPreservingLineEndings,
+  applyReplacementsPreservingUnchangedLines,
+  type TextReplacement,
+} from "./edit-replacements.js";
 import { resolveToCwd } from "./path-utils.js";
-
-export function detectLineEnding(content: string): "\r\n" | "\n" {
-  const crlfIdx = content.indexOf("\r\n");
-  const lfIdx = content.indexOf("\n");
-  if (lfIdx === -1) {
-    return "\n";
-  }
-  if (crlfIdx === -1) {
-    return "\n";
-  }
-  return crlfIdx < lfIdx ? "\r\n" : "\n";
-}
-
-export function normalizeToLF(text: string): string {
-  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-}
-
-export function restoreLineEndings(text: string, ending: "\r\n" | "\n"): string {
-  return ending === "\r\n" ? text.replace(/\n/g, "\r\n") : text;
-}
 
 /**
  * Normalize text for fuzzy matching. Applies progressive transformations:
@@ -86,114 +74,15 @@ export class EditNoChangeError extends Error {
   }
 }
 
-interface MatchedEdit {
+interface MatchedEdit extends TextReplacement {
   editIndex: number;
-  matchIndex: number;
-  matchLength: number;
-  newText: string;
 }
 
-type TextReplacement = Pick<MatchedEdit, "matchIndex" | "matchLength" | "newText">;
-
-interface LineSpan {
-  start: number;
-  end: number;
-}
-
-function splitLinesWithEndings(content: string): string[] {
-  return content.match(/[^\n]*\n|[^\n]+/g) ?? [];
-}
-
-function getLineSpans(content: string): LineSpan[] {
-  let offset = 0;
-  return splitLinesWithEndings(content).map((line) => {
-    const span = { start: offset, end: offset + line.length };
-    offset = span.end;
-    return span;
-  });
-}
-
-function getReplacementLineRange(lines: LineSpan[], replacement: TextReplacement) {
-  const replacementStart = replacement.matchIndex;
-  const replacementEnd = replacement.matchIndex + replacement.matchLength;
-  const startLine = lines.findIndex(
-    (line) => replacementStart >= line.start && replacementStart < line.end,
-  );
-  if (startLine === -1) {
-    throw new Error("Replacement range is outside the base content.");
-  }
-
-  let endLine = startLine;
-  while (endLine < lines.length && lines[endLine].end < replacementEnd) {
-    endLine++;
-  }
-  if (endLine >= lines.length) {
-    throw new Error("Replacement range is outside the base content.");
-  }
-  return { startLine, endLine: endLine + 1 };
-}
-
-function applyReplacements(content: string, replacements: TextReplacement[], offset = 0): string {
-  let result = content;
-  for (let i = replacements.length - 1; i >= 0; i--) {
-    const replacement = replacements[i];
-    const matchIndex = replacement.matchIndex - offset;
-    result =
-      result.slice(0, matchIndex) +
-      replacement.newText +
-      result.slice(matchIndex + replacement.matchLength);
-  }
-  return result;
-}
-
-/**
- * Rewrite only lines touched by fuzzy replacements. Untouched lines retain
- * their original bytes even though matching used normalized content.
- */
-export function applyReplacementsPreservingUnchangedLines(
-  originalContent: string,
-  baseContent: string,
-  replacements: TextReplacement[],
-): string {
-  const originalLines = splitLinesWithEndings(originalContent);
-  const baseLines = getLineSpans(baseContent);
-  if (originalLines.length !== baseLines.length) {
-    throw new Error(
-      "Cannot preserve unchanged lines because the base content has a different line count.",
-    );
-  }
-
-  const groups: Array<{
-    startLine: number;
-    endLine: number;
-    replacements: TextReplacement[];
-  }> = [];
-  const sortedReplacements = replacements.toSorted((a, b) => a.matchIndex - b.matchIndex);
-  for (const replacement of sortedReplacements) {
-    const range = getReplacementLineRange(baseLines, replacement);
-    const current = groups.at(-1);
-    if (current && range.startLine < current.endLine) {
-      current.endLine = Math.max(current.endLine, range.endLine);
-      current.replacements.push(replacement);
-    } else {
-      groups.push({ ...range, replacements: [replacement] });
-    }
-  }
-
-  let originalLineIndex = 0;
-  let result = "";
-  for (const group of groups) {
-    result += originalLines.slice(originalLineIndex, group.startLine).join("");
-    const groupStartOffset = baseLines[group.startLine].start;
-    const groupEndOffset = baseLines[group.endLine - 1].end;
-    result += applyReplacements(
-      baseContent.slice(groupStartOffset, groupEndOffset),
-      group.replacements,
-      groupStartOffset,
-    );
-    originalLineIndex = group.endLine;
-  }
-  return result + originalLines.slice(originalLineIndex).join("");
+interface AppliedEdits {
+  baseContent: string;
+  newContent: string;
+  replacementBaseContent: string;
+  replacements: MatchedEdit[];
 }
 
 /**
@@ -255,14 +144,161 @@ function countOccurrences(content: string, oldText: string): number {
   return fuzzyContent.split(fuzzyOldText).length - 1;
 }
 
-function getNotFoundError(path: string, editIndex: number, totalEdits: number): Error {
-  if (totalEdits === 1) {
-    return new Error(
-      `Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`,
-    );
+function countExactOccurrences(content: string, oldText: string): number {
+  return content.split(oldText).length - 1;
+}
+
+const EDIT_CANDIDATE_LIMIT = 3;
+const EDIT_CANDIDATE_MAX_LINES = 1000;
+const EDIT_CANDIDATE_MAX_SCAN_CHARS = 128 * 1024;
+const EDIT_CANDIDATE_MAX_LINE_CHARS = 120;
+const EDIT_CANDIDATE_MIN_SCORE = 0.45;
+
+interface EditCandidate {
+  lineNumber: number;
+  line: string;
+  score: number;
+}
+
+function truncateCandidateText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) {
+    return text;
   }
+  const cut =
+    maxChars > 0 &&
+    /[\uD800-\uDBFF]/.test(text.charAt(maxChars - 1)) &&
+    /[\uDC00-\uDFFF]/.test(text.charAt(maxChars))
+      ? maxChars - 1
+      : maxChars;
+  return text.slice(0, cut);
+}
+
+function getBoundedLines(text: string, maxLines: number, maxScanChars: number): string[] {
+  return truncateCandidateText(text, maxScanChars)
+    .split("\n", maxLines)
+    .map((line) => truncateCandidateText(line, EDIT_CANDIDATE_MAX_LINE_CHARS));
+}
+
+function scoreCandidate(expected: string, candidate: string): number {
+  const normalizedExpected = expected.trim();
+  const normalizedCandidate = candidate.trim();
+  const maxLength = Math.max(normalizedExpected.length, normalizedCandidate.length);
+  if (maxLength === 0) {
+    return 0;
+  }
+
+  // Length alone sets an upper bound on the possible similarity score.
+  if (
+    Math.min(normalizedExpected.length, normalizedCandidate.length) / maxLength <
+    EDIT_CANDIDATE_MIN_SCORE
+  ) {
+    return 0;
+  }
+
+  return 1 - levenshteinDistance(normalizedExpected, normalizedCandidate) / maxLength;
+}
+
+function describeIndentation(line: string): string {
+  const indentation = line.match(/^[ \t]*/)?.[0] ?? "";
+  if (!indentation) {
+    return "none";
+  }
+  const tabs = indentation.match(/\t/g)?.length ?? 0;
+  const spaces = indentation.length - tabs;
+  return tabs === 0 ? `${spaces} spaces` : `${spaces} spaces and ${tabs} tabs`;
+}
+
+function firstDifferenceIndex(left: string, right: string): number {
+  const sharedLength = Math.min(left.length, right.length);
+  for (let index = 0; index < sharedLength; index++) {
+    if (left.charAt(index) !== right.charAt(index)) {
+      return index;
+    }
+  }
+  return left.length === right.length ? -1 : sharedLength;
+}
+
+function describeCandidateDifference(expected: string, found: string): string {
+  const expectedIndentation = expected.match(/^[ \t]*/)?.[0] ?? "";
+  const foundIndentation = found.match(/^[ \t]*/)?.[0] ?? "";
+  if (expectedIndentation !== foundIndentation) {
+    return `indentation differs (expected ${describeIndentation(expected)}, found ${describeIndentation(found)})`;
+  }
+
+  const expectedBackslashes = expected.match(/\\/g)?.length ?? 0;
+  const foundBackslashes = found.match(/\\/g)?.length ?? 0;
+  if (expectedBackslashes !== foundBackslashes) {
+    return `escaping differs (expected ${expectedBackslashes} backslashes, found ${foundBackslashes})`;
+  }
+
+  const differenceIndex = firstDifferenceIndex(expected, found);
+  return differenceIndex === -1
+    ? "this line matches; surrounding lines differ"
+    : `first difference at column ${differenceIndex + 1}`;
+}
+
+function getCandidateHint(content: string, oldText: string): string {
+  const expected = getBoundedLines(oldText, 32, 4096).reduce(
+    (best, line) => (line.trim().length > best.trim().length ? line : best),
+    "",
+  );
+  if (!expected.trim()) {
+    return "";
+  }
+  const candidates = getBoundedLines(
+    content,
+    EDIT_CANDIDATE_MAX_LINES,
+    EDIT_CANDIDATE_MAX_SCAN_CHARS,
+  )
+    .map((line, index): EditCandidate | undefined => {
+      const score = scoreCandidate(expected, line);
+      return score >= EDIT_CANDIDATE_MIN_SCORE ? { lineNumber: index + 1, line, score } : undefined;
+    })
+    .filter((candidate): candidate is EditCandidate => candidate !== undefined)
+    .toSorted((left, right) => right.score - left.score || left.lineNumber - right.lineNumber)
+    .slice(0, EDIT_CANDIDATE_LIMIT);
+  if (candidates.length === 0) {
+    return "";
+  }
+  const expectedDisplay = JSON.stringify(expected);
+  return (
+    "\nClosest matching lines:\n" +
+    candidates
+      .map((candidate) => {
+        const foundDisplay = JSON.stringify(candidate.line);
+        const differenceIndex = firstDifferenceIndex(expectedDisplay, foundDisplay);
+        const markerIndex =
+          differenceIndex === -1
+            ? Math.min(expectedDisplay.length, foundDisplay.length)
+            : differenceIndex;
+        const markerWidth = Math.max(
+          1,
+          Math.min(12, Math.max(expectedDisplay.length, foundDisplay.length) - markerIndex),
+        );
+        return [
+          `  near line ${candidate.lineNumber} (${Math.round(candidate.score * 100)}% match):`,
+          `    expected: ${expectedDisplay}`,
+          `    found:    ${foundDisplay}`,
+          `              ${" ".repeat(markerIndex)}${"^".repeat(markerWidth)}`,
+          `    hint: ${describeCandidateDifference(expected, candidate.line)}`,
+        ].join("\n");
+      })
+      .join("\n")
+  );
+}
+
+function getNotFoundError(
+  path: string,
+  editIndex: number,
+  totalEdits: number,
+  content: string,
+  oldText: string,
+): Error {
+  const prefix =
+    totalEdits === 1 ? "Could not find the exact text" : `Could not find edits[${editIndex}]`;
+  const hint = getCandidateHint(content, oldText);
   return new Error(
-    `Could not find edits[${editIndex}] in ${path}. The oldText must match exactly including all whitespace and newlines.`,
+    `${prefix} in ${path}. The old text must match exactly including all whitespace and newlines.${hint}`,
   );
 }
 
@@ -307,18 +343,14 @@ function getNoChangeError(path: string, totalEdits: number): EditNoChangeError {
  * then applied in reverse order so offsets remain stable. If any edit needs
  * fuzzy matching, only touched lines are rewritten from normalized content.
  */
-export function applyEditsToNormalizedContent(
-  normalizedContent: string,
-  edits: Edit[],
-  path: string,
-): { baseContent: string; newContent: string } {
+function applyEdits(normalizedContent: string, edits: Edit[], path: string): AppliedEdits {
   const normalizedEdits = edits.map((edit) => ({
     oldText: normalizeToLF(edit.oldText),
     newText: normalizeToLF(edit.newText),
   }));
 
-  for (let i = 0; i < normalizedEdits.length; i++) {
-    if (normalizedEdits[i].oldText.length === 0) {
+  for (const [i, edit] of normalizedEdits.entries()) {
+    if (edit.oldText.length === 0) {
       throw getEmptyOldTextError(path, i, normalizedEdits.length);
     }
   }
@@ -332,14 +364,18 @@ export function applyEditsToNormalizedContent(
     : normalizedContent;
 
   const matchedEdits: MatchedEdit[] = [];
-  for (let i = 0; i < normalizedEdits.length; i++) {
-    const edit = normalizedEdits[i];
+  for (const [i, edit] of normalizedEdits.entries()) {
     const matchResult = fuzzyFindText(replacementBaseContent, edit.oldText);
     if (!matchResult.found) {
-      throw getNotFoundError(path, i, normalizedEdits.length);
+      throw getNotFoundError(path, i, normalizedEdits.length, normalizedContent, edit.oldText);
     }
 
-    const occurrences = countOccurrences(replacementBaseContent, edit.oldText);
+    // Count in the same space the match was found in. Fuzzy counting collapses
+    // distinctions the exact match relied on, which would reject a genuinely
+    // unique edit as ambiguous.
+    const occurrences = matchResult.usedFuzzyMatch
+      ? countOccurrences(replacementBaseContent, edit.oldText)
+      : countExactOccurrences(replacementBaseContent, edit.oldText);
     if (occurrences > 1) {
       throw getDuplicateError(path, i, normalizedEdits.length, occurrences);
     }
@@ -354,8 +390,11 @@ export function applyEditsToNormalizedContent(
 
   matchedEdits.sort((a, b) => a.matchIndex - b.matchIndex);
   for (let i = 1; i < matchedEdits.length; i++) {
-    const previous = matchedEdits[i - 1];
-    const current = matchedEdits[i];
+    const previous = matchedEdits.at(i - 1);
+    const current = matchedEdits.at(i);
+    if (!previous || !current) {
+      continue;
+    }
     if (previous.matchIndex + previous.matchLength > current.matchIndex) {
       throw new Error(
         `edits[${previous.editIndex}] and edits[${current.editIndex}] overlap in ${path}. Merge them into one edit or target disjoint regions.`,
@@ -376,7 +415,42 @@ export function applyEditsToNormalizedContent(
     throw getNoChangeError(path, normalizedEdits.length);
   }
 
+  return {
+    baseContent,
+    newContent,
+    replacementBaseContent,
+    replacements: matchedEdits,
+  };
+}
+
+function applyEditsToNormalizedContent(
+  normalizedContent: string,
+  edits: Edit[],
+  path: string,
+): { baseContent: string; newContent: string } {
+  const { baseContent, newContent } = applyEdits(normalizedContent, edits, path);
   return { baseContent, newContent };
+}
+
+export function applyEditsPreservingLineEndings(
+  originalContent: string,
+  edits: Edit[],
+  path: string,
+): { baseContent: string; newContent: string; finalContent: string } {
+  const applied = applyEdits(normalizeToLF(originalContent), edits, path);
+  const finalContent = applyReplacementsPreservingLineEndings(
+    originalContent,
+    applied.replacementBaseContent,
+    applied.replacements,
+  );
+  if (normalizeToLF(finalContent) !== applied.newContent) {
+    throw new Error("Line-ending restoration changed the normalized edit result.");
+  }
+  return {
+    baseContent: applied.baseContent,
+    newContent: applied.newContent,
+    finalContent,
+  };
 }
 
 /** Generate a standard unified patch. */
@@ -386,9 +460,9 @@ export function generateUnifiedPatch(
   newContent: string,
   contextLines = 4,
 ): string {
-  return Diff.createTwoFilesPatch(path, path, oldContent, newContent, undefined, undefined, {
+  return createPatch(path, oldContent, newContent, undefined, undefined, {
     context: contextLines,
-    headerOptions: Diff.FILE_HEADERS_ONLY,
+    headerOptions: FILE_HEADERS_ONLY,
   });
 }
 
@@ -401,120 +475,41 @@ export function generateDiffString(
   newContent: string,
   contextLines = 4,
 ): { diff: string; firstChangedLine: number | undefined } {
-  const parts = Diff.diffLines(oldContent, newContent);
-  const output: string[] = [];
-
-  const oldLines = oldContent.split("\n");
-  const newLines = newContent.split("\n");
-  const maxLineNum = Math.max(oldLines.length, newLines.length);
+  const hunks = structuredPatch("", "", oldContent, newContent, undefined, undefined, {
+    context: contextLines,
+  }).hunks;
+  const oldLineCount = oldContent.split("\n").length;
+  const newLineCount = newContent.split("\n").length;
+  const lastNewLine = newContent === "" ? 0 : newLineCount - Number(newContent.endsWith("\n"));
+  const maxLineNum = Math.max(oldLineCount, newLineCount);
   const lineNumWidth = String(maxLineNum).length;
-
-  let oldLineNum = 1;
-  let newLineNum = 1;
-  let lastWasChange = false;
+  const ellipsis = ` ${"".padStart(lineNumWidth, " ")} ...`;
+  const output: string[] = [];
   let firstChangedLine: number | undefined;
 
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i];
-    const raw = part.value.split("\n");
-    if (raw[raw.length - 1] === "") {
-      raw.pop();
+  for (const [hunkIndex, hunk] of hunks.entries()) {
+    if (hunkIndex > 0 || hunk.newStart > 1) {
+      output.push(ellipsis);
     }
 
-    if (part.added || part.removed) {
-      // Capture the first changed line (in the new file)
-      if (firstChangedLine === undefined) {
+    let oldLineNum = hunk.oldStart;
+    let newLineNum = hunk.newStart;
+    for (const line of hunk.lines) {
+      const prefix = line[0];
+      if (prefix === "\\") {
+        continue;
+      }
+      if (firstChangedLine === undefined && prefix !== " ") {
         firstChangedLine = newLineNum;
       }
+      const lineNum = prefix === "-" ? oldLineNum : newLineNum;
+      output.push(`${prefix}${String(lineNum).padStart(lineNumWidth, " ")} ${line.slice(1)}`);
+      oldLineNum += prefix === "+" ? 0 : 1;
+      newLineNum += prefix === "-" ? 0 : 1;
+    }
 
-      // Show the change
-      for (const line of raw) {
-        if (part.added) {
-          const lineNum = String(newLineNum).padStart(lineNumWidth, " ");
-          output.push(`+${lineNum} ${line}`);
-          newLineNum++;
-        } else {
-          // removed
-          const lineNum = String(oldLineNum).padStart(lineNumWidth, " ");
-          output.push(`-${lineNum} ${line}`);
-          oldLineNum++;
-        }
-      }
-      lastWasChange = true;
-    } else {
-      // Context lines - only show a few before/after changes
-      const nextPartIsChange = i < parts.length - 1 && (parts[i + 1].added || parts[i + 1].removed);
-      const hasLeadingChange = lastWasChange;
-      const hasTrailingChange = nextPartIsChange;
-
-      if (hasLeadingChange && hasTrailingChange) {
-        if (raw.length <= contextLines * 2) {
-          for (const line of raw) {
-            const lineNum = String(oldLineNum).padStart(lineNumWidth, " ");
-            output.push(` ${lineNum} ${line}`);
-            oldLineNum++;
-            newLineNum++;
-          }
-        } else {
-          const leadingLines = raw.slice(0, contextLines);
-          const trailingLines = raw.slice(raw.length - contextLines);
-          const skippedLines = raw.length - leadingLines.length - trailingLines.length;
-
-          for (const line of leadingLines) {
-            const lineNum = String(oldLineNum).padStart(lineNumWidth, " ");
-            output.push(` ${lineNum} ${line}`);
-            oldLineNum++;
-            newLineNum++;
-          }
-
-          output.push(` ${"".padStart(lineNumWidth, " ")} ...`);
-          oldLineNum += skippedLines;
-          newLineNum += skippedLines;
-
-          for (const line of trailingLines) {
-            const lineNum = String(oldLineNum).padStart(lineNumWidth, " ");
-            output.push(` ${lineNum} ${line}`);
-            oldLineNum++;
-            newLineNum++;
-          }
-        }
-      } else if (hasLeadingChange) {
-        const shownLines = raw.slice(0, contextLines);
-        const skippedLines = raw.length - shownLines.length;
-
-        for (const line of shownLines) {
-          const lineNum = String(oldLineNum).padStart(lineNumWidth, " ");
-          output.push(` ${lineNum} ${line}`);
-          oldLineNum++;
-          newLineNum++;
-        }
-
-        if (skippedLines > 0) {
-          output.push(` ${"".padStart(lineNumWidth, " ")} ...`);
-          oldLineNum += skippedLines;
-          newLineNum += skippedLines;
-        }
-      } else if (hasTrailingChange) {
-        const skippedLines = Math.max(0, raw.length - contextLines);
-        if (skippedLines > 0) {
-          output.push(` ${"".padStart(lineNumWidth, " ")} ...`);
-          oldLineNum += skippedLines;
-          newLineNum += skippedLines;
-        }
-
-        for (const line of raw.slice(skippedLines)) {
-          const lineNum = String(oldLineNum).padStart(lineNumWidth, " ");
-          output.push(` ${lineNum} ${line}`);
-          oldLineNum++;
-          newLineNum++;
-        }
-      } else {
-        // Skip these context lines entirely
-        oldLineNum += raw.length;
-        newLineNum += raw.length;
-      }
-
-      lastWasChange = false;
+    if (hunkIndex === hunks.length - 1 && hunk.newStart + hunk.newLines <= lastNewLine) {
+      output.push(ellipsis);
     }
   }
 

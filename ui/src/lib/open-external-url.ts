@@ -24,7 +24,7 @@ function isAllowedDataImageUrl(url: string): boolean {
   return !BLOCKED_DATA_IMAGE_MIME_TYPES.has(mimeType);
 }
 
-export type ResolveSafeExternalUrlOptions = {
+type ResolveSafeExternalUrlOptions = {
   allowDataImage?: boolean;
 };
 
@@ -56,9 +56,19 @@ export function resolveSafeExternalUrl(
   }
 }
 
-export type OpenExternalUrlSafeOptions = ResolveSafeExternalUrlOptions & {
+type OpenExternalUrlSafeOptions = ResolveSafeExternalUrlOptions & {
   baseHref?: string;
 };
+
+export function reserveExternalWindowForDeferredNavigation(): WindowProxy | null {
+  // Reserve while user activation is live, then detach the opener before any
+  // caller-controlled URL can be loaded into the new browsing context.
+  const opened = window.open("about:blank", "_blank");
+  if (opened) {
+    opened.opener = null;
+  }
+  return opened;
+}
 
 export function openExternalUrlSafe(
   rawUrl: string,

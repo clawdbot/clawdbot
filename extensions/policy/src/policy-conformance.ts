@@ -12,14 +12,15 @@ import {
   type PolicyRuleMetadata,
   type PolicyScopeSelectorKind,
 } from "./doctor/register.js";
+import { getPolicyPath, scopedPolicyValue } from "./policy-value.js";
 
-export const POLICY_CONFORMANCE_CHECK_IDS = {
+const POLICY_CONFORMANCE_CHECK_IDS = {
   missing: "policy/policy-conformance-missing",
   weaker: "policy/policy-conformance-weaker",
   invalid: "policy/policy-conformance-invalid",
 } as const;
 
-export type PolicyConformanceFinding = {
+type PolicyConformanceFinding = {
   readonly checkId: (typeof POLICY_CONFORMANCE_CHECK_IDS)[keyof typeof POLICY_CONFORMANCE_CHECK_IDS];
   readonly severity: "error";
   readonly message: string;
@@ -334,6 +335,8 @@ function baselineRuleIsNoOp(metadata: PolicyRuleMetadata, baseline: unknown): bo
     case "exact-list":
     case "ordered-string":
       return false;
+    case "routing-probes":
+      return policyRuleListIsEmpty(baseline, metadata);
   }
   return false;
 }
@@ -368,6 +371,8 @@ function policyRuleValueIsValid(metadata: PolicyRuleMetadata, value: unknown): b
           entry.trim() !== "" &&
           policyStringIsAllowed(metadata, entry),
       );
+    case "routing-probes":
+      return Array.isArray(value);
   }
   return false;
 }
@@ -424,6 +429,9 @@ function policyRuleListIsEmpty(value: unknown, metadata: PolicyRuleMetadata): bo
     return false;
   }
   if (metadata.valueType === "channel-provider-deny-rules") {
+    return value.length === 0;
+  }
+  if (metadata.valueType === "routing-probes") {
     return value.length === 0;
   }
   return value.length === 0;
@@ -570,22 +578,6 @@ function normalizeSelectorValues(
     .map((entry) =>
       selector === "agentIds" ? normalizeAgentId(entry) : entry.trim().toLowerCase(),
     );
-}
-
-function scopedPolicyValue(overlay: Record<string, unknown>, path: readonly string[]): unknown {
-  const scopedRoot = path[0] === "agents" ? overlay.agents : overlay[path[0]];
-  return getPolicyPath(scopedRoot, path.slice(1));
-}
-
-function getPolicyPath(value: unknown, path: readonly string[]): unknown {
-  let current = value;
-  for (const part of path) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[part];
-  }
-  return current;
 }
 
 async function readPolicyDocument(path: string): Promise<PolicyDocumentReadResult> {

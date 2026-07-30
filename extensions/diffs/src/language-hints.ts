@@ -8,7 +8,7 @@ import {
 } from "./shiki-curated-languages.js";
 import type { DiffViewerPayload } from "./types.js";
 
-export const BASE_DIFF_VIEWER_LANGUAGE_HINTS = [
+const BASE_DIFF_VIEWER_LANGUAGE_HINTS = [
   ...Object.keys(bundledLanguagesBase),
   "text",
   "ansi",

@@ -8,8 +8,8 @@ import {
 import type { BaseMessageInteractiveComponent } from "./components.js";
 import type { AutocompleteInteraction, CommandInteraction } from "./interactions.js";
 
-export type ConditionalCommandOption = (interaction: unknown) => boolean;
-export type CommandOption = Record<string, unknown> & {
+type ConditionalCommandOption = (interaction: unknown) => boolean;
+type CommandOption = Record<string, unknown> & {
   name: string;
   description?: string;
   type: ApplicationCommandOptionType;

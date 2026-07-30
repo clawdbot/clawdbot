@@ -232,7 +232,7 @@ function formatEntry(entry) {
 /**
  * Runs the web-search provider boundary baseline check.
  */
-export async function runWebSearchProviderBoundaryCheck(argv, io) {
+async function runWebSearchProviderBoundaryCheck(argv, io) {
   return await runBaselineInventoryCheck({
     argv: argv ?? process.argv.slice(2),
     io,

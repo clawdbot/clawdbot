@@ -1,7 +1,8 @@
 // Diffs plugin module implements render behavior.
 import type { FileContents, FileDiffMetadata, SupportedLanguages } from "@pierre/diffs";
 import { parsePatchFiles } from "@pierre/diffs";
-import { preloadFileDiff, preloadMultiFileDiff } from "@pierre/diffs/ssr";
+import { preloadDiffHTML, type PreloadDiffOptions } from "@pierre/diffs/ssr";
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeDiffFontSize, normalizeDiffLineSpacing } from "./config.js";
 import {
   collectDiffPayloadLanguageHints,
@@ -33,15 +34,6 @@ export class DiffRenderInputError extends Error {
 
 function escapeCssString(value: string): string {
   return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
 }
 
 function escapeJsonScript(value: unknown): string {
@@ -202,13 +194,83 @@ function buildRenderVariants(params: { options: DiffRenderOptions; target: DiffR
   };
 }
 
-function renderDiffCard(payload: DiffViewerPayload): string {
-  return `<section class="oc-diff-card">
+function renderDiffCard(payload: DiffViewerPayload, anchorId?: string): string {
+  return `<section class="oc-diff-card"${anchorId ? ` id="${anchorId}"` : ""}>
     <diffs-container class="oc-diff-host" data-openclaw-diff-host>
       <template shadowrootmode="open">${payload.prerenderedHTML}</template>
     </diffs-container>
     <script type="application/json" data-openclaw-diff-payload>${escapeJsonScript(payload)}</script>
   </section>`;
+}
+
+type FileDiffStats = {
+  additions: number;
+  deletions: number;
+};
+
+type FileNavEntry = {
+  anchorId: string;
+  fileDiff: FileDiffMetadata;
+  stats: FileDiffStats;
+};
+
+// Hunk.additionLines/deletionLines count only +/- lines (not context), so the
+// sums match the built-in per-file header counts rendered by @pierre/diffs.
+function computeFileDiffStats(fileDiff: FileDiffMetadata): FileDiffStats {
+  let additions = 0;
+  let deletions = 0;
+  for (const hunk of fileDiff.hunks) {
+    additions += hunk.additionLines;
+    deletions += hunk.deletionLines;
+  }
+  return { additions, deletions };
+}
+
+function renderNavChangeBadge(changeType: FileDiffMetadata["type"]): string {
+  const label =
+    changeType === "new"
+      ? "added"
+      : changeType === "deleted"
+        ? "deleted"
+        : changeType === "rename-pure" || changeType === "rename-changed"
+          ? "renamed"
+          : undefined;
+  return label ? `<span class="oc-diff-nav-badge" data-change="${label}">${label}</span>` : "";
+}
+
+function renderNavStats(stats: FileDiffStats): string {
+  return `<span class="oc-diff-nav-stats"><span class="oc-diff-nav-additions">+${stats.additions}</span><span class="oc-diff-nav-deletions">-${stats.deletions}</span></span>`;
+}
+
+function renderNavEntryName(fileDiff: FileDiffMetadata): string {
+  const renamed = fileDiff.prevName && fileDiff.prevName !== fileDiff.name;
+  return renamed
+    ? `${escapeHtml(fileDiff.prevName ?? "")} &rarr; ${escapeHtml(fileDiff.name)}`
+    : escapeHtml(fileDiff.name);
+}
+
+// Multi-file patches render as stacked cards; this summary card gives per-file
+// stats plus anchor links so long diffs stay navigable without extra JS.
+function renderFileSummaryNav(entries: ReadonlyArray<FileNavEntry>): string {
+  const totals = entries.reduce<FileDiffStats>(
+    (sum, entry) => ({
+      additions: sum.additions + entry.stats.additions,
+      deletions: sum.deletions + entry.stats.deletions,
+    }),
+    { additions: 0, deletions: 0 },
+  );
+  const items = entries
+    .map(
+      (entry) =>
+        `<li><a href="#${entry.anchorId}"><code>${renderNavEntryName(entry.fileDiff)}</code></a>${renderNavChangeBadge(entry.fileDiff.type)}${renderNavStats(entry.stats)}</li>`,
+    )
+    .join("\n      ");
+  return `<nav class="oc-diff-card oc-diff-nav" aria-label="Changed files">
+    <p class="oc-diff-nav-summary">${entries.length} changed files${renderNavStats(totals)}</p>
+    <ol class="oc-diff-nav-list">
+      ${items}
+    </ol>
+  </nav>`;
 }
 
 function buildHtmlDocument(params: {
@@ -255,6 +317,13 @@ function buildHtmlDocument(params: {
 
       html {
         background: #05070b;
+        scroll-behavior: smooth;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
       }
 
       body {
@@ -309,7 +378,91 @@ ${imageTypographyCss}
         display: block;
       }
 
-      .oc-frame[data-render-mode="image"] .oc-diff-card {
+      .oc-diff-nav {
+        padding: 14px 18px;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .oc-diff-nav-summary {
+        display: flex;
+        align-items: center;
+        margin: 0 0 10px;
+        font-weight: 600;
+      }
+
+      .oc-diff-nav-list {
+        display: grid;
+        gap: 4px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .oc-diff-nav-list li {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .oc-diff-nav-list code {
+        overflow-wrap: anywhere;
+      }
+
+      .oc-diff-nav-list a {
+        color: inherit;
+        text-decoration: none;
+        min-width: 0;
+      }
+
+      .oc-diff-nav-list a:hover {
+        text-decoration: underline;
+      }
+
+      .oc-diff-nav-stats {
+        display: inline-flex;
+        gap: 8px;
+        margin-inline-start: auto;
+        padding-inline-start: 12px;
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+
+      .oc-diff-nav-summary .oc-diff-nav-stats {
+        margin-inline-start: 10px;
+        padding-inline-start: 0;
+      }
+
+      .oc-diff-nav-additions {
+        color: #4ade80;
+      }
+
+      .oc-diff-nav-deletions {
+        color: #f87171;
+      }
+
+      .oc-diff-nav-badge {
+        flex: 0 0 auto;
+        padding: 1px 7px;
+        border-radius: 999px;
+        border: 1px solid rgba(148, 163, 184, 0.32);
+        font-size: 11px;
+        opacity: 0.85;
+      }
+
+      body[data-theme="light"] .oc-diff-nav-additions {
+        color: #15803d;
+      }
+
+      body[data-theme="light"] .oc-diff-nav-deletions {
+        color: #b91c1c;
+      }
+
+      /* Nav summary cards are short; the diff-card floor would pad them with
+         empty space in static PNG/PDF captures. */
+      .oc-frame[data-render-mode="image"] .oc-diff-card:not(.oc-diff-nav) {
         min-height: 240px;
       }
 
@@ -348,24 +501,33 @@ function payloadUsesLanguagePack(payload: DiffViewerPayload | undefined): boolea
 function buildRenderedSection(params: {
   viewerPayload?: DiffViewerPayload;
   imagePayload?: DiffViewerPayload;
+  anchorId?: string;
 }): RenderedSection {
   return {
-    ...(params.viewerPayload ? { viewer: renderDiffCard(params.viewerPayload) } : {}),
-    ...(params.imagePayload ? { image: renderDiffCard(params.imagePayload) } : {}),
+    ...(params.viewerPayload
+      ? { viewer: renderDiffCard(params.viewerPayload, params.anchorId) }
+      : {}),
+    ...(params.imagePayload ? { image: renderDiffCard(params.imagePayload, params.anchorId) } : {}),
     usesLanguagePack:
       payloadUsesLanguagePack(params.viewerPayload) || payloadUsesLanguagePack(params.imagePayload),
   };
 }
 
-function buildRenderedBodies(sections: ReadonlyArray<RenderedSection>): {
+function buildRenderedBodies(
+  sections: ReadonlyArray<RenderedSection>,
+  leadingHtml?: string,
+): {
   viewerBodyHtml?: string;
   imageBodyHtml?: string;
 } {
+  const lead = leadingHtml ? [leadingHtml] : [];
   const viewerSections = sections.flatMap((section) => (section.viewer ? [section.viewer] : []));
   const imageSections = sections.flatMap((section) => (section.image ? [section.image] : []));
   return {
-    ...(viewerSections.length > 0 ? { viewerBodyHtml: viewerSections.join("\n") } : {}),
-    ...(imageSections.length > 0 ? { imageBodyHtml: imageSections.join("\n") } : {}),
+    ...(viewerSections.length > 0
+      ? { viewerBodyHtml: [...lead, ...viewerSections].join("\n") }
+      : {}),
+    ...(imageSections.length > 0 ? { imageBodyHtml: [...lead, ...imageSections].join("\n") } : {}),
   };
 }
 
@@ -397,21 +559,18 @@ async function renderBeforeAfterDiff(
   if (!preloadOptions) {
     throw new Error(`Unsupported diff render target: ${target}`);
   }
-  const preloadResult = await preloadMultiFileDiffWithFallback({
+  const prerenderedHTML = await preloadDiffHTMLWithFallback({
     oldFile,
     newFile,
     options: preloadOptions,
   });
   const normalizedPayload = await normalizeDiffViewerPayloadLanguages(
     {
-      prerenderedHTML: preloadResult.prerenderedHTML,
-      oldFile: preloadResult.oldFile,
-      newFile: preloadResult.newFile,
+      prerenderedHTML,
+      oldFile,
+      newFile,
       options: preloadOptions,
-      langs: collectDiffPayloadLanguageHints({
-        oldFile: preloadResult.oldFile,
-        newFile: preloadResult.newFile,
-      }),
+      langs: collectDiffPayloadLanguageHints({ oldFile, newFile }),
     },
     { languagePackAvailable },
   );
@@ -471,18 +630,23 @@ async function renderPatchDiff(
   if (!preloadOptions) {
     throw new Error(`Unsupported diff render target: ${target}`);
   }
+  const navEntries: FileNavEntry[] = files.map((fileDiff, index) => ({
+    anchorId: `oc-diff-file-${index + 1}`,
+    fileDiff,
+    stats: computeFileDiffStats(fileDiff),
+  }));
   const sections = await Promise.all(
-    files.map(async (fileDiff) => {
-      const preloadResult = await preloadFileDiffWithFallback({
+    files.map(async (fileDiff, index) => {
+      const prerenderedHTML = await preloadDiffHTMLWithFallback({
         fileDiff,
         options: preloadOptions,
       });
       const normalizedPayload = await normalizeDiffViewerPayloadLanguages(
         {
-          prerenderedHTML: preloadResult.prerenderedHTML,
-          fileDiff: preloadResult.fileDiff,
+          prerenderedHTML,
+          fileDiff,
           options: preloadOptions,
-          langs: collectDiffPayloadLanguageHints({ fileDiff: preloadResult.fileDiff }),
+          langs: collectDiffPayloadLanguageHints({ fileDiff }),
         },
         { languagePackAvailable },
       );
@@ -496,12 +660,15 @@ async function renderPatchDiff(
       return buildRenderedSection({
         ...(viewerPayload ? { viewerPayload } : {}),
         ...(imagePayload ? { imagePayload } : {}),
+        anchorId: navEntries[index]?.anchorId,
       });
     }),
   );
+  // Single-file patches skip the summary card; one file needs no navigation.
+  const navHtml = files.length > 1 ? renderFileSummaryNav(navEntries) : undefined;
 
   return {
-    ...buildRenderedBodies(sections),
+    ...buildRenderedBodies(sections, navHtml),
     fileCount: files.length,
     usesLanguagePack: sections.some((section) => section.usesLanguagePack === true),
   };
@@ -568,9 +735,6 @@ export async function renderDiffDocument(
   };
 }
 
-type PreloadedFileDiffResult = Awaited<ReturnType<typeof preloadFileDiff>>;
-type PreloadedMultiFileDiffResult = Awaited<ReturnType<typeof preloadMultiFileDiff>>;
-
 function shouldFallbackToClientHydration(error: unknown): boolean {
   return (
     error instanceof TypeError &&
@@ -578,38 +742,13 @@ function shouldFallbackToClientHydration(error: unknown): boolean {
   );
 }
 
-async function preloadFileDiffWithFallback(params: {
-  fileDiff: FileDiffMetadata;
-  options: DiffViewerOptions;
-}): Promise<PreloadedFileDiffResult> {
+async function preloadDiffHTMLWithFallback(params: PreloadDiffOptions<undefined>): Promise<string> {
   try {
-    return await preloadFileDiff(params);
+    return await preloadDiffHTML(params);
   } catch (error) {
     if (!shouldFallbackToClientHydration(error)) {
       throw error;
     }
-    return {
-      fileDiff: params.fileDiff,
-      prerenderedHTML: "",
-    };
-  }
-}
-
-async function preloadMultiFileDiffWithFallback(params: {
-  oldFile: FileContents;
-  newFile: FileContents;
-  options: DiffViewerOptions;
-}): Promise<PreloadedMultiFileDiffResult> {
-  try {
-    return await preloadMultiFileDiff(params);
-  } catch (error) {
-    if (!shouldFallbackToClientHydration(error)) {
-      throw error;
-    }
-    return {
-      oldFile: params.oldFile,
-      newFile: params.newFile,
-      prerenderedHTML: "",
-    };
+    return "";
   }
 }

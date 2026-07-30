@@ -5,12 +5,9 @@ import {
   defineFinalizableLivePreviewAdapter,
   deliverFinalizableLivePreview,
   deliverWithFinalizableLivePreviewAdapter,
-  markLiveMessageCancelled,
-  markLiveMessageFinalized,
   markLiveMessagePreviewUpdated,
 } from "./live.js";
-import { createMessageReceiveContext, shouldAckMessageAfterStage } from "./receive.js";
-import { classifyDurableSendRecoveryState, createDurableMessageStateRecord } from "./state.js";
+import { createMessageReceiveContext } from "./receive.js";
 
 function requireMockCall(
   mock: { mock: { calls: unknown[][] } },
@@ -26,27 +23,6 @@ function requireMockCall(
 }
 
 describe("message lifecycle primitives", () => {
-  it("tracks live preview finalization state", () => {
-    const receipt = {
-      primaryPlatformMessageId: "m1",
-      platformMessageIds: ["m1"],
-      parts: [],
-      sentAt: 123,
-    };
-
-    const preview = createLiveMessageState({ receipt });
-    expect(preview.phase).toBe("previewing");
-    expect(preview.canFinalizeInPlace).toBe(true);
-
-    const finalized = markLiveMessageFinalized(preview, receipt);
-    expect(finalized.phase).toBe("finalized");
-    expect(finalized.canFinalizeInPlace).toBe(false);
-
-    const cancelled = markLiveMessageCancelled(preview);
-    expect(cancelled.phase).toBe("cancelled");
-    expect(cancelled.canFinalizeInPlace).toBe(false);
-  });
-
   it("tracks live preview rendered batch updates", () => {
     const preview = createLiveMessageState();
     const rendered = {
@@ -367,50 +343,60 @@ describe("message lifecycle primitives", () => {
 
     const nackError = new Error("offset failed");
     await ctx.nack(nackError);
+    await ctx.nack(new Error("duplicate failure"));
+    expect(onNack).toHaveBeenCalledTimes(1);
     expect(onNack).toHaveBeenCalledWith(nackError);
     expect(ctx.ackState).toBe("nacked");
     expect(ctx.nackErrorMessage).toBe("offset failed");
   });
 
-  it("maps ack policies to lifecycle stages", () => {
-    expect(shouldAckMessageAfterStage("after_receive_record", "receive_record")).toBe(true);
-    expect(shouldAckMessageAfterStage("after_receive_record", "agent_dispatch")).toBe(false);
-    expect(shouldAckMessageAfterStage("after_agent_dispatch", "agent_dispatch")).toBe(true);
-    expect(shouldAckMessageAfterStage("after_durable_send", "durable_send")).toBe(true);
-    expect(shouldAckMessageAfterStage("manual", "manual")).toBe(false);
-  });
-
-  it("classifies unknown-after-send recovery only after platform send may have started", () => {
-    expect(
-      classifyDurableSendRecoveryState({
-        hasIntent: true,
-        hasReceipt: false,
-        platformSendMayHaveStarted: true,
-      }),
-    ).toBe("unknown_after_send");
-    expect(
-      classifyDurableSendRecoveryState({
-        hasIntent: true,
-        hasReceipt: false,
-        platformSendMayHaveStarted: false,
-      }),
-    ).toBe("pending");
-  });
-
-  it("creates durable message state records with normalized errors", () => {
-    const record = createDurableMessageStateRecord({
-      intent: {
-        id: "intent-1",
-        channel: "telegram",
-        to: "12345",
-        durability: "required",
-      },
-      state: "failed",
-      error: new Error("network"),
-      updatedAt: 123,
+  it("retries nack callbacks after a failed attempt", async () => {
+    const onNack = vi
+      .fn<(error: unknown) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("temporary failure"))
+      .mockResolvedValueOnce();
+    const ctx = createMessageReceiveContext({
+      id: "rx-nack-retry",
+      channel: "telegram",
+      message: { text: "hello" },
+      onNack,
     });
-    expect(record.state).toBe("failed");
-    expect(record.errorMessage).toBe("network");
-    expect(record.updatedAt).toBe(123);
+
+    await expect(ctx.nack(new Error("first failure"))).rejects.toThrow("temporary failure");
+    expect(ctx.ackState).toBe("pending");
+
+    const retryError = new Error("retry failure");
+    await ctx.nack(retryError);
+
+    expect(onNack).toHaveBeenCalledTimes(2);
+    expect(ctx.ackState).toBe("nacked");
+    expect(ctx.nackErrorMessage).toBe("retry failure");
+  });
+
+  it("coalesces overlapping nack callbacks and retains the first error", async () => {
+    let resolveNack: (() => void) | undefined;
+    const onNack = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveNack = resolve;
+        }),
+    );
+    const ctx = createMessageReceiveContext({
+      id: "rx-nack-overlap",
+      channel: "telegram",
+      message: { text: "hello" },
+      onNack,
+    });
+    const firstError = new Error("first failure");
+
+    const first = ctx.nack(firstError);
+    const duplicate = ctx.nack(new Error("duplicate failure"));
+    await vi.waitFor(() => expect(onNack).toHaveBeenCalledOnce());
+    resolveNack?.();
+    await Promise.all([first, duplicate]);
+
+    expect(onNack).toHaveBeenCalledWith(firstError);
+    expect(ctx.ackState).toBe("nacked");
+    expect(ctx.nackErrorMessage).toBe("first failure");
   });
 });

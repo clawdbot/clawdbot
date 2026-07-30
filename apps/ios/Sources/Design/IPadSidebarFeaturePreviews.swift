@@ -194,7 +194,9 @@ private struct IPadActivityStatesPreview: View {
             trailing: "open",
             color: OpenClawBrand.ok,
             progress: nil,
-            route: .chat("main")),
+            route: .chat("main"),
+            isUnread: false,
+            isPinned: false),
         CommandCenterTab.WorkItem(
             id: "preview-ipad-audit",
             icon: "bubble.left.and.text.bubble.right",
@@ -204,7 +206,9 @@ private struct IPadActivityStatesPreview: View {
             trailing: "open",
             color: OpenClawBrand.accent,
             progress: nil,
-            route: .chat("ipad-audit")),
+            route: .chat("ipad-audit"),
+            isUnread: true,
+            isPinned: true),
     ]
 
     var body: some View {
@@ -299,8 +303,8 @@ private struct IPadActivityStatesPreview: View {
                     action: {})
                 ProStatusRow(
                     icon: gatewayValue == "online" ? "network" : "wifi.slash",
-                    title: gatewayTitle,
-                    detail: gatewayDetail,
+                    title: .localized(gatewayTitle),
+                    detail: .localized(gatewayDetail),
                     value: gatewayValue,
                     color: gatewayColor,
                     actionTitle: gatewayValue == "online" ? nil : "Settings",
@@ -318,8 +322,8 @@ private struct IPadActivityStatesPreview: View {
                     Divider().padding(.leading, 58)
                     ProStatusRow(
                         icon: row.icon,
-                        title: row.title,
-                        detail: row.detail,
+                        title: .localized(row.title),
+                        detail: .localized(row.detail),
                         value: row.state,
                         color: row.color,
                         actionTitle: "Open",
@@ -329,8 +333,8 @@ private struct IPadActivityStatesPreview: View {
                     Divider().padding(.leading, 58)
                     ProStatusRow(
                         icon: row.icon,
-                        title: row.title,
-                        detail: row.detail,
+                        title: .localized(row.title),
+                        detail: .localized(row.detail),
                         value: row.value,
                         color: row.color,
                         actionTitle: nil,
@@ -657,13 +661,11 @@ private enum IPadSkillWorkshopPreviewFixtures {
         return IPadSkillProposal(
             entry: IPadSkillProposalManifestEntry(
                 id: id,
-                kind: "skill",
                 status: status,
                 title: title,
                 description: description,
                 skillName: title,
                 skillKey: id,
-                createdAt: updatedAt,
                 updatedAt: updatedAt,
                 scanState: "complete"),
             previous: nil)

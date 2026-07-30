@@ -1,4 +1,5 @@
 // Defines task terminal outcome contracts used by completion handling.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { TaskTerminalOutcome } from "./task-registry.types.js";
 
 /** Terminal fields required when a mandatory detached task completion is invalid. */
@@ -25,7 +26,7 @@ function normalizeCompletionFailureReason(value: string | null | undefined): str
   if (!normalized) {
     return "";
   }
-  return normalized.length <= 160 ? normalized : `${normalized.slice(0, 159)}...`;
+  return normalized.length <= 160 ? normalized : `${truncateUtf16Safe(normalized, 159)}...`;
 }
 
 function matchesProgressOnlyPrefix(value: string): boolean {

@@ -314,4 +314,67 @@ keep this note
       fs.readFile(path.join(rootDir, "entities", "index.md"), "utf8"),
     ).resolves.toContain("[Alpha](alpha.md)");
   });
+
+  it("preserves disjoint metadata updates from concurrent agent turns", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-apply-concurrent-",
+    });
+    const targetPath = path.join(rootDir, "entities", "shared.md");
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(
+      targetPath,
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.shared",
+          title: "Shared",
+        },
+        body: "# Shared\n",
+      }),
+      "utf8",
+    );
+
+    await Promise.all([
+      applyMemoryWikiMutation({
+        config,
+        mutation: {
+          op: "update_metadata",
+          lookup: "entity.shared",
+          sourceIds: ["source.concurrent"],
+        },
+      }),
+      applyMemoryWikiMutation({
+        config,
+        mutation: {
+          op: "update_metadata",
+          lookup: "entity.shared",
+          questions: ["Which agent owns the next action?"],
+        },
+      }),
+      applyMemoryWikiMutation({
+        config,
+        mutation: {
+          op: "update_metadata",
+          lookup: "entity.shared",
+          confidence: 0.9,
+        },
+      }),
+      applyMemoryWikiMutation({
+        config,
+        mutation: {
+          op: "update_metadata",
+          lookup: "entity.shared",
+          status: "review",
+        },
+      }),
+    ]);
+
+    const parsed = parseWikiMarkdown(await fs.readFile(targetPath, "utf8"));
+    expect(parsed.frontmatter).toMatchObject({
+      sourceIds: ["source.concurrent"],
+      questions: ["Which agent owns the next action?"],
+      confidence: 0.9,
+      status: "review",
+    });
+  });
 });

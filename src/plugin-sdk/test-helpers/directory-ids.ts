@@ -3,7 +3,7 @@
  */
 import { expect } from "vitest";
 import type { ChannelDirectoryEntry } from "../channel-contract.js";
-import type { OpenClawConfig } from "../config-types.js";
+import type { OpenClawConfig } from "../config-contracts.js";
 
 export type DirectoryListFn = (params: {
   cfg: OpenClawConfig;

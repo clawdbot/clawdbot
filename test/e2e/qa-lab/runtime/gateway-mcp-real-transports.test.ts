@@ -1,6 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import type { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { testing } from "./gateway-mcp-real-transports.js";
 
@@ -18,36 +21,6 @@ async function writeEntry(root: string, relativePath: string) {
 }
 
 describe("gateway MCP real transport producer", () => {
-  it("uses the source CLI entry when build output is absent", async () => {
-    const root = createRepoRoot();
-    const entryPath = await writeEntry(root, "src/entry.ts");
-
-    const cli = testing.resolveOpenClawCliInvocation(root);
-
-    expect(cli.command).toBe(process.execPath);
-    expect(cli.argsPrefix).toStrictEqual(["--import", "tsx", entryPath]);
-    expect(cli.cwd).toBe(root);
-    expect(cli.gatewayCommand).toMatchObject({
-      executablePath: process.execPath,
-      argsPrefix: ["--import", "tsx", entryPath],
-      cwd: root,
-    });
-  });
-
-  it("prefers built package output when it exists", async () => {
-    const root = createRepoRoot();
-    const distEntry = await writeEntry(root, "dist/index.mjs");
-    await writeEntry(root, "src/entry.ts");
-
-    const cli = testing.resolveOpenClawCliInvocation(root);
-
-    expect(cli.argsPrefix).toStrictEqual([distEntry]);
-    expect(cli.gatewayCommand).toMatchObject({
-      argsPrefix: [distEntry],
-      usePackagedPlugins: true,
-    });
-  });
-
   it("uses the source channel MCP module when build output is absent", async () => {
     const root = createRepoRoot();
     const channelServerPath = await writeEntry(root, "src/mcp/channel-server.ts");
@@ -95,5 +68,60 @@ describe("gateway MCP real transport producer", () => {
       "--verbose",
     ]);
     expect(mcp.envPatch).toStrictEqual({});
+  });
+
+  it("isolates the source plugin-tools MCP invocation", () => {
+    const root = createRepoRoot();
+    const invocation = testing.resolvePluginToolsMcpInvocation({
+      configPath: "/tmp/plugin-tools/openclaw.json",
+      homeDir: "/tmp/plugin-tools/home",
+      repoRoot: root,
+      stateDir: "/tmp/plugin-tools/state",
+    });
+
+    expect(invocation).toStrictEqual({
+      command: process.execPath,
+      args: [
+        "--import",
+        createRequire(import.meta.url).resolve("tsx"),
+        path.join(root, "src/mcp/plugin-tools-serve.ts"),
+      ],
+      cwd: root,
+      env: {
+        HOME: "/tmp/plugin-tools/home",
+        OPENCLAW_CONFIG_PATH: "/tmp/plugin-tools/openclaw.json",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_HOME: "/tmp/plugin-tools/home",
+        OPENCLAW_STATE_DIR: "/tmp/plugin-tools/state",
+      },
+    });
+  });
+
+  it("sets explicit timeouts for each plugin-tools MCP request", async () => {
+    const connect = vi.fn().mockResolvedValue(undefined);
+    const listTools = vi.fn().mockResolvedValue({
+      tools: [{ name: "memory_search" }],
+    });
+    const callTool = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "MCP fact: the codename is ORBIT-9." }],
+      isError: false,
+    });
+    const client = { callTool, connect, listTools } as unknown as Client;
+    const transport = { pid: 42 } as StdioClientTransport;
+
+    await expect(testing.runMcpPluginToolsClientProof({ client, transport })).resolves.toContain(
+      "real plugin-tools pid=42",
+    );
+
+    expect(connect).toHaveBeenCalledWith(transport, { timeout: 180_000 });
+    expect(listTools).toHaveBeenCalledWith({}, { timeout: 180_000 });
+    expect(callTool).toHaveBeenCalledWith(
+      {
+        name: "memory_search",
+        arguments: { query: "ORBIT-9 codename", maxResults: 3 },
+      },
+      undefined,
+      { timeout: 180_000 },
+    );
   });
 });

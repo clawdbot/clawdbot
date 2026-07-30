@@ -1,6 +1,7 @@
+import CryptoKit
 import Foundation
-import OpenClawKit
 import Testing
+@testable import OpenClawKit
 
 extension NSLock {
     fileprivate func withDeviceRetryLock<T>(_ body: () -> T) -> T {
@@ -64,7 +65,11 @@ private final class TrustedDeviceRetryGatewaySession: WebSocketSessioning, Gatew
     }
 
     func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
-        _ = url
+        self.makeWebSocketTask(request: URLRequest(url: url))
+    }
+
+    func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
+        _ = request
         let attemptIndex = self.lock.withDeviceRetryLock { () -> Int in
             let current = self.makeCount
             self.makeCount += 1
@@ -97,13 +102,77 @@ private final class TrustedDeviceRetryGatewaySession: WebSocketSessioning, Gatew
 
 @Suite(.serialized)
 struct GatewayChannelDeviceTokenRetryTests {
+    @Test func `device-token-only auth binding changes after token rotation`() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        try await DeviceIdentityStore.withStateDirectory(tempDir) {
+            let identity = DeviceIdentityStore.loadOrCreate()
+            let key = SymmetricKey(size: .bits256)
+            let url = try #require(URL(string: "ws://example.invalid"))
+            let gatewayID = "device-token-binding-test"
+
+            func connectBinding() async throws -> GatewayAuthBinding {
+                let channel = GatewayChannelActor(
+                    url: url,
+                    token: nil,
+                    authBindingKey: key,
+                    session: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: {
+                        GatewayTestWebSocketTask()
+                    })),
+                    connectOptions: GatewayConnectOptions(
+                        role: "operator",
+                        scopes: GatewayChannelActor.defaultOperatorConnectScopes,
+                        caps: [],
+                        commands: [],
+                        permissions: [:],
+                        clientId: "openclaw-macos-test",
+                        clientMode: "ui",
+                        clientDisplayName: "OpenClaw Test",
+                        deviceAuthGatewayID: gatewayID))
+                try await channel.connect()
+                let generation = try #require(await channel.currentConnectionGeneration())
+                let binding = try #require(await channel.authBinding(
+                    ifCurrentConnectionGeneration: generation))
+                await channel.shutdown()
+                return binding
+            }
+
+            let firstToken = "first-device-token"
+            _ = DeviceAuthStore.storeToken(
+                deviceId: identity.deviceId,
+                role: "operator",
+                token: firstToken,
+                gatewayID: gatewayID)
+            let first = try await connectBinding()
+
+            let replacementToken = "replacement-device-token"
+            _ = DeviceAuthStore.storeToken(
+                deviceId: identity.deviceId,
+                role: "operator",
+                token: replacementToken,
+                gatewayID: gatewayID)
+            let replacement = try await connectBinding()
+
+            let firstFingerprint = try #require(first.credentialFingerprint)
+            let replacementFingerprint = try #require(replacement.credentialFingerprint)
+            #expect(first.source == .deviceToken)
+            #expect(replacement.source == .deviceToken)
+            #expect(firstFingerprint != replacementFingerprint)
+            #expect(!firstFingerprint.contains(firstToken))
+            #expect(!replacementFingerprint.contains(replacementToken))
+        }
+    }
+
     @Test func `remote pinned TLS retries stale shared token with stored device token`() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": tempDir.path]) {
+        try await DeviceIdentityStore.withStateDirectory(tempDir) {
             let identity = DeviceIdentityStore.loadOrCreate()
             _ = DeviceAuthStore.storeToken(
                 deviceId: identity.deviceId,

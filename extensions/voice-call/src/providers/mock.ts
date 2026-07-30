@@ -98,6 +98,15 @@ export class MockProvider implements VoiceCallProvider {
         };
       }
 
+      case "call.assistant-speech": {
+        const payload = evt as Partial<NormalizedEvent & { transcript?: string }>;
+        return {
+          ...base,
+          type: evt.type,
+          transcript: payload.transcript ?? "",
+        };
+      }
+
       case "call.speech": {
         const payload = evt as Partial<
           NormalizedEvent & {

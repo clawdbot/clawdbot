@@ -3,11 +3,12 @@
 import { describe, expect, test } from "vitest";
 import {
   buildPluginNodeCapabilityScopedHostUrl,
+  hasAuthorizedClientPluginNodeCapabilityUrl,
   hasAuthorizedPluginNodeCapability,
   indexPluginNodeCapabilitySurfaces,
   normalizePluginNodeCapabilityScopedUrl,
+  pluginNodeCapabilityScopedHostUrlsConflict,
   refreshClientPluginNodeCapability,
-  replacePluginNodeCapabilityInScopedHostUrl,
   setClientPluginNodeCapability,
 } from "./plugin-node-capability.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -56,13 +57,69 @@ describe("plugin node capability helpers", () => {
     });
   });
 
-  test("replaces scoped capability tokens without nesting capability prefixes", () => {
+  test("detects conflicting scoped host capabilities across rewritten hosts", () => {
     expect(
-      replacePluginNodeCapabilityInScopedHostUrl(
-        "http://127.0.0.1:18789/__openclaw__/cap/old-token/__openclaw__/a2ui/",
-        "new token",
+      pluginNodeCapabilityScopedHostUrlsConflict(
+        "http://127.0.0.1:18789/__openclaw__/cap/token%20value",
+        "https://gateway.example:7443/__openclaw__/cap/token%20value",
       ),
-    ).toBe("http://127.0.0.1:18789/__openclaw__/cap/new%20token/__openclaw__/a2ui");
+    ).toBe(false);
+    expect(
+      pluginNodeCapabilityScopedHostUrlsConflict(
+        "https://gateway.example/__openclaw__/cap/old-token",
+        "https://gateway.example/__openclaw__/cap/new-token",
+      ),
+    ).toBe(true);
+    expect(pluginNodeCapabilityScopedHostUrlsConflict("not-a-url", "also-not-a-url")).toBe(false);
+  });
+
+  test("validates a current scoped URL without extending its authorization", () => {
+    const client = makeClient({
+      pluginNodeCapabilities: {
+        canvas: { capability: "current-token", expiresAtMs: 1_500 },
+      },
+    });
+    const params = {
+      client,
+      surface: { surface: "canvas" },
+      url: "https://gateway.example/__openclaw__/cap/current-token",
+      nowMs: 1_000,
+    };
+
+    expect(hasAuthorizedClientPluginNodeCapabilityUrl(params)).toBe(true);
+    expect(client.pluginNodeCapabilities?.canvas?.expiresAtMs).toBe(1_500);
+    expect(
+      hasAuthorizedClientPluginNodeCapabilityUrl({
+        ...params,
+        url: "https://gateway.example/__openclaw__/cap/other-token",
+      }),
+    ).toBe(false);
+    expect(hasAuthorizedClientPluginNodeCapabilityUrl({ ...params, nowMs: 1_500 })).toBe(false);
+    expect(
+      hasAuthorizedClientPluginNodeCapabilityUrl({
+        ...params,
+        client: makeClient(),
+      }),
+    ).toBe(false);
+    expect(
+      hasAuthorizedClientPluginNodeCapabilityUrl({
+        ...params,
+        surface: { surface: "canvas", scopeKey: "other-plugin:canvas" },
+      }),
+    ).toBe(false);
+  });
+
+  test("treats the scoped path capability as authoritative over a stale query", () => {
+    const normalized = normalizePluginNodeCapabilityScopedUrl(
+      "/__openclaw__/cap/current-token/__openclaw__/canvas/?oc_cap=stale-token",
+    );
+    expect(normalized).toEqual({
+      pathname: "/__openclaw__/canvas/",
+      capability: "current-token",
+      rewrittenUrl: "/__openclaw__/canvas/?oc_cap=current-token",
+      scopedPath: true,
+      malformedScopedPath: false,
+    });
   });
 
   test("marks malformed scoped urls without authorizing a path capability", () => {

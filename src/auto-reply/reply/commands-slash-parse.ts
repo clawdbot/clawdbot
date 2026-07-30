@@ -2,14 +2,14 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /** Internal parse state for slash command action extraction. */
-export type SlashCommandParseResult =
+type SlashCommandParseResult =
   | { kind: "no-match" }
   | { kind: "empty" }
   | { kind: "invalid" }
   | { kind: "parsed"; action: string; args: string };
 
 /** Public slash-command parse result returned to command handlers. */
-export type ParsedSlashCommand =
+type ParsedSlashCommand =
   | { ok: true; action: string; args: string }
   | { ok: false; message: string };
 

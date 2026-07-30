@@ -2,10 +2,10 @@ title: WebChat auto TTS delivery
 
 scenario:
   id: webchat-auto-tts
-  surface: media-understanding-and-media-generation
-  category: media-understanding-and-media-generation.text-to-speech-delivery
+  surface: media
+  category: media.text-to-speech-delivery
   coverage:
-    secondary:
+    primary:
       - media.tts
       - media.outbound-voice-audio-delivery
   objective: Verify WebChat auto-TTS synthesizes only the final reply tail and serves trusted local audio through scoped browser media tickets.
@@ -22,8 +22,13 @@ scenario:
     - packages/speech-core/src/tts.ts
     - src/gateway/server-methods/chat-webchat-media.ts
     - src/gateway/control-ui.ts
-    - test/e2e/qa-lab/media/webchat-auto-tts.e2e.test.ts
+    - test/e2e/qa-lab/runtime/media-talk-gateway.ts
   execution:
-    kind: vitest
-    path: test/e2e/qa-lab/media/webchat-auto-tts.e2e.test.ts
-    summary: Vitest QA Lab coverage for mock WebChat TTS synthesis and real scoped media-ticket delivery.
+    kind: script
+    path: test/e2e/qa-lab/runtime/media-talk-gateway.ts
+    summary: Starts a real Gateway and mock model/TTS providers, sends a WebChat turn, and verifies the history attachment plus scoped media-ticket route.
+    args:
+      - --scenario
+      - webchat-auto-tts
+      - --artifact-base
+      - ${outputDir}

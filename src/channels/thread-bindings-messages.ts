@@ -3,6 +3,7 @@
  * Keep text system-prefixed and compact because callers post it directly into user-visible threads.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prefixSystemMessage } from "../infra/system-message.js";
 
 const DEFAULT_THREAD_BINDING_FAREWELL_TEXT =
@@ -43,7 +44,7 @@ export function resolveThreadBindingThreadName(params: {
   const base = label || normalizeOptionalString(params.agentId) || "agent";
   const raw = `🤖 ${base}`.replace(/\s+/g, " ").trim();
   // Native channel thread names have tight limits; keep generated names bounded.
-  return raw.slice(0, 100);
+  return truncateUtf16Safe(raw, 100);
 }
 
 /** Builds the system-prefixed intro text posted when a thread binding becomes active. */
@@ -57,7 +58,7 @@ export function resolveThreadBindingIntroText(params: {
 }): string {
   const label = normalizeOptionalString(params.label);
   const base = label || normalizeOptionalString(params.agentId) || "agent";
-  const normalized = base.replace(/\s+/g, " ").trim().slice(0, 100) || "agent";
+  const normalized = truncateUtf16Safe(base.replace(/\s+/g, " ").trim(), 100) || "agent";
   const idleTimeoutMs = normalizeThreadBindingDurationMs(params.idleTimeoutMs);
   const maxAgeMs = normalizeThreadBindingDurationMs(params.maxAgeMs);
   const cwd = normalizeOptionalString(params.sessionCwd);

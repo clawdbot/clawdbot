@@ -2,10 +2,10 @@
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
+  type MessageReceiptPart,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
 import {
   classifyMSTeamsSendError,
@@ -13,10 +13,11 @@ import {
   formatUnknownError,
 } from "./errors.js";
 import { prepareFileConsentActivityFs, requiresFileConsent } from "./file-consent-helpers.js";
+import { formatMSTeamsMarkdown } from "./format.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
   getDriveItemProperties,
-  uploadAndShareOneDrive,
+  requireMSTeamsSharePointSiteId,
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
 import { extractFilename, extractMessageId } from "./media-helpers.js";
@@ -59,7 +60,7 @@ const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024; // 4MB
 
 /**
  * MSTeams-specific media size limit (100MB).
- * Higher than the default because OneDrive upload handles large files well.
+ * Higher than the default to support Teams file-consent and SharePoint uploads.
  */
 const MSTEAMS_MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 
@@ -67,8 +68,9 @@ function createMSTeamsSendReceipt(params: {
   conversationId: string;
   platformMessageIds: readonly string[];
   kind: MessageReceiptPartKind;
+  kinds?: readonly MessageReceiptPartKind[];
 }) {
-  return createMessageReceiptFromOutboundResults({
+  const receipt = createMessageReceiptFromOutboundResults({
     kind: params.kind,
     results: params.platformMessageIds.map((messageId) => ({
       channel: "msteams",
@@ -76,6 +78,30 @@ function createMSTeamsSendReceipt(params: {
       conversationId: params.conversationId,
     })),
   });
+  if (!params.kinds) {
+    return receipt;
+  }
+  const kinds = params.kinds;
+  return {
+    ...receipt,
+    parts: receipt.parts.map((part, index) => {
+      const nextPart: MessageReceiptPart = {
+        platformMessageId: part.platformMessageId,
+        kind: kinds[index] ?? params.kind,
+        index: part.index,
+      };
+      if (part.threadId) {
+        nextPart.threadId = part.threadId;
+      }
+      if (part.replyToId) {
+        nextPart.replyToId = part.replyToId;
+      }
+      if (part.raw) {
+        nextPart.raw = part.raw;
+      }
+      return nextPart;
+    }),
+  };
 }
 
 function createMSTeamsSendResult(params: {
@@ -144,7 +170,7 @@ type SendMSTeamsCardResult = {
  *
  * File handling by conversation type:
  * - Personal (1:1) chats: small images (<4MB) use base64, large files and non-images use FileConsentCard
- * - Group chats / channels: files are uploaded to OneDrive and shared via link
+ * - Group chats / channels: files require configured SharePoint storage
  */
 export async function sendMessageMSTeams(
   params: SendMSTeamsMessageParams,
@@ -154,7 +180,7 @@ export async function sendMessageMSTeams(
     cfg,
     channel: "msteams",
   });
-  const messageText = convertMarkdownTables(text ?? "", tableMode);
+  const messageText = formatMSTeamsMarkdown(text ?? "", tableMode);
   const ctx = await resolveMSTeamsSendContext({ cfg, to });
   const {
     app,
@@ -162,6 +188,7 @@ export async function sendMessageMSTeams(
     ref,
     log,
     conversationType,
+    replyStyle,
     tokenProvider,
     sharePointSiteId,
     sdkCloudOptions,
@@ -251,113 +278,69 @@ export async function sendMessageMSTeams(
     }
 
     if (isImage && !sharePointSiteId) {
-      // Group chat/channel without SharePoint: send image inline (avoids OneDrive failures)
+      // Group chat/channel images can be sent inline without SharePoint storage.
       const base64 = media.buffer.toString("base64");
       const finalMediaUrl = `data:${media.contentType};base64,${base64}`;
       return sendTextWithMedia(ctx, messageText, finalMediaUrl);
     }
 
-    // Group chat or channel: upload to SharePoint (if siteId configured) or OneDrive
+    // Group chat or channel: upload to configured SharePoint storage.
     try {
-      if (sharePointSiteId) {
-        // Use SharePoint upload + Graph API for native file card
-        log.debug?.("uploading to SharePoint for native file card", {
-          fileName,
-          conversationType,
-          siteId: sharePointSiteId,
-        });
-
-        const uploaded = await uploadAndShareSharePoint({
-          buffer: media.buffer,
-          filename: fileName,
-          contentType: media.contentType,
-          tokenProvider,
-          siteId: sharePointSiteId,
-          // Use the Graph-native chat ID (19:xxx format) — the Bot Framework conversationId
-          // for personal DMs uses a different format that Graph API rejects.
-          chatId: ctx.graphChatId ?? conversationId,
-          usePerUserSharing: conversationType === "groupChat",
-        });
-
-        log.debug?.("SharePoint upload complete", {
-          itemId: uploaded.itemId,
-          shareUrl: uploaded.shareUrl,
-        });
-
-        // Get driveItem properties needed for native file card
-        const driveItem = await getDriveItemProperties({
-          siteId: sharePointSiteId,
-          itemId: uploaded.itemId,
-          tokenProvider,
-        });
-
-        log.debug?.("driveItem properties retrieved", {
-          eTag: driveItem.eTag,
-          webDavUrl: driveItem.webDavUrl,
-        });
-
-        // Build native Teams file card attachment and send via Bot Framework
-        const fileCardAttachment = buildTeamsFileInfoCard(driveItem);
-        const activity = {
-          type: "message",
-          text: messageText || undefined,
-          attachments: [fileCardAttachment],
-        };
-        const messageId = await sendProactiveActivityRaw({
-          app,
-          ref,
-          activity,
-          serviceUrlBoundary: sdkCloudOptions,
-        });
-
-        log.info("sent native file card", {
-          conversationId,
-          messageId,
-          fileName: driveItem.name,
-        });
-
-        return createMSTeamsSendResult({
-          messageId,
-          conversationId,
-          kind: "media",
-        });
-      }
-
-      // Fallback: no SharePoint site configured, use OneDrive with markdown link
-      log.debug?.("uploading to OneDrive (no SharePoint site configured)", {
+      const siteId = requireMSTeamsSharePointSiteId(sharePointSiteId);
+      log.debug?.("uploading to SharePoint for native file card", {
         fileName,
         conversationType,
+        siteId,
       });
 
-      const uploaded = await uploadAndShareOneDrive({
+      const uploaded = await uploadAndShareSharePoint({
         buffer: media.buffer,
         filename: fileName,
         contentType: media.contentType,
         tokenProvider,
+        siteId,
+        chatId: conversationId,
+        usePerUserSharing: conversationType === "groupChat",
       });
 
-      log.debug?.("OneDrive upload complete", {
+      log.debug?.("SharePoint upload complete", {
         itemId: uploaded.itemId,
         shareUrl: uploaded.shareUrl,
       });
 
-      // Send message with file link (Bot Framework doesn't support "reference" attachment type for sending)
-      const fileLink = `📎 [${uploaded.name}](${uploaded.shareUrl})`;
+      const driveItem = await getDriveItemProperties({
+        siteId,
+        itemId: uploaded.itemId,
+        tokenProvider,
+      });
+
+      log.debug?.("driveItem properties retrieved", {
+        eTag: driveItem.eTag,
+        webDavUrl: driveItem.webDavUrl,
+      });
+
+      const fileCardAttachment = buildTeamsFileInfoCard(driveItem);
       const activity = {
         type: "message",
-        text: messageText ? `${messageText}\n\n${fileLink}` : fileLink,
+        text: messageText || undefined,
+        attachments: [fileCardAttachment],
       };
       const messageId = await sendProactiveActivityRaw({
         app,
         ref,
         activity,
+        // Only channel replies carry a thread root; top-level and group sends must stay unchanged.
+        threadActivityId:
+          replyStyle === "thread" && conversationType === "channel"
+            ? (ref.threadId ?? ref.activityId)
+            : undefined,
         serviceUrlBoundary: sdkCloudOptions,
       });
 
-      log.info("sent message with OneDrive file link", {
+      log.info("sent native file card", {
         conversationId,
         messageId,
-        shareUrl: uploaded.shareUrl,
+        fileName: driveItem.name,
       });
 
       return createMSTeamsSendResult({
@@ -399,6 +382,8 @@ async function sendTextWithMedia(
     mediaMaxBytes,
     replyStyle,
   } = ctx;
+  const messages =
+    text && mediaUrl ? [{ text }, { mediaUrl }] : [{ text: text || undefined, mediaUrl }];
 
   let platformMessageIds: string[];
   try {
@@ -407,7 +392,7 @@ async function sendTextWithMedia(
       app,
       appId,
       conversationRef: ref,
-      messages: [{ text: text || undefined, mediaUrl }],
+      messages,
       retry: {},
       onRetry: (event) => {
         log.debug?.("retrying send", { conversationId, ...event });
@@ -437,6 +422,7 @@ async function sendTextWithMedia(
       conversationId,
       platformMessageIds,
       kind: mediaUrl ? "media" : "text",
+      ...(text && mediaUrl ? { kinds: ["text", "media"] } : {}),
     }),
   };
 }
@@ -449,16 +435,20 @@ type ProactiveActivityParams = {
   serviceUrlBoundary: MSTeamsProactiveContext["sdkCloudOptions"];
 };
 
-type ProactiveActivityRawParams = Omit<ProactiveActivityParams, "errorPrefix">;
+type ProactiveActivityRawParams = Omit<ProactiveActivityParams, "errorPrefix"> & {
+  threadActivityId?: string;
+};
 
 async function sendProactiveActivityRaw({
   app,
   ref,
   activity,
+  threadActivityId,
   serviceUrlBoundary,
 }: ProactiveActivityRawParams): Promise<string> {
   const baseRef = buildConversationReference(ref);
   const response = await sendMSTeamsActivityWithReference(app, baseRef, activity, {
+    ...(threadActivityId ? { threadActivityId } : {}),
     serviceUrlBoundary,
   });
   return extractMessageId(response) ?? "unknown";

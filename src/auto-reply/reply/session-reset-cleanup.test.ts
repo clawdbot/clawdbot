@@ -1,25 +1,36 @@
 // Tests session reset cleanup for stale files and persisted state.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  clearEmbeddedSessionPromptStates,
+  getEmbeddedSessionPromptState,
+} from "../../agents/embedded-agent-runner/session-prompt-state.js";
+import {
   enqueueSystemEvent,
   peekSystemEvents,
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
-import {
-  createReplyOperation,
-  replyRunRegistry,
-  testing as replyRunTesting,
-} from "./reply-run-registry.js";
+import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
+import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 
 afterEach(() => {
+  clearEmbeddedSessionPromptStates(["old-session"]);
   replyRunTesting.resetReplyRunRegistry();
   resetDiagnosticRunActivityForTest();
   resetSystemEventsForTest();
 });
 
 describe("clearSessionResetRuntimeState", () => {
+  it("disposes prompt projections with the archived session", () => {
+    const state = getEmbeddedSessionPromptState("old-session");
+    state.sentUserTurnIds.add("sent-user-turn");
+
+    clearSessionResetRuntimeState(["old-session"]);
+
+    expect(getEmbeddedSessionPromptState("old-session")).not.toBe(state);
+  });
+
   it("clears reset queues and drains system events for normalized keys", () => {
     enqueueSystemEvent("stale alpha", { sessionKey: "alpha" });
     enqueueSystemEvent("stale beta", { sessionKey: "beta" });

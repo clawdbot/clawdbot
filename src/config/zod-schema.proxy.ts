@@ -3,7 +3,7 @@ import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { z } from "zod";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-export const ProxyLoopbackModeSchema = z.enum(["gateway-only", "proxy", "block"]);
+const ProxyLoopbackModeSchema = z.enum(["gateway-only", "proxy", "block"]);
 
 const ProxyTlsConfigSchema = z
   .object({

@@ -7,20 +7,27 @@ import { generateVoiceResponse } from "./response-generator.js";
 type TestSessionEntry = {
   sessionId: string;
   updatedAt: number;
+  agentHarnessId?: string;
+  agentRuntimeOverride?: string;
   providerOverride?: string;
   modelOverride?: string;
   modelOverrideSource?: string;
   model?: string;
   modelProvider?: string;
+  modelSelectionLocked?: boolean;
+  pluginExtensions?: Record<string, unknown>;
   contextTokens?: number;
   authProfileOverride?: string;
 };
 
 type EmbeddedAgentArgs = {
   abortSignal?: AbortSignal;
+  agentHarnessId?: string;
+  agentHarnessRuntimeOverride?: string;
   extraSystemPrompt: string;
   provider?: string;
   model?: string;
+  modelSelectionLocked?: boolean;
   sessionKey?: string;
   sessionTarget?: {
     agentId?: string;
@@ -557,6 +564,88 @@ describe("generateVoiceResponse", () => {
     expect(args.sessionKey).toBe("agent:main:voice:15550001111");
   });
 
+  it("rejects responseModel for a model-locked session without running the embedded agent", async () => {
+    const { runtime, runEmbeddedAgent, patchSessionEntry, sessionStore } = createAgentRuntime([]);
+    sessionStore["agent:main:voice:15550001111"] = {
+      sessionId: "locked-session",
+      updatedAt: 100,
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      modelSelectionLocked: true,
+    };
+    const voiceConfig = VoiceCallConfigSchema.parse({
+      responseModel: "openai/gpt-4.1-nano",
+      responseTimeoutMs: 5000,
+    });
+
+    const result = await generateVoiceResponse({
+      voiceConfig,
+      coreConfig: {} as CoreConfig,
+      agentRuntime: runtime,
+      callId: "call-123",
+      from: "+15550001111",
+      transcript: [{ speaker: "user", text: "hello there" }],
+      userMessage: "hello there",
+    });
+
+    expect(result).toEqual({
+      text: null,
+      deliveredEarly: false,
+      error: "Model selection is locked for this session.",
+    });
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(patchSessionEntry).not.toHaveBeenCalled();
+    expect(sessionStore["agent:main:voice:15550001111"]).toMatchObject({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      modelSelectionLocked: true,
+    });
+    expect(sessionStore["agent:main:voice:15550001111"]?.modelOverride).toBeUndefined();
+  });
+
+  it("propagates the lock for a same-agent supervised Codex session", async () => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
+      { text: '{"spoken":"Native Codex continued."}' },
+    ]);
+    const sessionKey = "agent:main:harness:codex:supervision:019f-codex-thread";
+    sessionStore[sessionKey] = {
+      sessionId: "catalog-adopted-session",
+      updatedAt: 100,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      pluginExtensions: {
+        codex: {
+          supervision: {
+            sourceThreadId: "019f-codex-thread",
+            modelLocked: true,
+          },
+        },
+      },
+    };
+    const voiceConfig = VoiceCallConfigSchema.parse({ responseTimeoutMs: 5000 });
+
+    const result = await generateVoiceResponse({
+      voiceConfig,
+      coreConfig: {} as CoreConfig,
+      agentRuntime: runtime,
+      callId: "call-123",
+      sessionKey,
+      from: "+15550001111",
+      transcript: [{ speaker: "user", text: "continue" }],
+      userMessage: "continue",
+    });
+
+    expect(result.text).toBe("Native Codex continued.");
+    expect(requireEmbeddedAgentArgs(runEmbeddedAgent)).toMatchObject({
+      provider: "together",
+      model: "Qwen/Qwen2.5-7B-Instruct-Turbo",
+      modelSelectionLocked: true,
+      agentHarnessId: "codex",
+      agentHarnessRuntimeOverride: "codex",
+      sessionKey,
+    });
+  });
+
   it("canonicalizes a restored legacy per-call key for classic responses", async () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
       { text: '{"spoken":"Fresh call context."}' },
@@ -766,6 +855,30 @@ describe("generateVoiceResponse", () => {
     expect(args.sandboxSessionKey).toBe("agent:voice:voice:15550001111");
     expect(args.workspaceDir).toBe("/tmp/openclaw/workspace/voice");
     expect(args.sessionFile).toBeUndefined();
+  });
+
+  it("prefers the agent frozen on the call", async () => {
+    const { runtime, runEmbeddedAgent, resolveStorePath } = createAgentRuntime([
+      { text: '{"spoken":"Support agent."}' },
+    ]);
+
+    await generateVoiceResponse({
+      voiceConfig: VoiceCallConfigSchema.parse({ agentId: "voice", responseTimeoutMs: 5000 }),
+      coreConfig: {} as CoreConfig,
+      agentRuntime: runtime,
+      callId: "call-123",
+      agentId: "support",
+      sessionKey: "agent:support:google-meet:meet-1",
+      from: "+15550001111",
+      transcript: [],
+      userMessage: "hello there",
+    });
+
+    expect(resolveStorePath).toHaveBeenCalledWith(undefined, { agentId: "support" });
+    expect(requireEmbeddedAgentArgs(runEmbeddedAgent)).toMatchObject({
+      agentId: "support",
+      sessionKey: "agent:support:google-meet:meet-1",
+    });
   });
 
   it("passes the routed voice agent explicit tool allowlist to the embedded run", async () => {

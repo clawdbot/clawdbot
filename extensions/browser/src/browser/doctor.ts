@@ -4,6 +4,7 @@
  * Turns BrowserStatus into profile-aware diagnostic checks and fix hints for
  * CLI, tool, and HTTP doctor responses.
  */
+import { formatBrowserGraphicsSummary } from "./chrome.graphics.js";
 import type { BrowserStatus, BrowserTransport } from "./client.types.js";
 
 type BrowserDoctorCheckStatus = "pass" | "warn" | "fail" | "info";
@@ -164,6 +165,21 @@ export function buildBrowserDoctorReport(params: {
         ? {}
         : { fixHint: "Check Chrome launch logs, stale locks, proxy env, and port conflicts." }),
     });
+
+    if (status.graphics) {
+      const graphicsStatus =
+        status.graphics.status === "unavailable"
+          ? "warn"
+          : status.graphics.acceleration === "hardware"
+            ? "pass"
+            : "info";
+      checks.push({
+        id: "graphics",
+        label: "Graphics",
+        status: graphicsStatus,
+        summary: formatBrowserGraphicsSummary(status.graphics),
+      });
+    }
   }
 
   return {

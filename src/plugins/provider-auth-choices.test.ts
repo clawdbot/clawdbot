@@ -48,14 +48,13 @@ vi.resetModules();
 
 const {
   resolveManifestDeprecatedProviderAuthChoice,
-  resolveManifestProviderApiKeyChoice,
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
-  resolveManifestProviderOnboardAuthFlags,
   resolveProviderOnboardAuthFlags,
 } = await import("./provider-auth-choices.js");
-const { resetProviderAuthAliasMapCacheForTest, resolveProviderIdForAuth } =
-  await import("../agents/provider-auth-aliases.js");
+const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
+const { resetProviderAuthAliasMapCacheForTest } =
+  await import("../agents/provider-auth-aliases.test-support.js");
 
 function createManifestPlugin(id: string, providerAuthChoices: Array<Record<string, unknown>>) {
   return {
@@ -261,7 +260,7 @@ describe("provider auth choice manifest helpers", () => {
         ]),
       ],
       run: () =>
-        expect(resolveManifestProviderOnboardAuthFlags()).toEqual([
+        expect(resolveProviderOnboardAuthFlags()).toEqual([
           {
             optionKey: "moonshotApiKey",
             authChoice: "moonshot-api-key",
@@ -322,6 +321,8 @@ describe("provider auth choice manifest helpers", () => {
             optionKey: "openaiApiKey",
             cliFlag: "--openai-api-key",
             cliOption: "--openai-api-key <key>",
+            appGuidedSecret: true,
+            appGuidedDiscovery: true,
           },
         ],
       },
@@ -338,6 +339,15 @@ describe("provider auth choice manifest helpers", () => {
             optionKey: "openaiApiKey",
             cliFlag: "--openai-api-key",
             cliOption: "--openai-api-key <key>",
+          },
+          {
+            provider: "evil-openai",
+            method: "api-key",
+            choiceId: "evil-openai-api-key",
+            choiceLabel: "Evil OpenAI API key",
+            optionKey: "evilOpenaiApiKey",
+            cliFlag: "--evil-openai-api-key",
+            cliOption: "--evil-openai-api-key <key>",
           },
         ],
       },
@@ -357,6 +367,8 @@ describe("provider auth choice manifest helpers", () => {
         optionKey: "openaiApiKey",
         cliFlag: "--openai-api-key",
         cliOption: "--openai-api-key <key>",
+        appGuidedSecret: true,
+        appGuidedDiscovery: true,
       },
     ]);
     expect(
@@ -364,8 +376,24 @@ describe("provider auth choice manifest helpers", () => {
         includeUntrustedWorkspacePlugins: false,
       })?.providerId,
     ).toBe("openai");
+    const enabledWorkspaceConfig = {
+      plugins: { entries: { "evil-openai-hijack": { enabled: true } } },
+    };
     expect(
-      resolveManifestProviderOnboardAuthFlags({
+      resolveManifestProviderAuthChoices({
+        config: enabledWorkspaceConfig,
+        includeUntrustedWorkspacePlugins: false,
+      }).map((choice) => choice.choiceId),
+    ).toContain("evil-openai-api-key");
+    expect(
+      resolveManifestProviderAuthChoices({
+        config: enabledWorkspaceConfig,
+        includeUntrustedWorkspacePlugins: false,
+        includeWorkspacePlugins: false,
+      }).map((choice) => choice.choiceId),
+    ).not.toContain("evil-openai-api-key");
+    expect(
+      resolveProviderOnboardAuthFlags({
         includeUntrustedWorkspacePlugins: false,
       }),
     ).toEqual([
@@ -599,7 +627,7 @@ describe("provider auth choice manifest helpers", () => {
       },
     ]);
     expect(resolveManifestProviderAuthChoice("openai-api-key")?.providerId).toBe("openai");
-    expect(resolveManifestProviderOnboardAuthFlags()).toEqual([
+    expect(resolveProviderOnboardAuthFlags()).toEqual([
       {
         optionKey: "openaiApiKey",
         authChoice: "openai-api-key",
@@ -659,7 +687,7 @@ describe("provider auth choice manifest helpers", () => {
       },
     ]);
     expect(resolveManifestProviderAuthChoice("openai-api-key")?.providerId).toBe("custom-openai");
-    expect(resolveManifestProviderOnboardAuthFlags()).toEqual([
+    expect(resolveProviderOnboardAuthFlags()).toEqual([
       {
         optionKey: "openaiApiKey",
         authChoice: "openai-api-key",
@@ -670,7 +698,7 @@ describe("provider auth choice manifest helpers", () => {
     ]);
   });
 
-  it("resolves api-key choices through manifest-owned provider auth aliases", () => {
+  it("resolves manifest-owned provider auth aliases", () => {
     setManifestPlugins([
       {
         id: "fixture-provider",
@@ -695,10 +723,5 @@ describe("provider auth choice manifest helpers", () => {
     const resolvedProviderId = resolveProviderIdForAuth("fixture-provider-plan");
     expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalled();
     expect(resolvedProviderId).toBe("fixture-provider");
-    expect(
-      resolveManifestProviderApiKeyChoice({
-        providerId: "fixture-provider-plan",
-      })?.choiceId,
-    ).toBe("fixture-provider-api-key");
   });
 });

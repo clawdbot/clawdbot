@@ -34,7 +34,11 @@ internal fun slashCommandText(command: ChatCommandEntry): String {
   command.textAliases
     .firstOrNull { alias -> alias.startsWith("/") && alias.length > 1 }
     ?.let { return it }
-  val name = command.name.trim().removePrefix("/").takeIf { it.isNotEmpty() } ?: "help"
+  val name =
+    command.name
+      .trim()
+      .removePrefix("/")
+      .takeIf { it.isNotEmpty() } ?: "help"
   return "/$name"
 }
 

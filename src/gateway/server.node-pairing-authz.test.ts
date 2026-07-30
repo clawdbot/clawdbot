@@ -2,15 +2,25 @@
 // command scopes, and gateway enforcement around node client identity.
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
+import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
-import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+  type GatewayClientName,
+} from "../utils/message-channel.js";
 import { callGateway } from "./call.js";
 import {
+  issueOperatorToken,
   loadDeviceIdentity,
   openTrackedWs,
   pairDeviceIdentity,
 } from "./device-authz.test-helpers.js";
+import {
+  createNodePairingTestState,
+  describeWithGatewayServer,
+} from "./server.node-pairing.test-support.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import {
   connectOk,
@@ -21,11 +31,12 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
-const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-pair-authz-" });
-
-async function makeNodePairingStateDir(): Promise<string> {
-  return await tempDirs.make("case");
-}
+const {
+  cleanup: cleanupNodePairingTestState,
+  makeStateDir: makeNodePairingStateDir,
+  seedNodeDevice,
+  setup: setupNodePairingTestState,
+} = createNodePairingTestState("openclaw-node-pair-authz-");
 
 async function findPairedNode(nodeId: string, baseDir?: string) {
   const pairing = await listNodePairing(baseDir);
@@ -45,16 +56,19 @@ async function connectNodeClient(params: {
   port: number;
   deviceIdentity: ReturnType<typeof loadDeviceIdentity>["identity"];
   commands: string[];
+  clientName?: GatewayClientName;
+  platform?: string;
+  deviceFamily?: string;
 }) {
   return await connectGatewayClient({
     url: `ws://127.0.0.1:${params.port}`,
     token: "secret",
     role: "node",
-    clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+    clientName: params.clientName ?? GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientDisplayName: "node-command-pin",
     clientVersion: "1.0.0",
-    platform: "macos",
-    deviceFamily: "Mac",
+    platform: params.platform ?? "macos",
+    deviceFamily: params.deviceFamily ?? "Mac",
     mode: GATEWAY_CLIENT_MODES.NODE,
     scopes: [],
     commands: params.commands,
@@ -178,20 +192,23 @@ async function expectRpcNodePairingApprovalRejected(params: {
   operatorScopes: string[];
   operatorName: string;
   nodeId: string;
-  expectedMessage: string;
+  commands: string[];
+  expectedMissingScope: string;
+  expectedRequiredScopes: string[];
 }): Promise<void> {
   const ws = await openTrackedWs(params.started.port);
   try {
     await connectOk(ws, {
       token: "secret",
       scopes: params.operatorScopes,
-      deviceIdentityPath: `${await makeNodePairingStateDir()}/${params.operatorName}.json`,
+      deviceIdentityPath: `${await makeNodePairingStateDir()}/${params.operatorName}.sqlite`,
     });
+    await seedNodeDevice(params.nodeId);
     const request = await requestNodePairing({
       nodeId: params.nodeId,
       platform: "macos",
       deviceFamily: "Mac",
-      commands: ["system.run"],
+      commands: params.commands,
     });
 
     const approve = await rpcReq(ws, "node.pair.approve", {
@@ -199,51 +216,34 @@ async function expectRpcNodePairingApprovalRejected(params: {
     });
 
     expect(approve.ok).toBe(false);
-    expect(approve.error?.message).toContain(params.expectedMessage);
+    expect(approve.error).toEqual({
+      code: "FORBIDDEN",
+      message: `missing scope: ${params.expectedMissingScope}`,
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: params.expectedMissingScope,
+        requiredScopes: params.expectedRequiredScopes,
+      },
+    });
     await expect(findPairedNode(params.nodeId)).resolves.toBeNull();
   } finally {
     ws.close();
   }
 }
 
-function describeWithGatewayServer(
-  name: string,
-  defineTests: (getStarted: () => Awaited<ReturnType<typeof startServerWithClient>>) => void,
-): void {
-  describe(name, () => {
-    let started: Awaited<ReturnType<typeof startServerWithClient>> | undefined;
-
-    beforeAll(async () => {
-      started = await startServerWithClient("secret");
-    });
-
-    afterAll(async () => {
-      started?.ws.close();
-      await started?.server.close();
-      started?.envSnapshot.restore();
-    });
-
-    defineTests(() => {
-      if (!started) {
-        throw new Error("gateway test server was not started");
-      }
-      return started;
-    });
-  });
-}
-
 describe("gateway node pairing authorization", () => {
   beforeAll(async () => {
-    await tempDirs.setup();
+    await setupNodePairingTestState();
   });
 
   afterAll(async () => {
-    await tempDirs.cleanup();
+    await cleanupNodePairingTestState();
   });
 
   describe("approval scopes", () => {
     test("rejects node pairing approval without admin scope", async () => {
       const baseDir = await makeNodePairingStateDir();
+      await seedNodeDevice("node-approve-reject-admin", baseDir);
       const request = await requestNodePairing(
         {
           nodeId: "node-approve-reject-admin",
@@ -269,6 +269,7 @@ describe("gateway node pairing authorization", () => {
 
     test("rejects node pairing approval without pairing scope", async () => {
       const baseDir = await makeNodePairingStateDir();
+      await seedNodeDevice("node-approve-reject-pairing", baseDir);
       const request = await requestNodePairing(
         {
           nodeId: "node-approve-reject-pairing",
@@ -294,6 +295,7 @@ describe("gateway node pairing authorization", () => {
 
     test("approves commandless node pairing with pairing scope", async () => {
       const baseDir = await makeNodePairingStateDir();
+      await seedNodeDevice("node-approve-target", baseDir);
       const request = await requestNodePairing(
         {
           nodeId: "node-approve-target",
@@ -325,7 +327,25 @@ describe("gateway node pairing authorization", () => {
         operatorScopes: ["operator.pairing"],
         operatorName: "operator-pairing",
         nodeId: "node-rpc-approve-reject-admin",
-        expectedMessage: "missing scope: operator.admin",
+        commands: ["system.run"],
+        expectedMissingScope: "operator.admin",
+        expectedRequiredScopes: ["operator.pairing", "operator.admin"],
+      });
+    });
+
+    test.each([
+      ["fs.listDir", "fs-list-dir"],
+      ["system.execApprovals.get", "exec-approvals-get"],
+      ["system.execApprovals.set", "exec-approvals-set"],
+    ])("rejects %s node pairing approval without admin scope through rpc", async (command, id) => {
+      await expectRpcNodePairingApprovalRejected({
+        started: getStarted(),
+        operatorScopes: ["operator.pairing", "operator.write"],
+        operatorName: `operator-write-${id}`,
+        nodeId: `node-rpc-${id}`,
+        commands: [command],
+        expectedMissingScope: "operator.admin",
+        expectedRequiredScopes: ["operator.pairing", "operator.admin"],
       });
     });
 
@@ -335,14 +355,279 @@ describe("gateway node pairing authorization", () => {
         operatorScopes: ["operator.write"],
         operatorName: "operator-write",
         nodeId: "node-rpc-approve-reject-pairing",
-        expectedMessage: "operator.pairing",
+        commands: ["system.run"],
+        expectedMissingScope: "operator.pairing",
+        expectedRequiredScopes: ["operator.pairing"],
       });
+    });
+  });
+
+  describeWithGatewayServer("cross-device management guard", (getStarted) => {
+    async function requestVictimNodeSurface(nodeId: string) {
+      await seedNodeDevice(nodeId);
+      return await requestNodePairing({
+        nodeId,
+        platform: "macos",
+        deviceFamily: "Mac",
+        commands: [NODE_MCP_TOOLS_CALL_COMMAND],
+      });
+    }
+
+    async function openDeviceTokenSession(params: {
+      name: string;
+      scopes: string[];
+    }): Promise<{ ws: WebSocket; deviceId: string }> {
+      const operator = await issueOperatorToken({
+        name: params.name,
+        approvedScopes: params.scopes,
+        tokenScopes: params.scopes,
+      });
+      const ws = await openTrackedWs(getStarted().port);
+      await connectOk(ws, {
+        skipDefaultAuth: true,
+        deviceToken: operator.token.trim(),
+        deviceIdentityPath: operator.identityPath,
+        scopes: params.scopes,
+      });
+      return { ws, deviceId: operator.deviceId };
+    }
+
+    test("denies non-admin cross-device list, approve, reject, and rename", async () => {
+      const approveVictimId = "node-cross-device-approve-victim";
+      const approveRequest = await requestVictimNodeSurface(approveVictimId);
+      const rejectVictimId = "node-cross-device-reject-victim";
+      const rejectRequest = await requestVictimNodeSurface(rejectVictimId);
+      const renameVictimId = "node-cross-device-rename-victim";
+      const renameRequest = await requestVictimNodeSurface(renameVictimId);
+      requireApprovedPairing(
+        await approveNodePairing(renameRequest.request.requestId, {
+          callerScopes: ["operator.pairing", "operator.write"],
+        }),
+      );
+
+      const { ws } = await openDeviceTokenSession({
+        name: "node-cross-device-attacker",
+        scopes: ["operator.pairing", "operator.write"],
+      });
+      try {
+        const listed = await rpcReq<Awaited<ReturnType<typeof listNodePairing>>>(
+          ws,
+          "node.pair.list",
+          {},
+        );
+        expect(listed.ok).toBe(true);
+        expect(listed.payload).toEqual({ pending: [], paired: [] });
+
+        const approve = await rpcReq(ws, "node.pair.approve", {
+          requestId: approveRequest.request.requestId,
+        });
+        expect(approve.ok).toBe(false);
+        expect(approve.error?.message).toBe("node pairing approval denied");
+        await expect(findPairedNode(approveVictimId)).resolves.toBeNull();
+
+        const reject = await rpcReq(ws, "node.pair.reject", {
+          requestId: rejectRequest.request.requestId,
+        });
+        expect(reject.ok).toBe(false);
+        expect(reject.error?.message).toBe("node pairing rejection denied");
+        expect((await listNodePairing()).pending).toContainEqual(
+          expect.objectContaining({ nodeId: rejectVictimId }),
+        );
+
+        const unknownApprove = await rpcReq(ws, "node.pair.approve", {
+          requestId: "unknown-cross-device-approve",
+        });
+        expect(unknownApprove.error?.message).toBe("node pairing approval denied");
+        const unknownReject = await rpcReq(ws, "node.pair.reject", {
+          requestId: "unknown-cross-device-reject",
+        });
+        expect(unknownReject.error?.message).toBe("node pairing rejection denied");
+
+        const rename = await rpcReq(ws, "node.rename", {
+          nodeId: renameVictimId,
+          displayName: "attacker rename",
+        });
+        expect(rename.ok).toBe(false);
+        expect(rename.error?.message).toBe("node rename denied");
+        await expect(findPairedNode(renameVictimId)).resolves.not.toMatchObject({
+          displayName: "attacker rename",
+        });
+      } finally {
+        ws.close();
+      }
+    });
+
+    test("allows a non-admin device-token session to manage its own node surface", async () => {
+      const name = "node-self-device";
+      const attacker = await issueOperatorToken({
+        name,
+        approvedScopes: ["operator.pairing", "operator.write"],
+        tokenScopes: ["operator.pairing", "operator.write"],
+      });
+      await pairDeviceIdentity({
+        name,
+        role: "node",
+        scopes: [],
+        clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+      });
+      const request = await requestNodePairing({
+        nodeId: attacker.deviceId,
+        platform: "macos",
+        deviceFamily: "Mac",
+        commands: [NODE_MCP_TOOLS_CALL_COMMAND],
+      });
+
+      const ws = await openTrackedWs(getStarted().port);
+      try {
+        await connectOk(ws, {
+          skipDefaultAuth: true,
+          deviceToken: attacker.token.trim(),
+          deviceIdentityPath: attacker.identityPath,
+          scopes: ["operator.pairing", "operator.write"],
+        });
+
+        const listed = await rpcReq<Awaited<ReturnType<typeof listNodePairing>>>(
+          ws,
+          "node.pair.list",
+          {},
+        );
+        expect(listed.payload?.pending.map((entry) => entry.nodeId)).toEqual([attacker.deviceId]);
+
+        const approve = await rpcReq(ws, "node.pair.approve", {
+          requestId: request.request.requestId,
+        });
+        expect(approve.ok).toBe(true);
+
+        const rename = await rpcReq(ws, "node.rename", {
+          nodeId: attacker.deviceId,
+          displayName: "self renamed",
+        });
+        expect(rename.ok).toBe(true);
+        await expect(findPairedNode(attacker.deviceId)).resolves.toMatchObject({
+          displayName: "self renamed",
+        });
+
+        const nextRequest = await requestNodePairing({
+          nodeId: attacker.deviceId,
+          platform: "macos",
+          deviceFamily: "Mac",
+          commands: [],
+        });
+        const reject = await rpcReq(ws, "node.pair.reject", {
+          requestId: nextRequest.request.requestId,
+        });
+        expect(reject.ok).toBe(true);
+        expect((await listNodePairing()).pending).not.toContainEqual(
+          expect.objectContaining({ requestId: nextRequest.request.requestId }),
+        );
+      } finally {
+        ws.close();
+      }
+    });
+
+    test("allows a shared-auth operator session to manage another device's node surface", async () => {
+      const victimNodeId = "node-shared-auth-victim";
+      const request = await requestVictimNodeSurface(victimNodeId);
+      const operator = await issueOperatorToken({
+        name: "node-shared-auth-operator",
+        approvedScopes: ["operator.pairing", "operator.write"],
+      });
+
+      const ws = await openTrackedWs(getStarted().port);
+      try {
+        await connectOk(ws, {
+          token: "secret".trim(),
+          deviceIdentityPath: operator.identityPath,
+          scopes: ["operator.pairing", "operator.write"],
+        });
+
+        const listed = await rpcReq<Awaited<ReturnType<typeof listNodePairing>>>(
+          ws,
+          "node.pair.list",
+          {},
+        );
+        expect(listed.payload?.pending).toContainEqual(
+          expect.objectContaining({ nodeId: victimNodeId }),
+        );
+
+        const approve = await rpcReq(ws, "node.pair.approve", {
+          requestId: request.request.requestId,
+        });
+        expect(approve.ok).toBe(true);
+        await expect(findPairedNode(victimNodeId)).resolves.toMatchObject({
+          commands: [NODE_MCP_TOOLS_CALL_COMMAND],
+        });
+
+        const rename = await rpcReq(ws, "node.rename", {
+          nodeId: victimNodeId,
+          displayName: "shared renamed",
+        });
+        expect(rename.ok).toBe(true);
+
+        const nextRequest = await requestNodePairing({
+          nodeId: victimNodeId,
+          platform: "macos",
+          deviceFamily: "Mac",
+          commands: [],
+        });
+        const reject = await rpcReq(ws, "node.pair.reject", {
+          requestId: nextRequest.request.requestId,
+        });
+        expect(reject.ok).toBe(true);
+      } finally {
+        ws.close();
+      }
+    });
+
+    test("allows an admin device-token session to manage another device's node surface", async () => {
+      const victimNodeId = "node-admin-device-victim";
+      const request = await requestVictimNodeSurface(victimNodeId);
+      const { ws } = await openDeviceTokenSession({
+        name: "node-admin-device-operator",
+        scopes: ["operator.admin", "operator.pairing", "operator.write"],
+      });
+      try {
+        const listed = await rpcReq<Awaited<ReturnType<typeof listNodePairing>>>(
+          ws,
+          "node.pair.list",
+          {},
+        );
+        expect(listed.payload?.pending).toContainEqual(
+          expect.objectContaining({ nodeId: victimNodeId }),
+        );
+
+        const approve = await rpcReq(ws, "node.pair.approve", {
+          requestId: request.request.requestId,
+        });
+        expect(approve.ok).toBe(true);
+
+        const rename = await rpcReq(ws, "node.rename", {
+          nodeId: victimNodeId,
+          displayName: "admin renamed",
+        });
+        expect(rename.ok).toBe(true);
+
+        const nextRequest = await requestNodePairing({
+          nodeId: victimNodeId,
+          platform: "macos",
+          deviceFamily: "Mac",
+          commands: [],
+        });
+        const reject = await rpcReq(ws, "node.pair.reject", {
+          requestId: nextRequest.request.requestId,
+        });
+        expect(reject.ok).toBe(true);
+      } finally {
+        ws.close();
+      }
     });
   });
 
   describeWithGatewayServer("pending diagnostics scopes", (getStarted) => {
     test("shows pending pairing records to direct-local backend shared-auth callers", async () => {
       const pendingOnlyNodeId = "node-local-backend-pending";
+      await seedNodeDevice(pendingOnlyNodeId);
       const pending = await requestNodePairing({
         nodeId: pendingOnlyNodeId,
         platform: "macos",
@@ -394,6 +679,7 @@ describe("gateway node pairing authorization", () => {
         clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
         clientMode: GATEWAY_CLIENT_MODES.NODE,
       });
+      await seedNodeDevice(pairedNodeId);
       const initial = await requestNodePairing({
         nodeId: pairedNodeId,
         platform: "macos",
@@ -407,6 +693,7 @@ describe("gateway node pairing authorization", () => {
         platform: "macos",
         commands: ["screen.snapshot", "system.run"],
       });
+      await seedNodeDevice(pendingOnlyNodeId);
       await requestNodePairing({
         nodeId: pendingOnlyNodeId,
         platform: "macos",
@@ -423,7 +710,7 @@ describe("gateway node pairing authorization", () => {
         await connectOk(ws, {
           token: "secret",
           scopes: ["operator.read"],
-          deviceIdentityPath: `${await makeNodePairingStateDir()}/read-only.json`,
+          deviceIdentityPath: `${await makeNodePairingStateDir()}/read-only.sqlite`,
         });
 
         type NodeDiagnostics = {
@@ -435,7 +722,20 @@ describe("gateway node pairing authorization", () => {
         const listed = await rpcReq<{ nodes?: NodeDiagnostics[] }>(ws, "node.list", {});
         expect(listed.ok).toBe(true);
         const nodes = listed.payload?.nodes ?? [];
-        expect(nodes.some((node) => node.nodeId === pendingOnlyNodeId)).toBe(false);
+        // Pending surfaces now attach to paired devices, so the row is visible
+        // to read-only callers but its approval target stays redacted.
+        expect(nodes.find((node) => node.nodeId === pendingOnlyNodeId)).toEqual(
+          expect.objectContaining({
+            nodeId: pendingOnlyNodeId,
+            approvalState: "pending-approval",
+          }),
+        );
+        expect(nodes.find((node) => node.nodeId === pendingOnlyNodeId)).not.toHaveProperty(
+          "pendingRequestId",
+        );
+        expect(nodes.find((node) => node.nodeId === pendingOnlyNodeId)).not.toHaveProperty(
+          "pendingDeclaredCommands",
+        );
         expect(nodes.find((node) => node.nodeId === pairedNodeId)).toEqual(
           expect.objectContaining({
             nodeId: pairedNodeId,
@@ -485,9 +785,12 @@ describe("gateway node pairing authorization", () => {
         expect(describedVisiblePending.payload).not.toHaveProperty("pendingRequestId");
         expect(describedVisiblePending.payload).not.toHaveProperty("pendingDeclaredCommands");
 
-        const pendingOnly = await rpcReq(ws, "node.describe", { nodeId: pendingOnlyNodeId });
-        expect(pendingOnly.ok).toBe(false);
-        expect(pendingOnly.error?.message).toContain("unknown nodeId");
+        const pendingOnly = await rpcReq<NodeDiagnostics>(ws, "node.describe", {
+          nodeId: pendingOnlyNodeId,
+        });
+        expect(pendingOnly.ok).toBe(true);
+        expect(pendingOnly.payload).not.toHaveProperty("pendingRequestId");
+        expect(pendingOnly.payload).not.toHaveProperty("pendingDeclaredCommands");
 
         const selfWs = await openTrackedWs(getStarted().port);
         try {
@@ -529,6 +832,52 @@ describe("gateway node pairing authorization", () => {
   });
 
   describeWithGatewayServer("paired node reconnects", (getStarted) => {
+    test("keeps iOS approval when a transient permission becomes unavailable", async () => {
+      const pairedNode = await pairDeviceIdentity({
+        name: "ios-transient-permission",
+        role: "node",
+        scopes: [],
+        clientId: GATEWAY_CLIENT_NAMES.IOS_APP,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+      });
+      const initialPermissions = { camera: true, watchReachable: true };
+      const initial = await requestNodePairing({
+        nodeId: pairedNode.identity.deviceId,
+        platform: "ios",
+        deviceFamily: "iPhone",
+        commands: [],
+        permissions: initialPermissions,
+      });
+      await approveNodePairing(initial.request.requestId, {
+        callerScopes: ["operator.pairing", "operator.write"],
+      });
+
+      const nodeClient = await connectGatewayClient({
+        url: `ws://127.0.0.1:${getStarted().port}`,
+        token: "secret",
+        role: "node",
+        clientName: GATEWAY_CLIENT_NAMES.IOS_APP,
+        clientDisplayName: "iPhone",
+        clientVersion: "1.0.0",
+        platform: "ios",
+        deviceFamily: "iPhone",
+        mode: GATEWAY_CLIENT_MODES.NODE,
+        scopes: [],
+        commands: [],
+        permissions: { camera: true, watchReachable: false },
+        deviceIdentity: pairedNode.identity,
+      });
+      await nodeClient.stopAndWait();
+
+      const pairing = await listNodePairing();
+      expect(pairing.pending.some((entry) => entry.nodeId === pairedNode.identity.deviceId)).toBe(
+        false,
+      );
+      await expect(findPairedNode(pairedNode.identity.deviceId)).resolves.toMatchObject({
+        permissions: initialPermissions,
+      });
+    });
+
     test("clears stale reapproval when a node returns to its approved surface", async () => {
       const pairedNode = await pairDeviceIdentity({
         name: "node-reverted-reapproval",
@@ -573,6 +922,51 @@ describe("gateway node pairing authorization", () => {
           ),
         ).toBe(false);
       });
+    });
+
+    test("refreshes a paired macOS app node version without a repair request", async () => {
+      const started = getStarted();
+      const pairedNode = await pairDeviceIdentity({
+        name: "macos-version-refresh",
+        role: "node",
+        scopes: [],
+        clientId: GATEWAY_CLIENT_NAMES.MACOS_APP,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+        platform: "macOS 26.5.1",
+        deviceFamily: "Mac",
+      });
+      const nodeRequest = await requestNodePairing({
+        nodeId: pairedNode.identity.deviceId,
+        platform: "macOS 26.5.1",
+        deviceFamily: "Mac",
+        commands: ["system.info"],
+      });
+      requireApprovedPairing(
+        await approveNodePairing(nodeRequest.request.requestId, {
+          callerScopes: ["operator.pairing", "operator.write", "operator.admin"],
+        }),
+      );
+
+      const nodeClient = await connectNodeClient({
+        port: started.port,
+        deviceIdentity: pairedNode.identity,
+        commands: ["system.info"],
+        clientName: GATEWAY_CLIENT_NAMES.MACOS_APP,
+        platform: "macOS 26.5.2",
+        deviceFamily: "Mac",
+      });
+      try {
+        await vi.waitFor(async () => {
+          const pairedDevice = await getPairedDevice(pairedNode.identity.deviceId);
+          expect(pairedDevice?.platform).toBe("macOS 26.5.2");
+        });
+        const devicePairing = await listDevicePairing();
+        expect(
+          devicePairing.pending.find((entry) => entry.deviceId === pairedNode.identity.deviceId),
+        ).toBeUndefined();
+      } finally {
+        await nodeClient.stopAndWait();
+      }
     });
 
     test("requests re-pairing when a paired node reconnects with upgraded commands", async () => {

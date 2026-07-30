@@ -32,8 +32,8 @@ const pluginApiMocks = vi.hoisted(() => ({
 vi.mock("./api.js", () => {
   return {
     PAIRING_SETUP_BOOTSTRAP_PROFILE: {
-      roles: ["node"],
-      scopes: [],
+      roles: ["node", "operator"],
+      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
     },
     approveDevicePairing: vi.fn(),
     clearDeviceBootstrapTokens: pluginApiMocks.clearDeviceBootstrapTokens,
@@ -293,7 +293,7 @@ describe("device-pair /pair qr", () => {
     const result = await command.handler(
       createCommandContext({
         channel: "webchat",
-        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
+        gatewayClientScopes: ["operator.admin"],
       }),
     );
     const payload = result as {
@@ -307,8 +307,15 @@ describe("device-pair /pair qr", () => {
     expect(pluginApiMocks.renderQrPngDataUrl).toHaveBeenCalledTimes(1);
     expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledWith({
       profile: {
-        roles: ["node"],
-        scopes: [],
+        roles: ["node", "operator"],
+        scopes: [
+          "operator.admin",
+          "operator.approvals",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
+        purpose: "mobile-full",
       },
     });
     expect(text).toContain("Scan this QR code with the OpenClaw iOS app:");
@@ -601,6 +608,33 @@ describe("device-pair /pair qr", () => {
     expect(text).not.toContain("```");
   });
 
+  it.each(["toString", "constructor", "__proto__"])(
+    "requires QR channel sender %s to be an own entry",
+    async (channel) => {
+      const loadAdapter = vi.fn(async () => undefined);
+      const command = registerPairCommand({
+        runtime: {
+          channel: { outbound: { loadAdapter } },
+        } as unknown as OpenClawPluginApi["runtime"],
+      });
+      const result = await command.handler(
+        createCommandContext({
+          channel,
+          senderId: "prototype-channel",
+          gatewayClientScopes: INTERNAL_SETUP_SCOPES,
+        }),
+      );
+      const text = requireText(result);
+
+      expect(pluginApiMocks.writeQrPngTempFile).not.toHaveBeenCalled();
+      expect(loadAdapter).not.toHaveBeenCalled();
+      expect(pluginApiMocks.revokeDeviceBootstrapToken).not.toHaveBeenCalled();
+      expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
+      expect(text).toContain("QR image delivery is not available on this channel");
+      expect(text).toContain("Setup code:");
+    },
+  );
+
   it("supports invalidating unused setup codes", async () => {
     const command = registerPairCommand();
     const result = await command?.handler(
@@ -775,7 +809,19 @@ describe("device-pair /pair default setup code", () => {
     );
     const text = requireText(result);
 
-    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledWith({
+      profile: {
+        roles: ["node", "operator"],
+        scopes: [
+          "operator.admin",
+          "operator.approvals",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
+        purpose: "mobile-full",
+      },
+    });
     expect(text).toContain("Pairing setup code generated.");
   });
 
@@ -799,13 +845,35 @@ describe("device-pair /pair default setup code", () => {
         channel: "webchat",
         args: "",
         commandBody: "/pair",
-        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
+        gatewayClientScopes: ["operator.admin"],
       }),
     );
     const text = requireText(result);
 
     expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
     expect(text).toContain("Gateway: wss://gateway.example.test:18789");
+  });
+
+  it("keeps secure setup limited for non-admin gateway callers", async () => {
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
+      }),
+    );
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledWith({
+      profile: {
+        roles: ["node", "operator"],
+        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+      },
+    });
+    const text = requireText(result);
+    expect(text).toContain("Access: limited");
+    expect(text).not.toContain("Plaintext ws:// was limited for safety");
   });
 
   it("allows loopback cleartext setup urls", async () => {
@@ -828,10 +896,66 @@ describe("device-pair /pair default setup code", () => {
     expect(text).toContain("Gateway: ws://127.0.0.1:18789");
   });
 
+  it.each(["ws://0.0.0.0:18789", "ws://[::]:18789"])(
+    "rejects unspecified cleartext setup url %s before issuing setup codes",
+    async (publicUrl) => {
+      const command = registerPairCommand({
+        pluginConfig: {
+          publicUrl,
+        },
+      });
+      const result = await command.handler(
+        createCommandContext({
+          channel: "webchat",
+          args: "",
+          commandBody: "/pair",
+          gatewayClientScopes: INTERNAL_SETUP_SCOPES,
+        }),
+      );
+
+      expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+      expect(requireText(result)).toContain(
+        "Tailscale and public mobile pairing require a secure gateway URL",
+      );
+    },
+  );
+
   it("allows private LAN cleartext setup urls", async () => {
     const command = registerPairCommand({
       pluginConfig: {
         publicUrl: "ws://192.168.1.20:18789",
+      },
+    });
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: ["operator.admin"],
+      }),
+    );
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledWith({
+      profile: {
+        roles: ["node", "operator"],
+        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+      },
+    });
+    const text = requireText(result);
+    expect(text).toContain("Gateway: ws://192.168.1.20:18789");
+    expect(text).toContain("Access: limited");
+    expect(text).toContain("Plaintext ws:// was limited for safety");
+  });
+
+  it.each([
+    "ws://[fc00::1]:18789",
+    "ws://[fd7a:115c:a1e0::1]:18789",
+    "ws://[fe80::1]:18789",
+    "ws://[febf::1]:18789",
+  ])("allows IPv6 ULA and link-local cleartext setup url %s", async (publicUrl) => {
+    const command = registerPairCommand({
+      pluginConfig: {
+        publicUrl,
       },
     });
     const result = await command.handler(
@@ -844,7 +968,7 @@ describe("device-pair /pair default setup code", () => {
     );
 
     expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
-    expect(requireText(result)).toContain("Gateway: ws://192.168.1.20:18789");
+    expect(requireText(result)).toContain(`Gateway: ${publicUrl}`);
   });
 
   it("allows mdns cleartext setup urls", async () => {
@@ -1014,6 +1138,30 @@ describe("device-pair /pair default setup code", () => {
     expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
     expect(requireText(result)).toContain("prefer gateway.tailscale.mode=serve");
   });
+
+  it.each(["ws://[2001:db8::1]:18789", "ws://[fe7f::1]:18789", "ws://[fec0::1]:18789"])(
+    "rejects non-LAN IPv6 cleartext setup url %s before issuing setup codes",
+    async (publicUrl) => {
+      const command = registerPairCommand({
+        pluginConfig: {
+          publicUrl,
+        },
+      });
+      const result = await command.handler(
+        createCommandContext({
+          channel: "webchat",
+          args: "",
+          commandBody: "/pair",
+          gatewayClientScopes: INTERNAL_SETUP_SCOPES,
+        }),
+      );
+
+      expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+      expect(requireText(result)).toContain(
+        "Tailscale and public mobile pairing require a secure gateway URL",
+      );
+    },
+  );
 
   it("uses Tailscale Serve MagicDNS as a secure setup url", async () => {
     vi.mocked(resolveTailnetHostWithRunner).mockResolvedValueOnce("gateway.tailnet.ts.net");
@@ -1311,3 +1459,4 @@ describe("device-pair /pair approve", () => {
     expect(result).toEqual({ text: "✅ Paired Victim Phone (ios)." });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,7 +1,9 @@
 // Tests /learn prompt rewriting, defaults, standards, and availability gating.
 import { describe, expect, it } from "vitest";
+import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_LEARN_REQUEST } from "../../skills/workshop/learn-prompt.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { handleLearnCommand } from "./commands-learn.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -29,11 +31,12 @@ function buildLearnParams(
   commandBodyNormalized: string,
   cfg: OpenClawConfig = {},
 ): HandleCommandsParams {
+  const loadedConfig = migratePersistedImplicitMainRoster(cfg).config as OpenClawConfig;
   return {
-    cfg: { ...cfg, models: cfg.models ?? DEFAULT_TEST_MODELS },
+    cfg: { ...loadedConfig, models: loadedConfig.models ?? DEFAULT_TEST_MODELS },
     ctx: {
-      Provider: "web",
-      Surface: "web",
+      Provider: INTERNAL_MESSAGE_CHANNEL,
+      Surface: INTERNAL_MESSAGE_CHANNEL,
       CommandSource: "text",
       Body: commandBodyNormalized,
       RawBody: commandBodyNormalized,
@@ -47,15 +50,15 @@ function buildLearnParams(
       isAuthorizedSender: true,
       senderIsOwner: true,
       senderId: "tester",
-      channel: "web",
-      channelId: "web",
-      surface: "web",
+      channel: INTERNAL_MESSAGE_CHANNEL,
+      channelId: INTERNAL_MESSAGE_CHANNEL,
+      surface: INTERNAL_MESSAGE_CHANNEL,
       ownerList: [],
       rawBodyNormalized: commandBodyNormalized,
     },
     directives: {},
     elevated: { enabled: true, allowed: true, failures: [] },
-    sessionKey: "agent:main:web:test",
+    sessionKey: "agent:main:webchat:test",
     workspaceDir: "/tmp",
     provider: "openai",
     model: "gpt-5.5",
@@ -97,8 +100,8 @@ describe("learn command", () => {
     const instruction = (params.ctx as { BodyForAgent?: string }).BodyForAgent ?? "";
 
     expect(instruction).toContain('`skill_workshop` with action `"create"`');
-    expect(instruction).toContain("ONE short generic trigger phrase in double quotes");
-    expect(instruction).toContain("NEVER invent flags, commands, paths, APIs");
+    expect(instruction).toContain("first ~60 characters");
+    expect(instruction).toContain("never invent flags, commands, paths, APIs");
   });
 
   it("replies without continuing when the workshop is unavailable", async () => {
@@ -117,6 +120,28 @@ describe("learn command", () => {
     const params = buildLearnParams("/learn", {
       tools: { deny: ["skill_workshop"] },
     });
+
+    const result = await handleLearnCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
+  });
+
+  it("keeps the workshop available for owner WebChat under a wildcard sender policy", async () => {
+    const params = buildLearnParams("/learn", {
+      tools: { toolsBySender: { "*": { deny: ["skill_workshop"] } } },
+    });
+
+    const result = await handleLearnCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(true);
+  });
+
+  it("keeps the wildcard sender policy for non-owner WebChat", async () => {
+    const params = buildLearnParams("/learn", {
+      tools: { toolsBySender: { "*": { deny: ["skill_workshop"] } } },
+    });
+    params.command.senderIsOwner = false;
 
     const result = await handleLearnCommand(params, true);
 

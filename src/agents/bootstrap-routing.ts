@@ -31,7 +31,7 @@ type BootstrapRoutingInput = {
 };
 
 /** Bootstrap placement decision consumed by system/runtime context assembly. */
-export type WorkspaceBootstrapRouting = {
+type WorkspaceBootstrapRouting = {
   bootstrapMode: BootstrapMode;
   includeBootstrapInSystemContext: boolean;
   includeBootstrapInRuntimeContext: boolean;

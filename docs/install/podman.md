@@ -36,7 +36,7 @@ The model:
     | `OPENCLAW_IMAGE` / `OPENCLAW_PODMAN_IMAGE` | Use an existing/pulled image instead of building `openclaw:local` |
     | `OPENCLAW_IMAGE_APT_PACKAGES` | Install extra apt packages during image build (also accepts legacy `OPENCLAW_DOCKER_APT_PACKAGES`) |
     | `OPENCLAW_IMAGE_PIP_PACKAGES` | Install extra Python packages during image build; pin versions and use only package indexes you trust |
-    | `OPENCLAW_EXTENSIONS` | Pre-install plugin dependencies at build time |
+    | `OPENCLAW_EXTENSIONS` | Compile/package supported selected plugins and install their runtime dependencies |
     | `OPENCLAW_INSTALL_BROWSER` | Pre-install Chromium and Xvfb for browser automation (set to `1`) |
 
     For Quadlet-managed setup instead (Linux + systemd user services only):
@@ -153,6 +153,35 @@ Useful env vars for the manual launcher (persist these in `~/.openclaw/.env`; th
 
 If you use a non-default `OPENCLAW_CONFIG_DIR` or `OPENCLAW_WORKSPACE_DIR`, set the same variables for both `./scripts/podman/setup.sh` and later `./scripts/run-openclaw-podman.sh launch` commands -- the repo-local launcher does not persist custom path overrides across shells.
 
+## Upgrading images
+
+After you rebuild or pull a new image, restart the container or Quadlet service.
+On first startup for a new OpenClaw version, the gateway runs safe state and
+plugin repairs before reporting ready.
+
+If the gateway exits instead of becoming ready, run the same image once with
+`openclaw doctor --fix` against the same mounted state/config, then restart the
+gateway normally:
+
+```bash
+OPENCLAW_CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
+OPENCLAW_WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$OPENCLAW_CONFIG_DIR/workspace}"
+OPENCLAW_PODMAN_IMAGE="${OPENCLAW_PODMAN_IMAGE:-${OPENCLAW_IMAGE:-openclaw:local}}"
+
+podman run --rm -it \
+  --userns=keep-id \
+  --user "$(id -u):$(id -g)" \
+  -e HOME=/home/node \
+  -e NPM_CONFIG_CACHE=/home/node/.openclaw/.npm \
+  -v "$OPENCLAW_CONFIG_DIR:/home/node/.openclaw:rw" \
+  -v "$OPENCLAW_WORKSPACE_DIR:/home/node/.openclaw/workspace:rw" \
+  "$OPENCLAW_PODMAN_IMAGE" \
+  openclaw doctor --fix
+```
+
+On SELinux hosts, add `,Z` to both bind mounts if Podman blocks access to the
+mounted state.
+
 ## Useful commands
 
 - **Container logs:** `podman logs -f openclaw`
@@ -165,6 +194,7 @@ If you use a non-default `OPENCLAW_CONFIG_DIR` or `OPENCLAW_WORKSPACE_DIR`, set 
 
 - **Permission denied (EACCES) on config or workspace:** The container runs with `--userns=keep-id` and `--user <your uid>:<your gid>` by default. Ensure the host config/workspace paths are owned by your current user.
 - **Gateway start blocked (missing `gateway.mode=local`):** Ensure `~/.openclaw/openclaw.json` exists and sets `gateway.mode="local"`. `scripts/podman/setup.sh` creates this if missing.
+- **Container restarts after an image update:** Run the one-off `openclaw doctor --fix` command in [Upgrading images](#upgrading-images), then start the gateway again.
 - **Container CLI commands hit the wrong target:** Use `openclaw --container <name> ...` explicitly, or export `OPENCLAW_CONTAINER=<name>` in your shell.
 - **`openclaw update` fails with `--container`:** Expected. Rebuild/pull the image, then restart the container or the Quadlet service.
 - **Quadlet service does not start:** Run `systemctl --user daemon-reload`, then `systemctl --user start openclaw.service`. On headless systems you may also need `sudo loginctl enable-linger "$(whoami)"`.

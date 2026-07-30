@@ -8,7 +8,7 @@ import {
 import type { CronDelivery, CronMessageChannel } from "./types.js";
 
 /** Converts an active delivery context into cron announce delivery config. */
-export function cronDeliveryFromContext(context?: DeliveryContext): CronDelivery | null {
+function cronDeliveryFromContext(context?: DeliveryContext): CronDelivery | null {
   const normalized = normalizeDeliveryContext(context);
   if (!normalized?.to) {
     return null;

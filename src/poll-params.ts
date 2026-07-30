@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Parses poll command parameters into validated polling options.
 import { readSnakeCaseParamRaw } from "./param-key.js";
 
@@ -37,7 +38,10 @@ const CONTENT_BEARING_SHARED_POLL_PARAM_NAMES = ["pollQuestion", "pollOption"] a
 
 function hasContentBearingPollCreationParam(params: Record<string, unknown>): boolean {
   for (const key of CONTENT_BEARING_SHARED_POLL_PARAM_NAMES) {
-    const def = POLL_CREATION_PARAM_DEFS[key];
+    const def = expectDefined(
+      POLL_CREATION_PARAM_DEFS[key],
+      "poll creation param defs entry at key",
+    );
     const value = readPollParamRaw(params, key);
     if (def.kind === "string" && typeof value === "string" && value.trim().length > 0) {
       return true;

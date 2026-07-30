@@ -1,7 +1,7 @@
 /**
  * Resolves whether an account-scoped action is enabled.
  */
-export type ActionGate<T extends Record<string, boolean | undefined>> = (
+type ActionGate<T extends Record<string, boolean | undefined>> = (
   key: keyof T,
   defaultValue?: boolean,
 ) => boolean;

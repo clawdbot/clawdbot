@@ -31,10 +31,11 @@ class NodeUtilsTest {
 
   @Test
   fun parseJsonBooleanFlag_acceptsJsonBooleanLiterals() {
-    val params = buildJsonObject {
-      put("enabled", true)
-      put("disabled", false)
-    }
+    val params =
+      buildJsonObject {
+        put("enabled", true)
+        put("disabled", false)
+      }
 
     assertEquals(true, parseJsonBooleanFlag(params, "enabled"))
     assertEquals(false, parseJsonBooleanFlag(params, "disabled"))

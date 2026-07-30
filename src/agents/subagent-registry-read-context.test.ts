@@ -2,6 +2,7 @@
 // prompt/control paths instead of repeatedly scanning the run map.
 import { describe, expect, it } from "vitest";
 import {
+  buildLatestSubagentRunReadIndexFromRuns,
   buildSubagentRunReadIndexFromRuns,
   countActiveDescendantRunsFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
@@ -39,6 +40,29 @@ function listRunsForController(
 }
 
 describe("subagent registry read index", () => {
+  it("indexes the latest generation for each child session", () => {
+    const childSessionKey = "agent:main:subagent:restarted";
+    const olderGeneration = makeRun({
+      runId: "run-newer-created-at",
+      childSessionKey,
+      generation: 1,
+      createdAt: 200,
+    });
+    const latestGeneration = makeRun({
+      runId: "run-latest-generation",
+      childSessionKey: ` ${childSessionKey} `,
+      generation: 2,
+      createdAt: 100,
+    });
+
+    const index = buildLatestSubagentRunReadIndexFromRuns(
+      toRunMap([olderGeneration, latestGeneration]),
+    );
+
+    expect(index.getLatestSubagentRun(childSessionKey)).toBe(latestGeneration);
+    expect(index.getLatestSubagentRun("agent:main:subagent:missing")).toBeNull();
+  });
+
   it("matches existing query helpers while reusing one indexed snapshot", () => {
     const now = Date.now();
     const root = "agent:main:main";
@@ -234,5 +258,37 @@ describe("subagent registry read index", () => {
     });
 
     expect(index.getDisplaySubagentRun(childSessionKey)?.runId).toBe("run-memory-older-ended");
+  });
+
+  it.each([
+    { label: "active over active", olderEndedAt: undefined, newerEndedAt: undefined },
+    { label: "ended over active", olderEndedAt: undefined, newerEndedAt: 250 },
+    { label: "active over ended", olderEndedAt: 150, newerEndedAt: undefined },
+    { label: "ended over ended", olderEndedAt: 150, newerEndedAt: 250 },
+  ])("selects the latest in-memory generation: $label", ({ olderEndedAt, newerEndedAt }) => {
+    const childSessionKey = "agent:main:subagent:display-generation";
+    const persisted = makeRun({
+      runId: "run-persisted",
+      childSessionKey,
+      generation: 3,
+    });
+    const older = makeRun({
+      runId: "run-memory-older",
+      childSessionKey,
+      generation: 1,
+      endedAt: olderEndedAt,
+    });
+    const newer = makeRun({
+      runId: "run-memory-newer",
+      childSessionKey,
+      generation: 2,
+      endedAt: newerEndedAt,
+    });
+    const index = buildSubagentRunReadIndexFromRuns({
+      runs: toRunMap([persisted]),
+      inMemoryRuns: [newer, older],
+    });
+
+    expect(index.getDisplaySubagentRun(childSessionKey)).toBe(newer);
   });
 });

@@ -333,7 +333,7 @@ export function main(argv = process.argv.slice(2)) {
   runPnpm(["run", script, ...rest]);
 }
 
-export function resolveDirectExecutionPath(entry, realpath = fs.realpathSync.native) {
+function resolveDirectExecutionPath(entry, realpath = fs.realpathSync.native) {
   const resolved = path.resolve(entry);
   try {
     return realpath(resolved);

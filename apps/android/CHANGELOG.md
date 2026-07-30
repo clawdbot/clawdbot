@@ -2,17 +2,43 @@
 
 ## Unreleased
 
-The OpenClaw mascot now comes alive across onboarding and the app headers with the same float, blink, antenna-wiggle, and claw-snap animation as openclaw.ai.
+Uses the selected locale for Wear OS uppercase labels and compact token-count decimals.
 
-Adds read-only Cron Job details in Settings, including schedule, payload and delivery state, job ID copy, refresh, and nested back navigation.
+Fixes secondary Gateway sessions disconnecting during temporary discovery gaps and preserves manual TLS when reopening saved Gateways and Control UI pages.
 
-Gateway sessions now retry immediately when Android regains a validated network, without waiting for the current reconnect backoff.
+Prevents delayed Wear OS requests from a previous phone from blocking or corrupting the newly selected phone session.
 
-Canvas main-frame navigation now blocks device-local loopback and unspecified web targets while preserving remote, LAN, emulator-host, and bundled canvases.
+## 2026.7.3 - 2026-07-20
 
-Voice settings now stay within their intended width instead of overflowing or clipping on constrained screens.
+Adds a Wear OS companion for sessions, transcripts, text and voice replies, realtime Talk, Gateway controls, notifications, settings, and a launch Tile.
 
-Camera clip capture no longer emits release-path diagnostics containing temporary file details.
+Adds foreground, on-device Voice Wake with editable Gateway-synced wake words, plus copy and save-as-PNG actions for rendered chat widgets.
+
+Fixes composer media leaking across chats and malformed agent or profile initials when display names begin with emoji.
+
+Thanks @sibbl, @IWhatsskill, and @Leon-SK668.
+
+## 2026.7.2 - 2026-07-13
+
+Adds Automations and Skills management with search, filters, editing, run tracking, install safety, and ClawHub risk review.
+
+Improves chat with per-device history, durable approval status, session search, sharing, and agent avatars.
+
+Adds provider model details, build identity, safer permission recovery, fresh Installed Apps consent, and Gateway protocol v3/v4 support.
+
+Thanks @snowzlmbot, @IWhatsskill, @NianJiuZst, and @guarismo.
+
+## 2026.7.1 - 2026-07-08
+
+Adds multi-gateway switching with isolated credentials, history, queues, and notification routing.
+
+Upgrades chat with offline recovery, session search and groups, model and agent pickers, voice notes, actions, link previews, code and math rendering.
+
+Adds workspace files, Cron details, terminal access, and Listen playback.
+
+Improves onboarding, reconnects, keyboards, notification filtering, location, canvas safety, and voice reliability.
+
+Thanks @IWhatsskill, @ioridev, and @narcissus0702.
 
 ## 2026.6.11 - 2026-07-01
 

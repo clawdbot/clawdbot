@@ -5,13 +5,27 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime"
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { z } from "zod";
 import { resolveSlackAccount } from "./accounts.js";
+import type { SlackAuthoredTextPlacement } from "./authored-text.js";
+import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
-import { createSlackWebClient, getSlackWriteClient } from "./client.js";
+import { createSlackLookupClient, getSlackWriteClient } from "./client.js";
 import { buildSlackEditTextPayload } from "./edit-text.js";
+import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
+import { hasSlackMessageTableBlock, resolveSlackMessageText } from "./monitor/block-text.js";
 import { resolveSlackMedia } from "./monitor/media.js";
 import type { SlackMediaResult } from "./monitor/media.js";
+import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
+import {
+  appendSlackNativeDataFallbackText,
+  hasSlackNativeDataBlock,
+  isSlackInvalidBlocksError,
+  stripSlackNativeDataBlocks,
+} from "./native-data-blocks.js";
+import { buildSlackNativeDataDeliveryPlan } from "./native-data-fallback.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
+import { countSlackTextUtf8Bytes, truncateSlackTextByUtf8Bytes } from "./truncate.js";
+import type { SlackAttachment } from "./types.js";
 
 export type SlackActionClientOpts = {
   cfg?: OpenClawConfig;
@@ -25,6 +39,8 @@ export type SlackMessageSummary = {
   text?: string;
   user?: string;
   thread_ts?: string;
+  blocks?: unknown[];
+  attachments?: SlackAttachment[];
   reply_count?: number;
   reactions?: Array<{
     name?: string;
@@ -38,6 +54,14 @@ export type SlackMessageSummary = {
     mimetype?: string;
   }>;
 };
+
+function renderSlackReadMessageText(message: SlackMessageSummary): SlackMessageSummary {
+  if (!hasSlackMessageTableBlock(message)) {
+    return message;
+  }
+  const text = resolveSlackMessageText(message, { preserveMessageTextWhitespace: true });
+  return text && text !== message.text ? { ...message, text } : message;
+}
 
 export type SlackPin = {
   type?: string;
@@ -189,7 +213,7 @@ async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write
     return opts.client;
   }
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
-  return mode === "write" ? getSlackWriteClient(token) : createSlackWebClient(token);
+  return mode === "write" ? getSlackWriteClient(token) : createSlackLookupClient(token);
 }
 
 async function resolveBotUserId(client: WebClient) {
@@ -307,6 +331,10 @@ export async function sendSlackMessage(
     uploadFileName?: string;
     uploadTitle?: string;
     blocks?: (Block | KnownBlock)[];
+    authoredTextPlacement?: SlackAuthoredTextPlacement;
+    nativeDataFallbackBaseText?: string;
+    textIsSlackMrkdwn?: boolean;
+    textIsSlackPlainText?: boolean;
   },
 ) {
   return await sendMessageSlack(to, content, {
@@ -320,6 +348,12 @@ export async function sendSlackMessage(
     client: opts.client,
     threadTs: opts.threadTs,
     replyBroadcast: opts.replyBroadcast,
+    ...(opts.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
+    ...(opts.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
+    ...(opts.authoredTextPlacement ? { authoredTextPlacement: opts.authoredTextPlacement } : {}),
+    ...(Object.hasOwn(opts, "nativeDataFallbackBaseText")
+      ? { nativeDataFallbackBaseText: opts.nativeDataFallbackBaseText }
+      : {}),
     ...(opts.uploadFileName ? { uploadFileName: opts.uploadFileName } : {}),
     ...(opts.uploadTitle ? { uploadTitle: opts.uploadTitle } : {}),
     blocks: opts.blocks,
@@ -334,12 +368,75 @@ export async function editSlackMessage(
 ) {
   const client = await getClient(opts, "write");
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
-  await client.chat.update({
+  const editText = buildSlackEditTextPayload(content, blocks);
+  const hasNativeData = hasSlackNativeDataBlock(blocks);
+  const nativeFallbackText = hasNativeData
+    ? appendSlackNativeDataFallbackText(editText, blocks)
+    : editText;
+  if (hasNativeData && countSlackTextUtf8Bytes(nativeFallbackText) > SLACK_EDIT_TEXT_MAX_BYTES) {
+    throw new Error(
+      `Slack native chart or table fallback exceeds the ${String(SLACK_EDIT_TEXT_MAX_BYTES)}-byte edit limit. Send a new message instead.`,
+    );
+  }
+  // buildSlackEditTextPayload owns normalization; do not re-trim an edit that already fits.
+  const text =
+    countSlackTextUtf8Bytes(nativeFallbackText) <= SLACK_EDIT_TEXT_MAX_BYTES
+      ? nativeFallbackText
+      : truncateSlackTextByUtf8Bytes(nativeFallbackText, SLACK_EDIT_TEXT_MAX_BYTES);
+  const update = {
     channel: channelId,
     ts: messageId,
-    text: buildSlackEditTextPayload(content, blocks),
+    text,
     ...(blocks ? { blocks } : {}),
-  });
+  };
+  try {
+    await client.chat.update(update);
+  } catch (error) {
+    if (!hasSlackNativeDataBlock(blocks) || !isSlackInvalidBlocksError(error)) {
+      throw error;
+    }
+    logVerbose("slack edit: native data block rejected, retrying with text fallback");
+    const survivorBlocks = stripSlackNativeDataBlocks(blocks);
+    const survivorText = buildSlackBlocksFallbackText(survivorBlocks) ?? "";
+    const authoredEditText = content.trim();
+    const baseText =
+      authoredEditText && !survivorText.includes(authoredEditText) ? authoredEditText : "";
+    const fallbackPlan = buildSlackNativeDataDeliveryPlan({
+      baseText,
+      blocks: blocks ?? [],
+    });
+    if (fallbackPlan.fallbackMessages.length !== 1) {
+      throw new Error(
+        "Slack native chart or table edit fallback requires multiple messages. Send a new message instead.",
+        { cause: error },
+      );
+    }
+    const fallback = fallbackPlan.fallbackMessages[0];
+    if (!fallback || countSlackTextUtf8Bytes(fallback.text) > SLACK_EDIT_TEXT_MAX_BYTES) {
+      throw new Error(
+        `Slack native chart or table fallback exceeds the ${String(SLACK_EDIT_TEXT_MAX_BYTES)}-byte edit limit. Send a new message instead.`,
+        { cause: error },
+      );
+    }
+    const fallbackText = fallback.blocks
+      ? escapeSlackMrkdwn(fallback.text)
+      : truncateSlackTextByUtf8Bytes(
+          appendSlackNativeDataFallbackText(editText, blocks),
+          SLACK_EDIT_TEXT_MAX_BYTES,
+        );
+    if (countSlackTextUtf8Bytes(fallbackText) > SLACK_EDIT_TEXT_MAX_BYTES) {
+      throw new Error(
+        `Slack native chart or table fallback exceeds the ${String(SLACK_EDIT_TEXT_MAX_BYTES)}-byte edit limit. Send a new message instead.`,
+        { cause: error },
+      );
+    }
+    await client.chat.update({
+      channel: channelId,
+      ts: messageId,
+      text: fallbackText,
+      ...(fallback.blocks ? { blocks: fallback.blocks } : {}),
+    });
+  }
 }
 
 export async function deleteSlackMessage(
@@ -395,13 +492,15 @@ export async function readSlackMessages(
       limit: readLimit,
       ...exactBounds,
     });
-    const messages = ((result.messages ?? []) as SlackMessageSummary[]).filter((message) => {
-      if (exactMessageId) {
-        return message.ts === exactMessageId;
-      }
-      // conversations.replies includes the parent message; drop it for replies-only reads.
-      return message.ts !== opts.threadId;
-    });
+    const messages = ((result.messages ?? []) as SlackMessageSummary[])
+      .filter((message) => {
+        if (exactMessageId) {
+          return message.ts === exactMessageId;
+        }
+        // conversations.replies includes the parent message; drop it for replies-only reads.
+        return message.ts !== opts.threadId;
+      })
+      .map(renderSlackReadMessageText);
     return {
       messages,
       hasMore: exactMessageId ? false : Boolean(result.has_more),
@@ -413,9 +512,9 @@ export async function readSlackMessages(
     limit: readLimit,
     ...exactBounds,
   });
-  const messages = ((result.messages ?? []) as SlackMessageSummary[]).filter(
-    (message) => !exactMessageId || message.ts === exactMessageId,
-  );
+  const messages = ((result.messages ?? []) as SlackMessageSummary[])
+    .filter((message) => !exactMessageId || message.ts === exactMessageId)
+    .map(renderSlackReadMessageText);
   return {
     messages,
     hasMore: exactMessageId ? false : Boolean(result.has_more),

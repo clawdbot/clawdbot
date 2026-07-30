@@ -1,11 +1,23 @@
 // Diagnostic run activity helpers summarize run lifecycle activity for diagnostics.
 import {
+  getInternalDiagnosticEventSequence,
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
   type DiagnosticSessionActiveWorkKind,
 } from "../infra/diagnostic-events.js";
+import {
+  applyArgumentChurnObservation,
+  clearArgumentChurnActivity,
+  clearArgumentChurnPolicyWaits,
+  type DiagnosticArgumentChurnActivity,
+  type DiagnosticArgumentChurnObservationParams,
+  mergeArgumentChurnActivity,
+  recordDiagnosticActivityProgress,
+  resolveArgumentChurnProgress,
+} from "./diagnostic-argument-churn-activity.js";
+import { createDiagnosticEmbeddedRunIndex } from "./diagnostic-embedded-run-index.js";
 
-type SessionActivity = {
+type SessionActivity = DiagnosticArgumentChurnActivity & {
   sessionId?: string;
   sessionKey?: string;
   activeEmbeddedRuns: Map<string, ActiveEmbeddedRun>;
@@ -17,6 +29,7 @@ type SessionActivity = {
 };
 
 type ActiveEmbeddedRun = {
+  runId: string;
   sessionId?: string;
   sessionKey?: string;
   sequence: number;
@@ -55,6 +68,15 @@ type DiagnosticRunProgressActivityEvent = Pick<
   "runId" | "sessionId" | "sessionKey" | "reason"
 >;
 
+// Quiet-but-alive tools are normal agent behavior; the CLI byte watchdog kills
+// truly silent children within its own deadline. This floor bounds every
+// staleness consumer (diagnostic recovery aborts, reply-run stale takeover,
+// steer gates): lowering it reopens #88870, removing it reopens #96168.
+export const BLOCKED_TOOL_CALL_ABORT_FLOOR_MS = 15 * 60_000;
+
+// Default quiet-run reclaim window for steer/takeover. Evidence clocks stay local.
+export const RUN_STALE_TAKEOVER_MS = 10 * 60_000;
+
 export type DiagnosticSessionActivitySnapshot = {
   activeWorkKind?: DiagnosticSessionActiveWorkKind;
   hasActiveEmbeddedRun?: boolean;
@@ -65,8 +87,19 @@ export type DiagnosticSessionActivitySnapshot = {
   lastProgressReason?: string;
 };
 
+// Quiet-but-alive tool phases get the blocked-tool floor so a human message
+// cannot reclaim a healthy long tool that stuck recovery would not touch yet.
+export function resolveRunStaleThresholdMs(
+  activity: Pick<DiagnosticSessionActivitySnapshot, "activeWorkKind">,
+): number {
+  return activity.activeWorkKind === "tool_call"
+    ? Math.max(RUN_STALE_TAKEOVER_MS, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)
+    : RUN_STALE_TAKEOVER_MS;
+}
+
 const activityByRef = new Map<string, SessionActivity>();
 const activityByRunId = new Map<string, SessionActivity>();
+const embeddedRunIndex = createDiagnosticEmbeddedRunIndex(activityByRunId);
 let embeddedRunSequence = 0;
 
 function sessionRefs(params: { sessionId?: string; sessionKey?: string }): string[] {
@@ -113,6 +146,10 @@ function mergeSessionActivity(target: SessionActivity, source: SessionActivity):
   target.sessionId ??= source.sessionId;
   target.sessionKey ??= source.sessionKey;
   for (const [key, embeddedRun] of source.activeEmbeddedRuns) {
+    const existing = target.activeEmbeddedRuns.get(key);
+    if (existing && existing.runId !== embeddedRun.runId) {
+      embeddedRunIndex.remove(target, key);
+    }
     target.activeEmbeddedRuns.set(key, embeddedRun);
   }
   for (const [key, tool] of source.activeTools) {
@@ -127,10 +164,17 @@ function mergeSessionActivity(target: SessionActivity, source: SessionActivity):
       Math.max(cutoff, target.recoveredOwnerStartEventCutoffs.get(ownerRef) ?? 0),
     );
   }
-  if (source.lastProgressAt > target.lastProgressAt) {
+  const sourceProgressIsNewer =
+    source.lastProgressSequence !== undefined
+      ? target.lastProgressSequence === undefined ||
+        source.lastProgressSequence > target.lastProgressSequence
+      : target.lastProgressSequence === undefined && source.lastProgressAt > target.lastProgressAt;
+  if (sourceProgressIsNewer) {
     target.lastProgressAt = source.lastProgressAt;
     target.lastProgressReason = source.lastProgressReason;
+    target.lastProgressSequence = source.lastProgressSequence;
   }
+  mergeArgumentChurnActivity(target, source);
   replaceSessionActivityReferences(source, target);
 }
 
@@ -185,6 +229,7 @@ function resolveSessionActivity(params: {
 function touchSessionActivity(activity: SessionActivity, reason: string, now = Date.now()): void {
   activity.lastProgressAt = now;
   activity.lastProgressReason = reason;
+  recordDiagnosticActivityProgress(activity);
 }
 
 function toolKey(event: {
@@ -271,6 +316,15 @@ function recordRunProgress(event: DiagnosticRunProgressActivityEvent): void {
   markDiagnosticRunProgress(event);
 }
 
+export function markDiagnosticArgumentChurnObservation(
+  params: DiagnosticArgumentChurnObservationParams,
+): void {
+  const activity = resolveSessionActivity({ ...params, create: params.active === true });
+  if (activity) {
+    applyArgumentChurnObservation(activity, activity.activeEmbeddedRuns.values(), params);
+  }
+}
+
 export function markDiagnosticRunProgress(params: DiagnosticRunProgressActivityEvent): void {
   const activity = resolveSessionActivity({ ...params, create: true });
   if (!activity) {
@@ -289,22 +343,38 @@ function recordRunCompleted(
   activityByRunId.delete(event.runId);
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
-  activity.activeEmbeddedRuns.clear();
+  embeddedRunIndex.clear(activity);
+  clearArgumentChurnActivity(activity, { runId: event.runId });
+  clearArgumentChurnPolicyWaits(activity, { runId: event.runId });
   touchSessionActivity(activity, "run:completed");
 }
 
 export function markDiagnosticEmbeddedRunStarted(params: {
   sessionId: string;
   sessionKey?: string;
+  runId?: string;
   workKey?: string;
 }): void {
-  const activity = resolveSessionActivity({ ...params, create: true });
+  const ownerRunId = params.runId?.trim() || params.sessionId.trim();
+  const activity = resolveSessionActivity({ ...params, runId: ownerRunId, create: true });
   if (!activity) {
     return;
   }
-  activity.activeEmbeddedRuns.set(resolveEmbeddedRunWorkKey(params), {
+  // Registration is the ownership boundary. A replacement or re-armed run
+  // must never inherit the prior owner's semantic-stall clock.
+  if (activity.argumentChurnStartedAt !== undefined) {
+    clearArgumentChurnActivity(activity, { runId: ownerRunId });
+  }
+  clearArgumentChurnPolicyWaits(activity);
+  const workKey = resolveEmbeddedRunWorkKey(params);
+  const existing = activity.activeEmbeddedRuns.get(workKey);
+  if (existing && existing.runId !== ownerRunId) {
+    embeddedRunIndex.remove(activity, workKey);
+  }
+  activity.activeEmbeddedRuns.set(workKey, {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    runId: ownerRunId,
     sequence: ++embeddedRunSequence,
   });
   touchSessionActivity(activity, "embedded_run:started");
@@ -320,10 +390,14 @@ export function markDiagnosticEmbeddedRunEnded(params: {
   if (!activity) {
     return;
   }
-  activity.activeEmbeddedRuns.delete(resolveEmbeddedRunWorkKey(params));
+  embeddedRunIndex.remove(activity, resolveEmbeddedRunWorkKey(params));
   if (params.clearRunActivity !== false) {
     activity.activeTools.clear();
     activity.activeModelCalls.clear();
+  }
+  if (activity.activeEmbeddedRuns.size === 0) {
+    clearArgumentChurnActivity(activity);
+    clearArgumentChurnPolicyWaits(activity);
   }
   touchSessionActivity(activity, "embedded_run:ended");
 }
@@ -386,7 +460,7 @@ function clearRecoveredOwnerEmbeddedRuns(
       ownerRefs.has(embeddedRun.sessionId) &&
       !embeddedRunStartedAfter(embeddedRun, recoveryStartedAfterSequence)
     ) {
-      activity.activeEmbeddedRuns.delete(key);
+      embeddedRunIndex.remove(activity, key);
     }
   }
 }
@@ -445,7 +519,7 @@ function pruneActivityStartedBeforeRecoveryCutoff(
   }
   for (const [key, embeddedRun] of activity.activeEmbeddedRuns) {
     if (!embeddedRunStartedAfter(embeddedRun, recoveryStartedAfterEmbeddedRunSequence)) {
-      activity.activeEmbeddedRuns.delete(key);
+      embeddedRunIndex.remove(activity, key);
     }
   }
   for (const [key, tool] of activity.activeTools) {
@@ -539,7 +613,16 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
     activity.activeTools.size === 0 &&
     activity.activeModelCalls.size === 0
   ) {
-    return { cleared: false, blockedByActiveEmbeddedRun: false };
+    const clearedChurn = clearArgumentChurnActivity(activity, {
+      runId: params.activeSessionId,
+    });
+    const clearedPolicyWait = clearArgumentChurnPolicyWaits(activity, {
+      runId: params.activeSessionId,
+    });
+    return {
+      cleared: clearedChurn || clearedPolicyWait,
+      blockedByActiveEmbeddedRun: false,
+    };
   }
   clearRecoveredOwnerEmbeddedRuns(
     activity,
@@ -561,10 +644,12 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
       touchSessionActivity(activity, "embedded_run:recovery_skipped_active_owner");
       return { cleared: false, blockedByActiveEmbeddedRun: true };
     }
-    activity.activeEmbeddedRuns.clear();
+    embeddedRunIndex.clear(activity);
   }
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
+  clearArgumentChurnActivity(activity, { runId: params.activeSessionId });
+  clearArgumentChurnPolicyWaits(activity, { runId: params.activeSessionId });
   touchSessionActivity(activity, "embedded_run:ended");
   return { cleared: true, blockedByActiveEmbeddedRun: false };
 }
@@ -593,14 +678,19 @@ export function getDiagnosticSessionActivitySnapshot(
       activeTool = tool;
     }
   }
+  const churnProgress = resolveArgumentChurnProgress(
+    activity,
+    activity.activeEmbeddedRuns.values(),
+    now,
+  );
   return {
     activeWorkKind,
     ...(activity.activeEmbeddedRuns.size > 0 ? { hasActiveEmbeddedRun: true } : {}),
     activeToolName: activeTool?.toolName,
     activeToolCallId: activeTool?.toolCallId,
     activeToolAgeMs: activeTool ? Math.max(0, now - activeTool.startedAt) : undefined,
-    lastProgressAgeMs: Math.max(0, now - activity.lastProgressAt),
-    lastProgressReason: activity.lastProgressReason,
+    lastProgressAgeMs: Math.max(0, now - churnProgress.lastProgressAt),
+    lastProgressReason: churnProgress.lastProgressReason,
   };
 }
 
@@ -608,11 +698,11 @@ export function getDiagnosticEmbeddedRunActivitySequence(): number {
   return embeddedRunSequence;
 }
 
-export function markDiagnosticRunProgressForTest(params: DiagnosticRunProgressActivityEvent): void {
+function markDiagnosticRunProgressForTest(params: DiagnosticRunProgressActivityEvent): void {
   markDiagnosticRunProgress(params);
 }
 
-export function markDiagnosticToolStartedForTest(params: {
+function markDiagnosticToolStartedForTest(params: {
   sessionId?: string;
   sessionKey?: string;
   runId?: string;
@@ -622,28 +712,27 @@ export function markDiagnosticToolStartedForTest(params: {
   recordToolStarted(params);
 }
 
-export function markDiagnosticModelStartedForTest(
-  params: DiagnosticModelStartedActivityEvent,
-): void {
+function markDiagnosticModelStartedForTest(params: DiagnosticModelStartedActivityEvent): void {
   recordModelStarted(params);
 }
 
 export function resetDiagnosticRunActivityForTest(): void {
-  activityByRef.clear();
-  activityByRunId.clear();
-  embeddedRunSequence = 0;
-  unregisterDiagnosticRunActivityListener?.();
-  unregisterDiagnosticRunActivityListener = undefined;
-  registerDiagnosticRunActivityListener();
+  stopDiagnosticRunActivityTracking();
 }
 
 let unregisterDiagnosticRunActivityListener: (() => void) | undefined;
 
-function registerDiagnosticRunActivityListener(): void {
+export function startDiagnosticRunActivityTracking(): void {
   if (unregisterDiagnosticRunActivityListener) {
     return;
   }
+  const startAfterEventSequence = getInternalDiagnosticEventSequence();
   unregisterDiagnosticRunActivityListener = onInternalDiagnosticEvent((event) => {
+    // A prior lifecycle can leave already-sequenced events in the async queue.
+    // Ignore them so a restart cannot recreate activity that stop cleared.
+    if (event.seq <= startAfterEventSequence) {
+      return;
+    }
     switch (event.type) {
       case "tool.execution.started":
         recordToolStarted(event);
@@ -671,4 +760,20 @@ function registerDiagnosticRunActivityListener(): void {
   });
 }
 
-registerDiagnosticRunActivityListener();
+export function stopDiagnosticRunActivityTracking(): void {
+  unregisterDiagnosticRunActivityListener?.();
+  unregisterDiagnosticRunActivityListener = undefined;
+  activityByRef.clear();
+  activityByRunId.clear();
+  embeddedRunSequence = 0;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.diagnosticRunActivityTestApi")
+  ] = {
+    markDiagnosticModelStartedForTest,
+    markDiagnosticRunProgressForTest,
+    markDiagnosticToolStartedForTest,
+  };
+}

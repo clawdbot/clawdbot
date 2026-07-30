@@ -3,8 +3,8 @@
  * path for config defaults and thinking profiles.
  */
 import {
-  resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
+  resolveClaudeMythos5ModelIdentity,
   resolveClaudeThinkingProfile,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
@@ -40,9 +40,11 @@ export function resolveThinkingProfile(params: {
         includeNativeMax: true,
       });
     case "claude-cli":
-      if (resolveClaudeFable5ModelIdentity({ id: contractModelId })) {
+      if (resolveClaudeMythos5ModelIdentity({ id: contractModelId })) {
         return CLAUDE_CLI_OFF_THINKING_PROFILE;
       }
+      // Claude Code exposes Fable's native effort ladder. Keep subscription-
+      // backed and API-backed Fable routes on one model contract.
       return resolveClaudeThinkingProfile(contractModelId, undefined, {
         includeNativeMax: true,
       });

@@ -107,5 +107,4 @@ internal class ValidatedNetworkState<T>(
  * True when the network reports a validated internet capability. Exposed internal so the
  * predicate can be unit-tested without a Robolectric ConnectivityManager shadow.
  */
-internal fun isTransportValidated(capabilities: NetworkCapabilities): Boolean =
-  capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+internal fun isTransportValidated(capabilities: NetworkCapabilities): Boolean = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
