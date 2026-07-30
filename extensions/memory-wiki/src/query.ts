@@ -1237,6 +1237,74 @@ function resolveDigestClaimLookup(digest: QueryDigestBundle, lookup: string): st
   return match?.pagePath ?? null;
 }
 
+async function readCanonicalWikiPage(
+  rootDir: string,
+  lookup: string,
+): Promise<QueryableWikiPage | null> {
+  const normalized = normalizeLookupKey(lookup);
+  const relativePath = normalized.endsWith(".md") ? normalized : `${normalized}.md`;
+  const segments = relativePath.split("/");
+  const [rootSegment] = segments;
+  // Only vault-relative paths under a queryable dir may bypass enumeration; absolute paths,
+  // traversal, empty segments, and reserved index pages fall back to the scanning path (#116048).
+  if (
+    segments.length < 2 ||
+    segments.some((segment) => segment === "" || segment === "." || segment === "..") ||
+    !QUERY_DIRS.some((queryDir) => queryDir === rootSegment) ||
+    path.basename(relativePath) === "index.md"
+  ) {
+    return null;
+  }
+
+  // Vault enumeration walks with a skip-symlink policy, so the direct read must reject symlinked
+  // targets too; comparing real paths keeps the fast path on the same files the scan would see.
+  const absolutePath = path.join(rootDir, relativePath);
+  const [rootReal, pageReal] = await Promise.all([
+    fs.realpath(rootDir).catch(() => null),
+    fs.realpath(absolutePath).catch(() => null),
+  ]);
+  if (!rootReal || pageReal !== path.join(rootReal, ...segments)) {
+    return null;
+  }
+
+  const raw = await fs.readFile(absolutePath, "utf8").catch(() => null);
+  if (raw === null) {
+    return null;
+  }
+  const summary = toWikiPageSummary({ absolutePath, relativePath, raw });
+  return summary ? { ...summary, raw } : null;
+}
+
+async function resolveWikiGetPage(params: {
+  config: ResolvedMemoryWikiConfig;
+  lookup: string;
+  canReadPage: (page: QueryableWikiPage) => boolean;
+}): Promise<QueryableWikiPage | null> {
+  const rootDir = params.config.vault.path;
+  const canonicalPage = await readCanonicalWikiPage(rootDir, params.lookup);
+  if (
+    canonicalPage &&
+    params.canReadPage(canonicalPage) &&
+    resolveQueryableWikiPageByLookup([canonicalPage], params.lookup)
+  ) {
+    return canonicalPage;
+  }
+
+  const digest = await readQueryDigestBundle(params.config);
+  const digestClaimPagePath = digest ? resolveDigestClaimLookup(digest, params.lookup) : null;
+  const digestLookupPage = digestClaimPagePath
+    ? ((await readQueryableWikiPagesByPaths(rootDir, [digestClaimPagePath])).find(
+        params.canReadPage,
+      ) ?? null)
+    : null;
+  if (digestLookupPage) {
+    return digestLookupPage;
+  }
+
+  const pages = (await readQueryableWikiPages(rootDir)).filter(params.canReadPage);
+  return resolveQueryableWikiPageByLookup(pages, params.lookup);
+}
+
 export function resolveQueryableWikiPageByLookup(
   pages: QueryableWikiPage[],
   lookup: string,
@@ -1370,18 +1438,11 @@ export async function getMemoryWikiPage(input: {
   const lineCount = normalizePositiveInteger(params.lineCount, 200);
 
   if (shouldSearchWiki(effectiveConfig)) {
-    const canReadPage = createWikiPageVisibilityFilter(params);
-    const digest = await readQueryDigestBundle(effectiveConfig);
-    const digestClaimPagePath = digest ? resolveDigestClaimLookup(digest, params.lookup) : null;
-    const digestLookupPage = digestClaimPagePath
-      ? ((
-          await readQueryableWikiPagesByPaths(effectiveConfig.vault.path, [digestClaimPagePath])
-        ).find(canReadPage) ?? null)
-      : null;
-    const pages = digestLookupPage
-      ? [digestLookupPage]
-      : (await readQueryableWikiPages(effectiveConfig.vault.path)).filter(canReadPage);
-    const page = digestLookupPage ?? resolveQueryableWikiPageByLookup(pages, params.lookup);
+    const page = await resolveWikiGetPage({
+      config: effectiveConfig,
+      lookup: params.lookup,
+      canReadPage: createWikiPageVisibilityFilter(params),
+    });
     if (page) {
       const parsed = parseWikiMarkdown(page.raw);
       const lines = parsed.body.split(/\r?\n/);
