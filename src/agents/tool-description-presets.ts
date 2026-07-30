@@ -131,7 +131,7 @@ export function describeSessionStatusTool(): string {
   return [
     "Show visible-session model/usage/time/cost/tasks.",
     '`sessionKey="current"` for current; UI labels are not keys.',
-    "`model` overrides; `model=default` resets. Use for active model/session questions.",
+    "`model` overrides; `model=default` resets; `thinkingLevel` sets thinking for the effective model. Use for active model/session questions.",
   ].join(" ");
 }
 

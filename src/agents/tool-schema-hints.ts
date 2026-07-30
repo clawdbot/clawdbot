@@ -2,9 +2,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 const MAX_COMPACT_INPUT_HINT_CHARS = 300;
-// Sized so real multi-branch contracts like web_search's four-way union stay
-// promotable with headroom; the quick index independently truncates total bytes.
-const MAX_COMPACT_OUTPUT_HINT_CHARS = 800;
+// Sized so real contracts like web_search's four-way union and session_status
+// stay promotable with headroom; the quick index independently truncates total bytes.
+const MAX_COMPACT_OUTPUT_HINT_CHARS = 850;
 const MAX_COMPACT_INPUT_SCHEMA_PROPERTIES = 16;
 const MAX_COMPACT_OUTPUT_SCHEMA_PROPERTIES = 20;
 const MAX_COMPACT_SCHEMA_PROPERTY_NAME_CHARS = 128;

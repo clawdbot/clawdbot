@@ -367,7 +367,9 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
     case "subagents":
       return action === "cancel" || action === "kill" || action === "steer";
     case "session_status":
-      return typeof record?.model === "string" && record.model.trim().length > 0;
+      return [record?.model, record?.thinkingLevel].some(
+        (value) => typeof value === "string" && value.trim().length > 0,
+      );
     case "gateway":
       return action == null || !GATEWAY_REPLAY_SAFE_ACTIONS.has(action);
     case "nodes":
