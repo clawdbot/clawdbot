@@ -6,6 +6,11 @@ import { MeetingNodeAudioPullWaiters } from "./node-audio-pull-waiters.js";
 
 const NODE_BRIDGE_TERMINATION_GRACE_MS = 2_000;
 
+type NodeOutputWriteWaiter = {
+  output: ChildProcess;
+  release: () => void;
+};
+
 type NodeBridgeSession = {
   id: string;
   url?: string;
@@ -24,6 +29,8 @@ type NodeBridgeSession = {
   lastOutputBytes: number;
   closedAt?: string;
   clearCount: number;
+  outputGeneration: number;
+  outputWriteWaiters: Set<NodeOutputWriteWaiter>;
   stopPromise?: Promise<void>;
   retiredOutputStops: Set<Promise<void>>;
 };
@@ -83,6 +90,16 @@ function readNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+function readOutputGeneration(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
+    return value;
+  }
+  throw new Error("outputGeneration must be a non-negative integer");
+}
+
 function runCommandWithTimeout(argv: string[], timeoutMs: number) {
   const [command, ...args] = argv;
   if (!command) {
@@ -118,6 +135,14 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     session.waiters.wake();
   };
 
+  const releaseOutputWriteWaiters = (session: NodeBridgeSession, output?: ChildProcess): void => {
+    for (const waiter of [...session.outputWriteWaiters]) {
+      if (!output || waiter.output === output) {
+        waiter.release();
+      }
+    }
+  };
+
   const retireOutputProcess = (session: NodeBridgeSession, outputProcess?: ChildProcess) => {
     const stopPromise = terminateMeetingBridgeProcess(outputProcess, {
       graceMs: NODE_BRIDGE_TERMINATION_GRACE_MS,
@@ -137,6 +162,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     session.closed = true;
     session.closedAt = new Date().toISOString();
     wake(session);
+    releaseOutputWriteWaiters(session);
     session.stopPromise = Promise.all([
       terminateMeetingBridgeProcess(session.input, {
         graceMs: NODE_BRIDGE_TERMINATION_GRACE_MS,
@@ -184,6 +210,8 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
       lastInputBytes: 0,
       lastOutputBytes: 0,
       clearCount: 0,
+      outputGeneration: 0,
+      outputWriteWaiters: new Set(),
       retiredOutputStops: new Set(),
     };
     const outputProcess = startOutputProcess(output);
@@ -235,7 +263,52 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     };
   };
 
-  const pushAudio = (params: Record<string, unknown>) => {
+  const staleOutputResult = (session: NodeBridgeSession) => ({
+    bridgeId: session.id,
+    ok: true,
+    stale: true,
+    outputGeneration: session.outputGeneration,
+  });
+
+  const writeOutputChunk = (
+    session: NodeBridgeSession,
+    output: ChildProcess,
+    audio: Buffer,
+  ): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      const stdin = output.stdin;
+      if (!stdin) {
+        reject(new Error("audio output stream is closed"));
+        return;
+      }
+      let settled = false;
+      let waiter: NodeOutputWriteWaiter;
+      const finish = (error?: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        session.outputWriteWaiters.delete(waiter);
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      };
+      waiter = { output, release: () => finish() };
+      session.outputWriteWaiters.add(waiter);
+      try {
+        stdin.write(audio, (error) => finish(error ?? undefined));
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(formatErrorMessage(error)));
+        return;
+      }
+      if (stdin.destroyed || stdin.writableEnded) {
+        finish(new Error("audio output stream is closed"));
+      }
+    });
+
+  const pushAudio = async (params: Record<string, unknown>) => {
     const bridgeId = readString(params.bridgeId);
     const base64 = readString(params.base64);
     if (!bridgeId || !base64) {
@@ -245,16 +318,41 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     if (!session || session.closed) {
       throw new Error(`bridge is not open: ${bridgeId}`);
     }
+    const requestedGeneration = readOutputGeneration(params.outputGeneration);
+    if (requestedGeneration !== undefined && requestedGeneration !== session.outputGeneration) {
+      return staleOutputResult(session);
+    }
+    const output = session.output;
+    if (!output?.stdin) {
+      throw new Error(`bridge is not open: ${bridgeId}`);
+    }
     const audio = decodeMeetingAudioBase64(base64, "pushAudio");
-    session.lastOutputAt = new Date().toISOString();
-    session.lastOutputBytes += audio.byteLength;
     try {
-      session.output?.stdin?.write(audio);
+      await writeOutputChunk(session, output, audio);
     } catch {
+      if (
+        session.output !== output ||
+        (requestedGeneration !== undefined && requestedGeneration !== session.outputGeneration)
+      ) {
+        return staleOutputResult(session);
+      }
       void stopSession(session);
       throw new Error(`bridge is not open: ${bridgeId}`);
     }
-    return { bridgeId, ok: true };
+    if (
+      session.closed ||
+      session.output !== output ||
+      (requestedGeneration !== undefined && requestedGeneration !== session.outputGeneration)
+    ) {
+      return staleOutputResult(session);
+    }
+    session.lastOutputAt = new Date().toISOString();
+    session.lastOutputBytes += audio.byteLength;
+    return {
+      bridgeId,
+      ok: true,
+      outputGeneration: session.outputGeneration,
+    };
   };
 
   const clearAudio = (params: Record<string, unknown>) => {
@@ -266,14 +364,29 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     if (!session || session.closed) {
       throw new Error(`bridge is not open: ${bridgeId}`);
     }
+    const requestedGeneration = readOutputGeneration(params.outputGeneration);
+    if (requestedGeneration !== undefined && requestedGeneration <= session.outputGeneration) {
+      return staleOutputResult(session);
+    }
+    if (requestedGeneration === undefined && session.outputGeneration >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("outputGeneration exhausted");
+    }
+    const nextGeneration = requestedGeneration ?? session.outputGeneration + 1;
     const previousOutput = session.output;
     const outputProcess = startOutputProcess(session.outputCommand);
     session.output = outputProcess;
+    session.outputGeneration = nextGeneration;
     attachOutputProcessHandlers(session, outputProcess);
+    releaseOutputWriteWaiters(session, previousOutput);
     session.clearCount += 1;
     session.lastClearAt = new Date().toISOString();
     retireOutputProcess(session, previousOutput);
-    return { bridgeId, ok: true, clearCount: session.clearCount };
+    return {
+      bridgeId,
+      ok: true,
+      clearCount: session.clearCount,
+      outputGeneration: session.outputGeneration,
+    };
   };
 
   const startBrowser = (params: Record<string, unknown>) => {
@@ -372,6 +485,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
             lastInputBytes: session.lastInputBytes,
             lastOutputBytes: session.lastOutputBytes,
             clearCount: session.clearCount,
+            outputGeneration: session.outputGeneration,
             queuedInputChunks: session.chunks.length,
           }
         : bridgeId
@@ -492,7 +606,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
           result = await pullAudio(params);
           break;
         case "pushAudio":
-          result = pushAudio(params);
+          result = await pushAudio(params);
           break;
         case "clearAudio":
           result = clearAudio(params);

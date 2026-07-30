@@ -129,6 +129,29 @@ describe("meeting node host audio output", () => {
     await invokeHost(host, { action: "stop", bridgeId });
   });
 
+  it("rejects output generations outside the safe integer range", async () => {
+    childProcessMocks.spawn
+      .mockReturnValueOnce(createProcess({ stdin: createStdin(true) }))
+      .mockReturnValueOnce(createProcess({ stdout: new EventEmitter() }));
+    const host = createHost();
+    const started = await invokeHost(host, {
+      action: "start",
+      audioInputCommand: ["capture"],
+      audioOutputCommand: ["play"],
+      launch: false,
+      mode: "bidi",
+    });
+
+    await expect(
+      invokeHost(host, {
+        action: "clearAudio",
+        bridgeId: started.bridgeId,
+        outputGeneration: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    ).rejects.toThrow("outputGeneration must be a non-negative integer");
+    await invokeHost(host, { action: "stop", bridgeId: started.bridgeId });
+  });
+
   it("waits for output acceptance and rejects stale generations after clear", async () => {
     const originalStdin = createStdin(false);
     const replacementStdin = createStdin(true);
