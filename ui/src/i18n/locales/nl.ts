@@ -8,6 +8,7 @@ export const nl: TranslationMap = {
     ok: "OK",
     yes: "Ja",
     no: "Nee",
+    assistant: "Assistent",
     active: "Actief",
     loading: "Laden…",
     refreshing: "Vernieuwen…",
@@ -35,8 +36,11 @@ export const nl: TranslationMap = {
     create: "Maken",
     copy: "Kopiëren",
     copied: "Gekopieerd!",
+    copyFailed: "Kopiëren mislukt",
     copyCode: "Code kopiëren",
+    resizeSplitView: "Gesplitste weergave vergroten of verkleinen",
     delete: "Verwijderen",
+    remove: "Verwijderen",
     dismiss: "Sluiten",
     unselect: "Deselecteren",
     enabled: "Ingeschakeld",
@@ -45,6 +49,9 @@ export const nl: TranslationMap = {
     none: "geen",
     na: "n.v.t.",
     never: "nooit",
+    justNow: "zojuist",
+    now: "nu",
+    unknown: "Onbekend",
     configured: "Geconfigureerd",
     running: "Actief",
     linked: "Gekoppeld",
@@ -70,6 +77,7 @@ export const nl: TranslationMap = {
     settingsSections: "Instellingensecties",
     version: "Versie",
     docs: "Docs",
+    learnMore: "Meer informatie",
     theme: "Thema",
     colorMode: "Kleurmodus",
     colorModeOption: "Kleurmodus: {mode}",
@@ -113,10 +121,24 @@ export const nl: TranslationMap = {
     filteredFileCount: "{count}/{total} bestanden",
     noMatches: "Geen overeenkomende bestanden.",
     navigate: "navigeren",
+    kind: {
+      text: "Tekst",
+      shell: "Shell",
+      file: "Bestand",
+    },
   },
   mcpApp: {
     title: "MCP-app",
     unavailable: "MCP-app niet beschikbaar: {error}",
+    errors: {
+      gatewayUnavailable: "Gateway van MCP App niet beschikbaar",
+      mountUnavailable: "Koppelpunt van MCP App niet beschikbaar",
+      sandboxTimedOut: "Time-out bij MCP App-sandbox",
+      sandboxUnavailable: "MCP App-sandbox niet beschikbaar",
+      initializationTimedOut: "Time-out bij initialisatie van MCP App",
+      requestFailed: "Verzoek mislukt",
+      invalidSandboxUrl: "Sandbox-URL van MCP App is ongeldig",
+    },
   },
   githubPreview: {
     loading: "GitHub-gegevens laden…",
@@ -327,6 +349,19 @@ export const nl: TranslationMap = {
         nip05: "you@example.com",
         lightningAddress: "you@getalby.com",
       },
+      notices: {
+        timeout:
+          "Time-out van verzoek na 30 seconden; mogelijk heeft de server de wijziging toch toegepast — controleer het profiel voordat u het opnieuw probeert.",
+        operationFailed: "{prefix}: {error}",
+        updateFailed: "Bijwerken van profiel mislukt",
+        updateFailedStatus: "Bijwerken van profiel mislukt ({status})",
+        publishFailed: "Publiceren van profiel op alle relays mislukt.",
+        published: "Profiel gepubliceerd naar relays.",
+        importFailed: "Importeren van profiel mislukt",
+        importFailedStatus: "Importeren van profiel mislukt ({status})",
+        importedFromRelays: "Profiel geïmporteerd uit relays. Controleer en publiceer.",
+        imported: "Profiel geïmporteerd. Controleer en publiceer.",
+      },
     },
   },
   lazyView: {
@@ -338,6 +373,57 @@ export const nl: TranslationMap = {
       "OpenClaw is op de achtergrond bijgewerkt. Laad opnieuw om het nieuwste paneel te zien.",
     reloading: "Opnieuw laden…",
     retry: "Opnieuw proberen",
+    stylesFailed:
+      "De stijlen konden niet worden geladen, waardoor de pagina er mogelijk niet goed uitziet.",
+  },
+  updates: {
+    refreshRequired: "Server bijgewerkt — vernieuw voor volledige functionaliteit",
+    coalescedRestart:
+      "Update geïnstalleerd. De Gateway wordt al opnieuw gestart; de status wordt vernieuwd nadat de verbinding is hersteld.",
+    error: "Updatefout: {error}",
+    status: "Update {status}: {reason}. {guidance}",
+    verificationFailed:
+      "Update geïnstalleerd, maar de actieve versie is niet gewijzigd — mogelijk is opnieuw opstarten geblokkeerd.",
+    verificationFailedWithVersions:
+      "Update geïnstalleerd, maar de actieve versie is niet gewijzigd — mogelijk is opnieuw opstarten geblokkeerd. Verwacht: v{expectedVersion}, actief: v{actualVersion}.",
+    handoffTimeout:
+      "De updateoverdracht is gestart, maar na het herstellen van de verbinding is geen voltooiing gemeld. Voer `openclaw update status` uit voor het definitieve resultaat.",
+    outcomeUnknown:
+      "Het updateverzoek is mogelijk geaccepteerd, maar de Gateway heeft na het herstellen van de verbinding geen definitief resultaat gemeld. Voer `openclaw update status` uit voordat u het opnieuw probeert.",
+    failureReasons: {
+      dirty: "Commit of stash de wijzigingen en probeer het opnieuw.",
+      noUpstream: "Stel een upstream-branch in en probeer het opnieuw.",
+      notGitInstall:
+        "Dit is geen git-checkout. Voer `openclaw update` uit via de CLI voor een globale herinstallatie.",
+      notOpenclawRoot:
+        "Voer de update uit vanuit een OpenClaw-checkout of gebruik het globale herinstallatiepad via de CLI.",
+      depsInstallFailed:
+        "Installatie van afhankelijkheden mislukt. Los de installatiefout op en probeer het opnieuw.",
+      buildFailed: "Build mislukt. Los de buildfout op en probeer het opnieuw.",
+      buildDirty:
+        "De build van de geselecteerde revisie heeft bestanden in de checkout gewijzigd. Probeer het opnieuw met een revisie die de gegenereerde artefacten bevat.",
+      uiBuildFailed:
+        "Het opnieuw bouwen van de Control UI is mislukt. Los de UI-buildfout op en probeer het opnieuw.",
+      globalInstallFailed:
+        "De globale pakketinstallatie kon niet op schijf worden geverifieerd. Probeer het opnieuw of installeer opnieuw via de CLI.",
+      restartDisabled:
+        "De update is niet toegepast omdat het opnieuw starten van de Gateway is uitgeschakeld. Schakel opnieuw starten in de configuratie in en probeer het daarna opnieuw.",
+      restartUnavailable:
+        "Deze globale installatie kan niet veilig worden vervangen zolang opnieuw starten is uitgeschakeld en er geen supervisor aanwezig is.",
+      restartUnhealthy:
+        "Het vervangende proces is nooit gezond geworden. Het vorige proces is actief gebleven, zodat u het systeem kunt herstellen.",
+      managedServiceHandoffAlreadyRunning:
+        "Er wordt al een andere beheerde update uitgevoerd. Wacht tot deze is voltooid en vernieuw daarna de updatestatus.",
+      doctorFailed:
+        "Doctor-reparatie mislukt. Voer `openclaw doctor --non-interactive` uit en probeer het opnieuw.",
+      default:
+        "Bekijk de Gateway-logboeken voor de exacte fout en probeer het opnieuw zodra de oorzaak is verholpen.",
+    },
+    postRestart: {
+      restartUnhealthy:
+        "Het vervangende proces is nooit gezond geworden en het vorige proces is actief gebleven.",
+      default: "Controleer de Gateway-logboeken op de fout bij het vervangen.",
+    },
   },
   nodes: {
     pairing: {
@@ -831,6 +917,10 @@ export const nl: TranslationMap = {
   },
   agents: {
     noAgents: "Geen agents",
+    defaults: {
+      title: "Standaardinstellingen voor agents",
+      description: "Standaardinstellingen die elke agent overneemt, tenzij ze worden overschreven.",
+    },
     copyId: "ID kopiëren",
     copyIdTitle: "Agent-ID naar klembord kopiëren",
     default: "Standaard",
@@ -1035,6 +1125,9 @@ export const nl: TranslationMap = {
     noEvents: "Nog geen gebeurtenissen.",
   },
   configForm: {
+    redactedPlaceholder: "[geredigeerd - klik op onthullen om te bekijken]",
+    sectionHelp: "Hulp voor {section}",
+    readGuide: "Lees de handleiding",
     showAdvanced: "Geavanceerd tonen",
     advancedHidden: "{count} geavanceerde instelling verborgen",
     advancedHiddenPlural: "{count} geavanceerde instellingen verborgen",
@@ -1228,6 +1321,8 @@ export const nl: TranslationMap = {
       lobsterdexOpen: "Lobsterdex openen",
     },
     security: {
+      intro:
+        "Controleer de toegang tot de Gateway, het toolbeleid, de apparaatauthenticatie en de goedkeuringen.",
       title: "Beveiliging",
       gatewayAuth: "Gateway-authenticatie",
       execPolicy: "Uitvoeringsbeleid",
@@ -1396,6 +1491,7 @@ export const nl: TranslationMap = {
         "Meldingen zijn uitgeschakeld voor OpenClaw in macOS. Sta ze toe in Systeeminstellingen > Meldingen.",
     },
     appearance: {
+      intro: "Thema-, chat- en zijbalkvoorkeuren voor deze Control UI-client.",
       theme: "Thema",
       chooseTheme: "Kies een themafamilie.",
       importedTheme: "Geïmporteerd thema",
@@ -1466,11 +1562,11 @@ export const nl: TranslationMap = {
     open: "Open",
     applying: "Toepassen…",
     autoSaveSaving: "Opslaan…",
+    autoSaveSaved: "Opgeslagen",
     autoSaveFailed: "Opslaan mislukt",
     autoSaveConflict: "Instellingen elders gewijzigd",
     retry: "Opnieuw proberen",
-    applyBannerText: "Opgeslagen in openclaw.json — herstart de gateway om toe te passen.",
-    applyBannerAction: "Herstarten & toepassen",
+    applyChanges: "Wijzigingen toepassen",
     rawDiscard: "Verwerpen",
     rawDraftBlocksApply:
       "Niet-opgeslagen ruwe configuratiewijzigingen — sla ze op of verwerp ze in de Raw-editor voordat je herstart.",
@@ -1718,7 +1814,6 @@ export const nl: TranslationMap = {
     forward: "Vooruit",
     chat: "Chat",
     settings: "Instellingen",
-    settingsGeneral: "Algemeen",
     askOpenClaw: "Vraag OpenClaw",
     settingsGroupConnections: "Verbindingen",
     settingsGroupAgents: "Agents en tools",
@@ -1774,6 +1869,10 @@ export const nl: TranslationMap = {
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
     unavailable: "The terminal is not available on this gateway.",
+    uploadTooLarge: "Bestand overschrijdt de uploadlimiet van 16 MiB voor de terminal: {file}",
+    uploadUnsafeCmdPath: "Kan een geüpload pad met % of ! niet veilig invoegen in cmd.exe",
+    uploadUnsupportedShell:
+      "Kan een geüpload pad niet veilig invoegen in een niet-ondersteunde shell: {shell}",
   },
   browser: {
     title: "Browser",
@@ -1810,6 +1909,15 @@ export const nl: TranslationMap = {
     noChatTarget: "Open eerst een chatsessie zodat de annotatie ergens naartoe kan.",
     inspectUnavailable: "Elementinspectie is uitgeschakeld (browser.evaluateEnabled=false).",
     annotationSent: "Annotatie toegevoegd aan de chatcomposer.",
+    errors: {
+      requestFailed: "Browseraanvraag mislukt: {error}",
+      screenshotPathMissing: "Browserschermafbeelding heeft geen mediapad geretourneerd.",
+      screenshotFetchTimedOut: "Time-out bij ophalen van schermafbeelding.",
+      screenshotFetchFailed: "Ophalen van schermafbeelding mislukt ({status}).",
+      screenshotReadFailed: "Lezen van schermafbeelding mislukt.",
+      screenshotDecodeFailed: "Decoderen van schermafbeelding mislukt.",
+      canvasUnavailable: "Canvas 2D-context niet beschikbaar.",
+    },
     annotatePrompt: {
       introTitled:
         'Ik heb de pagina op {url} geannoteerd (door de pagina gerapporteerde titel: "{title}") — de bijgevoegde screenshot toont mijn markering.',
@@ -1856,6 +1964,7 @@ export const nl: TranslationMap = {
     automation: "Automatisering",
     mcp: "MCP",
     memory: "Geheugen",
+    talk: "Spraak",
     infrastructure: "Infrastructuur",
     labs: "Labs",
     about: "Over",
@@ -1895,6 +2004,7 @@ export const nl: TranslationMap = {
     automation: "Opdrachten, hooks, automatiseringen en plugins.",
     mcp: "MCP-servers, auth, tools en diagnostiek.",
     memory: "Geheugenengine, backend, zoeken en dromen.",
+    talk: "Realtime spraak: provider, model en stem van de spreker.",
     infrastructure: "Gateway-, web-, browser- en media-instellingen.",
     labs: "Experimentele agent- en toolmogelijkheden.",
     about: "Control UI en verbonden Gateway build-identiteit.",
@@ -1913,6 +2023,16 @@ export const nl: TranslationMap = {
     heading: "Verbind je AI",
     intro:
       "OpenClaw hergebruikt AI-toegang die je al hebt — een CLI-login, een API-sleutel of een aanmelding bij een provider.",
+    required: {
+      title: "Geen AI-provider geconfigureerd",
+      body: "OpenClaw kan geen provider en model vinden die voor deze agent zijn geconfigureerd. Voeg deze toe voordat u een gesprek start.",
+      action: "Een provider configureren",
+    },
+    connectionFailure: {
+      title: "OpenClaw kan uw geconfigureerde AI niet gebruiken",
+      body: "Voor deze agent zijn een provider en model geselecteerd, maar de verbinding is mislukt. Controleer de aanmelding bij de provider of de API-sleutel, de toegang tot het model en de servicestatus en probeer het opnieuw.",
+      action: "Providerinstellingen controleren",
+    },
     loading: "Deze Gateway controleren op beschikbare AI-toegang…",
     retry: "Opnieuw proberen",
     checkAgain: "Opnieuw controleren",
@@ -1944,6 +2064,8 @@ export const nl: TranslationMap = {
     },
     unavailable: {
       title: "Gedetecteerd, maar niet automatisch getest",
+      signIn: "Aanmelden met {provider}",
+      useApiKey: "API-sleutel gebruiken",
     },
     signIn: {
       title: "Aanmelden bij een provider",
@@ -1973,6 +2095,7 @@ export const nl: TranslationMap = {
       title: "Je AI is klaar",
       detail: "{modelRef} · {latencyMs} ms",
       openChat: "Chat openen",
+      continueSetup: "Doorgaan met instellen",
       configuredModel: "Geconfigureerd model",
     },
     failure: {
@@ -2165,6 +2288,11 @@ export const nl: TranslationMap = {
       channelDegraded: "{channel} is verslechterd — vraag me wat er is gebeurd",
       channelFallback: "Een kanaal",
       dismiss: "Deze update sluiten",
+      channelSetupTitle: "Bereik OpenClaw buiten deze app",
+      channelSetupBody:
+        "De webapp werkt al. Voeg alleen een kanaal toe als je OpenClaw vanuit een andere dienst berichten wilt sturen.",
+      channelSetupAction: "Een kanaal instellen",
+      channelSetupDismiss: "De webapp blijven gebruiken",
     },
   },
   mcpServers: {
@@ -2178,6 +2306,11 @@ export const nl: TranslationMap = {
     targetLabel: "URL of opdracht",
     nameInvalid: "Servernamen gebruiken letters, cijfers, punten, streepjes of underscores.",
     targetInvalid: "Voer een URL in voor HTTP-transporten of een geldige opdrachtregel voor stdio.",
+    sessionEnableFailed:
+      "De server is globaal uitgeschakeld opgeslagen, maar inschakelen voor deze sessie is mislukt: {error}",
+    sessionChanged: "De actieve sessie is gewijzigd voordat de server kon worden ingeschakeld.",
+    sessionUnavailable:
+      "De actieve sessie is niet beschikbaar; vernieuw de pagina en probeer het opnieuw.",
     nameTaken: "Er bestaat al een MCP-server met de naam “{name}”.",
     missing: "MCP-server “{name}” is niet gevonden in de configuratie.",
     missingTransport: "transport ontbreekt",
@@ -2194,12 +2327,14 @@ export const nl: TranslationMap = {
     working: "Bezig…",
   },
   mcpPage: {
+    intro: "Verbind en beheer MCP-servers die tools aan OpenClaw leveren.",
     connectorsLink: "Ontdek connectors met één klik op de pagina Plugins.",
     servers: "Servers",
     oauth: "OAuth",
     filtered: "Gefilterd",
     configuredServers: "Geconfigureerde servers",
     noServers: "Geen MCP-servers geconfigureerd.",
+    setUpFirstServer: "Stel je eerste MCP-server in",
     operatorCommands: "MCP-operatorcommando's",
     operatorCommandsHint: "Status, diagnostiek, authenticatie, testen en runtime-herladen.",
     runtimeHint:
@@ -2209,19 +2344,146 @@ export const nl: TranslationMap = {
     tlsVerifyOff: "TLS-verificatie uit",
     mtls: "mTLS",
   },
+  talkPage: {
+    intro: "Configureer providers, modellen en stemmen voor realtime spraak.",
+    voiceSection: {
+      title: "Realtime spraak",
+      description:
+        "Doorlopende spraakgesprekken met je agent. Met de onderstaande keuzelijsten stel je talk.realtime-instellingen in; het volledige formulier verderop bevat alle overige opties.",
+    },
+    status: {
+      title: "Status",
+      ready: "Gereed",
+      notReady: "Niet geconfigureerd",
+      unavailable: "Niet beschikbaar",
+      unavailableHint:
+        "Maak verbinding met de Gateway om te controleren of realtime spraak gereed is.",
+      activeProvider: "Actieve provider: {provider}",
+      noProvider: "Er is nog geen provider voor realtime spraak geconfigureerd.",
+    },
+    provider: {
+      title: "Provider",
+      description: "Auto kiest de eerste provider met werkende inloggegevens.",
+      auto: "Automatisch",
+    },
+    model: {
+      title: "Model",
+      description: "Realtime-spraakmodel voor Talk-sessies in de browser.",
+      default: "Standaardinstelling van provider",
+      defaultNamed: "Standaard ({model})",
+    },
+    voice: {
+      title: "Sprekerstem",
+      description:
+        "Stem die wordt gebruikt voor gesproken antwoorden. GPT-Live vergrendelt de stem zodra een gesprek begint.",
+      default: "Standaardinstelling van provider",
+    },
+    gptLive: {
+      title: "GPT-Live",
+      hint: "GPT-Live werkt met een ChatGPT-abonnement: meld u één keer aan met “openclaw models auth login --provider openai”. Er is geen Platform API-sleutel nodig. Alleen voor Talk in de browser. Gedelegeerd werk kan tijdens de uitvoering worden aangestuurd en vereist een exacte gesproken bevestiging voor acties met grote gevolgen.",
+      ready: "Gereed",
+    },
+  },
   memoryPage: {
+    intro: "Kies hoe OpenClaw het agentgeheugen opslaat, doorzoekt en onderhoudt.",
     tablistLabel: "Geheugensecties",
     tabs: {
       overview: "Overzicht",
-      search: "Zoeken",
-      dreaming: "Dromen",
+      memories: "Herinneringen",
+      dreams: "Dromen",
+      settings: "Instellingen",
+    },
+    overview: {
+      hero: {
+        awake: "Het geheugen is actief",
+        waking: "Geheugen wordt geactiveerd…",
+        hibernating: "Het geheugen is in winterslaap",
+        needsAttention: "Het geheugen vereist aandacht",
+        activeDescription: "{engine} · {mode}",
+        loadingDescription: "De geheugenengine en droomcyclus van deze agent worden gecontroleerd.",
+        offDescription: "Kies een geheugenengine in Instellingen om deze te activeren.",
+        disabledDescription:
+          "De geselecteerde geheugenengine is uitgeschakeld. Schakel deze opnieuw in via Instellingen.",
+        gatewayOffline: "De Gateway is offline, waardoor de geheugenstatus niet beschikbaar is.",
+        hybridSearch: "hybride zoekopdracht",
+        keywordSearch: "zoeken op trefwoorden (geen embeddings)",
+        openSettings: "Instellingen openen",
+        retry: "Opnieuw proberen",
+        refresh: "Status vernieuwen",
+      },
+      schedule: {
+        title: "Slaapschema",
+        lightDescription:
+          "Sorteert nieuwe kortetermijnnotities en zet veelbelovende kandidaten klaar zonder het langetermijngeheugen te wijzigen.",
+        remDescription:
+          "Reflecteert op thema's en terugkerende ideeën uit recente activiteit om de rangschikking te verbeteren zonder het langetermijngeheugen te wijzigen.",
+        deepDescription:
+          "Beoordeelt klaargezette kandidaten, neemt de blijvers op in het langetermijngeheugen (MEMORY.md) en schrijft het droomdagboek.",
+        nextRun: "volgende {time}",
+        lastRun: "laatste {time}",
+        notScheduled: "Niet gepland",
+        learnMore: "Hoe dromen werkt",
+        openDocs: "Droomgids openen",
+      },
+      activity: {
+        title: "Activiteit",
+        promotedToday: "Vandaag opgenomen",
+        promotedTotal: "Totaal opgenomen",
+        shortTermCount: "Openstaande kortetermijnitems",
+        phaseHitCount: "Fasesignalen",
+        lightPhaseHitCount: "Treffers in lichte slaapfase",
+        remPhaseHitCount: "Treffers in REM-slaapfase",
+      },
+      health: {
+        title: "Status van de engine",
+        provider: "Provider",
+        embeddings: "Embeddings",
+        runtime: "Embedding-runtime",
+        healthy: "Gereed",
+        unavailable: "Niet beschikbaar",
+        notChecked: "Niet gecontroleerd",
+        notCheckedDescription: "De gereedheid van embeddings is nog niet gecontroleerd.",
+        checking: "Controleren…",
+        test: "Testen",
+        testing: "Bezig met testen…",
+      },
+      shortcuts: {
+        title: "Geheugen verkennen",
+        memories: "Herinneringen doorzoeken",
+        diary: "Het droomdagboek lezen",
+        settings: "Geheugen configureren",
+      },
+    },
+    memories: {
+      searchLabel: "Herinneringen doorzoeken",
+      searchPlaceholder: "Doorzoek de herinneringen van deze agent",
+      searchButton: "Zoeken",
+      idle: "Zoek naar een persoon, project, beslissing of iets anders dat deze agent zich herinnert.",
+      searching: "Herinneringen doorzoeken…",
+      results: "{count} resultaten",
+      empty: "Geen herinneringen gevonden voor ‘{query}’.",
+      error: "Zoeken in het geheugen mislukt: {message}",
+      retry: "Opnieuw proberen",
+      gatewayUpdateRequired:
+        "Werk de Gateway bij om herinneringen te doorzoeken vanuit de Control UI.",
+      hybridSearch: "hybride zoekopdracht",
+      keywordSearch: "zoeken op trefwoord",
+      lineRange: "regels {start}–{end}",
+      score: "score {score}",
+      sourceMemory: "geheugen",
+      sourceSessions: "sessies",
+      fileLoading: "Het volledige geheugenbestand wordt geladen…",
+      fileError: "Dit geheugenbestand kon niet worden geladen: {message}",
+      fileUnsupported: "Dit geheugenbestand kan niet als tekst worden weergegeven.",
     },
     engine: {
       title: "Engine",
       description:
         "Precies één geheugenplug-in bezit de geheugenslot. Een engine selecteren schakelt deze in en de andere uit.",
       rowTitle: "Geheugenengine",
+      openClawMemory: "OpenClaw-geheugen",
       off: "Uit",
+      unavailable: "Niet beschikbaar",
       autoHint:
         "Er is geen engine vastgezet in de configuratie, dus de slot valt terug op de standaardeigenaar.",
       explicitHint: "Deze engine is vastgezet in de config onder plugins.slots.memory.",
@@ -2252,6 +2514,8 @@ export const nl: TranslationMap = {
       memoryWiki: {
         title: "Geheugen-wiki",
       },
+      toggleAriaLabel: "{plugin} in- of uitschakelen",
+      changeFailed: "{plugin} kon niet worden bijgewerkt",
       stateUnknown: "Onbekend",
       manage: "Add-ons in- of uitschakelen",
       manageLink: "Plug-ins openen",
@@ -2531,6 +2795,11 @@ export const nl: TranslationMap = {
       description:
         "Houd een begrensde toolmap zichtbaar en stel de rest uit achter zoeken, zodat grote MCP- en plugincatalogi de prompt niet langer overspoelen.",
     },
+    loopDetection: {
+      title: "Detectie van tool-lussen",
+      description:
+        "Schakel controles op basis van de recente geschiedenis in die waarschuwen of herhaalde toolaanroepen blokkeren wanneer een agent geen voortgang meer boekt.",
+    },
     localModelLean: {
       title: "Slanke tools voor lokale modellen",
       description:
@@ -2739,12 +3008,20 @@ export const nl: TranslationMap = {
       next: "Volgende",
       apply: "Toepassen",
       applying: "Toepassen…",
+      evaluate: "Evalueren",
+      evaluating: "Evalueren…",
+      evaluated: "Geëvalueerd",
       revise: "Herzien",
       tweak: "Aanpassen",
       opening: "Openen…",
       reject: "Afwijzen",
       rejecting: "Afwijzen…",
       sending: "Versturen…",
+    },
+    notices: {
+      applied: "Toegepast",
+      rejected: "Afgewezen",
+      revisionRequested: "Herziening aangevraagd",
     },
     revision: {
       title: "Voorstel {verb}",
@@ -2771,6 +3048,35 @@ export const nl: TranslationMap = {
       loading: "Voorstel laden…",
       supportFilesTitle: "Ondersteuningsbestanden",
       clickToPreview: "· klik voor voorbeeld",
+    },
+    evaluation: {
+      title: "Evaluatie",
+      version: "Voorstel {version}",
+      completedAt: "Voltooid om {time}",
+      status: {
+        completed: "Voltooid",
+        skipped: "Overgeslagen",
+        error: "Fout",
+      },
+      decision: {
+        pass: "Goedgekeurd",
+        revise: "Herzien",
+        block: "Geblokkeerd",
+      },
+      severity: {
+        info: "Info",
+        warn: "Waarschuwing",
+        critical: "Kritiek",
+      },
+      evaluatorVersion: "Evaluator {version}",
+      mode: "Modus {mode}",
+      findings: "Bevindingen",
+      metrics: "Metrieken",
+      fileLine: "{file}:{line}",
+      errors: {
+        revisionHashUnavailable: "De huidige revisie van het voorstel kon niet worden vastgesteld.",
+        revisionChanged: "De revisie van het voorstel is tijdens de evaluatie gewijzigd.",
+      },
     },
     empty: {
       searchTitle: "Geen overeenkomende voorstellen",
@@ -2835,6 +3141,8 @@ export const nl: TranslationMap = {
       comeWithIt: "worden meegeleverd.",
       useIt: "Gebruiken",
       addToSkills: "Toevoegen aan je skills",
+      evaluate: "Evalueren",
+      runChecks: "Voorstelcontroles uitvoeren",
       tweakIt: "Aanpassen",
       askAgent: "Vraag de agent iets te wijzigen",
       skipping: "Overslaan…",
@@ -3493,18 +3801,46 @@ export const nl: TranslationMap = {
       reload: "Opnieuw laden",
       reloading: "Opnieuw laden…",
     },
+    actions: {
+      dedupeRemovedOneAndKept: "{removed} dubbele droomvermelding verwijderd en {kept} behouden.",
+      dedupeRemovedManyAndKept:
+        "{removed} dubbele droomvermeldingen verwijderd en {kept} behouden.",
+      dedupeRemovedOne: "{removed} dubbele droomvermelding verwijderd.",
+      dedupeRemovedMany: "{removed} dubbele droomvermeldingen verwijderd.",
+      repairArchivedThreadCorpus: "gearchiveerd corpus van threads",
+      repairArchivedIngestionState: "gearchiveerde opnamestatus",
+      repairArchivedDreamDiary: "gearchiveerd droomdagboek",
+      repairNoChanges: "Herstel van de droomcache voltooid zonder wijzigingen.",
+      repairCompleteWithArchive:
+        "Herstel van de droomcache voltooid: {actions}. Archief: {archiveDir}",
+      repairComplete: "Herstel van de droomcache voltooid: {actions}.",
+      backfillComplete: "{count} droomdagboekvermeldingen aangevuld.",
+      resetDiaryComplete: "{count} aangevulde droomdagboekvermeldingen verwijderd.",
+      clearReplayedComplete: "{count} opnieuw afgespeelde kortetermijnvermeldingen gewist.",
+      complete: "Droomdagboekactie voltooid.",
+      confirmRepair:
+        "Droomcache herstellen? Hiermee worden afgeleide droomcachebestanden gearchiveerd en opnieuw opgebouwd op basis van schone invoer. Je droomdagboek blijft ongewijzigd.",
+      confirmDedupe:
+        "Dubbele vermeldingen uit het droomdagboek verwijderen? Hiermee wordt DREAMS.md herschreven en worden alleen exact identieke dagboekvermeldingen verwijderd.",
+      archivePathCopied: "Archiefpad gekopieerd.",
+      archivePathCopyFailed: "Kan het archiefpad niet kopiëren.",
+      updateFailed: "Kan de droominstellingen niet bijwerken.",
+      unsupportedPlugin:
+        'De geselecteerde geheugenplug-in "{pluginId}" ondersteunt geen droominstellingen.',
+      configHashMissing: "Configuratiehash ontbreekt; vernieuw en probeer het opnieuw.",
+    },
     wiki: {
       previewFallbackTitle: "Wiki-pagina",
       close: "Sluiten",
       loadingPage: "Wiki-pagina laden…",
       dreamsTab: "Dromen",
       insightsTab: "Geïmporteerde inzichten",
-      palaceTab: "Memory Palace",
+      wikiTab: "Geheugenwiki",
       dreamsExplainer:
         "Dit is het ruwe droomdagboek dat het systeem schrijft tijdens het opnieuw afspelen en consolideren van geheugen; gebruik het om te inspecteren wat het geheugensysteem opmerkt en waar het nog rommelig of dun oogt.",
       insightsExplainer:
         "Dit zijn geïmporteerde inzichten die zijn geclusterd uit externe geschiedenis; gebruik ze om te bekijken wat imports naar boven brachten voordat iets ervan doorgroeit naar duurzaam geheugen.",
-      palaceExplainer:
+      wikiExplainer:
         "Dit is het gecompileerde geheugenwiki-oppervlak dat het systeem kan doorzoeken en waarover het kan redeneren; gebruik het om echte geheugenpagina's, beweringen, openstaande vragen en tegenstrijdigheden te inspecteren in plaats van ruwe geïmporteerde bronchats.",
       copyArchivePath: "Archiefpad kopiëren",
       loadingInsights: "Geïmporteerde inzichten laden…",
@@ -3520,9 +3856,9 @@ export const nl: TranslationMap = {
       riskReasons: "Risicoredenen:",
       labels: "Labels:",
       openSourcePage: "Bronpagina openen",
-      loadingPalace: "Geheugenpaleis laden…",
-      emptyPalace: "Geheugenpaleis is nog niet gevuld",
-      emptyPalaceHint:
+      loadingWiki: "Geheugenwiki laden…",
+      emptyWiki: "De geheugenwiki is nog niet gevuld",
+      emptyWikiHint:
         "Op dit moment bevat de wiki vooral ruwe bronimports en operationele rapporten. Dit tabblad wordt nuttig zodra syntheses, entiteiten of concepten worden geschreven.",
       claims: "Beweringen",
       openQuestions: "Openstaande vragen",
@@ -3539,13 +3875,68 @@ export const nl: TranslationMap = {
       enableSuffix: ", herlaad daarna dit tabblad.",
       openConfig: "Config openen",
       howToEnable: "Zo schakel je in",
+      pageTypes: {
+        entity: "entiteit",
+        concept: "concept",
+        source: "bron",
+        synthesis: "synthese",
+        report: "rapport",
+      },
+      pageGroups: {
+        sources: "Bronnen",
+        syntheses: "Syntheses",
+        reports: "Rapporten",
+        entities: "Entiteiten",
+        concepts: "Concepten",
+      },
+      counts: {
+        pageOne: "{count} pagina",
+        pages: "{count} pagina's",
+        claimRowOne: "{count} claimregel",
+        claimRows: "{count} claimregels",
+        openQuestionOne: "{count} open vraag",
+        openQuestions: "{count} open vragen",
+        contradictionOne: "{count} tegenstrijdigheid",
+        contradictions: "{count} tegenstrijdigheden",
+        chats: "{count} chats",
+        sensitive: "{count} gevoelig",
+        signals: "{count} signalen",
+        messages: "{count} berichten",
+        userMessages: "{count} gebruiker",
+        assistantMessages: "{count} assistent",
+      },
+      pageGroupSummary: "{label} · {count}",
+      noPagesYet: "Nog geen pagina's",
+      sectionPageSummary: "{label}: {count}",
+      questionCountOnPages: "{questionCount} op {pageCount}",
+      risk: {
+        needsReview: "moet worden beoordeeld",
+        low: "laag risico",
+        medium: "gemiddeld risico",
+        high: "hoog risico",
+        unknown: "onbekend risico",
+      },
+      pageNotFound: "Geen wikipagina gevonden voor {lookup}.",
+      previewTruncated: "Het eerste gedeelte van deze pagina wordt weergegeven.",
+      previewTruncatedWithTotal:
+        "Het eerste gedeelte van deze pagina wordt weergegeven ({count} regels in totaal).",
+      importedClusterSummary: "Geïmporteerde chats gegroepeerd rond {label}.",
+      withheldDigestOne: "{count} samenvatting is in afwachting van beoordeling achtergehouden.",
+      withheldDigests: "{count} samenvattingen zijn in afwachting van beoordeling achtergehouden.",
+      details: "Details",
+      hideDetails: "Details verbergen",
+      vault: "Kluis",
+      fullVaultBreakdown: "Volledig overzicht van de kluis: {breakdown}.",
+      selectedSection: "Geselecteerde sectie: {summary}.",
+      latestUpdate: "Laatste update {date}.",
+      noContent: "Geen wiki-inhoud beschikbaar.",
     },
     phrases: {
       consolidatingMemories: "herinneringen consolideren…",
       tidyingKnowledgeGraph: "de kennisgrafiek opruimen…",
       replayingConversations: "gesprekken van vandaag opnieuw afspelen…",
       weavingShortTerm: "kortetermijn in langetermijn verweven…",
-      defragmentingMindPalace: "het mind palace defragmenteren…",
+      defragmentingMemoryLane: "herinneringen defragmenteren…",
       filingLooseThoughts: "losse gedachten opbergen…",
       connectingDots: "verre punten verbinden…",
       compostingContext: "oude contextvensters composteren…",
@@ -3570,6 +3961,7 @@ export const nl: TranslationMap = {
     emptySubtitle: "Sign in to a provider or add an API key, then refresh.",
     status: {
       ok: "Verbonden",
+      ready: "Gereed",
       expiring: "Expiring",
       expired: "Verlopen",
       missing: "Not signed in",
@@ -3623,6 +4015,16 @@ export const nl: TranslationMap = {
         unknown: "Verbinding mislukt",
         no_model: "Geen model beschikbaar",
       },
+    },
+    readiness: {
+      title: "AI-configuratie",
+      heading: "Verbind je AI",
+      signedInNoModels:
+        "Je bent ingelogd, maar dit account biedt geen bruikbare modellen. Kies een andere provider of een ander account om door te gaan.",
+      notConfigured: "Kies een provider en verifieer het model dat OpenClaw zal gebruiken.",
+      noModels: "Geen modellen beschikbaar",
+      modelRequired: "Model vereist",
+      chooseProvider: "Kies een andere provider",
     },
     logout: {
       action: "Uitloggen",
@@ -4082,6 +4484,111 @@ export const nl: TranslationMap = {
       multipleMatches: "Meer dan één sessie komt overeen met {shortId}.",
       additionalMatches: "Er blijven zoekresultaten over. Gebruik een langere id-prefix.",
     },
+    commandResults: {
+      startingNewThread: "Nieuwe thread starten...",
+      resettingThread: "Thread resetten...",
+      stoppingCurrentRun: "Huidige uitvoering stoppen...",
+      chatHistoryCleared: "Chatgeschiedenis gewist.",
+      exportingThread: "Thread exporteren...",
+      unknownCommand: "Onbekende opdracht: `{command}`",
+      options: "Opties: {options}.",
+      sessionUnavailable: "Sessiemogelijkheid is niet beschikbaar",
+      help: {
+        availableCommands: "Beschikbare opdrachten",
+        agentCommand: "agent",
+        openMenu: "Typ `/` om het opdrachtmenu te openen.",
+      },
+      compaction: {
+        failed: "Compacteren mislukt.",
+        failedWithReason: "Compacteren mislukt: {reason}",
+        tokenSummary: " ({before} -> {after} tokens)",
+        succeeded: "Context is gecomprimeerd",
+        skipped: "Compacteren overgeslagen.",
+        skippedWithReason: "Compacteren overgeslagen: {reason}",
+      },
+      model: {
+        current: "**Huidig model:** {model}",
+        available: "**Beschikbaar:** {models}",
+        more: "+{count} meer",
+        getFailed: "Modelinformatie ophalen mislukt: {error}",
+        set: "Model ingesteld op {model}.",
+        setFailed: "Model instellen mislukt: {error}",
+      },
+      thinking: {
+        current: "Huidig denkniveau: {level}.",
+        getFailed: "Denkniveau ophalen mislukt: {error}",
+        reset: "Denkniveau teruggezet naar de standaardwaarde.",
+        resetFailed: "Denkniveau terugzetten mislukt: {error}",
+        unrecognized: 'Onbekend denkniveau "{level}". Geldige niveaus: {options}.',
+        unsupported:
+          'Niet-ondersteund denkniveau "{level}" voor dit model. Geldige niveaus: {options}.',
+        set: "Denkniveau ingesteld op {level}.",
+        setFailed: "Denkniveau instellen mislukt: {error}",
+      },
+      verbose: {
+        current: "Huidig uitgebreidheidsniveau: {level}.",
+        getFailed: "Kan het uitgebreidheidsniveau niet ophalen: {error}",
+        unrecognized:
+          'Uitgebreidheidsniveau "{level}" niet herkend. Geldige niveaus: off, on, full.',
+        set: "Uitgebreide modus ingesteld op {level}.",
+        setFailed: "Kan de uitgebreide modus niet instellen: {error}",
+      },
+      fast: {
+        autoValue: "auto ({seconds} sec)",
+        on: "aan",
+        off: "uit",
+        sourceSession: " (sessie)",
+        sourceAgent: " (standaard: agent)",
+        sourceModel: " (standaard: model)",
+        sourceDefault: " (standaard)",
+        current: "Huidige snelle modus: {value}",
+        options: "on, off, auto ({seconds} sec), default, status",
+        getFailed: "Kan de snelle modus niet ophalen: {error}",
+        reset: "Snelle modus teruggezet naar de standaardinstelling.",
+        resetFailed: "Kan de snelle modus niet terugzetten: {error}",
+        unrecognized:
+          'Snelle modus "{mode}" niet herkend. Geldige niveaus: on, off, auto, default, status.',
+        setAuto: "Snelle modus ingesteld op auto.",
+        enabled: "Snelle modus ingeschakeld.",
+        disabled: "Snelle modus uitgeschakeld.",
+        setFailed: "Kan de snelle modus niet instellen: {error}",
+      },
+      usage: {
+        noActiveThread: "Geen actieve thread.",
+        notAvailable: "n.v.t.",
+        title: "Threadgebruik",
+        inputTokens: "Invoer: {count} tokens",
+        outputTokens: "Uitvoer: {count} tokens",
+        totalTokens: "Totaal: {count} tokens",
+        context: "Context: {percent} van {total}",
+        model: "Model: {model}",
+        failed: "Kan gebruik niet ophalen: {error}",
+      },
+      agents: {
+        none: "Geen agents geconfigureerd.",
+        title: "**Agents** ({count})",
+        default: "standaard",
+        runtime: " · runtime {runtime}",
+        failed: "Kan agents niet weergeven: {error}",
+      },
+      steer: {
+        timeout: "De actieve uitvoering eindigde voordat het bijstuurbericht werd geaccepteerd.",
+        failed:
+          "Bijsturen is mislukt voordat het bericht de uitvoering bereikte; probeer het opnieuw.",
+        usage: "Gebruik: `/steer <message>`",
+        noActiveRun:
+          "Geen actieve uitvoering. Gebruik in plaats daarvan het chatinvoerveld of `/redirect`.",
+        succeeded: "Bijgestuurd.",
+        requestFailed: "Bijsturen mislukt: {error}",
+      },
+      redirect: {
+        timeout: "De actieve uitvoering eindigde voordat het omleidingsbericht werd geaccepteerd.",
+        failed: "Omleiden is mislukt voordat de run werd bereikt; probeer het opnieuw.",
+        usage: "Gebruik: `/redirect <message>`",
+        succeeded: "Omgeleid.",
+        requestFailed: "Omleiden mislukt: {error}",
+      },
+    },
     sessionSharing: {
       menu: "Thread delen",
       current: "Zichtbaarheid van thread: {visibility}",
@@ -4236,9 +4743,16 @@ export const nl: TranslationMap = {
     dismissUpdateBanner: "Updatebanner sluiten",
     switchedSession: "Overgeschakeld naar {session}",
     actions: {
+      copyAsMarkdown: "Kopiëren als markdown",
       dismissError: "Fout sluiten",
       exitFocusMode: "Focusmodus afsluiten",
       scrollToLatest: "Naar nieuwste scrollen",
+    },
+    markdown: {
+      truncated: "… ingekort ({total} tekens, eerste {shown} weergegeven).",
+    },
+    codeBlock: {
+      jsonLines: "JSON · {count} regels",
     },
     workspaceConflict: {
       titleOne: "1 conflict in cloudwerkruimte",
@@ -4334,6 +4848,7 @@ export const nl: TranslationMap = {
       threads: "Threads",
       groups: "Groepen",
       coding: "Programmeren",
+      noSessionsForAgent: "Geen sessies gevonden voor deze agent",
       catalogViewOptions: "Weergaveopties",
       catalogGroupByProject: "Project",
       catalogGroupByPerson: "Persoon",
@@ -4345,6 +4860,8 @@ export const nl: TranslationMap = {
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "Acties voor {count} sessies",
       toolActivity: "{tool} wordt gebruikt",
+      catalogDiscoveryHelp:
+        "{error}. Configureer systeemeigen threaddetectie via Instellingen > Automatisering > Plugins.",
     },
     welcome: {
       hintBeforeShortcut: "Type a message below ·",
@@ -4378,12 +4895,23 @@ export const nl: TranslationMap = {
       steered: "Gestuurd",
       steerQueuedMessage: "Bericht in wachtrij sturen",
       removeQueuedMessage: "Bericht uit wachtrij verwijderen",
+      states: {
+        steering: "Bijsturen",
+        applyingSettings: "Chatinstellingen toepassen",
+        waitingForRun: "Wachten op huidige run",
+        runningCommand: "Opdracht uitvoeren",
+        waitingForReconnect: "Wachten op opnieuw verbinden",
+        needsReview: "Moet worden beoordeeld",
+      },
+      imageCount: "Afbeelding ({count})",
     },
     goals: {
       edit: "Doel bewerken",
       pause: "Doel pauzeren",
       resume: "Doel hervatten",
       clear: "Doel wissen",
+      showDetails: "Doeldetails weergeven",
+      hideDetails: "Doeldetails verbergen",
     },
     questions: {
       title: "Codex heeft invoer nodig",
@@ -4409,6 +4937,7 @@ export const nl: TranslationMap = {
       unavailable: "Niet beschikbaar",
       expired: "Verlopen",
       cancelled: "Geannuleerd",
+      disconnected: "Niet verbonden. Probeer het opnieuw nadat de verbinding is hersteld.",
     },
     imageLightbox: {
       label: "Afbeeldingsvoorbeeld: {title}",
@@ -4444,14 +4973,36 @@ export const nl: TranslationMap = {
       showMore: "Meer tonen",
       unknownDate: "Onbekende datum",
       voiceNote: "Spraakbericht",
+      duplicatesCollapsed: "{count} opeenvolgende identieke berichten samengevouwen",
+      contextFor: "Berichtcontext voor {timestamp}",
+    },
+    mediaPlayer: {
+      play: "Afspelen",
+      pause: "Pauzeren",
+      seek: "Door media bladeren",
+      download: "{filename} downloaden",
+      preparing: "Afspelen voorbereiden…",
+      videoUnavailable: "Kan dit formaat niet afspelen — download het in plaats daarvan.",
     },
     modelControls: {
+      current: "Huidig",
       default: "Standaard",
       reasoning: "Redenering",
       speed: "Snelheid",
       sessionOverride: "Thread-overschrijving",
+      useDefault: "Standaard gebruiken",
       usingDefault: "Standaard uit Instellingen wordt gebruikt",
       resetToDefault: "Terugzetten naar standaard ({model})",
+      defaultWithModel: "Standaard ({model})",
+      defaultWithLevel: "Standaard ({level})",
+      fastHelp:
+        "Snelle antwoorden zijn eerder klaar en kunnen een groter deel van je gebruikslimieten benutten.",
+      speedUnsupported: "Snelheidsregeling wordt niet ondersteund voor dit model.",
+      contextWindow: "{count} context",
+      providerModels: "Modellen van {provider}",
+      resetReasoning: "Herstellen naar standaard ({level})",
+      useDefaultReasoning: "Standaardredenering gebruiken ({level})",
+      fastResponsesAria: "Snelle antwoorden: {state}",
     },
     rail: {
       title: "Sessiehulp",
@@ -4521,6 +5072,22 @@ export const nl: TranslationMap = {
       renderedMarkdownHint: "Opgeschoonde rich-text voorbeeldweergave om snel te lezen.",
       noPreviewableMarkdown: "Geen markdown-inhoud om te bekijken.",
       noContent: "Geen inhoud beschikbaar",
+      fullContentOversized:
+        "De volledige inhoud is niet beschikbaar omdat het opgeslagen transcriptitem te groot is om veilig te retourneren.",
+      fullContentNotVisible:
+        "De volledige inhoud is niet beschikbaar omdat dit transcriptitem geen zichtbare WebChat-weergave heeft.",
+      fullContentUnavailable:
+        "De volledige inhoud is niet langer beschikbaar voor dit transcriptitem.",
+      copyContents: "Bestandsinhoud kopiëren",
+      fileChanged: "Bestand is op schijf gewijzigd sinds het werd geladen.",
+      renderPreview: "Weergavevoorbeeld",
+      imagePreview: "Afbeeldingsvoorbeeld",
+      file: "Bestand",
+      markdownPreview: "Markdown-voorbeeld",
+      toolDetails: "Tooldetails",
+      reloadFailed: "Kan het nieuwste bestand niet opnieuw laden.",
+      overwriteLoadFailed: "Kan het nieuwste bestand niet laden vóór het overschrijven.",
+      fullContentLoadFailed: "Kan de volledige inhoud niet laden: {error}",
     },
     sidebarColumns: {
       chat: "Chat",
@@ -4539,6 +5106,7 @@ export const nl: TranslationMap = {
       unpin: "Losmaken",
       loading: "Chat laden",
       noMatches: "Geen overeenkomende berichten",
+      pinnedCount: "{count} vastgemaakt",
     },
     pairingQrExpired: {
       title: "Koppelings-QR verlopen",
@@ -4561,6 +5129,8 @@ export const nl: TranslationMap = {
       runInterrupted: "Onderbroken",
       runStatus: "Uitvoeringsstatus: {status}",
       compactingContext: "Context wordt gecomprimeerd...",
+      compacting: "Bezig met comprimeren",
+      compact: "Comprimeren",
       contextCompacted: "Context gecomprimeerd",
       fallbackActive: "Fallback actief: {model}",
       fallbackCleared: "Fallback gewist: {model}",
@@ -4577,6 +5147,50 @@ export const nl: TranslationMap = {
       attachPhoto: "Foto",
       attachFile: "Attach file",
       attachFileOption: "Bestand",
+      menu: {
+        back: "Terug",
+        skills: "Skills",
+        connectors: "Connectors",
+        webSearch: "Zoeken op internet",
+        managePlugins: "Plug-ins beheren",
+        manageSkills: "Skills beheren",
+        browseConnectors: "Door connectors bladeren",
+        addMcpServer: "MCP-server toevoegen…",
+        addMcpServerTitle: "MCP-server toevoegen",
+        addMcpServerDescription: "Configureer de server en kies waar deze wordt ingeschakeld.",
+        scopeLabel: "Beschikbaarheid",
+        scopeSession: "Deze sessie",
+        scopeEverywhere: "Overal",
+        scopeSessionHint:
+          "De server wordt globaal uitgeschakeld opgeslagen en alleen voor deze sessie ingeschakeld.",
+        scopeEverywhereHint: "De server wordt opgeslagen en voor elke sessie ingeschakeld.",
+        toolAccess: {
+          label: "Toegang tot tools",
+          loading: "Tools laden…",
+          loadFailed: "Kan tools niet laden.",
+          noTools: "Geen tools beschikbaar voor deze connector.",
+          summary: "{enabled} van {total} tools aan",
+          summaryOne: "{enabled} van {total} tool aan",
+        },
+        enabledCount: "{count} aan",
+        loadingSkills: "Skills laden…",
+        skillsLoadFailed: "Kan Skills niet laden.",
+        noSkills: "Geen Skills beschikbaar.",
+        noConnectors: "Geen MCP-servers geconfigureerd.",
+        depsMissing: "afhankelijkheden ontbreken",
+        skillBlocked: "niet beschikbaar voor deze agent",
+        sessionTag: "sessie",
+        offlineBlocked:
+          "Maak verbinding met de Gateway om de mogelijkheden van de sessie te wijzigen.",
+        readOnlyBlocked: "Schrijftoegang is vereist om de mogelijkheden van de sessie te wijzigen.",
+        adminBlocked: "Beheerderstoegang is vereist om connectors te beheren.",
+        savingBlocked: "Wacht tot de huidige wijziging van de sessiemogelijkheden is voltooid.",
+      },
+      overrides: {
+        count: "{count} sessie-overschrijvingen",
+        countOne: "{count} sessie-overschrijving",
+        clear: "Sessie-overschrijvingen wissen",
+      },
       contextUsage: {
         title: "Details over contextgebruik",
         open: "Details over contextgebruik openen",
@@ -4649,6 +5263,17 @@ export const nl: TranslationMap = {
       turnCameraOff: "Camera uitschakelen",
       turnCameraOn: "Camera inschakelen",
       voiceTranscript: "Spraaktranscript",
+    },
+    attachments: {
+      attachedFile: "Bijgevoegd bestand",
+      outsideAllowedFolders: "Buiten toegestane mappen",
+      unavailable: "Niet beschikbaar",
+      checking: "Controleren...",
+    },
+    voice: {
+      asking: "OpenClaw vragen...",
+      connecting: "Spraakinvoer verbinden...",
+      listening: "Luisteren...",
     },
     selectors: {
       session: "Chat session",

@@ -8,6 +8,7 @@ export const uk: TranslationMap = {
     ok: "OK",
     yes: "Так",
     no: "Ні",
+    assistant: "Асистент",
     active: "Активно",
     loading: "Завантаження…",
     refreshing: "Оновлення…",
@@ -35,8 +36,11 @@ export const uk: TranslationMap = {
     create: "Створити",
     copy: "Копіювати",
     copied: "Скопійовано!",
+    copyFailed: "Не вдалося скопіювати",
     copyCode: "Копіювати код",
+    resizeSplitView: "Змінити розмір розділеного подання",
     delete: "Видалити",
+    remove: "Видалити",
     dismiss: "Закрити",
     unselect: "Зняти вибір",
     enabled: "Увімкнено",
@@ -45,6 +49,9 @@ export const uk: TranslationMap = {
     none: "немає",
     na: "н/д",
     never: "never",
+    justNow: "щойно",
+    now: "зараз",
+    unknown: "Невідомо",
     configured: "Налаштовано",
     running: "Запущено",
     linked: "Пов’язано",
@@ -70,6 +77,7 @@ export const uk: TranslationMap = {
     settingsSections: "Розділи налаштувань",
     version: "Версія",
     docs: "Документація",
+    learnMore: "Докладніше",
     theme: "Тема",
     colorMode: "Колірний режим",
     colorModeOption: "Режим кольору: {mode}",
@@ -113,10 +121,24 @@ export const uk: TranslationMap = {
     filteredFileCount: "{count}/{total} файлів",
     noMatches: "Немає відповідних файлів.",
     navigate: "навігація",
+    kind: {
+      text: "Текст",
+      shell: "Оболонка",
+      file: "Файл",
+    },
   },
   mcpApp: {
     title: "Застосунок MCP",
     unavailable: "Застосунок MCP недоступний: {error}",
+    errors: {
+      gatewayUnavailable: "Gateway MCP App недоступний",
+      mountUnavailable: "Точка монтування MCP App недоступна",
+      sandboxTimedOut: "Час очікування пісочниці MCP App вичерпано",
+      sandboxUnavailable: "Пісочниця MCP App недоступна",
+      initializationTimedOut: "Час очікування ініціалізації MCP App вичерпано",
+      requestFailed: "Не вдалося виконати запит",
+      invalidSandboxUrl: "URL-адреса пісочниці MCP App недійсна",
+    },
   },
   githubPreview: {
     loading: "Завантаження деталей GitHub…",
@@ -328,6 +350,19 @@ export const uk: TranslationMap = {
         nip05: "you@example.com",
         lightningAddress: "you@getalby.com",
       },
+      notices: {
+        timeout:
+          "Час очікування запиту вичерпано через 30 секунд; сервер усе ще міг застосувати зміну — перевірте профіль, перш ніж повторити спробу.",
+        operationFailed: "{prefix}: {error}",
+        updateFailed: "Не вдалося оновити профіль",
+        updateFailedStatus: "Не вдалося оновити профіль ({status})",
+        publishFailed: "Не вдалося опублікувати профіль на жодному ретрансляторі.",
+        published: "Профіль опубліковано на ретрансляторах.",
+        importFailed: "Не вдалося імпортувати профіль",
+        importFailedStatus: "Не вдалося імпортувати профіль ({status})",
+        importedFromRelays: "Профіль імпортовано з ретрансляторів. Перевірте й опублікуйте.",
+        imported: "Профіль імпортовано. Перевірте й опублікуйте.",
+      },
     },
   },
   lazyView: {
@@ -339,6 +374,56 @@ export const uk: TranslationMap = {
       "OpenClaw оновлено у фоновому режимі. Перезавантажте, щоб отримати найновішу панель.",
     reloading: "Перезавантаження…",
     retry: "Повторити",
+    stylesFailed: "Не вдалося завантажити стилі, тому сторінка може відображатися некоректно.",
+  },
+  updates: {
+    refreshRequired: "Сервер оновлено — оновіть сторінку, щоб отримати всі можливості",
+    coalescedRestart:
+      "Оновлення встановлено. Перезапуск Gateway уже виконується; статус оновиться після повторного підключення.",
+    error: "Помилка оновлення: {error}",
+    status: "Оновлення {status}: {reason}. {guidance}",
+    verificationFailed:
+      "Оновлення встановлено, але запущена версія не змінилася — можливо, перезапуск було заблоковано.",
+    verificationFailedWithVersions:
+      "Оновлення встановлено, але запущена версія не змінилася — можливо, перезапуск було заблоковано. Очікувалася v{expectedVersion}, запущено v{actualVersion}.",
+    handoffTimeout:
+      "Передавання керування для оновлення розпочато, але після повторного підключення не надійшло повідомлення про завершення. Виконайте `openclaw update status`, щоб отримати остаточний результат.",
+    outcomeUnknown:
+      "Запит на оновлення, можливо, було прийнято, але після повторного підключення Gateway не повідомив остаточний результат. Перед повторною спробою виконайте `openclaw update status`.",
+    failureReasons: {
+      dirty: "Зафіксуйте зміни комітом або сховайте їх у stash, а потім повторіть спробу.",
+      noUpstream: "Налаштуйте upstream-гілку, а потім повторіть спробу.",
+      notGitInstall:
+        "Це не робоча копія git. Виконайте `openclaw update` у CLI для глобального перевстановлення.",
+      notOpenclawRoot:
+        "Запустіть оновлення з робочої копії OpenClaw або скористайтеся шляхом глобального перевстановлення через CLI.",
+      depsInstallFailed:
+        "Не вдалося встановити залежності. Усуньте помилку встановлення та повторіть спробу.",
+      buildFailed: "Помилка збірки. Виправте помилку збірки та повторіть спробу.",
+      buildDirty:
+        "Збірка вибраної ревізії змінила файли робочої копії. Повторіть спробу з ревізією, яка містить згенеровані артефакти.",
+      uiBuildFailed:
+        "Не вдалося повторно зібрати Control UI. Виправте помилку збірки UI та повторіть спробу.",
+      globalInstallFailed:
+        "Не вдалося перевірити глобальне встановлення пакета на диску. Повторіть спробу або перевстановіть його за допомогою CLI.",
+      restartDisabled:
+        "Оновлення не застосовано, оскільки перезапуски Gateway вимкнено. Увімкніть перезапуски в конфігурації, а потім повторіть спробу.",
+      restartUnavailable:
+        "Це глобальне встановлення неможливо безпечно замінити, поки перезапуски вимкнено й супервізор відсутній.",
+      restartUnhealthy:
+        "Процес заміни так і не перейшов у справний стан. Попередній процес залишився запущеним, щоб ви могли відновити роботу.",
+      managedServiceHandoffAlreadyRunning:
+        "Інше кероване оновлення вже виконується. Дочекайтеся його завершення, а потім оновіть стан оновлення.",
+      doctorFailed:
+        "Не вдалося виконати відновлення за допомогою Doctor. Запустіть `openclaw doctor --non-interactive` і повторіть спробу.",
+      default:
+        "Перегляньте журнали Gateway, щоб дізнатися точну причину помилки, і повторіть спробу після її усунення.",
+    },
+    postRestart: {
+      restartUnhealthy:
+        "Процес заміни так і не перейшов у справний стан, а попередній процес залишився запущеним.",
+      default: "Перевірте журнали Gateway, щоб дізнатися причину помилки процесу заміни.",
+    },
   },
   nodes: {
     pairing: {
@@ -826,6 +911,10 @@ export const uk: TranslationMap = {
   },
   agents: {
     noAgents: "No agents",
+    defaults: {
+      title: "Типові налаштування агента",
+      description: "Типові налаштування, які успадковує кожен агент, якщо їх не перевизначено.",
+    },
     copyId: "Copy ID",
     copyIdTitle: "Copy agent ID to clipboard",
     default: "Default",
@@ -1031,6 +1120,9 @@ export const uk: TranslationMap = {
     noEvents: "No events yet.",
   },
   configForm: {
+    redactedPlaceholder: "[приховано — натисніть «Показати», щоб переглянути]",
+    sectionHelp: "Довідка для розділу {section}",
+    readGuide: "Прочитати посібник",
     showAdvanced: "Показати розширені",
     advancedHidden: "{count} додаткове налаштування приховано",
     advancedHiddenPlural: "{count} додаткових налаштувань приховано",
@@ -1226,6 +1318,8 @@ export const uk: TranslationMap = {
       lobsterdexOpen: "Відкрити Lobsterdex",
     },
     security: {
+      intro:
+        "Перегляньте доступ до Gateway, політику інструментів, автентифікацію пристроїв і схвалення.",
       title: "Безпека",
       gatewayAuth: "Автентифікація Gateway",
       execPolicy: "Політика виконання",
@@ -1394,6 +1488,7 @@ export const uk: TranslationMap = {
         "Сповіщення для OpenClaw вимкнено в macOS. Дозвольте їх у Системних параметрах > Сповіщення.",
     },
     appearance: {
+      intro: "Налаштування теми, чату та бічної панелі для цього клієнта Control UI.",
       theme: "Тема",
       chooseTheme: "Виберіть сімейство тем.",
       importedTheme: "Імпортована тема",
@@ -1466,11 +1561,11 @@ export const uk: TranslationMap = {
     open: "Відкрити",
     applying: "Застосування…",
     autoSaveSaving: "Збереження…",
+    autoSaveSaved: "Збережено",
     autoSaveFailed: "Не вдалося зберегти",
     autoSaveConflict: "Налаштування змінено в іншому місці",
     retry: "Повторити",
-    applyBannerText: "Збережено в openclaw.json — перезапустіть gateway для застосування.",
-    applyBannerAction: "Перезапустити й застосувати",
+    applyChanges: "Застосувати зміни",
     rawDiscard: "Відхилити",
     rawDraftBlocksApply:
       "Незбережені зміни в Raw-редакторі — збережіть або скасуйте їх перед перезапуском.",
@@ -1719,7 +1814,6 @@ export const uk: TranslationMap = {
     forward: "Вперед",
     chat: "Чат",
     settings: "Налаштування",
-    settingsGeneral: "Загальні",
     askOpenClaw: "Запитати OpenClaw",
     settingsGroupConnections: "Підключення",
     settingsGroupAgents: "Агенти й інструменти",
@@ -1775,6 +1869,11 @@ export const uk: TranslationMap = {
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
     unavailable: "The terminal is not available on this gateway.",
+    uploadTooLarge: "Файл перевищує обмеження термінала на завантаження в 16 MiB: {file}",
+    uploadUnsafeCmdPath:
+      "Не вдалося безпечно вставити в cmd.exe шлях до завантаженого файлу, що містить % або !",
+    uploadUnsupportedShell:
+      "Не вдалося безпечно вставити шлях до завантаженого файлу в непідтримувану оболонку: {shell}",
   },
   browser: {
     title: "Браузер",
@@ -1811,6 +1910,15 @@ export const uk: TranslationMap = {
     noChatTarget: "Спочатку відкрийте сеанс чату, щоб було куди надіслати анотацію.",
     inspectUnavailable: "Інспектування елементів вимкнено (browser.evaluateEnabled=false).",
     annotationSent: "Анотацію додано до редактора повідомлення чату.",
+    errors: {
+      requestFailed: "Не вдалося виконати запит браузера: {error}",
+      screenshotPathMissing: "Знімок екрана браузера не повернув шлях до медіафайлу.",
+      screenshotFetchTimedOut: "Час очікування отримання знімка екрана минув.",
+      screenshotFetchFailed: "Не вдалося отримати знімок екрана ({status}).",
+      screenshotReadFailed: "Не вдалося прочитати знімок екрана.",
+      screenshotDecodeFailed: "Не вдалося декодувати знімок екрана.",
+      canvasUnavailable: "Контекст Canvas 2D недоступний.",
+    },
     annotatePrompt: {
       introTitled:
         'Я анотував сторінку за адресою {url} (заголовок, повідомлений сторінкою: "{title}") — на прикріпленому знімку екрана видно мою розмітку.',
@@ -1857,6 +1965,7 @@ export const uk: TranslationMap = {
     automation: "Автоматизація",
     mcp: "MCP",
     memory: "Пам'ять",
+    talk: "Розмова",
     infrastructure: "Інфраструктура",
     labs: "Лабораторія",
     about: "Про застосунок",
@@ -1897,6 +2006,7 @@ export const uk: TranslationMap = {
     automation: "Команди, хуки, автоматизації та плагіни.",
     mcp: "MCP-сервери, автентифікація, інструменти та діагностика.",
     memory: "Рушій пам'яті, бекенд, пошук і сновидіння.",
+    talk: "Голос у реальному часі: постачальник, модель і голос диктора.",
     infrastructure: "Налаштування шлюзу, вебу, браузера та медіа.",
     labs: "Експериментальні можливості агента та інструментів.",
     about: "Ідентифікаційні дані збірок Control UI і підключеного Gateway.",
@@ -1915,6 +2025,16 @@ export const uk: TranslationMap = {
     heading: "Підключіть свій ШІ",
     intro:
       "OpenClaw повторно використовує вже наявний у вас доступ до ШІ — вхід через CLI, API-ключ або обліковий запис постачальника.",
+    required: {
+      title: "Постачальника ШІ не налаштовано",
+      body: "OpenClaw не вдалося знайти постачальника та модель, налаштовані для цього агента. Додайте їх, перш ніж починати розмову.",
+      action: "Налаштувати постачальника",
+    },
+    connectionFailure: {
+      title: "OpenClaw не вдалося використати налаштований ШІ",
+      body: "Для цього агента вибрано постачальника та модель, але підключитися не вдалося. Перевірте вхід до облікового запису постачальника або ключ API, доступ до моделі та стан служби, а потім повторіть спробу.",
+      action: "Перевірити налаштування постачальника",
+    },
     loading: "Перевіряємо доступні способи доступу до ШІ на цьому Gateway…",
     retry: "Повторити",
     checkAgain: "Перевірити ще раз",
@@ -1946,6 +2066,8 @@ export const uk: TranslationMap = {
     },
     unavailable: {
       title: "Виявлено, але не протестовано автоматично",
+      signIn: "Увійти через {provider}",
+      useApiKey: "Використати ключ API",
     },
     signIn: {
       title: "Увійдіть через постачальника",
@@ -1976,6 +2098,7 @@ export const uk: TranslationMap = {
       title: "Ваш ШІ готовий",
       detail: "{modelRef} · {latencyMs} мс",
       openChat: "Відкрити чат",
+      continueSetup: "Продовжити налаштування",
       configuredModel: "Налаштована модель",
     },
     failure: {
@@ -2165,6 +2288,11 @@ export const uk: TranslationMap = {
       channelDegraded: "{channel} у погіршеному стані — запитайте мене, що сталося",
       channelFallback: "Канал",
       dismiss: "Відхилити це оновлення",
+      channelSetupTitle: "Зв’язуйтеся з OpenClaw поза цією програмою",
+      channelSetupBody:
+        "Вебпрограма вже працює. Додайте канал, лише якщо хочете надсилати повідомлення OpenClaw з іншого сервісу.",
+      channelSetupAction: "Налаштувати канал",
+      channelSetupDismiss: "Продовжити користуватися вебпрограмою",
     },
   },
   mcpServers: {
@@ -2178,6 +2306,10 @@ export const uk: TranslationMap = {
     targetLabel: "URL або команда",
     nameInvalid: "Назви серверів можуть містити літери, цифри, крапки, дефіси або підкреслення.",
     targetInvalid: "Введіть URL для транспортів HTTP або дійсний командний рядок для stdio.",
+    sessionEnableFailed:
+      "Сервер було збережено як глобально вимкнений, але не вдалося ввімкнути його для цього сеансу: {error}",
+    sessionChanged: "Активний сеанс змінився до того, як його вдалося ввімкнути.",
+    sessionUnavailable: "Активний сеанс недоступний; оновіть сторінку та повторіть спробу.",
     nameTaken: "MCP-сервер з назвою «{name}» вже існує.",
     missing: "MCP-сервер «{name}» не знайдено в конфігурації.",
     missingTransport: "відсутній транспорт",
@@ -2194,12 +2326,14 @@ export const uk: TranslationMap = {
     working: "Працює…",
   },
   mcpPage: {
+    intro: "Підключайте сервери MCP, які надають інструменти OpenClaw, і керуйте ними.",
     connectorsLink: "Знайдіть конектори в один клік на сторінці Plugins.",
     servers: "Сервери",
     oauth: "OAuth",
     filtered: "Відфільтровано",
     configuredServers: "Налаштовані сервери",
     noServers: "Немає налаштованих серверів MCP.",
+    setUpFirstServer: "Налаштуйте свій перший сервер MCP",
     operatorCommands: "Команди оператора MCP",
     operatorCommandsHint:
       "Статус, діагностика, автентифікація, зондування та перезавантаження середовища виконання.",
@@ -2210,19 +2344,146 @@ export const uk: TranslationMap = {
     tlsVerifyOff: "перевірку TLS вимкнено",
     mtls: "mTLS",
   },
+  talkPage: {
+    intro:
+      "Налаштовуйте постачальників голосового зв’язку в реальному часі, моделі та голоси озвучення.",
+    voiceSection: {
+      title: "Голосовий зв’язок у реальному часі",
+      description:
+        "Безперервні голосові розмови з вашим агентом. Засоби вибору нижче записують налаштування talk.realtime; повна форма далі містить усі інші параметри.",
+    },
+    status: {
+      title: "Статус",
+      ready: "Готово",
+      notReady: "Не налаштовано",
+      unavailable: "Недоступно",
+      unavailableHint:
+        "Підключіться до Gateway, щоб перевірити готовність голосового зв’язку в реальному часі.",
+      activeProvider: "Активний постачальник: {provider}",
+      noProvider: "Постачальника голосового зв’язку в реальному часі ще не налаштовано.",
+    },
+    provider: {
+      title: "Постачальник",
+      description: "Автоматично вибирає першого постачальника з дійсними обліковими даними.",
+      auto: "Автоматично",
+    },
+    model: {
+      title: "Модель",
+      description: "Модель голосового зв’язку в реальному часі для браузерних сеансів Talk.",
+      default: "Типова модель постачальника",
+      defaultNamed: "За замовчуванням ({model})",
+    },
+    voice: {
+      title: "Голос озвучення",
+      description:
+        "Голос, який використовується для озвучених відповідей. GPT-Live фіксує голос після початку виклику.",
+      default: "За замовчуванням постачальника",
+    },
+    gptLive: {
+      title: "GPT-Live",
+      hint: "GPT-Live працює з підпискою ChatGPT: один раз увійдіть за допомогою «openclaw models auth login --provider openai». Ключ Platform API не потрібен. Лише для Talk у браузері. Делегованою роботою можна керувати під час виконання, а для дій зі значним впливом потрібне точне усне підтвердження.",
+      ready: "Готово",
+    },
+  },
   memoryPage: {
+    intro: "Виберіть, як OpenClaw зберігає, шукає та обслуговує пам’ять агента.",
     tablistLabel: "Розділи пам'яті",
     tabs: {
       overview: "Огляд",
-      search: "Пошук",
-      dreaming: "Сновидіння",
+      memories: "Спогади",
+      dreams: "Сни",
+      settings: "Налаштування",
+    },
+    overview: {
+      hero: {
+        awake: "Пам’ять активна",
+        waking: "Пам’ять активується…",
+        hibernating: "Пам’ять у режимі гібернації",
+        needsAttention: "Пам’ять потребує уваги",
+        activeDescription: "{engine} · {mode}",
+        loadingDescription: "Перевіряємо рушій пам’яті та цикл сновидінь цього агента.",
+        offDescription: "Виберіть рушій пам’яті в налаштуваннях, щоб активувати її.",
+        disabledDescription:
+          "Вибраний рушій пам’яті вимкнено. Увімкніть його знову в налаштуваннях.",
+        gatewayOffline: "Gateway не в мережі, тому стан пам’яті недоступний.",
+        hybridSearch: "гібридний пошук",
+        keywordSearch: "пошук за ключовими словами (без вбудовувань)",
+        openSettings: "Відкрити налаштування",
+        retry: "Повторити",
+        refresh: "Оновити статус",
+      },
+      schedule: {
+        title: "Розклад сну",
+        lightDescription:
+          "Сортує свіжі короткострокові нотатки та готує перспективні варіанти, не змінюючи довгострокову пам’ять.",
+        remDescription:
+          "Аналізує теми та повторювані ідеї в нещодавній активності, щоб покращити ранжування, не змінюючи довгострокову пам’ять.",
+        deepDescription:
+          "Оцінює підготовлені варіанти, переносить відібрані до довгострокової пам’яті (MEMORY.md) і записує щоденник сновидінь.",
+        nextRun: "наступний запуск {time}",
+        lastRun: "останній запуск {time}",
+        notScheduled: "Не заплановано",
+        learnMore: "Як працюють сновидіння",
+        openDocs: "Відкрити посібник зі сновидінь",
+      },
+      activity: {
+        title: "Активність",
+        promotedToday: "Перенесено сьогодні",
+        promotedTotal: "Усього перенесено",
+        shortTermCount: "Короткострокові записи в очікуванні",
+        phaseHitCount: "Сигнали фаз",
+        lightPhaseHitCount: "Збіги легкої фази",
+        remPhaseHitCount: "Збіги REM-фази",
+      },
+      health: {
+        title: "Стан рушія",
+        provider: "Постачальник",
+        embeddings: "Векторні представлення",
+        runtime: "Середовище виконання векторизації",
+        healthy: "Готово",
+        unavailable: "Недоступно",
+        notChecked: "Не перевірено",
+        notCheckedDescription: "Готовність вбудовувань ще не перевірено.",
+        checking: "Перевірка…",
+        test: "Перевірити",
+        testing: "Перевірка…",
+      },
+      shortcuts: {
+        title: "Огляд пам’яті",
+        memories: "Шукати у спогадах",
+        diary: "Читати щоденник снів",
+        settings: "Налаштувати пам’ять",
+      },
+    },
+    memories: {
+      searchLabel: "Пошук у спогадах",
+      searchPlaceholder: "Шукати у спогадах цього агента",
+      searchButton: "Пошук",
+      idle: "Знайдіть людину, проєкт, рішення чи будь-що інше, що пам’ятає цей агент.",
+      searching: "Пошук у спогадах…",
+      results: "Результатів: {count}",
+      empty: "Не знайдено спогадів за запитом «{query}».",
+      error: "Не вдалося виконати пошук у спогадах: {message}",
+      retry: "Повторити",
+      gatewayUpdateRequired: "Оновіть Gateway, щоб шукати у спогадах із Control UI.",
+      hybridSearch: "гібридний пошук",
+      keywordSearch: "пошук за ключовими словами",
+      lineRange: "рядки {start}–{end}",
+      score: "оцінка {score}",
+      sourceMemory: "пам’ять",
+      sourceSessions: "сеанси",
+      fileLoading: "Завантаження повного файлу пам’яті…",
+      fileError: "Не вдалося завантажити цей файл пам’яті: {message}",
+      fileUnsupported: "Цей файл пам’яті неможливо відобразити як текст.",
     },
     engine: {
       title: "Рушій",
       description:
         "Рівно один плагін пам'яті володіє слотом пам'яті. Вибір рушія вмикає його та вимикає інші.",
       rowTitle: "Рушій пам'яті",
+      openClawMemory: "Пам’ять OpenClaw",
       off: "Вимкнено",
+      unavailable: "Недоступно",
       autoHint:
         "У конфігурації не закріплено жодного рушія, тож слот повертається до типового власника.",
       explicitHint: "Цей рушій закріплено в конфігурації під plugins.slots.memory.",
@@ -2253,6 +2514,8 @@ export const uk: TranslationMap = {
       memoryWiki: {
         title: "Вікі пам'яті",
       },
+      toggleAriaLabel: "Увімкнути або вимкнути {plugin}",
+      changeFailed: "Не вдалося оновити {plugin}",
       stateUnknown: "Невідомо",
       manage: "Увімкнути або вимкнути додатки",
       manageLink: "Відкрити плагіни",
@@ -2529,6 +2792,11 @@ export const uk: TranslationMap = {
       description:
         "Тримайте обмежений каталог інструментів видимим і відкладайте решту за пошуком, щоб великі каталоги MCP та плагінів не переповнювали підказку.",
     },
+    loopDetection: {
+      title: "Виявлення зациклення інструментів",
+      description:
+        "Увімкніть засоби захисту на основі поточної історії, які попереджають або блокують повторні виклики інструментів, коли агент перестає просуватися.",
+    },
     localModelLean: {
       title: "Спрощені інструменти для локальних моделей",
       description:
@@ -2736,12 +3004,20 @@ export const uk: TranslationMap = {
       next: "Далі",
       apply: "Застосувати",
       applying: "Застосування…",
+      evaluate: "Оцінити",
+      evaluating: "Оцінювання…",
+      evaluated: "Оцінено",
       revise: "Переглянути",
       tweak: "Налаштувати",
       opening: "Відкриття…",
       reject: "Відхилити",
       rejecting: "Відхилення…",
       sending: "Надсилання…",
+    },
+    notices: {
+      applied: "Застосовано",
+      rejected: "Відхилено",
+      revisionRequested: "Запитано доопрацювання",
     },
     revision: {
       title: "{verb} пропозицію",
@@ -2768,6 +3044,35 @@ export const uk: TranslationMap = {
       loading: "Завантаження пропозиції…",
       supportFilesTitle: "Допоміжні файли",
       clickToPreview: "· натисніть для перегляду",
+    },
+    evaluation: {
+      title: "Оцінювання",
+      version: "Пропозиція {version}",
+      completedAt: "Завершено {time}",
+      status: {
+        completed: "Завершено",
+        skipped: "Пропущено",
+        error: "Помилка",
+      },
+      decision: {
+        pass: "Схвалити",
+        revise: "Переглянути",
+        block: "Заблокувати",
+      },
+      severity: {
+        info: "Інформація",
+        warn: "Попередження",
+        critical: "Критично",
+      },
+      evaluatorVersion: "Засіб оцінювання {version}",
+      mode: "Режим {mode}",
+      findings: "Виявлені проблеми",
+      metrics: "Метрики",
+      fileLine: "{file}:{line}",
+      errors: {
+        revisionHashUnavailable: "Не вдалося визначити поточну редакцію пропозиції.",
+        revisionChanged: "Редакція пропозиції змінилася під час оцінювання.",
+      },
     },
     empty: {
       searchTitle: "Немає відповідних пропозицій",
@@ -2830,6 +3135,8 @@ export const uk: TranslationMap = {
       comeWithIt: "додаються разом.",
       useIt: "Використати",
       addToSkills: "Додати до ваших Skills",
+      evaluate: "Оцінити",
+      runChecks: "Запустити перевірки пропозиції",
       tweakIt: "Налаштувати",
       askAgent: "Попросіть агента щось змінити",
       skipping: "Пропускання…",
@@ -3486,18 +3793,46 @@ export const uk: TranslationMap = {
       reload: "Перезавантажити",
       reloading: "Перезавантаження…",
     },
+    actions: {
+      dedupeRemovedOneAndKept: "Видалено {removed} дублікат запису сновидіння та збережено {kept}.",
+      dedupeRemovedManyAndKept:
+        "Видалено {removed} дублікатів записів сновидінь та збережено {kept}.",
+      dedupeRemovedOne: "Видалено {removed} дублікат запису сновидіння.",
+      dedupeRemovedMany: "Видалено {removed} дублікатів записів сновидінь.",
+      repairArchivedThreadCorpus: "архівований корпус гілок",
+      repairArchivedIngestionState: "архівований стан імпорту",
+      repairArchivedDreamDiary: "архівований щоденник сновидінь",
+      repairNoChanges: "Відновлення кешу сновидінь завершено без змін.",
+      repairCompleteWithArchive:
+        "Відновлення кешу сновидінь завершено: {actions}. Архів: {archiveDir}",
+      repairComplete: "Відновлення кешу сновидінь завершено: {actions}.",
+      backfillComplete: "Ретроспективно додано {count} записів до щоденника сновидінь.",
+      resetDiaryComplete: "Видалено {count} ретроспективно доданих записів зі щоденника сновидінь.",
+      clearReplayedComplete: "Очищено {count} повторно відтворених короткострокових записів.",
+      complete: "Дію зі щоденником сновидінь завершено.",
+      confirmRepair:
+        "Відновити кеш сновидінь? Похідні файли кешу сновидінь буде архівовано й перебудовано з чистих вхідних даних. Ваш щоденник сновидінь залишиться без змін.",
+      confirmDedupe:
+        "Видалити дублікати зі щоденника сновидінь? Файл DREAMS.md буде перезаписано, а видалено буде лише точні дублікати записів.",
+      archivePathCopied: "Шлях до архіву скопійовано.",
+      archivePathCopyFailed: "Не вдалося скопіювати шлях до архіву.",
+      updateFailed: "Не вдалося оновити налаштування сновидінь.",
+      unsupportedPlugin:
+        'Вибраний плагін пам’яті "{pluginId}" не підтримує налаштування сновидінь.',
+      configHashMissing: "Хеш конфігурації відсутній; оновіть сторінку та повторіть спробу.",
+    },
     wiki: {
       previewFallbackTitle: "Wiki-сторінка",
       close: "Закрити",
       loadingPage: "Завантаження wiki-сторінки…",
       dreamsTab: "Сни",
       insightsTab: "Імпортовані інсайти",
-      palaceTab: "Палац пам'яті",
+      wikiTab: "Вікі пам’яті",
       dreamsExplainer:
         "Це необроблений щоденник снів, який система записує під час відтворення й консолідації пам'яті; використовуйте його, щоб оглянути, що помічає система пам'яті та де вона ще виглядає зашумленою чи неповною.",
       insightsExplainer:
         "Це імпортовані інсайти, згруповані із зовнішньої історії; використовуйте їх, щоб переглянути, що виявили імпорти, перш ніж щось із цього перейде в тривалу пам'ять.",
-      palaceExplainer:
+      wikiExplainer:
         "Це скомпільована wiki-поверхня пам'яті, яку система може шукати та осмислювати; використовуйте її для перегляду фактичних сторінок пам'яті, тверджень, відкритих запитань і суперечностей, а не необроблених імпортованих вихідних чатів.",
       copyArchivePath: "Скопіювати шлях архіву",
       loadingInsights: "Завантаження імпортованих інсайтів…",
@@ -3513,9 +3848,9 @@ export const uk: TranslationMap = {
       riskReasons: "Причини ризику:",
       labels: "Мітки:",
       openSourcePage: "Відкрити сторінку джерела",
-      loadingPalace: "Завантаження палацу пам'яті…",
-      emptyPalace: "Палац пам'яті ще не заповнено",
-      emptyPalaceHint:
+      loadingWiki: "Завантаження вікі пам’яті…",
+      emptyWiki: "Вікі пам’яті ще не заповнено",
+      emptyWikiHint:
         "Наразі вікі містить переважно необроблені імпорти джерел і операційні звіти. Ця вкладка стане корисною, щойно почнуть записуватися синтези, сутності чи концепції.",
       claims: "Твердження",
       openQuestions: "Відкриті питання",
@@ -3531,13 +3866,67 @@ export const uk: TranslationMap = {
       enableSuffix: ", а потім перезавантажте цю вкладку.",
       openConfig: "Відкрити конфігурацію",
       howToEnable: "Як увімкнути",
+      pageTypes: {
+        entity: "сутність",
+        concept: "поняття",
+        source: "джерело",
+        synthesis: "синтез",
+        report: "звіт",
+      },
+      pageGroups: {
+        sources: "Джерела",
+        syntheses: "Синтези",
+        reports: "Звіти",
+        entities: "Сутності",
+        concepts: "Концепції",
+      },
+      counts: {
+        pageOne: "{count} сторінка",
+        pages: "{count} сторінок",
+        claimRowOne: "{count} рядок твердження",
+        claimRows: "{count} рядків тверджень",
+        openQuestionOne: "{count} відкрите запитання",
+        openQuestions: "{count} відкритих запитань",
+        contradictionOne: "{count} суперечність",
+        contradictions: "{count} суперечностей",
+        chats: "{count} чатів",
+        sensitive: "{count} конфіденційних",
+        signals: "{count} сигналів",
+        messages: "{count} повідомлень",
+        userMessages: "{count} користувач",
+        assistantMessages: "{count} асистент",
+      },
+      pageGroupSummary: "{label} · {count}",
+      noPagesYet: "Сторінок ще немає",
+      sectionPageSummary: "{label}: {count}",
+      questionCountOnPages: "{questionCount} на {pageCount}",
+      risk: {
+        needsReview: "потребує перевірки",
+        low: "низький ризик",
+        medium: "середній ризик",
+        high: "високий ризик",
+        unknown: "невідомий ризик",
+      },
+      pageNotFound: "Не знайдено сторінки вікі для {lookup}.",
+      previewTruncated: "Показано перший фрагмент цієї сторінки.",
+      previewTruncatedWithTotal: "Показано перший фрагмент цієї сторінки (усього рядків: {count}).",
+      importedClusterSummary: "Імпортовані чати згруповано навколо теми {label}.",
+      withheldDigestOne: "{count} дайджест приховано до завершення перевірки.",
+      withheldDigests: "{count} дайджестів приховано до завершення перевірки.",
+      details: "Деталі",
+      hideDetails: "Приховати подробиці",
+      vault: "Сховище",
+      fullVaultBreakdown: "Повна структура сховища: {breakdown}.",
+      selectedSection: "Вибраний розділ: {summary}.",
+      latestUpdate: "Останнє оновлення: {date}.",
+      noContent: "Вміст вікі недоступний.",
     },
     phrases: {
       consolidatingMemories: "консолідація спогадів…",
       tidyingKnowledgeGraph: "упорядкування графа знань…",
       replayingConversations: "відтворення сьогоднішніх розмов…",
       weavingShortTerm: "переплетення короткострокового з довгостроковим…",
-      defragmentingMindPalace: "дефрагментація палацу розуму…",
+      defragmentingMemoryLane: "дефрагментація спогадів…",
       filingLooseThoughts: "упорядкування розрізнених думок…",
       connectingDots: "поєднання далеких точок…",
       compostingContext: "переробка старих контекстних вікон…",
@@ -3562,6 +3951,7 @@ export const uk: TranslationMap = {
     emptySubtitle: "Sign in to a provider or add an API key, then refresh.",
     status: {
       ok: "Підключено",
+      ready: "Готово",
       expiring: "Expiring",
       expired: "Застарів",
       missing: "Not signed in",
@@ -3614,6 +4004,16 @@ export const uk: TranslationMap = {
         unknown: "Не вдалося встановити з’єднання",
         no_model: "Немає доступних моделей",
       },
+    },
+    readiness: {
+      title: "Налаштування ШІ",
+      heading: "Підключіть свій ШІ",
+      signedInNoModels:
+        "Ви ввійшли в систему, але цей обліковий запис не надає доступних для використання моделей. Щоб продовжити, виберіть іншого постачальника або обліковий запис.",
+      notConfigured: "Виберіть постачальника та перевірте модель, яку використовуватиме OpenClaw.",
+      noModels: "Немає доступних моделей",
+      modelRequired: "Потрібна модель",
+      chooseProvider: "Вибрати іншого постачальника",
     },
     logout: {
       action: "Вийти",
@@ -4068,6 +4468,111 @@ export const uk: TranslationMap = {
       multipleMatches: "Кілька сеансів відповідають {shortId}.",
       additionalMatches: "Залишаються результати пошуку. Використайте довший префікс id.",
     },
+    commandResults: {
+      startingNewThread: "Створення нової гілки...",
+      resettingThread: "Скидання гілки...",
+      stoppingCurrentRun: "Зупинення поточного виконання...",
+      chatHistoryCleared: "Історію чату очищено.",
+      exportingThread: "Експортування гілки...",
+      unknownCommand: "Невідома команда: `{command}`",
+      options: "Параметри: {options}.",
+      sessionUnavailable: "Можливість роботи із сеансом недоступна",
+      help: {
+        availableCommands: "Доступні команди",
+        agentCommand: "агент",
+        openMenu: "Введіть `/`, щоб відкрити меню команд.",
+      },
+      compaction: {
+        failed: "Не вдалося виконати ущільнення.",
+        failedWithReason: "Не вдалося виконати ущільнення: {reason}",
+        tokenSummary: " ({before} -> {after} токенів)",
+        succeeded: "Контекст успішно стиснуто",
+        skipped: "Стиснення пропущено.",
+        skippedWithReason: "Стиснення пропущено: {reason}",
+      },
+      model: {
+        current: "**Поточна модель:** {model}",
+        available: "**Доступні:** {models}",
+        more: "+ще {count}",
+        getFailed: "Не вдалося отримати інформацію про модель: {error}",
+        set: "Встановлено модель {model}.",
+        setFailed: "Не вдалося встановити модель: {error}",
+      },
+      thinking: {
+        current: "Поточний рівень міркування: {level}.",
+        getFailed: "Не вдалося отримати рівень міркування: {error}",
+        reset: "Рівень міркування скинуто до стандартного.",
+        resetFailed: "Не вдалося скинути рівень міркування: {error}",
+        unrecognized: 'Нерозпізнаний рівень міркування "{level}". Допустимі рівні: {options}.',
+        unsupported:
+          'Рівень міркування "{level}" не підтримується цією моделлю. Допустимі рівні: {options}.',
+        set: "Встановлено рівень міркування {level}.",
+        setFailed: "Не вдалося встановити рівень міркування: {error}",
+      },
+      verbose: {
+        current: "Поточний рівень деталізації: {level}.",
+        getFailed: "Не вдалося отримати рівень деталізації: {error}",
+        unrecognized: 'Нерозпізнаний рівень деталізації "{level}". Допустимі рівні: off, on, full.',
+        set: "Для режиму деталізації встановлено рівень {level}.",
+        setFailed: "Не вдалося встановити докладний режим: {error}",
+      },
+      fast: {
+        autoValue: "автоматично ({seconds} с)",
+        on: "увімк.",
+        off: "вимк.",
+        sourceSession: " (сеанс)",
+        sourceAgent: " (типово: агент)",
+        sourceModel: " (типово: модель)",
+        sourceDefault: " (типово)",
+        current: "Поточний швидкий режим: {value}",
+        options: "увімкнено, вимкнено, автоматично ({seconds} с), типово, стан",
+        getFailed: "Не вдалося отримати швидкий режим: {error}",
+        reset: "Швидкий режим скинуто до типового значення.",
+        resetFailed: "Не вдалося скинути швидкий режим: {error}",
+        unrecognized:
+          "Нерозпізнаний швидкий режим «{mode}». Допустимі рівні: увімкнено, вимкнено, автоматично, типово, стан.",
+        setAuto: "Для швидкого режиму встановлено автоматичне значення.",
+        enabled: "Швидкий режим увімкнено.",
+        disabled: "Швидкий режим вимкнено.",
+        setFailed: "Не вдалося встановити швидкий режим: {error}",
+      },
+      usage: {
+        noActiveThread: "Немає активної гілки.",
+        notAvailable: "н/д",
+        title: "Використання ресурсів гілкою",
+        inputTokens: "Вхідні дані: {count} токенів",
+        outputTokens: "Виведення: {count} токенів",
+        totalTokens: "Усього: {count} токенів",
+        context: "Контекст: {percent} із {total}",
+        model: "Модель: {model}",
+        failed: "Не вдалося отримати дані про використання: {error}",
+      },
+      agents: {
+        none: "Агентів не налаштовано.",
+        title: "**Агенти** ({count})",
+        default: "стандарт",
+        runtime: " · середовище виконання {runtime}",
+        failed: "Не вдалося отримати список агентів: {error}",
+      },
+      steer: {
+        timeout: "Активне виконання завершилося до прийняття повідомлення про зміну напрямку.",
+        failed:
+          "Не вдалося змінити напрямок до того, як повідомлення надійшло до виконання; спробуйте ще раз.",
+        usage: "Використання: `/steer <message>`",
+        noActiveRun:
+          "Немає активного виконання. Натомість скористайтеся полем введення чату або командою `/redirect`.",
+        succeeded: "Напрямок змінено.",
+        requestFailed: "Не вдалося змінити напрямок: {error}",
+      },
+      redirect: {
+        timeout: "Активне виконання завершилося до прийняття повідомлення про перенаправлення.",
+        failed:
+          "Не вдалося перенаправити до того, як повідомлення надійшло до виконання; спробуйте ще раз.",
+        usage: "Використання: `/redirect <message>`",
+        succeeded: "Перенаправлено.",
+        requestFailed: "Не вдалося перенаправити: {error}",
+      },
+    },
     sessionSharing: {
       menu: "Спільний доступ до потоку",
       current: "Видимість потоку: {visibility}",
@@ -4221,9 +4726,16 @@ export const uk: TranslationMap = {
     dismissUpdateBanner: "Закрити банер оновлення",
     switchedSession: "Перемкнуто на {session}",
     actions: {
+      copyAsMarkdown: "Копіювати як Markdown",
       dismissError: "Закрити помилку",
       exitFocusMode: "Вийти з режиму фокусування",
       scrollToLatest: "Прокрутити до останнього",
+    },
+    markdown: {
+      truncated: "… обрізано ({total} символів, показано перші {shown}).",
+    },
+    codeBlock: {
+      jsonLines: "JSON · {count} рядків",
     },
     workspaceConflict: {
       titleOne: "1 конфлікт хмарного робочого простору",
@@ -4318,6 +4830,7 @@ export const uk: TranslationMap = {
       threads: "Гілки",
       groups: "Групи",
       coding: "Програмування",
+      noSessionsForAgent: "Сеансів для цього агента не знайдено",
       catalogViewOptions: "Параметри перегляду",
       catalogGroupByProject: "Проєкт",
       catalogGroupByPerson: "Особа",
@@ -4329,6 +4842,8 @@ export const uk: TranslationMap = {
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "Дії для {count} сеансів",
       toolActivity: "Використання {tool}",
+      catalogDiscoveryHelp:
+        "{error}. Налаштуйте вбудоване виявлення потоків у Налаштуваннях > Автоматизація > Плагіни.",
     },
     welcome: {
       hintBeforeShortcut: "Type a message below ·",
@@ -4362,12 +4877,23 @@ export const uk: TranslationMap = {
       steered: "Скеровано",
       steerQueuedMessage: "Скерувати повідомлення з черги",
       removeQueuedMessage: "Видалити повідомлення з черги",
+      states: {
+        steering: "Керування",
+        applyingSettings: "Застосування налаштувань чату",
+        waitingForRun: "Очікування завершення поточного запуску",
+        runningCommand: "Виконання команди",
+        waitingForReconnect: "Очікування повторного підключення",
+        needsReview: "Потребує перевірки",
+      },
+      imageCount: "Зображення ({count})",
     },
     goals: {
       edit: "Редагувати ціль",
       pause: "Призупинити ціль",
       resume: "Відновити ціль",
       clear: "Очистити ціль",
+      showDetails: "Показати відомості про ціль",
+      hideDetails: "Сховати відомості про ціль",
     },
     questions: {
       title: "Codex потребує вводу",
@@ -4393,6 +4919,7 @@ export const uk: TranslationMap = {
       unavailable: "Недоступно",
       expired: "Застарів",
       cancelled: "Скасовано",
+      disconnected: "Немає підключення. Спробуйте ще раз після повторного підключення.",
     },
     imageLightbox: {
       label: "Попередній перегляд зображення: {title}",
@@ -4428,14 +4955,35 @@ export const uk: TranslationMap = {
       showMore: "Показати більше",
       unknownDate: "Невідома дата",
       voiceNote: "Голосове повідомлення",
+      duplicatesCollapsed: "Згорнуто {count} послідовних однакових повідомлень",
+      contextFor: "Контекст повідомлення за {timestamp}",
+    },
+    mediaPlayer: {
+      play: "Відтворити",
+      pause: "Призупинити",
+      seek: "Перемотати медіафайл",
+      download: "Завантажити {filename}",
+      preparing: "Підготовка до відтворення…",
+      videoUnavailable: "Не вдається відтворити цей формат — натомість завантажте файл.",
     },
     modelControls: {
+      current: "Поточний",
       default: "За замовчуванням",
       reasoning: "Міркування",
       speed: "Швидкість",
       sessionOverride: "Перевизначення гілки",
+      useDefault: "Використовувати за замовчуванням",
       usingDefault: "Використовується типове значення з Налаштувань",
       resetToDefault: "Скинути до типового ({model})",
+      defaultWithModel: "За замовчуванням ({model})",
+      defaultWithLevel: "За замовчуванням ({level})",
+      fastHelp: "Швидкі відповіді формуються раніше й можуть використовувати більше ваших лімітів.",
+      speedUnsupported: "Керування швидкістю не підтримується для цієї моделі.",
+      contextWindow: "Контекст: {count}",
+      providerModels: "Моделі {provider}",
+      resetReasoning: "Скинути до значення за замовчуванням ({level})",
+      useDefaultReasoning: "Використовувати міркування за замовчуванням ({level})",
+      fastResponsesAria: "Швидкі відповіді: {state}",
     },
     rail: {
       title: "Помічник сеансу",
@@ -4506,6 +5054,21 @@ export const uk: TranslationMap = {
         "Очищений попередній перегляд форматованого тексту для швидкого читання.",
       noPreviewableMarkdown: "Немає markdown-вмісту для попереднього перегляду.",
       noContent: "Вміст недоступний",
+      fullContentOversized:
+        "Повний вміст недоступний, оскільки збережений запис стенограми завеликий для безпечного повернення.",
+      fullContentNotVisible:
+        "Повний вміст недоступний, оскільки цей запис стенограми не має видимого представлення WebChat.",
+      fullContentUnavailable: "Повний вміст цього запису стенограми більше недоступний.",
+      copyContents: "Копіювати вміст файлу",
+      fileChanged: "Файл на диску змінився після завантаження.",
+      renderPreview: "Відобразити попередній перегляд",
+      imagePreview: "Попередній перегляд зображення",
+      file: "Файл",
+      markdownPreview: "Попередній перегляд Markdown",
+      toolDetails: "Відомості про інструмент",
+      reloadFailed: "Не вдалося повторно завантажити останню версію файлу.",
+      overwriteLoadFailed: "Не вдалося завантажити останню версію файлу перед перезаписом.",
+      fullContentLoadFailed: "Не вдалося завантажити повний вміст: {error}",
     },
     sidebarColumns: {
       chat: "Чат",
@@ -4524,6 +5087,7 @@ export const uk: TranslationMap = {
       unpin: "Відкріпити",
       loading: "Завантаження чату",
       noMatches: "Немає відповідних повідомлень",
+      pinnedCount: "Закріплено: {count}",
     },
     pairingQrExpired: {
       title: "QR-код для пар'ювання застарів",
@@ -4546,6 +5110,8 @@ export const uk: TranslationMap = {
       runInterrupted: "Перервано",
       runStatus: "Статус виконання: {status}",
       compactingContext: "Стискання контексту...",
+      compacting: "Стиснення",
+      compact: "Стиснути",
       contextCompacted: "Контекст стиснуто",
       fallbackActive: "Активна резервна модель: {model}",
       fallbackCleared: "Резервну модель скасовано: {model}",
@@ -4562,6 +5128,49 @@ export const uk: TranslationMap = {
       attachPhoto: "Фото",
       attachFile: "Attach file",
       attachFileOption: "Файл",
+      menu: {
+        back: "Назад",
+        skills: "Skills",
+        connectors: "Конектори",
+        webSearch: "Пошук в інтернеті",
+        managePlugins: "Керувати плагінами",
+        manageSkills: "Керувати Skills",
+        browseConnectors: "Переглянути конектори",
+        addMcpServer: "Додати сервер MCP…",
+        addMcpServerTitle: "Додати сервер MCP",
+        addMcpServerDescription: "Налаштуйте сервер і виберіть, де його буде ввімкнено.",
+        scopeLabel: "Доступність",
+        scopeSession: "Цей сеанс",
+        scopeEverywhere: "Усюди",
+        scopeSessionHint:
+          "Сервер зберігається глобально вимкненим і вмикається лише для цього сеансу.",
+        scopeEverywhereHint: "Сервер збережено та ввімкнено для кожного сеансу.",
+        toolAccess: {
+          label: "Доступ до інструментів",
+          loading: "Завантаження інструментів…",
+          loadFailed: "Не вдалося завантажити інструменти.",
+          noTools: "Для цього конектора немає доступних інструментів.",
+          summary: "Увімкнено {enabled} з {total} інструментів",
+          summaryOne: "Увімкнено {enabled} з {total} інструмента",
+        },
+        enabledCount: "Увімкнено: {count}",
+        loadingSkills: "Завантаження Skills…",
+        skillsLoadFailed: "Не вдалося завантажити Skills.",
+        noSkills: "Немає доступних Skills.",
+        noConnectors: "Немає налаштованих серверів MCP.",
+        depsMissing: "відсутні залежності",
+        skillBlocked: "недоступно для цього агента",
+        sessionTag: "сеанс",
+        offlineBlocked: "Підключіться до Gateway, щоб змінити можливості сеансу.",
+        readOnlyBlocked: "Для зміни можливостей сеансу потрібен доступ на запис.",
+        adminBlocked: "Для керування конекторами потрібен доступ адміністратора.",
+        savingBlocked: "Зачекайте, доки завершиться поточна зміна можливостей сеансу.",
+      },
+      overrides: {
+        count: "Перевизначень сеансу: {count}",
+        countOne: "Перевизначення сеансу: {count}",
+        clear: "Очистити перевизначення сеансу",
+      },
       contextUsage: {
         title: "Відомості про використання контексту",
         open: "Відкрити відомості про використання контексту",
@@ -4634,6 +5243,17 @@ export const uk: TranslationMap = {
       turnCameraOff: "Вимкнути камеру",
       turnCameraOn: "Увімкнути камеру",
       voiceTranscript: "Транскрипція голосу",
+    },
+    attachments: {
+      attachedFile: "Прикріплений файл",
+      outsideAllowedFolders: "Поза дозволеними папками",
+      unavailable: "Недоступно",
+      checking: "Перевірка...",
+    },
+    voice: {
+      asking: "Звернення до OpenClaw...",
+      connecting: "Підключення голосового введення...",
+      listening: "Прослуховування...",
     },
     selectors: {
       session: "Chat session",

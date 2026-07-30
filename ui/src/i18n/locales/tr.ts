@@ -8,6 +8,7 @@ export const tr: TranslationMap = {
     ok: "Tamam",
     yes: "Evet",
     no: "Hayır",
+    assistant: "Asistan",
     active: "Etkin",
     loading: "Yükleniyor…",
     refreshing: "Yenileniyor…",
@@ -35,8 +36,11 @@ export const tr: TranslationMap = {
     create: "Oluştur",
     copy: "Kopyala",
     copied: "Kopyalandı!",
+    copyFailed: "Kopyalama başarısız oldu",
     copyCode: "Kodu kopyala",
+    resizeSplitView: "Bölünmüş görünümü yeniden boyutlandır",
     delete: "Sil",
+    remove: "Kaldır",
     dismiss: "Kapat",
     unselect: "Seçimi kaldır",
     enabled: "Etkin",
@@ -45,6 +49,9 @@ export const tr: TranslationMap = {
     none: "yok",
     na: "yok",
     never: "never",
+    justNow: "az önce",
+    now: "şimdi",
+    unknown: "Bilinmiyor",
     configured: "Yapılandırıldı",
     running: "Çalışıyor",
     linked: "Bağlandı",
@@ -70,6 +77,7 @@ export const tr: TranslationMap = {
     settingsSections: "Ayar bölümleri",
     version: "Sürüm",
     docs: "Dokümanlar",
+    learnMore: "Daha fazla bilgi",
     theme: "Tema",
     colorMode: "Renk modu",
     colorModeOption: "Renk modu: {mode}",
@@ -113,10 +121,24 @@ export const tr: TranslationMap = {
     filteredFileCount: "{count}/{total} dosya",
     noMatches: "Eşleşen dosya yok.",
     navigate: "gezin",
+    kind: {
+      text: "Metin",
+      shell: "Kabuk",
+      file: "Dosya",
+    },
   },
   mcpApp: {
     title: "MCP App",
     unavailable: "MCP App kullanılamıyor: {error}",
+    errors: {
+      gatewayUnavailable: "MCP App Gateway kullanılamıyor",
+      mountUnavailable: "MCP App bağlama noktası kullanılamıyor",
+      sandboxTimedOut: "MCP App korumalı alanı zaman aşımına uğradı",
+      sandboxUnavailable: "MCP App korumalı alanı kullanılamıyor",
+      initializationTimedOut: "MCP App başlatma işlemi zaman aşımına uğradı",
+      requestFailed: "İstek başarısız oldu",
+      invalidSandboxUrl: "MCP App korumalı alan URL'si geçersiz",
+    },
   },
   githubPreview: {
     loading: "GitHub ayrıntıları yükleniyor…",
@@ -325,6 +347,19 @@ export const tr: TranslationMap = {
         nip05: "you@example.com",
         lightningAddress: "you@getalby.com",
       },
+      notices: {
+        timeout:
+          "İstek 30 saniye sonra zaman aşımına uğradı; sunucu değişikliği yine de uygulamış olabilir — yeniden denemeden önce profili kontrol edin.",
+        operationFailed: "{prefix}: {error}",
+        updateFailed: "Profil güncellenemedi",
+        updateFailedStatus: "Profil güncellenemedi ({status})",
+        publishFailed: "Profil hiçbir aktarıcıda yayımlanamadı.",
+        published: "Profil rölelere yayınlandı.",
+        importFailed: "Profil içe aktarılamadı",
+        importFailedStatus: "Profil içe aktarılamadı ({status})",
+        importedFromRelays: "Profil rölelerden içe aktarıldı. İnceleyip yayınlayın.",
+        imported: "Profil içe aktarıldı. İnceleyip yayınlayın.",
+      },
     },
   },
   lazyView: {
@@ -335,6 +370,57 @@ export const tr: TranslationMap = {
     staleSubtitle: "OpenClaw arka planda güncellendi. En son paneli almak için yeniden yükleyin.",
     reloading: "Yeniden yükleniyor…",
     retry: "Tekrar dene",
+    stylesFailed: "Stiller yüklenemediğinden sayfa bozuk görünebilir.",
+  },
+  updates: {
+    refreshRequired: "Sunucu güncellendi — tüm özellikler için yenileyin",
+    coalescedRestart:
+      "Güncelleme yüklendi. Gateway zaten yeniden başlatılıyor; yeniden bağlandıktan sonra durum yenilenecek.",
+    error: "Güncelleme hatası: {error}",
+    status: "Güncelleme {status}: {reason}. {guidance}",
+    verificationFailed:
+      "Güncelleme yüklendi ancak çalışan sürüm değişmedi — yeniden başlatma engellenmiş olabilir.",
+    verificationFailedWithVersions:
+      "Güncelleme yüklendi ancak çalışan sürüm değişmedi — yeniden başlatma engellenmiş olabilir. Beklenen sürüm v{expectedVersion}, çalışan sürüm v{actualVersion}.",
+    handoffTimeout:
+      "Güncelleme devri başlatıldı ancak yeniden bağlandıktan sonra tamamlandığı bildirilmedi. Nihai sonuç için `openclaw update status` komutunu çalıştırın.",
+    outcomeUnknown:
+      "Güncelleme isteği kabul edilmiş olabilir ancak Gateway yeniden bağlandıktan sonra nihai bir sonuç bildirmedi. Yeniden denemeden önce `openclaw update status` komutunu çalıştırın.",
+    failureReasons: {
+      dirty: "Değişiklikleri kaydedin veya stash'e alın, ardından yeniden deneyin.",
+      noUpstream: "Bir upstream dalı ayarlayın, ardından yeniden deneyin.",
+      notGitInstall:
+        "Bu bir git checkout'u değil. Genel kapsamda yeniden yüklemek için CLI üzerinden `openclaw update` komutunu çalıştırın.",
+      notOpenclawRoot:
+        "Güncellemeyi bir OpenClaw checkout'undan çalıştırın veya CLI genel yeniden yükleme yolunu kullanın.",
+      depsInstallFailed:
+        "Bağımlılık yüklemesi başarısız oldu. Yükleme hatasını düzeltip yeniden deneyin.",
+      buildFailed: "Derleme başarısız oldu. Derleme hatasını düzeltip yeniden deneyin.",
+      buildDirty:
+        "Seçilen revizyonun derlemesi, kullanıma alınan dosyaları değiştirdi. Oluşturulan yapıtları içeren bir revizyonla yeniden deneyin.",
+      uiBuildFailed:
+        "Control UI yeniden derlemesi başarısız oldu. UI derleme hatasını düzeltip yeniden deneyin.",
+      globalInstallFailed:
+        "Genel paket kurulumunun diskte olduğu doğrulanamadı. Yeniden deneyin veya CLI üzerinden yeniden kurun.",
+      restartDisabled:
+        "Gateway yeniden başlatmaları devre dışı olduğundan güncelleme uygulanmadı. Yapılandırmada yeniden başlatmaları etkinleştirip yeniden deneyin.",
+      restartUnavailable:
+        "Yeniden başlatmalar devre dışıyken ve herhangi bir denetleyici mevcut değilken bu genel kurulum güvenli bir şekilde değiştirilemez.",
+      restartUnhealthy:
+        "Yeni süreç hiçbir zaman sağlıklı duruma gelmedi. Kurtarma yapabilmeniz için önceki süreç çalışmaya devam etti.",
+      managedServiceHandoffAlreadyRunning:
+        "Yönetilen başka bir güncelleme zaten çalışıyor. Tamamlanmasını bekleyin, ardından güncelleme durumunu yenileyin.",
+      doctorFailed:
+        "Doctor onarımı başarısız oldu. `openclaw doctor --non-interactive` komutunu çalıştırıp yeniden deneyin.",
+      default:
+        "Hatanın tam nedenini öğrenmek için Gateway günlüklerine bakın ve nedeni düzelttikten sonra yeniden deneyin.",
+    },
+    postRestart: {
+      restartUnhealthy:
+        "Yeni süreç hiçbir zaman sağlıklı duruma gelmedi ve önceki süreç çalışmaya devam etti.",
+      default:
+        "Yeni sürecin başarısızlık nedenini öğrenmek için Gateway günlüklerini kontrol edin.",
+    },
   },
   nodes: {
     pairing: {
@@ -824,6 +910,10 @@ export const tr: TranslationMap = {
   },
   agents: {
     noAgents: "No agents",
+    defaults: {
+      title: "Aracı varsayılanları",
+      description: "Geçersiz kılınmadığı sürece her aracının devraldığı varsayılanlar.",
+    },
     copyId: "Copy ID",
     copyIdTitle: "Copy agent ID to clipboard",
     default: "Default",
@@ -1028,6 +1118,9 @@ export const tr: TranslationMap = {
     noEvents: "No events yet.",
   },
   configForm: {
+    redactedPlaceholder: "[gizlendi - görüntülemek için göster'e tıklayın]",
+    sectionHelp: "{section} için yardım",
+    readGuide: "Kılavuzu okuyun",
     showAdvanced: "Gelişmişi göster",
     advancedHidden: "{count} gelişmiş ayar gizlendi",
     advancedHiddenPlural: "{count} gelişmiş ayar gizlendi",
@@ -1221,6 +1314,8 @@ export const tr: TranslationMap = {
       lobsterdexOpen: "Lobsterdex'i aç",
     },
     security: {
+      intro:
+        "Gateway erişimini, araç politikasını, cihaz kimlik doğrulamasını ve onayları gözden geçirin.",
       title: "Güvenlik",
       gatewayAuth: "Gateway kimlik doğrulama",
       execPolicy: "Yürütme politikası",
@@ -1389,6 +1484,7 @@ export const tr: TranslationMap = {
         "OpenClaw için macOS'ta bildirimler devre dışı. Sistem Ayarları > Bildirimler bölümünden izin verin.",
     },
     appearance: {
+      intro: "Bu Control UI istemcisi için tema, sohbet ve kenar çubuğu tercihleri.",
       theme: "Tema",
       chooseTheme: "Bir tema ailesi seçin.",
       importedTheme: "İçe aktarılan tema",
@@ -1459,12 +1555,11 @@ export const tr: TranslationMap = {
     open: "Aç",
     applying: "Uygulanıyor…",
     autoSaveSaving: "Kaydediliyor…",
+    autoSaveSaved: "Kaydedildi",
     autoSaveFailed: "Kaydetme başarısız",
     autoSaveConflict: "Ayarlar başka bir yerden değiştirildi",
     retry: "Tekrar dene",
-    applyBannerText:
-      "openclaw.json dosyasına kaydedildi — uygulamak için gateway'i yeniden başlatın.",
-    applyBannerAction: "Yeniden başlat ve uygula",
+    applyChanges: "Değişiklikleri uygula",
     rawDiscard: "Vazgeç",
     rawDraftBlocksApply:
       "Kaydedilmemiş ham yapılandırma düzenlemeleri var — yeniden başlatmadan önce Raw düzenleyicide kaydedin veya iptal edin.",
@@ -1711,7 +1806,6 @@ export const tr: TranslationMap = {
     forward: "İleri",
     chat: "Sohbet",
     settings: "Ayarlar",
-    settingsGeneral: "Genel",
     askOpenClaw: "OpenClaw'a Sor",
     settingsGroupConnections: "Bağlantılar",
     settingsGroupAgents: "Aracılar ve Araçlar",
@@ -1767,6 +1861,11 @@ export const tr: TranslationMap = {
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
     unavailable: "The terminal is not available on this gateway.",
+    uploadTooLarge: "Dosya, 16 MiB terminal yükleme sınırını aşıyor: {file}",
+    uploadUnsafeCmdPath:
+      "% veya ! içeren yüklenmiş bir yol cmd.exe içine güvenli bir şekilde eklenemiyor",
+    uploadUnsupportedShell:
+      "Yüklenmiş bir yol desteklenmeyen kabuğa güvenli bir şekilde eklenemiyor: {shell}",
   },
   browser: {
     title: "Tarayıcı",
@@ -1803,6 +1902,15 @@ export const tr: TranslationMap = {
     noChatTarget: "Önce bir sohbet oturumu açın, böylece açıklamanın gönderileceği bir yer olur.",
     inspectUnavailable: "Öğe inceleme devre dışı (browser.evaluateEnabled=false).",
     annotationSent: "Açıklama sohbet yazıcısına eklendi.",
+    errors: {
+      requestFailed: "Tarayıcı isteği başarısız oldu: {error}",
+      screenshotPathMissing: "Tarayıcı ekran görüntüsü bir medya yolu döndürmedi.",
+      screenshotFetchTimedOut: "Ekran görüntüsünü getirme işlemi zaman aşımına uğradı.",
+      screenshotFetchFailed: "Ekran görüntüsü getirilemedi ({status}).",
+      screenshotReadFailed: "Ekran görüntüsü okunamadı.",
+      screenshotDecodeFailed: "Ekran görüntüsünün kodu çözülemedi.",
+      canvasUnavailable: "Canvas 2D bağlamı kullanılamıyor.",
+    },
     annotatePrompt: {
       introTitled:
         '{url} adresindeki sayfayı işaretledim (sayfanın bildirdiği başlık: "{title}") — ekli ekran görüntüsü işaretlememi gösteriyor.',
@@ -1849,6 +1957,7 @@ export const tr: TranslationMap = {
     automation: "Otomasyon",
     mcp: "MCP",
     memory: "Bellek",
+    talk: "Konuşma",
     infrastructure: "Altyapı",
     labs: "Labs",
     about: "Hakkında",
@@ -1889,6 +1998,7 @@ export const tr: TranslationMap = {
     automation: "Komutlar, kancalar, otomasyonlar ve eklentiler.",
     mcp: "MCP sunucuları, kimlik doğrulama, araçlar ve tanılama.",
     memory: "Bellek motoru, arka uç, arama ve rüya görme.",
+    talk: "Gerçek zamanlı ses: sağlayıcı, model ve konuşmacı sesi.",
     infrastructure: "Gateway, web, tarayıcı ve medya ayarları.",
     labs: "Deneysel aracı ve araç yetenekleri.",
     about: "Control UI ve bağlı Gateway derleme kimliği.",
@@ -1907,6 +2017,16 @@ export const tr: TranslationMap = {
     heading: "AI'ınıza bağlanın",
     intro:
       "OpenClaw, hâlihazırda sahip olduğunuz AI erişimini yeniden kullanır — bir CLI oturumu, API anahtarı veya sağlayıcı oturumu.",
+    required: {
+      title: "Yapılandırılmış AI sağlayıcısı yok",
+      body: "OpenClaw, bu aracı için yapılandırılmış bir sağlayıcı ve model bulamadı. Sohbet başlatmadan önce bir tane ekleyin.",
+      action: "Bir sağlayıcı yapılandır",
+    },
+    connectionFailure: {
+      title: "OpenClaw, yapılandırdığınız AI'ı kullanamadı",
+      body: "Bu aracı için bir sağlayıcı ve model seçilmiş ancak bağlantı başarısız oldu. Sağlayıcı oturumunu veya API anahtarını, model erişimini ve hizmet durumunu kontrol edip tekrar deneyin.",
+      action: "Sağlayıcı ayarlarını kontrol et",
+    },
     loading: "Bu Gateway'deki kullanılabilir AI erişimi kontrol ediliyor…",
     retry: "Tekrar dene",
     checkAgain: "Tekrar kontrol et",
@@ -1938,6 +2058,8 @@ export const tr: TranslationMap = {
     },
     unavailable: {
       title: "Algılandı ancak otomatik olarak test edilmedi",
+      signIn: "{provider} ile oturum aç",
+      useApiKey: "API anahtarını kullan",
     },
     signIn: {
       title: "Bir sağlayıcıyla oturum açın",
@@ -1967,6 +2089,7 @@ export const tr: TranslationMap = {
       title: "Yapay zekânız hazır",
       detail: "{modelRef} · {latencyMs} ms",
       openChat: "Sohbeti Aç",
+      continueSetup: "Kuruluma devam et",
       configuredModel: "Yapılandırılmış model",
     },
     failure: {
@@ -2154,6 +2277,11 @@ export const tr: TranslationMap = {
       channelDegraded: "{channel} bozulmuş durumda — ne olduğunu bana sorun",
       channelFallback: "Bir kanal",
       dismiss: "Bu güncellemeyi kapat",
+      channelSetupTitle: "OpenClaw'a bu uygulamanın dışından ulaşın",
+      channelSetupBody:
+        "Web uygulaması zaten çalışıyor. Yalnızca OpenClaw'a başka bir hizmetten mesaj göndermek istiyorsanız bir kanal ekleyin.",
+      channelSetupAction: "Bir kanal kur",
+      channelSetupDismiss: "Web uygulamasını kullanmaya devam et",
     },
   },
   mcpServers: {
@@ -2167,6 +2295,10 @@ export const tr: TranslationMap = {
     targetLabel: "URL veya komut",
     nameInvalid: "Sunucu adları harf, rakam, nokta, tire veya alt çizgi kullanır.",
     targetInvalid: "HTTP aktarımları için bir URL veya stdio için geçerli bir komut satırı girin.",
+    sessionEnableFailed:
+      "Sunucu genel olarak devre dışı şekilde kaydedildi ancak bu oturum için etkinleştirilemedi: {error}",
+    sessionChanged: "Etkin oturum, sunucu etkinleştirilemeden önce değişti.",
+    sessionUnavailable: "Etkin oturum kullanılamıyor; yenileyip tekrar deneyin.",
     nameTaken: "“{name}” adlı bir MCP sunucusu zaten var.",
     missing: "MCP sunucusu “{name}” yapılandırmada bulunamadı.",
     missingTransport: "aktarım eksik",
@@ -2183,12 +2315,14 @@ export const tr: TranslationMap = {
     working: "Çalışıyor…",
   },
   mcpPage: {
+    intro: "OpenClaw'a araçlar sağlayan MCP sunucularını bağlayın ve yönetin.",
     connectorsLink: "Eklentiler sayfasında tek tıklamayla çalışan bağlayıcıları keşfedin.",
     servers: "Sunucular",
     oauth: "OAuth",
     filtered: "Filtrelenmiş",
     configuredServers: "Yapılandırılmış sunucular",
     noServers: "Yapılandırılmış MCP sunucusu yok.",
+    setUpFirstServer: "İlk MCP sunucunuzu kurun",
     operatorCommands: "MCP operatör komutları",
     operatorCommandsHint:
       "Durum, tanılama, kimlik doğrulama, sondalama ve çalışma zamanı yeniden yüklemesi.",
@@ -2199,19 +2333,145 @@ export const tr: TranslationMap = {
     tlsVerifyOff: "TLS doğrulaması kapalı",
     mtls: "mTLS",
   },
+  talkPage: {
+    intro: "Gerçek zamanlı ses sağlayıcılarını, modellerini ve konuşmacı seslerini yapılandırın.",
+    voiceSection: {
+      title: "Gerçek zamanlı ses",
+      description:
+        "Aracınızla kesintisiz sesli konuşmalar yapın. Aşağıdaki seçiciler talk.realtime ayarlarını belirler; daha aşağıdaki tam form ise diğer tüm ayarları kapsar.",
+    },
+    status: {
+      title: "Durum",
+      ready: "Hazır",
+      notReady: "Yapılandırılmadı",
+      unavailable: "Kullanılamıyor",
+      unavailableHint:
+        "Gerçek zamanlı sesin hazır olup olmadığını kontrol etmek için Gateway'e bağlanın.",
+      activeProvider: "Etkin sağlayıcı: {provider}",
+      noProvider: "Henüz hiçbir gerçek zamanlı ses sağlayıcısı yapılandırılmadı.",
+    },
+    provider: {
+      title: "Sağlayıcı",
+      description: "Otomatik seçeneği, kimlik bilgileri çalışan ilk sağlayıcıyı seçer.",
+      auto: "Otomatik",
+    },
+    model: {
+      title: "Model",
+      description: "Tarayıcı Talk oturumları için gerçek zamanlı ses modeli.",
+      default: "Sağlayıcı varsayılanı",
+      defaultNamed: "Varsayılan ({model})",
+    },
+    voice: {
+      title: "Konuşmacı sesi",
+      description:
+        "Sesli yanıtlar için kullanılan ses. GPT-Live, arama başladıktan sonra sesi kilitler.",
+      default: "Sağlayıcı varsayılanı",
+    },
+    gptLive: {
+      title: "GPT-Live",
+      hint: "GPT-Live bir ChatGPT aboneliğiyle çalışır: “openclaw models auth login --provider openai” ile bir kez oturum açın. Platform API anahtarı gerekmez. Yalnızca tarayıcı Talk oturumlarında kullanılabilir. Devredilen işler çalışırken yönlendirilebilir ve yüksek etkili eylemler için sözlü olarak tam onay verilmesi gerekir.",
+      ready: "Hazır",
+    },
+  },
   memoryPage: {
+    intro: "OpenClaw'ın aracı belleğini nasıl depolayacağını, arayacağını ve yöneteceğini seçin.",
     tablistLabel: "Bellek bölümleri",
     tabs: {
       overview: "Genel Bakış",
-      search: "Ara",
-      dreaming: "Rüya Görme",
+      memories: "Anılar",
+      dreams: "Rüyalar",
+      settings: "Ayarlar",
+    },
+    overview: {
+      hero: {
+        awake: "Bellek uyanık",
+        waking: "Bellek uyanıyor…",
+        hibernating: "Bellek hazırda bekliyor",
+        needsAttention: "Bellekle ilgilenilmesi gerekiyor",
+        activeDescription: "{engine} · {mode}",
+        loadingDescription: "Bu aracının bellek motoru ve rüya döngüsü kontrol ediliyor.",
+        offDescription: "Belleği uyandırmak için Ayarlar'dan bir bellek motoru seçin.",
+        disabledDescription: "Seçilen bellek motoru devre dışı. Ayarlar'dan yeniden etkinleştirin.",
+        gatewayOffline: "Gateway çevrimdışı olduğundan bellek durumu kullanılamıyor.",
+        hybridSearch: "karma arama",
+        keywordSearch: "anahtar kelime araması (embedding yok)",
+        openSettings: "Ayarları Aç",
+        retry: "Tekrar dene",
+        refresh: "Durumu yenile",
+      },
+      schedule: {
+        title: "Uyku programı",
+        lightDescription:
+          "Yeni kısa süreli notları sıralar ve umut vadeden adayları uzun süreli belleği değiştirmeden hazırlar.",
+        remDescription:
+          "Uzun süreli belleği değiştirmeden sıralamayı güçlendirmek için son etkinliklerdeki temalar ve yinelenen fikirler üzerine düşünür.",
+        deepDescription:
+          "Hazırlanan adayları puanlar, saklanacakları uzun süreli belleğe (MEMORY.md) aktarır ve rüya günlüğünü yazar.",
+        nextRun: "sonraki {time}",
+        lastRun: "son {time}",
+        notScheduled: "Programlanmadı",
+        learnMore: "Rüya görme nasıl çalışır",
+        openDocs: "Rüya görme kılavuzunu aç",
+      },
+      activity: {
+        title: "Etkinlik",
+        promotedToday: "Bugün aktarılanlar",
+        promotedTotal: "Toplam aktarılan",
+        shortTermCount: "Bekleyen kısa süreli kayıtlar",
+        phaseHitCount: "Faz sinyalleri",
+        lightPhaseHitCount: "Hafif faz eşleşmeleri",
+        remPhaseHitCount: "REM fazı eşleşmeleri",
+      },
+      health: {
+        title: "Motor durumu",
+        provider: "Sağlayıcı",
+        embeddings: "Yerleştirmeler",
+        runtime: "Yerleştirme çalışma zamanı",
+        healthy: "Hazır",
+        unavailable: "Kullanılamıyor",
+        notChecked: "Kontrol edilmedi",
+        notCheckedDescription: "Yerleştirme hazırlığı henüz kontrol edilmedi.",
+        checking: "Kontrol ediliyor…",
+        test: "Test et",
+        testing: "Test ediliyor…",
+      },
+      shortcuts: {
+        title: "Belleği keşfet",
+        memories: "Anılarda ara",
+        diary: "Rüya günlüğünü oku",
+        settings: "Belleği yapılandır",
+      },
+    },
+    memories: {
+      searchLabel: "Anılarda ara",
+      searchPlaceholder: "Bu aracının anılarında ara",
+      searchButton: "Ara",
+      idle: "Bu aracının hatırladığı bir kişiyi, projeyi, kararı veya başka herhangi bir şeyi arayın.",
+      searching: "Anılar aranıyor…",
+      results: "{count} sonuç",
+      empty: "“{query}” ile eşleşen anı bulunamadı.",
+      error: "Bellek araması başarısız oldu: {message}",
+      retry: "Tekrar dene",
+      gatewayUpdateRequired:
+        "Control UI üzerinden anılarda arama yapmak için Gateway'i güncelleyin.",
+      hybridSearch: "hibrit arama",
+      keywordSearch: "anahtar kelime araması",
+      lineRange: "satırlar {start}–{end}",
+      score: "puan {score}",
+      sourceMemory: "bellek",
+      sourceSessions: "oturum",
+      fileLoading: "Bellek dosyasının tamamı yükleniyor…",
+      fileError: "Bu bellek dosyası yüklenemedi: {message}",
+      fileUnsupported: "Bu bellek dosyası metin olarak gösterilemiyor.",
     },
     engine: {
       title: "Motor",
       description:
         "Bellek yuvasına tam olarak bir bellek eklentisi sahip olur. Bir motor seçmek onu etkinleştirir ve diğerlerini devre dışı bırakır.",
       rowTitle: "Bellek motoru",
+      openClawMemory: "OpenClaw Belleği",
       off: "Kapalı",
+      unavailable: "Kullanılamıyor",
       autoHint:
         "Yapılandırmada hiçbir motor sabitlenmemiş, bu nedenle yuva varsayılan sahibine geri döner.",
       explicitHint: "Bu motor, plugins.slots.memory altındaki yapılandırmada sabitlenmiştir.",
@@ -2242,6 +2502,8 @@ export const tr: TranslationMap = {
       memoryWiki: {
         title: "Bellek wiki'si",
       },
+      toggleAriaLabel: "{plugin} eklentisini etkinleştir veya devre dışı bırak",
+      changeFailed: "{plugin} güncellenemedi",
       stateUnknown: "Bilinmiyor",
       manage: "Eklentileri etkinleştir veya devre dışı bırak",
       manageLink: "Eklentileri Aç",
@@ -2528,6 +2790,11 @@ export const tr: TranslationMap = {
       description:
         "Sınırlı bir araç dizinini görünür tutun ve geri kalanını aramanın ardında erteleyin; böylece büyük MCP ve eklenti katalogları istemi doldurmayı bıraksın.",
     },
+    loopDetection: {
+      title: "Araç döngüsü algılama",
+      description:
+        "Bir aracı ilerleme kaydetmeyi bıraktığında tekrarlanan araç çağrılarını uyaran veya engelleyen hareketli geçmiş korumalarını etkinleştirin.",
+    },
     localModelLean: {
       title: "Yerel modeller için sade araçlar",
       description:
@@ -2736,12 +3003,20 @@ export const tr: TranslationMap = {
       next: "Sonraki",
       apply: "Uygula",
       applying: "Uygulanıyor…",
+      evaluate: "Değerlendir",
+      evaluating: "Değerlendiriliyor…",
+      evaluated: "Değerlendirildi",
       revise: "Gözden geçir",
       tweak: "İnce ayar",
       opening: "Açılıyor…",
       reject: "Reddet",
       rejecting: "Reddediliyor…",
       sending: "Gönderiliyor…",
+    },
+    notices: {
+      applied: "Uygulandı",
+      rejected: "Reddedildi",
+      revisionRequested: "Düzeltme istendi",
     },
     revision: {
       title: "Öneriyi {verb}",
@@ -2768,6 +3043,35 @@ export const tr: TranslationMap = {
       loading: "Öneri yükleniyor…",
       supportFilesTitle: "Destek dosyaları",
       clickToPreview: "· önizlemek için tıklayın",
+    },
+    evaluation: {
+      title: "Değerlendirme",
+      version: "Öneri {version}",
+      completedAt: "{time} tarihinde tamamlandı",
+      status: {
+        completed: "Tamamlandı",
+        skipped: "Atlandı",
+        error: "Hata",
+      },
+      decision: {
+        pass: "Geçti",
+        revise: "Gözden geçir",
+        block: "Engelle",
+      },
+      severity: {
+        info: "Bilgi",
+        warn: "Uyarı",
+        critical: "Kritik",
+      },
+      evaluatorVersion: "Değerlendirici {version}",
+      mode: "Mod {mode}",
+      findings: "Bulgular",
+      metrics: "Metrikler",
+      fileLine: "{file}:{line}",
+      errors: {
+        revisionHashUnavailable: "Mevcut teklif revizyonu belirlenemedi.",
+        revisionChanged: "Teklif revizyonu değerlendirme sırasında değişti.",
+      },
     },
     empty: {
       searchTitle: "Eşleşen öneri yok",
@@ -2830,6 +3134,8 @@ export const tr: TranslationMap = {
       comeWithIt: "bununla birlikte gelir.",
       useIt: "Kullan",
       addToSkills: "Skills'e ekle",
+      evaluate: "Değerlendir",
+      runChecks: "Teklif kontrollerini çalıştır",
       tweakIt: "İnce ayar yap",
       askAgent: "Aracıdan bir şeyi değiştirmesini isteyin",
       skipping: "Atlanıyor…",
@@ -3485,18 +3791,46 @@ export const tr: TranslationMap = {
       reload: "Yeniden yükle",
       reloading: "Yeniden yükleniyor…",
     },
+    actions: {
+      dedupeRemovedOneAndKept:
+        "{removed} yinelenen rüya girdisi kaldırıldı ve {kept} girdi korundu.",
+      dedupeRemovedManyAndKept:
+        "{removed} yinelenen rüya girdisi kaldırıldı ve {kept} girdi korundu.",
+      dedupeRemovedOne: "{removed} yinelenen rüya girdisi kaldırıldı.",
+      dedupeRemovedMany: "{removed} yinelenen rüya girdisi kaldırıldı.",
+      repairArchivedThreadCorpus: "arşivlenmiş ileti dizisi külliyatı",
+      repairArchivedIngestionState: "arşivlenmiş alım durumu",
+      repairArchivedDreamDiary: "arşivlenmiş rüya günlüğü",
+      repairNoChanges: "Rüya önbelleği onarımı değişiklik yapılmadan tamamlandı.",
+      repairCompleteWithArchive:
+        "Rüya önbelleği onarımı tamamlandı: {actions}. Arşiv: {archiveDir}",
+      repairComplete: "Rüya önbelleği onarımı tamamlandı: {actions}.",
+      backfillComplete: "{count} rüya günlüğü kaydı geriye dönük dolduruldu.",
+      resetDiaryComplete: "Geriye dönük doldurulan {count} rüya günlüğü kaydı kaldırıldı.",
+      clearReplayedComplete: "Yeniden oynatılan {count} kısa süreli kayıt temizlendi.",
+      complete: "Rüya günlüğü işlemi tamamlandı.",
+      confirmRepair:
+        "Rüya Önbelleği Onarılsın mı? Bu işlem, türetilmiş rüya önbelleği dosyalarını arşivler ve temiz girdilerden yeniden oluşturur. Rüya günlüğünüze dokunulmaz.",
+      confirmDedupe:
+        "Rüya Günlüğündeki Yinelenenler Kaldırılsın mı? Bu işlem DREAMS.md dosyasını yeniden yazar ve yalnızca tamamen aynı olan yinelenen günlük kayıtlarını kaldırır.",
+      archivePathCopied: "Arşiv yolu kopyalandı.",
+      archivePathCopyFailed: "Arşiv yolu kopyalanamadı.",
+      updateFailed: "Rüya ayarları güncellenemedi.",
+      unsupportedPlugin: 'Seçilen bellek eklentisi "{pluginId}" rüya ayarlarını desteklemiyor.',
+      configHashMissing: "Yapılandırma karması eksik; yenileyip tekrar deneyin.",
+    },
     wiki: {
       previewFallbackTitle: "Wiki sayfası",
       close: "Kapat",
       loadingPage: "Wiki sayfası yükleniyor…",
       dreamsTab: "Rüyalar",
       insightsTab: "İçe Aktarılan İçgörüler",
-      palaceTab: "Hafıza Sarayı",
+      wikiTab: "Bellek Vikisi",
       dreamsExplainer:
         "Bu, sistemin belleği yeniden oynatıp pekiştirirken yazdığı ham rüya günlüğüdür; bunu bellek sisteminin neleri fark ettiğini ve hâlâ nerede gürültülü ya da yetersiz göründüğünü incelemek için kullanın.",
       insightsExplainer:
         "Bunlar, harici geçmişten kümelenmiş, içe aktarılan içgörülerdir; bunları içe aktarımların hangi bilgileri kalıcı belleğe geçmeden önce yüzeye çıkardığını gözden geçirmek için kullanın.",
-      palaceExplainer:
+      wikiExplainer:
         "Bu, sistemin arama yapıp üzerine akıl yürütebileceği derlenmiş bellek wiki yüzeyidir; bunu ham içe aktarılan kaynak sohbetler yerine gerçek bellek sayfalarını, iddiaları, açık soruları ve çelişkileri incelemek için kullanın.",
       copyArchivePath: "Arşiv yolunu kopyala",
       loadingInsights: "İçe aktarılan içgörüler yükleniyor…",
@@ -3512,9 +3846,9 @@ export const tr: TranslationMap = {
       riskReasons: "Risk nedenleri:",
       labels: "Etiketler:",
       openSourcePage: "Kaynak sayfasını aç",
-      loadingPalace: "Bellek sarayı yükleniyor…",
-      emptyPalace: "Bellek sarayı henüz doldurulmadı",
-      emptyPalaceHint:
+      loadingWiki: "Bellek vikisi yükleniyor…",
+      emptyWiki: "Bellek vikisi henüz doldurulmadı",
+      emptyWikiHint:
         "Şu anda wiki çoğunlukla ham kaynak içe aktarmaları ve operasyonel raporlar içeriyor. Bu sekme, sentezler, varlıklar veya kavramlar yazılmaya başlandığında kullanışlı hale gelir.",
       claims: "İddialar",
       openQuestions: "Açık sorular",
@@ -3530,13 +3864,67 @@ export const tr: TranslationMap = {
       enableSuffix: ", ardından bu sekmeyi yeniden yükleyin.",
       openConfig: "Yapılandırmayı Aç",
       howToEnable: "Nasıl etkinleştirilir",
+      pageTypes: {
+        entity: "varlık",
+        concept: "kavram",
+        source: "kaynak",
+        synthesis: "sentez",
+        report: "rapor",
+      },
+      pageGroups: {
+        sources: "Kaynaklar",
+        syntheses: "Sentezler",
+        reports: "Raporlar",
+        entities: "Varlıklar",
+        concepts: "Kavramlar",
+      },
+      counts: {
+        pageOne: "{count} sayfa",
+        pages: "{count} sayfa",
+        claimRowOne: "{count} iddia satırı",
+        claimRows: "{count} iddia satırı",
+        openQuestionOne: "{count} açık soru",
+        openQuestions: "{count} açık soru",
+        contradictionOne: "{count} çelişki",
+        contradictions: "{count} çelişki",
+        chats: "{count} sohbet",
+        sensitive: "{count} hassas",
+        signals: "{count} sinyal",
+        messages: "{count} mesaj",
+        userMessages: "{count} kullanıcı",
+        assistantMessages: "{count} asistan",
+      },
+      pageGroupSummary: "{label} · {count}",
+      noPagesYet: "Henüz sayfa yok",
+      sectionPageSummary: "{label}: {count}",
+      questionCountOnPages: "{pageCount} sayfada {questionCount}",
+      risk: {
+        needsReview: "inceleme gerekiyor",
+        low: "düşük risk",
+        medium: "orta risk",
+        high: "yüksek risk",
+        unknown: "bilinmeyen risk",
+      },
+      pageNotFound: "{lookup} için wiki sayfası bulunamadı.",
+      previewTruncated: "Bu sayfanın ilk bölümü gösteriliyor.",
+      previewTruncatedWithTotal: "Bu sayfanın ilk bölümü gösteriliyor (toplam {count} satır).",
+      importedClusterSummary: "İçe aktarılan sohbetler {label} etrafında gruplandırıldı.",
+      withheldDigestOne: "{count} özet, inceleme tamamlanana kadar bekletildi.",
+      withheldDigests: "{count} özet, inceleme tamamlanana kadar bekletildi.",
+      details: "Ayrıntılar",
+      hideDetails: "Ayrıntıları gizle",
+      vault: "Kasa",
+      fullVaultBreakdown: "Kasanın tam dökümü: {breakdown}.",
+      selectedSection: "Seçili bölüm: {summary}.",
+      latestUpdate: "Son güncelleme {date}.",
+      noContent: "Kullanılabilir wiki içeriği yok.",
     },
     phrases: {
       consolidatingMemories: "anılar pekiştiriliyor…",
       tidyingKnowledgeGraph: "bilgi grafiği düzenleniyor…",
       replayingConversations: "bugünün konuşmaları yeniden oynatılıyor…",
       weavingShortTerm: "kısa vadeli hafıza uzun vadeli hafızaya işleniyor…",
-      defragmentingMindPalace: "zihin sarayı birleştiriliyor…",
+      defragmentingMemoryLane: "anı yolu birleştiriliyor…",
       filingLooseThoughts: "dağınık düşünceler dosyalanıyor…",
       connectingDots: "uzaktaki noktalar birleştiriliyor…",
       compostingContext: "eski bağlam pencereleri kompost ediliyor…",
@@ -3561,6 +3949,7 @@ export const tr: TranslationMap = {
     emptySubtitle: "Sign in to a provider or add an API key, then refresh.",
     status: {
       ok: "Bağlı",
+      ready: "Hazır",
       expiring: "Expiring",
       expired: "Süresi doldu",
       missing: "Not signed in",
@@ -3614,6 +4003,16 @@ export const tr: TranslationMap = {
         unknown: "Bağlantı başarısız oldu",
         no_model: "Kullanılabilir model yok",
       },
+    },
+    readiness: {
+      title: "AI kurulumu",
+      heading: "AI'ınıza bağlanın",
+      signedInNoModels:
+        "Oturum açtınız, ancak bu hesap kullanılabilir bir model sunmuyor. Devam etmek için başka bir sağlayıcı veya hesap seçin.",
+      notConfigured: "Bir sağlayıcı seçin ve OpenClaw'un kullanacağı modeli doğrulayın.",
+      noModels: "Kullanılabilir model yok",
+      modelRequired: "Model gerekli",
+      chooseProvider: "Başka bir sağlayıcı seçin",
     },
     logout: {
       action: "Çıkış yap",
@@ -4074,6 +4473,109 @@ export const tr: TranslationMap = {
       multipleMatches: "{shortId} ile birden fazla oturum eşleşiyor.",
       additionalMatches: "Arama sonuçları kaldı. Daha uzun bir kimlik öneki kullanın.",
     },
+    commandResults: {
+      startingNewThread: "Yeni ileti dizisi başlatılıyor...",
+      resettingThread: "İleti dizisi sıfırlanıyor...",
+      stoppingCurrentRun: "Mevcut çalıştırma durduruluyor...",
+      chatHistoryCleared: "Sohbet geçmişi temizlendi.",
+      exportingThread: "İleti dizisi dışa aktarılıyor...",
+      unknownCommand: "Bilinmeyen komut: `{command}`",
+      options: "Seçenekler: {options}.",
+      sessionUnavailable: "Oturum özelliği kullanılamıyor",
+      help: {
+        availableCommands: "Kullanılabilir Komutlar",
+        agentCommand: "aracı",
+        openMenu: "Komut menüsünü açmak için `/` yazın.",
+      },
+      compaction: {
+        failed: "Sıkıştırma başarısız oldu.",
+        failedWithReason: "Sıkıştırma başarısız oldu: {reason}",
+        tokenSummary: " ({before} -> {after} token)",
+        succeeded: "Bağlam başarıyla sıkıştırıldı",
+        skipped: "Sıkıştırma atlandı.",
+        skippedWithReason: "Sıkıştırma atlandı: {reason}",
+      },
+      model: {
+        current: "**Geçerli model:** {model}",
+        available: "**Kullanılabilir:** {models}",
+        more: "+{count} daha",
+        getFailed: "Model bilgileri alınamadı: {error}",
+        set: "Model {model} olarak ayarlandı.",
+        setFailed: "Model ayarlanamadı: {error}",
+      },
+      thinking: {
+        current: "Geçerli düşünme düzeyi: {level}.",
+        getFailed: "Düşünme düzeyi alınamadı: {error}",
+        reset: "Düşünme düzeyi varsayılana sıfırlandı.",
+        resetFailed: "Düşünme düzeyi sıfırlanamadı: {error}",
+        unrecognized: 'Tanınmayan düşünme düzeyi: "{level}". Geçerli düzeyler: {options}.',
+        unsupported:
+          'Bu model için desteklenmeyen düşünme düzeyi: "{level}". Geçerli düzeyler: {options}.',
+        set: "Düşünme düzeyi {level} olarak ayarlandı.",
+        setFailed: "Düşünme düzeyi ayarlanamadı: {error}",
+      },
+      verbose: {
+        current: "Geçerli ayrıntı düzeyi: {level}.",
+        getFailed: "Ayrıntı düzeyi alınamadı: {error}",
+        unrecognized: 'Tanınmayan ayrıntı düzeyi "{level}". Geçerli düzeyler: off, on, full.',
+        set: "Ayrıntılı mod {level} olarak ayarlandı.",
+        setFailed: "Ayrıntılı mod ayarlanamadı: {error}",
+      },
+      fast: {
+        autoValue: "auto ({seconds} sn)",
+        on: "açık",
+        off: "kapalı",
+        sourceSession: " (oturum)",
+        sourceAgent: " (varsayılan: agent)",
+        sourceModel: " (varsayılan: model)",
+        sourceDefault: " (varsayılan)",
+        current: "Geçerli hızlı mod: {value}",
+        options: "on, off, auto ({seconds} sn), default, status",
+        getFailed: "Hızlı mod alınamadı: {error}",
+        reset: "Hızlı mod varsayılana sıfırlandı.",
+        resetFailed: "Hızlı mod sıfırlanamadı: {error}",
+        unrecognized:
+          'Tanınmayan hızlı mod "{mode}". Geçerli düzeyler: on, off, auto, default, status.',
+        setAuto: "Hızlı mod auto olarak ayarlandı.",
+        enabled: "Hızlı mod etkinleştirildi.",
+        disabled: "Hızlı mod devre dışı bırakıldı.",
+        setFailed: "Hızlı mod ayarlanamadı: {error}",
+      },
+      usage: {
+        noActiveThread: "Etkin ileti dizisi yok.",
+        notAvailable: "yok",
+        title: "İş Parçacığı Kullanımı",
+        inputTokens: "Girdi: {count} token",
+        outputTokens: "Çıktı: {count} token",
+        totalTokens: "Toplam: {count} token",
+        context: "Bağlam: {total} üzerinden {percent}",
+        model: "Model: {model}",
+        failed: "Kullanım bilgileri alınamadı: {error}",
+      },
+      agents: {
+        none: "Yapılandırılmış aracı yok.",
+        title: "**Aracılar** ({count})",
+        default: "varsayılan",
+        runtime: " · çalışma zamanı {runtime}",
+        failed: "Aracılar listelenemedi: {error}",
+      },
+      steer: {
+        timeout: "Yönlendirme mesajı kabul edilmeden etkin çalıştırma sona erdi.",
+        failed: "Yönlendirme, çalıştırmaya ulaşmadan başarısız oldu; tekrar deneyin.",
+        usage: "Kullanım: `/steer <message>`",
+        noActiveRun:
+          "Etkin çalıştırma yok. Bunun yerine sohbet girişini veya `/redirect` komutunu kullanın.",
+        succeeded: "Yönlendirildi.",
+        requestFailed: "Yönlendirme başarısız oldu: {error}",
+      },
+      redirect: {
+        timeout: "Yeniden yönlendirme mesajı kabul edilmeden etkin çalıştırma sona erdi.",
+        failed: "Yeniden yönlendirme, çalıştırmaya ulaşmadan başarısız oldu; tekrar deneyin.",
+        usage: "Kullanım: `/redirect <message>`",
+        succeeded: "Yönlendirildi.",
+        requestFailed: "Yönlendirilemedi: {error}",
+      },
+    },
     sessionSharing: {
       menu: "Konu paylaşımı",
       current: "Konu görünürlüğü: {visibility}",
@@ -4226,9 +4728,16 @@ export const tr: TranslationMap = {
     dismissUpdateBanner: "Güncelleme başlığını kapat",
     switchedSession: "{session} oturumuna geçildi",
     actions: {
+      copyAsMarkdown: "Markdown olarak kopyala",
       dismissError: "Hatayı kapat",
       exitFocusMode: "Odak modundan çık",
       scrollToLatest: "En sona kaydır",
+    },
+    markdown: {
+      truncated: "… kısaltıldı (toplam {total} karakter, ilk {shown} gösteriliyor).",
+    },
+    codeBlock: {
+      jsonLines: "JSON · {count} satır",
     },
     workspaceConflict: {
       titleOne: "1 bulut çalışma alanı çakışması",
@@ -4324,6 +4833,7 @@ export const tr: TranslationMap = {
       threads: "Konu Başlıkları",
       groups: "Gruplar",
       coding: "Kodlama",
+      noSessionsForAgent: "Bu aracı için oturum bulunamadı",
       catalogViewOptions: "Görünüm seçenekleri",
       catalogGroupByProject: "Proje",
       catalogGroupByPerson: "Kişi",
@@ -4335,6 +4845,8 @@ export const tr: TranslationMap = {
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "{count} oturum için eylemler",
       toolActivity: "{tool} kullanılıyor",
+      catalogDiscoveryHelp:
+        "{error}. Yerel ileti dizisi keşfini Ayarlar > Otomasyon > Eklentiler bölümünde yapılandırın.",
     },
     welcome: {
       hintBeforeShortcut: "Type a message below ·",
@@ -4368,12 +4880,23 @@ export const tr: TranslationMap = {
       steered: "Yönlendirildi",
       steerQueuedMessage: "Sıradaki mesajı yönlendir",
       removeQueuedMessage: "Sıradaki mesajı kaldır",
+      states: {
+        steering: "Yönlendiriliyor",
+        applyingSettings: "Sohbet ayarları uygulanıyor",
+        waitingForRun: "Geçerli çalıştırmanın tamamlanması bekleniyor",
+        runningCommand: "Komut çalıştırılıyor",
+        waitingForReconnect: "Yeniden bağlanma bekleniyor",
+        needsReview: "İncelenmesi gerekiyor",
+      },
+      imageCount: "Görsel ({count})",
     },
     goals: {
       edit: "Hedefi düzenle",
       pause: "Hedefi duraklat",
       resume: "Hedefi sürdür",
       clear: "Hedefi temizle",
+      showDetails: "Hedef ayrıntılarını göster",
+      hideDetails: "Hedef ayrıntılarını gizle",
     },
     questions: {
       title: "Codex girdiye ihtiyaç duyuyor",
@@ -4399,6 +4922,7 @@ export const tr: TranslationMap = {
       unavailable: "Kullanılamıyor",
       expired: "Süresi doldu",
       cancelled: "İptal edildi",
+      disconnected: "Bağlı değil. Yeniden bağlandıktan sonra tekrar deneyin.",
     },
     imageLightbox: {
       label: "Görsel önizlemesi: {title}",
@@ -4434,14 +4958,36 @@ export const tr: TranslationMap = {
       showMore: "Daha fazla göster",
       unknownDate: "Bilinmeyen tarih",
       voiceNote: "Sesli not",
+      duplicatesCollapsed: "Art arda gelen {count} aynı mesaj daraltıldı",
+      contextFor: "{timestamp} tarihli mesajın bağlamı",
+    },
+    mediaPlayer: {
+      play: "Oynat",
+      pause: "Duraklat",
+      seek: "Medyada ara",
+      download: "{filename} dosyasını indir",
+      preparing: "Oynatma hazırlanıyor…",
+      videoUnavailable: "Bu biçim oynatılamıyor — bunun yerine indirin.",
     },
     modelControls: {
+      current: "Geçerli",
       default: "Varsayılan",
       reasoning: "Akıl yürütme",
       speed: "Hız",
       sessionOverride: "İş parçacığı geçersiz kılma",
+      useDefault: "Varsayılanı kullan",
       usingDefault: "Ayarlar'daki varsayılan kullanılıyor",
       resetToDefault: "Varsayılana sıfırla ({model})",
+      defaultWithModel: "Varsayılan ({model})",
+      defaultWithLevel: "Varsayılan ({level})",
+      fastHelp:
+        "Hızlı yanıtlar daha kısa sürede tamamlanır ve kullanım limitlerinizin daha fazlasını kullanabilir.",
+      speedUnsupported: "Bu modelde hız kontrolü desteklenmiyor.",
+      contextWindow: "{count} bağlam",
+      providerModels: "{provider} modelleri",
+      resetReasoning: "Varsayılana sıfırla ({level})",
+      useDefaultReasoning: "Varsayılan akıl yürütmeyi kullan ({level})",
+      fastResponsesAria: "Hızlı yanıtlar: {state}",
     },
     rail: {
       title: "Oturum yardımcısı",
@@ -4511,6 +5057,21 @@ export const tr: TranslationMap = {
       renderedMarkdownHint: "Hızlı okuma için temizlenmiş zengin metin önizlemesi.",
       noPreviewableMarkdown: "Önizlenebilir markdown içeriği yok.",
       noContent: "İçerik yok",
+      fullContentOversized:
+        "Saklanan transkript girdisi güvenli bir şekilde döndürülemeyecek kadar büyük olduğu için tam içeriğe erişilemiyor.",
+      fullContentNotVisible:
+        "Bu transkript girdisinin görünür bir WebChat yansıtması olmadığı için tam içeriğe erişilemiyor.",
+      fullContentUnavailable: "Bu transkript girdisinin tam içeriğine artık erişilemiyor.",
+      copyContents: "Dosya içeriğini kopyala",
+      fileChanged: "Dosya, yüklendikten sonra diskte değiştirildi.",
+      renderPreview: "İşleme önizlemesi",
+      imagePreview: "Görsel önizlemesi",
+      file: "Dosya",
+      markdownPreview: "Markdown önizlemesi",
+      toolDetails: "Araç ayrıntıları",
+      reloadFailed: "En son dosya yeniden yüklenemedi.",
+      overwriteLoadFailed: "Üzerine yazmadan önce en son dosya yüklenemedi.",
+      fullContentLoadFailed: "Tam içerik yüklenemedi: {error}",
     },
     sidebarColumns: {
       chat: "Sohbet",
@@ -4529,6 +5090,7 @@ export const tr: TranslationMap = {
       unpin: "Sabitlemeyi kaldır",
       loading: "Sohbet yükleniyor",
       noMatches: "Eşleşen mesaj yok",
+      pinnedCount: "{count} sabitlenmiş",
     },
     pairingQrExpired: {
       title: "Eşleştirme QR kodunun süresi doldu",
@@ -4550,6 +5112,8 @@ export const tr: TranslationMap = {
       runInterrupted: "Kesildi",
       runStatus: "Çalışma durumu: {status}",
       compactingContext: "Bağlam sıkıştırılıyor...",
+      compacting: "Sıkıştırılıyor",
+      compact: "Sıkıştır",
       contextCompacted: "Bağlam sıkıştırıldı",
       fallbackActive: "Yedek model etkin: {model}",
       fallbackCleared: "Yedek model kaldırıldı: {model}",
@@ -4566,6 +5130,49 @@ export const tr: TranslationMap = {
       attachPhoto: "Fotoğraf",
       attachFile: "Attach file",
       attachFileOption: "Dosya",
+      menu: {
+        back: "Geri",
+        skills: "Skills",
+        connectors: "Bağlayıcılar",
+        webSearch: "Web araması",
+        managePlugins: "Eklentileri yönet",
+        manageSkills: "Skills'i yönet",
+        browseConnectors: "Bağlayıcılara göz at",
+        addMcpServer: "MCP sunucusu ekle…",
+        addMcpServerTitle: "MCP sunucusu ekle",
+        addMcpServerDescription: "Sunucuyu yapılandırın ve nerede etkinleştirileceğini seçin.",
+        scopeLabel: "Kullanılabilirlik",
+        scopeSession: "Bu oturum",
+        scopeEverywhere: "Her yerde",
+        scopeSessionHint:
+          "Sunucu genel olarak devre dışı kaydedilir ve yalnızca bu oturum için etkinleştirilir.",
+        scopeEverywhereHint: "Sunucu kaydedilir ve her oturum için etkinleştirilir.",
+        toolAccess: {
+          label: "Araç erişimi",
+          loading: "Araçlar yükleniyor…",
+          loadFailed: "Araçlar yüklenemedi.",
+          noTools: "Bu bağlayıcı için kullanılabilir araç yok.",
+          summary: "{total} araçtan {enabled} tanesi açık",
+          summaryOne: "{total} araçtan {enabled} tanesi açık",
+        },
+        enabledCount: "{count} açık",
+        loadingSkills: "Skills yükleniyor…",
+        skillsLoadFailed: "Skills yüklenemedi.",
+        noSkills: "Kullanılabilir Skills yok.",
+        noConnectors: "Yapılandırılmış MCP sunucusu yok.",
+        depsMissing: "bağımlılıklar eksik",
+        skillBlocked: "bu ajan için kullanılamıyor",
+        sessionTag: "oturum",
+        offlineBlocked: "Oturum özelliklerini değiştirmek için Gateway'e bağlanın.",
+        readOnlyBlocked: "Oturum özelliklerini değiştirmek için yazma erişimi gereklidir.",
+        adminBlocked: "Bağlayıcıları yönetmek için yönetici erişimi gereklidir.",
+        savingBlocked: "Mevcut oturum yeteneği değişikliğinin tamamlanmasını bekleyin.",
+      },
+      overrides: {
+        count: "{count} oturum geçersiz kılma ayarı",
+        countOne: "{count} oturum geçersiz kılma ayarı",
+        clear: "Oturum geçersiz kılma ayarlarını temizle",
+      },
       contextUsage: {
         title: "Bağlam kullanımı ayrıntıları",
         open: "Bağlam kullanımı ayrıntılarını aç",
@@ -4637,6 +5244,17 @@ export const tr: TranslationMap = {
       turnCameraOff: "Kamerayı kapat",
       turnCameraOn: "Kamerayı aç",
       voiceTranscript: "Ses dökümü",
+    },
+    attachments: {
+      attachedFile: "Ekli dosya",
+      outsideAllowedFolders: "İzin verilen klasörlerin dışında",
+      unavailable: "Kullanılamıyor",
+      checking: "Kontrol ediliyor...",
+    },
+    voice: {
+      asking: "OpenClaw'a soruluyor...",
+      connecting: "Ses girişi bağlanıyor...",
+      listening: "Dinleniyor...",
     },
     selectors: {
       session: "Chat session",

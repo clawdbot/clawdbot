@@ -8,6 +8,7 @@ export const it: TranslationMap = {
     ok: "OK",
     yes: "Sì",
     no: "No",
+    assistant: "Assistente",
     active: "Attivo",
     loading: "Caricamento…",
     refreshing: "Aggiornamento…",
@@ -35,8 +36,11 @@ export const it: TranslationMap = {
     create: "Crea",
     copy: "Copia",
     copied: "Copiato!",
+    copyFailed: "Copia non riuscita",
     copyCode: "Copia codice",
+    resizeSplitView: "Ridimensiona la vista divisa",
     delete: "Elimina",
+    remove: "Rimuovi",
     dismiss: "Ignora",
     unselect: "Deseleziona",
     enabled: "Abilitato",
@@ -45,6 +49,9 @@ export const it: TranslationMap = {
     none: "nessuno",
     na: "n/d",
     never: "mai",
+    justNow: "proprio ora",
+    now: "ora",
+    unknown: "Sconosciuto",
     configured: "Configurato",
     running: "In esecuzione",
     linked: "Collegato",
@@ -70,6 +77,7 @@ export const it: TranslationMap = {
     settingsSections: "Sezioni impostazioni",
     version: "Versione",
     docs: "Docs",
+    learnMore: "Scopri di più",
     theme: "Tema",
     colorMode: "Modalità colore",
     colorModeOption: "Modalità colore: {mode}",
@@ -113,10 +121,24 @@ export const it: TranslationMap = {
     filteredFileCount: "{count}/{total} file",
     noMatches: "Nessun file corrispondente.",
     navigate: "naviga",
+    kind: {
+      text: "Testo",
+      shell: "Shell",
+      file: "File",
+    },
   },
   mcpApp: {
     title: "App MCP",
     unavailable: "App MCP non disponibile: {error}",
+    errors: {
+      gatewayUnavailable: "Gateway MCP App non disponibile",
+      mountUnavailable: "Montaggio MCP App non disponibile",
+      sandboxTimedOut: "Timeout della sandbox MCP App",
+      sandboxUnavailable: "Sandbox MCP App non disponibile",
+      initializationTimedOut: "Timeout dell'inizializzazione di MCP App",
+      requestFailed: "Richiesta non riuscita",
+      invalidSandboxUrl: "L'URL della sandbox MCP App non è valido",
+    },
   },
   githubPreview: {
     loading: "Caricamento dei dettagli di GitHub…",
@@ -327,6 +349,19 @@ export const it: TranslationMap = {
         nip05: "you@example.com",
         lightningAddress: "you@getalby.com",
       },
+      notices: {
+        timeout:
+          "La richiesta è scaduta dopo 30 secondi; il server potrebbe aver comunque applicato la modifica — controlla il profilo prima di riprovare.",
+        operationFailed: "{prefix}: {error}",
+        updateFailed: "Aggiornamento del profilo non riuscito",
+        updateFailedStatus: "Aggiornamento del profilo non riuscito ({status})",
+        publishFailed: "Pubblicazione del profilo non riuscita su tutti i relay.",
+        published: "Profilo pubblicato sui relay.",
+        importFailed: "Importazione del profilo non riuscita",
+        importFailedStatus: "Importazione del profilo non riuscita ({status})",
+        importedFromRelays: "Profilo importato dai relay. Verificalo e pubblicalo.",
+        imported: "Profilo importato. Verificalo e pubblicalo.",
+      },
     },
   },
   lazyView: {
@@ -338,6 +373,57 @@ export const it: TranslationMap = {
       "OpenClaw è stato aggiornato in background. Ricarica per visualizzare il pannello più recente.",
     reloading: "Ricaricamento…",
     retry: "Riprova",
+    stylesFailed:
+      "Impossibile caricare gli stili, quindi la pagina potrebbe non essere visualizzata correttamente.",
+  },
+  updates: {
+    refreshRequired: "Server aggiornato — aggiorna la pagina per disporre di tutte le funzionalità",
+    coalescedRestart:
+      "Aggiornamento installato. È già in corso un riavvio del Gateway; lo stato verrà aggiornato dopo la riconnessione.",
+    error: "Errore di aggiornamento: {error}",
+    status: "Aggiornamento {status}: {reason}. {guidance}",
+    verificationFailed:
+      "Aggiornamento installato, ma la versione in esecuzione non è cambiata — il riavvio potrebbe essere stato bloccato.",
+    verificationFailedWithVersions:
+      "Aggiornamento installato, ma la versione in esecuzione non è cambiata — il riavvio potrebbe essere stato bloccato. Versione prevista: v{expectedVersion}; versione in esecuzione: v{actualVersion}.",
+    handoffTimeout:
+      "Il passaggio di consegne dell'aggiornamento è iniziato, ma il completamento non è stato segnalato dopo la riconnessione. Esegui `openclaw update status` per il risultato finale.",
+    outcomeUnknown:
+      "La richiesta di aggiornamento potrebbe essere stata accettata, ma il Gateway non ha segnalato un risultato finale dopo la riconnessione. Esegui `openclaw update status` prima di riprovare.",
+    failureReasons: {
+      dirty: "Esegui il commit o lo stash delle modifiche, quindi riprova.",
+      noUpstream: "Imposta un branch upstream, quindi riprova.",
+      notGitInstall:
+        "Non è un checkout git. Esegui `openclaw update` dalla CLI per una reinstallazione globale.",
+      notOpenclawRoot:
+        "Esegui l'aggiornamento da un checkout di OpenClaw oppure usa il percorso di reinstallazione globale tramite CLI.",
+      depsInstallFailed:
+        "Installazione delle dipendenze non riuscita. Correggi l'errore di installazione e riprova.",
+      buildFailed: "Compilazione non riuscita. Correggi l'errore di compilazione e riprova.",
+      buildDirty:
+        "La compilazione della revisione selezionata ha modificato i file del checkout. Riprova con una revisione che includa gli artefatti generati.",
+      uiBuildFailed:
+        "La ricompilazione della Control UI non è riuscita. Correggi l'errore di compilazione dell'interfaccia e riprova.",
+      globalInstallFailed:
+        "Non è stato possibile verificare su disco l'installazione globale del pacchetto. Riprova o esegui nuovamente l'installazione dalla CLI.",
+      restartDisabled:
+        "L'aggiornamento non è stato applicato perché i riavvii del Gateway sono disabilitati. Abilita i riavvii nella configurazione, quindi riprova.",
+      restartUnavailable:
+        "Questa installazione globale non può essere sostituita in modo sicuro mentre i riavvii sono disabilitati e non è presente alcun supervisore.",
+      restartUnhealthy:
+        "Il processo sostitutivo non ha mai raggiunto uno stato integro. Il processo precedente è rimasto attivo per consentirti di ripristinare il sistema.",
+      managedServiceHandoffAlreadyRunning:
+        "È già in corso un altro aggiornamento gestito. Attendi che venga completato, quindi aggiorna lo stato dell'aggiornamento.",
+      doctorFailed:
+        "La riparazione tramite Doctor non è riuscita. Esegui `openclaw doctor --non-interactive` e riprova.",
+      default:
+        "Consulta i log del Gateway per individuare l'errore esatto e riprova dopo averne risolto la causa.",
+    },
+    postRestart: {
+      restartUnhealthy:
+        "Il processo sostitutivo non ha mai raggiunto uno stato integro e il processo precedente è rimasto attivo.",
+      default: "Controlla i log del Gateway per verificare l'errore del processo sostitutivo.",
+    },
   },
   nodes: {
     pairing: {
@@ -832,6 +918,10 @@ export const it: TranslationMap = {
   },
   agents: {
     noAgents: "Nessun agente",
+    defaults: {
+      title: "Impostazioni predefinite degli agenti",
+      description: "Impostazioni predefinite ereditate da ogni agente, salvo sostituzioni.",
+    },
     copyId: "Copia ID",
     copyIdTitle: "Copia l'ID dell'agente negli appunti",
     default: "Predefinito",
@@ -1041,6 +1131,9 @@ export const it: TranslationMap = {
     noEvents: "Ancora nessun evento.",
   },
   configForm: {
+    redactedPlaceholder: "[oscurato - fai clic su Mostra per visualizzare]",
+    sectionHelp: "Guida per {section}",
+    readGuide: "Leggi la guida",
     showAdvanced: "Mostra avanzate",
     advancedHidden: "{count} impostazione avanzata nascosta",
     advancedHiddenPlural: "{count} impostazioni avanzate nascoste",
@@ -1234,6 +1327,8 @@ export const it: TranslationMap = {
       lobsterdexOpen: "Apri Lobsterdex",
     },
     security: {
+      intro:
+        "Verifica l'accesso al Gateway, i criteri degli strumenti, l'autenticazione dei dispositivi e le approvazioni.",
       title: "Sicurezza",
       gatewayAuth: "Autenticazione Gateway",
       execPolicy: "Criterio di esecuzione",
@@ -1402,6 +1497,7 @@ export const it: TranslationMap = {
         "Le notifiche sono disabilitate per OpenClaw in macOS. Consentile in Impostazioni di Sistema > Notifiche.",
     },
     appearance: {
+      intro: "Preferenze relative a tema, chat e barra laterale per questo client Control UI.",
       theme: "Tema",
       chooseTheme: "Scegli una famiglia di temi.",
       importedTheme: "Tema importato",
@@ -1473,11 +1569,11 @@ export const it: TranslationMap = {
     open: "Apri",
     applying: "Applicazione…",
     autoSaveSaving: "Salvataggio…",
+    autoSaveSaved: "Salvato",
     autoSaveFailed: "Salvataggio non riuscito",
     autoSaveConflict: "Impostazioni modificate altrove",
     retry: "Riprova",
-    applyBannerText: "Salvato in openclaw.json — riavvia il gateway per applicare.",
-    applyBannerAction: "Riavvia e applica",
+    applyChanges: "Applica modifiche",
     rawDiscard: "Scarta",
     rawDraftBlocksApply:
       "Modifiche non salvate nella configurazione raw — salva o scarta nell'editor Raw prima di riavviare.",
@@ -1726,7 +1822,6 @@ export const it: TranslationMap = {
     forward: "Avanti",
     chat: "Chat",
     settings: "Impostazioni",
-    settingsGeneral: "Generale",
     askOpenClaw: "Chiedi a OpenClaw",
     settingsGroupConnections: "Connessioni",
     settingsGroupAgents: "Agenti e strumenti",
@@ -1782,6 +1877,11 @@ export const it: TranslationMap = {
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
     unavailable: "The terminal is not available on this gateway.",
+    uploadTooLarge: "Il file supera il limite di caricamento del terminale di 16 MiB: {file}",
+    uploadUnsafeCmdPath:
+      "Impossibile inserire in modo sicuro in cmd.exe un percorso caricato contenente % o !",
+    uploadUnsupportedShell:
+      "Impossibile inserire in modo sicuro un percorso caricato in una shell non supportata: {shell}",
   },
   browser: {
     title: "Browser",
@@ -1820,6 +1920,16 @@ export const it: TranslationMap = {
     inspectUnavailable:
       "L'ispezione degli elementi è disabilitata (browser.evaluateEnabled=false).",
     annotationSent: "Annotazione aggiunta al compositore della chat.",
+    errors: {
+      requestFailed: "Richiesta del browser non riuscita: {error}",
+      screenshotPathMissing:
+        "Lo screenshot del browser non ha restituito un percorso multimediale.",
+      screenshotFetchTimedOut: "Tempo scaduto durante il recupero dello screenshot.",
+      screenshotFetchFailed: "Recupero dello screenshot non riuscito ({status}).",
+      screenshotReadFailed: "Lettura dello screenshot non riuscita.",
+      screenshotDecodeFailed: "Decodifica dello screenshot non riuscita.",
+      canvasUnavailable: "Contesto Canvas 2D non disponibile.",
+    },
     annotatePrompt: {
       introTitled:
         'Ho annotato la pagina all\'indirizzo {url} (titolo segnalato dalla pagina: "{title}") — lo screenshot allegato mostra il mio markup.',
@@ -1867,6 +1977,7 @@ export const it: TranslationMap = {
     automation: "Automazione",
     mcp: "MCP",
     memory: "Memoria",
+    talk: "Talk",
     infrastructure: "Infrastruttura",
     labs: "Labs",
     about: "Informazioni",
@@ -1906,6 +2017,7 @@ export const it: TranslationMap = {
     automation: "Comandi, hook, automazioni e plugin.",
     mcp: "Server MCP, autenticazione, strumenti e diagnostica.",
     memory: "Motore di memoria, backend, ricerca e dreaming.",
+    talk: "Voce in tempo reale: provider, modello e voce dell'interlocutore.",
     infrastructure: "Impostazioni Gateway, web, browser e media.",
     labs: "Funzionalità sperimentali di agenti e strumenti.",
     about: "Control UI e il Gateway connesso creano l'identità.",
@@ -1924,6 +2036,16 @@ export const it: TranslationMap = {
     heading: "Connetti la tua IA",
     intro:
       "OpenClaw riutilizza l'accesso all'IA che hai già: un accesso CLI, una chiave API o l'accesso a un provider.",
+    required: {
+      title: "Nessun provider di IA configurato",
+      body: "OpenClaw non ha trovato un provider e un modello configurati per questo agente. Aggiungine uno prima di iniziare una conversazione.",
+      action: "Configura un provider",
+    },
+    connectionFailure: {
+      title: "OpenClaw non ha potuto utilizzare l'IA configurata",
+      body: "Per questo agente sono selezionati un provider e un modello, ma la connessione non è riuscita. Controlla l'accesso al provider o la chiave API, l'accesso al modello e lo stato del servizio, quindi riprova.",
+      action: "Controlla le impostazioni del provider",
+    },
     loading: "Verifica dell'accesso all'IA disponibile su questo Gateway…",
     retry: "Riprova",
     checkAgain: "Verifica di nuovo",
@@ -1955,6 +2077,8 @@ export const it: TranslationMap = {
     },
     unavailable: {
       title: "Rilevato, ma non testato automaticamente",
+      signIn: "Accedi con {provider}",
+      useApiKey: "Usa la chiave API",
     },
     signIn: {
       title: "Accedi con un provider",
@@ -1984,6 +2108,7 @@ export const it: TranslationMap = {
       title: "La tua IA è pronta",
       detail: "{modelRef} · {latencyMs} ms",
       openChat: "Apri la chat",
+      continueSetup: "Continua la configurazione",
       configuredModel: "Modello configurato",
     },
     failure: {
@@ -2176,6 +2301,11 @@ export const it: TranslationMap = {
       channelDegraded: "{channel} è degradato — chiedimi cosa è successo",
       channelFallback: "Un canale",
       dismiss: "Ignora questo aggiornamento",
+      channelSetupTitle: "Contatta OpenClaw al di fuori di questa app",
+      channelSetupBody:
+        "L'app web è già funzionante. Aggiungi un canale solo se vuoi inviare messaggi a OpenClaw da un altro servizio.",
+      channelSetupAction: "Configura un canale",
+      channelSetupDismiss: "Continua a usare l'app web",
     },
   },
   mcpServers: {
@@ -2189,6 +2319,10 @@ export const it: TranslationMap = {
     targetLabel: "URL o comando",
     nameInvalid: "I nomi dei server usano lettere, numeri, punti, trattini o trattini bassi.",
     targetInvalid: "Inserisci un URL per i trasporti HTTP o una riga di comando valida per stdio.",
+    sessionEnableFailed:
+      "Il server è stato salvato come disabilitato a livello globale, ma non è stato possibile abilitarlo per questa sessione: {error}",
+    sessionChanged: "La sessione attiva è cambiata prima che fosse possibile abilitarlo.",
+    sessionUnavailable: "La sessione attiva non è disponibile; aggiorna e riprova.",
     nameTaken: "Esiste già un server MCP chiamato “{name}”.",
     missing: "Il server MCP “{name}” non è stato trovato nella configurazione.",
     missingTransport: "trasporto mancante",
@@ -2205,12 +2339,14 @@ export const it: TranslationMap = {
     working: "In elaborazione…",
   },
   mcpPage: {
+    intro: "Connetti e gestisci i server MCP che forniscono strumenti a OpenClaw.",
     connectorsLink: "Scopri i connettori con un clic nella pagina Plugin.",
     servers: "Server",
     oauth: "OAuth",
     filtered: "Filtrato",
     configuredServers: "Server configurati",
     noServers: "Nessun server MCP configurato.",
+    setUpFirstServer: "Configura il tuo primo server MCP",
     operatorCommands: "Comandi operatore MCP",
     operatorCommandsHint:
       "Stato, diagnostica, autenticazione, probing e ricaricamento del runtime.",
@@ -2221,19 +2357,145 @@ export const it: TranslationMap = {
     tlsVerifyOff: "verifica TLS disattivata",
     mtls: "mTLS",
   },
+  talkPage: {
+    intro: "Configura provider vocali in tempo reale, modelli e voci degli speaker.",
+    voiceSection: {
+      title: "Voce in tempo reale",
+      description:
+        "Conversazioni vocali continue con il tuo agente. I selettori qui sotto modificano le impostazioni talk.realtime; il modulo completo più in basso include tutte le altre opzioni.",
+    },
+    status: {
+      title: "Stato",
+      ready: "Pronte",
+      notReady: "Non configurato",
+      unavailable: "Non disponibile",
+      unavailableHint: "Connettiti al Gateway per verificare se la voce in tempo reale è pronta.",
+      activeProvider: "Provider attivo: {provider}",
+      noProvider: "Non è ancora configurato alcun provider vocale in tempo reale.",
+    },
+    provider: {
+      title: "Provider",
+      description: "Auto seleziona il primo provider con credenziali funzionanti.",
+      auto: "Automatico",
+    },
+    model: {
+      title: "Modello",
+      description: "Modello vocale in tempo reale per le sessioni Talk nel browser.",
+      default: "Predefinito del provider",
+      defaultNamed: "Predefinito ({model})",
+    },
+    voice: {
+      title: "Voce del parlante",
+      description:
+        "Voce utilizzata per le risposte vocali. GPT-Live blocca la voce all'avvio di una chiamata.",
+      default: "Predefinita del provider",
+    },
+    gptLive: {
+      title: "GPT-Live",
+      hint: "GPT-Live funziona con un abbonamento ChatGPT: accedi una volta con “openclaw models auth login --provider openai”. Non è necessaria una chiave API Platform. Solo per Talk nel browser. Il lavoro delegato può essere guidato durante l'esecuzione e richiede una conferma vocale esatta per le azioni ad alto impatto.",
+      ready: "Pronte",
+    },
+  },
   memoryPage: {
+    intro: "Scegli come OpenClaw archivia, cerca e gestisce la memoria dell'agente.",
     tablistLabel: "Sezioni memoria",
     tabs: {
       overview: "Panoramica",
-      search: "Cerca",
-      dreaming: "Dreaming",
+      memories: "Memorie",
+      dreams: "Sogni",
+      settings: "Impostazioni",
+    },
+    overview: {
+      hero: {
+        awake: "La memoria è attiva",
+        waking: "Attivazione della memoria…",
+        hibernating: "La memoria è in ibernazione",
+        needsAttention: "La memoria richiede attenzione",
+        activeDescription: "{engine} · {mode}",
+        loadingDescription:
+          "Verifica del motore di memoria e del ciclo dei sogni di questo agente.",
+        offDescription: "Scegli un motore di memoria nelle Impostazioni per attivarla.",
+        disabledDescription:
+          "Il motore di memoria selezionato è disabilitato. Riabilitalo nelle Impostazioni.",
+        gatewayOffline: "Il Gateway è offline, quindi lo stato della memoria non è disponibile.",
+        hybridSearch: "ricerca ibrida",
+        keywordSearch: "ricerca per parole chiave (senza embedding)",
+        openSettings: "Apri impostazioni",
+        retry: "Riprova",
+        refresh: "Aggiorna stato",
+      },
+      schedule: {
+        title: "Programma del sonno",
+        lightDescription:
+          "Ordina le nuove note a breve termine e prepara i candidati promettenti senza modificare la memoria a lungo termine.",
+        remDescription:
+          "Riflette sui temi e sulle idee ricorrenti nelle attività recenti per migliorare l'ordinamento senza modificare la memoria a lungo termine.",
+        deepDescription:
+          "Valuta i candidati preparati, promuove quelli da conservare nella memoria a lungo termine (MEMORY.md) e scrive il diario dei sogni.",
+        nextRun: "prossima esecuzione {time}",
+        lastRun: "ultima esecuzione {time}",
+        notScheduled: "Non programmato",
+        learnMore: "Come funziona il sogno",
+        openDocs: "Apri la guida al sogno",
+      },
+      activity: {
+        title: "Attività",
+        promotedToday: "Promossi oggi",
+        promotedTotal: "Totale promossi",
+        shortTermCount: "Voci a breve termine in sospeso",
+        phaseHitCount: "Segnali di fase",
+        lightPhaseHitCount: "Corrispondenze della fase leggera",
+        remPhaseHitCount: "Corrispondenze della fase REM",
+      },
+      health: {
+        title: "Stato del motore",
+        provider: "Provider",
+        embeddings: "Embedding",
+        runtime: "Runtime degli embedding",
+        healthy: "Pronte",
+        unavailable: "Non disponibile",
+        notChecked: "Non verificato",
+        notCheckedDescription: "La disponibilità degli embedding non è stata ancora verificata.",
+        checking: "Verifica in corso…",
+        test: "Verifica",
+        testing: "Verifica in corso…",
+      },
+      shortcuts: {
+        title: "Esplora la memoria",
+        memories: "Cerca nei ricordi",
+        diary: "Leggi il diario dei sogni",
+        settings: "Configura la memoria",
+      },
+    },
+    memories: {
+      searchLabel: "Cerca nei ricordi",
+      searchPlaceholder: "Cerca nei ricordi di questo agente",
+      searchButton: "Cerca",
+      idle: "Cerca una persona, un progetto, una decisione o qualsiasi altra cosa che questo agente ricordi.",
+      searching: "Ricerca nei ricordi…",
+      results: "{count} risultati",
+      empty: "Nessun ricordo corrisponde a “{query}”.",
+      error: "Ricerca nei ricordi non riuscita: {message}",
+      retry: "Riprova",
+      gatewayUpdateRequired: "Aggiorna il Gateway per cercare nei ricordi dalla Control UI.",
+      hybridSearch: "ricerca ibrida",
+      keywordSearch: "ricerca per parole chiave",
+      lineRange: "righe {start}–{end}",
+      score: "punteggio {score}",
+      sourceMemory: "memoria",
+      sourceSessions: "sessioni",
+      fileLoading: "Caricamento del file di memoria completo…",
+      fileError: "Impossibile caricare questo file di memoria: {message}",
+      fileUnsupported: "Questo file di memoria non può essere visualizzato come testo.",
     },
     engine: {
       title: "Motore",
       description:
         "Esattamente un plugin di memoria occupa lo slot memoria. Selezionando un motore lo si abilita e si disabilitano gli altri.",
       rowTitle: "Motore di memoria",
+      openClawMemory: "Memoria OpenClaw",
       off: "Disattivato",
+      unavailable: "Non disponibile",
       autoHint:
         "Nessun motore è fissato nella configurazione, quindi lo slot ricade sul suo proprietario predefinito.",
       explicitHint: "Questo motore è fissato nella configurazione sotto plugins.slots.memory.",
@@ -2265,6 +2527,8 @@ export const it: TranslationMap = {
       memoryWiki: {
         title: "Wiki della memoria",
       },
+      toggleAriaLabel: "Attiva o disattiva {plugin}",
+      changeFailed: "Impossibile aggiornare {plugin}",
       stateUnknown: "Sconosciuto",
       manage: "Abilita o disabilita i componenti aggiuntivi",
       manageLink: "Apri Plugin",
@@ -2553,6 +2817,11 @@ export const it: TranslationMap = {
       description:
         "Mantieni visibile una directory di strumenti limitata e rimanda il resto dietro la ricerca, così i grandi cataloghi MCP e plugin smettono di affollare il prompt.",
     },
+    loopDetection: {
+      title: "Rilevamento dei cicli degli strumenti",
+      description:
+        "Attiva controlli basati sulla cronologia recente che avvisano o bloccano le chiamate ripetute agli strumenti quando un agente smette di fare progressi.",
+    },
     localModelLean: {
       title: "Strumenti essenziali per modelli locali",
       description:
@@ -2760,12 +3029,20 @@ export const it: TranslationMap = {
       next: "Successivo",
       apply: "Applica",
       applying: "Applicazione in corso…",
+      evaluate: "Valuta",
+      evaluating: "Valutazione…",
+      evaluated: "Valutata",
       revise: "Rivedi",
       tweak: "Modifica",
       opening: "Apertura…",
       reject: "Rifiuta",
       rejecting: "Rifiuto in corso…",
       sending: "Invio in corso…",
+    },
+    notices: {
+      applied: "Applicato",
+      rejected: "Rifiutato",
+      revisionRequested: "Revisione richiesta",
     },
     revision: {
       title: "{verb} proposta",
@@ -2792,6 +3069,35 @@ export const it: TranslationMap = {
       loading: "Caricamento proposta…",
       supportFilesTitle: "File di supporto",
       clickToPreview: "· clicca per anteprima",
+    },
+    evaluation: {
+      title: "Valutazione",
+      version: "Proposta {version}",
+      completedAt: "Completata {time}",
+      status: {
+        completed: "Completata",
+        skipped: "Saltati",
+        error: "Errore",
+      },
+      decision: {
+        pass: "Superata",
+        revise: "Rivedi",
+        block: "Bloccata",
+      },
+      severity: {
+        info: "Informazione",
+        warn: "Avviso",
+        critical: "Critica",
+      },
+      evaluatorVersion: "Valutatore {version}",
+      mode: "Modalità {mode}",
+      findings: "Risultati",
+      metrics: "Metriche",
+      fileLine: "{file}:{line}",
+      errors: {
+        revisionHashUnavailable: "Impossibile identificare la revisione corrente della proposta.",
+        revisionChanged: "La revisione della proposta è cambiata durante la valutazione.",
+      },
     },
     empty: {
       searchTitle: "Nessuna proposta corrispondente",
@@ -2855,6 +3161,8 @@ export const it: TranslationMap = {
       comeWithIt: "inclusi.",
       useIt: "Usalo",
       addToSkills: "Aggiungi alle tue skill",
+      evaluate: "Valuta",
+      runChecks: "Esegui i controlli sulla proposta",
       tweakIt: "Modificalo",
       askAgent: "Chiedi all'agente di cambiare qualcosa",
       skipping: "Salto in corso…",
@@ -3514,18 +3822,46 @@ export const it: TranslationMap = {
       reload: "Ricarica",
       reloading: "Ricaricamento…",
     },
+    actions: {
+      dedupeRemovedOneAndKept: "Rimossa {removed} voce duplicata del sogno e mantenute {kept}.",
+      dedupeRemovedManyAndKept: "Rimosse {removed} voci duplicate del sogno e mantenute {kept}.",
+      dedupeRemovedOne: "Rimossa {removed} voce duplicata del sogno.",
+      dedupeRemovedMany: "Rimosse {removed} voci duplicate del sogno.",
+      repairArchivedThreadCorpus: "corpus dei thread archiviati",
+      repairArchivedIngestionState: "stato di acquisizione archiviato",
+      repairArchivedDreamDiary: "diario dei sogni archiviato",
+      repairNoChanges: "La riparazione della cache dei sogni è terminata senza modifiche.",
+      repairCompleteWithArchive:
+        "Riparazione della cache dei sogni completata: {actions}. Archivio: {archiveDir}",
+      repairComplete: "Riparazione della cache dei sogni completata: {actions}.",
+      backfillComplete: "Sono state aggiunte retroattivamente {count} voci al diario dei sogni.",
+      resetDiaryComplete:
+        "Sono state rimosse {count} voci aggiunte retroattivamente dal diario dei sogni.",
+      clearReplayedComplete: "Sono state eliminate {count} voci a breve termine riprodotte.",
+      complete: "Azione sul diario dei sogni completata.",
+      confirmRepair:
+        "Riparare la cache dei sogni? Questa operazione archivia i file derivati della cache dei sogni e li ricostruisce a partire da dati puliti. Il diario dei sogni rimarrà invariato.",
+      confirmDedupe:
+        "Rimuovere i duplicati dal diario dei sogni? Questa operazione riscrive DREAMS.md e rimuove solo le voci del diario perfettamente identiche.",
+      archivePathCopied: "Percorso dell'archivio copiato.",
+      archivePathCopyFailed: "Impossibile copiare il percorso dell'archivio.",
+      updateFailed: "Impossibile aggiornare le impostazioni dei sogni.",
+      unsupportedPlugin:
+        'Il plugin di memoria selezionato "{pluginId}" non supporta le impostazioni dei sogni.',
+      configHashMissing: "Hash della configurazione mancante; aggiorna e riprova.",
+    },
     wiki: {
       previewFallbackTitle: "Pagina wiki",
       close: "Chiudi",
       loadingPage: "Caricamento della pagina wiki…",
       dreamsTab: "Sogni",
       insightsTab: "Insight importati",
-      palaceTab: "Palazzo della memoria",
+      wikiTab: "Wiki della memoria",
       dreamsExplainer:
         "Questo è il diario grezzo dei sogni che il sistema scrive mentre riproduce e consolida la memoria; usalo per esaminare ciò che il sistema di memoria sta notando e dove risulta ancora rumoroso o scarno.",
       insightsExplainer:
         "Questi sono insight importati raggruppati dalla cronologia esterna; usali per rivedere ciò che le importazioni hanno evidenziato prima che qualcosa si trasformi in memoria durevole.",
-      palaceExplainer:
+      wikiExplainer:
         "Questa è la superficie compilata della wiki della memoria che il sistema può cercare e su cui può ragionare; usala per esaminare le pagine di memoria effettive, le affermazioni, le domande aperte e le contraddizioni anziché le chat di origine importate grezze.",
       copyArchivePath: "Copia percorso archivio",
       loadingInsights: "Caricamento degli insight importati…",
@@ -3541,9 +3877,9 @@ export const it: TranslationMap = {
       riskReasons: "Motivi di rischio:",
       labels: "Etichette:",
       openSourcePage: "Apri pagina di origine",
-      loadingPalace: "Caricamento del palazzo della memoria…",
-      emptyPalace: "Il palazzo della memoria non è ancora popolato",
-      emptyPalaceHint:
+      loadingWiki: "Caricamento della wiki della memoria…",
+      emptyWiki: "La wiki della memoria non contiene ancora dati",
+      emptyWikiHint:
         "Al momento il wiki contiene principalmente importazioni di origine grezze e report operativi. Questa scheda diventa utile quando iniziano a essere scritte sintesi, entità o concetti.",
       claims: "Affermazioni",
       openQuestions: "Domande aperte",
@@ -3559,13 +3895,68 @@ export const it: TranslationMap = {
       enableSuffix: ", quindi ricarica questa scheda.",
       openConfig: "Apri configurazione",
       howToEnable: "Come abilitare",
+      pageTypes: {
+        entity: "entità",
+        concept: "concetto",
+        source: "fonte",
+        synthesis: "sintesi",
+        report: "report",
+      },
+      pageGroups: {
+        sources: "Fonti",
+        syntheses: "Sintesi",
+        reports: "Report",
+        entities: "Entità",
+        concepts: "Concetti",
+      },
+      counts: {
+        pageOne: "{count} pagina",
+        pages: "{count} pagine",
+        claimRowOne: "{count} riga di affermazione",
+        claimRows: "{count} righe di affermazioni",
+        openQuestionOne: "{count} domanda aperta",
+        openQuestions: "{count} domande aperte",
+        contradictionOne: "{count} contraddizione",
+        contradictions: "{count} contraddizioni",
+        chats: "{count} chat",
+        sensitive: "{count} sensibili",
+        signals: "{count} segnali",
+        messages: "{count} messaggi",
+        userMessages: "{count} utente",
+        assistantMessages: "{count} assistente",
+      },
+      pageGroupSummary: "{label} · {count}",
+      noPagesYet: "Ancora nessuna pagina",
+      sectionPageSummary: "{label}: {count}",
+      questionCountOnPages: "{questionCount} su {pageCount}",
+      risk: {
+        needsReview: "da rivedere",
+        low: "rischio basso",
+        medium: "rischio medio",
+        high: "rischio alto",
+        unknown: "rischio sconosciuto",
+      },
+      pageNotFound: "Nessuna pagina wiki trovata per {lookup}.",
+      previewTruncated: "Visualizzazione del primo blocco di questa pagina.",
+      previewTruncatedWithTotal:
+        "Visualizzazione del primo blocco di questa pagina ({count} righe totali).",
+      importedClusterSummary: "Chat importate raggruppate attorno a {label}.",
+      withheldDigestOne: "{count} riepilogo è stato trattenuto in attesa di revisione.",
+      withheldDigests: "{count} riepiloghi sono stati trattenuti in attesa di revisione.",
+      details: "Dettagli",
+      hideDetails: "Nascondi dettagli",
+      vault: "Archivio",
+      fullVaultBreakdown: "Ripartizione completa dell'archivio: {breakdown}.",
+      selectedSection: "Sezione selezionata: {summary}.",
+      latestUpdate: "Ultimo aggiornamento {date}.",
+      noContent: "Nessun contenuto wiki disponibile.",
     },
     phrases: {
       consolidatingMemories: "consolidamento dei ricordi…",
       tidyingKnowledgeGraph: "riordino del grafo della conoscenza…",
       replayingConversations: "replay delle conversazioni di oggi…",
       weavingShortTerm: "intreccio del breve termine nel lungo termine…",
-      defragmentingMindPalace: "deframmentazione del palazzo della mente…",
+      defragmentingMemoryLane: "deframmentazione del viale dei ricordi…",
       filingLooseThoughts: "archiviazione dei pensieri sparsi…",
       connectingDots: "collegamento di punti lontani…",
       compostingContext: "compostaggio delle vecchie finestre di contesto…",
@@ -3590,6 +3981,7 @@ export const it: TranslationMap = {
     emptySubtitle: "Sign in to a provider or add an API key, then refresh.",
     status: {
       ok: "Connesso",
+      ready: "Pronte",
       expiring: "Expiring",
       expired: "Scaduto",
       missing: "Not signed in",
@@ -3643,6 +4035,16 @@ export const it: TranslationMap = {
         unknown: "Connessione non riuscita",
         no_model: "Nessun modello disponibile",
       },
+    },
+    readiness: {
+      title: "Configurazione dell'IA",
+      heading: "Connetti la tua IA",
+      signedInNoModels:
+        "Hai effettuato l'accesso, ma questo account non offre modelli utilizzabili. Scegli un altro provider o account per continuare.",
+      notConfigured: "Scegli un provider e verifica il modello che OpenClaw utilizzerà.",
+      noModels: "Nessun modello disponibile",
+      modelRequired: "Modello obbligatorio",
+      chooseProvider: "Scegli un altro provider",
     },
     logout: {
       action: "Esci",
@@ -4108,6 +4510,113 @@ export const it: TranslationMap = {
       multipleMatches: "Più di una sessione corrisponde a {shortId}.",
       additionalMatches: "Ci sono altri risultati di ricerca. Usa un prefisso id più lungo.",
     },
+    commandResults: {
+      startingNewThread: "Avvio di una nuova conversazione...",
+      resettingThread: "Reimpostazione della conversazione...",
+      stoppingCurrentRun: "Interruzione dell'esecuzione corrente...",
+      chatHistoryCleared: "Cronologia della chat cancellata.",
+      exportingThread: "Esportazione della conversazione...",
+      unknownCommand: "Comando sconosciuto: `{command}`",
+      options: "Opzioni: {options}.",
+      sessionUnavailable: "La funzionalità di sessione non è disponibile",
+      help: {
+        availableCommands: "Comandi disponibili",
+        agentCommand: "agente",
+        openMenu: "Digita `/` per aprire il menu dei comandi.",
+      },
+      compaction: {
+        failed: "Compattazione non riuscita.",
+        failedWithReason: "Compattazione non riuscita: {reason}",
+        tokenSummary: " ({before} -> {after} token)",
+        succeeded: "Contesto compattato correttamente",
+        skipped: "Compattazione ignorata.",
+        skippedWithReason: "Compattazione ignorata: {reason}",
+      },
+      model: {
+        current: "**Modello attuale:** {model}",
+        available: "**Disponibili:** {models}",
+        more: "+{count} altri",
+        getFailed: "Impossibile ottenere le informazioni sul modello: {error}",
+        set: "Modello impostato su {model}.",
+        setFailed: "Impossibile impostare il modello: {error}",
+      },
+      thinking: {
+        current: "Livello di ragionamento attuale: {level}.",
+        getFailed: "Impossibile ottenere il livello di ragionamento: {error}",
+        reset: "Livello di ragionamento ripristinato al valore predefinito.",
+        resetFailed: "Impossibile ripristinare il livello di ragionamento: {error}",
+        unrecognized:
+          'Livello di ragionamento "{level}" non riconosciuto. Livelli validi: {options}.',
+        unsupported:
+          'Livello di ragionamento "{level}" non supportato per questo modello. Livelli validi: {options}.',
+        set: "Livello di ragionamento impostato su {level}.",
+        setFailed: "Impossibile impostare il livello di ragionamento: {error}",
+      },
+      verbose: {
+        current: "Livello di dettaglio attuale: {level}.",
+        getFailed: "Impossibile ottenere il livello di dettaglio: {error}",
+        unrecognized:
+          'Livello di dettaglio "{level}" non riconosciuto. Livelli validi: off, on, full.',
+        set: "Modalità dettagliata impostata su {level}.",
+        setFailed: "Impossibile impostare la modalità dettagliata: {error}",
+      },
+      fast: {
+        autoValue: "auto ({seconds} sec)",
+        on: "on",
+        off: "off",
+        sourceSession: " (sessione)",
+        sourceAgent: " (predefinito: agente)",
+        sourceModel: " (predefinito: modello)",
+        sourceDefault: " (predefinito)",
+        current: "Modalità veloce attuale: {value}",
+        options: "on, off, auto ({seconds} sec), default, status",
+        getFailed: "Impossibile ottenere la modalità veloce: {error}",
+        reset: "Modalità veloce ripristinata al valore predefinito.",
+        resetFailed: "Impossibile ripristinare la modalità veloce: {error}",
+        unrecognized:
+          'Modalità veloce "{mode}" non riconosciuta. Livelli validi: on, off, auto, default, status.',
+        setAuto: "Modalità veloce impostata su auto.",
+        enabled: "Modalità veloce attivata.",
+        disabled: "Modalità veloce disattivata.",
+        setFailed: "Impossibile impostare la modalità veloce: {error}",
+      },
+      usage: {
+        noActiveThread: "Nessun thread attivo.",
+        notAvailable: "n/d",
+        title: "Utilizzo del thread",
+        inputTokens: "Input: {count} token",
+        outputTokens: "Output: {count} token",
+        totalTokens: "Totale: {count} token",
+        context: "Contesto: {percent} di {total}",
+        model: "Modello: {model}",
+        failed: "Impossibile ottenere l'utilizzo: {error}",
+      },
+      agents: {
+        none: "Nessun agente configurato.",
+        title: "**Agenti** ({count})",
+        default: "predefinito",
+        runtime: " · runtime {runtime}",
+        failed: "Impossibile elencare gli agenti: {error}",
+      },
+      steer: {
+        timeout:
+          "L'esecuzione attiva è terminata prima che il messaggio di indirizzamento fosse accettato.",
+        failed: "L'indirizzamento non è riuscito prima di raggiungere l'esecuzione; riprova.",
+        usage: "Utilizzo: `/steer <message>`",
+        noActiveRun:
+          "Nessuna esecuzione attiva. Usa il campo di immissione della chat o `/redirect`.",
+        succeeded: "Indirizzamento eseguito.",
+        requestFailed: "Impossibile indirizzare: {error}",
+      },
+      redirect: {
+        timeout:
+          "L'esecuzione attiva è terminata prima che il messaggio di reindirizzamento fosse accettato.",
+        failed: "Reindirizzamento non riuscito prima di raggiungere l'esecuzione; riprova.",
+        usage: "Utilizzo: `/redirect <message>`",
+        succeeded: "Reindirizzato.",
+        requestFailed: "Reindirizzamento non riuscito: {error}",
+      },
+    },
     sessionSharing: {
       menu: "Condivisione thread",
       current: "Visibilità thread: {visibility}",
@@ -4261,9 +4770,16 @@ export const it: TranslationMap = {
     dismissUpdateBanner: "Ignora banner di aggiornamento",
     switchedSession: "Passato a {session}",
     actions: {
+      copyAsMarkdown: "Copia come markdown",
       dismissError: "Ignora errore",
       exitFocusMode: "Esci dalla modalità focus",
       scrollToLatest: "Scorri all'ultimo",
+    },
+    markdown: {
+      truncated: "… troncato ({total} caratteri, vengono mostrati i primi {shown}).",
+    },
+    codeBlock: {
+      jsonLines: "JSON · {count} righe",
     },
     workspaceConflict: {
       titleOne: "1 conflitto di workspace cloud",
@@ -4359,6 +4875,7 @@ export const it: TranslationMap = {
       threads: "Thread",
       groups: "Gruppi",
       coding: "Programmazione",
+      noSessionsForAgent: "Nessuna sessione trovata per questo agente",
       catalogViewOptions: "Opzioni di visualizzazione",
       catalogGroupByProject: "Progetto",
       catalogGroupByPerson: "Persona",
@@ -4370,6 +4887,8 @@ export const it: TranslationMap = {
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "Azioni per {count} sessioni",
       toolActivity: "Utilizzo di {tool}",
+      catalogDiscoveryHelp:
+        "{error}. Configura il rilevamento nativo dei thread in Impostazioni > Automazione > Plugin.",
     },
     welcome: {
       hintBeforeShortcut: "Type a message below ·",
@@ -4403,12 +4922,23 @@ export const it: TranslationMap = {
       steered: "Orientato",
       steerQueuedMessage: "Orienta il messaggio in coda",
       removeQueuedMessage: "Rimuovi il messaggio in coda",
+      states: {
+        steering: "Reindirizzamento",
+        applyingSettings: "Applicazione delle impostazioni della chat",
+        waitingForRun: "In attesa dell'esecuzione corrente",
+        runningCommand: "Esecuzione del comando",
+        waitingForReconnect: "In attesa della riconnessione",
+        needsReview: "Da esaminare",
+      },
+      imageCount: "Immagine ({count})",
     },
     goals: {
       edit: "Modifica obiettivo",
       pause: "Sospendi obiettivo",
       resume: "Riprendi obiettivo",
       clear: "Cancella obiettivo",
+      showDetails: "Mostra i dettagli dell'obiettivo",
+      hideDetails: "Nascondi i dettagli dell'obiettivo",
     },
     questions: {
       title: "Codex richiede un input",
@@ -4434,6 +4964,7 @@ export const it: TranslationMap = {
       unavailable: "Non disponibile",
       expired: "Scaduto",
       cancelled: "Annullato",
+      disconnected: "Connessione assente. Riprova dopo esserti riconnesso.",
     },
     imageLightbox: {
       label: "Anteprima immagine: {title}",
@@ -4469,14 +5000,36 @@ export const it: TranslationMap = {
       showMore: "Mostra altro",
       unknownDate: "Data sconosciuta",
       voiceNote: "Nota vocale",
+      duplicatesCollapsed: "{count} messaggi identici consecutivi raggruppati",
+      contextFor: "Contesto del messaggio per {timestamp}",
+    },
+    mediaPlayer: {
+      play: "Riproduci",
+      pause: "Pausa",
+      seek: "Cerca nel contenuto multimediale",
+      download: "Scarica {filename}",
+      preparing: "Preparazione della riproduzione…",
+      videoUnavailable: "Impossibile riprodurre questo formato — scaricalo.",
     },
     modelControls: {
+      current: "Attuale",
       default: "Predefinito",
       reasoning: "Ragionamento",
       speed: "Velocità",
       sessionOverride: "Override thread",
+      useDefault: "Usa predefinito",
       usingDefault: "Utilizzo predefinito dalle Impostazioni",
       resetToDefault: "Ripristina predefinito ({model})",
+      defaultWithModel: "Predefinito ({model})",
+      defaultWithLevel: "Predefinito ({level})",
+      fastHelp:
+        "Le risposte rapide vengono completate prima e possono utilizzare una quota maggiore dei tuoi limiti di utilizzo.",
+      speedUnsupported: "Il controllo della velocità non è supportato per questo modello.",
+      contextWindow: "{count} di contesto",
+      providerModels: "Modelli di {provider}",
+      resetReasoning: "Ripristina il valore predefinito ({level})",
+      useDefaultReasoning: "Usa il ragionamento predefinito ({level})",
+      fastResponsesAria: "Risposte rapide: {state}",
     },
     rail: {
       title: "Assistente sessione",
@@ -4546,6 +5099,22 @@ export const it: TranslationMap = {
       renderedMarkdownHint: "Anteprima rich-text sanificata per una lettura rapida.",
       noPreviewableMarkdown: "Nessun contenuto markdown visualizzabile in anteprima.",
       noContent: "Nessun contenuto disponibile",
+      fullContentOversized:
+        "Il contenuto completo non è disponibile perché la voce della trascrizione memorizzata è troppo grande per essere restituita in modo sicuro.",
+      fullContentNotVisible:
+        "Il contenuto completo non è disponibile perché questa voce della trascrizione non dispone di una proiezione WebChat visibile.",
+      fullContentUnavailable:
+        "Il contenuto completo non è più disponibile per questa voce della trascrizione.",
+      copyContents: "Copia il contenuto del file",
+      fileChanged: "Il file sul disco è stato modificato dopo il caricamento.",
+      renderPreview: "Anteprima del rendering",
+      imagePreview: "Anteprima dell'immagine",
+      file: "File",
+      markdownPreview: "Anteprima Markdown",
+      toolDetails: "Dettagli dello strumento",
+      reloadFailed: "Impossibile ricaricare il file più recente.",
+      overwriteLoadFailed: "Impossibile caricare il file più recente prima di sovrascriverlo.",
+      fullContentLoadFailed: "Impossibile caricare il contenuto completo: {error}",
     },
     sidebarColumns: {
       chat: "Chat",
@@ -4564,6 +5133,7 @@ export const it: TranslationMap = {
       unpin: "Rimuovi dai fissati",
       loading: "Caricamento chat",
       noMatches: "Nessun messaggio corrispondente",
+      pinnedCount: "{count} elementi fissati",
     },
     pairingQrExpired: {
       title: "QR di pairing scaduto",
@@ -4586,6 +5156,8 @@ export const it: TranslationMap = {
       runInterrupted: "Interrotto",
       runStatus: "Stato esecuzione: {status}",
       compactingContext: "Compattazione del contesto...",
+      compacting: "Compattazione in corso",
+      compact: "Compatta",
       contextCompacted: "Contesto compattato",
       fallbackActive: "Fallback attivo: {model}",
       fallbackCleared: "Fallback rimosso: {model}",
@@ -4602,6 +5174,51 @@ export const it: TranslationMap = {
       attachPhoto: "Foto",
       attachFile: "Attach file",
       attachFileOption: "Documento",
+      menu: {
+        back: "Indietro",
+        skills: "Skills",
+        connectors: "Connettori",
+        webSearch: "Ricerca sul web",
+        managePlugins: "Gestisci plugin",
+        manageSkills: "Gestisci Skills",
+        browseConnectors: "Sfoglia i connettori",
+        addMcpServer: "Aggiungi server MCP…",
+        addMcpServerTitle: "Aggiungi server MCP",
+        addMcpServerDescription: "Configura il server e scegli dove abilitarlo.",
+        scopeLabel: "Disponibilità",
+        scopeSession: "Questa sessione",
+        scopeEverywhere: "Ovunque",
+        scopeSessionHint:
+          "Il server viene salvato come disabilitato a livello globale e abilitato solo per questa sessione.",
+        scopeEverywhereHint: "Il server viene salvato e abilitato per ogni sessione.",
+        toolAccess: {
+          label: "Accesso agli strumenti",
+          loading: "Caricamento degli strumenti…",
+          loadFailed: "Impossibile caricare gli strumenti.",
+          noTools: "Nessuno strumento disponibile per questo connettore.",
+          summary: "{enabled} strumenti su {total} attivi",
+          summaryOne: "{enabled} strumento su {total} attivo",
+        },
+        enabledCount: "{count} attivi",
+        loadingSkills: "Caricamento delle Skills…",
+        skillsLoadFailed: "Impossibile caricare le Skills.",
+        noSkills: "Nessuna Skill disponibile.",
+        noConnectors: "Nessun server MCP configurato.",
+        depsMissing: "dipendenze mancanti",
+        skillBlocked: "non disponibile per questo agente",
+        sessionTag: "sessione",
+        offlineBlocked: "Connettiti al Gateway per modificare le funzionalità della sessione.",
+        readOnlyBlocked:
+          "È richiesto l'accesso in scrittura per modificare le funzionalità della sessione.",
+        adminBlocked: "È richiesto l'accesso come amministratore per gestire i connettori.",
+        savingBlocked:
+          "Attendi il completamento della modifica delle funzionalità della sessione corrente.",
+      },
+      overrides: {
+        count: "{count} sostituzioni della sessione",
+        countOne: "{count} sostituzione della sessione",
+        clear: "Cancella le sostituzioni della sessione",
+      },
       contextUsage: {
         title: "Dettagli sull'uso del contesto",
         open: "Apri i dettagli sull'uso del contesto",
@@ -4677,6 +5294,17 @@ export const it: TranslationMap = {
       turnCameraOff: "Spegni la fotocamera",
       turnCameraOn: "Accendi la fotocamera",
       voiceTranscript: "Trascrizione vocale",
+    },
+    attachments: {
+      attachedFile: "File allegato",
+      outsideAllowedFolders: "Al di fuori delle cartelle consentite",
+      unavailable: "Non disponibile",
+      checking: "Verifica in corso...",
+    },
+    voice: {
+      asking: "Richiesta a OpenClaw...",
+      connecting: "Connessione all'input vocale...",
+      listening: "In ascolto...",
     },
     selectors: {
       session: "Chat session",
