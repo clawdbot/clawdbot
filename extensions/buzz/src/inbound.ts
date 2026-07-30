@@ -172,9 +172,10 @@ export async function handleBuzzInbound(params: {
         },
         keepaliveIntervalMs: 3_000,
         onStartError: (error: unknown) => {
-          runtime.error(
-            `[${account.accountId}] Buzz typing failed for ${channelId}: ${String(error)}`,
-          );
+          // PluginRuntime exposes logging via getChildLogger, not a top-level error() API.
+          runtime.logging
+            .getChildLogger({ plugin: "buzz", feature: "typing" })
+            .error(`[${account.accountId}] Buzz typing failed for ${channelId}: ${String(error)}`);
         },
       },
     },
