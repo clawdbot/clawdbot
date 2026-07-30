@@ -70,4 +70,62 @@ describe("MediaStreamHandler lifecycle", () => {
       await server.close();
     }
   });
+
+  it("terminates active streams and shares concurrent close completion", async () => {
+    const closeSession = vi.fn();
+    const onConnect = vi.fn();
+    const onDisconnect = vi.fn();
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: {
+        createSession: () => ({
+          connect: async () => {},
+          sendAudio: () => {},
+          close: closeSession,
+          isConnected: () => true,
+        }),
+        id: "openai",
+        label: "OpenAI",
+        isConfigured: () => true,
+      },
+      providerConfig: {},
+      shouldAcceptStream: () => true,
+      onConnect,
+      onDisconnect,
+    });
+    const server = await startUpgradeWsServer({
+      urlPath: "/voice/stream",
+      onUpgrade: (request, socket, head) => {
+        handler.handleUpgrade(request, socket, head);
+      },
+    });
+    const ws = await connectWs(server.url);
+
+    try {
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          streamSid: "MZ-shutdown",
+          start: { callSid: "CA-shutdown" },
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(onConnect).toHaveBeenCalledWith("CA-shutdown", "MZ-shutdown");
+      });
+
+      const closed = waitForClose(ws);
+      const firstClose = handler.close();
+      const secondClose = handler.close();
+
+      expect(secondClose).toBe(firstClose);
+      await firstClose;
+      expect(await closed).toEqual({ code: 1006, reason: "" });
+      expect(closeSession).toHaveBeenCalledTimes(1);
+      expect(onDisconnect).toHaveBeenCalledWith("CA-shutdown", "MZ-shutdown");
+      expect(onDisconnect).toHaveBeenCalledTimes(1);
+    } finally {
+      ws.terminate();
+      await handler.close();
+      await server.close();
+    }
+  });
 });

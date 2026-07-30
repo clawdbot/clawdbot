@@ -138,6 +138,8 @@ function parseTwilioMediaMessage(data: RawData): TwilioMediaMessage {
  */
 export class MediaStreamHandler {
   private wss: WebSocketServer | null = null;
+  private closePromise: Promise<void> | null = null;
+  private closing = false;
   private sessions = new Map<string, StreamSession>();
   private config: MediaStreamConfig;
   /** Pending sockets that have upgraded but not yet sent an accepted `start` frame. */
@@ -172,6 +174,11 @@ export class MediaStreamHandler {
    * Handle WebSocket upgrade for media stream connections.
    */
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
+    if (this.closing) {
+      this.rejectUpgrade(socket, 503, "Media stream handler is shutting down");
+      return;
+    }
+
     if (!this.wss) {
       this.wss = new WebSocketServer({
         noServer: true,
@@ -219,6 +226,31 @@ export class MediaStreamHandler {
       releaseUpgradeReservation();
       throw error;
     }
+  }
+
+  close(): Promise<void> {
+    if (this.closePromise) {
+      return this.closePromise;
+    }
+
+    this.closing = true;
+    const wss = this.wss;
+    this.wss = null;
+    this.closePromise = (async () => {
+      if (!wss) {
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+        for (const ws of wss.clients) {
+          ws.terminate();
+        }
+      });
+    })().finally(() => {
+      this.closing = false;
+      this.closePromise = null;
+    });
+    return this.closePromise;
   }
 
   /**
