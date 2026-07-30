@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { attachReservedSubagentClaimToken } from "../../agents/reserved-subagent-admission.js";
 import { subagentRuns } from "../../agents/subagent-registry-memory.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import { createAgentAdmissionController } from "./agent-admission-controller.js";
+import { createAgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
+import { reserveReservedSubagentDedupeEntry } from "./agent-dedupe.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 
 function runPreflight(
@@ -348,5 +352,160 @@ describe("agent request Swarm preflight", () => {
 
     expect(result).toBeDefined();
     expect(respond).not.toHaveBeenCalled();
+  });
+});
+
+describe("reserved subagent Gateway admission", () => {
+  const runId = "plugin-reserved-run";
+  const sessionKey = "agent:worker:subagent:plugin-reserved-child";
+  const pluginRuntimeOwnerId = "agentic-os";
+  const claimToken = "reserved-claim-token";
+
+  function createContext() {
+    return {
+      dedupe: new Map(),
+      getRuntimeConfig: () => ({}),
+    };
+  }
+
+  function createRequest() {
+    return {
+      message: "run reserved child",
+      sessionKey,
+      idempotencyKey: runId,
+      lane: "subagent",
+    };
+  }
+
+  it("admits only the exact internal owner and claim token", () => {
+    const context = createContext();
+    const release = reserveReservedSubagentDedupeEntry({
+      dedupe: context.dedupe,
+      runId,
+      sessionKey,
+      pluginRuntimeOwnerId,
+      claimToken,
+    });
+    const exactRespond = vi.fn();
+    const exactRequest = attachReservedSubagentClaimToken(createRequest(), claimToken);
+    const exactClient = {
+      internal: {
+        pluginRuntimeOwnerId,
+      },
+    };
+    const exact = prepareAgentRequestPreflight({
+      params: exactRequest,
+      respond: exactRespond,
+      context,
+      client: exactClient,
+    } as never);
+    expect(exact).toBeDefined();
+    expect(exactRespond).not.toHaveBeenCalled();
+    const exactLifecycle = createAgentDedupeLifecycle({
+      cfg: {},
+      request: exactRequest,
+      runId,
+      lifecycleGeneration: exact!.lifecycleGeneration,
+      agentDedupeKeys: exact!.agentDedupeKeys,
+      suppressVisibleSessionEffects: false,
+      context,
+      client: exactClient,
+      respond: exactRespond,
+    } as never);
+    exactLifecycle.reserve(sessionKey);
+    expect(exactLifecycle.reservationId).toBe(claimToken);
+
+    for (const candidate of [
+      { params: createRequest(), internal: undefined },
+      {
+        params: attachReservedSubagentClaimToken(createRequest(), "wrong-token"),
+        internal: { pluginRuntimeOwnerId },
+      },
+      {
+        params: attachReservedSubagentClaimToken(createRequest(), claimToken),
+        internal: { pluginRuntimeOwnerId: "other-plugin" },
+      },
+    ]) {
+      const respond = vi.fn();
+      const result = prepareAgentRequestPreflight({
+        params: candidate.params,
+        respond,
+        context,
+        client: candidate.internal ? { internal: candidate.internal } : undefined,
+      } as never);
+      expect(result).toBeUndefined();
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          message: "agent runId is reserved for a different plugin subagent admission.",
+        }),
+      );
+    }
+    release();
+  });
+
+  it("blocks an ordinary admission that passed preflight before the reserved claim", () => {
+    const context = createContext();
+    const ordinaryClient = undefined;
+    const ordinaryRespond = vi.fn();
+    const preflight = prepareAgentRequestPreflight({
+      params: createRequest(),
+      respond: ordinaryRespond,
+      context,
+      client: ordinaryClient,
+    } as never);
+    expect(preflight).toBeDefined();
+
+    const release = reserveReservedSubagentDedupeEntry({
+      dedupe: context.dedupe,
+      runId,
+      sessionKey,
+      pluginRuntimeOwnerId,
+      claimToken,
+    });
+    const reservedEntry = context.dedupe.get(`agent:${runId}`);
+    const dedupeLifecycle = createAgentDedupeLifecycle({
+      cfg: {},
+      request: createRequest(),
+      runId,
+      lifecycleGeneration: preflight!.lifecycleGeneration,
+      agentDedupeKeys: preflight!.agentDedupeKeys,
+      suppressVisibleSessionEffects: false,
+      context,
+      client: ordinaryClient,
+      respond: ordinaryRespond,
+    } as never);
+    dedupeLifecycle.reserve(sessionKey);
+    expect(context.dedupe.get(`agent:${runId}`)).toBe(reservedEntry);
+
+    const controller = createAgentAdmissionController({
+      cfg: {},
+      runId,
+      lifecycleGeneration: preflight!.lifecycleGeneration,
+      agentDedupeKeys: preflight!.agentDedupeKeys,
+      context,
+      respond: ordinaryRespond,
+      dedupeLifecycle,
+      getRequestedSessionKey: () => sessionKey,
+      getResolvedSessionKey: () => sessionKey,
+      getResolvedSessionId: () => "ordinary-session",
+      getResolvedSessionAgentId: () => "worker",
+      getAgentId: () => "worker",
+      getCfgForAgent: () => undefined,
+      getSessionPersisted: () => false,
+      getSupersededSessionId: () => undefined,
+      setAdmittedSessionId: () => {},
+    } as never);
+    controller.assertAllowed();
+    expect(controller.respondToOutcome()).toBe(true);
+    expect(context.dedupe.get(`agent:${runId}`)).toBe(reservedEntry);
+    expect(ordinaryRespond).toHaveBeenLastCalledWith(
+      true,
+      { runId, status: "in_flight" },
+      undefined,
+      expect.objectContaining({ cached: true, runId }),
+    );
+    release();
   });
 });

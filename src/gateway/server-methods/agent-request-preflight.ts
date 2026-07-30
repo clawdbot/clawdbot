@@ -7,6 +7,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { parseExecApprovalFollowupApprovalId } from "../../agents/bash-tools.exec-approval-followup-state.js";
+import { readReservedSubagentClaimToken } from "../../agents/reserved-subagent-admission.js";
 import { normalizeSpawnedRunMetadata } from "../../agents/spawned-context.js";
 import {
   findAuthorizedSwarmCollectorRequest,
@@ -25,7 +26,9 @@ import {
 import { isSubagentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   isAcceptedAgentDedupePayload,
+  isReservedSubagentDedupeReservationAuthorized,
   readGatewayDedupeEntry,
+  readReservedSubagentDedupeReservation,
   resolveAgentDedupeKeys,
 } from "./agent-dedupe.js";
 import {
@@ -242,7 +245,28 @@ export function prepareAgentRequestPreflight(
     execApprovalFollowupApprovalId,
   });
   const cached = readGatewayDedupeEntry({ dedupe: params.context.dedupe, keys: agentDedupeKeys });
-  if (cached) {
+  const reservedSubagentReservation = readReservedSubagentDedupeReservation(cached);
+  if (
+    reservedSubagentReservation &&
+    !isReservedSubagentDedupeReservationAuthorized({
+      reservation: reservedSubagentReservation,
+      runId,
+      sessionKey: request.sessionKey?.trim(),
+      pluginRuntimeOwnerId: normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId),
+      claimToken: readReservedSubagentClaimToken(request),
+    })
+  ) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "agent runId is reserved for a different plugin subagent admission.",
+      ),
+    );
+    return undefined;
+  }
+  if (cached && !reservedSubagentReservation) {
     if (cached.ok && isAcceptedAgentDedupePayload(cached.payload)) {
       const cachedRunId =
         typeof cached.payload.runId === "string" && cached.payload.runId.trim()

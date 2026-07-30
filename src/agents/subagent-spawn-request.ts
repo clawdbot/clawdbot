@@ -208,16 +208,26 @@ export function resolveSubagentSpawnRequest(
   const authorizedTargetAgentId = normalizeOptionalString(ctx.authorizedTargetAgentId);
   const preallocatedChildSessionKey = normalizeOptionalString(ctx.preallocatedChildSessionKey);
   const preallocatedRunId = normalizeOptionalString(ctx.preallocatedRunId);
+  const pluginOwnerId = normalizeOptionalString(ctx.pluginOwnerId);
+  const reservedSubagentClaimToken = normalizeOptionalString(ctx.reservedSubagentClaimToken);
   const hasReservedSpawnField = Boolean(
-    authorizedTargetAgentId || preallocatedChildSessionKey || preallocatedRunId,
+    authorizedTargetAgentId ||
+    preallocatedChildSessionKey ||
+    preallocatedRunId ||
+    pluginOwnerId ||
+    reservedSubagentClaimToken,
   );
   if (
     hasReservedSpawnField &&
-    (!authorizedTargetAgentId || !preallocatedChildSessionKey || !preallocatedRunId)
+    (!authorizedTargetAgentId ||
+      !preallocatedChildSessionKey ||
+      !preallocatedRunId ||
+      !pluginOwnerId ||
+      !reservedSubagentClaimToken)
   ) {
     return rejectSubagentSpawnRequest(
       "error",
-      "reserved subagent spawn requires authorizedTargetAgentId, preallocatedChildSessionKey, and preallocatedRunId",
+      "reserved subagent spawn requires target, child, run, plugin owner, and Gateway claim identities",
     );
   }
   if (authorizedTargetAgentId) {

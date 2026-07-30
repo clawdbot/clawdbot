@@ -80,6 +80,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     ownerConnId,
     ownerDeviceId,
     context,
+    client,
     respond,
   });
   const reservePreAcceptedAgentDedupe = dedupeLifecycle.reserve;

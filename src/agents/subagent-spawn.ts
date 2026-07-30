@@ -374,6 +374,12 @@ export async function spawnSubagentDirect(
           timeoutMs: childLaunch.timeoutMs,
         },
         childLaunch.authorization,
+        {
+          ...(ctx.pluginOwnerId ? { pluginRuntimeOwnerId: ctx.pluginOwnerId } : {}),
+          ...(ctx.reservedSubagentClaimToken
+            ? { reservedSubagentClaimToken: ctx.reservedSubagentClaimToken }
+            : {}),
+        },
       );
 
     const emitSpawnLifecycleHooks = createSubagentSpawnLifecycleEmitter({

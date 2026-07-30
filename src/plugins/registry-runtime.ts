@@ -235,6 +235,40 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       assertSessionEntryOwned({ action: params.action, entry, sessionKey: params.sessionKey });
       return entry;
     };
+    const assertReservedSpawnRequesterOwned = (sessionKey: string): void => {
+      const entry = registryParams.runtime.agent.session.getSessionEntry({
+        sessionKey,
+        readConsistency: "latest",
+      });
+      if (!entry) {
+        throw new Error(
+          `Plugin "${pluginId}" cannot spawn a reserved child from missing requester session "${sessionKey}".`,
+        );
+      }
+      const explicitOwnerPluginId = normalizeOptionalString(entry.pluginOwnerId);
+      if (explicitOwnerPluginId) {
+        if (explicitOwnerPluginId !== pluginId) {
+          throw new Error(
+            `Requester session "${sessionKey}" is owned by plugin "${explicitOwnerPluginId}", not "${pluginId}".`,
+          );
+        }
+        return;
+      }
+      const locked = resolveLockedSessionHarnessRegistration(
+        sessionKey,
+        entry,
+        "spawn a reserved child from",
+      );
+      if (locked?.ownerPluginId === pluginId) {
+        return;
+      }
+      if (locked) {
+        throw new Error(
+          `Requester session "${sessionKey}" is owned by plugin "${locked.ownerPluginId}", not "${pluginId}".`,
+        );
+      }
+      throw new Error(`Requester session "${sessionKey}" is not owned by plugin "${pluginId}".`);
+    };
     const resolveStoredSessionExecutionOwner = (params: {
       action: string;
       agentId?: string;
@@ -859,10 +893,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         return {
           spawnReserved: async (params) =>
             await withPluginRuntimePluginIdScope(pluginId, async () => {
-              assertSessionIdentitiesOwned({
-                action: "spawn a reserved child from",
-                sessionKeys: [params.requesterSessionKey],
-              });
+              assertReservedSpawnRequesterOwned(params.requesterSessionKey);
               return await subagent.spawnReserved(params);
             }),
           run: async (params) =>

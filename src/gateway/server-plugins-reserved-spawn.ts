@@ -1,4 +1,5 @@
 // Plugin-managed reserved spawn adapter. Service-specific lease state stays in plugins.
+import { randomUUID } from "node:crypto";
 import {
   getLatestSubagentRunByChildSessionKey,
   getSubagentRunByRunId,
@@ -8,6 +9,8 @@ import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { isValidAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { reserveReservedSubagentDedupeEntry } from "./server-methods/agent-dedupe.js";
+import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
 
 type ReservedSubagentIdentityClaims = {
   runIds: Set<string>;
@@ -18,10 +21,10 @@ const RESERVED_SUBAGENT_IDENTITY_CLAIMS_KEY: unique symbol = Symbol.for(
   "openclaw.pluginRuntime.reservedSubagentIdentityClaims",
 );
 
-function claimReservedSubagentIdentities(params: {
-  runId: string;
-  childSessionKey: string;
-}): () => void {
+function claimReservedSubagentIdentities(params: { runId: string; childSessionKey: string }): {
+  claimToken: string;
+  release: () => void;
+} {
   const claims = resolveGlobalSingleton<ReservedSubagentIdentityClaims>(
     RESERVED_SUBAGENT_IDENTITY_CLAIMS_KEY,
     () => ({
@@ -37,14 +40,18 @@ function claimReservedSubagentIdentities(params: {
   }
   claims.runIds.add(params.runId);
   claims.childSessionKeys.add(params.childSessionKey);
+  const claimToken = randomUUID();
   let released = false;
-  return () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    claims.runIds.delete(params.runId);
-    claims.childSessionKeys.delete(params.childSessionKey);
+  return {
+    claimToken,
+    release: () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      claims.runIds.delete(params.runId);
+      claims.childSessionKeys.delete(params.childSessionKey);
+    },
   };
 }
 
@@ -97,14 +104,26 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
   if (!task) {
     throw new Error("spawnReserved task must be non-empty.");
   }
-  const releaseIdentityClaims = claimReservedSubagentIdentities({
+  const gatewayContext = scope?.context ?? getFallbackGatewayContext();
+  if (!gatewayContext) {
+    throw new Error("spawnReserved requires a live Gateway context.");
+  }
+  const identityClaim = claimReservedSubagentIdentities({
     runId,
     childSessionKey,
   });
+  let releaseGatewayDedupeReservation = () => {};
   try {
     assertReservedSubagentIdentitiesAvailable({
       runId,
       childSessionKey,
+    });
+    releaseGatewayDedupeReservation = reserveReservedSubagentDedupeEntry({
+      dedupe: gatewayContext.dedupe,
+      runId,
+      sessionKey: childSessionKey,
+      pluginRuntimeOwnerId: pluginId,
+      claimToken: identityClaim.claimToken,
     });
     const { spawnSubagentDirect } = await import("../agents/subagent-spawn.js");
     const result = await spawnSubagentDirect(
@@ -125,6 +144,7 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
         preallocatedChildSessionKey: childSessionKey,
         preallocatedRunId: runId,
         pluginOwnerId: pluginId,
+        reservedSubagentClaimToken: identityClaim.claimToken,
       },
     );
     if (result.status !== "accepted") {
@@ -139,6 +159,7 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
       mode: "run",
     };
   } finally {
-    releaseIdentityClaims();
+    releaseGatewayDedupeReservation();
+    identityClaim.release();
   }
 };

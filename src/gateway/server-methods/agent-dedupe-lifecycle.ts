@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readReservedSubagentClaimToken } from "../../agents/reserved-subagent-admission.js";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -7,7 +8,9 @@ import { resolveSessionStoreKey } from "../session-utils.js";
 import {
   isAcceptedAgentDedupePayload,
   isPreRegistrationAbortedAgentDedupeEntryForSession,
+  isReservedSubagentDedupeReservationAuthorized,
   readGatewayDedupeEntry,
+  readReservedSubagentDedupeReservation,
   setAbortedAgentDedupeEntries,
   setGatewayDedupeEntries,
 } from "./agent-dedupe.js";
@@ -34,15 +37,37 @@ export function createAgentDedupeLifecycle(params: {
   ownerConnId?: string;
   ownerDeviceId?: string;
   context: GatewayRequestHandlerOptions["context"];
+  client: GatewayRequestHandlerOptions["client"];
   respond: GatewayRequestHandlerOptions["respond"];
 }) {
   let reserved = false;
   let accepted = false;
   let committedResetCompletion: CommittedResetCompletion | undefined;
-  const reservationId = randomUUID();
+  let reservationId: string = randomUUID();
 
   const reserve = (sessionKey?: string, dedupeAgentId?: string) => {
     if (reserved) {
+      return;
+    }
+    const existingReservation = readReservedSubagentDedupeReservation(
+      readGatewayDedupeEntry({
+        dedupe: params.context.dedupe,
+        keys: params.agentDedupeKeys,
+      }),
+    );
+    if (existingReservation) {
+      reserved = true;
+      if (
+        isReservedSubagentDedupeReservationAuthorized({
+          reservation: existingReservation,
+          runId: params.runId,
+          sessionKey,
+          pluginRuntimeOwnerId: params.client?.internal?.pluginRuntimeOwnerId,
+          claimToken: readReservedSubagentClaimToken(params.request),
+        })
+      ) {
+        reservationId = existingReservation.reservationId;
+      }
       return;
     }
     const dedupeSessionResolvesGlobal = sessionKey
@@ -161,7 +186,9 @@ export function createAgentDedupeLifecycle(params: {
   };
 
   return {
-    reservationId,
+    get reservationId() {
+      return reservationId;
+    },
     reserve,
     clearUnaccepted,
     abortForLifecycleRotation,

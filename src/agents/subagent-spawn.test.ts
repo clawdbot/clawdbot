@@ -3,6 +3,7 @@
 import os from "node:os";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { readReservedSubagentClaimToken } from "./reserved-subagent-admission.js";
 import {
   createSubagentSpawnTestConfig,
   expectPersistedRuntimeModel,
@@ -368,12 +369,10 @@ describe("spawnSubagentDirect seam flow", () => {
         ],
       },
     });
-    hoisted.callGatewayMock.mockImplementation(async ({ method, params }) =>
-      method === "agent"
-        ? { runId: requireRecord(params).idempotencyKey }
-        : method?.startsWith("sessions.")
-          ? { ok: true }
-          : {},
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(
+      async (method: string, params: Record<string, unknown>) =>
+        method === "agent" ? { runId: params.idempotencyKey } : { ok: true },
     );
     installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
       onStore: (store) => {
@@ -393,6 +392,7 @@ describe("spawnSubagentDirect seam flow", () => {
         preallocatedChildSessionKey,
         preallocatedRunId,
         pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "plugin-reserved-claim",
       },
     );
 
@@ -407,12 +407,15 @@ describe("spawnSubagentDirect seam flow", () => {
       agentId: "worker",
       expectsCompletionMessage: false,
     });
-    expect(gatewayRequest("agent")).toMatchObject({
-      params: {
-        sessionKey: preallocatedChildSessionKey,
-        idempotencyKey: preallocatedRunId,
-      },
+    const reservedDispatch = hoisted.dispatchGatewayMethodInProcessMock.mock.calls.find(
+      ([method]) => method === "agent",
+    );
+    expect(reservedDispatch?.[1]).toMatchObject({
+      sessionKey: preallocatedChildSessionKey,
+      idempotencyKey: preallocatedRunId,
     });
+    expect(readReservedSubagentClaimToken(reservedDispatch?.[1])).toBe("plugin-reserved-claim");
+    expect(reservedDispatch?.[2]).toMatchObject({ pluginRuntimeOwnerId: "agentic-os" });
     expect(persistedStore?.[preallocatedChildSessionKey]).toMatchObject({
       pluginOwnerId: "agentic-os",
       spawnedBy: "agent:main:main",
@@ -457,6 +460,7 @@ describe("spawnSubagentDirect seam flow", () => {
         preallocatedChildSessionKey: childSessionKey,
         preallocatedRunId: "reserved-run-existing-child",
         pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "reserved-existing-child-claim",
       },
     );
 
@@ -487,12 +491,10 @@ describe("spawnSubagentDirect seam flow", () => {
       await mutator(store);
       return store;
     });
-    hoisted.callGatewayMock.mockImplementation(async ({ method, params }) =>
-      method === "agent"
-        ? { runId: requireRecord(params).idempotencyKey }
-        : method?.startsWith("sessions.")
-          ? { ok: true }
-          : {},
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(
+      async (method: string, params: Record<string, unknown>) =>
+        method === "agent" ? { runId: params.idempotencyKey } : { ok: true },
     );
     const spawn = () =>
       spawnSubagentDirect(
@@ -507,6 +509,7 @@ describe("spawnSubagentDirect seam flow", () => {
           preallocatedChildSessionKey: childSessionKey,
           preallocatedRunId: "reserved-run-concurrent-child",
           pluginOwnerId: "agentic-os",
+          reservedSubagentClaimToken: "reserved-concurrent-child-claim",
         },
       );
 
@@ -520,7 +523,11 @@ describe("spawnSubagentDirect seam flow", () => {
           result.error?.includes("reserved childSessionKey already exists"),
       ),
     ).toHaveLength(1);
-    expect(gatewayRequestRecords().filter((request) => request.method === "agent")).toHaveLength(1);
+    expect(
+      hoisted.dispatchGatewayMethodInProcessMock.mock.calls.filter(
+        ([method]) => method === "agent",
+      ),
+    ).toHaveLength(1);
     expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
   });
 
@@ -531,6 +538,8 @@ describe("spawnSubagentDirect seam flow", () => {
         authorizedTargetAgentId: "planner",
         preallocatedChildSessionKey: "agent:worker:subagent:reserved",
         preallocatedRunId: "reserved-run",
+        pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "reserved-target-mismatch-claim",
       },
       expected: "reserved spawn target does not match requested agentId",
     },
@@ -540,6 +549,8 @@ describe("spawnSubagentDirect seam flow", () => {
         authorizedTargetAgentId: "worker",
         preallocatedChildSessionKey: "agent:planner:subagent:reserved",
         preallocatedRunId: "reserved-run",
+        pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "reserved-child-mismatch-claim",
       },
       expected: "reserved childSessionKey must be",
     },

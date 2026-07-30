@@ -1,6 +1,10 @@
 // Gateway plugin reserved-spawn tests lock the narrow Plugin SDK to core seam.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withPluginRuntimePluginIdScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  withPluginRuntimeGatewayRequestScope,
+  withPluginRuntimePluginIdScope,
+} from "../plugins/runtime/gateway-request-scope.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 
 const spawnSubagentDirect = vi.hoisted(() => vi.fn());
 const getAgentRunContext = vi.hoisted(() => vi.fn());
@@ -16,6 +20,7 @@ vi.mock("../agents/subagent-registry.js", () => ({
 }));
 vi.mock("../infra/agent-events.js", () => ({
   getAgentRunContext,
+  onAgentEvent: vi.fn(),
 }));
 
 import { createGatewaySubagentRuntime } from "./server-plugins.js";
@@ -27,6 +32,19 @@ const reservation = {
   runId: "plugin-reserved-run",
   task: "run the reserved child",
 } as const;
+
+function withReservedPluginScope<T>(
+  run: () => T,
+  dedupe: GatewayRequestContext["dedupe"] = new Map(),
+): T {
+  return withPluginRuntimeGatewayRequestScope(
+    {
+      context: { dedupe } as GatewayRequestContext,
+      isWebchatConnect: () => false,
+    },
+    () => withPluginRuntimePluginIdScope("agentic-os", run),
+  );
+}
 
 describe("createGatewaySubagentRuntime.spawnReserved", () => {
   beforeEach(() => {
@@ -49,6 +67,15 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
     expect(spawnSubagentDirect).not.toHaveBeenCalled();
   });
 
+  it("requires a live Gateway context", async () => {
+    await expect(
+      withPluginRuntimePluginIdScope("agentic-os", () =>
+        createGatewaySubagentRuntime().spawnReserved(reservation),
+      ),
+    ).rejects.toThrow("requires a live Gateway context");
+    expect(spawnSubagentDirect).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "unscoped requester",
@@ -67,18 +94,34 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
     },
   ])("rejects malformed reserved spawn input: $name", async ({ params, expected }) => {
     await expect(
-      withPluginRuntimePluginIdScope("agentic-os", () =>
-        createGatewaySubagentRuntime().spawnReserved(params),
-      ),
+      withReservedPluginScope(() => createGatewaySubagentRuntime().spawnReserved(params)),
     ).rejects.toThrow(expected);
     expect(spawnSubagentDirect).not.toHaveBeenCalled();
   });
 
   it("forwards only generic reservation and ownership data", async () => {
     const runtime = createGatewaySubagentRuntime();
+    const dedupe: GatewayRequestContext["dedupe"] = new Map();
+    spawnSubagentDirect.mockImplementationOnce(
+      async (_params: unknown, context: { reservedSubagentClaimToken?: string }) => {
+        const reserved = dedupe.get(`agent:${reservation.runId}`);
+        expect(reserved?.payload).toMatchObject({
+          pluginRuntimeOwnerId: "agentic-os",
+          runId: reservation.runId,
+          sessionKey: reservation.childSessionKey,
+          reservedSubagentClaimToken: context.reservedSubagentClaimToken,
+        });
+        return {
+          status: "accepted",
+          childSessionKey: reservation.childSessionKey,
+          runId: reservation.runId,
+          mode: "run",
+        };
+      },
+    );
 
     await expect(
-      withPluginRuntimePluginIdScope("agentic-os", () => runtime.spawnReserved(reservation)),
+      withReservedPluginScope(() => runtime.spawnReserved(reservation), dedupe),
     ).resolves.toEqual({
       childSessionKey: reservation.childSessionKey,
       runId: reservation.runId,
@@ -97,19 +140,42 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
         preallocatedChildSessionKey: reservation.childSessionKey,
         preallocatedRunId: reservation.runId,
         pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: expect.any(String),
       },
     );
+    expect(dedupe.has(`agent:${reservation.runId}`)).toBe(false);
   });
 
   it.each([
     {
+      name: "cached Gateway run",
+      arrange: () => undefined,
+      dedupe: new Map([
+        [
+          `agent:${reservation.runId}`,
+          {
+            ts: Date.now(),
+            ok: true,
+            payload: {
+              status: "accepted",
+              runId: reservation.runId,
+              sessionKey: "agent:other:main",
+            },
+          },
+        ],
+      ]) as GatewayRequestContext["dedupe"],
+      expected: "runId already exists in the Gateway dedupe cache",
+    },
+    {
       name: "active Gateway run",
       arrange: () => getAgentRunContext.mockReturnValue({ sessionKey: "agent:other:main" }),
+      dedupe: new Map() as GatewayRequestContext["dedupe"],
       expected: "runId is already active",
     },
     {
       name: "persisted run",
       arrange: () => getSubagentRunByRunId.mockReturnValue({ runId: reservation.runId }),
+      dedupe: new Map() as GatewayRequestContext["dedupe"],
       expected: "runId already exists",
     },
     {
@@ -118,16 +184,18 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
         getLatestSubagentRunByChildSessionKey.mockReturnValue({
           childSessionKey: reservation.childSessionKey,
         }),
+      dedupe: new Map() as GatewayRequestContext["dedupe"],
       expected: "childSessionKey already exists",
     },
   ])(
     "rejects a reserved identity collision before dispatch: $name",
-    async ({ arrange, expected }) => {
+    async ({ arrange, dedupe, expected }) => {
       arrange();
 
       await expect(
-        withPluginRuntimePluginIdScope("agentic-os", () =>
-          createGatewaySubagentRuntime().spawnReserved(reservation),
+        withReservedPluginScope(
+          () => createGatewaySubagentRuntime().spawnReserved(reservation),
+          dedupe,
         ),
       ).rejects.toThrow(expected);
       expect(spawnSubagentDirect).not.toHaveBeenCalled();
@@ -150,14 +218,12 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
         }),
     );
     const runtime = createGatewaySubagentRuntime();
-    const first = withPluginRuntimePluginIdScope("agentic-os", () =>
-      runtime.spawnReserved(reservation),
-    );
+    const first = withReservedPluginScope(() => runtime.spawnReserved(reservation));
     await vi.waitFor(() => expect(spawnSubagentDirect).toHaveBeenCalledTimes(1));
 
-    await expect(
-      withPluginRuntimePluginIdScope("agentic-os", () => runtime.spawnReserved(reservation)),
-    ).rejects.toThrow("already claimed");
+    await expect(withReservedPluginScope(() => runtime.spawnReserved(reservation))).rejects.toThrow(
+      "already claimed",
+    );
     expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
 
     resolveFirst?.({
@@ -181,9 +247,7 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
     });
 
     await expect(
-      withPluginRuntimePluginIdScope("agentic-os", () =>
-        createGatewaySubagentRuntime().spawnReserved(reservation),
-      ),
+      withReservedPluginScope(() => createGatewaySubagentRuntime().spawnReserved(reservation)),
     ).rejects.toThrow("returned different child or run identities");
   });
 });

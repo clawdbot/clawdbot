@@ -451,6 +451,7 @@ describe("plugin registry runtime config scope", () => {
     const reservedKey = "agent:main:harness:codex:thread-1";
     const ordinaryKey = "agent:main:ordinary";
     const ordinaryAliasKey = "agent:main:ordinary-alias";
+    const pluginOwnedOrdinaryKey = "agent:main:plugin-owned-ordinary";
     const ordinaryNoIdKey = "agent:main:ordinary-no-id";
     const lockedNoIdKey = "agent:main:locked-no-id";
     const lockedOrdinaryKey = "agent:main:ordinary-locked";
@@ -468,6 +469,11 @@ describe("plugin registry runtime config scope", () => {
     };
     const ordinaryEntry = { sessionId: "ordinary-session", updatedAt: 1 };
     const ordinaryAliasEntry = { sessionId: reservedEntry.sessionId, updatedAt: 1 };
+    const pluginOwnedOrdinaryEntry = {
+      sessionId: "plugin-owned-ordinary-session",
+      updatedAt: 1,
+      pluginOwnerId: "codex-owner",
+    };
     const ordinaryNoIdEntry = { updatedAt: 1 };
     const lockedNoIdEntry = {
       updatedAt: 1,
@@ -487,6 +493,7 @@ describe("plugin registry runtime config scope", () => {
     };
     const entries = {
       [ordinaryAliasKey]: ordinaryAliasEntry,
+      [pluginOwnedOrdinaryKey]: pluginOwnedOrdinaryEntry,
       [ordinaryNoIdKey]: ordinaryNoIdEntry,
       [lockedNoIdKey]: lockedNoIdEntry,
       [reservedKey]: reservedEntry,
@@ -627,6 +634,26 @@ describe("plugin registry runtime config scope", () => {
       runId: reservedSpawn.runId,
       mode: "run",
     });
+    await expect(
+      ownerApi.runtime.subagent.spawnReserved({
+        ...reservedSpawn,
+        requesterSessionKey: pluginOwnedOrdinaryKey,
+        childSessionKey: "agent:main:subagent:plugin-owned-child",
+        runId: "plugin-owned-child-run",
+      }),
+    ).resolves.toMatchObject({ runId: "plugin-owned-child-run" });
+    await expect(
+      ownerApi.runtime.subagent.spawnReserved({
+        ...reservedSpawn,
+        requesterSessionKey: ordinaryKey,
+      }),
+    ).rejects.toThrow(`Requester session "${ordinaryKey}" is not owned`);
+    await expect(
+      ownerApi.runtime.subagent.spawnReserved({
+        ...reservedSpawn,
+        requesterSessionKey: "agent:main:missing-requester",
+      }),
+    ).rejects.toThrow("missing requester session");
 
     let delegatedCallbackScope = getPluginRuntimeGatewayRequestScope();
     await expect(

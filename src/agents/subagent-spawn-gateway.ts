@@ -1,3 +1,4 @@
+import { attachReservedSubagentClaimToken } from "./reserved-subagent-admission.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import { applySubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import { resolveSubagentRunTimerDelayMs } from "./subagent-run-timeout.js";
@@ -14,6 +15,10 @@ const MAX_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 300_000;
 export async function callSubagentGateway(
   params: Parameters<typeof callGateway>[0],
   authorization?: SubagentLaunchAuthorization,
+  runtimeOwner?: {
+    pluginRuntimeOwnerId?: string;
+    reservedSubagentClaimToken?: string;
+  },
 ): Promise<Awaited<ReturnType<typeof callGateway>>> {
   // Subagent lifecycle requires methods spanning multiple scope tiers
   // (sessions.delete → admin, agent → write). When each call
@@ -25,10 +30,20 @@ export async function callSubagentGateway(
   // Only admin-requiring calls are pinned to ADMIN_SCOPE; other methods (e.g.
   // "agent" -> write) keep their least-privilege scope. Apply the trusted
   // launch authorization before resolving the request's required scope.
-  const authorizedParams =
+  const authorizedParamsBase =
     params.params != null && typeof params.params === "object" && !Array.isArray(params.params)
       ? applySubagentLaunchAuthorization(params.params as Record<string, unknown>, authorization)
       : params.params;
+  const authorizedParams =
+    runtimeOwner?.reservedSubagentClaimToken &&
+    authorizedParamsBase != null &&
+    typeof authorizedParamsBase === "object" &&
+    !Array.isArray(authorizedParamsBase)
+      ? attachReservedSubagentClaimToken(
+          authorizedParamsBase as Record<string, unknown>,
+          runtimeOwner.reservedSubagentClaimToken,
+        )
+      : authorizedParamsBase;
   const leastPrivilegeScopes = resolveLeastPrivilegeOperatorScopesForMethod(
     params.method,
     authorizedParams,
@@ -36,6 +51,9 @@ export async function callSubagentGateway(
   const allowModelOverride = authorization !== undefined;
   const deps = getSubagentSpawnDeps();
   const hasInProcessGateway = deps.hasInProcessGatewayContext();
+  if (runtimeOwner?.reservedSubagentClaimToken && !hasInProcessGateway) {
+    throw new Error("reserved subagent Gateway admission requires in-process dispatch.");
+  }
   const needsOutOfProcessModelOverrideAuth = allowModelOverride && !hasInProcessGateway;
   const scopes =
     params.scopes ??
@@ -65,6 +83,9 @@ export async function callSubagentGateway(
         expectFinal: request.expectFinal,
         ...(allowModelOverride ? { allowSyntheticModelOverride: true } : {}),
         ...(forceSyntheticClient ? { forceSyntheticClient: true } : {}),
+        ...(runtimeOwner?.pluginRuntimeOwnerId
+          ? { pluginRuntimeOwnerId: runtimeOwner.pluginRuntimeOwnerId }
+          : {}),
         ...(typeof request.timeoutMs === "number" ? { timeoutMs: request.timeoutMs } : {}),
         ...(scopes != null ? { syntheticScopes: scopes } : {}),
       },
