@@ -68,7 +68,8 @@ export function buildAssistantText(
   scenarioState: MockScenarioState,
 ) {
   const prompt = extractLastUserText(input);
-  const completedImageMediaPath = readCompletedImageGenerationMediaPath(prompt);
+  const latestRawUserText = extractAllUserTexts(input).at(-1) ?? "";
+  const completedImageMediaPath = readCompletedImageGenerationMediaPath(latestRawUserText);
   if (completedImageMediaPath) {
     return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${completedImageMediaPath}`;
   }
