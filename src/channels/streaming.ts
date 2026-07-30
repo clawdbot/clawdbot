@@ -2,7 +2,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 // Channel streaming config normalization and progress-draft formatting helpers.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
+import {
+  formatToolDetail,
+  isShellToolDisplayName,
+  resolveToolDisplay,
+} from "../agents/tool-display.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import type {
   BlockStreamingChunkConfig,
@@ -331,7 +335,7 @@ function buildNamedProgressLine(
   const display = resolveToolDisplay({ name: normalizedName });
   const prefix = `${display.emoji} ${display.label}`;
   const compactCommandDetail =
-    (display.name === "exec" || display.name === "bash") && text.startsWith(`${display.emoji} `)
+    isShellToolDisplayName(display.name) && text.startsWith(`${display.emoji} `)
       ? text.slice(display.emoji.length + 1).trim()
       : undefined;
   const compactCommandPrefix =
@@ -1135,8 +1139,7 @@ function getProgressDraftLineText(line: string | ChannelProgressDraftLine): stri
   const status = line.status?.trim();
   const displayStatus = status === "completed" ? undefined : status;
   if (detail) {
-    const compactCommandLine =
-      line.toolName === "exec" || line.toolName === "bash" || line.toolName === "shell";
+    const compactCommandLine = isShellToolDisplayName(line.toolName);
     if (line.kind === "command-output" && displayStatus && detail !== displayStatus) {
       const outputDetail = detail.startsWith(`${displayStatus};`)
         ? detail
