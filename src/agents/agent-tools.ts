@@ -65,6 +65,7 @@ import { describeProcessTool } from "./bash-tools.descriptions.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import { processSchema } from "./bash-tools.schemas.js";
+import type { BashSandboxWorkdirMount } from "./bash-tools.shared.js";
 import { listChannelAgentTools } from "./channel-tools.js";
 import { shouldSuppressManagedWebSearchTool } from "./codex-native-web-search.js";
 import {
@@ -131,6 +132,7 @@ type GuardContainerMount = {
 
 function readOnlySandboxReadMounts(
   sandbox: SandboxContext | null | undefined,
+  readOnlyWorkspaceSkillMounts?: readonly BashSandboxWorkdirMount[],
 ): GuardContainerMount[] | undefined {
   if (!sandbox) {
     return undefined;
@@ -144,19 +146,27 @@ function readOnlySandboxReadMounts(
   }
   if (sandbox.workspaceAccess === "rw") {
     mounts.push(
-      ...resolveReadOnlyWorkspaceSkillMounts({
-        workspaceDir: sandbox.workspaceDir,
-        agentWorkspaceDir: sandbox.agentWorkspaceDir,
-        skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
-        workdir: sandbox.containerWorkdir,
-        workspaceAccess: sandbox.workspaceAccess,
-      }).map((mount) => ({
-        containerRoot: mount.containerPath,
-        hostRoot: mount.hostPath,
-      })),
+      ...(readOnlyWorkspaceSkillMounts ?? resolveReadOnlySandboxSkillMounts(sandbox)).map(
+        (mount) => ({
+          containerRoot: mount.containerPath,
+          hostRoot: mount.hostPath,
+        }),
+      ),
     );
   }
   return mounts.length > 0 ? mounts : undefined;
+}
+
+function resolveReadOnlySandboxSkillMounts(
+  sandbox: SandboxContext,
+): readonly BashSandboxWorkdirMount[] {
+  return resolveReadOnlyWorkspaceSkillMounts({
+    workspaceDir: sandbox.workspaceDir,
+    agentWorkspaceDir: sandbox.agentWorkspaceDir,
+    skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
+    workdir: sandbox.containerWorkdir,
+    workspaceAccess: sandbox.workspaceAccess,
+  });
 }
 
 function resolveSkillReadRoots(skillsSnapshot?: SkillSnapshot): string[] | undefined {
@@ -637,6 +647,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const includePluginTools = toolConstructionPlan.includePluginTools;
   const workspaceOnly = fsPolicy.workspaceOnly;
   const skillReadRoots = sandboxRoot ? undefined : resolveSkillReadRoots(options?.skillsSnapshot);
+  const readOnlyWorkspaceSkillMounts = sandbox ? resolveReadOnlySandboxSkillMounts(sandbox) : [];
   const applyPatchConfig = execConfig.applyPatch;
   // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
   // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
@@ -668,7 +679,10 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
           });
           const guarded = workspaceOnly
             ? wrapToolWorkspaceRootGuardWithOptions(sandboxed, sandboxRoot, {
-                additionalContainerMounts: readOnlySandboxReadMounts(sandbox),
+                additionalContainerMounts: readOnlySandboxReadMounts(
+                  sandbox,
+                  readOnlyWorkspaceSkillMounts,
+                ),
                 containerWorkdir: sandbox.containerWorkdir,
               })
             : sandboxed;
@@ -783,6 +797,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
               containerName: sandbox.containerName,
               workspaceDir: sandbox.workspaceDir,
               containerWorkdir: sandbox.containerWorkdir,
+              readOnlyWorkspaceSkillMounts,
               workdirValidation: sandbox.backend?.workdirValidation,
               validateWorkdir: sandbox.backend?.validateWorkdir?.bind(sandbox.backend),
               discardPreparedWorkdir: sandbox.backend?.discardPreparedWorkdir?.bind(

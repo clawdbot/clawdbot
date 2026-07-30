@@ -14,10 +14,16 @@ import type {
 const CHUNK_LIMIT = 8 * 1024;
 
 /** Sandbox metadata needed to map host workspaces into container exec calls. */
+export type BashSandboxWorkdirMount = {
+  hostPath: string;
+  containerPath: string;
+};
+
 export type BashSandboxConfig = {
   containerName: string;
   workspaceDir: string;
   containerWorkdir: string;
+  readOnlyWorkspaceSkillMounts?: readonly BashSandboxWorkdirMount[];
   workdirValidation?: SandboxBackendWorkdirValidation;
   validateWorkdir?: SandboxBackendWorkdirValidator;
   discardPreparedWorkdir?: (workdir: string) => void;

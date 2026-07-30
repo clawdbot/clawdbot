@@ -33,6 +33,12 @@ type BackendHostWorkdirCandidate = {
   failIfInvalid: boolean;
 };
 
+type ContainerHostWorkdirMapping = {
+  hostPath: string;
+  hostRoot: string;
+  containerRoot: string;
+};
+
 type ExistingHostWorkspacePathResult =
   | { kind: "available"; workdir: SandboxWorkdir }
   | { kind: "missing"; relative: string }
@@ -73,23 +79,33 @@ function safeCurrentCwd(): string | null {
 function mapContainerWorkdirToHost(params: {
   workdir: string;
   sandbox: BashSandboxConfig;
-}): string | undefined {
+}): ContainerHostWorkdirMapping | undefined {
   const workdir = normalizeContainerPath(params.workdir);
-  const containerRoot = normalizeContainerPath(params.sandbox.containerWorkdir);
-  if (containerRoot === ".") {
-    return undefined;
+  const mappings = [
+    ...(params.sandbox.readOnlyWorkspaceSkillMounts ?? []).map((mount) => ({
+      hostRoot: path.resolve(mount.hostPath),
+      containerRoot: normalizeContainerPath(mount.containerPath),
+    })),
+    {
+      hostRoot: path.resolve(params.sandbox.workspaceDir),
+      containerRoot: normalizeContainerPath(params.sandbox.containerWorkdir),
+    },
+  ]
+    .filter((mapping) => mapping.containerRoot !== ".")
+    .sort((left, right) => right.containerRoot.length - left.containerRoot.length);
+
+  for (const mapping of mappings) {
+    const rel = mapContainerWorkdirRelativeToRoot({ workdir, root: mapping.containerRoot });
+    if (!rel) {
+      continue;
+    }
+    return {
+      hostPath: path.resolve(mapping.hostRoot, ...rel),
+      hostRoot: mapping.hostRoot,
+      containerRoot: mapping.containerRoot,
+    };
   }
-  if (workdir === containerRoot) {
-    return path.resolve(params.sandbox.workspaceDir);
-  }
-  if (!workdir.startsWith(`${containerRoot}/`)) {
-    return undefined;
-  }
-  const rel = workdir
-    .slice(containerRoot.length + 1)
-    .split("/")
-    .filter(Boolean);
-  return path.resolve(params.sandbox.workspaceDir, ...rel);
+  return undefined;
 }
 
 function normalizeContainerPath(input: string): string {
@@ -99,6 +115,25 @@ function normalizeContainerPath(input: string): string {
   }
   const posixPath = path.posix.normalize(normalized);
   return posixPath === "/" ? posixPath : posixPath.replace(/\/+$/g, "");
+}
+
+function mapContainerWorkdirRelativeToRoot(params: {
+  workdir: string;
+  root: string;
+}): string[] | null {
+  if (params.workdir === params.root) {
+    return [];
+  }
+  if (params.root === "/") {
+    return path.posix.isAbsolute(params.workdir) ? params.workdir.split("/").filter(Boolean) : null;
+  }
+  if (!params.workdir.startsWith(`${params.root}/`)) {
+    return null;
+  }
+  return params.workdir
+    .slice(params.root.length + 1)
+    .split("/")
+    .filter(Boolean);
 }
 
 function joinContainerWorkdir(containerWorkdir: string, relative: string): string {
@@ -228,7 +263,7 @@ function resolveBackendHostWorkdirCandidate(params: {
     sandbox: params.sandbox,
   });
   return containerMappedHostPath
-    ? { hostPath: containerMappedHostPath, failIfInvalid: false }
+    ? { hostPath: containerMappedHostPath.hostPath, failIfInvalid: false }
     : null;
 }
 
@@ -291,12 +326,14 @@ async function resolveHostValidatedSandboxWorkdir(params: {
     workdir: params.workdir,
     sandbox: params.sandbox,
   });
-  const candidateWorkdir = mappedHostWorkdir ?? params.workdir;
+  const candidateWorkdir = mappedHostWorkdir?.hostPath ?? params.workdir;
+  const candidateRoot = mappedHostWorkdir?.hostRoot ?? params.sandbox.workspaceDir;
+  const containerRoot = mappedHostWorkdir?.containerRoot ?? params.sandbox.containerWorkdir;
   try {
     const resolved = await assertSandboxPath({
       filePath: candidateWorkdir,
-      cwd: params.sandbox.workspaceDir,
-      root: params.sandbox.workspaceDir,
+      cwd: candidateRoot,
+      root: candidateRoot,
     });
     const stats = await fs.stat(resolved.resolved);
     if (!stats.isDirectory()) {
@@ -305,7 +342,7 @@ async function resolveHostValidatedSandboxWorkdir(params: {
     const relative = resolved.relative
       ? resolved.relative.split(path.sep).join(path.posix.sep)
       : "";
-    const containerCwd = joinContainerWorkdir(params.sandbox.containerWorkdir, relative);
+    const containerCwd = joinContainerWorkdir(containerRoot, relative);
     return { hostCwd: resolved.resolved, containerCwd, scriptPreflightCwd: resolved.resolved };
   } catch {
     return null;

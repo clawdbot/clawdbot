@@ -291,6 +291,65 @@ describe("resolveExecWorkdir", () => {
     });
   });
 
+  it("maps read-only sandbox skill mount workdirs to their mounted host source", async () => {
+    await withTempDir(async (workspaceDir) => {
+      await withTempDir(async (skillsWorkspaceDir) => {
+        const mountedSkillsRoot = path.join(skillsWorkspaceDir, "skills");
+        const demoSkillDir = path.join(mountedSkillsRoot, "demo");
+        await mkdir(demoSkillDir, { recursive: true });
+
+        await expect(
+          resolveExecWorkdir({
+            host: "sandbox",
+            workdir: "/workspace/.openclaw/sandbox-skills/skills/demo",
+            sandbox: {
+              ...sandboxConfig(workspaceDir),
+              readOnlyWorkspaceSkillMounts: [
+                {
+                  hostPath: mountedSkillsRoot,
+                  containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+                },
+              ],
+            },
+          }),
+        ).resolves.toEqual({
+          kind: "sandbox",
+          hostCwd: demoSkillDir,
+          containerCwd: "/workspace/.openclaw/sandbox-skills/skills/demo",
+          scriptPreflightCwd: demoSkillDir,
+        });
+      });
+    });
+  });
+
+  it("rejects missing read-only sandbox skill mount workdirs", async () => {
+    await withTempDir(async (workspaceDir) => {
+      await withTempDir(async (skillsWorkspaceDir) => {
+        const mountedSkillsRoot = path.join(skillsWorkspaceDir, "skills");
+        await mkdir(mountedSkillsRoot, { recursive: true });
+
+        await expect(
+          resolveExecWorkdir({
+            host: "sandbox",
+            workdir: "/workspace/.openclaw/sandbox-skills/skills/missing",
+            sandbox: {
+              ...sandboxConfig(workspaceDir),
+              readOnlyWorkspaceSkillMounts: [
+                {
+                  hostPath: mountedSkillsRoot,
+                  containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+                },
+              ],
+            },
+          }),
+        ).resolves.toEqual({
+          kind: "unavailable",
+          requestedCwd: "/workspace/.openclaw/sandbox-skills/skills/missing",
+        });
+      });
+    });
+  });
+
   it("lets backend-validated sandboxes use remote-only container workdirs", async () => {
     await withTempDir(async (workspaceDir) => {
       await expect(
