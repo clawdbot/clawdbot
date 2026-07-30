@@ -97,6 +97,15 @@ function projectedReportCellStatus(cell) {
   return cell.runtimeErrorClass || cell.transportErrorClass ? "fail" : "pass";
 }
 
+function hasPassingRuntimeCellStatus(cell) {
+  // Early frozen candidates did not serialize the derived cell status. Accept
+  // only that absent legacy field when the same runtime evidence projects pass.
+  return (
+    cell.status === "pass" ||
+    (!Object.hasOwn(cell, "status") && projectedReportCellStatus(cell) === "pass")
+  );
+}
+
 function requireRuntimePairScenario(scenario, index) {
   if (!isRecord(scenario)) {
     throw new Error(`scenario ${index + 1} is not an object`);
@@ -116,9 +125,12 @@ function requireRuntimePairScenario(scenario, index) {
   }
 
   if (scenario.status === "pass") {
-    const hasTwoPassingCells = openclaw.status === "pass" && codex.status === "pass";
+    const hasTwoPassingCells =
+      hasPassingRuntimeCellStatus(openclaw) && hasPassingRuntimeCellStatus(codex);
     const hasAdvisoryCodexGap =
-      parity.drift === "structural" && openclaw.status === "pass" && isExplicitCodexGap(codex);
+      parity.drift === "structural" &&
+      hasPassingRuntimeCellStatus(openclaw) &&
+      isExplicitCodexGap(codex);
     if (
       parity.drift === "failure-mode" ||
       (!hasTwoPassingCells && !hasAdvisoryCodexGap) ||

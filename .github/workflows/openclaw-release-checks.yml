@@ -1270,9 +1270,10 @@ jobs:
           if pnpm openclaw qa suite --help | grep -Fq -- "--runtime-pair-lane"; then
             runtime_pair_args+=(--runtime-pair-lane "$RUNTIME_PAIR_LANE")
           elif [[ "$RUNTIME_PAIR_LANE" == "core" ]]; then
-            # Before runtime-pair lanes, the frozen candidate's standard and
-            # live-only tiers together defined the current core lane.
-            runtime_pair_args+=(--runtime-parity-tier standard,live-only)
+            # Legacy explicit-tier selection bypasses its provider eligibility
+            # filter. live-only scenarios require a live provider, so the mock
+            # core lane must select only the eligible standard tier.
+            runtime_pair_args+=(--runtime-parity-tier standard)
           elif [[ "$RUNTIME_PAIR_LANE" == "soak" ]]; then
             runtime_pair_args+=(--runtime-parity-tier soak)
           else
