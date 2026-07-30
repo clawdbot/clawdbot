@@ -1467,7 +1467,7 @@ describe("gateway session utils", () => {
     expect(opaqueRow.displayName).toMatch(/^telegram:/);
   });
 
-  test("buildGatewaySessionRow presentation uses saved non-group names but not group tokens", () => {
+  test("buildGatewaySessionRow projects flat classification facts without group tokens", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
     const subagentEntry = {
       displayName: "Research",
@@ -1479,10 +1479,10 @@ describe("gateway session utils", () => {
       key: "agent:main:subagent:one",
       entry: subagentEntry,
     });
-    expect(subagentRow.presentation).toMatchObject({
-      title: "Research",
-      titleSource: "displayName",
-      family: "subagent",
+    expect(subagentRow).toMatchObject({
+      classification: "subagent",
+      agentId: "main",
+      isBackground: true,
     });
 
     const groupEntry = {
@@ -1496,12 +1496,20 @@ describe("gateway session utils", () => {
       key: "agent:main:telegram:group:99",
       entry: groupEntry,
     });
-    expect(groupRow.presentation).toMatchObject({
-      title: "Telegram group",
-      titleSource: "generated",
-      family: "group",
+    expect(groupRow).toMatchObject({
+      classification: "group",
+      peerKind: "group",
     });
-    expect(JSON.stringify(groupRow.presentation)).not.toContain("private-token");
+    expect(
+      JSON.stringify({
+        classification: groupRow.classification,
+        agentId: groupRow.agentId,
+        accountId: groupRow.accountId,
+        peerKind: groupRow.peerKind,
+        isMain: groupRow.isMain,
+        isBackground: groupRow.isBackground,
+      }),
+    ).not.toContain("private-token");
   });
 
   test("buildGatewaySessionRow projects worktree and execNode bindings", () => {

@@ -2,7 +2,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
-import { SessionPresentationSchema } from "./session-presentation.js";
+import { SessionClassificationSchema, SessionPeerKindSchema } from "./session-classification.js";
 import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
 export const SessionToolOverridesSchema = closedObject({
@@ -37,11 +37,17 @@ export const SessionRowSchema = Type.Object(
     ]),
     label: Type.Optional(Type.String()),
     boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
-    presentation: Type.Optional(SessionPresentationSchema),
     displayName: Type.Optional(Type.String()),
     derivedTitle: Type.Optional(Type.String()),
     lastMessagePreview: Type.Optional(Type.String()),
     channel: Type.Optional(Type.String()),
+    /** Stable non-sensitive facts derived from the canonical session route. */
+    classification: Type.Optional(SessionClassificationSchema),
+    agentId: Type.Optional(NonEmptyString),
+    accountId: Type.Optional(NonEmptyString),
+    peerKind: Type.Optional(SessionPeerKindSchema),
+    isMain: Type.Optional(Type.Boolean()),
+    isBackground: Type.Optional(Type.Boolean()),
     chatType: Type.Optional(
       Type.Union([Type.Literal("direct"), Type.Literal("group"), Type.Literal("channel")]),
     ),

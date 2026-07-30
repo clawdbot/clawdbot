@@ -354,11 +354,16 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     }
 
     public var key: String
-    /// Client-ready, non-sensitive session identity and display metadata.
-    public var presentation: SessionPresentation?
     public var kind: String?
     public var displayName: String?
     public var derivedTitle: String?
+    /// Non-sensitive facts derived by the Gateway from the canonical session route.
+    public var classification: String?
+    public var agentId: String?
+    public var accountId: String?
+    public var peerKind: String?
+    public var isMain: Bool?
+    public var isBackground: Bool?
     public var label: String?
     public var category: String?
     public var pinned: Bool?
@@ -418,9 +423,14 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
 
     public init(
         key: String,
-        presentation: SessionPresentation? = nil,
         kind: String?,
         displayName: String?,
+        classification: String? = nil,
+        agentId: String? = nil,
+        accountId: String? = nil,
+        peerKind: String? = nil,
+        isMain: Bool? = nil,
+        isBackground: Bool? = nil,
         surface: String?,
         subject: String?,
         room: String?,
@@ -476,10 +486,15 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         derivedTitle: String? = nil)
     {
         self.key = key
-        self.presentation = presentation
         self.kind = kind
         self.displayName = displayName
         self.derivedTitle = derivedTitle
+        self.classification = classification
+        self.agentId = agentId
+        self.accountId = accountId
+        self.peerKind = peerKind
+        self.isMain = isMain
+        self.isBackground = isBackground
         self.label = label
         self.category = category
         self.pinned = pinned

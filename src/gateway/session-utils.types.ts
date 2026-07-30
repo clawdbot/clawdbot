@@ -3,7 +3,8 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionCreatedActor,
-  SessionPresentation,
+  SessionClassification,
+  SessionPeerKind,
   SessionPlacement,
   SessionRow,
   SessionSharingRole,
@@ -55,7 +56,12 @@ type SessionCompactionCheckpointPreview = Pick<
 export type GatewaySessionRow = {
   key: string;
   /** Optional display metadata; never authoritative for session access or lifecycle. */
-  presentation?: SessionPresentation;
+  classification?: SessionClassification;
+  agentId?: string;
+  accountId?: string;
+  peerKind?: SessionPeerKind;
+  isMain?: boolean;
+  isBackground?: boolean;
   /** Additive collaboration state; absent on older gateways. */
   visibility?: SessionVisibility;
   /** Caller-relative role used by Control UI participation controls. */
