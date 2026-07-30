@@ -105,12 +105,14 @@ function filterRoomEventOperationalPayloads(params: {
     return params.payloads;
   }
   const policy = resolveOperationalReplyPolicy(params.turn.config).policy;
-  if (policy !== "redirect" && policy !== "silent") {
-    return [];
-  }
-  return params.payloads.filter((payload) =>
-    isOperationalReplyPayload({ payload, explicitCommandTurn: false }),
-  );
+  return params.payloads.filter((payload) => {
+    const commandReply = getReplyPayloadMetadata(payload)?.commandReply === true;
+    return (
+      commandReply ||
+      ((policy === "redirect" || policy === "silent") &&
+        isOperationalReplyPayload({ payload, explicitCommandTurn: commandReply }))
+    );
+  });
 }
 
 /** Resolves one final queued delivery action without performing transport I/O. */
@@ -421,7 +423,9 @@ async function sendFollowupPayloads(params: {
     await applyOperationalReplyPolicy({
       cfg: turn.config,
       payload,
-      explicitCommandTurn: false,
+      // commandReply is host-owned metadata. Queued follow-ups no longer carry
+      // the original command context, so this marker preserves its exemption.
+      explicitCommandTurn: getReplyPayloadMetadata(payload)?.commandReply === true,
       sendPolicyDenied: turn.sendPolicy === "deny",
       sourceSessionKey:
         turn.queued.run.runtimePolicySessionKey ??

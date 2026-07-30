@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   getReplyPayloadMetadata,
+  markCommandReplyForDelivery,
   markOperationalReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
@@ -497,6 +498,32 @@ describe("resolveFollowupDeliveryDecision", () => {
     ).toMatchObject({ kind: "deliver", payloads: [{ text: "runtime warning" }] });
   });
 
+  it("keeps marked command replies visible in room events under silent policy", () => {
+    const turn = createTurn({
+      config: {
+        messages: {
+          operationalReplies: { policy: "silent" },
+        },
+      },
+      queued: {
+        ...createTurn().queued,
+        currentInboundEventKind: "room_event",
+      },
+    });
+    const commandReply = markCommandReplyForDelivery({
+      text: "compacted",
+      isCompactionNotice: true,
+    }) as ReplyPayload;
+
+    expect(
+      resolveFollowupDeliveryDecision({
+        turn,
+        execution: createSettledExecution(),
+        accounting: createAccounting([commandReply]),
+      }),
+    ).toMatchObject({ kind: "deliver", payloads: [{ text: "compacted" }] });
+  });
+
   it("honors the admission-time send policy before any final projection", () => {
     expect(
       resolveFollowupDeliveryDecision({
@@ -916,6 +943,39 @@ describe("deliverFollowupDecision", () => {
 
     expect(deliveryState.runtimeError).toHaveBeenCalledWith(
       expect.stringContaining("route-reply failed: offline"),
+    );
+  });
+
+  it("does not silence a marked command reply during follow-up delivery", async () => {
+    deliveryState.routeReply.mockReset();
+    deliveryState.routeReply.mockResolvedValue({
+      ok: true,
+      delivered: true,
+      messageId: "command-reply",
+    });
+    const commandReply = markCommandReplyForDelivery({
+      text: "compacted",
+      isCompactionNotice: true,
+    }) as ReplyPayload;
+
+    await deliverFollowupDecision({
+      decision: { kind: "deliver", payloads: [commandReply] },
+      turn: createTurn({
+        config: {
+          messages: {
+            operationalReplies: { policy: "silent" },
+          },
+        },
+      }),
+      defaults: createDefaults(vi.fn(async (_payload: ReplyPayload) => {})),
+      runId: "run-command",
+      runFollowup: vi.fn(async () => {}),
+    });
+
+    expect(deliveryState.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ text: "compacted" }),
+      }),
     );
   });
 
