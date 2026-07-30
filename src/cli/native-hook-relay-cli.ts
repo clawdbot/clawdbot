@@ -1,4 +1,5 @@
 // CLI adapter for invoking native provider hooks through direct relay or gateway fallback.
+import { readFileSync } from "node:fs";
 import {
   invokeNativeHookRelayBridge,
   isNativeHookRelayBridgeStaleRegistrationError,
@@ -89,42 +90,96 @@ function parseNativeHookRelayCliOptions(argv: string[]): NativeHookRelayCliOptio
 }
 
 /**
- * On Linux, polls the parent process and exits when the parent disappears.
- * Hook relay helpers are spawned per tool call by Codex. When the gateway
- * or Codex process tree is SIGKILLed (cgroup OOM, container memory cap),
- * the relay process is reparented to PID 1 without cleanup. This watch
- * detects parent death and exits early, preventing orphaned memory bloat.
+ * Reads the starttime (clock ticks since boot) and ppid from /proc/[pid]/stat.
+ * Returns null when the proc entry is not readable (process gone).
  */
-export function installParentDeathWatchLinux(parentPid: number): { dispose: () => void } {
+function readProcStat(pid: number): { startTime: number; ppid: number } | null {
+  try {
+    const raw = readFileSync(`/proc/${pid}/stat`, "utf8");
+    // /proc/[pid]/stat: pid (comm) state ppid ... starttime
+    const closeParen = raw.lastIndexOf(")");
+    if (closeParen < 0) {
+      return null;
+    }
+    const fields = raw.slice(closeParen + 2).split(" ");
+    // field index 1 after ")" is ppid
+    const ppid = Number(fields[1]);
+    // field index 19 after ")" is starttime (22nd field overall)
+    const startTime = Number(fields[19]);
+    return { startTime, ppid };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * On Linux, polls the parent process identity and exits when the parent
+ * disappears or is replaced. Hook relay helpers are spawned per tool call
+ * by Codex. When the gateway or Codex process tree is SIGKILLed (cgroup
+ * OOM, container memory cap), the relay process is reparented to PID 1
+ * without cleanup.
+ *
+ * A signal-0 existence probe (process.kill(pid, 0)) cannot distinguish the
+ * original parent from an unrelated process that reused the same numeric
+ * PID after the parent died. This watch instead compares the parent's
+ * /proc/[pid]/stat start time against the value captured at startup so a
+ * recycled PID or reparenting both trigger exit.
+ */
+export function installParentDeathWatchLinux(
+  parentPid: number,
+  deps?: { readProcStat?: typeof readProcStat },
+): { dispose: () => void } {
+  const read = deps?.readProcStat ?? readProcStat;
+  const initial = read(parentPid);
+  if (!initial) {
+    // Parent already gone; exit immediately.
+    process.exit(0);
+  }
+
   const pollMs = 5000;
-  const dispose = () => {
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let disposed = false;
+
+  const disposeTimer = () => {
     if (timer) {
       clearInterval(timer);
       timer = undefined;
     }
   };
-  let timer: ReturnType<typeof setInterval> | undefined;
-  // Poll the parent process; exit cleanly when it is gone.
+
   timer = setInterval(() => {
     if (disposed) {
       return;
     }
-    try {
-      process.kill(parentPid, 0);
-    } catch (err: unknown) {
-      const code = (err as NodeJS.ErrnoException)?.code;
-      if (code === "ESRCH") {
-        dispose();
-        process.exit(0);
-      }
+    const current = read(parentPid);
+    if (!current) {
+      // /proc entry missing — parent process no longer exists.
+      disposeTimer();
+      process.exit(0);
+      return;
+    }
+    if (current.startTime !== initial.startTime) {
+      // Start time changed — the original parent died and this PID was
+      // recycled for an unrelated process.
+      disposeTimer();
+      process.exit(0);
+      return;
+    }
+    // Detect reparenting: when the parent dies the kernel reparents the
+    // orphan to PID 1 (or a subreaper). Self-stat ppid is live (unlike
+    // cached process.ppid).
+    const self = read(process.pid);
+    if (self && self.ppid !== parentPid) {
+      disposeTimer();
+      process.exit(0);
     }
   }, pollMs);
   timer.unref();
-  let disposed = false;
+
   return {
     dispose: () => {
       disposed = true;
-      dispose();
+      disposeTimer();
     },
   };
 }

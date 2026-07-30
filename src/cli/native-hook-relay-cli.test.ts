@@ -673,6 +673,43 @@ function createHeldOpenTextStream(text: string): PassThrough {
 
 describe("parent death watch", () => {
   const PARENT_PID = 88888;
+  const PARENT_START_TIME = 12345;
+  const SELF_START_TIME = 67890;
+
+  function makeProcStat(
+    pid: number,
+    ppid: number,
+    startTime: number,
+  ): {
+    startTime: number;
+    ppid: number;
+  } {
+    return { startTime, ppid };
+  }
+
+  function createReadProcStatMock(
+    opts: {
+      parentAlive?: boolean;
+      parentStartTime?: number;
+      selfPpid?: number;
+    } = {},
+  ) {
+    const parentAlive = opts.parentAlive ?? true;
+    const parentStartTime = opts.parentStartTime ?? PARENT_START_TIME;
+    const selfPpid = opts.selfPpid ?? PARENT_PID;
+    return vi.fn((pid: number) => {
+      if (pid === PARENT_PID) {
+        if (!parentAlive) {
+          return null;
+        }
+        return makeProcStat(PARENT_PID, 1, parentStartTime);
+      }
+      if (pid === process.pid) {
+        return makeProcStat(process.pid, selfPpid, SELF_START_TIME);
+      }
+      return null;
+    });
+  }
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -684,17 +721,18 @@ describe("parent death watch", () => {
   });
 
   it("starts a periodic poll on Linux", () => {
+    const readProcStat = createReadProcStatMock();
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
-    const watch = installParentDeathWatchLinux(PARENT_PID);
+    const watch = installParentDeathWatchLinux(PARENT_PID, { readProcStat });
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 5000);
     watch.dispose();
   });
 
   it("does not exit while the parent stays alive", () => {
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
-    vi.spyOn(process, "kill").mockReturnValue(true);
+    const readProcStat = createReadProcStatMock();
 
-    installParentDeathWatchLinux(PARENT_PID);
+    installParentDeathWatchLinux(PARENT_PID, { readProcStat });
     vi.advanceTimersByTime(5000);
     vi.advanceTimersByTime(5000);
     vi.advanceTimersByTime(5000);
@@ -702,26 +740,101 @@ describe("parent death watch", () => {
     exitSpy.mockRestore();
   });
 
-  it("exits when the parent process disappears", () => {
+  it("exits immediately when the parent is already gone at startup", () => {
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
-    let parentDead = false;
-    vi.spyOn(process, "kill").mockImplementation((pid, sig) => {
-      if (parentDead && pid === PARENT_PID && sig === 0) {
-        const err = new Error("ESRCH") as NodeJS.ErrnoException;
-        err.code = "ESRCH";
-        throw err;
+    const readProcStat = createReadProcStatMock({ parentAlive: false });
+
+    installParentDeathWatchLinux(PARENT_PID, { readProcStat });
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    exitSpy.mockRestore();
+  });
+
+  it("exits when the parent /proc entry disappears", () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    const readProcStat = vi.fn((pid: number) => {
+      if (pid === PARENT_PID) {
+        return makeProcStat(PARENT_PID, 1, PARENT_START_TIME);
       }
-      return true;
+      if (pid === process.pid) {
+        return makeProcStat(process.pid, PARENT_PID, SELF_START_TIME);
+      }
+      return null;
     });
 
-    installParentDeathWatchLinux(PARENT_PID);
+    installParentDeathWatchLinux(PARENT_PID, { readProcStat });
 
     // Tick 1: parent alive.
     vi.advanceTimersByTime(5000);
     expect(exitSpy).not.toHaveBeenCalled();
 
-    // Tick 2: parent dead → exit(0).
-    parentDead = true;
+    // Tick 2: parent proc entry gone → exit(0).
+    readProcStat.mockReturnValue(null);
+    vi.advanceTimersByTime(5000);
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    exitSpy.mockRestore();
+  });
+
+  it("exits when the parent start time changes (PID reuse)", () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    const readProcStat = vi.fn((pid: number) => {
+      if (pid === PARENT_PID) {
+        return makeProcStat(PARENT_PID, 1, PARENT_START_TIME);
+      }
+      if (pid === process.pid) {
+        return makeProcStat(process.pid, PARENT_PID, SELF_START_TIME);
+      }
+      return null;
+    });
+
+    installParentDeathWatchLinux(PARENT_PID, { readProcStat });
+
+    // Tick 1: parent start time matches → no exit.
+    vi.advanceTimersByTime(5000);
+    expect(exitSpy).not.toHaveBeenCalled();
+
+    // Tick 2: PID was reused, start time differs → exit(0).
+    readProcStat.mockImplementation((pid: number) => {
+      if (pid === PARENT_PID) {
+        return makeProcStat(PARENT_PID, 1, 99999);
+      }
+      if (pid === process.pid) {
+        return makeProcStat(process.pid, PARENT_PID, SELF_START_TIME);
+      }
+      return null;
+    });
+    vi.advanceTimersByTime(5000);
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    exitSpy.mockRestore();
+  });
+
+  it("exits when the relay is reparented (self ppid changed)", () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    const readProcStat = vi.fn((pid: number) => {
+      if (pid === PARENT_PID) {
+        return makeProcStat(PARENT_PID, 1, PARENT_START_TIME);
+      }
+      if (pid === process.pid) {
+        return makeProcStat(process.pid, PARENT_PID, SELF_START_TIME);
+      }
+      return null;
+    });
+
+    installParentDeathWatchLinux(PARENT_PID, { readProcStat });
+
+    // Tick 1: ppid matches → no exit.
+    vi.advanceTimersByTime(5000);
+    expect(exitSpy).not.toHaveBeenCalled();
+
+    // Tick 2: reparented to PID 1 → exit(0).
+    readProcStat.mockImplementation((pid: number) => {
+      if (pid === PARENT_PID) {
+        return makeProcStat(PARENT_PID, 1, PARENT_START_TIME);
+      }
+      if (pid === process.pid) {
+        return makeProcStat(process.pid, 1, SELF_START_TIME);
+      }
+      return null;
+    });
     vi.advanceTimersByTime(5000);
     expect(exitSpy).toHaveBeenCalledWith(0);
     exitSpy.mockRestore();
@@ -729,9 +842,9 @@ describe("parent death watch", () => {
 
   it("dispose stops the watch and prevents further ticks", () => {
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
-    vi.spyOn(process, "kill").mockReturnValue(true);
+    const readProcStat = createReadProcStatMock();
 
-    const watch = installParentDeathWatchLinux(PARENT_PID);
+    const watch = installParentDeathWatchLinux(PARENT_PID, { readProcStat });
     watch.dispose();
 
     // Advance well past several intervals — nothing should fire.
