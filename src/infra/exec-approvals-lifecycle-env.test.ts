@@ -281,6 +281,85 @@ describe("OpenClaw lifecycle dynamic carrier edges", () => {
         "sh",
       ]),
     ).toBe(false);
+    expect(
+      requiresApproval(`sh -c 'f(){ openclaw "$@"; }; f gateway restart' sh`, [
+        "sh",
+        "-c",
+        `f(){ openclaw "$@"; }; f gateway restart`,
+        "sh",
+      ]),
+    ).toBe(true);
+    expect(
+      requiresApproval(`sh -c 'f(){ openclaw "$1"; }; f gateway' sh`, [
+        "sh",
+        "-c",
+        `f(){ openclaw "$1"; }; f gateway`,
+        "sh",
+      ]),
+    ).toBe(true);
+    expect(
+      requiresApproval(`sh -c 'f(){ openclaw "\${1:-status}"; }; if f gateway; then :; fi' sh`, [
+        "sh",
+        "-c",
+        `f(){ openclaw "\${1:-status}"; }; if f gateway; then :; fi`,
+        "sh",
+      ]),
+    ).toBe(true);
+    expect(
+      requiresApproval(`sh -c 'f(){ exec "$@"; }; f openclaw gateway restart' sh`, [
+        "sh",
+        "-c",
+        `f(){ exec "$@"; }; f openclaw gateway restart`,
+        "sh",
+      ]),
+    ).toBe(true);
+  });
+
+  it("recomputes environment syntax across mixed shell wrappers", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `echo ok; cmd /c "%TOOL% gateway restart"`,
+        env: { TOOL: "openclaw" },
+        platform: "win32",
+        segments: [
+          { raw: "echo ok", argv: ["echo", "ok"] },
+          {
+            raw: `cmd /c "%TOOL% gateway restart"`,
+            argv: ["cmd", "/c", "%TOOL% gateway restart"],
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `cmd /c "powershell -Command '$env:TOOL gateway restart'"`,
+        env: { TOOL: "openclaw" },
+        platform: "win32",
+        segments: [
+          {
+            raw: `cmd /c "powershell -Command '$env:TOOL gateway restart'"`,
+            argv: ["cmd", "/c", `powershell -Command '$env:TOOL gateway restart'`],
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not trust inherited values shadowed by shell binders", () => {
+    for (const inline of [
+      `for TOOL in openclaw; do "$TOOL" gateway restart; done`,
+      `read TOOL; "$TOOL" gateway restart`,
+    ]) {
+      expect(
+        commandRequiresOpenClawLifecycleApproval({
+          command: `sh -c '${inline}'`,
+          env: { TOOL: "echo" },
+          envComplete: true,
+          platform: "linux",
+          segments: [{ raw: `sh -c '${inline}'`, argv: ["sh", "-c", inline] }],
+        }),
+      ).toBe(true);
+    }
   });
 
   it("fails closed for dynamic direct node-service actions", () => {

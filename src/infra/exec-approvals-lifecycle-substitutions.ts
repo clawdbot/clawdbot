@@ -364,11 +364,44 @@ export function lifecyclePositionalBindingRequiresApproval(
   );
 }
 
-/** Return true when a shell function executes its own positional argv as a command. */
+const FUNCTION_POSITIONAL_REFERENCE_RE = /\$(?:[@*]|[0-9]+|\{(?:[@*]|[0-9]+)[^}]*\})/u;
+const FUNCTION_DYNAMIC_EXECUTOR_RE =
+  /(?:^|[;&|)])\s*(?:builtin|command|doas|env|exec|nohup|sudo)\b[^;&|]*\$(?:[@*]|[0-9]+|\{(?:[@*]|[0-9]+)[^}]*\})/u;
+const FUNCTION_DIRECT_POSITIONAL_EXEC_RE =
+  /(?:^|[;&|)])\s*["']?\$(?:[@*]|[0-9]+|\{(?:[@*]|[0-9]+)[^}]*\})["']?(?:\s|;|&|\|)/u;
+const FUNCTION_OPENCLAW_POSITIONAL_RE =
+  /(?:^|[;&|)])\s*(?:exec\s+)?(?:["']?[^;&|\s]*opencla(?:w|[?*])[^;&|\s]*["']?)[^;&|]*\$(?:[@*]|[0-9]+|\{(?:[@*]|[0-9]+)[^}]*\})/iu;
+
+function escapedRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+/** Return true when an invoked shell function can route local positional argv to a lifecycle command. */
 export function lifecycleFunctionLocalPositionalsRequireApproval(command: string): boolean {
-  return /(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*\s*(?:\(\s*\))?\s*\{(?:\s*|[^{}]*[;&|]\s*)["']?\$(?:@|\*|\{@\}|\{\*\})["']?(?:\s|;|&|\|)/u.test(
-    command,
-  );
+  const definitionRe = /(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*(?:\(\s*\))?\s*\{([^{}]*)\}/gu;
+  for (const match of command.matchAll(definitionRe)) {
+    const name = match[1] ?? "";
+    const body = match[2] ?? "";
+    if (!name || !FUNCTION_POSITIONAL_REFERENCE_RE.test(body)) {
+      continue;
+    }
+    const tail = command.slice((match.index ?? 0) + match[0].length);
+    const invocationRe = new RegExp(
+      String.raw`(?:^|[;&|}\n()]|(?:if|then|elif|while|until|do|else)\s+)\s*${escapedRegExp(name)}(?:\s|[;&|]|$)`,
+      "u",
+    );
+    if (!invocationRe.test(tail)) {
+      continue;
+    }
+    if (
+      FUNCTION_DIRECT_POSITIONAL_EXEC_RE.test(body) ||
+      FUNCTION_DYNAMIC_EXECUTOR_RE.test(body) ||
+      FUNCTION_OPENCLAW_POSITIONAL_RE.test(body)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Bind exact POSIX positional references for nested lifecycle classification. */

@@ -3,8 +3,12 @@ import { splitShellArgs } from "../utils/shell-argv.js";
 import { resolveCarrierCommandArgv } from "./command-carriers.js";
 import { unwrapKnownDispatchWrapperInvocation } from "./dispatch-wrapper-resolution.js";
 import { resolveLifecycleXargsArgv } from "./exec-approvals-lifecycle-carriers.js";
-import { classifyOpenClawConfigArgv } from "./exec-approvals-lifecycle-config.js";
-import { classifyOpenClawDoctorArgv } from "./exec-approvals-lifecycle-doctor.js";
+import {
+  classifyOpenClawArgv,
+  lifecycleFirstPositional as scanFirstPositional,
+  lifecycleHasEffectiveHelpOrVersion as hasEffectiveHelpOrVersion,
+  lifecycleHasHelpOrVersion as hasHelpOrVersion,
+} from "./exec-approvals-lifecycle-cli.js";
 import {
   expandKnownLifecycleEnvironmentCommand,
   expandLifecycleEnvironmentArgv,
@@ -12,8 +16,6 @@ import {
   lifecycleCommandShellDialect,
   unresolvedEnvironmentMayHideLifecycle,
 } from "./exec-approvals-lifecycle-env.js";
-import { classifyOpenClawGatewayArgv } from "./exec-approvals-lifecycle-gateway.js";
-import { classifyOpenClawNodeServiceArgv } from "./exec-approvals-lifecycle-node-service.js";
 import { resolveNodeOpenClawArgv } from "./exec-approvals-lifecycle-node.js";
 import {
   isOpenClawExecutablePattern,
@@ -21,15 +23,9 @@ import {
   matchesOpenClawUnitPattern,
 } from "./exec-approvals-lifecycle-patterns.js";
 import {
-  classifyOpenClawHooksArgv,
-  classifyOpenClawPluginsArgv,
-} from "./exec-approvals-lifecycle-plugins.js";
-import { classifyOpenClawApprovalPolicyArgv } from "./exec-approvals-lifecycle-policy.js";
-import {
   commandHasPowerShellLifecyclePipeline,
   resolvePowerShellStartProcessOpenClawArgv,
 } from "./exec-approvals-lifecycle-powershell.js";
-import { classifyOpenClawResetArgv } from "./exec-approvals-lifecycle-reset.js";
 import { resolveLifecyclePackageRunnerArgv } from "./exec-approvals-lifecycle-runners.js";
 import {
   splitLifecycleInlineCommands,
@@ -43,20 +39,12 @@ import {
   lifecycleSubstitutionResultMayHideLifecycle,
   resolveLifecyclePosixShellPositionals,
 } from "./exec-approvals-lifecycle-substitutions.js";
-import {
-  lifecycleHasEffectiveBooleanOption,
-  lifecycleOptionName as optionName,
-} from "./exec-approvals-lifecycle-tokens.js";
+import { lifecycleOptionName as optionName } from "./exec-approvals-lifecycle-tokens.js";
 import type { ExecCommandSegment } from "./exec-command-analysis-types.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 import { extractShellWrapperInlineCommand } from "./shell-wrapper-resolution.js";
 
 const MAX_NESTED_COMMAND_DEPTH = 8;
-const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "--version"]);
-const OPENCLAW_GLOBAL_FLAGS = new Set(["--dev", "--no-color"]);
-const OPENCLAW_GLOBAL_OPTIONS = new Set(["--container", "--log-level", "--profile"]);
-const UPDATE_OPTIONS_WITH_VALUE = new Set(["--channel", "--tag", "--timeout"]);
-const DRY_RUN_OPTION = new Set(["--dry-run"]);
 const LAUNCHCTL_MUTATIONS = new Set([
   "attach",
   "bootstrap",
@@ -147,6 +135,13 @@ const POWERSHELL_SERVICE_MUTATIONS = new Set([
 type LifecycleSegment = Pick<ExecCommandSegment, "argv"> &
   Partial<Pick<ExecCommandSegment, "raw" | "resolution" | "sourceArgv">>;
 
+type LifecycleEnvironmentContext = {
+  env?: NodeJS.ProcessEnv;
+  envComplete: boolean;
+  platform: NodeJS.Platform;
+  shadowedKeys: ReadonlySet<string>;
+};
+
 function normalizedToken(value: string | undefined): string {
   return (value ?? "").trim().toLowerCase().replaceAll("`", "").replaceAll("^", "");
 }
@@ -171,135 +166,14 @@ function unresolvedDepthMayHideLifecycle(argv: readonly string[]): boolean {
   );
 }
 
-function hasHelpOrVersion(argv: readonly string[]): boolean {
-  return argv.some((token) => HELP_OR_VERSION_FLAGS.has(token.trim()));
-}
-
-function hasEffectiveHelpOrVersion(
+function classifyLaunchctl(
   argv: readonly string[],
-  start: number,
-  optionsWithValue: ReadonlySet<string>,
+  raw: string,
+  depth: number,
+  shellContext?: ShellContext,
+  cwd?: string,
+  environment?: LifecycleEnvironmentContext,
 ): boolean {
-  for (let index = start; index < argv.length; index += 1) {
-    const token = argv[index]?.trim() ?? "";
-    if (token === "--") {
-      break;
-    }
-    const name = optionName(token);
-    if (HELP_OR_VERSION_FLAGS.has(token)) {
-      return true;
-    }
-    if (optionsWithValue.has(name) && !token.includes("=")) {
-      index += 1;
-    }
-  }
-  return false;
-}
-
-function scanFirstPositional(
-  argv: readonly string[],
-  start: number,
-  optionsWithValue: ReadonlySet<string>,
-): number {
-  for (let index = start; index < argv.length; index += 1) {
-    const token = argv[index]?.trim() ?? "";
-    if (token === "--") {
-      return index + 1;
-    }
-    if (!token.startsWith("-") || token === "-") {
-      return index;
-    }
-    const name = optionName(token);
-    if (optionsWithValue.has(name) && !token.includes("=")) {
-      index += 1;
-    }
-  }
-  return argv.length;
-}
-
-function classifyUpdateArgv(argv: readonly string[], start: number): boolean {
-  if (hasEffectiveHelpOrVersion(argv, start, UPDATE_OPTIONS_WITH_VALUE)) {
-    return false;
-  }
-  const positionalIndex = scanFirstPositional(argv, start, UPDATE_OPTIONS_WITH_VALUE);
-  const action = normalizedToken(argv[positionalIndex]);
-  if (action === "status") {
-    return false;
-  }
-  if (
-    lifecycleHasEffectiveBooleanOption(argv, start, DRY_RUN_OPTION, UPDATE_OPTIONS_WITH_VALUE) &&
-    !["finalize", "repair", "wizard"].includes(action)
-  ) {
-    return false;
-  }
-  return true;
-}
-
-function classifyOpenClawArgv(argv: readonly string[]): boolean {
-  let index = 1;
-  for (; index < argv.length; index += 1) {
-    const token = argv[index]?.trim() ?? "";
-    const lower = normalizedToken(token);
-    if (HELP_OR_VERSION_FLAGS.has(token)) {
-      return false;
-    }
-    if (lower === "--update") {
-      return classifyUpdateArgv(argv, index + 1);
-    }
-    if (OPENCLAW_GLOBAL_FLAGS.has(lower)) {
-      continue;
-    }
-    const name = optionName(token);
-    if (OPENCLAW_GLOBAL_OPTIONS.has(name)) {
-      if (!token.includes("=")) {
-        index += 1;
-      }
-      continue;
-    }
-    if (token.startsWith("-")) {
-      continue;
-    }
-    break;
-  }
-
-  const command = normalizedToken(argv[index]);
-  switch (command) {
-    case "approvals":
-    case "exec-approvals":
-    case "exec-policy":
-      return classifyOpenClawApprovalPolicyArgv(command, argv, index + 1);
-    case "config":
-      return classifyOpenClawConfigArgv(argv, index + 1);
-    case "daemon":
-    case "gateway":
-      return classifyOpenClawGatewayArgv(argv, index + 1);
-    case "uninstall":
-      return (
-        !hasHelpOrVersion(argv.slice(index + 1)) &&
-        !lifecycleHasEffectiveBooleanOption(argv, index + 1, DRY_RUN_OPTION)
-      );
-    case "update":
-      return classifyUpdateArgv(argv, index + 1);
-    case "doctor":
-      return classifyOpenClawDoctorArgv(argv, index + 1);
-    case "node":
-      return classifyOpenClawNodeServiceArgv(argv, index + 1);
-    case "hooks":
-      return classifyOpenClawHooksArgv(argv, index + 1);
-    case "plugins":
-      return classifyOpenClawPluginsArgv(argv, index + 1);
-    case "reset":
-      return classifyOpenClawResetArgv(argv, index + 1);
-    case "configure":
-    case "onboard":
-    case "setup":
-      return !HELP_OR_VERSION_FLAGS.has(argv[index + 1]?.trim() ?? "");
-    default:
-      return false;
-  }
-}
-
-function classifyLaunchctl(argv: readonly string[], raw: string, depth: number): boolean {
   const optionsWithValue = new Set(["-d", "-s"]);
   if (hasEffectiveHelpOrVersion(argv, 1, optionsWithValue)) {
     return false;
@@ -308,7 +182,10 @@ function classifyLaunchctl(argv: readonly string[], raw: string, depth: number):
   const action = normalizedToken(argv[actionIndex]);
   if (["asuser", "bsexec"].includes(action)) {
     const commandArgv = argv.slice(actionIndex + 2);
-    return commandArgv.length > 0 && classifyArgv(commandArgv, raw, depth + 1);
+    return (
+      commandArgv.length > 0 &&
+      classifyArgv(commandArgv, raw, depth + 1, shellContext, cwd, environment)
+    );
   }
   if (!LAUNCHCTL_MUTATIONS.has(action)) {
     return false;
@@ -483,6 +360,7 @@ function commandHasLifecycleSubstitution(
   depth: number,
   shellContext?: ShellContext,
   cwd?: string,
+  environment?: LifecycleEnvironmentContext,
 ): boolean {
   const scan = extractShellSubstitutionCommands(
     command,
@@ -497,7 +375,7 @@ function commandHasLifecycleSubstitution(
       shellContext === "powershell" ? "powershell" : "posix",
     ).some((part) => {
       const argv = splitShellArgs(part);
-      return argv ? classifyArgv(argv, part, depth + 1, shellContext, cwd) : true;
+      return argv ? classifyArgv(argv, part, depth + 1, shellContext, cwd, environment) : true;
     }),
   );
 }
@@ -508,6 +386,7 @@ function classifyArgv(
   depth: number,
   shellContext?: ShellContext,
   cwd?: string,
+  environment?: LifecycleEnvironmentContext,
 ): boolean {
   if (argv.length === 0) {
     return false;
@@ -518,7 +397,7 @@ function classifyArgv(
       return false;
     }
     if (commandArgv) {
-      return classifyArgv(commandArgv, raw, depth, shellContext, cwd);
+      return classifyArgv(commandArgv, raw, depth, shellContext, cwd, environment);
     }
   }
   if (
@@ -530,7 +409,7 @@ function classifyArgv(
     return true;
   }
   if (shellContext === "powershell" && ["&", "."].includes(argv[0]?.trim() ?? "")) {
-    return classifyArgv(argv.slice(1), raw, depth + 1, shellContext, cwd);
+    return classifyArgv(argv.slice(1), raw, depth + 1, shellContext, cwd, environment);
   }
   if (isOpenClawExecutable(argv[0])) {
     return classifyOpenClawArgv(["openclaw", ...argv.slice(1)]);
@@ -541,35 +420,76 @@ function classifyArgv(
 
   const carried = resolveCarrierCommandArgv(argv, depth, { includeExec: true });
   if (carried?.length) {
-    return classifyArgv(carried, carried.join(" "), depth + 1, shellContext, cwd);
+    return classifyArgv(carried, carried.join(" "), depth + 1, shellContext, cwd, environment);
   }
   const dispatch = unwrapKnownDispatchWrapperInvocation(argv);
   if (dispatch.kind === "unwrapped" && dispatch.argv.length > 0) {
-    return classifyArgv(dispatch.argv, dispatch.argv.join(" "), depth + 1, shellContext, cwd);
+    return classifyArgv(
+      dispatch.argv,
+      dispatch.argv.join(" "),
+      depth + 1,
+      shellContext,
+      cwd,
+      environment,
+    );
   }
 
-  const inline = extractShellWrapperInlineCommand(argv);
-  if (inline !== null) {
+  const rawInline = extractShellWrapperInlineCommand(argv);
+  if (rawInline !== null) {
     const wrapper = normalizeExecutableToken(argv[0] ?? "");
     const nestedShellContext: ShellContext = ["powershell", "pwsh"].includes(wrapper)
       ? "powershell"
       : undefined;
-    if (nestedShellContext === "powershell" && commandHasPowerShellLifecyclePipeline(inline)) {
+    const nestedDialect =
+      wrapper === "cmd" ? "cmd" : nestedShellContext === "powershell" ? "powershell" : "posix";
+    const nestedShadowedKeys = environment
+      ? new Set([...environment.shadowedKeys, ...lifecycleAssignedEnvironmentKeys(rawInline)])
+      : new Set<string>();
+    const inline = environment
+      ? expandKnownLifecycleEnvironmentCommand(
+          rawInline,
+          environment.env,
+          nestedShadowedKeys,
+          nestedDialect,
+        )
+      : rawInline;
+    const nestedEnvironment = environment
+      ? { ...environment, shadowedKeys: nestedShadowedKeys }
+      : undefined;
+    if (
+      nestedShellContext === "powershell" &&
+      commandHasPowerShellLifecyclePipeline(inline, environment ? !environment.envComplete : false)
+    ) {
       return true;
     }
     if (lifecycleFunctionLocalPositionalsRequireApproval(inline)) {
       return true;
     }
-    if (commandHasLifecycleSubstitution(inline, depth, nestedShellContext, cwd)) {
+    if (
+      commandHasLifecycleSubstitution(inline, depth, nestedShellContext, cwd, nestedEnvironment)
+    ) {
       return true;
     }
     const positionalArgv = resolveLifecyclePosixShellPositionals(argv);
-    const nestedDialect =
-      wrapper === "cmd" ? "cmd" : nestedShellContext === "powershell" ? "powershell" : "posix";
     return splitLifecycleInlineCommands(inline, nestedDialect).some((part) => {
-      const nestedArgv = splitShellArgs(part);
-      if (!nestedArgv) {
+      const rawNestedArgv = splitShellArgs(part);
+      if (!rawNestedArgv) {
         return false;
+      }
+      const expandedNested = environment
+        ? expandLifecycleEnvironmentArgv({
+            argv: rawNestedArgv,
+            env: environment.env,
+            envComplete: environment.envComplete,
+            dialect: nestedDialect,
+            shadowedKeys: nestedShadowedKeys,
+          })
+        : { argv: rawNestedArgv, fieldSplitUncertain: false, unresolved: false };
+      if (
+        (expandedNested.unresolved || expandedNested.fieldSplitUncertain) &&
+        unresolvedEnvironmentMayHideLifecycle(rawNestedArgv)
+      ) {
+        return true;
       }
       if (
         positionalArgv !== null &&
@@ -579,9 +499,9 @@ function classifyArgv(
       }
       const boundArgv =
         positionalArgv === null
-          ? nestedArgv
-          : bindLifecyclePosixShellPositionals(nestedArgv, positionalArgv);
-      return classifyArgv(boundArgv, part, depth + 1, nestedShellContext, cwd);
+          ? expandedNested.argv
+          : bindLifecyclePosixShellPositionals(expandedNested.argv, positionalArgv);
+      return classifyArgv(boundArgv, part, depth + 1, nestedShellContext, cwd, nestedEnvironment);
     });
   }
 
@@ -590,7 +510,14 @@ function classifyArgv(
     return true;
   }
   if (xargs.kind === "argv") {
-    return classifyArgv(xargs.argv, xargs.argv.join(" "), depth + 1, shellContext, cwd);
+    return classifyArgv(
+      xargs.argv,
+      xargs.argv.join(" "),
+      depth + 1,
+      shellContext,
+      cwd,
+      environment,
+    );
   }
 
   const packageRunner = resolveLifecyclePackageRunnerArgv(argv);
@@ -604,6 +531,7 @@ function classifyArgv(
       depth + 1,
       shellContext,
       cwd,
+      environment,
     );
   }
   const nodeArgv = resolveNodeOpenClawArgv(argv, cwd);
@@ -618,7 +546,7 @@ function classifyArgv(
 
   const executable = normalizeExecutableToken(argv[0] ?? "");
   if (executable === "launchctl") {
-    return classifyLaunchctl(argv, raw, depth);
+    return classifyLaunchctl(argv, raw, depth, shellContext, cwd, environment);
   }
   if (executable === "systemctl") {
     return classifySystemctl(argv);
@@ -641,7 +569,13 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
   const envComplete = params.envComplete ?? params.env !== undefined;
   const platform = params.platform ?? process.platform;
   const shadowedKeys = lifecycleAssignedEnvironmentKeys(params.command);
-  const dialect = lifecycleCommandShellDialect(params.segments[0]?.argv[0], platform);
+  const environment: LifecycleEnvironmentContext = {
+    env: params.env,
+    envComplete,
+    platform,
+    shadowedKeys,
+  };
+  const dialect = lifecycleCommandShellDialect(undefined, platform);
   const expandedCommand = expandKnownLifecycleEnvironmentCommand(
     params.command,
     params.env,
@@ -651,7 +585,7 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
   const shellContext: ShellContext = platform === "win32" ? "powershell" : undefined;
   if (
     commandHasPowerShellLifecyclePipeline(expandedCommand, !envComplete) ||
-    commandHasLifecycleSubstitution(expandedCommand, 0, shellContext, params.cwd)
+    commandHasLifecycleSubstitution(expandedCommand, 0, shellContext, params.cwd, environment)
   ) {
     return true;
   }
@@ -677,17 +611,47 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
     }
     if (
       candidates.some((argv) => {
+        const candidateDialect = lifecycleCommandShellDialect(argv[0], platform);
+        const candidateShellContext: ShellContext =
+          candidateDialect === "powershell" ? "powershell" : undefined;
+        const segmentCommand = segment.raw ?? params.command;
+        const expandedSegmentCommand = expandKnownLifecycleEnvironmentCommand(
+          segmentCommand,
+          params.env,
+          shadowedKeys,
+          candidateDialect,
+        );
+        if (
+          (candidateShellContext === "powershell" &&
+            commandHasPowerShellLifecyclePipeline(expandedSegmentCommand, !envComplete)) ||
+          commandHasLifecycleSubstitution(
+            expandedSegmentCommand,
+            0,
+            candidateShellContext,
+            params.cwd,
+            environment,
+          )
+        ) {
+          return true;
+        }
         const expanded = expandLifecycleEnvironmentArgv({
           argv,
           env: params.env,
           envComplete,
-          dialect,
+          dialect: candidateDialect,
           shadowedKeys,
         });
         return (
           ((expanded.unresolved || expanded.fieldSplitUncertain) &&
             unresolvedEnvironmentMayHideLifecycle(argv)) ||
-          classifyArgv(expanded.argv, expandedCommand, 0, shellContext, params.cwd)
+          classifyArgv(
+            expanded.argv,
+            expandedSegmentCommand,
+            0,
+            candidateShellContext,
+            params.cwd,
+            environment,
+          )
         );
       })
     ) {
@@ -697,11 +661,33 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
   if (params.segments.length > 0) {
     return false;
   }
-  return splitLifecycleInlineCommands(
-    expandedCommand,
-    shellContext === "powershell" ? "powershell" : "posix",
-  ).some((part) => {
+  return splitLifecycleInlineCommands(expandedCommand, dialect).some((part) => {
     const argv = splitShellArgs(part);
-    return argv ? classifyArgv(argv, part, 0, shellContext, params.cwd) : false;
+    if (!argv) {
+      return false;
+    }
+    const partDialect = lifecycleCommandShellDialect(argv[0], platform);
+    const partShellContext: ShellContext = partDialect === "powershell" ? "powershell" : undefined;
+    const expandedPart = expandKnownLifecycleEnvironmentCommand(
+      part,
+      params.env,
+      shadowedKeys,
+      partDialect,
+    );
+    const expandedArgv = expandLifecycleEnvironmentArgv({
+      argv,
+      env: params.env,
+      envComplete,
+      dialect: partDialect,
+      shadowedKeys,
+    });
+    return classifyArgv(
+      expandedArgv.argv,
+      expandedPart,
+      0,
+      partShellContext,
+      params.cwd,
+      environment,
+    );
   });
 }

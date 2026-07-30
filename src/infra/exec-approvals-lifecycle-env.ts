@@ -103,10 +103,33 @@ function isVariableReference(value: string | undefined): boolean {
   return VARIABLE_REFERENCE_RE.test(value ?? "");
 }
 
+function collectShellBinderKeys(command: string, keys: Set<string>): void {
+  for (const match of command.matchAll(/\b(?:for|select)\s+([A-Za-z_][A-Za-z0-9_]*)\b/gu)) {
+    keys.add((match[1] ?? "").toLowerCase());
+  }
+  for (const match of command.matchAll(/\bfor\s*\(\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/gu)) {
+    keys.add((match[1] ?? "").toLowerCase());
+  }
+  for (const match of command.matchAll(/\b(?:mapfile|read|readarray)\b([^;&|}\n]*)/gu)) {
+    const tokens = splitShellArgs(match[1] ?? "") ?? [];
+    for (const token of tokens) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/u.test(token)) {
+        keys.add(token.toLowerCase());
+      }
+    }
+  }
+  for (const match of command.matchAll(
+    /\bgetopts\s+(?:"[^"]*"|'[^']*'|\S+)\s+([A-Za-z_][A-Za-z0-9_]*)/gu,
+  )) {
+    keys.add((match[1] ?? "").toLowerCase());
+  }
+}
+
 function collectAssignedEnvironmentKeys(command: string, keys: Set<string>, depth: number): void {
   if (depth > 8) {
     return;
   }
+  collectShellBinderKeys(command, keys);
   for (const part of splitLifecycleInlineCommands(command)) {
     const argv = splitShellArgs(part);
     if (!argv?.length) {
