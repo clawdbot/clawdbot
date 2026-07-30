@@ -8,7 +8,10 @@ import {
   resolvePreparedApprovalAccountId,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
-import { buildApprovalReactionPendingContent } from "openclaw/plugin-sdk/approval-reaction-runtime";
+import {
+  buildApprovalNativeControlsPromptText,
+  buildApprovalReactionPendingContent,
+} from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type {
   ExecApprovalRequest,
@@ -100,7 +103,7 @@ function buildPendingPayload(params: {
     // details message because bridge capability cannot prove recipient support.
     // Same bold headers and labels as the tapback prompt (#85954): both are
     // delivered through the attributed-body send path.
-    pollText: pendingContent.nativeControlsText,
+    pollText: buildApprovalNativeControlsPromptText({ view: params.view, nowMs: params.nowMs }),
     allowedDecisions: pendingContent.reactionPayload.allowedDecisions,
   };
 }

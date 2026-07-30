@@ -83,17 +83,9 @@ export type ApprovalReactionPromptPayload = ReplyPayload & {
   reactionBindings: readonly ApprovalReactionDecisionBinding[];
 };
 
-/** Reaction-enabled and manual-fallback approval prompt payloads, plus native-control copy. */
+/** Pair of reaction-enabled and manual-fallback approval prompt payloads. */
 export type ApprovalReactionPendingContent = {
   reactionPayload: ApprovalReactionPromptPayload;
-  /**
-   * Prompt copy for channels whose native controls (Apple Messages polls,
-   * inline buttons) own the decision surface. Carries the same bold headers and
-   * labels as `reactionPayload` (#85954) minus the tapback hint, which would
-   * advertise a second, redundant control path next to the native one. Text
-   * only: the native control itself carries the decision metadata.
-   */
-  nativeControlsText: string;
   manualFallbackPayload: ReplyPayload;
 };
 
@@ -473,13 +465,6 @@ export function buildApprovalReactionPendingContent(params: {
   nowMs: number;
 }): ApprovalReactionPendingContent {
   const reactionPayload = buildApprovalPendingPromptPayload(params);
-  // Same rich copy as the reaction prompt, without the tapback hint: the
-  // channel's native controls already own the decision surface.
-  const nativeControlsText = buildApprovalReactionPromptText({
-    view: params.view,
-    nowMs: params.nowMs,
-    reactionHint: null,
-  });
   const manualFallbackPayload =
     params.view.approvalKind === "plugin"
       ? (() => {
@@ -511,7 +496,24 @@ export function buildApprovalReactionPendingContent(params: {
             nowMs: params.nowMs,
           } satisfies ExecApprovalPendingReplyParams),
         );
-  return { reactionPayload, nativeControlsText, manualFallbackPayload };
+  return { reactionPayload, manualFallbackPayload };
+}
+
+/**
+ * Prompt copy for channels whose native controls (Apple Messages polls, inline
+ * buttons) own the decision surface. Same bold headers and labels as the
+ * reaction prompt (#85954) minus the tapback hint, which would advertise a
+ * second, redundant control path next to the native one.
+ */
+export function buildApprovalNativeControlsPromptText(params: {
+  view: PendingApprovalView;
+  nowMs: number;
+}): string {
+  return buildApprovalReactionPromptText({
+    view: params.view,
+    nowMs: params.nowMs,
+    reactionHint: null,
+  });
 }
 
 /** Build reaction and manual-fallback pending approval content directly from a request. */

@@ -142,7 +142,6 @@ describe("whatsappApprovalNativeRuntime", () => {
         } as never,
         pendingPayload: {
           manualFallbackPayload: { text: "pending" },
-          nativeControlsText: "pending",
           reactionPayload: {
             text: "pending",
             allowedDecisions: ["allow-once"],
