@@ -13,6 +13,7 @@ import {
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
+import { resolveUserTimezone } from "../../../agents/date-time.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
 import {
@@ -50,27 +51,16 @@ function pickDateTimePart(
   return parts.find((part) => part.type === type)?.value;
 }
 
-function resolveLocalTimeZone(): string | undefined {
-  const timeZone = process.env.TZ?.trim();
-  if (!timeZone) {
-    return undefined;
-  }
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone }).format(new Date());
-    return timeZone;
-  } catch {
-    return undefined;
-  }
-}
-
-function formatLocalSessionTimestamp(date: Date): {
+function formatLocalSessionTimestamp(
+  date: Date,
+  timeZone: string,
+): {
   date: string;
   time: string;
   timeSlug: string;
-  timeZoneName?: string;
 } {
   const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: resolveLocalTimeZone(),
+    timeZone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -78,7 +68,6 @@ function formatLocalSessionTimestamp(date: Date): {
     minute: "2-digit",
     second: "2-digit",
     hourCycle: "h23",
-    timeZoneName: "short",
   }).formatToParts(date);
 
   const year = pickDateTimePart(parts, "year") ?? String(date.getFullYear()).padStart(4, "0");
@@ -87,16 +76,10 @@ function formatLocalSessionTimestamp(date: Date): {
   const hour = pickDateTimePart(parts, "hour") ?? String(date.getHours()).padStart(2, "0");
   const minute = pickDateTimePart(parts, "minute") ?? String(date.getMinutes()).padStart(2, "0");
   const second = pickDateTimePart(parts, "second") ?? String(date.getSeconds()).padStart(2, "0");
-  const timeZoneName = [...parts]
-    .toReversed()
-    .find((part) => part.type === "timeZoneName")
-    ?.value?.trim();
-
   return {
     date: `${year}-${month}-${day}`,
     time: `${hour}:${minute}:${second}`,
     timeSlug: `${hour}${minute}`,
-    timeZoneName,
   };
 }
 
@@ -262,9 +245,10 @@ async function saveSessionMemoryNow(
     const memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
 
-    // Use the user's local timezone for memory artifact names and headings.
+    // Session-memory artifacts share the same configured user-day boundary as daily memory files.
     const now = new Date(event.timestamp);
-    const localTimestamp = formatLocalSessionTimestamp(now);
+    const userTimezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone ?? process.env.TZ);
+    const localTimestamp = formatLocalSessionTimestamp(now, userTimezone);
     const dateStr = localTimestamp.date;
 
     // Manual commands carry the prior entry separately; automatic rollover
@@ -338,7 +322,6 @@ async function saveSessionMemoryNow(
     });
 
     const timeStr = localTimestamp.time;
-    const timeZoneSuffix = localTimestamp.timeZoneName ? ` ${localTimestamp.timeZoneName}` : "";
 
     // Extract context details
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
@@ -349,7 +332,7 @@ async function saveSessionMemoryNow(
 
     // Build Markdown entry
     const entryParts = [
-      `# Session: ${dateStr} ${timeStr}${timeZoneSuffix}`,
+      `# Session: ${dateStr} ${timeStr} ${userTimezone}`,
       "",
       `- **Session Key**: ${displaySessionKey}`,
       `- **Session ID**: ${sessionId}`,
