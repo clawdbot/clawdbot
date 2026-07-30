@@ -8,6 +8,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readFileWindowFully } from "../infra/file-read.js";
+import {
+  CANONICAL_ROOT_MEMORY_FILENAME,
+  LEGACY_ROOT_MEMORY_FILENAME,
+} from "../memory/root-memory-files.js";
+import { isPrivateMemorySessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
@@ -208,6 +213,28 @@ function applyContextModeFilter(params: {
   return [];
 }
 
+function enforcePrivateMemoryBoundary(
+  files: WorkspaceBootstrapFile[],
+  sessionKey?: string,
+): WorkspaceBootstrapFile[] {
+  if (isPrivateMemorySessionKey(sessionKey)) {
+    return files;
+  }
+  // Hooks can inject memory.md (LEGACY_ROOT_MEMORY_FILENAME) via
+  // `as unknown as WorkspaceBootstrapFile`, which is not in the nominal
+  // type. Use case-insensitive basename comparison so both MEMORY.md and
+  // memory.md are stripped regardless of the typed name field.
+  return files.filter((file) => !isMemoryBootstrapFileName(file.name));
+}
+
+function isMemoryBootstrapFileName(name: string): boolean {
+  const lower = name.toLowerCase();
+  return (
+    lower === CANONICAL_ROOT_MEMORY_FILENAME.toLowerCase() ||
+    lower === LEGACY_ROOT_MEMORY_FILENAME.toLowerCase()
+  );
+}
+
 function filterCompletedWorkspaceBootstrapFile(
   files: WorkspaceBootstrapFile[],
   setupCompleted: boolean,
@@ -280,12 +307,14 @@ export async function resolveBootstrapFilesForRun(params: {
     sessionId: params.sessionId,
     agentId: params.agentId,
   });
-  const filteredUpdated = filterCompletedWorkspaceBootstrapFile(
-    updated,
-    workspaceSetupCompleted,
+  return sanitizeBootstrapFiles(
+    enforcePrivateMemoryBoundary(
+      filterCompletedWorkspaceBootstrapFile(updated, workspaceSetupCompleted, params.workspaceDir),
+      sessionKey,
+    ),
     params.workspaceDir,
+    params.warn,
   );
-  return sanitizeBootstrapFiles(filteredUpdated, params.workspaceDir, params.warn);
 }
 
 /** Resolves both raw bootstrap metadata and bounded context files for a run. */

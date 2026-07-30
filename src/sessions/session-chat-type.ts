@@ -44,6 +44,33 @@ function derivePluginLegacySessionChatType(
   return deriveLegacySessionChatType(scopedSessionKey);
 }
 
+export function isSharedChannelSessionKey(sessionKey: string | undefined | null): boolean {
+  const chatType = deriveSessionChatType(sessionKey);
+  return chatType === "group" || chatType === "channel";
+}
+
+export function isPrivateMemorySessionKey(sessionKey: string | undefined | null): boolean {
+  if (!sessionKey) {
+    return true;
+  }
+  const chatType = deriveSessionChatType(sessionKey);
+  if (chatType === "group" || chatType === "channel") {
+    return false;
+  }
+  if (chatType === "direct") {
+    return true;
+  }
+  const raw = normalizeLowercaseStringOrEmpty(sessionKey);
+  if (!raw) {
+    return true;
+  }
+  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
+  if (scoped === "main" || scoped === "chat:main") {
+    return true;
+  }
+  return false;
+}
+
 export function deriveSessionChatType(sessionKey: string | undefined | null): SessionKeyChatType {
   const builtInType = deriveSessionChatTypeFromKey(sessionKey);
   if (builtInType !== "unknown") {
