@@ -39,6 +39,9 @@ export const GEMINI_CLI_EXACT_TOOL_ENV_BARRIERS: Record<string, string> = {
   CLOUD_SHELL: "false",
   GEMINI_CLI_USE_COMPUTE_ADC: "false",
   GEMINI_TELEMETRY_LOG_PROMPTS: "false",
+  // Gemini CLI otherwise treats an inherited path as authority to write its
+  // built-in system prompt, including outside the isolated workspace.
+  GEMINI_WRITE_SYSTEM_MD: "false",
 };
 
 export type GeminiCliRestrictedAuthContext = {
