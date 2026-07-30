@@ -97,6 +97,10 @@ export async function prepareReplyAgentPayloads(state: {
     verboseEnabled,
   } = accounting;
   let { activeSessionEntry, didLogHeartbeatStrip } = accounting;
+  const deliberateSilentTerminalReply = hasDeliberateSilentTerminalReply(runResult);
+  if (deliberateSilentTerminalReply) {
+    opts?.onDeliberateSilentTerminalReply?.();
+  }
 
   const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
     blockReplyPipeline,
@@ -142,7 +146,7 @@ export async function prepareReplyAgentPayloads(state: {
           "message_tool_only",
         hasPendingContinuation:
           runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,
-        hasExplicitSilentReply: hasDeliberateSilentTerminalReply(runResult),
+        hasExplicitSilentReply: deliberateSilentTerminalReply,
         hasCommittedDelivery: successfulTerminalDelivery,
         sessionCtx,
         cfg,

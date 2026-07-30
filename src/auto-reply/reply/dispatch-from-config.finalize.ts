@@ -8,7 +8,6 @@ import {
   markReplyPayloadAsTtsSupplement,
   type ReplyPayload,
 } from "../reply-payload.js";
-import { isSilentReplyPayloadText } from "../tokens.js";
 import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
 import type { ExecuteDispatchReadyState } from "./dispatch-from-config.execute.js";
 import {
@@ -35,6 +34,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     ctx,
     deliveryChannel,
     deliverySuppressionReason,
+    deliberateSilentTerminalReply,
     dispatcher,
     emptyFinalAllowedAsSilent,
     explicitCommandTurnCtx,
@@ -69,7 +69,6 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     waitForPendingDirectBlockReplyDelivery,
   } = state;
   const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
-  const hasExplicitSilentReply = replies.some((reply) => isSilentReplyPayloadText(reply.text));
   const pendingFinalDelivery = {
     storePath: sessionStoreEntry.storePath,
     sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
@@ -293,7 +292,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     !sendPolicyDenied &&
     sourceReplyDeliveryMode !== "message_tool_only" &&
     !emptyFinalAllowedAsSilent &&
-    !hasExplicitSilentReply &&
+    !deliberateSilentTerminalReply &&
     !getObservedReplyDelivery() &&
     !replyAcceptedByActiveRun &&
     !turnLedger.hasVisibleDelivery() &&
@@ -309,8 +308,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   }
   let counts = dispatcher.getQueuedCounts();
   let noVisibleReplyFallbackDelivered = false;
-  // Visible agent turns with genuinely empty model completions get a core
-  // fallback final. An explicit NO_REPLY is intentional silence, not emptiness.
+  // The agent-result classifier owns terminal silence; carry that fact here
+  // because reply payloads are filtered projections and cannot safely rederive it.
   // An aborted or timed-out settle leaves delivery state unknown; admission
   // then keeps its legacy trust and the turn ends without a fallback.
   if (queuedSettleResult === "settled" && noVisibleReplyFallbackAllowed()) {
@@ -394,7 +393,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       !getObservedReplyDelivery() &&
       !replyAcceptedByActiveRun &&
       !emptyFinalAllowedAsSilent &&
-      !hasExplicitSilentReply
+      !deliberateSilentTerminalReply
         ? { noVisibleReplyFallbackEligible: true }
         : {}),
       ...(noVisibleReplyFallbackDelivered ? { noVisibleReplyFallbackDelivered: true } : {}),
