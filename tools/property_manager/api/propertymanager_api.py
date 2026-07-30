@@ -324,6 +324,7 @@ def categories():
 
 
 @app.post("/categories")
+@auth_required()
 def create_category():
     """Create a category (used by Mac/iPhone when adding a category)."""
     payload = request.get_json(silent=True)
@@ -385,6 +386,7 @@ FALLBACK_CATEGORY_NAME = "House"
 
 
 @app.delete("/categories/<category_id>")
+@auth_required()
 def delete_category(category_id: str):
     """Delete a category. If active tasks remain, require explicit reassign_to."""
     category = pm_db.execute_one_json(
@@ -519,6 +521,7 @@ def task_detail(task_id: str):
 
 
 @app.post("/tasks")
+@auth_required()
 def upsert_task():
     """Create or replace a task (used by Mac Publish)."""
     payload = request.get_json(silent=True)
@@ -709,6 +712,7 @@ def upsert_task():
 
 
 @app.patch("/tasks/<task_id>")
+@auth_required()
 def patch_task(task_id: str):
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
@@ -746,6 +750,7 @@ def patch_task(task_id: str):
 
 
 @app.delete("/tasks/<task_id>")
+@auth_required()
 def delete_task(task_id: str):
     """Soft-delete a task by setting is_active=false (keeps history/parts)."""
     affected = pm_db.execute(
@@ -763,6 +768,7 @@ def delete_task(task_id: str):
 
 
 @app.put("/tasks/<task_id>/parts")
+@auth_required()
 def replace_task_parts(task_id: str):
     """Replace the full parts list for a task (used by iPhone edit form)."""
     if fetch_task_or_404(task_id) is None:
@@ -828,6 +834,7 @@ def replace_task_parts(task_id: str):
 
 
 @app.post("/tasks/<task_id>/parts")
+@auth_required()
 def create_task_part(task_id: str):
     if fetch_task_or_404(task_id) is None:
         return jsonify({"error": "Task not found"}), 404

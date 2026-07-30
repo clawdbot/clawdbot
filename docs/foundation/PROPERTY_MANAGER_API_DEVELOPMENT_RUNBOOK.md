@@ -19,17 +19,20 @@ Do **not** apply this unit or procedure to the production Intel Mini without exp
 
 ### Defaults
 
-| Setting          | Value                                 | Why                                          |
-| ---------------- | ------------------------------------- | -------------------------------------------- |
-| Bind             | `0.0.0.0:5062`                        | Existing PropertyManager API port            |
-| Workers          | 2 × `sync`                            | Light API; docker-exec DB blocks per request |
-| Timeout          | 120s                                  | Manual / meter / mapping ops via docker exec |
-| Graceful timeout | 30s                                   | Clean worker drain on reload/stop            |
-| PID file         | `/tmp/pm-dev/propertymanager-api.pid` | Writable without privileges                  |
-| Reloader         | off                                   | systemd owns lifecycle                       |
-| Upload limit     | 32 MiB (`MAX_CONTENT_LENGTH`)         | Intentional ceiling                          |
+| Setting          | Value                                 | Why                                                |
+| ---------------- | ------------------------------------- | -------------------------------------------------- |
+| Bind             | `0.0.0.0:5062`                        | Existing PropertyManager API port                  |
+| Workers          | 2 × `sync`                            | Light API; docker-exec DB blocks per request       |
+| Timeout          | 120s                                  | Manual / meter / mapping ops via docker exec       |
+| Graceful timeout | 90s                                   | Drain in-flight docker-exec queries on stop/reload |
+| PID file         | `/tmp/pm-dev/propertymanager-api.pid` | Writable without privileges                        |
+| Reloader         | off                                   | systemd owns lifecycle                             |
+| Upload limit     | 32 MiB (`MAX_CONTENT_LENGTH`)         | Intentional ceiling                                |
+| systemd stop     | `TimeoutStopSec=120`                  | Above gunicorn graceful_timeout                    |
 
 DB access defaults to **docker-exec-per-query** (`PROPERTYMANAGER_DB_VIA_DOCKER=1`). That pattern is process-safe across Gunicorn workers (no shared connections). Migrations are never run on import.
+
+**Reload vs restart:** prefer `systemctl --user reload` (HUP) for code/config pickup. A full `restart` waits for graceful drain, then SIGKILLs workers; if a `docker exec … psql` child is still running past `graceful_timeout`, in-flight requests (for example `GET /v1/assets`) can fail with HTTP 500. Raising `PROPERTYMANAGER_API_GRACEFUL_TIMEOUT` helps long queries; it does not eliminate the hard-kill ceiling.
 
 ---
 
@@ -63,7 +66,11 @@ journalctl --user -u propertymanager-api.service -n 100 --no-pager
 Graceful reload / restart:
 
 ```bash
+# Preferred for near-zero downtime (HUP: new workers up, old drain)
 systemctl --user reload propertymanager-api.service
+
+# Full restart — can interrupt docker-exec-per-query mid-flight if queries
+# exceed PROPERTYMANAGER_API_GRACEFUL_TIMEOUT (default 90s)
 systemctl --user restart propertymanager-api.service
 ```
 

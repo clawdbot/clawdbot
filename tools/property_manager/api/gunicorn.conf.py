@@ -5,6 +5,10 @@ Worker rationale:
   Threads would not overlap usefully inside one worker for that path.
 - Two workers: light REST API; enough to survive one blocked/long request.
 - 120s timeout: meter confirm / mapping / manual ops can be slow via docker exec.
+- Graceful timeout defaults to 90s so in-flight ``docker exec … psql`` can finish
+  before workers are SIGKILLed on stop/reload. Prefer ``systemctl reload``
+  (HUP) over full restart for near-zero downtime; a hard restart can still
+  interrupt docker-exec children if a query exceeds graceful_timeout.
 - No autoreloader: systemd owns restarts; reload is ``kill -HUP`` / systemctl reload.
 """
 
@@ -23,7 +27,7 @@ workers = int(os.environ.get("PROPERTYMANAGER_API_WORKERS", "2"))
 worker_class = "sync"
 
 timeout = int(os.environ.get("PROPERTYMANAGER_API_TIMEOUT", "120"))
-graceful_timeout = int(os.environ.get("PROPERTYMANAGER_API_GRACEFUL_TIMEOUT", "30"))
+graceful_timeout = int(os.environ.get("PROPERTYMANAGER_API_GRACEFUL_TIMEOUT", "90"))
 keepalive = 5
 
 # Explicitly disable the development autoreloader.

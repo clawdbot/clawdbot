@@ -17,12 +17,22 @@ handler; do not store connections on module globals.
 
 Importing this module does not open connections, run migrations, or mutate data.
 Migrations remain an explicit operator action.
+
+Graceful shutdown / docker-exec limitation
+------------------------------------------
+Gunicorn ``graceful_timeout`` (default 90s) must cover in-flight docker-exec
+queries. If a worker is SIGKILLed after that window (or systemd
+``TimeoutStopSec`` fires), the child ``docker exec`` may die mid-query and the
+client can see HTTP 500 / connection reset. Prefer ``systemctl reload`` (HUP)
+over full restart for near-zero downtime. Do not start docker-exec in a detached
+process group — orphans would outlive the request without benefiting clients.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import uuid
 from datetime import date, datetime
@@ -94,6 +104,55 @@ def use_docker() -> bool:
     return not bool(DB_CONFIG["password"])
 
 
+def _docker_psql(
+    sql: str,
+    *,
+    field_separator: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run one psql statement via docker exec (same argv as legacy callers)."""
+    cmd = [
+        "docker",
+        "exec",
+        "-i",
+        DOCKER_CONTAINER,
+        "psql",
+        "-U",
+        DB_CONFIG["user"],
+        "-d",
+        DB_CONFIG["dbname"],
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-At",
+    ]
+    if field_separator is not None:
+        cmd.extend(["-F", field_separator])
+    cmd.extend(["-c", sql])
+    return subprocess.run(
+        cmd,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _raise_psql_failure(result: subprocess.CompletedProcess[str]) -> None:
+    """Map docker-exec/psql failures, including shutdown interruption, to RuntimeError."""
+    if result.returncode == 0:
+        return
+    # Negative returncode = killed by signal (common when Gunicorn drains/kills a worker).
+    if result.returncode < 0:
+        sig = -result.returncode
+        try:
+            sig_name = signal.Signals(sig).name
+        except ValueError:
+            sig_name = str(sig)
+        raise RuntimeError(
+            f"psql interrupted by {sig_name} during docker exec "
+            "(prefer systemctl reload over hard restart; raise graceful_timeout if queries are long)"
+        )
+    raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "psql failed")
+
+
 def _jsonable(value: Any) -> Any:
     if value is None:
         return None
@@ -135,31 +194,9 @@ class DockerCursor:
 
     def execute(self, query: str, params: Any = None) -> None:
         sql = _mogrify(query, params)
-        result = subprocess.run(
-            [
-                "docker",
-                "exec",
-                "-i",
-                DOCKER_CONTAINER,
-                "psql",
-                "-U",
-                DB_CONFIG["user"],
-                "-d",
-                DB_CONFIG["dbname"],
-                "-v",
-                "ON_ERROR_STOP=1",
-                "-At",
-                "-F",
-                "\t",
-                "-c",
-                sql,
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        result = _docker_psql(sql, field_separator="\t")
         if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "psql failed")
+            _raise_psql_failure(result)
 
         text = result.stdout
         # For SELECT ... RETURNING / SELECT, parse rows. Mutations may return empty.
@@ -263,29 +300,9 @@ def execute_json(query: str, params: Any = None) -> list[dict[str, Any]]:
     """Run a SELECT and return list[dict] via json_agg."""
     wrapped = f"SELECT COALESCE(json_agg(row_to_json(q)), '[]'::json) FROM ({query}) q"
     sql = _mogrify(wrapped, params)
-    result = subprocess.run(
-        [
-            "docker",
-            "exec",
-            "-i",
-            DOCKER_CONTAINER,
-            "psql",
-            "-U",
-            DB_CONFIG["user"],
-            "-d",
-            DB_CONFIG["dbname"],
-            "-v",
-            "ON_ERROR_STOP=1",
-            "-At",
-            "-c",
-            sql,
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    result = _docker_psql(sql)
     if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "psql failed")
+        _raise_psql_failure(result)
     payload = json.loads(result.stdout or "[]")
     if not isinstance(payload, list):
         return []
@@ -299,29 +316,9 @@ def execute_one_json(query: str, params: Any = None) -> dict[str, Any] | None:
 
 def execute(query: str, params: Any = None) -> int:
     sql = _mogrify(query, params)
-    result = subprocess.run(
-        [
-            "docker",
-            "exec",
-            "-i",
-            DOCKER_CONTAINER,
-            "psql",
-            "-U",
-            DB_CONFIG["user"],
-            "-d",
-            DB_CONFIG["dbname"],
-            "-v",
-            "ON_ERROR_STOP=1",
-            "-At",
-            "-c",
-            sql,
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    result = _docker_psql(sql)
     if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "psql failed")
+        _raise_psql_failure(result)
     text = (result.stdout or "").strip()
     if not text:
         return 0

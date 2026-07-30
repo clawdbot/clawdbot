@@ -27,9 +27,12 @@ Environment=PROPERTYMANAGER_DB_ENV_FILE=%h/.config/openclaw/db.env
 Environment=PROPERTYMANAGER_PID_DIR=/tmp/pm-dev
 Environment=OPENCLAW_BASE=%h/ai/projects/openclaw-cursor-propertymanager
 ExecStart=%h/ai/projects/openclaw-cursor-propertymanager/tools/property_manager/api/run_api.sh
+# Prefer ExecReload (HUP) for config/code pickup: new workers start, old drain.
+# Full restart sends SIGQUIT then waits TimeoutStopSec; keep it above gunicorn
+# graceful_timeout so docker-exec-per-query children can finish.
 ExecReload=/bin/kill -s HUP $MAINPID
 KillSignal=SIGQUIT
-TimeoutStopSec=45
+TimeoutStopSec=120
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
