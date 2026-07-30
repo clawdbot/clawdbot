@@ -142,40 +142,6 @@ describe("plugin-sdk qa-runtime", () => {
     });
   });
 
-  it("leases plugin-owned transport credentials through the private QA host", async () => {
-    const lease = {
-      source: "env" as const,
-      kind: "buzz",
-      payload: { roomId: "qa-room" },
-      heartbeatIntervalMs: 0,
-      leaseTtlMs: 0,
-      heartbeat: vi.fn(async () => {}),
-      release: vi.fn(async () => {}),
-    };
-    const acquireQaCredentialLease = vi.fn(async () => lease);
-    const heartbeat = {
-      getFailure: vi.fn(() => null),
-      stop: vi.fn(async () => {}),
-      throwIfFailed: vi.fn(),
-    };
-    const startQaCredentialLeaseHeartbeat = vi.fn(() => heartbeat);
-    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
-      acquireQaCredentialLease,
-      startQaCredentialLeaseHeartbeat,
-    });
-    const module = await import("./qa-runtime.js");
-    const options = {
-      kind: "buzz",
-      parsePayload: (payload: unknown) => payload as { roomId: string },
-      resolveEnvPayload: () => ({ roomId: "qa-room" }),
-    };
-
-    await expect(module.acquireQaCredentialLease(options)).resolves.toBe(lease);
-    expect(module.startQaCredentialLeaseHeartbeat(lease)).toBe(heartbeat);
-    expect(acquireQaCredentialLease).toHaveBeenCalledWith(options);
-    expect(startQaCredentialLeaseHeartbeat).toHaveBeenCalledWith(lease, undefined);
-  });
-
   it("registers shared live transport QA CLI options", async () => {
     const module = await import("./qa-runtime.js");
     const run = vi.fn(async () => {});

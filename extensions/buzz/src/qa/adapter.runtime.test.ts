@@ -2,7 +2,7 @@ import type {
   QaBusInboundMessageInput,
   QaBusMessage,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { parseBuzzQaCredentialPayload } from "./credentials.js";
 
 const credentials = parseBuzzQaCredentialPayload({
@@ -15,7 +15,7 @@ const credentials = parseBuzzQaCredentialPayload({
 const release = vi.hoisted(() => vi.fn(async () => {}));
 const heartbeatStop = vi.hoisted(() => vi.fn(async () => {}));
 const acquireQaCredentialLease = vi.hoisted(() =>
-  vi.fn(async () => ({
+  vi.fn(async (_options: unknown) => ({
     source: "env" as const,
     kind: "buzz",
     payload: credentials,
@@ -26,7 +26,7 @@ const acquireQaCredentialLease = vi.hoisted(() =>
   })),
 );
 const startQaCredentialLeaseHeartbeat = vi.hoisted(() =>
-  vi.fn(() => ({
+  vi.fn((_lease: unknown) => ({
     getFailure: () => null,
     stop: heartbeatStop,
     throwIfFailed: vi.fn(),
@@ -62,10 +62,6 @@ const createBuzzQaRelayDriver = vi.hoisted(() =>
   }),
 );
 
-vi.mock("openclaw/plugin-sdk/qa-runtime", () => ({
-  acquireQaCredentialLease,
-  startQaCredentialLeaseHeartbeat,
-}));
 vi.mock("./credentials.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./credentials.js")>()),
   readBuzzQaCredentialFile,
@@ -74,9 +70,13 @@ vi.mock("./relay-client.js", () => ({ createBuzzQaRelayDriver }));
 
 import { createBuzzQaTransportAdapter } from "./adapter.runtime.js";
 
+const credentialHost: Parameters<typeof createBuzzQaTransportAdapter>[0]["credentials"] = {
+  acquire: async (options) => (await acquireQaCredentialLease(options)) as never,
+  startHeartbeat: startQaCredentialLeaseHeartbeat,
+};
+
 describe("Buzz QA transport adapter", () => {
   beforeEach(() => {
-    vi.stubEnv("OPENCLAW_QA_CREDENTIAL_SOURCE", "");
     vi.clearAllMocks();
     relayDriverState.onMessage = undefined;
     sendMessage.mockResolvedValue({
@@ -86,10 +86,6 @@ describe("Buzz QA transport adapter", () => {
     readBuzzQaCredentialFile.mockResolvedValue(credentials);
   });
 
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
   it("uses private file credentials by default", async () => {
     await createBuzzQaTransportAdapter({
       adapterOptions: {
@@ -97,6 +93,7 @@ describe("Buzz QA transport adapter", () => {
         repoRoot: "/repo",
       },
       channelId: "buzz",
+      credentials: credentialHost,
       driver: "live",
       messages: {
         addInboundMessage: vi.fn(),
@@ -115,26 +112,6 @@ describe("Buzz QA transport adapter", () => {
     );
   });
 
-  it("honors the shared credential source environment override", async () => {
-    vi.stubEnv("OPENCLAW_QA_CREDENTIAL_SOURCE", "convex");
-
-    await createBuzzQaTransportAdapter({
-      channelId: "buzz",
-      driver: "live",
-      messages: {
-        addInboundMessage: vi.fn(),
-        addOutboundMessage: vi.fn(),
-        editMessage: vi.fn(),
-      },
-      outputDir: ".artifacts/qa-e2e/buzz",
-    });
-
-    expect(readBuzzQaCredentialFile).not.toHaveBeenCalled();
-    expect(acquireQaCredentialLease).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "buzz", source: "convex" }),
-    );
-  });
-
   it("sends a portable mentioned message through the native Buzz relay driver", async () => {
     const addInboundMessage = vi.fn(async (input) => ({
       ...input,
@@ -145,6 +122,7 @@ describe("Buzz QA transport adapter", () => {
     const adapter = await createBuzzQaTransportAdapter({
       adapterOptions: { credentialSource: "convex", sutAccountId: "sut" },
       channelId: "buzz",
+      credentials: credentialHost,
       driver: "live",
       messages: {
         addInboundMessage,
@@ -209,6 +187,7 @@ describe("Buzz QA transport adapter", () => {
     const adapter = await createBuzzQaTransportAdapter({
       adapterOptions: { credentialSource: "convex", sutAccountId: "sut" },
       channelId: "buzz",
+      credentials: credentialHost,
       driver: "live",
       messages: {
         addInboundMessage,
@@ -292,6 +271,7 @@ describe("Buzz QA transport adapter", () => {
     const adapter = await createBuzzQaTransportAdapter({
       adapterOptions: { credentialSource: "convex", sutAccountId: "sut" },
       channelId: "buzz",
+      credentials: credentialHost,
       driver: "live",
       messages: {
         addInboundMessage,
@@ -337,6 +317,7 @@ describe("Buzz QA transport adapter", () => {
     const adapter = await createBuzzQaTransportAdapter({
       adapterOptions: { credentialSource: "convex" },
       channelId: "buzz",
+      credentials: credentialHost,
       driver: "live",
       messages: {
         addInboundMessage: vi.fn(),

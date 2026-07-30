@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runQaSuiteCommand = vi.hoisted(() => vi.fn());
 
@@ -8,7 +8,12 @@ import { runLiveTransportQaSuiteCommand } from "./live-transport-suite.runtime.j
 
 describe("live transport suite runtime", () => {
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_QA_CREDENTIAL_SOURCE", "");
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("normalizes one live command into the shared suite host", async () => {
@@ -70,6 +75,21 @@ describe("live transport suite runtime", () => {
         explicitScenarioSelection: true,
         scenarioIds: ["whatsapp-help-command"],
       }),
+    );
+  });
+
+  it("normalizes the shared credential source environment override", async () => {
+    vi.stubEnv("OPENCLAW_QA_CREDENTIAL_SOURCE", " convex ");
+
+    await runLiveTransportQaSuiteCommand({
+      channelId: "buzz",
+      defaultProviderMode: "mock-openai",
+      options: {},
+      selectScenarioIds: () => ["channel-canary"],
+    });
+
+    expect(runQaSuiteCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ credentialSource: "convex" }),
     );
   });
 

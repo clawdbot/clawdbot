@@ -1,10 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
-import {
-  acquireQaCredentialLease,
-  startQaCredentialLeaseHeartbeat,
-} from "openclaw/plugin-sdk/qa-runtime";
 import type { BuzzInboundMessage } from "../message-event.js";
 import { buildBuzzTarget } from "../target.js";
 import { parseBuzzQaCredentialPayload, readBuzzQaCredentialFile } from "./credentials.js";
@@ -57,10 +53,7 @@ export async function createBuzzQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
   const options = context.adapterOptions ?? {};
-  const requestedCredentialSource =
-    options.credentialSource?.trim().toLowerCase() ||
-    process.env.OPENCLAW_QA_CREDENTIAL_SOURCE?.trim().toLowerCase() ||
-    "file";
+  const requestedCredentialSource = options.credentialSource?.trim().toLowerCase() || "file";
   if (requestedCredentialSource !== "file" && requestedCredentialSource !== "convex") {
     throw new Error('Buzz QA credential source must be "file" or "convex".');
   }
@@ -80,7 +73,7 @@ export async function createBuzzQaTransportAdapter(
     requestedCredentialSource === "file" && credentialFile
       ? await readBuzzQaCredentialFile({ filePath: credentialFile, repoRoot: options.repoRoot })
       : undefined;
-  const lease = await acquireQaCredentialLease({
+  const lease = await context.credentials.acquire({
     kind: "buzz",
     source: requestedCredentialSource === "convex" ? "convex" : "env",
     role: options.credentialRole,
@@ -92,7 +85,7 @@ export async function createBuzzQaTransportAdapter(
     },
     parsePayload: parseBuzzQaCredentialPayload,
   });
-  const heartbeat = startQaCredentialLeaseHeartbeat(lease);
+  const heartbeat = context.credentials.startHeartbeat(lease);
   const credentials = lease.payload;
   const accountId = options.sutAccountId?.trim() || "sut";
   const nativeMessageIds = new Map<string, string>();
