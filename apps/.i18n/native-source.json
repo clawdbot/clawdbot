@@ -25947,7 +25947,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4174,
+      "line": 4175,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval needed",
       "surface": "apple",
@@ -25955,7 +25955,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4175,
+      "line": 4176,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Action required",
       "surface": "apple",
@@ -25963,7 +25963,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4890,
+      "line": 4891,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting...",
       "surface": "apple",
@@ -25971,7 +25971,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4891,
+      "line": 4892,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting...",
       "surface": "apple",
@@ -25979,7 +25979,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 5246,
+      "line": 5247,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connected",
       "surface": "apple",
@@ -25987,7 +25987,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 5246,
+      "line": 5247,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Offline",
       "surface": "apple",
@@ -25995,7 +25995,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6416,
+      "line": 6417,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "No chat messages yet",
       "surface": "apple",
@@ -26003,7 +26003,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6478,
+      "line": 6479,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting…",
       "surface": "apple",
@@ -26011,7 +26011,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6478,
+      "line": 6479,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting…",
       "surface": "apple",
@@ -26019,7 +26019,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8837,
+      "line": 8838,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval",
       "surface": "apple",
@@ -26027,7 +26027,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8837,
+      "line": 8838,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "This approval was already",
       "surface": "apple",
@@ -26035,7 +26035,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8843,
+      "line": 8844,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "This approval was already set to Always Allow.",
       "surface": "apple",
@@ -26043,7 +26043,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8844,
+      "line": 8845,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval set to Always Allow.",
       "surface": "apple",
@@ -26051,7 +26051,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 10214,
+      "line": 10215,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "\\(urlText.prefix(500))…",
       "surface": "apple",
