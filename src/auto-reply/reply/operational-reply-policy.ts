@@ -122,13 +122,17 @@ function resolveOperationalReplyKind(payload: ReplyPayload): string {
 
 function createOperationalReplyOnceKey(params: {
   payload: ReplyPayload;
+  sourceConversationKey?: string;
   sessionKey?: string;
 }): string {
   return crypto
     .createHash("sha256")
     .update(
       JSON.stringify({
-        sessionKey: params.sessionKey ?? "unknown",
+        source:
+          params.sessionKey !== undefined
+            ? { kind: "session", key: params.sessionKey }
+            : { kind: "conversation", key: params.sourceConversationKey ?? "unknown" },
         kind: resolveOperationalReplyKind(params.payload),
         text: params.payload.text ?? "",
         mediaUrl: params.payload.mediaUrl ?? "",
@@ -609,6 +613,7 @@ export async function applyOperationalReplyPolicy(params: {
   if (operationalReplyPolicy.policy === "once") {
     const onceKey = createOperationalReplyOnceKey({
       payload: params.payload,
+      sourceConversationKey: params.sourceConversationKey,
       sessionKey: params.sourceSessionKey,
     });
     const reservationResult = await reserveOperationalReplyOnceKey({

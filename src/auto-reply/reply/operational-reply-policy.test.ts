@@ -240,6 +240,34 @@ describe("operational reply policy", () => {
     expect(duplicateAfterSuccess).toMatchObject({ intentionalSilence: true });
   });
 
+  it("scopes sessionless once notices to their source conversation", async () => {
+    const payload = markReplyPayloadForSourceSuppressionDelivery({
+      text: "shared provider error",
+      isError: true,
+    });
+    const applyForConversation = (sourceConversationKey: string) =>
+      applyOperationalReplyPolicy({
+        cfg: onceConfig(),
+        payload,
+        explicitCommandTurn: false,
+        sendPolicyDenied: false,
+        sourceConversationKey,
+        sourceEventKey: "event-1",
+      });
+
+    const first = await applyForConversation("conversation-a");
+    await markOperationalReplyPolicyDelivered(first, true);
+    const sameConversation = await applyForConversation("conversation-a");
+    const otherConversation = await applyForConversation("conversation-b");
+
+    expect(sameConversation).toMatchObject({
+      intentionalSilence: true,
+      shouldDeliver: false,
+    });
+    expect(otherConversation.shouldDeliver).toBe(true);
+    await markOperationalReplyPolicyDelivered(otherConversation, false);
+  });
+
   it("allows only one concurrent once reservation", async () => {
     const { sessionKey, storePath } = await createSessionStoreFixture();
     const cfg = onceConfig(storePath);
