@@ -1770,6 +1770,11 @@ describe("processGatewayAllowlist", () => {
 
     expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(commandRequiresOpenClawLifecycleApprovalMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        envComplete: false,
+      }),
+    );
     expect(warnings[0]).toContain("OpenClaw lifecycle commands require explicit approval");
     expect(result.pendingResult?.details.status).toBe("approval-pending");
   });

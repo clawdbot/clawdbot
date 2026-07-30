@@ -658,6 +658,7 @@ async function evaluateSystemRunPolicyPhase(
       command: parsed.commandText,
       cwd: parsed.cwd,
       env: parsed.env,
+      envComplete: false,
       segments,
     }) && !(baseSecurity === "full" && baseAsk === "off" && !fallbackRequest);
   if (

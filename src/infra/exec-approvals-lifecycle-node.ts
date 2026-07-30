@@ -43,7 +43,7 @@ const NODE_OPTIONS_WITH_VALUE = new Set([
 ]);
 
 function optionName(token: string): string {
-  return token.trim().toLowerCase().split("=", 1)[0] ?? "";
+  return token.trim().toLowerCase().replaceAll("_", "-").split("=", 1)[0] ?? "";
 }
 
 /** Return OpenClaw-equivalent argv when Node directly launches its CLI entry script. */

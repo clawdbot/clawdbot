@@ -37,12 +37,15 @@ const XARGS_OPTIONS_WITH_VALUE = new Set([
 const REPLACEMENT_SENSITIVE_EXECUTABLES = new Set([
   "ash",
   "bash",
+  "bunx",
   "command",
   "doas",
   "env",
   "exec",
   "fish",
   "ksh",
+  "kill",
+  "killall",
   "launchctl",
   "net",
   "nice",
@@ -50,7 +53,9 @@ const REPLACEMENT_SENSITIVE_EXECUTABLES = new Set([
   "nohup",
   "npm",
   "npx",
+  "openclaw",
   "pkill",
+  "pnpm",
   "powershell",
   "pwsh",
   "sc",
@@ -63,7 +68,17 @@ const REPLACEMENT_SENSITIVE_EXECUTABLES = new Set([
   "taskkill",
   "timeout",
   "xargs",
+  "yarn",
   "zsh",
+]);
+const STDIN_APPEND_SENSITIVE_EXECUTABLES = new Set([
+  ...REPLACEMENT_SENSITIVE_EXECUTABLES,
+  "bunx",
+  "kill",
+  "killall",
+  "openclaw",
+  "pnpm",
+  "yarn",
 ]);
 
 export type LifecycleXargsPlan =
@@ -94,7 +109,8 @@ export function resolveLifecycleXargsArgv(argv: readonly string[]): LifecycleXar
       ? commandArgv.findIndex((token) => token.includes(replacementToken as string))
       : -1;
     const executable = normalizeExecutableToken(commandArgv[0] ?? "");
-    return replacementIndex === 0 ||
+    return (!replacementToken && STDIN_APPEND_SENSITIVE_EXECUTABLES.has(executable)) ||
+      replacementIndex === 0 ||
       (replacementIndex > 0 && REPLACEMENT_SENSITIVE_EXECUTABLES.has(executable))
       ? { kind: "approval-required" }
       : { kind: "argv", argv: commandArgv };

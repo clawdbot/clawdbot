@@ -188,7 +188,7 @@ function classifyGatewayArgv(argv: readonly string[], start: number): boolean {
     const methodIndex = scanFirstPositional(
       argv,
       actionIndex + 1,
-      new Set(["--params", "--timeout"]),
+      new Set(["--params", "--password", "--timeout", "--token", "--url"]),
     );
     return LIFECYCLE_RPC_METHODS.has(normalizedToken(argv[methodIndex]));
   }
@@ -333,9 +333,11 @@ function classifyServiceManager(argv: readonly string[]): boolean {
     );
   }
   if (executable === "sc") {
+    const actionIndex = argv[1]?.startsWith("\\\\") ? 2 : 1;
     return (
-      ["config", "create", "delete", "start", "stop"].includes(normalizedToken(argv[1])) &&
-      argv.slice(2).some(looksLikeOpenClaw)
+      ["config", "create", "delete", "start", "stop"].includes(
+        normalizedToken(argv[actionIndex]),
+      ) && argv.slice(actionIndex + 1).some(looksLikeOpenClaw)
     );
   }
   if (executable === "net") {
@@ -463,7 +465,7 @@ function splitInlineCommands(command: string): string[] {
 
 function isPowerShellSelection(argv: readonly string[]): boolean {
   return (
-    ["get-process", "get-service", "gps", "gsv"].includes(
+    ["get-process", "get-service", "gps", "gsv", "ps"].includes(
       normalizeExecutableToken(argv[0] ?? ""),
     ) && argv.slice(1).some(looksLikeOpenClaw)
   );
@@ -472,8 +474,10 @@ function isPowerShellSelection(argv: readonly string[]): boolean {
 function isPowerShellPipelineMutation(argv: readonly string[]): boolean {
   return [
     "kill",
+    "remove-service",
     "restart-service",
     "sasv",
+    "set-service",
     "start-service",
     "stop-process",
     "stop-service",

@@ -679,6 +679,7 @@ export async function processGatewayAllowlist(
       command: params.command,
       cwd: params.workdir,
       env: params.env,
+      envComplete: false,
       segments: allowlistEval.segments,
     }) && !(hostSecurity === "full" && hostAsk === "off");
   const requiresAsk =
