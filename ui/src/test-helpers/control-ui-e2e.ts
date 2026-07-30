@@ -10,6 +10,7 @@ import type { Locator, Page } from "playwright";
 import type { ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
+import type { DoctorMemoryStatusPayload } from "../../../src/gateway/server-methods/doctor.ts";
 import {
   controlUiBrowserOnlySharedModuleAliases,
   resolveExternalPackageAliasesForVite,
@@ -1298,6 +1299,17 @@ function installControlUiMockGateway(
         };
       case "models.list":
         return { models: scenario.models };
+      case "doctor.memory.status": {
+        const payload: DoctorMemoryStatusPayload = {
+          agentId:
+            isRecord(params) && typeof params.agentId === "string"
+              ? params.agentId
+              : scenario.defaultAgentId,
+          provider: "none",
+          embedding: { ok: false, checked: false },
+        };
+        return payload;
+      }
       case "sessions.list":
         return applySessionPatches(
           {

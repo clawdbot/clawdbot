@@ -741,6 +741,7 @@ export const en: TranslationMap = {
     noArchivedSessions: "No archived sessions.",
     noSessionsMatchFilters: "No threads match your filters.",
     pagination: "{start}-{end} of {total} rows",
+    pageSize: "Rows per page",
     rowsPerPage: "{count} per page",
     showAll: "Show all",
     inherit: "inherit",
