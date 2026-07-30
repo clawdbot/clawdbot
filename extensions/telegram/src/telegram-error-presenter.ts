@@ -51,8 +51,10 @@ export function formatTelegramFallbackError(err: unknown): string {
     return "⚠️ Billing issue: insufficient credits or quota. Check your provider account.";
   }
 
-  // Model not found
-  if (/\b404\b|model\s+not\s+found|no\s+such\s+model/i.test(detail)) {
+  // Model not found — only when the provider explicitly says so.
+  // A bare 404 can also mean a missing endpoint, deployment route, or base URL,
+  // so it must not trigger model-specific recovery advice.
+  if (/model\s+not\s+found|no\s+such\s+model/i.test(detail)) {
     return "⚠️ The selected model was not found. Try a different model.";
   }
 
