@@ -20,33 +20,6 @@ import { POSIX_INLINE_COMMAND_FLAGS, resolveInlineCommandMatch } from "./shell-i
 import { POSIX_PARSEABLE_SHELL_WRAPPERS } from "./shell-wrapper-resolution.js";
 
 const MAX_SUBSTITUTION_DEPTH = 8;
-const SUBSTITUTION_RESULT_SENSITIVE_EXECUTABLES = new Set([
-  "ash",
-  "bash",
-  "bunx",
-  "doas",
-  "env",
-  "fish",
-  "ksh",
-  "launchctl",
-  "net",
-  "node",
-  "npm",
-  "npx",
-  "pnpm",
-  "powershell",
-  "pwsh",
-  "sc",
-  "schtasks",
-  "service",
-  "sh",
-  "sudo",
-  "systemctl",
-  "taskkill",
-  "xargs",
-  "yarn",
-  "zsh",
-]);
 const OPENCLAW_GLOBAL_FLAGS = new Set(["--dev", "--no-color"]);
 const OPENCLAW_GLOBAL_OPTIONS = new Set(["--container", "--log-level", "--profile"]);
 const UPDATE_OPTIONS_WITH_VALUE = new Set(["--channel", "--tag", "--timeout"]);
@@ -167,7 +140,7 @@ function extractAtDepth(
 
     const next = command[index + 1] ?? "";
     const opensParenSubstitution =
-      (char === "$" && next === "(" && command[index + 2] !== "(") ||
+      (dialect !== "cmd" && char === "$" && next === "(" && command[index + 2] !== "(") ||
       (dialect === "posix" && quote === null && ["<", ">", "="].includes(char) && next === "(");
     if (opensParenSubstitution) {
       const end = findClosingParen(command, index + 2, dialect);
@@ -308,7 +281,8 @@ export function lifecycleSubstitutionResultMayHideLifecycle(
   argv: readonly string[],
   dialect: LifecycleShellDialect = "posix",
 ): boolean {
-  const substitutionTokenRe = dialect === "posix" ? /\$\(|`|[<>=]\(/u : /\$\(/u;
+  const substitutionTokenRe =
+    dialect === "posix" ? /\$\(|`|[<>=]\(/u : dialect === "powershell" ? /\$\(/u : /$a/u;
   const isSubstitution = (value: string | undefined): boolean =>
     substitutionTokenRe.test(value ?? "");
   const substitutionIndexes = argv.flatMap((token, index) =>
@@ -324,10 +298,10 @@ export function lifecycleSubstitutionResultMayHideLifecycle(
   if (executable === "openclaw" || executable.startsWith("openclaw@")) {
     return openClawSubstitutionMayHideLifecycle(argv, isSubstitution);
   }
-  return (
-    SUBSTITUTION_RESULT_SENSITIVE_EXECUTABLES.has(executable) &&
-    lifecycleDynamicArgvMayHideLifecycle(argv, isSubstitution)
-  );
+  // kill signal-zero previews are handled by the process classifier after
+  // substitution inspection; the shared dynamic scanner is deliberately
+  // conservative for all other supported carriers and mutation commands.
+  return executable !== "kill" && lifecycleDynamicArgvMayHideLifecycle(argv, isSubstitution);
 }
 
 /** Return POSIX shell argv bound as $0, $1, ... after an inline command. */

@@ -110,6 +110,22 @@ describe("OpenClaw PowerShell filter pipeline approvals", () => {
 });
 
 describe("OpenClaw lifecycle runner parsing edges", () => {
+  it.each([
+    ["& { openclaw gateway restart }", ["&", "{", "openclaw", "gateway", "restart", "}"]],
+    [
+      "if ($true) { openclaw gateway restart }",
+      ["if", "($true)", "{", "openclaw", "gateway", "restart", "}"],
+    ],
+    ["if 1==1 openclaw gateway restart", ["if", "1==1", "openclaw", "gateway", "restart"]],
+    [
+      "if not exist nowhere openclaw gateway restart",
+      ["if", "not", "exist", "nowhere", "openclaw", "gateway", "restart"],
+    ],
+    ["try { openclaw gateway restart }", ["try", "{", "openclaw", "gateway", "restart", "}"]],
+  ] as Array<[string, string[]]>)("classifies shell control block: %s", (command, argv) => {
+    expect(requiresApproval(command, argv)).toBe(true);
+  });
+
   it.each(["bun", "corepack", "pnpx", "yarnpkg"])(
     "fails closed when xargs appends stdin to %s",
     (runner) => {
@@ -273,6 +289,39 @@ describe("OpenClaw lifecycle runner parsing edges", () => {
 });
 
 describe("OpenClaw lifecycle substitution-controlled options", () => {
+  it.each([
+    [`pkill "$(printf 'open%sclaw' '')"`, ["pkill", "$(printf 'open%sclaw' '')"]],
+    [
+      `bun "$(printf x)" openclaw gateway restart`,
+      ["bun", "$(printf x)", "openclaw", "gateway", "restart"],
+    ],
+    [
+      `Start-Process "$(printf openclaw)" -ArgumentList "gateway", "restart"`,
+      ["Start-Process", "$(printf openclaw)", "-ArgumentList", "gateway,", "restart"],
+    ],
+  ] as Array<[string, string[]]>)(
+    "fails closed for dynamic process or runner target: %s",
+    (command, argv) => {
+      expect(requiresApproval(command, argv)).toBe(true);
+    },
+  );
+
+  it.each([
+    [
+      `openclaw doctor --session-sqlite "$(printf compact)"`,
+      ["openclaw", "doctor", "--session-sqlite", "$(printf compact)"],
+    ],
+    [
+      `openclaw doctor --state-sqlite="$(printf compact)"`,
+      ["openclaw", "doctor", "--state-sqlite=$(printf compact)"],
+    ],
+  ] as Array<[string, string[]]>)(
+    "fails closed for dynamic doctor maintenance value: %s",
+    (command, argv) => {
+      expect(requiresApproval(command, argv)).toBe(true);
+    },
+  );
+
   it("ignores substitutions confined to unrelated package-manager option values", () => {
     expect(
       requiresApproval('npm install lodash --registry="$(get-registry)"', [

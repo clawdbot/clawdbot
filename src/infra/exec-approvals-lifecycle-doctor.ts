@@ -71,6 +71,10 @@ export function unresolvedOpenClawDoctorArgvMayMutate(
       return false;
     }
     if (OPTIONS_WITH_VALUE.has(name)) {
+      const value = token.includes("=") ? token.slice(token.indexOf("=") + 1) : argv[index + 1];
+      if (["--session-sqlite", "--state-sqlite"].includes(name) && isUnresolved(value)) {
+        return true;
+      }
       if (!token.includes("=")) {
         index += 1;
       }

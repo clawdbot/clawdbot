@@ -29,6 +29,7 @@ import { resolveLifecyclePackageRunnerArgv } from "./exec-approvals-lifecycle-ru
 import {
   splitLifecycleInlineCommands,
   stripLifecyclePosixAssignments,
+  unwrapLifecycleControlArgv,
 } from "./exec-approvals-lifecycle-shell.js";
 import {
   bindLifecyclePosixShellPositionals,
@@ -203,7 +204,7 @@ function classifyScheduledTask(argv: readonly string[]): boolean {
   return mutation && argv.some(looksLikeOpenClaw);
 }
 
-type ShellContext = "powershell" | undefined;
+type ShellContext = "cmd" | "powershell" | undefined;
 
 function classifyProcessMutation(
   argv: readonly string[],
@@ -272,18 +273,12 @@ function commandHasLifecycleSubstitution(
   cwd?: string,
   environment?: LifecycleEnvironmentContext,
 ): boolean {
-  const scan = extractShellSubstitutionCommands(
-    command,
-    shellContext === "powershell" ? "powershell" : "posix",
-  );
+  const scan = extractShellSubstitutionCommands(command, shellContext ?? "posix");
   if (scan.uncertain) {
     return true;
   }
   return scan.commands.some((nested) =>
-    splitLifecycleInlineCommands(
-      nested,
-      shellContext === "powershell" ? "powershell" : "posix",
-    ).some((part) => {
+    splitLifecycleInlineCommands(nested, shellContext ?? "posix").some((part) => {
       const argv = splitShellArgs(part);
       if (!argv) {
         return true;
@@ -291,7 +286,7 @@ function commandHasLifecycleSubstitution(
       if (!environment) {
         return classifyArgv(argv, part, depth + 1, shellContext, cwd);
       }
-      const dialect = shellContext === "powershell" ? "powershell" : "posix";
+      const dialect = shellContext ?? "posix";
       const expanded = expandLifecycleEnvironmentArgv({
         argv,
         env: environment.env,
@@ -322,7 +317,22 @@ function classifyArgv(
   if (argv.length === 0) {
     return false;
   }
-  if (shellContext !== "powershell") {
+  const controlArgv = unwrapLifecycleControlArgv(argv, shellContext ?? "posix");
+  if (controlArgv) {
+    return (
+      controlArgv.length > 0 &&
+      classifyArgv(
+        controlArgv,
+        raw,
+        depth + 1,
+        shellContext,
+        cwd,
+        environment,
+        substitutionTokensAreSyntax,
+      )
+    );
+  }
+  if (shellContext === undefined) {
     const commandArgv = stripLifecyclePosixAssignments(argv);
     if (commandArgv?.length === 0) {
       return false;
@@ -341,23 +351,9 @@ function classifyArgv(
   }
   if (
     substitutionTokensAreSyntax &&
-    lifecycleSubstitutionResultMayHideLifecycle(
-      argv,
-      shellContext === "powershell" ? "powershell" : "posix",
-    )
+    lifecycleSubstitutionResultMayHideLifecycle(argv, shellContext ?? "posix")
   ) {
     return true;
-  }
-  if (shellContext === "powershell" && ["&", "."].includes(argv[0]?.trim() ?? "")) {
-    return classifyArgv(
-      argv.slice(1),
-      raw,
-      depth + 1,
-      shellContext,
-      cwd,
-      environment,
-      substitutionTokensAreSyntax,
-    );
   }
   if (isOpenClawExecutable(argv[0])) {
     return classifyOpenClawArgv(["openclaw", ...argv.slice(1)]);
@@ -394,11 +390,13 @@ function classifyArgv(
   const rawInline = extractShellWrapperInlineCommand(argv);
   if (rawInline !== null) {
     const wrapper = normalizeExecutableToken(argv[0] ?? "");
-    const nestedShellContext: ShellContext = ["powershell", "pwsh"].includes(wrapper)
-      ? "powershell"
-      : undefined;
-    const nestedDialect =
-      wrapper === "cmd" ? "cmd" : nestedShellContext === "powershell" ? "powershell" : "posix";
+    const nestedShellContext: ShellContext =
+      wrapper === "cmd"
+        ? "cmd"
+        : ["powershell", "pwsh"].includes(wrapper)
+          ? "powershell"
+          : undefined;
+    const nestedDialect = nestedShellContext ?? "posix";
     const nestedShadowedKeys = environment
       ? new Set([...environment.shadowedKeys, ...lifecycleAssignedEnvironmentKeys(rawInline)])
       : new Set<string>();
@@ -602,7 +600,7 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
       candidates.some((argv) => {
         const candidateDialect = lifecycleCommandShellDialect(argv[0], platform);
         const candidateShellContext: ShellContext =
-          candidateDialect === "powershell" ? "powershell" : undefined;
+          candidateDialect === "posix" ? undefined : candidateDialect;
         const segmentCommand = segment.raw ?? params.command;
         if (
           (candidateShellContext === "powershell" &&
@@ -666,7 +664,7 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
       return false;
     }
     const partDialect = lifecycleCommandShellDialect(argv[0], platform);
-    const partShellContext: ShellContext = partDialect === "powershell" ? "powershell" : undefined;
+    const partShellContext: ShellContext = partDialect === "posix" ? undefined : partDialect;
     if (lifecycleSubstitutionResultMayHideLifecycle(argv, partDialect)) {
       return true;
     }
