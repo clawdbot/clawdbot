@@ -86,6 +86,12 @@ function buildDispatchInput(overrides: {
   } as unknown as Parameters<typeof dispatchEmbeddedRunAttempt>[0]["control"];
   return {
     params,
+    transcriptOwnership: overrides.sessionManager
+      ? { kind: "caller-owned", sessionManager: overrides.sessionManager }
+      : {
+          kind: "runtime-target",
+          sessionTarget: (runtime as { sessionTarget?: unknown }).sessionTarget as never,
+        },
     runtime,
     control,
     bootstrapPromptWarningSignaturesSeen: [],
@@ -108,7 +114,7 @@ describe("dispatchEmbeddedRunAttempt caller-owned session manager", () => {
     expect(backendCalls.at(-1)?.sessionManager).toBe(sessionManager);
   });
 
-  it("leaves sessionManager undefined for persisted runs", async () => {
+  it("leaves sessionManager undefined for runtime-target runs", async () => {
     const dispatched = await dispatchEmbeddedRunAttempt(buildDispatchInput({}));
     expect(dispatched.preparedAttempt.sessionManager).toBeUndefined();
     expect(backendCalls.at(-1)?.sessionManager).toBeUndefined();
