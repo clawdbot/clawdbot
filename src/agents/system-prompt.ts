@@ -62,6 +62,7 @@ import type {
   ProviderSystemPromptSectionId,
 } from "./system-prompt-contribution.js";
 import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import {
   buildWatchedSessionsPromptLines,
   type PreparedWatchedSessionsPrompt,
@@ -863,7 +864,8 @@ export function buildAgentSystemPrompt(params: {
       "Own visible shell. Use for long/interactive jobs user should watch. exec for quiet work",
     canvas: "Present/eval/snapshot Canvas",
     nodes: "Paired node status/control/media",
-    cron: "Schedule/wake. Reminder text must read as reminder when fired; mention reminder for delayed gaps; include useful recent context.",
+    [AUTOMATIONS_TOOL_NAME]:
+      "Schedule/wake. Reminder text must read as reminder when fired; mention reminder for delayed gaps; include useful recent context.",
     message: "Message/channel actions",
     conversations_list: "List exact external conversation addresses",
     conversations_send: "Send directly to an external conversation",
@@ -905,7 +907,7 @@ export function buildAgentSystemPrompt(params: {
     "terminal",
     "canvas",
     "nodes",
-    "cron",
+    AUTOMATIONS_TOOL_NAME,
     "message",
     "conversations_list",
     "conversations_send",

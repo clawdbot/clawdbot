@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { NodeInvokeResult, NodeRegistry } from "../node-registry.js";
+import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { type NodeInvokeResult, NodeRegistry } from "../node-registry.js";
 import { createNodeRelayBackend } from "./node-relay.js";
 
 function deferred<T>() {
@@ -11,6 +12,64 @@ function deferred<T>() {
 }
 
 describe("createNodeRelayBackend", () => {
+  it("waits for pairing validation and dispatch instead of the final node exit", async () => {
+    const pairingState = deferred<{ identity: string; generation: string }>();
+    const frames: string[] = [];
+    const resolveCurrentPairingState = vi.fn(async () => await pairingState.promise);
+    const registry = new NodeRegistry({
+      resolveCurrentPairingState,
+    });
+    registry.register(
+      {
+        connId: "conn-validated",
+        usesSharedGatewayAuth: false,
+        socket: {
+          send(frame: unknown) {
+            if (typeof frame === "string") {
+              frames.push(frame);
+            }
+          },
+        },
+        connect: {
+          client: { id: "openclaw-node-host", mode: "node" },
+          device: { id: "node-validated" },
+          commands: ["codex.terminal.resume.v1"],
+        },
+      } as never,
+      { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
+    );
+
+    const opening = createNodeRelayBackend({
+      registry,
+      nodeId: "node-validated",
+      expectedConnId: "conn-validated",
+      expectedPairingGeneration: "generation-a",
+      command: "codex.terminal.resume.v1",
+      params: { threadId: "thread" },
+    });
+    await vi.waitFor(() =>
+      expect(resolveCurrentPairingState).toHaveBeenCalledWith("node-validated"),
+    );
+    expect(frames).toEqual([]);
+
+    pairingState.resolve({ identity: "identity-a", generation: "generation-a" });
+    const backend = await withTestTimeout(
+      opening,
+      500,
+      "timed out waiting for node terminal dispatch readiness",
+    );
+
+    expect(JSON.parse(frames[0] ?? "{}")).toMatchObject({
+      event: "node.invoke.request",
+      payload: {
+        nodeId: "node-validated",
+        command: "codex.terminal.resume.v1",
+      },
+    });
+    backend.kill();
+    registry.unregister("conn-validated");
+  });
+
   it("relays progress, input, resize, cancellation, and the node exit result", async () => {
     const invokeResult = deferred<NodeInvokeResult>();
     let onProgress: ((chunk: string) => void) | undefined;
@@ -19,13 +78,13 @@ describe("createNodeRelayBackend", () => {
     const registry = {
       invoke: vi.fn(
         (params: {
-          onInvokeId?: (id: string) => void;
+          onDispatchReady?: (id: string) => void;
           onProgress?: (chunk: string) => void;
           signal?: AbortSignal;
         }) => {
           onProgress = params.onProgress;
           signal = params.signal;
-          params.onInvokeId?.("invoke-1");
+          params.onDispatchReady?.("invoke-1");
           return invokeResult.promise;
         },
       ),
@@ -67,8 +126,8 @@ describe("createNodeRelayBackend", () => {
 
   it("maps node disconnect failures to terminal errors", async () => {
     const registry = {
-      invoke: vi.fn((params: { onInvokeId?: (id: string) => void }) => {
-        params.onInvokeId?.("invoke-2");
+      invoke: vi.fn((params: { onDispatchReady?: (id: string) => void }) => {
+        params.onDispatchReady?.("invoke-2");
         return Promise.resolve({
           ok: false,
           error: { code: "NOT_CONNECTED", message: "node disconnected" },
@@ -91,8 +150,8 @@ describe("createNodeRelayBackend", () => {
   });
 
   it("pins the expected connection and reports route changes through onExit", async () => {
-    const invoke = vi.fn((params: { onInvokeId?: (id: string) => void }) => {
-      params.onInvokeId?.("invoke-route-changed");
+    const invoke = vi.fn((params: { onDispatchReady?: (id: string) => void }) => {
+      params.onDispatchReady?.("invoke-route-changed");
       return Promise.resolve({
         ok: false,
         error: { code: "ROUTE_CHANGED", message: "node connection changed before dispatch" },
@@ -128,9 +187,12 @@ describe("createNodeRelayBackend", () => {
     let onProgress: ((chunk: string) => void) | undefined;
     const registry = {
       invoke: vi.fn(
-        (params: { onInvokeId?: (id: string) => void; onProgress?: (chunk: string) => void }) => {
+        (params: {
+          onDispatchReady?: (id: string) => void;
+          onProgress?: (chunk: string) => void;
+        }) => {
           onProgress = params.onProgress;
-          params.onInvokeId?.("invoke-buffered");
+          params.onDispatchReady?.("invoke-buffered");
           return Promise.resolve({ ok: true });
         },
       ),
@@ -175,8 +237,8 @@ describe("createNodeRelayBackend", () => {
   it("never splits a surrogate pair at the input chunk boundary", async () => {
     const sendInvokeInput = vi.fn();
     const registry = {
-      invoke: vi.fn((params: { onInvokeId?: (id: string) => void }) => {
-        params.onInvokeId?.("invoke-input");
+      invoke: vi.fn((params: { onDispatchReady?: (id: string) => void }) => {
+        params.onDispatchReady?.("invoke-input");
         return Promise.resolve({ ok: true });
       }),
       sendInvokeInput,

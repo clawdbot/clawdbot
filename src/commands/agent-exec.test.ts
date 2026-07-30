@@ -333,6 +333,118 @@ describe("agent exec command composition", () => {
     await expect(fs.stat(observedStateDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("discovers operator-installed plugins while run state stays ephemeral", async () => {
+    const operatorStateDir = await makeTempRoot("openclaw-agent-exec-plugin-owner-");
+    const pluginDir = path.join(operatorStateDir, "extensions", "exec-provider");
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.writeFile(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "exec-provider",
+        configSchema: { type: "object", additionalProperties: false },
+        providers: ["exec-provider"],
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "exec-provider",
+        version: "1.0.0",
+        type: "module",
+        openclaw: { extensions: ["./index.js"] },
+      }),
+      "utf8",
+    );
+    await fs.writeFile(path.join(pluginDir, "index.js"), "export default {}\n", "utf8");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = operatorStateDir;
+    const { runtime } = createRuntime();
+    let runtimeStateDir = "";
+    let discoveredRoot = "";
+    try {
+      await agentExecCommand("inspect", {}, runtime, {
+        runAgent: vi.fn(async () => {
+          runtimeStateDir = process.env.OPENCLAW_STATE_DIR ?? "";
+          const { resolvePluginMetadataSnapshot } =
+            await import("../plugins/plugin-metadata-snapshot.js");
+          const snapshot = resolvePluginMetadataSnapshot({
+            allowCurrent: false,
+            config: { plugins: { entries: { "exec-provider": { enabled: true } } } },
+            env: process.env,
+            preferPersisted: false,
+          });
+          discoveredRoot = snapshot.byPluginId.get("exec-provider")?.rootDir ?? "";
+          return successResult();
+        }),
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
+
+    expect(runtimeStateDir).not.toBe(operatorStateDir);
+    await expect(fs.realpath(discoveredRoot)).resolves.toBe(await fs.realpath(pluginDir));
+    await expect(fs.stat(runtimeStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("keeps operator-installed plugins hidden under --isolated", async () => {
+    const operatorStateDir = await makeTempRoot("openclaw-agent-exec-plugin-isolated-");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = operatorStateDir;
+    const { runtime } = createRuntime();
+    let resolvedExtensionsDir = "";
+    try {
+      await agentExecCommand("inspect", { isolated: true }, runtime, {
+        runAgent: vi.fn(async () => {
+          const { resolveDefaultPluginExtensionsDir } = await import("../plugins/install-paths.js");
+          resolvedExtensionsDir = resolveDefaultPluginExtensionsDir();
+          return successResult();
+        }),
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
+
+    expect(resolvedExtensionsDir).not.toBe(path.join(operatorStateDir, "extensions"));
+    expect(path.basename(path.dirname(resolvedExtensionsDir))).toMatch(/^openclaw-agent-exec-/u);
+  });
+
+  it("keeps --state-dir scoped to run state instead of plugin installs", async () => {
+    const operatorStateDir = await makeTempRoot("openclaw-agent-exec-plugin-operator-");
+    const retainedRunStateDir = await makeTempRoot("openclaw-agent-exec-retained-state-");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = operatorStateDir;
+    const { runtime } = createRuntime();
+    let resolvedExtensionsDir = "";
+    try {
+      await agentExecCommand("inspect", { stateDir: retainedRunStateDir }, runtime, {
+        runAgent: vi.fn(async () => {
+          expect(process.env.OPENCLAW_STATE_DIR).toBe(retainedRunStateDir);
+          const { resolveDefaultPluginExtensionsDir } = await import("../plugins/install-paths.js");
+          resolvedExtensionsDir = resolveDefaultPluginExtensionsDir();
+          return successResult();
+        }),
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
+
+    expect(resolvedExtensionsDir).toBe(path.join(operatorStateDir, "extensions"));
+    await expect(fs.stat(retainedRunStateDir)).resolves.toBeDefined();
+  });
+
   it("applies explicit Code Mode and lean local-model controls to the isolated config", async () => {
     const { runtime } = createRuntime();
     let observedConfig: unknown;

@@ -514,6 +514,8 @@ export const cronHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
+        // Wire contract: shipped CLI matchers parse this exact wording for the
+        // name-lookup fallback (isMissingCronGetError). Rename is CLI-display only.
         errorShape(ErrorCodes.INVALID_REQUEST, `cron job not found: ${jobId}`),
       );
       return;

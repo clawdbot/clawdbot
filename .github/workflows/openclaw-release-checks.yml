@@ -46,6 +46,11 @@ on:
         required: false
         default: false
         type: boolean
+      fail_fast:
+        description: Stop the Matrix QA lane after its first failed check or scenario
+        required: false
+        default: false
+        type: boolean
       run_maturity_scorecard:
         description: Render advisory maturity scorecard release docs; default release checks rely on dedicated package, QA, live, and E2E gates
         required: false
@@ -133,6 +138,7 @@ jobs:
       mode: ${{ steps.inputs.outputs.mode }}
       release_profile: ${{ steps.inputs.outputs.release_profile }}
       run_release_soak: ${{ steps.inputs.outputs.run_release_soak }}
+      fail_fast: ${{ steps.inputs.outputs.fail_fast }}
       run_maturity_scorecard: ${{ steps.inputs.outputs.run_maturity_scorecard }}
       allow_unreleased_changelog: ${{ steps.inputs.outputs.allow_unreleased_changelog }}
       rerun_group: ${{ steps.inputs.outputs.rerun_group }}
@@ -312,6 +318,7 @@ jobs:
           RELEASE_MODE_INPUT: ${{ inputs.mode }}
           RELEASE_PROFILE_INPUT: ${{ inputs.release_profile }}
           RELEASE_RUN_RELEASE_SOAK_INPUT: ${{ inputs.run_release_soak }}
+          RELEASE_FAIL_FAST_INPUT: ${{ inputs.fail_fast }}
           RELEASE_RUN_MATURITY_SCORECARD_INPUT: ${{ inputs.run_maturity_scorecard }}
           RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT: ${{ inputs.allow_unreleased_changelog }}
           RELEASE_RERUN_GROUP_INPUT: ${{ inputs.rerun_group }}
@@ -353,6 +360,12 @@ jobs:
             run_release_soak=false
           else
             run_release_soak=true
+          fi
+          fail_fast="$(printf '%s' "$RELEASE_FAIL_FAST_INPUT" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$fail_fast" != "true" && "$fail_fast" != "1" && "$fail_fast" != "yes" ]]; then
+            fail_fast=false
+          else
+            fail_fast=true
           fi
           run_maturity_scorecard="$(printf '%s' "$RELEASE_RUN_MATURITY_SCORECARD_INPUT" | tr '[:upper:]' '[:lower:]')"
           if [[ "$run_maturity_scorecard" != "true" && "$run_maturity_scorecard" != "1" && "$run_maturity_scorecard" != "yes" ]]; then
@@ -482,6 +495,7 @@ jobs:
             printf 'mode=%s\n' "$RELEASE_MODE_INPUT"
             printf 'release_profile=%s\n' "$release_profile"
             printf 'run_release_soak=%s\n' "$run_release_soak"
+            printf 'fail_fast=%s\n' "$fail_fast"
             printf 'run_maturity_scorecard=%s\n' "$run_maturity_scorecard"
             printf 'allow_unreleased_changelog=%s\n' "$allow_unreleased_changelog"
             printf 'rerun_group=%s\n' "$RELEASE_RERUN_GROUP_INPUT"
@@ -507,6 +521,7 @@ jobs:
           RELEASE_MODE: ${{ inputs.mode }}
           RELEASE_PROFILE: ${{ steps.inputs.outputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ steps.inputs.outputs.run_release_soak }}
+          FAIL_FAST: ${{ steps.inputs.outputs.fail_fast }}
           RUN_MATURITY_SCORECARD: ${{ steps.inputs.outputs.run_maturity_scorecard }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ steps.inputs.outputs.allow_unreleased_changelog }}
           RELEASE_RERUN_GROUP: ${{ inputs.rerun_group }}
@@ -526,6 +541,7 @@ jobs:
             echo "- Cross-OS mode: \`${RELEASE_MODE}\`"
             echo "- Release profile: \`${RELEASE_PROFILE}\`"
             echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
+            echo "- Matrix QA fail fast: \`${FAIL_FAST}\`"
             echo "- Maturity scorecard docs: \`${RUN_MATURITY_SCORECARD}\`"
             echo "- Allow Unreleased changelog packaging: \`${ALLOW_UNRELEASED_CHANGELOG}\`"
             echo "- Rerun group: \`${RELEASE_RERUN_GROUP}\`"
@@ -1270,9 +1286,10 @@ jobs:
           if pnpm openclaw qa suite --help | grep -Fq -- "--runtime-pair-lane"; then
             runtime_pair_args+=(--runtime-pair-lane "$RUNTIME_PAIR_LANE")
           elif [[ "$RUNTIME_PAIR_LANE" == "core" ]]; then
-            # Before runtime-pair lanes, the frozen candidate's standard and
-            # live-only tiers together defined the current core lane.
-            runtime_pair_args+=(--runtime-parity-tier standard,live-only)
+            # Legacy explicit-tier selection bypasses its provider eligibility
+            # filter. live-only scenarios require a live provider, so the mock
+            # core lane must select only the eligible standard tier.
+            runtime_pair_args+=(--runtime-parity-tier standard)
           elif [[ "$RUNTIME_PAIR_LANE" == "soak" ]]; then
             runtime_pair_args+=(--runtime-parity-tier soak)
           else
@@ -1636,6 +1653,7 @@ jobs:
       ref: ${{ needs.resolve_target.outputs.revision }}
       expected_sha: ${{ needs.resolve_target.outputs.revision }}
       run_matrix: true
+      fail_fast: ${{ fromJSON(needs.resolve_target.outputs.fail_fast) }}
 
   # The dispatched child owns Telegram evidence/status artifacts; this blocking job
   # carries its exact conclusion into the parent summary without copying secrets or artifacts.

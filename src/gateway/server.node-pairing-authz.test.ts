@@ -5,6 +5,7 @@ import { WebSocket } from "ws";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
+import { resolveNodeIdFromNodeList } from "../shared/node-resolve.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -57,6 +58,7 @@ async function connectNodeClient(params: {
   deviceIdentity: ReturnType<typeof loadDeviceIdentity>["identity"];
   commands: string[];
   clientName?: GatewayClientName;
+  displayName?: string;
   platform?: string;
   deviceFamily?: string;
 }) {
@@ -65,7 +67,7 @@ async function connectNodeClient(params: {
     token: "secret",
     role: "node",
     clientName: params.clientName ?? GATEWAY_CLIENT_NAMES.NODE_HOST,
-    clientDisplayName: "node-command-pin",
+    clientDisplayName: params.displayName ?? "node-command-pin",
     clientVersion: "1.0.0",
     platform: params.platform ?? "macos",
     deviceFamily: params.deviceFamily ?? "Mac",
@@ -620,6 +622,93 @@ describe("gateway node pairing authorization", () => {
         expect(reject.ok).toBe(true);
       } finally {
         ws.close();
+      }
+    });
+
+    test("projects an operator rename immediately and after the node reconnects", async () => {
+      const pairedNode = await pairDeviceIdentity({
+        name: "node-rename-projection",
+        role: "node",
+        scopes: [],
+        clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+      });
+      const requested = await requestNodePairing({
+        nodeId: pairedNode.identity.deviceId,
+        displayName: "Approval Name",
+        platform: "macos",
+        deviceFamily: "Mac",
+        commands: [],
+      });
+      requireApprovedPairing(
+        await approveNodePairing(requested.request.requestId, {
+          callerScopes: ["operator.pairing"],
+        }),
+      );
+
+      const controlWs = await openTrackedWs(getStarted().port);
+      let nodeClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+      try {
+        await connectOk(controlWs, { token: "secret" });
+        nodeClient = await connectNodeClient({
+          port: getStarted().port,
+          deviceIdentity: pairedNode.identity,
+          commands: [],
+          displayName: "Live Name",
+        });
+
+        const renamed = await rpcReq(controlWs, "node.rename", {
+          nodeId: pairedNode.identity.deviceId,
+          displayName: "Operator Name",
+        });
+        expect(renamed.ok).toBe(true);
+
+        type NodeRead = { nodeId: string; displayName?: string; connected?: boolean };
+        const readNodes = async (): Promise<NodeRead[]> => {
+          const listed = await rpcReq<{ nodes?: NodeRead[] }>(controlWs, "node.list", {});
+          return listed.payload?.nodes ?? [];
+        };
+        const readConnectedNode = async (): Promise<NodeRead | undefined> => {
+          return (await readNodes()).find((entry) => entry.nodeId === pairedNode.identity.deviceId);
+        };
+        await vi.waitFor(async () => {
+          expect(await readConnectedNode()).toMatchObject({
+            displayName: "Operator Name",
+            connected: true,
+          });
+        });
+        const listedNodes = await readNodes();
+        expect(resolveNodeIdFromNodeList(listedNodes, "Operator Name")).toBe(
+          pairedNode.identity.deviceId,
+        );
+        expect(() => resolveNodeIdFromNodeList(listedNodes, "Live Name")).toThrow(
+          "unknown node: Live Name",
+        );
+        const described = await rpcReq<NodeRead>(controlWs, "node.describe", {
+          nodeId: pairedNode.identity.deviceId,
+        });
+        expect(described.payload).toMatchObject({
+          displayName: "Operator Name",
+          connected: true,
+        });
+
+        await nodeClient.stopAndWait();
+        nodeClient = undefined;
+        nodeClient = await connectNodeClient({
+          port: getStarted().port,
+          deviceIdentity: pairedNode.identity,
+          commands: [],
+          displayName: "Replacement Live Name",
+        });
+        await vi.waitFor(async () => {
+          expect(await readConnectedNode()).toMatchObject({
+            displayName: "Operator Name",
+            connected: true,
+          });
+        });
+      } finally {
+        await nodeClient?.stopAndWait();
+        controlWs.close();
       }
     });
   });

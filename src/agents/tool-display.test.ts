@@ -10,7 +10,30 @@ import {
   splitTopLevelStages,
 } from "./tool-display-exec-shell.js";
 import { resolveExecDetail } from "./tool-display-exec.js";
-import { formatToolDetail, formatToolSummary, resolveToolDisplay } from "./tool-display.js";
+import {
+  formatToolDetail,
+  formatToolSummary,
+  isShellToolDisplayName,
+  resolveToolDisplay,
+} from "./tool-display.js";
+
+describe("isShellToolDisplayName", () => {
+  it("matches shell tools whatever case the backend spells them in", () => {
+    // The Claude CLI sends "Bash"; embedded runs send "bash"/"exec".
+    for (const name of ["Bash", "bash", "BASH", "Exec", "exec", "shell"]) {
+      expect(isShellToolDisplayName(name)).toBe(true);
+    }
+    for (const name of ["Read", "web_search", undefined, ""]) {
+      expect(isShellToolDisplayName(name)).toBe(false);
+    }
+  });
+
+  it("keeps the compact summary form for a capitalized shell tool", () => {
+    const display = resolveToolDisplay({ name: "Bash", args: { command: "echo alpha" } });
+    // Compact form is "<emoji> <detail>", not "<emoji> Bash: <detail>".
+    expect(formatToolSummary(display)).toBe(`${display.emoji} ${formatToolDetail(display)}`);
+  });
+});
 
 describe("tool display details", () => {
   it("keeps same-line heredoc operators from attaching the body to later stages", () => {

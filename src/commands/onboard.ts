@@ -408,10 +408,11 @@ function validateResetNonInteractiveGateway(params: {
  * Interactive onboarding defaults to guided setup. Any explicit
  * setup flag beyond this allowlist keeps the classic wizard — those flags are
  * a public automation contract and guided setup does not honor them.
- * Boolean false and undefined mean "not passed" (Commander coerces unset
- * booleans to false); explicit `--no-install-daemon` arrives as `false` via
- * resolveInstallDaemonFlag and is special-cased. `--modern` never reaches this
- * dispatch; the command layer routes it through the inference-gated OpenClaw.
+ * Most false booleans mean "not passed" because the command layer normalizes
+ * them with Boolean(). False-valued explicit choices preserve undefined when
+ * omitted, so daemon, Tailscale-reset, and custom-model input overrides are
+ * special-cased. `--modern` never reaches this dispatch; the command layer
+ * routes it through the inference-gated OpenClaw.
  */
 const GUIDED_SAFE_ONBOARD_KEYS = new Set([
   "workspace",
@@ -427,7 +428,11 @@ function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {
   if (opts.classic === true) {
     return true;
   }
-  if (opts.installDaemon !== undefined) {
+  if (
+    opts.installDaemon !== undefined ||
+    opts.tailscaleResetOnExit !== undefined ||
+    opts.customImageInput !== undefined
+  ) {
     return true;
   }
   for (const [key, value] of Object.entries(opts)) {

@@ -1447,7 +1447,7 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 
 ---
 
-## Cron
+## Automations (`cron`)
 
 ```json5
 {
@@ -1462,11 +1462,11 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 }
 ```
 
-- `enabled`: execute stored cron jobs (default: `true`). Set `false` to pause all cron execution without deleting jobs.
-- `triggers.enabled`: also run event-driven cron triggers (default: `false`).
-- `sessionRetention`: how long to keep completed isolated cron run sessions before pruning SQLite session rows. Also controls cleanup of archived deleted cron transcripts. Default: `24h`; set `false` to disable.
+- `enabled`: execute stored automation jobs (default: `true`). Set `false` to pause all automation execution without deleting jobs.
+- `triggers.enabled`: also run event-driven automation triggers (default: `false`).
+- `sessionRetention`: how long to keep completed isolated automation run sessions before pruning SQLite session rows. Also controls cleanup of archived deleted automation transcripts. Default: `24h`; set `false` to disable.
 - Run history automatically keeps the newest 2000 terminal rows per job. Lost rows retain their 24-hour cleanup window.
-- `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
+- `webhookToken`: bearer token used for automation webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
 
 The `cron` block is strict; `cron.enabled`, `cron.triggers`, `cron.webhookToken`,
 `cron.sessionRetention`, and `cron.failureAlert` are the only accepted keys. The
@@ -1498,7 +1498,7 @@ when preserving announce delivery. `openclaw doctor --fix` strips a leftover
 destination for every job. The retired `cron.failureDestination` block is merged
 into it by [`openclaw doctor --fix`](/cli/doctor).
 
-- `enabled`: enable failure alerts for cron jobs (default: `false`).
+- `enabled`: enable failure alerts for automation jobs (default: `false`).
 - `after`: consecutive failures before an alert fires (positive integer, min: `1`; default: `2`).
 - `cooldownMs`: minimum milliseconds between repeated alerts for the same job (non-negative integer; default: `3600000`).
 - `includeSkipped`: count consecutive skipped runs toward the alert threshold (default: `false`). Skipped runs are tracked separately and do not affect execution-error backoff.
@@ -1510,7 +1510,7 @@ into it by [`openclaw doctor --fix`](/cli/doctor).
 - When neither global nor per-job failure destination is set, jobs that already deliver via `announce` fall back to that primary announce target on failure.
 - `delivery.failureDestination` is only supported for `sessionTarget="isolated"` jobs unless the job's primary `delivery.mode` is `"webhook"`.
 
-See [Cron Jobs](/automation/cron-jobs). Isolated cron executions are tracked as [background tasks](/automation/tasks).
+See [Automations](/automation/cron-jobs). Isolated automation runs are tracked as [background tasks](/automation/tasks).
 
 ## Media model template variables
 

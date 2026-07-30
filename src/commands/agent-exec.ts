@@ -594,6 +594,14 @@ export async function agentExecCommand(
         after: envAfterConfigLoad,
       });
     const runConfig = buildExecRunConfig({ base: baseConfig, cwd, opts });
+    // Installed plugins belong to the operator config resolved above, not to
+    // the disposable state root used for this run. Capture all roots before
+    // OPENCLAW_STATE_DIR moves so discovery and the installed-index DB agree.
+    const inheritInstalledPlugins = opts.isolated !== true && opts.authEnvOnly !== true;
+    const pluginInstallContext = inheritInstalledPlugins
+      ? await import("../plugins/install-root-context.js")
+      : undefined;
+    const pluginInstallRoots = pluginInstallContext?.resolvePluginInstallRoots();
     const timeout = normalizeTimeoutSeconds(opts.timeout);
     const fallbacks = normalizeFallbacks(opts.model, opts.fallback);
     const { resolveDefaultAgentDir } = await import("../agents/agent-scope-config.js");
@@ -661,10 +669,14 @@ export async function agentExecCommand(
     // Stored credentials are the default so a folder-scoped run reaches the
     // same logins as the rest of the CLI; `--auth-env-only` opts back into an
     // environment-only scope for automation.
+    const runWithPluginInstallRoots = () =>
+      pluginInstallContext && pluginInstallRoots
+        ? pluginInstallContext.withPluginInstallRoots(pluginInstallRoots, invoke)
+        : invoke();
     const runWithAuthScope = () =>
       opts.authEnvOnly === true
-        ? withEnvOnlyAuthProfileStore(invoke)
-        : withAuthProfileStoreAgentDir(storedAuthAgentDir, invoke);
+        ? withEnvOnlyAuthProfileStore(runWithPluginInstallRoots)
+        : withAuthProfileStoreAgentDir(storedAuthAgentDir, runWithPluginInstallRoots);
     const result = await withHostExecInheritedEnvOmitted(
       listKnownProviderAuthEnvVarNames({ env: process.env }),
       runWithAuthScope,

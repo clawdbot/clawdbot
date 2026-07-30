@@ -1348,7 +1348,6 @@ export async function prepareSlackMessage(params: {
         isDirect: isDirectMessage,
         isGroup: isRoomish,
         isMentionableGroup: isRoom,
-        requireMention: shouldRequireMention,
         canDetectMention,
         effectiveWasMentioned,
         shouldBypassMention,
