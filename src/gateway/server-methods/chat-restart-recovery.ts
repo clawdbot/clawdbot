@@ -325,7 +325,6 @@ export function resolveRestartSafeChatAdmission(params: {
             restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
             restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
             status: entry.status,
-            updatedAt: entry.updatedAt,
           },
         }
       : entry.restartRecoveryDeliverySourceRunId

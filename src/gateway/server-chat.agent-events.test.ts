@@ -10,6 +10,7 @@ import {
 import { formatChannelProgressDraftLine } from "../channels/streaming.js";
 import {
   claimAgentRunContext,
+  emitAgentEvent as emitRuntimeAgentEvent,
   emitAgentEventForOwner,
   onAgentRuntimeEvent,
   registerAgentRunContext,
@@ -3674,6 +3675,34 @@ describe("agent event handler", () => {
     const persistEvent = requireRecord(persistParams.event, "persist lifecycle event");
     expect(persistEvent.runId).toBe("run-hidden");
     expect(requireRecord(persistEvent.data, "persist lifecycle event data").phase).toBe("end");
+  });
+
+  it("does not project maintenance child lifecycle onto its parent session", () => {
+    const { handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-maintenance-parent",
+    });
+    registerAgentRunContext("run-maintenance-child", {
+      isControlUiVisible: false,
+      projectSessionActive: false,
+      projectSessionLifecycle: false,
+      sessionId: "session-parent",
+      sessionKey: "session-maintenance-parent",
+    });
+    const stop = onAgentRuntimeEvent(handler);
+
+    emitRuntimeAgentEvent({
+      runId: "run-maintenance-child",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    emitRuntimeAgentEvent({
+      runId: "run-maintenance-child",
+      stream: "lifecycle",
+      data: { phase: "end", endedAt: 2_000 },
+    });
+    stop();
+
+    expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
   });
 
   it("sends non-control-UI-visible live chat only to exact session message subscribers", () => {

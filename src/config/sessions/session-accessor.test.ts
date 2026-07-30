@@ -3190,7 +3190,6 @@ describe("session accessor seam", () => {
         restartRecoverySourceReplyDeliveryMode: retryable.restartRecoverySourceReplyDeliveryMode,
         restartRecoveryTerminalRunIds: retryable.restartRecoveryTerminalRunIds,
         status: retryable.status,
-        updatedAt: retryable.updatedAt,
       },
       messages: [
         {
@@ -3414,7 +3413,6 @@ describe("session accessor seam", () => {
       restartRecoverySourceReplyDeliveryMode: stored.restartRecoverySourceReplyDeliveryMode,
       restartRecoveryTerminalRunIds: stored.restartRecoveryTerminalRunIds,
       status: stored.status,
-      updatedAt: stored.updatedAt,
     };
     let releasePredicate!: () => void;
     let markPredicateStarted!: () => void;

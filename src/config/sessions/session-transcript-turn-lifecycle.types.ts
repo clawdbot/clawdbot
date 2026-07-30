@@ -22,7 +22,6 @@ export type SessionTranscriptTurnExpectedState = {
   restartRecoverySourceReplyDeliveryMode: SessionRestartRecoveryState["restartRecoverySourceReplyDeliveryMode"];
   restartRecoveryTerminalRunIds: SessionRestartRecoveryState["restartRecoveryTerminalRunIds"];
   status: SessionRunStatus | undefined;
-  updatedAt: number;
 };
 
 /** Lifecycle fields committed with an accepted transcript turn. */

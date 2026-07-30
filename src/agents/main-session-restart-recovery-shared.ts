@@ -32,12 +32,13 @@ export function buildRestartRecoveryExpectedState(
   entry: SessionEntry,
   mainRestartRecovery?: { cycleId: string; revision: number },
 ): SessionTranscriptTurnExpectedState {
+  const expectedMainRestartRecovery = mainRestartRecovery ?? entry.mainRestartRecovery;
   return {
     abortedLastRun: entry.abortedLastRun,
-    ...(mainRestartRecovery
+    ...(expectedMainRestartRecovery
       ? {
-          mainRestartRecoveryCycleId: mainRestartRecovery.cycleId,
-          mainRestartRecoveryRevision: mainRestartRecovery.revision,
+          mainRestartRecoveryCycleId: expectedMainRestartRecovery.cycleId,
+          mainRestartRecoveryRevision: expectedMainRestartRecovery.revision,
         }
       : {}),
     restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
@@ -53,7 +54,6 @@ export function buildRestartRecoveryExpectedState(
     restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
     restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
     status: entry.status,
-    updatedAt: entry.updatedAt,
   };
 }
 

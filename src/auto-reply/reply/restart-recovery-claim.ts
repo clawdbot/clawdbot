@@ -12,7 +12,7 @@ import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type {
   UserTurnTranscriptRecorder,
   UserTurnTranscriptTarget,
@@ -86,6 +86,12 @@ export async function retireTerminalRestartRecoverySourceClaim(params: {
 function buildExpectedSessionState(entry: SessionEntry): SessionTranscriptTurnExpectedState {
   return {
     abortedLastRun: entry.abortedLastRun,
+    ...(entry.mainRestartRecovery
+      ? {
+          mainRestartRecoveryCycleId: entry.mainRestartRecovery.cycleId,
+          mainRestartRecoveryRevision: entry.mainRestartRecovery.revision,
+        }
+      : {}),
     restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
     restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
     restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
@@ -99,7 +105,6 @@ function buildExpectedSessionState(entry: SessionEntry): SessionTranscriptTurnEx
     restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
     restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
     status: entry.status,
-    updatedAt: entry.updatedAt,
   };
 }
 
@@ -111,6 +116,10 @@ function matchesExpectedSessionState(
   return (
     entry.sessionId === sessionId &&
     entry.abortedLastRun === expected.abortedLastRun &&
+    (expected.mainRestartRecoveryCycleId === undefined ||
+      entry.mainRestartRecovery?.cycleId === expected.mainRestartRecoveryCycleId) &&
+    (expected.mainRestartRecoveryRevision === undefined ||
+      entry.mainRestartRecovery?.revision === expected.mainRestartRecoveryRevision) &&
     entry.restartRecoveryBeforeAgentReplyState === expected.restartRecoveryBeforeAgentReplyState &&
     entry.restartRecoveryDeliveryReceiptState === expected.restartRecoveryDeliveryReceiptState &&
     entry.restartRecoveryDeliveryToolCallId === expected.restartRecoveryDeliveryToolCallId &&
@@ -129,8 +138,7 @@ function matchesExpectedSessionState(
       entry.restartRecoveryTerminalRunIds,
       expected.restartRecoveryTerminalRunIds,
     ) &&
-    entry.status === expected.status &&
-    entry.updatedAt === expected.updatedAt
+    entry.status === expected.status
   );
 }
 

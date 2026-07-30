@@ -56,8 +56,7 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
           selected.entry.restartRecoveryTerminalRunIds,
           expectedState.restartRecoveryTerminalRunIds,
         ) &&
-        selected.entry.status === expectedState.status &&
-        selected.entry.updatedAt === expectedState.updatedAt)),
+        selected.entry.status === expectedState.status)),
   );
 }
 
