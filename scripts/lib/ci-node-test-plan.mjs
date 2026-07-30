@@ -279,11 +279,15 @@ function expandCompactGroup(group) {
     throw new Error(`compact split for ${group.shard_name} does not cover its configs exactly`);
   }
 
-  return splits.map((split) => ({
-    ...group,
-    configs: [split.config],
-    shard_name: split.shardName,
-  }));
+  const expandedGroups = [];
+  for (const split of splits) {
+    expandedGroups.push({
+      ...group,
+      configs: [split.config],
+      shard_name: split.shardName,
+    });
+  }
+  return expandedGroups;
 }
 const TOOLING_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const TOOLING_DOCKER_TEST_FILE = "test/scripts/docker-build-helper.test.ts";
