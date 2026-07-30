@@ -29,7 +29,7 @@ const BACKGROUND_CLASSIFICATIONS = new Set<SessionClassification>([
   "system",
 ]);
 
-export type GatewaySessionClassification = {
+type GatewaySessionClassification = {
   classification: SessionClassification;
   agentId?: string;
   accountId?: string;
@@ -42,13 +42,27 @@ export type GatewaySessionClassification = {
 
 function classifyRest(rest: string): SessionClassification {
   const normalized = normalizeLowercaseStringOrEmpty(rest);
-  if (normalized.startsWith("dashboard:")) return "dashboard";
-  if (normalized.startsWith("tui-")) return "tui";
-  if (normalized.startsWith("explicit:")) return "explicit";
-  if (normalized.startsWith("hook:")) return "hook";
-  if (normalized.startsWith("harness:")) return "harness";
-  if (normalized.startsWith("voice:")) return "voice";
-  if (normalized.startsWith("dreaming-narrative-")) return "dreaming";
+  if (normalized.startsWith("dashboard:")) {
+    return "dashboard";
+  }
+  if (normalized.startsWith("tui-")) {
+    return "tui";
+  }
+  if (normalized.startsWith("explicit:")) {
+    return "explicit";
+  }
+  if (normalized.startsWith("hook:")) {
+    return "hook";
+  }
+  if (normalized.startsWith("harness:")) {
+    return "harness";
+  }
+  if (normalized.startsWith("voice:")) {
+    return "voice";
+  }
+  if (normalized.startsWith("dreaming-narrative-")) {
+    return "dreaming";
+  }
   if (
     normalized === "boot" ||
     normalized.startsWith("commitments:") ||

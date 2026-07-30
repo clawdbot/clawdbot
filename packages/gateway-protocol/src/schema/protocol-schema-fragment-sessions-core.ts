@@ -1,11 +1,8 @@
-import * as sessionClassification from "./session-classification.js";
 import * as sessionsCatalog from "./sessions-catalog.js";
 import * as sessions from "./sessions.js";
 
 export const SessionCoreProtocolSchemas = {
   SessionsListParams: sessions.SessionsListParamsSchema,
-  SessionClassification: sessionClassification.SessionClassificationSchema,
-  SessionPeerKind: sessionClassification.SessionPeerKindSchema,
   SessionCatalogCapabilities: sessionsCatalog.SessionCatalogCapabilitiesSchema,
   SessionCatalogDescriptor: sessionsCatalog.SessionCatalogDescriptorSchema,
   SessionCatalogPullRequestSummary: sessionsCatalog.SessionCatalogPullRequestSummarySchema,
