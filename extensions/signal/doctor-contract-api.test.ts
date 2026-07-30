@@ -403,6 +403,64 @@ describe("signal transport compatibility", () => {
     });
   });
 
+  it("infers the managed bind port from a loopback httpUrl when httpPort is absent", () => {
+    // autoStart=true with a loopback httpUrl on a non-default port and no
+    // httpPort: the managed daemon must bind the URL's port so daemon bind and
+    // client probe agree (issue #116165). Before the fix the migrated transport
+    // carried the 8082 url but no httpPort, so the daemon bound 8080.
+    const result = normalizeCompatibilityConfig({
+      cfg: signalConfig({
+        apiMode: "native",
+        autoStart: true,
+        account: "+15555550123",
+        httpUrl: "http://127.0.0.1:8082",
+      }),
+    });
+
+    expect(result.config.channels?.signal?.transport).toMatchObject({
+      kind: "managed-native",
+      url: "http://127.0.0.1:8082",
+      httpPort: 8082,
+    });
+  });
+
+  it("infers the managed bind port from a localhost httpUrl alias", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: signalConfig({
+        apiMode: "native",
+        autoStart: true,
+        account: "+15555550123",
+        httpUrl: "http://localhost:9090",
+      }),
+    });
+
+    expect(result.config.channels?.signal?.transport).toMatchObject({
+      kind: "managed-native",
+      url: "http://localhost:9090",
+      httpPort: 9090,
+    });
+  });
+
+  it("does not infer a bind port from a non-loopback httpUrl", () => {
+    // A non-loopback connection URL is an external endpoint, not a bind target;
+    // resolveLocalSignalTransportPort returns undefined so no httpPort is set
+    // and behavior is unchanged.
+    const result = normalizeCompatibilityConfig({
+      cfg: signalConfig({
+        apiMode: "native",
+        autoStart: true,
+        account: "+15555550123",
+        httpUrl: "http://signal:8080",
+      }),
+    });
+
+    expect(result.config.channels?.signal?.transport).toMatchObject({
+      kind: "managed-native",
+      url: "http://signal:8080",
+    });
+    expect(result.config.channels?.signal?.transport?.httpPort).toBeUndefined();
+  });
+
   it("reserves managed bind and local connection ports during migration", () => {
     const result = normalizeCompatibilityConfig({
       cfg: signalConfig({

@@ -226,7 +226,14 @@ function buildManagedNativeTransport(
   const cliPath = optionalString(value("cliPath"));
   const url = resolveManagedConnectionUrl(entry, parent);
   const httpHost = optionalString(value("httpHost"));
-  const httpPort = value("httpPort");
+  // Infer the daemon bind port from a loopback httpUrl when httpPort is absent
+  // so the managed daemon and the client probe URL agree (issue #116165).
+  // resolveLocalSignalTransportPort returns undefined for non-loopback hosts,
+  // so a remote connection URL is left without an inferred bind port.
+  const rawHttpPort = value("httpPort");
+  const inferredHttpPort =
+    typeof rawHttpPort !== "number" && url ? resolveLocalSignalTransportPort(url) : undefined;
+  const httpPort = typeof rawHttpPort === "number" ? rawHttpPort : inferredHttpPort;
   const startupTimeoutMs = value("startupTimeoutMs");
   const receiveMode = value("receiveMode");
   const ignoreStories = value("ignoreStories");
