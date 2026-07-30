@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import {
   applyClosedWorldToolGate,
-  __resetClosedWorldGateDedupForTests,
+  resetClosedWorldGateDedupForTests,
 } from "./closed-world-tool-gate.js";
 
 function tool(name: string): AnyAgentTool {
@@ -16,7 +16,7 @@ const SNAPSHOT = JSON.stringify({
 
 describe("closed-world tool gate", () => {
   afterEach(() => {
-    __resetClosedWorldGateDedupForTests();
+    resetClosedWorldGateDedupForTests();
   });
 
   it("no snapshot -> log-only, passes every tool through (zero risk)", () => {
@@ -37,7 +37,7 @@ describe("closed-world tool gate", () => {
     expect(result.mode).toBe("report");
     expect(result.snapshotPresent).toBe(true);
     // exec + cron are NOT in the snapshot -> flagged as would-deny...
-    expect(result.wouldDeny.sort()).toEqual(["cron", "exec"]);
+    expect(result.wouldDeny.toSorted()).toEqual(["cron", "exec"]);
     // ...but report mode NEVER filters.
     expect(result.tools).toHaveLength(4);
   });
@@ -50,8 +50,8 @@ describe("closed-world tool gate", () => {
       emit: false,
     });
     expect(result.mode).toBe("enforce");
-    expect(result.wouldDeny.sort()).toEqual(["cron", "exec"]);
-    const kept = result.tools.map((t) => t.name).sort();
+    expect(result.wouldDeny.toSorted()).toEqual(["cron", "exec"]);
+    const kept = result.tools.map((t) => t.name).toSorted();
     expect(kept).toEqual(["ohlcv_tail", "read"]);
   });
 

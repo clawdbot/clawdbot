@@ -15,10 +15,16 @@ describe("vctraderai-modify-position-protection", () => {
     process.env.PFM_AGENT_TOKEN = "agent-token-001";
   });
   afterEach(() => {
-    if (originalWorkspace === undefined) delete process.env.PFM_WORKSPACE_ID;
-    else process.env.PFM_WORKSPACE_ID = originalWorkspace;
-    if (originalAgentToken === undefined) delete process.env.PFM_AGENT_TOKEN;
-    else process.env.PFM_AGENT_TOKEN = originalAgentToken;
+    if (originalWorkspace === undefined) {
+      delete process.env.PFM_WORKSPACE_ID;
+    } else {
+      process.env.PFM_WORKSPACE_ID = originalWorkspace;
+    }
+    if (originalAgentToken === undefined) {
+      delete process.env.PFM_AGENT_TOKEN;
+    } else {
+      process.env.PFM_AGENT_TOKEN = originalAgentToken;
+    }
   });
 
   it("registers the modify_position_protection tool with the plugin api", () => {

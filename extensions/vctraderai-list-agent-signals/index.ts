@@ -32,14 +32,6 @@ function readWorkspaceId(): string {
   return value;
 }
 
-function requireStringParam(params: ListAgentSignalsParams, key: string): string {
-  const value = params[key];
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`vctraderai list_agent_signals: ${key} is required`);
-  }
-  return value;
-}
-
 function buildQuery(
   params: ListAgentSignalsParams,
   keys: string[],

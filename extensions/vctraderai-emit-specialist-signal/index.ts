@@ -32,26 +32,6 @@ function readWorkspaceId(): string {
   return value;
 }
 
-function requireStringParam(params: EmitSpecialistSignalParams, key: string): string {
-  const value = params[key];
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`vctraderai emit_specialist_signal: ${key} is required`);
-  }
-  return value;
-}
-
-function buildQuery(
-  params: EmitSpecialistSignalParams,
-  keys: string[],
-): Record<string, string | undefined> {
-  const query: Record<string, string | undefined> = {};
-  for (const key of keys) {
-    const value = params[key];
-    query[key] = typeof value === "string" || typeof value === "number" ? String(value) : undefined;
-  }
-  return query;
-}
-
 export async function runEmitSpecialistSignal(
   params: EmitSpecialistSignalParams,
   deps: EmitSpecialistSignalDeps = {},

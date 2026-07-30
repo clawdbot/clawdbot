@@ -32,14 +32,6 @@ function readWorkspaceId(): string {
   return value;
 }
 
-function requireStringParam(params: GetHeartbeatStatusParams, key: string): string {
-  const value = params[key];
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`vctraderai get_heartbeat_status: ${key} is required`);
-  }
-  return value;
-}
-
 function buildQuery(
   params: GetHeartbeatStatusParams,
   keys: string[],

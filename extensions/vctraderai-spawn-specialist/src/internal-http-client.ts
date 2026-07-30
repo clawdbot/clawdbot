@@ -9,7 +9,7 @@
 // non-allowlisted families are still rejected before a socket is opened.
 
 const ALLOWLIST_PATH_PATTERN =
-  /^\/api\/v1\/openclaw\/(heartbeat|model-routes|signals|briefings|specialists)(\/[A-Za-z0-9\-_%\/]+)?(\?.*)?$/;
+  /^\/api\/v1\/openclaw\/(heartbeat|model-routes|signals|briefings|specialists)(\/[A-Za-z0-9\-_%/]+)?(\?.*)?$/;
 const DEFAULT_BFF_BASE_URL = "http://web_api.local";
 
 export type BffFetchOptions = {

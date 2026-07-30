@@ -12,10 +12,16 @@ describe("vctraderai-get-broker-deals", () => {
     process.env.PFM_AGENT_TOKEN = "agent-token-001";
   });
   afterEach(() => {
-    if (originalWorkspace === undefined) delete process.env.PFM_WORKSPACE_ID;
-    else process.env.PFM_WORKSPACE_ID = originalWorkspace;
-    if (originalAgentToken === undefined) delete process.env.PFM_AGENT_TOKEN;
-    else process.env.PFM_AGENT_TOKEN = originalAgentToken;
+    if (originalWorkspace === undefined) {
+      delete process.env.PFM_WORKSPACE_ID;
+    } else {
+      process.env.PFM_WORKSPACE_ID = originalWorkspace;
+    }
+    if (originalAgentToken === undefined) {
+      delete process.env.PFM_AGENT_TOKEN;
+    } else {
+      process.env.PFM_AGENT_TOKEN = originalAgentToken;
+    }
   });
 
   it("registers the get_broker_deals tool with the plugin api", () => {

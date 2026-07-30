@@ -32,14 +32,6 @@ function readWorkspaceId(): string {
   return value;
 }
 
-function requireStringParam(params: GeneratePreSessionBriefingParams, key: string): string {
-  const value = params[key];
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`vctraderai generate_pre_session_briefing: ${key} is required`);
-  }
-  return value;
-}
-
 function buildQuery(
   params: GeneratePreSessionBriefingParams,
   keys: string[],

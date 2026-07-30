@@ -327,7 +327,7 @@ export function createCapturedPluginRegistration(params?: {
           const resolved = tool({});
           const resolvedList = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
           for (const resolvedTool of resolvedList) {
-            tools.push(resolvedTool as AnyAgentTool);
+            tools.push(resolvedTool);
           }
         },
       },

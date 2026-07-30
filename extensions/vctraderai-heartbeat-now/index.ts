@@ -32,26 +32,6 @@ function readWorkspaceId(): string {
   return value;
 }
 
-function requireStringParam(params: HeartbeatNowParams, key: string): string {
-  const value = params[key];
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`vctraderai heartbeat_now: ${key} is required`);
-  }
-  return value;
-}
-
-function buildQuery(
-  params: HeartbeatNowParams,
-  keys: string[],
-): Record<string, string | undefined> {
-  const query: Record<string, string | undefined> = {};
-  for (const key of keys) {
-    const value = params[key];
-    query[key] = typeof value === "string" || typeof value === "number" ? String(value) : undefined;
-  }
-  return query;
-}
-
 export async function runHeartbeatNow(
   params: HeartbeatNowParams,
   deps: HeartbeatNowDeps = {},

@@ -8,8 +8,11 @@ describe("vctraderai-generate-report", () => {
     process.env.PFM_WORKSPACE_ID = "ws-001";
   });
   afterEach(() => {
-    if (originalWorkspace === undefined) delete process.env.PFM_WORKSPACE_ID;
-    else process.env.PFM_WORKSPACE_ID = originalWorkspace;
+    if (originalWorkspace === undefined) {
+      delete process.env.PFM_WORKSPACE_ID;
+    } else {
+      process.env.PFM_WORKSPACE_ID = originalWorkspace;
+    }
   });
 
   it("registers the generate_report tool with the plugin api", () => {

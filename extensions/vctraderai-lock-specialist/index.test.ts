@@ -33,7 +33,7 @@ describe("vctraderai-lock-specialist", () => {
   it("does not send a body-supplied workspace_id (server derives it)", async () => {
     let capturedBody: Record<string, unknown> = {};
     const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      capturedBody = JSON.parse(String(init?.body ?? "{}"));
+      capturedBody = JSON.parse(typeof init?.body === "string" ? init.body : "{}");
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     }) as typeof globalThis.fetch;
     await runLockSpecialist({ specialist_key: "gold_specialist" }, { fetchImpl });

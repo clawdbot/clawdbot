@@ -12,10 +12,16 @@ describe("vctraderai-list-mt5-accounts", () => {
     process.env.PFM_AGENT_TOKEN = "agent-token-001";
   });
   afterEach(() => {
-    if (originalWorkspace === undefined) delete process.env.PFM_WORKSPACE_ID;
-    else process.env.PFM_WORKSPACE_ID = originalWorkspace;
-    if (originalAgentToken === undefined) delete process.env.PFM_AGENT_TOKEN;
-    else process.env.PFM_AGENT_TOKEN = originalAgentToken;
+    if (originalWorkspace === undefined) {
+      delete process.env.PFM_WORKSPACE_ID;
+    } else {
+      process.env.PFM_WORKSPACE_ID = originalWorkspace;
+    }
+    if (originalAgentToken === undefined) {
+      delete process.env.PFM_AGENT_TOKEN;
+    } else {
+      process.env.PFM_AGENT_TOKEN = originalAgentToken;
+    }
   });
 
   it("registers the list_mt5_accounts tool with the plugin api", () => {
@@ -64,7 +70,9 @@ describe("vctraderai-list-mt5-accounts", () => {
     const controller = new AbortController();
     controller.abort();
     const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      if (init?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      if (init?.signal?.aborted) {
+        throw new DOMException("Aborted", "AbortError");
+      }
       return new Response(JSON.stringify({}), { status: 200 });
     }) as typeof globalThis.fetch;
     await expect(runListMt5Accounts({}, { fetchImpl }, controller.signal)).rejects.toThrow();

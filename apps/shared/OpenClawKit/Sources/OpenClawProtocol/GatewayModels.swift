@@ -6654,6 +6654,8 @@ public struct ChatFinalEvent: Codable, Sendable {
     public let spawnedby: String?
     public let seq: Int
     public let state: String
+    public let model: String?
+    public let provider: String?
     public let message: AnyCodable?
     public let usage: AnyCodable?
     public let stopreason: String?
@@ -6664,6 +6666,8 @@ public struct ChatFinalEvent: Codable, Sendable {
         spawnedby: String?,
         seq: Int,
         state: String,
+        model: String?,
+        provider: String?,
         message: AnyCodable?,
         usage: AnyCodable?,
         stopreason: String?)
@@ -6673,6 +6677,8 @@ public struct ChatFinalEvent: Codable, Sendable {
         self.spawnedby = spawnedby
         self.seq = seq
         self.state = state
+        self.model = model
+        self.provider = provider
         self.message = message
         self.usage = usage
         self.stopreason = stopreason
@@ -6684,6 +6690,8 @@ public struct ChatFinalEvent: Codable, Sendable {
         case spawnedby = "spawnedBy"
         case seq
         case state
+        case model
+        case provider
         case message
         case usage
         case stopreason = "stopReason"
@@ -6734,6 +6742,8 @@ public struct ChatErrorEvent: Codable, Sendable {
     public let spawnedby: String?
     public let seq: Int
     public let state: String
+    public let model: String?
+    public let provider: String?
     public let message: AnyCodable?
     public let errormessage: String?
     public let errorkind: AnyCodable?
@@ -6746,6 +6756,8 @@ public struct ChatErrorEvent: Codable, Sendable {
         spawnedby: String?,
         seq: Int,
         state: String,
+        model: String?,
+        provider: String?,
         message: AnyCodable?,
         errormessage: String?,
         errorkind: AnyCodable?,
@@ -6757,6 +6769,8 @@ public struct ChatErrorEvent: Codable, Sendable {
         self.spawnedby = spawnedby
         self.seq = seq
         self.state = state
+        self.model = model
+        self.provider = provider
         self.message = message
         self.errormessage = errormessage
         self.errorkind = errorkind
@@ -6770,6 +6784,8 @@ public struct ChatErrorEvent: Codable, Sendable {
         case spawnedby = "spawnedBy"
         case seq
         case state
+        case model
+        case provider
         case message
         case errormessage = "errorMessage"
         case errorkind = "errorKind"

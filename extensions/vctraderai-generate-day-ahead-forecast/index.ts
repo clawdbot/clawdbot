@@ -32,14 +32,6 @@ function readWorkspaceId(): string {
   return value;
 }
 
-function requireStringParam(params: GenerateDayAheadForecastParams, key: string): string {
-  const value = params[key];
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`vctraderai generate_day_ahead_forecast: ${key} is required`);
-  }
-  return value;
-}
-
 function buildQuery(
   params: GenerateDayAheadForecastParams,
   keys: string[],

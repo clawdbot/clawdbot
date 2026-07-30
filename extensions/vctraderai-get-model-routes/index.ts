@@ -32,14 +32,6 @@ function readWorkspaceId(): string {
   return value;
 }
 
-function requireStringParam(params: GetModelRoutesParams, key: string): string {
-  const value = params[key];
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`vctraderai get_model_routes: ${key} is required`);
-  }
-  return value;
-}
-
 function buildQuery(
   params: GetModelRoutesParams,
   keys: string[],

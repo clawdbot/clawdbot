@@ -54,11 +54,7 @@ function parseSnapshot(raw: string | undefined): Set<string> | null {
 }
 
 function resolveMode(raw: string | undefined): ClosedWorldMode {
-  return String(raw || "")
-    .trim()
-    .toLowerCase() === "enforce"
-    ? "enforce"
-    : "report";
+  return (raw || "").trim().toLowerCase() === "enforce" ? "enforce" : "report";
 }
 
 // Process-lifetime dedup so a per-turn call does not spam identical lines.
@@ -79,14 +75,14 @@ export function applyClosedWorldToolGate(
   const resolved = tools.map((tool) => normalizeToolName(tool.name || "tool"));
 
   if (emit) {
-    const signature = [...resolved].sort().join(",");
+    const signature = resolved.toSorted().join(",");
     if (signature !== loggedResolvedSignature) {
       loggedResolvedSignature = signature;
       log.info("closed_world.resolved_set", {
         mode,
         snapshot_present: snapshot !== null,
         tool_count: resolved.length,
-        tools: [...resolved].sort(),
+        tools: resolved.toSorted(),
       });
     }
   }
@@ -116,7 +112,7 @@ export function applyClosedWorldToolGate(
 }
 
 /** Test seam: reset the process-lifetime dedup caches. */
-export function __resetClosedWorldGateDedupForTests(): void {
+export function resetClosedWorldGateDedupForTests(): void {
   loggedResolvedSignature = null;
   loggedWouldDeny.clear();
 }

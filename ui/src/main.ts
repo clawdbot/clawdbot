@@ -9,7 +9,7 @@ type ViteImportMeta = ImportMeta & {
 
 declare const OPENCLAW_CONTROL_UI_BUILD_ID: string | undefined;
 
-const isProd = (import.meta as ViteImportMeta).env?.PROD === true;
+const isProd = (import.meta as ViteImportMeta).env?.PROD ?? false;
 
 if (isProd && "serviceWorker" in navigator) {
   const swUrl = new URL("./sw.js", window.location.href);

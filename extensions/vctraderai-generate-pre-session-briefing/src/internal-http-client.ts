@@ -5,7 +5,7 @@
 // Session D model-route/signal/briefing tools.
 
 const ALLOWLIST_PATH_PATTERN =
-  /^\/api\/v1\/openclaw\/(heartbeat|model-routes|signals|briefings)(\/[a-z0-9-\/]+)?(\?.*)?$/;
+  /^\/api\/v1\/openclaw\/(heartbeat|model-routes|signals|briefings)(\/[a-z0-9-/]+)?(\?.*)?$/;
 const DEFAULT_BFF_BASE_URL = "http://web_api.local";
 
 export type BffFetchOptions = {

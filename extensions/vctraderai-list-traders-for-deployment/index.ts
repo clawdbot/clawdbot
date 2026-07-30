@@ -22,7 +22,9 @@ export type ListTradersForDeploymentDeps = {
   threadId?: string;
 };
 
-export type ListTradersForDeploymentParams = {};
+/** This tool takes no parameters. `Record<string, never>` says exactly that;
+ * the `{}` type does not — it admits any non-nullish value. */
+export type ListTradersForDeploymentParams = Record<string, never>;
 
 function requireWorkspaceId(): string {
   const workspaceId = process.env.PFM_WORKSPACE_ID;
