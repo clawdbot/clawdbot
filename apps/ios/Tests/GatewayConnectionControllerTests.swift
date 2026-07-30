@@ -2206,24 +2206,37 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
             stableID: connectedID))
         let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
         let identity = DeviceIdentityStore.loadOrCreate()
-        defer { DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: "node", gatewayID: connectedID) }
+        let resetRelease = AsyncStream<Void>.makeStream()
+        let existingReset = Task {
+            for await _ in resetRelease.stream {
+                return
+            }
+        }
+        appModel._test_setGatewaySessionResetTask(existingReset)
+        defer {
+            resetRelease.continuation.finish()
+            appModel._test_setGatewaySessionResetTask(nil)
+            DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: "node", gatewayID: connectedID)
+        }
 
-        await controller.forgetGateway(stableID: connectedID)
+        let forgetTask = Task { @MainActor in
+            await controller.forgetGateway(stableID: connectedID)
+        }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(3))
+        while appModel.activeGatewayConnectConfig != nil, ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        #expect(appModel.activeGatewayConnectConfig == nil)
+
         _ = DeviceAuthStore.storeToken(
             deviceId: identity.deviceId,
             role: "node",
             token: "late-handshake-token",
             gatewayID: connectedID)
-        let deadline = ContinuousClock().now.advanced(by: .seconds(3))
-        while DeviceAuthStore.loadToken(
-            deviceId: identity.deviceId,
-            role: "node",
-            gatewayID: connectedID) != nil,
-            ContinuousClock().now < deadline
-        {
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        resetRelease.continuation.yield()
+        resetRelease.continuation.finish()
 
+        #expect(await forgetTask.value)
         #expect(appModel.activeGatewayConnectConfig == nil)
         #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == selectedID)
         #expect(DeviceAuthStore.loadToken(

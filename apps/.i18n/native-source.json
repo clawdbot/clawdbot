@@ -34331,7 +34331,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 242,
+      "line": 245,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Debug",
       "surface": "apple",
@@ -34339,7 +34339,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 246,
+      "line": 249,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Open Config Folder",
       "surface": "apple",
@@ -34347,7 +34347,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 251,
+      "line": 254,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Run Health Check Now",
       "surface": "apple",
@@ -34355,7 +34355,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 256,
+      "line": 259,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Send Test Heartbeat",
       "surface": "apple",
@@ -34363,7 +34363,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 262,
+      "line": 265,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Show Pairing Panel (Demo)",
       "surface": "apple",
@@ -34371,7 +34371,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 269,
+      "line": 272,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Remote Tunnel",
       "surface": "apple",
@@ -34379,7 +34379,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 272,
+      "line": 275,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Reset Remote Tunnel",
       "surface": "apple",
@@ -34387,7 +34387,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 280,
+      "line": 283,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Verbose Logging (Main): On",
       "surface": "apple",
@@ -34395,7 +34395,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 281,
+      "line": 284,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Verbose Logging (Main): Off",
       "surface": "apple",
@@ -34403,7 +34403,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 285,
+      "line": 288,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Verbosity",
       "surface": "apple",
@@ -34411,7 +34411,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 293,
+      "line": 296,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "File Logging: On",
       "surface": "apple",
@@ -34419,7 +34419,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 294,
+      "line": 297,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "File Logging: Off",
       "surface": "apple",
@@ -34427,7 +34427,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 298,
+      "line": 301,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "App Logging",
       "surface": "apple",
@@ -34435,7 +34435,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 303,
+      "line": 306,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Open Session Store",
       "surface": "apple",
@@ -34443,7 +34443,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 309,
+      "line": 312,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Open Agent Events…",
       "surface": "apple",
@@ -34451,7 +34451,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 314,
+      "line": 317,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Open Log",
       "surface": "apple",
@@ -34459,7 +34459,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 319,
+      "line": 322,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Send Debug Voice Text",
       "surface": "apple",
@@ -34467,7 +34467,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 324,
+      "line": 327,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Send Test Notification",
       "surface": "apple",
@@ -34475,7 +34475,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 331,
+      "line": 334,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Restart Gateway",
       "surface": "apple",
@@ -34483,7 +34483,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 337,
+      "line": 340,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Restart Onboarding",
       "surface": "apple",
@@ -34491,7 +34491,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 342,
+      "line": 345,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Restart App",
       "surface": "apple",
@@ -34499,7 +34499,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 385,
+      "line": 391,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Main",
       "surface": "apple",
@@ -34507,7 +34507,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 385,
+      "line": 391,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Other",
       "surface": "apple",
@@ -34515,7 +34515,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 459,
+      "line": 465,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Show pairing requests",
       "surface": "apple",
@@ -34523,7 +34523,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 484,
+      "line": 490,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Refreshing microphones…",
       "surface": "apple",
@@ -34531,7 +34531,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 491,
+      "line": 497,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Microphone",
       "surface": "apple",
@@ -34539,7 +34539,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 516,
+      "line": 522,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Disconnected (using System default)",
       "surface": "apple",
