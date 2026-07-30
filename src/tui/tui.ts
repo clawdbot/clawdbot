@@ -572,6 +572,9 @@ export function resolveTuiCtrlCAction(params: {
   if (params.exitRequested === true) {
     return { action: "force-exit", nextLastCtrlCAt: params.lastCtrlCAt };
   }
+  if (params.hasInput) {
+    return resolveCtrlCAction(params);
+  }
   if (params.wasDisconnected === true) {
     return { action: "exit", nextLastCtrlCAt: params.lastCtrlCAt };
   }
@@ -605,6 +608,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   let initialSessionApplied = false;
   let rememberedSessionApplied = false;
   let currentSessionId: string | null = null;
+  let sessionGeneration = 0;
   let activeChatRunId: string | null = null;
   let pendingSubmit: TuiPendingSubmit | null = null;
   let historyLoaded = false;
@@ -637,6 +641,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   let statusTimer: NodeJS.Timeout | null = null;
   let statusStartedAt: number | null = null;
   let lastActivityStatus = activityStatus;
+  let invalidateSessionRunOwnership: () => void = () => undefined;
+  let retireHistoryAbsentRun: (_runId: string) => void = () => undefined;
 
   const state: TuiStateAccess = {
     get agentDefaultId() {
@@ -667,7 +673,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       return currentAgentId;
     },
     set currentAgentId(value) {
+      if (currentAgentId === value) {
+        return;
+      }
+      sessionGeneration += 1;
       currentAgentId = value;
+      invalidateSessionRunOwnership();
       pluginApprovals?.sessionChanged();
       taskSuggestions?.sessionChanged();
     },
@@ -675,6 +686,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       return currentSessionKey;
     },
     set currentSessionKey(value) {
+      if (currentSessionKey !== value) {
+        sessionGeneration += 1;
+      }
       currentSessionKey = value;
       pluginApprovals?.sessionChanged();
       taskSuggestions?.sessionChanged();
@@ -683,7 +697,16 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       return currentSessionId;
     },
     set currentSessionId(value) {
+      if (currentSessionId && value && currentSessionId !== value) {
+        sessionGeneration += 1;
+      }
       currentSessionId = value;
+    },
+    get sessionGeneration() {
+      return sessionGeneration;
+    },
+    set sessionGeneration(value) {
+      sessionGeneration = value;
     },
     get activeChatRunId() {
       return activeChatRunId;
@@ -850,6 +873,19 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const statusContainer = new Container();
   const footer = new Text("", 1, 0);
   const chatLog = new ChatLog();
+  const connectionNotices: string[] = [];
+  const addConnectionNotice = (text: string) => {
+    connectionNotices.push(text);
+    if (connectionNotices.length > 12) {
+      connectionNotices.shift();
+    }
+    chatLog.addSystem(text, { coalesceConsecutive: true });
+  };
+  const restoreConnectionNotices = () => {
+    for (const notice of connectionNotices) {
+      chatLog.addSystem(notice, { coalesceConsecutive: true });
+    }
+  };
   const editor = new CustomEditor(tui, editorTheme);
   const root = new Container();
   root.addChild(header);
@@ -1381,10 +1417,27 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     refreshSessionInfo,
     applySessionInfoFromPatch,
     applySessionMutationResult,
-    loadHistory,
+    loadHistory: loadHistorySnapshot,
     setSession,
     abortActive,
   } = sessionActions;
+  const loadHistory = async (options?: { retireMissingReconnectRun?: boolean }) => {
+    const activeRunAtStart = state.activeChatRunId;
+    const result = await loadHistorySnapshot();
+    if (result.loaded) {
+      if (
+        options?.retireMissingReconnectRun === true &&
+        activeRunAtStart &&
+        !result.inFlightRunId &&
+        activeRunAtStart === state.activeChatRunId
+      ) {
+        retireHistoryAbsentRun(activeRunAtStart);
+      }
+      restoreConnectionNotices();
+      tui.requestRender();
+    }
+    return result;
+  };
   const taskSuggestions = createTuiTaskSuggestionController({
     client,
     chatLog,
@@ -1426,6 +1479,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     forgetLocalBtwRunId,
     clearLocalBtwRunIds,
   });
+  retireHistoryAbsentRun = () => reconnectStreamingWatchdog(null);
+  invalidateSessionRunOwnership = () => {
+    disposeEventHandlers();
+    state.activeChatRunId = null;
+    setActivityStatus("idle");
+  };
 
   const deferredFinish = createDeferredTuiFinish();
   const forceExit = () => {
@@ -1560,7 +1619,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const handleCtrlC = () => {
     const now = Date.now();
     const decision = resolveTuiCtrlCAction({
-      hasInput: editor.getText().trim().length > 0,
+      hasInput: editor.getText().length > 0,
       now,
       lastCtrlCAt,
       exitRequested,
@@ -1737,12 +1796,15 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       if (!ownsConnection()) {
         return;
       }
-      await loadHistory();
+      await loadHistory({ retireMissingReconnectRun: reconnected });
       if (!ownsConnection()) {
         return;
       }
       if (activityStatus === "starting up") {
         setActivityStatus("idle");
+      }
+      if (reconnected) {
+        addConnectionNotice("gateway reconnected after transport loss");
       }
       setConnectionStatus(
         isLocalMode ? "local ready" : reconnected ? "gateway reconnected" : "gateway connected",
@@ -1773,7 +1835,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     });
   };
 
-  client.onDisconnected = (reason) => {
+  const handleBackendDisconnected = (reason: string) => {
     if (exitRequested) {
       return;
     }
@@ -1805,12 +1867,17 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     updateFooter();
     tui.requestRender();
   };
+  client.onConnectError = (error) => {
+    handleBackendDisconnected(formatTuiErrorMessage(error));
+  };
+  client.onDisconnected = handleBackendDisconnected;
 
   client.onGap = (info) => {
     if (exitRequested || !isConnected) {
       return;
     }
     setConnectionStatus(`event gap: expected ${info.expected}, got ${info.received}`, 5000);
+    addConnectionNotice(`gateway event gap: expected ${info.expected}, got ${info.received}`);
     reconcileHistoryAfterGap();
     void (async () => {
       try {

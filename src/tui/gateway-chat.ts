@@ -132,11 +132,13 @@ export class GatewayChatClient implements TuiBackend {
   private client: GatewayClient;
   private readyPromise: Promise<void>;
   private resolveReady?: () => void;
+  private pendingConnectError?: Error;
   readonly connection: ResolvedGatewayConnection;
   hello?: HelloOk;
 
   onEvent?: (evt: GatewayEvent) => void;
   onConnected?: () => void;
+  onConnectError?: (error: Error) => void;
   onDisconnected?: (reason: string) => void;
   onGap?: (info: { expected: number; received: number }) => void;
 
@@ -170,6 +172,7 @@ export class GatewayChatClient implements TuiBackend {
       minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
       onHelloOk: (hello) => {
+        this.pendingConnectError = undefined;
         this.hello = hello;
         this.resolveReady?.();
         this.onConnected?.();
@@ -186,8 +189,12 @@ export class GatewayChatClient implements TuiBackend {
         this.readyPromise = new Promise((resolve) => {
           this.resolveReady = resolve;
         });
+        if (this.pendingConnectError) {
+          return;
+        }
         this.onDisconnected?.(reason);
       },
+      onConnectError: (error) => this.notifyConnectError(error),
       onGap: (info) => {
         this.onGap?.(info);
       },
@@ -212,12 +219,24 @@ export class GatewayChatClient implements TuiBackend {
     })
       .then((readiness) => {
         if (!readiness.ready && !readiness.aborted) {
-          this.onDisconnected?.("gateway event loop readiness timeout");
+          this.notifyConnectError(new Error("gateway event loop readiness timeout"));
         }
       })
       .catch((err: unknown) => {
-        this.onDisconnected?.(err instanceof Error ? err.message : String(err));
+        this.notifyConnectError(err instanceof Error ? err : new Error(String(err)));
       });
+  }
+
+  private notifyConnectError(error: Error) {
+    if (this.pendingConnectError) {
+      return;
+    }
+    this.pendingConnectError = error;
+    if (this.onConnectError) {
+      this.onConnectError(error);
+    } else {
+      this.onDisconnected?.(error.message);
+    }
   }
 
   stop() {
