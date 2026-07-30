@@ -63,6 +63,7 @@ async function resolveColdPluginModelRef(
     // same static manifest normalization the reset-model resolver applies downstream so
     // classification cannot diverge from the resolution that consumes the directive.
     const slash = firstToken.indexOf("/");
+    const bareToken = slash > 0 ? "" : firstToken.trim();
     const tokenProvider = slash > 0 ? normalizeProviderId(firstToken.slice(0, slash)) : "";
     const tokenModel = slash > 0 ? firstToken.slice(slash + 1).trim() : "";
     const normalizedTokenKey =
@@ -82,6 +83,21 @@ async function resolveColdPluginModelRef(
       // allowed keys so classification never diverges from what the resolver can select.
       const entryId = typeof entry.id === "string" ? entry.id.trim().toLowerCase() : "";
       if (!entryId) {
+        continue;
+      }
+      if (bareToken) {
+        // Runtime-discovered catalogs (e.g. LM Studio) publish bare ids with no manifest
+        // rows, so a bare token is a directive only on an exact id match — fuzzy matching
+        // here would swallow ordinary session names that resemble model ids.
+        if (entryId === bareToken) {
+          return true;
+        }
+        const normalizedBare = normalizeStaticProviderModelId(providerId, bareToken)
+          .trim()
+          .toLowerCase();
+        if (normalizedBare && entryId === normalizedBare) {
+          return true;
+        }
         continue;
       }
       if (`${providerId}/${entryId}` === firstToken) {
@@ -157,15 +173,15 @@ async function isModelRefTail(params: HandleCommandsParams, tail: string): Promi
   if (allowed.allowAny && defaultModel.trim()) {
     allowedModelKeys.add(modelKey(normalizeProviderId(defaultProvider), defaultModel.trim()));
   }
-  if (allowedModelKeys.size > 0) {
-    const providers = new Set<string>();
-    for (const key of allowedModelKeys) {
-      const slash = key.indexOf("/");
-      if (slash <= 0) {
-        continue;
-      }
-      providers.add(normalizeProviderId(key.slice(0, slash)));
+  const providers = new Set<string>();
+  for (const key of allowedModelKeys) {
+    const slash = key.indexOf("/");
+    if (slash <= 0) {
+      continue;
     }
+    providers.add(normalizeProviderId(key.slice(0, slash)));
+  }
+  if (allowedModelKeys.size > 0) {
     const resolveSelection = (raw: string) =>
       resolveModelDirectiveSelection({
         raw,
@@ -211,18 +227,33 @@ async function isModelRefTail(params: HandleCommandsParams, tail: string): Promi
       return true;
     }
   }
-  // Cold-catalog escalation: a provider/model-shaped leading token that the config-derived
-  // allowlist could not resolve is only ambiguous while the catalog is still cold (snapshot
-  // undefined) right after startup or an agent switch. Resolve it on demand exactly once so a
-  // plugin-supplied model is honored as a directive instead of being frozen as a session name.
-  // Once the catalog is warm the snapshot is defined so this never runs; the reset-model
-  // resolver downstream would cold-load anyway for any tail it treats as a directive, so this
-  // only shifts that same load slightly earlier for the narrow ambiguous case.
+  // Cold-catalog escalation: a leading token that the config-derived allowlist could not
+  // resolve is only ambiguous while the catalog is still cold (snapshot undefined) right
+  // after startup or an agent switch. Resolve it on demand exactly once so a plugin-supplied
+  // model is honored as a directive instead of being frozen as a session name. Once the
+  // catalog is warm the snapshot is defined so this never runs; the reset-model resolver
+  // downstream would cold-load anyway for any tail it treats as a directive, so this only
+  // shifts that same load slightly earlier for the narrow ambiguous case.
+  if (warmCatalog !== undefined) {
+    return false;
+  }
   const firstLower = first.toLowerCase();
-  if (firstLower.includes("/") && warmCatalog === undefined) {
+  if (firstLower.includes("/")) {
     return resolveColdPluginModelRef(catalogParams, firstLower);
   }
-  return false;
+  // Bare tokens can only name runtime-discovered plugin models (e.g. LM Studio ids), which
+  // manifest facts cannot represent cold. Escalate under the resolver's fuzzy precondition
+  // and only when a plugin actually declares runtime/refreshable discovery, so installs
+  // without such plugins never pay a catalog load for ordinary session names.
+  const allowBareEscalation = providers.has(normalizeProviderId(first)) || first.trim().length >= 6;
+  if (!allowBareEscalation) {
+    return false;
+  }
+  const { manifestModelCatalogDeclaresRuntimeDiscovery } = await modelCatalogRuntimeLoader.load();
+  if (!manifestModelCatalogDeclaresRuntimeDiscovery({ config: params.cfg })) {
+    return false;
+  }
+  return resolveColdPluginModelRef(catalogParams, firstLower);
 }
 
 function getNativeCommandTitleTail(params: HandleCommandsParams): string | undefined {
@@ -238,17 +269,24 @@ function getNativeCommandTitleTail(params: HandleCommandsParams): string | undef
   return newMatch ? newMatch[1]?.trim() : trimmed;
 }
 
-function parseExplicitNamedNewSessionTail(tail: string): string | undefined {
+type NamedNewSessionTail = { kind: "name"; value: string } | { kind: "missing-name" };
+
+function parseExplicitNamedNewSessionTail(tail: string): NamedNewSessionTail | undefined {
   if (/^(?:--model(?:=|\s+)|model:)/i.test(tail)) {
     return undefined;
   }
-  const flagMatch = tail.match(/^--name(?:=|\s+)(.+)$/i);
-  if (flagMatch?.[1]) {
-    return flagMatch[1].trim();
+  // Recognize the reserved name prefixes independently of value presence: an empty
+  // `--name=` / `name:` is a naming attempt with a missing value, not a session name.
+  // Without the marker the raw directive would fall through and be persisted as a label.
+  const flagMatch = tail.match(/^--name(?:=(.*)|\s+(.*))?$/i);
+  if (flagMatch) {
+    const value = (flagMatch[1] ?? flagMatch[2] ?? "").trim();
+    return value ? { kind: "name", value } : { kind: "missing-name" };
   }
-  const prefixMatch = tail.match(/^name:(.+)$/i);
-  if (prefixMatch?.[1]) {
-    return prefixMatch[1].trim();
+  const prefixMatch = tail.match(/^name:(.*)$/i);
+  if (prefixMatch) {
+    const value = (prefixMatch[1] ?? "").trim();
+    return value ? { kind: "name", value } : { kind: "missing-name" };
   }
   return undefined;
 }
@@ -256,7 +294,7 @@ function parseExplicitNamedNewSessionTail(tail: string): string | undefined {
 async function parseNamedNewSessionTail(
   params: HandleCommandsParams,
   resetTail: string,
-): Promise<string | undefined> {
+): Promise<NamedNewSessionTail | undefined> {
   const nativeTitle = getNativeCommandTitleTail(params);
   if (nativeTitle) {
     const explicitNativeName = parseExplicitNamedNewSessionTail(nativeTitle);
@@ -268,7 +306,9 @@ async function parseNamedNewSessionTail(
     if (/^(?:--model(?:=|\s+)|model:)/i.test(nativeTitle)) {
       return undefined;
     }
-    return (await isModelRefTail(params, nativeTitle)) ? undefined : nativeTitle;
+    return (await isModelRefTail(params, nativeTitle))
+      ? undefined
+      : { kind: "name", value: nativeTitle };
   }
   const tail = resetTail.trim();
   if (!tail) {
@@ -277,9 +317,6 @@ async function parseNamedNewSessionTail(
   const explicitName = parseExplicitNamedNewSessionTail(tail);
   if (explicitName) {
     return explicitName;
-  }
-  if (/^(?:--model(?:=|\s+)|model:)/i.test(tail)) {
-    return undefined;
   }
   return undefined;
 }
@@ -439,6 +476,20 @@ export async function maybeHandleResetCommand(
 
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
 
+  // Parse the naming intent before the reset hooks run: an explicit name prefix with a
+  // missing value must surface a validation error without resetting the session, instead
+  // of falling through and persisting the raw directive as the session label.
+  const namedNewSession =
+    commandAction === "new" ? await parseNamedNewSessionTail(params, resetTail) : undefined;
+  if (namedNewSession?.kind === "missing-name") {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "⚠️ Missing session name. Usage: /new --name <session name> (or /new name:<session name>).",
+      },
+    };
+  }
+
   const hookResult = await emitResetCommandHooks({
     action: commandAction,
     agentId: params.agentId,
@@ -452,8 +503,7 @@ export async function maybeHandleResetCommand(
     onObservedReplyDelivery: params.opts?.onObservedReplyDelivery,
     workspaceDir: params.workspaceDir,
   });
-  const newSessionTitle =
-    commandAction === "new" ? await parseNamedNewSessionTail(params, resetTail) : undefined;
+  const newSessionTitle = namedNewSession?.kind === "name" ? namedNewSession.value : undefined;
   if (newSessionTitle) {
     // Bind the label to the incarnation this /new produced: hooks above are awaited and a
     // concurrent reset may have rotated the session since. Naming would otherwise relabel

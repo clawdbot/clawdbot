@@ -345,6 +345,46 @@ function resolveEligibleManifestCatalogPlugins(
   );
 }
 
+/**
+ * True when an installed plugin declares runtime/refreshable model discovery. Those
+ * catalogs have no static manifest rows, so cold classification cannot see their model
+ * ids without an on-demand load; callers use this as the gate for that escalation.
+ */
+export function manifestModelCatalogDeclaresRuntimeDiscovery(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const snapshot = getCurrentPluginMetadataSnapshot({
+    config: params.config,
+    env: params.env,
+    allowWorkspaceScopedSnapshot: true,
+  });
+  if (!snapshot) {
+    return false;
+  }
+  for (const plugin of resolveEligibleManifestCatalogPlugins(snapshot, params.config)) {
+    const declared = Object.values(plugin.modelCatalog?.discovery ?? {});
+    if (declared.some((mode) => mode === "runtime" || mode === "refreshable")) {
+      return true;
+    }
+    if (!plugin.modelCatalog?.providers) {
+      continue;
+    }
+    const plan = planEffectiveModelCatalogRows({
+      registry: { plugins: [plugin] },
+      config: params.config,
+    });
+    if (
+      plan.entries.some(
+        (entry) => entry.discovery === "runtime" || entry.discovery === "refreshable",
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function loadManifestModelCatalog(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
