@@ -8,7 +8,22 @@ type TestStdin = EventEmitter & {
 
 function createStdin(writeResult: boolean): TestStdin {
   const stdin = new EventEmitter() as TestStdin;
-  stdin.write = vi.fn(() => writeResult);
+  const callbacks: Array<(error?: Error | null) => void> = [];
+  stdin.write = vi.fn((_audio: Buffer, callback?: (error?: Error | null) => void) => {
+    if (callback) {
+      if (writeResult) {
+        queueMicrotask(() => callback());
+      } else {
+        callbacks.push(callback);
+      }
+    }
+    return writeResult;
+  });
+  stdin.on("drain", () => {
+    for (const callback of callbacks.splice(0)) {
+      callback();
+    }
+  });
   return stdin;
 }
 
