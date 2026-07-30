@@ -436,21 +436,26 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
   });
 
-  it("keeps explicit NO_REPLY silent for mentioned group turns", async () => {
-    setNoAbort();
-    const deliver = vi.fn(async () => {});
-    const dispatcher = createReplyDispatcher({ deliver });
-    const replyResolver = vi.fn(async () => ({ text: "NO_REPLY" }) satisfies ReplyPayload);
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      Surface: "feishu",
-      Provider: "feishu",
-      SessionKey: "agent:main:feishu:group:oc_group",
-      WasMentioned: true,
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx,
+  it.each([
+    {
+      name: "direct turns",
+      ctx: buildTestCtx({
+        ChatType: "direct",
+        Surface: "feishu",
+        Provider: "feishu",
+        SessionKey: "agent:main:feishu:direct:ou_user",
+      }),
+      cfg: emptyConfig,
+    },
+    {
+      name: "mentioned group turns",
+      ctx: buildTestCtx({
+        ChatType: "group",
+        Surface: "feishu",
+        Provider: "feishu",
+        SessionKey: "agent:main:feishu:group:oc_group",
+        WasMentioned: true,
+      }),
       cfg: {
         agents: {
           defaults: {
@@ -460,9 +465,14 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
           },
         },
       } as OpenClawConfig,
-      dispatcher,
-      replyResolver,
-    });
+    },
+  ])("treats explicit NO_REPLY as intentional silence in $name", async ({ ctx, cfg }) => {
+    setNoAbort();
+    const deliver = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({ deliver });
+    const replyResolver = vi.fn(async () => ({ text: "NO_REPLY" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
 
