@@ -9228,6 +9228,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /reference/templates/BOOTSTRAP
 - Headings:
   - H1: BOOTSTRAP.md - Birth Sequence
+  - H2: The Most Important Rule
+  - H3: How to write compact
+  - H3: Example
+  - H2: The Conversation
   - H2: 1. Ask What to Call You
   - H2: 2. Choose Your Vibe
   - H2: 3. Finish With Recommendations
