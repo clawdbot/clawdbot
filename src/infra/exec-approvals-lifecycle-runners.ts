@@ -24,6 +24,30 @@ const PACKAGE_TARGET_OPTIONS_WITH_VALUE = new Set([
   ...PACKAGE_GLOBAL_OPTIONS_WITH_VALUE,
   ...PACKAGE_OPTIONS_WITH_VALUE,
 ]);
+const PACKAGE_MUTATION_ALIASES = new Set([
+  "add",
+  "i",
+  "in",
+  "ins",
+  "inst",
+  "insta",
+  "instal",
+  "install",
+  "isnt",
+  "isnta",
+  "isntal",
+  "isntall",
+  "link",
+  "r",
+  "remove",
+  "rm",
+  "un",
+  "uninstall",
+  "unlink",
+  "up",
+  "update",
+  "upgrade",
+]);
 
 export type LifecyclePackageRunnerPlan =
   | { kind: "not-runner" }
@@ -85,7 +109,7 @@ function packageOperationMutatesOpenClaw(
   subcommandIndex: number,
 ): boolean {
   const operation = normalizedToken(argv[subcommandIndex]);
-  if (!["add", "i", "install", "remove", "uninstall", "up", "update"].includes(operation)) {
+  if (!PACKAGE_MUTATION_ALIASES.has(operation)) {
     return false;
   }
   return argv

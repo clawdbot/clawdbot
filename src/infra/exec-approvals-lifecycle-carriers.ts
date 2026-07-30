@@ -34,6 +34,37 @@ const XARGS_OPTIONS_WITH_VALUE = new Set([
   "--process-slot-var",
   "--replace",
 ]);
+const REPLACEMENT_SENSITIVE_EXECUTABLES = new Set([
+  "ash",
+  "bash",
+  "command",
+  "doas",
+  "env",
+  "exec",
+  "fish",
+  "ksh",
+  "launchctl",
+  "net",
+  "nice",
+  "node",
+  "nohup",
+  "npm",
+  "npx",
+  "pkill",
+  "powershell",
+  "pwsh",
+  "sc",
+  "schtasks",
+  "service",
+  "setsid",
+  "sh",
+  "sudo",
+  "systemctl",
+  "taskkill",
+  "timeout",
+  "xargs",
+  "zsh",
+]);
 
 export type LifecycleXargsPlan =
   | { kind: "not-xargs" }
@@ -58,10 +89,16 @@ export function resolveLifecycleXargsArgv(argv: readonly string[]): LifecycleXar
     return { kind: "not-xargs" };
   }
   let replacementToken: string | undefined;
-  const commandPlan = (commandArgv: string[]): LifecycleXargsPlan =>
-    replacementToken && commandArgv[0]?.includes(replacementToken)
+  const commandPlan = (commandArgv: string[]): LifecycleXargsPlan => {
+    const replacementIndex = replacementToken
+      ? commandArgv.findIndex((token) => token.includes(replacementToken as string))
+      : -1;
+    const executable = normalizeExecutableToken(commandArgv[0] ?? "");
+    return replacementIndex === 0 ||
+      (replacementIndex > 0 && REPLACEMENT_SENSITIVE_EXECUTABLES.has(executable))
       ? { kind: "approval-required" }
       : { kind: "argv", argv: commandArgv };
+  };
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index]?.trim() ?? "";
     if (token === "--") {

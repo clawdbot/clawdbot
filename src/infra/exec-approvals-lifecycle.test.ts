@@ -35,6 +35,14 @@ const mutationCases: Array<[string, string[]]> = [
     ["launchctl", "unload", "~/Library/LaunchAgents/com.openclaw.gateway.plist"],
   ],
   [
+    "launchctl asuser 501 openclaw gateway restart",
+    ["launchctl", "asuser", "501", "openclaw", "gateway", "restart"],
+  ],
+  [
+    "launchctl bsexec 123 openclaw gateway restart",
+    ["launchctl", "bsexec", "123", "openclaw", "gateway", "restart"],
+  ],
+  [
     "systemctl --user restart openclaw-gateway.service",
     ["systemctl", "--user", "restart", "openclaw-gateway.service"],
   ],
@@ -45,6 +53,14 @@ const mutationCases: Array<[string, string[]]> = [
   [
     "systemctl --job-mode replace restart openclaw-gateway.service",
     ["systemctl", "--job-mode", "replace", "restart", "openclaw-gateway.service"],
+  ],
+  [
+    "systemctl restart openclaw-gateway.service -- --help",
+    ["systemctl", "restart", "openclaw-gateway.service", "--", "--help"],
+  ],
+  [
+    "systemctl kill openclaw-gateway.service -- --signal=0",
+    ["systemctl", "kill", "openclaw-gateway.service", "--", "--signal=0"],
   ],
   ["service openclaw-gateway stop", ["service", "openclaw-gateway", "stop"]],
   ['schtasks /Run /TN "OpenClaw Gateway"', ["schtasks", "/Run", "/TN", "OpenClaw Gateway"]],
@@ -81,6 +97,11 @@ const mutationCases: Array<[string, string[]]> = [
   ["npm exec -- openclaw gateway restart", ["npm", "exec", "--", "openclaw", "gateway", "restart"]],
   ["npm install -g openclaw@latest", ["npm", "install", "-g", "openclaw@latest"]],
   ["npm install -g oc@npm:openclaw@latest", ["npm", "install", "-g", "oc@npm:openclaw@latest"]],
+  ["npm rm -g openclaw", ["npm", "rm", "-g", "openclaw"]],
+  ["npm r -g openclaw", ["npm", "r", "-g", "openclaw"]],
+  ["npm unlink -g openclaw", ["npm", "unlink", "-g", "openclaw"]],
+  ["pnpm un openclaw", ["pnpm", "un", "openclaw"]],
+  ["yarn upgrade openclaw", ["yarn", "upgrade", "openclaw"]],
   [
     "npm --prefix /tmp exec -- openclaw gateway restart",
     ["npm", "--prefix", "/tmp", "exec", "--", "openclaw", "gateway", "restart"],
@@ -99,6 +120,14 @@ const mutationCases: Array<[string, string[]]> = [
     ["node", "/opt/openclaw/dist/entry.js", "gateway", "restart"],
   ],
   [
+    "node -r preload /opt/openclaw/dist/entry.js gateway restart",
+    ["node", "-r", "preload", "/opt/openclaw/dist/entry.js", "gateway", "restart"],
+  ],
+  [
+    "node -rpreload /opt/openclaw/dist/entry.js gateway restart",
+    ["node", "-rpreload", "/opt/openclaw/dist/entry.js", "gateway", "restart"],
+  ],
+  [
     `powershell -NoProfile -Command "kill openclaw"`,
     ["powershell", "-NoProfile", "-Command", "kill openclaw"],
   ],
@@ -111,6 +140,11 @@ const mutationCases: Array<[string, string[]]> = [
   ],
   ["xargs openclaw gateway", ["xargs", "openclaw", "gateway"]],
   ["xargs -I{} {} gateway restart", ["xargs", "-I{}", "{}", "gateway", "restart"]],
+  ["xargs -I{} env {} gateway restart", ["xargs", "-I{}", "env", "{}", "gateway", "restart"]],
+  [
+    "xargs env -a '' openclaw gateway restart",
+    ["xargs", "env", "-a", "", "openclaw", "gateway", "restart"],
+  ],
   [`echo "$(openclaw gateway restart)"`, ["echo", "$(openclaw gateway restart)"]],
   [
     String.raw`echo "$(printf '\'; openclaw gateway restart)"`,
@@ -250,6 +284,22 @@ describe("OpenClaw lifecycle exec approvals", () => {
           {
             raw: `systemctl "$ACTION" openclaw-gateway.service`,
             argv: ["systemctl", "$ACTION", "openclaw-gateway.service"],
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("fails closed when a partial environment controls the executable", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: "$TOOL gateway restart",
+        env: {},
+        envComplete: false,
+        segments: [
+          {
+            raw: "$TOOL gateway restart",
+            argv: ["$TOOL", "gateway", "restart"],
           },
         ],
       }),

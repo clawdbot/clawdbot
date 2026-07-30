@@ -102,11 +102,8 @@ function extractAtDepth(command: string, depth: number): ShellSubstitutionScan {
       quote = "'";
       continue;
     }
-    if (char === '"' && quote !== "'") {
+    if (char === '"') {
       quote = quote === '"' ? null : '"';
-      continue;
-    }
-    if (quote === "'") {
       continue;
     }
 

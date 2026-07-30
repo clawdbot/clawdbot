@@ -7,6 +7,7 @@ import {
   expandLifecycleEnvironmentArgv,
   unresolvedEnvironmentMayHideLifecycle,
 } from "./exec-approvals-lifecycle-env.js";
+import { resolveNodeOpenClawArgv } from "./exec-approvals-lifecycle-node.js";
 import { resolveLifecyclePackageRunnerArgv } from "./exec-approvals-lifecycle-runners.js";
 import {
   bindLifecyclePosixShellPositionals,
@@ -265,12 +266,16 @@ function classifyOpenClawArgv(argv: readonly string[]): boolean {
   }
 }
 
-function classifyLaunchctl(argv: readonly string[]): boolean {
+function classifyLaunchctl(argv: readonly string[], raw: string, depth: number): boolean {
   if (hasHelpOrVersion(argv)) {
     return false;
   }
   const actionIndex = scanFirstPositional(argv, 1, new Set(["-d", "-s"]));
   const action = normalizedToken(argv[actionIndex]);
+  if (["asuser", "bsexec"].includes(action)) {
+    const commandArgv = argv.slice(actionIndex + 2);
+    return commandArgv.length > 0 && classifyArgv(commandArgv, raw, depth + 1);
+  }
   if (!LAUNCHCTL_MUTATIONS.has(action)) {
     return false;
   }
@@ -278,19 +283,27 @@ function classifyLaunchctl(argv: readonly string[]): boolean {
 }
 
 function argvUsesSignalZero(argv: readonly string[]): boolean {
-  return argv.some((token, index) => {
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (token === "--") {
+      return false;
+    }
     const lower = normalizedToken(token);
-    return (
+    if (
       lower === "-0" ||
       lower === "-s0" ||
       lower === "--signal=0" ||
       ((lower === "-s" || lower === "--signal") && normalizedToken(argv[index + 1]) === "0")
-    );
-  });
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function classifySystemctl(argv: readonly string[]): boolean {
-  if (hasHelpOrVersion(argv)) {
+  const endOfOptions = argv.indexOf("--");
+  if (hasHelpOrVersion(endOfOptions === -1 ? argv : argv.slice(0, endOfOptions))) {
     return false;
   }
   const actionIndex = scanFirstPositional(argv, 1, SYSTEMCTL_OPTIONS_WITH_VALUE);
@@ -383,21 +396,6 @@ function classifyProcessMutation(
     return argv.slice(1).some(looksLikeOpenClaw);
   }
   return false;
-}
-
-function resolveNodeOpenClawArgv(argv: readonly string[]): string[] | null {
-  if (normalizeExecutableToken(argv[0] ?? "") !== "node") {
-    return null;
-  }
-  const scriptIndex = scanFirstPositional(argv, 1, new Set(["--conditions", "--require"]));
-  const script = normalizedToken(argv[scriptIndex]);
-  if (
-    !looksLikeOpenClaw(script) ||
-    !/(?:^|[/\\])(?:openclaw\.mjs|(?:dist[/\\])?(?:entry|index)\.(?:c?js|mjs))$/u.test(script)
-  ) {
-    return null;
-  }
-  return ["openclaw", ...argv.slice(scriptIndex + 1)];
 }
 
 function splitCommandText(command: string, delimiters: ReadonlySet<string>): string[] {
@@ -601,7 +599,7 @@ function classifyArgv(
 
   const executable = normalizeExecutableToken(argv[0] ?? "");
   if (executable === "launchctl") {
-    return classifyLaunchctl(argv);
+    return classifyLaunchctl(argv, raw, depth);
   }
   if (executable === "systemctl") {
     return classifySystemctl(argv);

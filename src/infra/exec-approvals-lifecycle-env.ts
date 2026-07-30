@@ -27,6 +27,9 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
   if (!argv.some((token) => VARIABLE_REFERENCE_RE.test(token))) {
     return false;
   }
+  if (VARIABLE_REFERENCE_RE.test(argv[0] ?? "")) {
+    return true;
+  }
   const executable = normalizedExecutable(argv[0]);
   const tokens = argv.map((token) => token.trim().toLowerCase());
   if (executable === "launchctl") {
@@ -98,17 +101,13 @@ export function expandLifecycleEnvironmentArgv(params: {
     }
     return "";
   };
-  const argv = params.argv
-    .map((token) =>
-      token
-        .replace(POWERSHELL_VARIABLE_RE, (_match, key: string) => replaceVariable(key))
-        .replace(
-          POSIX_VARIABLE_RE,
-          (_match, braced: string | undefined, bare: string | undefined) =>
-            replaceVariable(braced ?? bare ?? ""),
-        )
-        .replace(CMD_VARIABLE_RE, (_match, key: string) => replaceVariable(key)),
-    )
-    .filter((token) => token.length > 0);
+  const argv = params.argv.map((token) =>
+    token
+      .replace(POWERSHELL_VARIABLE_RE, (_match, key: string) => replaceVariable(key))
+      .replace(POSIX_VARIABLE_RE, (_match, braced: string | undefined, bare: string | undefined) =>
+        replaceVariable(braced ?? bare ?? ""),
+      )
+      .replace(CMD_VARIABLE_RE, (_match, key: string) => replaceVariable(key)),
+  );
   return { argv, fieldSplitUncertain, unresolved };
 }
