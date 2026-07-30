@@ -164,6 +164,81 @@ describe("RealtimeCallHandler lifecycle", () => {
     }
   });
 
+  it("tolerates provider close during bridge creation", async () => {
+    const bridgeConnect = vi.fn(async () => {});
+    const createBridgeForCall = vi.fn(
+      (request: { onClose?: (reason: "completed" | "error") => void }) => {
+        request.onClose?.("completed");
+        return createBridge(vi.fn(), { connect: bridgeConnect });
+      },
+    );
+    const call: CallRecord = {
+      callId: "call-synchronous-close",
+      providerCallId: "CA-synchronous-close",
+      provider: "twilio",
+      direction: "inbound",
+      state: "ringing",
+      from: "+15550001111",
+      to: "+15550002222",
+      startedAt: Date.now(),
+      transcript: [],
+      processedEventIds: [],
+    };
+    const handler = new RealtimeCallHandler(
+      createRealtimeConfig(),
+      {
+        processEvent: vi.fn(),
+        getCallByProviderCallId: vi.fn(() => call),
+      } as unknown as CallManager,
+      {
+        name: "twilio",
+        verifyWebhook: vi.fn(),
+        parseWebhookEvent: vi.fn(),
+        initiateCall: vi.fn(),
+        hangupCall: vi.fn(),
+        playTts: vi.fn(),
+        startListening: vi.fn(),
+        stopListening: vi.fn(),
+        getCallStatus: vi.fn(),
+      } as unknown as VoiceCallProvider,
+      {
+        id: "openai",
+        label: "OpenAI",
+        isConfigured: () => true,
+        createBridge: createBridgeForCall,
+      },
+      { apiKey: "test-key" },
+      "/voice/webhook",
+    );
+    const { streamUrl } = handler.issueStreamSession();
+    const server = await startUpgradeWsServer({
+      urlPath: new URL(streamUrl).pathname,
+      onUpgrade: (request, socket, head) => {
+        handler.handleWebSocketUpgrade(request, socket, head);
+      },
+    });
+    const ws = await connectWs(server.url);
+
+    try {
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-synchronous-close", callSid: "CA-synchronous-close" },
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(createBridgeForCall).toHaveBeenCalledTimes(1);
+        expect(bridgeConnect).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      if (ws.readyState !== WebSocket.CLOSED) {
+        ws.terminate();
+      }
+      await handler.close();
+      await server.close();
+    }
+  });
+
   it("releases a hung native consult and ignores its late result after stream teardown", async () => {
     let onToolCall:
       | ((event: { itemId: string; callId: string; name: string; args: unknown }) => void)
