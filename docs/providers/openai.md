@@ -1080,9 +1080,11 @@ compatibility fallback when the shared
     Platform access; Voice Call GPT-Live uses the Platform-key backend WebSocket.
     Maintainer live verification is available with
     `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts`;
-    the OpenAI legs verify both the backend WebSocket bridge and the browser
-    WebRTC SDP exchange without logging secrets.
-    Pass `--openai-only` to run those two legs without Google credentials.
+    the OpenAI legs verify the backend WebSocket bridge, a synthesized PCM24
+    speech-to-response audio roundtrip, and the browser WebRTC SDP exchange
+    without logging secrets. Pass `--openai-only` to run those legs without
+    Google credentials. Use `--openai-audio-cycles 3` for a short repeated
+    connect, talkback, and close soak.
     </Note>
 
   </Accordion>
