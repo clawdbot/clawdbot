@@ -35,6 +35,7 @@ import { resolveSilentReplyPolicyFromPolicies } from "../../shared/silent-reply-
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import {
   copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
   markOperationalReplyPayloadForSourceSuppressionDelivery,
   type ReplyPayload,
 } from "../reply-payload.js";
@@ -403,7 +404,8 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     return await applyOperationalReplyPolicyFromConfig({
       cfg,
       payload,
-      explicitCommandTurn: explicitCommandTurnCtx,
+      explicitCommandTurn:
+        explicitCommandTurnCtx || getReplyPayloadMetadata(payload)?.commandReply === true,
       sendPolicyDenied,
       sourceSessionKey: operationalReplySourceSessionKey,
       sourceStorePath: sessionStoreEntry.storePath,

@@ -2,6 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  markCommandReplyForDelivery,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
@@ -893,6 +894,30 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps marked command replies visible when queued follow-ups lose command context", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const commandReply = markCommandReplyForDelivery({
+      text: "compacted",
+      isCompactionNotice: true,
+    }) as ReplyPayload;
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        ChatType: "direct",
+      }),
+      cfg: {
+        ...emptyConfig,
+        messages: { operationalReplies: { policy: "silent" } },
+      },
+      dispatcher,
+      replyResolver: async () => commandReply,
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(commandReply);
   });
 
   it("keeps parent-owned operational replies private before redirect policy", async () => {
