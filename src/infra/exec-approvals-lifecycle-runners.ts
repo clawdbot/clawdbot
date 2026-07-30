@@ -144,6 +144,13 @@ export function resolveLifecyclePackageRunnerArgv(
   if (packageOperationMutatesOpenClaw(argv, subcommandIndex)) {
     return { kind: "approval-required" };
   }
+  if (
+    executable === "yarn" &&
+    subcommand === "global" &&
+    packageOperationMutatesOpenClaw(argv, subcommandIndex + 1)
+  ) {
+    return { kind: "approval-required" };
+  }
   if (executable === "npm" && ["exec", "x"].includes(subcommand)) {
     const inline = resolveInlineCommand(argv, subcommandIndex + 1);
     const resolved = inline ?? packageTarget(argv, subcommandIndex + 1);

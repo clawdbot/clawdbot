@@ -71,6 +71,10 @@ const mutationCases: Array<[string, string[]]> = [
     "systemctl kill openclaw-gateway.service -- --signal=0",
     ["systemctl", "kill", "openclaw-gateway.service", "--", "--signal=0"],
   ],
+  [
+    "systemctl --signal=0 --signal=TERM kill openclaw-gateway.service",
+    ["systemctl", "--signal=0", "--signal=TERM", "kill", "openclaw-gateway.service"],
+  ],
   ["service openclaw-gateway stop", ["service", "openclaw-gateway", "stop"]],
   [
     String.raw`sc.exe \\localhost delete OpenClaw`,
@@ -115,6 +119,8 @@ const mutationCases: Array<[string, string[]]> = [
   ["npm unlink -g openclaw", ["npm", "unlink", "-g", "openclaw"]],
   ["pnpm un openclaw", ["pnpm", "un", "openclaw"]],
   ["yarn upgrade openclaw", ["yarn", "upgrade", "openclaw"]],
+  ["yarn global add openclaw", ["yarn", "global", "add", "openclaw"]],
+  ["yarn global remove openclaw", ["yarn", "global", "remove", "openclaw"]],
   [
     "npm --prefix /tmp exec -- openclaw gateway restart",
     ["npm", "--prefix", "/tmp", "exec", "--", "openclaw", "gateway", "restart"],
@@ -172,6 +178,7 @@ const mutationCases: Array<[string, string[]]> = [
   ["printf 'gateway restart' | xargs openclaw", ["xargs", "openclaw"]],
   ["printf 'gateway' | xargs -I{} openclaw {}", ["xargs", "-I{}", "openclaw", "{}"]],
   ["pgrep openclaw | xargs kill", ["xargs", "kill"]],
+  ["pgrep openclaw | xargs --no-run-if-empty kill", ["xargs", "--no-run-if-empty", "kill"]],
   ["xargs -I{} {} gateway restart", ["xargs", "-I{}", "{}", "gateway", "restart"]],
   ["xargs -I{} env {} gateway restart", ["xargs", "-I{}", "env", "{}", "gateway", "restart"]],
   [

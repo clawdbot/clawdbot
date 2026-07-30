@@ -11,6 +11,7 @@ const XARGS_FLAGS = new Set([
   "--exit",
   "--interactive",
   "--null",
+  "--no-run-if-empty",
   "--open-tty",
   "--show-limits",
   "--verbose",
@@ -98,6 +99,12 @@ function looksLifecycleSensitive(argv: readonly string[]): boolean {
   );
 }
 
+function containsSensitiveCommandCandidate(argv: readonly string[], start: number): boolean {
+  return argv
+    .slice(start)
+    .some((token) => STDIN_APPEND_SENSITIVE_EXECUTABLES.has(normalizeExecutableToken(token)));
+}
+
 /** Resolve the fixed command prefix launched for each xargs input record. */
 export function resolveLifecycleXargsArgv(argv: readonly string[]): LifecycleXargsPlan {
   if (normalizeExecutableToken(argv[0] ?? "") !== "xargs") {
@@ -153,7 +160,9 @@ export function resolveLifecycleXargsArgv(argv: readonly string[]): LifecycleXar
     if (/^-[EILPnsa].+/u.test(token)) {
       continue;
     }
-    return looksLifecycleSensitive(argv) ? { kind: "approval-required" } : { kind: "not-xargs" };
+    return looksLifecycleSensitive(argv) || containsSensitiveCommandCandidate(argv, index + 1)
+      ? { kind: "approval-required" }
+      : { kind: "not-xargs" };
   }
   return looksLifecycleSensitive(argv) ? { kind: "approval-required" } : { kind: "not-xargs" };
 }

@@ -284,22 +284,28 @@ function classifyLaunchctl(argv: readonly string[], raw: string, depth: number):
 }
 
 function argvUsesSignalZero(argv: readonly string[]): boolean {
+  let effectiveSignal: string | undefined;
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (token === "--") {
-      return false;
+      break;
     }
     const lower = normalizedToken(token);
-    if (
-      lower === "-0" ||
-      lower === "-s0" ||
-      lower === "--signal=0" ||
-      ((lower === "-s" || lower === "--signal") && normalizedToken(argv[index + 1]) === "0")
-    ) {
-      return true;
+    if (lower === "-0") {
+      effectiveSignal = "0";
+    } else if (lower.startsWith("-s") && lower.length > 2) {
+      effectiveSignal = lower.slice(2);
+    } else if (lower.startsWith("--signal=")) {
+      effectiveSignal = lower.slice("--signal=".length);
+    } else if (lower === "-s" || lower === "--signal") {
+      effectiveSignal = normalizedToken(argv[index + 1]);
+      index += 1;
+    } else if (effectiveSignal !== undefined && lower.startsWith("-")) {
+      // A later option may override or otherwise alter signal delivery; fail closed.
+      effectiveSignal = undefined;
     }
   }
-  return false;
+  return effectiveSignal === "0";
 }
 
 function classifySystemctl(argv: readonly string[]): boolean {
