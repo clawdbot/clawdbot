@@ -5,6 +5,7 @@ import {
   formatUnknownCompactionReasonDetail,
   isBenignCompactionSkipResult,
   isBenignCompactionSkipReason,
+  isTransientCompactionFailureReason,
   resolveCompactionFailureReason,
 } from "./compact-reasons.js";
 
@@ -64,6 +65,17 @@ describe("classifyCompactionReason", () => {
   it("keeps unclassified provider errors in the stable unknown bucket", () => {
     expect(classifyCompactionReason("No API provider registered for api: ollama")).toBe("unknown");
   });
+
+  it.each([
+    ["Compaction timed out", "timeout"],
+    ["Provider returned 429 rate limit", "provider_error_429"],
+    ["Provider returned 503 from model", "provider_error_5xx"],
+    ["Provider returned 400", "provider_error_4xx"],
+    ["Provider returned 401", "provider_error_4xx"],
+    ["Provider returned 403", "provider_error_4xx"],
+  ])("classifies provider failure %s as %s", (reason, expected) => {
+    expect(classifyCompactionReason(reason)).toBe(expected);
+  });
 });
 
 describe("isBenignCompactionSkipReason", () => {
@@ -86,6 +98,22 @@ describe("isBenignCompactionSkipReason", () => {
     "does not hide the failure reason %s",
     (reason) => {
       expect(isBenignCompactionSkipResult({ ok: true, compacted: false, reason })).toBe(false);
+    },
+  );
+});
+
+describe("isTransientCompactionFailureReason", () => {
+  it.each(["Compaction timed out", "Provider returned 429", "Provider returned 503"])(
+    "treats retryable preflight compaction failure %s as transient",
+    (reason) => {
+      expect(isTransientCompactionFailureReason(reason)).toBe(true);
+    },
+  );
+
+  it.each(["Provider returned 400", "Provider returned 401", "Provider returned 403", undefined])(
+    "does not treat non-retryable preflight compaction failure %s as transient",
+    (reason) => {
+      expect(isTransientCompactionFailureReason(reason)).toBe(false);
     },
   );
 });

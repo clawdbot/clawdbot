@@ -57,12 +57,10 @@ export function classifyCompactionReason(reason?: string): string {
   if (text.includes("timed out") || text.includes("timeout")) {
     return "timeout";
   }
-  if (
-    text.includes("400") ||
-    text.includes("401") ||
-    text.includes("403") ||
-    text.includes("429")
-  ) {
+  if (text.includes("429")) {
+    return "provider_error_429";
+  }
+  if (text.includes("400") || text.includes("401") || text.includes("403")) {
     return "provider_error_4xx";
   }
   if (
@@ -80,6 +78,16 @@ export function classifyCompactionReason(reason?: string): string {
 export function isBenignCompactionSkipReason(reason?: string): boolean {
   const classification = classifyCompactionReason(reason);
   return classification === "below_threshold" || classification === "already_compacted";
+}
+
+/** Return whether a failed compaction result came from a retryable provider outage. */
+export function isTransientCompactionFailureReason(reason?: string): boolean {
+  const classification = classifyCompactionReason(reason);
+  return (
+    classification === "timeout" ||
+    classification === "provider_error_429" ||
+    classification === "provider_error_5xx"
+  );
 }
 
 /** Return whether a compaction result is an intentional no-op rather than a failure. */

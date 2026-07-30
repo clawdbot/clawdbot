@@ -22,6 +22,8 @@ import {
 } from "../../plugins/memory-state.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import type { TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { runMemoryFlushIfNeeded, runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
@@ -372,7 +374,9 @@ describe("runMemoryFlushIfNeeded", () => {
     cliBackendsTesting.resetDepsForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
     clearMemoryPluginState();
-    await fs.rm(rootDir, { recursive: true, force: true });
+    await cleanupSessionStateForTest();
+    closeOpenClawAgentDatabasesForTest();
+    await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 });
   });
 
   it("runs a memory flush turn, rotates after compaction, and persists metadata", async () => {
@@ -1626,6 +1630,132 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
     expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "incomplete");
   });
+
+  it.each([
+    ["failed timeout", false, "Compaction timed out"],
+    ["failed 429", false, "Provider returned 429 rate limit"],
+    ["failed 503", false, "Provider returned 503 from model"],
+    ["successful timeout no-op", true, "Compaction timed out"],
+    ["successful 429 no-op", true, "Provider returned 429 rate limit"],
+    ["successful 503 no-op", true, "Provider returned 503 from model"],
+  ])(
+    "continues when required preflight compaction reports a transient %s result",
+    async (_caseName, ok, reason) => {
+      const sessionFile = path.join(rootDir, "session.jsonl");
+      await fs.writeFile(
+        sessionFile,
+        `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
+        "utf8",
+      );
+      registerMemoryFlushPlanResolverForTest(() => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 1_000_000_000,
+        reserveTokensFloor: 0,
+        prompt: "Pre-compaction memory flush.\nNO_REPLY",
+        systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+        relativePath: "memory/2023-11-14.md",
+      }));
+      compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+        ok,
+        compacted: false,
+        reason,
+      });
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        transcriptPath: sessionFile,
+        updatedAt: Date.now(),
+        totalTokens: 120,
+        totalTokensFresh: true,
+      };
+      const onCompactionNotice = vi.fn();
+
+      const entry = await runPreflightCompactionIfNeeded({
+        cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+        followupRun: createTestFollowupRun({
+          sessionId: "session",
+          sessionFile,
+          sessionKey: "agent:main:main",
+        }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 100,
+        sessionEntry,
+        sessionStore: { "agent:main:main": sessionEntry },
+        sessionKey: "agent:main:main",
+        storePath: path.join(rootDir, "sessions.json"),
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+        onCompactionNotice,
+      });
+
+      expect(entry).toBe(sessionEntry);
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+      expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+      expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
+      expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "skipped");
+    },
+  );
+
+  it.each([
+    ["failed 400", false, "Provider returned 400"],
+    ["failed 401", false, "Provider returned 401"],
+    ["successful 403 no-op", true, "Provider returned 403"],
+  ])(
+    "still fails required preflight compaction for non-retryable %s result",
+    async (_caseName, ok, reason) => {
+      const sessionFile = path.join(rootDir, "session.jsonl");
+      await fs.writeFile(
+        sessionFile,
+        `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
+        "utf8",
+      );
+      registerMemoryFlushPlanResolverForTest(() => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 1_000_000_000,
+        reserveTokensFloor: 0,
+        prompt: "Pre-compaction memory flush.\nNO_REPLY",
+        systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+        relativePath: "memory/2023-11-14.md",
+      }));
+      compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+        ok,
+        compacted: false,
+        reason,
+      });
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        transcriptPath: sessionFile,
+        updatedAt: Date.now(),
+        totalTokens: 120,
+        totalTokensFresh: true,
+      };
+      const onCompactionNotice = vi.fn();
+
+      await expect(
+        runPreflightCompactionIfNeeded({
+          cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+          followupRun: createTestFollowupRun({
+            sessionId: "session",
+            sessionFile,
+            sessionKey: "agent:main:main",
+          }),
+          defaultModel: "anthropic/claude-opus-4-6",
+          agentCfgContextTokens: 100,
+          sessionEntry,
+          sessionStore: { "agent:main:main": sessionEntry },
+          sessionKey: "agent:main:main",
+          storePath: path.join(rootDir, "sessions.json"),
+          isHeartbeat: false,
+          replyOperation: createReplyOperation(),
+          onCompactionNotice,
+        }),
+      ).rejects.toThrow(`Preflight compaction required but failed: ${reason}`);
+
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+      expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+      expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
+      expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "incomplete");
+    },
+  );
 
   it("fails when required preflight context-engine compaction is deferred to background maintenance", async () => {
     const sessionFile = path.join(rootDir, "session.jsonl");

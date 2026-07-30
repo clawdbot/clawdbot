@@ -11,7 +11,10 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
-import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner/compact-reasons.js";
+import {
+  isBenignCompactionSkipResult,
+  isTransientCompactionFailureReason,
+} from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -193,6 +196,17 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.agentRunnerMemoryTestApi")] = {
     setAgentRunnerMemoryTestDeps,
   };
+}
+
+function shouldSkipRequiredPreflightCompactionResult(result: {
+  ok: boolean;
+  compacted: boolean;
+  reason?: string;
+}): boolean {
+  if (result.compacted) {
+    return false;
+  }
+  return isBenignCompactionSkipResult(result) || isTransientCompactionFailureReason(result.reason);
 }
 
 function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
@@ -920,7 +934,7 @@ export async function runPreflightCompactionIfNeeded(params: {
 
     if (!result?.ok) {
       const reason = result?.reason ?? "not_compacted";
-      if (result && isBenignCompactionSkipResult(result)) {
+      if (result && shouldSkipRequiredPreflightCompactionResult(result)) {
         await notifyTerminalCompaction("skipped");
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
         return entry ?? params.sessionEntry;
@@ -932,7 +946,7 @@ export async function runPreflightCompactionIfNeeded(params: {
 
     if (!result.compacted) {
       const reason = normalizeOptionalString(result.reason) ?? "not_compacted";
-      if (isBenignCompactionSkipResult(result)) {
+      if (shouldSkipRequiredPreflightCompactionResult(result)) {
         await notifyTerminalCompaction("skipped");
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
         return entry ?? params.sessionEntry;
