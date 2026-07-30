@@ -180,9 +180,39 @@ describe("healthCommand", () => {
 
     expect(runtime.exit).not.toHaveBeenCalled();
     const parsed = JSON.parse(requireFirstRuntimeLog()) as HealthSummary;
+    expect(parsed.durationMs).toBe(5);
     expect(parsed.channels.whatsapp?.linked).toBe(true);
     expect(parsed.channels.telegram?.configured).toBe(true);
     expect(parsed.sessions.count).toBe(1);
+  });
+
+  it("prints the gateway probe duration in text output", async () => {
+    const snapshot = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime as never);
+
+    const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+    expect(output).toContain("Gateway probe duration: 5ms");
+  });
+
+  it("omits the probe duration for legacy gateway snapshots", async () => {
+    const { durationMs, ...legacySnapshot } = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    expect(durationMs).toBe(5);
+    callGatewayMock.mockResolvedValueOnce(legacySnapshot);
+
+    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime as never);
+
+    const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+    expect(output).not.toContain("Gateway probe duration:");
   });
 
   it("prints the delivery queue warning line when the gateway reports dead-letters", async () => {

@@ -9,6 +9,7 @@ import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../utils.js";
 import { digestClawMcpServer } from "./mcp.js";
+import { clawManifestWorkspaceConflictsWithPath } from "./schema.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
 import {
   CLAW_ADD_PLAN_SCHEMA_VERSION,
@@ -55,6 +56,7 @@ export type ClawAddPlanContext = {
     integrity?: string;
     installId?: string;
     warning?: string;
+    requirements?: ClawLocalPrerequisite[];
     installedVersion?: string;
     code?: string;
     message?: string;
@@ -74,6 +76,7 @@ type PendingWorkspaceFileAction = {
   sourcePath: string;
   manifestPath: string;
   byteLength: number;
+  content?: Buffer;
 };
 
 function blockedWorkspaceFileAction(params: {
@@ -190,6 +193,7 @@ async function inspectWorkspaceFileAction(params: {
 
 export async function buildClawAddPlan(params: {
   manifest: ClawManifest;
+  clawMarkdownBody?: Buffer;
   openClawProfile?: ClawOpenClawProfile;
   source: ClawSourceIdentity;
   diagnostics?: ClawDiagnostic[];
@@ -331,6 +335,46 @@ export async function buildClawAddPlan(params: {
     }
   }
 
+  if (params.clawMarkdownBody && params.clawMarkdownBody.toString("utf8").trim().length > 0) {
+    if (clawManifestWorkspaceConflictsWithPath(params.manifest, "SOUL.md")) {
+      const diagnostic = blocker(
+        "claw_body_soul_conflict",
+        "$.workspace",
+        "CLAW.md body content and an explicit SOUL.md workspace declaration cannot both be present.",
+      );
+      blockers.push(diagnostic);
+      actions.push({
+        kind: "workspaceFile",
+        id: "SOUL.md",
+        action: "write",
+        target: resolve(workspace, "SOUL.md"),
+        source: source.manifestPath,
+        sourceKind: "clawMarkdownBody",
+        blocked: true,
+        reason: diagnostic.message,
+      });
+    } else {
+      const pending: PendingWorkspaceFileAction = {
+        sourcePath: source.manifestPath,
+        manifestPath: "$body",
+        byteLength: params.clawMarkdownBody.byteLength,
+        content: params.clawMarkdownBody,
+        action: {
+          kind: "workspaceFile",
+          id: "SOUL.md",
+          action: "write",
+          target: resolve(workspace, "SOUL.md"),
+          source: source.manifestPath,
+          sourceKind: "clawMarkdownBody",
+          details: { expectedState: "absent" },
+          blocked: false,
+        },
+      };
+      pendingWorkspaceFiles.push(pending);
+      actions.push(pending.action);
+    }
+  }
+
   for (const name of CLAW_BOOTSTRAP_FILE_NAMES) {
     const declaration = params.manifest.workspace.bootstrapFiles[name];
     if (!declaration) {
@@ -369,6 +413,10 @@ export async function buildClawAddPlan(params: {
     }
   } else {
     for (const pending of pendingWorkspaceFiles) {
+      if (pending.content) {
+        pending.action.digest = `sha256:${createHash("sha256").update(pending.content).digest("hex")}`;
+        continue;
+      }
       try {
         await assertNoSymlinkParents({
           rootDir: source.packageRoot,
@@ -412,6 +460,9 @@ export async function buildClawAddPlan(params: {
     if (diagnostic) {
       blockers.push(diagnostic);
     }
+    if (preflight.ok && preflight.requirements) {
+      readinessRequirements.push(...preflight.requirements);
+    }
     actions.push({
       kind: "package",
       id: `${pkg.kind}:${pkg.ref}`,
@@ -423,6 +474,7 @@ export async function buildClawAddPlan(params: {
         ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
         ...(preflight.installId ? { installId: preflight.installId } : {}),
         ...(preflight.warning ? { riskWarning: preflight.warning } : {}),
+        ...(preflight.requirements ? { prerequisites: preflight.requirements } : {}),
         expectedState: !preflight.ok
           ? "unresolved"
           : preflight.action === "reuse"
@@ -491,7 +543,7 @@ export async function buildClawAddPlan(params: {
         ...server,
         expectedState: exactExisting ? "present-exact" : "absent",
         prerequisites: readinessRequirements.filter(
-          (requirement) => requirement.mcpServer === name,
+          (requirement) => requirement.kind !== "plugin-setup" && requirement.mcpServer === name,
         ),
       },
       blocked,

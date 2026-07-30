@@ -131,6 +131,16 @@ export async function runEmbeddedAgentAttempt(params: {
       })
     : undefined;
   params.trackInternalModelRunTarget(internalSessionTarget);
+  const attemptSessionTarget =
+    internalSessionTarget ??
+    (sessionKey && storePath
+      ? {
+          agentId: sessionAgentId,
+          sessionId,
+          sessionKey,
+          storePath,
+        }
+      : undefined);
   const attemptSessionFile = internalSessionTarget?.sessionFile ?? sessionFile;
 
   const startedAt = Date.now();
@@ -146,28 +156,30 @@ export async function runEmbeddedAgentAttempt(params: {
     params.opts.suppressPromptPersistence === true ||
     (params.opts.transcriptMessage === "" && !hasTranscriptMedia);
   const recorderTranscriptText = transcriptBody || undefined;
-  const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
-    ...(!suppressUserTurnPersistence && (recorderTranscriptText || hasTranscriptMedia)
-      ? {
-          input: {
-            text: recorderTranscriptText,
-            ...(hasTranscriptMedia ? { media: transcriptMedia } : {}),
-          },
-        }
-      : {}),
-    target: {
-      sessionId: internalSessionTarget?.sessionId ?? sessionId,
-      agentId: internalSessionTarget?.agentId ?? sessionAgentId,
-      sessionKey: internalSessionTarget?.sessionKey ?? sessionKey ?? sessionId,
-      sessionEntry: internalSessionTarget?.sessionEntry ?? sessionEntry,
-      sessionStore: params.suppressVisibleSessionEffects ? undefined : sessionStore,
-      storePath: internalSessionTarget?.storePath ?? storePath,
-      cwd: cwd ?? workspaceDir,
-      config: cfg,
-    },
-    beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-    errorContext: "agent command user turn transcript",
-  });
+  const userTurnTranscriptRecorder =
+    (internalSessionTarget ? undefined : params.opts.userTurnTranscriptRecorder) ??
+    createUserTurnTranscriptRecorder({
+      ...(!suppressUserTurnPersistence && (recorderTranscriptText || hasTranscriptMedia)
+        ? {
+            input: {
+              text: recorderTranscriptText,
+              ...(hasTranscriptMedia ? { media: transcriptMedia } : {}),
+            },
+          }
+        : {}),
+      target: {
+        sessionId: internalSessionTarget?.sessionId ?? sessionId,
+        agentId: internalSessionTarget?.agentId ?? sessionAgentId,
+        sessionKey: internalSessionTarget?.sessionKey ?? sessionKey ?? sessionId,
+        sessionEntry: internalSessionTarget?.sessionEntry ?? sessionEntry,
+        sessionStore: params.suppressVisibleSessionEffects ? undefined : sessionStore,
+        storePath: internalSessionTarget?.storePath ?? storePath,
+        cwd: cwd ?? workspaceDir,
+        config: cfg,
+      },
+      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      errorContext: "agent command user turn transcript",
+    });
   if (suppressUserTurnPersistence) {
     userTurnTranscriptRecorder.markBlocked();
   }
@@ -236,6 +248,7 @@ export async function runEmbeddedAgentAttempt(params: {
           cfg,
           provider,
           model,
+          requestedRouteResolution: params.modelSelection.requestedRouteResolution,
           agentDir,
           fallbacksOverride: effectiveFallbacksOverride,
           ...modelManifestContext,
@@ -381,7 +394,7 @@ export async function runEmbeddedAgentAttempt(params: {
             agentHarnessRuntimeOverride,
             sessionId,
             sessionKey,
-            ...(internalSessionTarget ? { sessionTarget: internalSessionTarget } : {}),
+            ...(attemptSessionTarget ? { sessionTarget: attemptSessionTarget } : {}),
             sessionAgentId,
             sessionFile: attemptSessionFile,
             workspaceDir,

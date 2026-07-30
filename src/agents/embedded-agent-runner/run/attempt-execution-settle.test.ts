@@ -43,7 +43,10 @@ function createFixture() {
   const removeAbortSignalListener = vi.fn(() => order.push("remove-abort-listener"));
   const getBeforeAgentFinalizeRevisionReason = vi.fn(() => "revision");
   const promptActiveSession = vi.fn(async () => undefined);
-  const activeSession = { sessionId: "active-session" };
+  const activeSession = {
+    sessionId: "active-session",
+    getActiveToolNames: vi.fn(() => ["read"]),
+  };
   const sessionManager = { kind: "session-manager" };
   const hookRunner = { kind: "hook-runner" };
   const cacheTrace = { kind: "cache-trace" };
@@ -66,7 +69,7 @@ function createFixture() {
     abortable: (promise: Promise<unknown>) => promise,
     cache: {
       observabilityEnabled: true,
-      promptToolNames: new Set(["read"]),
+      promptTools: [{ name: "read" }],
     },
     history: {
       contextEnginePromptAuthority: "assembled",
@@ -281,6 +284,12 @@ describe("runEmbeddedAttemptSettledPhase", () => {
             __openclaw: { senderName: "Alice" },
           }),
         }),
+        toolPolicy: expect.objectContaining({
+          baseline: {
+            activeToolNames: ["read"],
+            catalogEntries: [],
+          },
+        }),
       }),
     );
     expect(mocks.completeResult).toHaveBeenCalledWith(
@@ -324,6 +333,52 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     expect(mocks.logError).toHaveBeenCalledWith(
       expect.stringContaining("unsubscribe failed, possible resource leak"),
     );
+  });
+
+  it("releases the active run when backend cleanup throws during a failed prompt", async () => {
+    const fixture = createFixture();
+    const failure = new Error("prompt failed");
+    mocks.runPrompt.mockRejectedValueOnce(failure);
+    fixture.detachBackend.mockImplementationOnce(() => {
+      fixture.order.push("detach-backend");
+      throw new Error("backend detach failed");
+    });
+
+    await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toBe(failure);
+
+    expect(mocks.clearActiveEmbeddedRun).toHaveBeenCalledOnce();
+    expect(fixture.removeAbortSignalListener).toHaveBeenCalledOnce();
+    expect(mocks.logError).toHaveBeenCalledWith(
+      expect.stringContaining("backend detach failed, possible resource leak"),
+    );
+  });
+
+  it("reports a backend cleanup failure after releasing a successful run", async () => {
+    const fixture = createFixture();
+    const failure = new Error("backend detach failed");
+    fixture.detachBackend.mockImplementationOnce(() => {
+      fixture.order.push("detach-backend");
+      throw failure;
+    });
+
+    await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toBe(failure);
+
+    expect(mocks.clearActiveEmbeddedRun).toHaveBeenCalledOnce();
+    expect(fixture.removeAbortSignalListener).toHaveBeenCalledOnce();
+  });
+
+  it("reports active-run cleanup failure after releasing the abort listener", async () => {
+    const fixture = createFixture();
+    const failure = new Error("active run cleanup failed");
+    mocks.clearActiveEmbeddedRun.mockImplementationOnce(() => {
+      fixture.order.push("clear-active-run");
+      throw failure;
+    });
+
+    await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toBe(failure);
+
+    expect(fixture.detachBackend).toHaveBeenCalledOnce();
+    expect(fixture.removeAbortSignalListener).toHaveBeenCalledOnce();
   });
 
   it("re-arms delivered children only after a yielded requester becomes idle", async () => {

@@ -426,6 +426,10 @@ actor GatewayEndpointStore {
         }
     }
 
+    func currentState() async -> GatewayEndpointState {
+        self.state
+    }
+
     func refresh() async {
         _ = await self.refreshIfCurrent()
     }

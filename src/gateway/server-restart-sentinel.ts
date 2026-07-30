@@ -478,6 +478,21 @@ async function loadRestartSentinelStartupTask(params: {
     }
 
     if (!sessionKey) {
+      const controlPlaneOnlyConfigRestart =
+        (payload.kind === "config-patch" || payload.kind === "config-apply") &&
+        (typeof payload.message !== "string" || payload.message.trim().length === 0) &&
+        !payload.continuation &&
+        !payload.deliveryContext &&
+        payload.threadId == null;
+      if (controlPlaneOnlyConfigRestart) {
+        // A targetless config acknowledgement has no agent turn to resume.
+        // Synthesizing a main-session wake races real restart recovery and spends a model turn.
+        const consumed = await clearRestartSentinelIfRevision(sentinelRevision);
+        if (!consumed) {
+          log.info(`${summary}: newer restart sentinel preserved while consuming config restart`);
+        }
+        return { status: "ran" as const };
+      }
       const mainSessionKey = resolveMainSessionKeyFromConfig();
       const wakeQueueId = await enqueueSessionDelivery(
         buildQueuedRestartContinuation({

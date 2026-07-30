@@ -210,6 +210,7 @@ export async function executePreparedCliRun(
     promptArg: argsPrompt,
     useResume,
     forkResume: params.forkCliSessionOnResume,
+    resumeAt: params.cliSessionResumeAt,
     sendSystemPromptOnResume: resendSystemPromptForSoftResume,
   });
 
@@ -291,6 +292,9 @@ export async function executePreparedCliRun(
   };
   const executeAttempt = async (): Promise<CliOutput> => {
     await context.preparedBackend.beforeExecution?.();
+    if (params.abortSignal?.aborted) {
+      throw createCliAbortError();
+    }
     const cliTurnStartedAt = Date.now();
     const restoreSkillEnv = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
@@ -511,10 +515,16 @@ export async function executePreparedCliRun(
     if (!runOutput) {
       throw new Error("CLI run completed without output");
     }
-    return toolTracking.withExecutionEvidence(runOutput);
+    return toolTracking.withExecutionEvidence({
+      ...runOutput,
+      toolSummary: events.getToolSummary(),
+    });
   };
   try {
     completedOutput = await enqueueCliRun(queueKey, async () => {
+      if (params.abortSignal?.aborted) {
+        throw createCliAbortError();
+      }
       if (params.lifecycleGeneration) {
         assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       }

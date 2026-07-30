@@ -136,7 +136,6 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
           resolved.phase = "stopped";
           resolved.underlyingStarted = false;
           resolved.state.cron.stop();
-          resolved.state.stopExitWatchers?.();
           await resolved.state.stopStreamWatchers?.();
           return;
         }
@@ -161,7 +160,6 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
           resolved.phase = "stopped";
           resolved.underlyingStarted = false;
           resolved.state.cron.stop();
-          resolved.state.stopExitWatchers?.();
           await resolved.state.stopStreamWatchers?.();
           return;
         }
@@ -185,8 +183,6 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
         loaded.phase = "stopped";
         loaded.underlyingStarted = false;
         loaded.state.cron.stop();
-        loaded.state.stopExitWatchers?.();
-        void loaded.state.stopStreamWatchers?.().catch(() => {});
         return;
       }
       const loading = cronStateLoader.peek();
@@ -201,8 +197,6 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
             resolved.phase = "stopped";
             resolved.underlyingStarted = false;
             resolved.state.cron.stop();
-            resolved.state.stopExitWatchers?.();
-            void resolved.state.stopStreamWatchers?.().catch(() => {});
           })
           .catch(() => {});
       }
@@ -221,7 +215,6 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
         await resolved.state.cron.stopAndDrain();
       } else {
         resolved.state.cron.stop();
-        resolved.state.stopExitWatchers?.();
         await resolved.state.stopStreamWatchers?.();
       }
     },
@@ -268,6 +261,9 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     },
     async remove(id) {
       return await (await load()).state.cron.remove(id);
+    },
+    async removeStaleJobFamily(family) {
+      return await (await load()).state.cron.removeStaleJobFamily(family);
     },
     async removeAgentJobsTransactional(agentId, commit) {
       return await (await load()).state.cron.removeAgentJobsTransactional(agentId, commit);

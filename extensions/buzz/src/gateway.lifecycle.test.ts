@@ -7,6 +7,7 @@ import type { ResolvedBuzzAccount } from "./types.js";
 const gatewayMocks = vi.hoisted(() => ({
   close: vi.fn(async () => {}),
   busSendText: vi.fn(async () => "event-id"),
+  busSendTyping: vi.fn(async () => undefined),
   sendBuzzTextOneShot: vi.fn(async () => "standalone-event-id"),
   onMessage: undefined as
     | ((message: import("./message-event.js").BuzzInboundMessage, bus: BuzzBus) => Promise<void>)
@@ -27,7 +28,8 @@ vi.mock("./inbound.js", () => ({
   handleBuzzInbound: vi.fn(async () => {}),
 }));
 
-import { buzzOutboundAdapter, startBuzzGatewayAccount } from "./gateway.js";
+import { buzzOutboundAdapter, sendBuzzTyping, startBuzzGatewayAccount } from "./gateway.js";
+import { BUZZ_NORMAL_MESSAGE_KIND } from "./message-event.js";
 import { setBuzzRuntime } from "./runtime.js";
 import { resolveBuzzAccount } from "./types.js";
 
@@ -41,6 +43,7 @@ describe("Buzz gateway lifecycle", () => {
     gatewayMocks.onMessageError = undefined;
     gatewayMocks.onFatalError = undefined;
     gatewayMocks.busSendText.mockResolvedValue("event-id");
+    gatewayMocks.busSendTyping.mockResolvedValue(undefined);
     gatewayMocks.sendBuzzTextOneShot.mockResolvedValue("standalone-event-id");
     gatewayMocks.resolveAgentIdentity.mockReset().mockReturnValue(undefined);
     gatewayMocks.resolveAgentRoute.mockReset().mockReturnValue({ agentId: "main" });
@@ -73,6 +76,7 @@ describe("Buzz gateway lifecycle", () => {
         return {
           publicKey: "a".repeat(64),
           sendText: gatewayMocks.busSendText,
+          sendTyping: gatewayMocks.busSendTyping,
           close: gatewayMocks.close,
         };
       },
@@ -160,6 +164,28 @@ describe("Buzz gateway lifecycle", () => {
     });
   });
 
+  it("drops heartbeat typing when no gateway bus is running", async () => {
+    const cfg = {
+      channels: {
+        buzz: {
+          relayUrl: "wss://buzz.example.com",
+          privateKey: PRIVATE_KEY,
+          groups: { [CHANNEL_ID]: {} },
+        },
+      },
+    } as OpenClawConfig;
+
+    await sendBuzzTyping({
+      cfg,
+      to: `buzz:${CHANNEL_ID}`,
+      accountId: "default",
+      threadId: "root-id",
+    });
+
+    expect(gatewayMocks.busSendTyping).not.toHaveBeenCalled();
+    expect(gatewayMocks.sendBuzzTextOneShot).not.toHaveBeenCalled();
+  });
+
   it("reuses the gateway bus for sends in the running process", async () => {
     const abortController = new AbortController();
     const cfg = {
@@ -202,6 +228,57 @@ describe("Buzz gateway lifecycle", () => {
       replyToId: undefined,
     });
     expect(gatewayMocks.sendBuzzTextOneShot).not.toHaveBeenCalled();
+
+    abortController.abort();
+    await expect(lifecycle).resolves.toBeUndefined();
+  });
+
+  it("uses the active bus for heartbeat typing without destabilizing the account", async () => {
+    const abortController = new AbortController();
+    const cfg = {
+      channels: {
+        buzz: {
+          relayUrl: "wss://buzz.example.com",
+          privateKey: PRIVATE_KEY,
+          groups: { [CHANNEL_ID]: {} },
+        },
+      },
+    } as OpenClawConfig;
+    const account = resolveBuzzAccount({ cfg });
+    const ctx = {
+      cfg,
+      accountId: account.accountId,
+      account,
+      runtime: {},
+      abortSignal: abortController.signal,
+      log: { info: vi.fn(), error: vi.fn() },
+      getStatus: vi.fn(),
+      setStatus: vi.fn(),
+    } as unknown as ChannelGatewayContext<ResolvedBuzzAccount>;
+    const lifecycle = startBuzzGatewayAccount(ctx);
+    await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
+
+    await sendBuzzTyping({
+      cfg,
+      to: `buzz:${CHANNEL_ID}`,
+      accountId: "default",
+      threadId: "root-id",
+    });
+    expect(gatewayMocks.busSendTyping).toHaveBeenCalledWith({
+      channelId: CHANNEL_ID,
+      threadId: "root-id",
+    });
+
+    gatewayMocks.busSendTyping.mockRejectedValueOnce(new Error("socket closing"));
+    await expect(
+      sendBuzzTyping({
+        cfg,
+        to: `buzz:${CHANNEL_ID}`,
+        accountId: "default",
+      }),
+    ).rejects.toThrow("socket closing");
+    expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce();
+    expect(gatewayMocks.close).not.toHaveBeenCalled();
 
     abortController.abort();
     await expect(lifecycle).resolves.toBeUndefined();
@@ -312,6 +389,7 @@ describe("Buzz gateway lifecycle", () => {
     await gatewayMocks.onMessage?.(
       {
         id: "event-1",
+        kind: BUZZ_NORMAL_MESSAGE_KIND,
         channelId: CHANNEL_ID,
         senderPubkey: "b".repeat(64),
         text: "hello",
@@ -321,6 +399,7 @@ describe("Buzz gateway lifecycle", () => {
       {
         publicKey: "a".repeat(64),
         sendText: async () => "event-id",
+        sendTyping: async () => {},
         close: async () => {},
       },
     );

@@ -25,6 +25,7 @@ const EXT_BY_MIME: Record<string, string> = {
   "audio/x-wav": ".wav",
   "audio/flac": ".flac",
   "audio/aac": ".aac",
+  "audio/amr": ".amr",
   "audio/opus": ".opus",
   "audio/webm": ".webm",
   "audio/x-m4a": ".m4a",

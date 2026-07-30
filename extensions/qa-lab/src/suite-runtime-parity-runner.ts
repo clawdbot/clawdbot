@@ -11,11 +11,9 @@ import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progr
 import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import type { QaTransportAdapterFactory, QaTransportId } from "./qa-transport-registry.js";
 import {
-  isRuntimeParityResultPass,
   runRuntimeParityScenario,
   type RuntimeId,
   type RuntimeParityCell,
-  type RuntimeParityResult,
 } from "./runtime-parity.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver, QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
@@ -26,6 +24,7 @@ import {
   resolveQaSuiteWorkerStartStaggerMs,
   scenarioRequiresControlUi,
 } from "./suite-planning.js";
+import { buildRuntimeParityScenarioResult } from "./suite-runtime-parity-result.js";
 import { remapModelRefForForcedRuntime } from "./suite-support.js";
 import type {
   QaSuiteRunParams,
@@ -39,60 +38,6 @@ import {
   requireQaSuiteStartLab,
   writeQaSuiteProgress,
 } from "./suite.js";
-
-function isRuntimeParityPass(result: RuntimeParityResult) {
-  return isRuntimeParityResultPass(result);
-}
-
-function formatRuntimeParityCellDetails(cell: RuntimeParityCell) {
-  const errors = [cell.transportErrorClass, cell.runtimeErrorClass].filter(Boolean).join(", ");
-  const sentinels = cell.sentinelFindings?.map((finding) => finding.kind).join(", ");
-  return [
-    `runtime=${cell.runtime}`,
-    `wallMs=${cell.wallClockMs}`,
-    `toolCalls=${cell.toolCalls.length}`,
-    `finalChars=${cell.finalText.length}`,
-    `tokens=${cell.usage.totalTokens}`,
-    ...(errors ? [`errors=${errors}`] : []),
-    ...(sentinels ? [`sentinels=${sentinels}`] : []),
-  ].join(" ");
-}
-
-function buildRuntimeParityScenarioResult(params: {
-  scenarioName: string;
-  result: RuntimeParityResult;
-}): QaSuiteScenarioResult {
-  const driftStepStatus = isRuntimeParityPass(params.result) ? "pass" : "fail";
-  const openclawCell = params.result.cells.openclaw;
-  return {
-    name: params.scenarioName,
-    status: driftStepStatus,
-    details: params.result.driftDetails ?? `runtime drift classified as ${params.result.drift}`,
-    steps: [
-      {
-        name: openclawCell.runtime,
-        status:
-          openclawCell.runtimeErrorClass || openclawCell.transportErrorClass ? "fail" : "pass",
-        details: formatRuntimeParityCellDetails(openclawCell),
-      },
-      {
-        name: params.result.cells.codex.runtime,
-        status:
-          params.result.cells.codex.runtimeErrorClass ||
-          params.result.cells.codex.transportErrorClass
-            ? "fail"
-            : "pass",
-        details: formatRuntimeParityCellDetails(params.result.cells.codex),
-      },
-      {
-        name: "runtime drift",
-        status: driftStepStatus,
-        details: params.result.driftDetails ?? params.result.drift,
-      },
-    ],
-    runtimeParity: params.result,
-  };
-}
 
 export async function runQaRuntimeParitySuite(params: {
   runQaFlowSuite: QaSuiteRunner;
@@ -183,6 +128,7 @@ export async function runQaRuntimeParitySuite(params: {
         const parity = await runRuntimeParityScenario({
           scenarioId: scenario.id,
           runtimeParityUsage: scenario.runtimeParityUsage,
+          runtimePair: params.runtimePair,
           runCell: async (runtime) => {
             const cellOutputDir = path.join(
               params.outputDir,
@@ -252,8 +198,8 @@ export async function runQaRuntimeParitySuite(params: {
               bootStateLines: [],
             } satisfies RuntimeParityCell;
             return {
-              scenarioStatus: scenarioResult.status === "pass" ? "pass" : "fail",
-              scenarioDetails: scenarioResult.details,
+              status: scenarioResult.status,
+              details: scenarioResult.details,
               cell: cellResult.runtimeParityCell ?? fallbackCell,
             };
           },

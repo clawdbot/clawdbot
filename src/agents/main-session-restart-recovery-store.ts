@@ -106,9 +106,22 @@ export async function recoverStore(params: {
   sessionWorkAdmissionHandoffId?: string;
   activeSessionIds?: Iterable<string>;
   activeSessionKeys?: Iterable<string>;
+  lifecycleGeneration?: string;
+  shouldContinue?: () => boolean;
   gatewayRuntime: GatewayRecoveryRuntime;
 }): Promise<{ recovered: number; failed: number; skipped: number }> {
   const result = { recovered: 0, failed: 0, skipped: 0 };
+  const shouldContinue = () => params.shouldContinue?.() !== false;
+  const resumeIfCurrent = async (resumeParams: Parameters<typeof resumeMainSession>[0]) => {
+    if (!shouldContinue()) {
+      return "skipped" as const;
+    }
+    return await resumeMainSession({
+      ...resumeParams,
+      lifecycleGeneration: params.lifecycleGeneration,
+      shouldContinue: params.shouldContinue,
+    });
+  };
   const providedActiveSessionIds =
     params.activeSessionIds === undefined ? undefined : normalizeStringSet(params.activeSessionIds);
   const providedActiveSessionKeys =
@@ -145,6 +158,10 @@ export async function recoverStore(params: {
   for (const { sessionKey, entry: loadedEntry } of entries.toSorted((a, b) =>
     a.sessionKey.localeCompare(b.sessionKey),
   )) {
+    if (!shouldContinue()) {
+      result.skipped++;
+      return result;
+    }
     let entry = loadedEntry;
     const agentId = resolveAgentIdFromSessionKey(
       sessionKey,
@@ -191,19 +208,28 @@ export async function recoverStore(params: {
       continue;
     }
 
+    if (!shouldContinue()) {
+      result.skipped++;
+      return result;
+    }
     const observed = await commitMainSessionRecovery({
       command: {
         kind: "observe",
         cycleId: randomUUID(),
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        lifecycleGeneration: params.lifecycleGeneration ?? getAgentEventLifecycleGeneration(),
         sessionKey,
       },
       requireWriteSuccess: true,
+      shouldContinue: params.shouldContinue,
       target: { sessionKey, storePath: params.storePath },
     });
     if (!observed.entry || observed.transition.kind !== "observed") {
       result.skipped++;
       continue;
+    }
+    if (!shouldContinue()) {
+      result.skipped++;
+      return result;
     }
     entry = observed.entry;
     const recoveryView = observed.transition.view;
@@ -216,6 +242,10 @@ export async function recoverStore(params: {
       continue;
     }
     if (recoveryView.status === "exhausted") {
+      if (!shouldContinue()) {
+        result.skipped++;
+        return result;
+      }
       const tombstone = await tombstoneMainRestartRecoveryWithNotice({
         cfg: params.cfg,
         entry,
@@ -266,6 +296,10 @@ export async function recoverStore(params: {
       requiresRestartRecoveryMessageActionAuthority(entry) &&
       !hasRestartRecoveryMessageActionAuthority(entry)
     ) {
+      if (!shouldContinue()) {
+        result.skipped++;
+        return result;
+      }
       const disposition = await failUnresumableMainSession({
         cfg: params.cfg,
         entry,
@@ -296,6 +330,9 @@ export async function recoverStore(params: {
       if (!resumeBlockReason) {
         return false;
       }
+      if (!shouldContinue()) {
+        return true;
+      }
       const disposition = await failUnresumableMainSession({
         cfg: params.cfg,
         entry,
@@ -310,14 +347,13 @@ export async function recoverStore(params: {
     };
 
     if (
-      entry.pendingFinalDelivery === true &&
-      entry.pendingFinalDeliveryText &&
+      entry.pendingFinalDelivery?.kind === "replayable" &&
       entry.restartRecoveryForceSafeTools === true
     ) {
       if (await failBlockedResume()) {
         continue;
       }
-      const resumed = await resumeMainSession({
+      const resumed = await resumeIfCurrent({
         canonicalSessionKey: dispatchSessionKey,
         cfg: params.cfg,
         entry,
@@ -325,7 +361,7 @@ export async function recoverStore(params: {
         recoveryAttempt: recoveryView.nextAttempt,
         storePath: params.storePath,
         sessionKey,
-        pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
+        pendingFinalDeliveryText: entry.pendingFinalDelivery.text,
         forceRestartSafeTools: true,
         sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
         gatewayRuntime: params.gatewayRuntime,
@@ -351,14 +387,18 @@ export async function recoverStore(params: {
         },
       );
     } catch (err) {
-      if (entry.pendingFinalDelivery === true && entry.pendingFinalDeliveryText) {
+      if (!shouldContinue()) {
+        result.skipped++;
+        return result;
+      }
+      if (entry.pendingFinalDelivery?.kind === "replayable") {
         if (await failBlockedResume()) {
           continue;
         }
         log.warn(
           `transcript unavailable for ${sessionKey}; resuming its durable pending final delivery`,
         );
-        const resumed = await resumeMainSession({
+        const resumed = await resumeIfCurrent({
           canonicalSessionKey: dispatchSessionKey,
           cfg: params.cfg,
           entry,
@@ -366,7 +406,7 @@ export async function recoverStore(params: {
           recoveryAttempt: recoveryView.nextAttempt,
           storePath: params.storePath,
           sessionKey,
-          pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
+          pendingFinalDeliveryText: entry.pendingFinalDelivery.text,
           sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
           gatewayRuntime: params.gatewayRuntime,
         });
@@ -378,11 +418,15 @@ export async function recoverStore(params: {
       continue;
     }
 
-    if (entry.pendingFinalDelivery === true && entry.pendingFinalDeliveryText) {
+    if (!shouldContinue()) {
+      result.skipped++;
+      return result;
+    }
+    if (entry.pendingFinalDelivery?.kind === "replayable") {
       if (await failBlockedResume()) {
         continue;
       }
-      const resumed = await resumeMainSession({
+      const resumed = await resumeIfCurrent({
         canonicalSessionKey: dispatchSessionKey,
         cfg: params.cfg,
         entry,
@@ -390,7 +434,7 @@ export async function recoverStore(params: {
         recoveryAttempt: recoveryView.nextAttempt,
         storePath: params.storePath,
         sessionKey,
-        pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
+        pendingFinalDeliveryText: entry.pendingFinalDelivery.text,
         forceRestartSafeTools: hasReplaySafeCodeModeCheckpointInCurrentTurn(messages),
         sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
         gatewayRuntime: params.gatewayRuntime,
@@ -409,6 +453,10 @@ export async function recoverStore(params: {
         ? "transcript"
         : undefined;
     if (completionSource) {
+      if (!shouldContinue()) {
+        result.skipped++;
+        return result;
+      }
       const reconciliation = await reconcileInterruptedCompletionReport({
         entry,
         source: completionSource,
@@ -438,6 +486,10 @@ export async function recoverStore(params: {
       entry.restartRecoveryDeliveryToolCallId,
     );
     if (resumePolicy.action === "complete") {
+      if (!shouldContinue()) {
+        result.skipped++;
+        return result;
+      }
       const completion = await markSessionCompletedAfterRecoveryCheckpoint({
         agentId,
         entry,
@@ -458,6 +510,10 @@ export async function recoverStore(params: {
       } else if (completion.outcome === "changed") {
         result.skipped++;
       } else {
+        if (!shouldContinue()) {
+          result.skipped++;
+          return result;
+        }
         const disposition = await failUnresumableMainSession({
           cfg: params.cfg,
           entry,
@@ -472,6 +528,10 @@ export async function recoverStore(params: {
       continue;
     }
     if (resumePolicy.action === "fail") {
+      if (!shouldContinue()) {
+        result.skipped++;
+        return result;
+      }
       const disposition = await failUnresumableMainSession({
         cfg: params.cfg,
         entry,
@@ -488,7 +548,7 @@ export async function recoverStore(params: {
     if (await failBlockedResume()) {
       continue;
     }
-    const resumed = await resumeMainSession({
+    const resumed = await resumeIfCurrent({
       canonicalSessionKey: dispatchSessionKey,
       cfg: params.cfg,
       entry,
@@ -496,7 +556,6 @@ export async function recoverStore(params: {
       recoveryAttempt: recoveryView.nextAttempt,
       storePath: params.storePath,
       sessionKey,
-      pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
       forceRestartSafeTools:
         entry.restartRecoveryForceSafeTools === true || resumePolicy.forceRestartSafeTools,
       sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,

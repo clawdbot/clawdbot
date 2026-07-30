@@ -112,6 +112,54 @@ function isExecutableFile(filePath: string, options?: { env?: NodeJS.ProcessEnv 
 }
 
 const WINDOWS_NATIVE_EXECUTABLE_EXTENSIONS = new Set([".com", ".exe", ".bat", ".cmd"]);
+const EXECUTABLE_PATH_CACHE_TTL_MS = 60_000;
+const EXECUTABLE_PATH_CACHE_MAX_ENTRIES = 128;
+
+type ExecutablePathCacheEntry = {
+  expiresAt: number;
+  resolved: string | null;
+};
+
+const executablePathCache = new Map<string, ExecutablePathCacheEntry>();
+
+function cacheExecutablePath(key: string, resolved: string | undefined): void {
+  executablePathCache.set(key, {
+    expiresAt: Date.now() + EXECUTABLE_PATH_CACHE_TTL_MS,
+    resolved: resolved ?? null,
+  });
+  while (executablePathCache.size > EXECUTABLE_PATH_CACHE_MAX_ENTRIES) {
+    const oldest = executablePathCache.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    executablePathCache.delete(oldest.value);
+  }
+}
+
+function executablePathCacheKey(
+  executable: string,
+  pathEnv: string,
+  env: NodeJS.ProcessEnv | undefined,
+  includeExtensionless: boolean | undefined,
+): string {
+  const pathExt =
+    resolveEnvironmentValue(env, "PATHEXT") ??
+    resolveEnvironmentValue(process.env, "PATHEXT") ??
+    "";
+  let cwd = "";
+  try {
+    // Relative PATH entries resolve against cwd, so changing directories must invalidate them.
+    cwd = process.cwd();
+  } catch {
+    // A deleted cwd already makes relative probes fail; keep the cache key stable for that state.
+  }
+  return `${process.platform}\0${executable}\0${pathEnv}\0${pathExt}\0${includeExtensionless !== false}\0${cwd}`;
+}
+
+/** Clears process-local PATH probe results after the runtime environment changes. */
+export function clearExecutablePathCache(): void {
+  executablePathCache.clear();
+}
 
 export function resolveExecutableFromPathEnv(
   executable: string,
@@ -119,6 +167,21 @@ export function resolveExecutableFromPathEnv(
   env?: NodeJS.ProcessEnv,
   options?: { includeExtensionless?: boolean },
 ): string | undefined {
+  const cacheKey = executablePathCacheKey(executable, pathEnv, env, options?.includeExtensionless);
+  const cached = executablePathCache.get(cacheKey);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) {
+    // Hits and misses remain valid while the same PATH/PATHEXT/cwd key is used; config reload clears
+    // the map. Installs/removals under an unchanged key intentionally need reload or a 60s idle gap,
+    // because steady pollers must never fall back into synchronous PATH stat loops.
+    cached.expiresAt = now + EXECUTABLE_PATH_CACHE_TTL_MS;
+    executablePathCache.delete(cacheKey);
+    executablePathCache.set(cacheKey, cached);
+    return cached.resolved ?? undefined;
+  }
+  if (cached) {
+    executablePathCache.delete(cacheKey);
+  }
   const delimiter = process.platform === "win32" ? ";" : path.delimiter;
   const entries = pathEnv.split(delimiter).filter(Boolean);
   const extensions = resolveWindowsExecutableExtensions(
@@ -137,10 +200,12 @@ export function resolveExecutableFromPathEnv(
       if (
         hasNativeWindowsExtension ? isRegularFile(candidate) : isExecutableFile(candidate, { env })
       ) {
+        cacheExecutablePath(cacheKey, candidate);
         return candidate;
       }
     }
   }
+  cacheExecutablePath(cacheKey, undefined);
   return undefined;
 }
 

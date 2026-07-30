@@ -1234,68 +1234,6 @@
   }
 }
 
-/* Default stance: the body flexes in place in sympathy with the jaw — pure
-   rotation, no translate, so the claw works without pacing around. Snip 1 at
-   10-16%, snip 2 at 26-32%, then rest. */
-@keyframes chatWorkingClawFlex {
-  0%,
-  6% {
-    transform: rotate(0deg);
-  }
-
-  10% {
-    transform: rotate(-4deg);
-  }
-
-  16% {
-    transform: rotate(3deg);
-  }
-
-  22%,
-  26% {
-    transform: rotate(-4deg);
-  }
-
-  32% {
-    transform: rotate(3deg);
-  }
-
-  42%,
-  100% {
-    transform: rotate(0deg);
-  }
-}
-
-/* Jaw opens wide on each wind-up and snaps shut on the snip frames above. */
-@keyframes chatWorkingClawSnip {
-  0%,
-  6% {
-    transform: rotate(-10deg);
-  }
-
-  10% {
-    transform: rotate(-26deg);
-  }
-
-  16% {
-    transform: rotate(4deg);
-  }
-
-  22%,
-  26% {
-    transform: rotate(-24deg);
-  }
-
-  32% {
-    transform: rotate(4deg);
-  }
-
-  42%,
-  100% {
-    transform: rotate(-10deg);
-  }
-}
-
 /* Shadowbox body: jab 1 at 12-16%, jab 2 at 26-30%, big wind-up, cross at
    46-52%. */
 @keyframes chatWorkingClawCombo {

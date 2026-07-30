@@ -56,6 +56,7 @@ import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
 } from "../../gateway/active-sessions-shutdown-tracker.js";
+import { emitSessionAutoResetHook } from "../../hooks/session-auto-reset.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
@@ -364,6 +365,22 @@ export function resolveReplySessionPreprocessingState(
 }
 
 /** Initializes or reuses the reply session state for one inbound turn. */
+type SessionModelOverrideSelection = Pick<
+  SessionEntry,
+  "modelOverride" | "providerOverride" | "modelOverrideSource" | "modelOverrideRouteResolution"
+>;
+
+function selectSessionModelOverride(
+  entry: Partial<SessionModelOverrideSelection>,
+): SessionModelOverrideSelection {
+  return {
+    modelOverride: entry.modelOverride,
+    providerOverride: entry.providerOverride,
+    modelOverrideSource: entry.modelOverrideSource,
+    modelOverrideRouteResolution: entry.modelOverrideRouteResolution,
+  };
+}
+
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
   return await runWithSessionInitConflictRetry(
     async () => await initSessionStateAttempt(params, false),
@@ -483,9 +500,7 @@ async function initSessionStateAttemptLocked(
   let persistedReasoning: string | undefined;
   let persistedTtsAuto: TtsAutoMode | undefined;
   let persistedResponseUsage: SessionEntry["responseUsage"];
-  let persistedModelOverride: string | undefined;
-  let persistedProviderOverride: string | undefined;
-  let persistedModelOverrideSource: SessionEntry["modelOverrideSource"];
+  let persistedModelSelection: SessionModelOverrideSelection | undefined;
   let persistedAuthProfileOverride: string | undefined;
   let persistedAuthProfileOverrideSource: SessionEntry["authProfileOverrideSource"];
   let persistedAuthProfileOverrideCompactionCount: number | undefined;
@@ -664,6 +679,7 @@ async function initSessionStateAttemptLocked(
   const lifecycleTimestamps = resolveSessionLifecycleTimestamps({
     entry,
     agentId,
+    sessionKey,
     storePath,
   });
   const entryFreshness = entry
@@ -776,9 +792,7 @@ async function initSessionStateAttemptLocked(
     persistedReasoning = reusableEntry.reasoningLevel;
     persistedTtsAuto = reusableEntry.ttsAuto;
     persistedResponseUsage = reusableEntry.responseUsage;
-    persistedModelOverride = reusableEntry.modelOverride;
-    persistedProviderOverride = reusableEntry.providerOverride;
-    persistedModelOverrideSource = reusableEntry.modelOverrideSource;
+    persistedModelSelection = selectSessionModelOverride(reusableEntry);
     persistedAuthProfileOverride = reusableEntry.authProfileOverride;
     persistedAuthProfileOverrideSource = reusableEntry.authProfileOverrideSource;
     persistedAuthProfileOverrideCompactionCount = reusableEntry.authProfileOverrideCompactionCount;
@@ -804,9 +818,7 @@ async function initSessionStateAttemptLocked(
     // despite the `Model set to ... for this session` ack (#90119, #69301).
     if (entry) {
       const preservedSelection = resolveResetPreservedSelection({ entry });
-      persistedModelOverride = preservedSelection.modelOverride;
-      persistedProviderOverride = preservedSelection.providerOverride;
-      persistedModelOverrideSource = preservedSelection.modelOverrideSource;
+      persistedModelSelection = selectSessionModelOverride(preservedSelection);
       persistedAuthProfileOverride = preservedSelection.authProfileOverride;
       persistedAuthProfileOverrideSource = preservedSelection.authProfileOverrideSource;
       persistedAuthProfileOverrideCompactionCount =
@@ -843,6 +855,8 @@ async function initSessionStateAttemptLocked(
   }
 
   const baseEntry = !isNewSession && effectiveFreshEntry ? reusableEntry : undefined;
+  const modelSelection =
+    persistedModelSelection ?? (baseEntry ? selectSessionModelOverride(baseEntry) : undefined);
   const usageFamilyKey = previousSessionEntry
     ? (previousSessionEntry.usageFamilyKey ?? sessionKey)
     : baseEntry?.usageFamilyKey;
@@ -943,9 +957,10 @@ async function initSessionStateAttemptLocked(
     usageFamilyKey,
     usageFamilySessionIds,
     previousSessionId: baseEntry?.previousSessionId,
-    modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
-    providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
-    modelOverrideSource: persistedModelOverrideSource ?? baseEntry?.modelOverrideSource,
+    modelOverride: modelSelection?.modelOverride,
+    providerOverride: modelSelection?.providerOverride,
+    modelOverrideSource: modelSelection?.modelOverrideSource,
+    modelOverrideRouteResolution: modelSelection?.modelOverrideRouteResolution,
     authProfileOverride: persistedAuthProfileOverride ?? baseEntry?.authProfileOverride,
     authProfileOverrideSource:
       persistedAuthProfileOverrideSource ?? baseEntry?.authProfileOverrideSource,
@@ -1016,23 +1031,14 @@ async function initSessionStateAttemptLocked(
   }
   if (isNewSession) {
     sessionEntry.compactionCount = 0;
-    sessionEntry.memoryFlushCompactionCount = undefined;
-    sessionEntry.memoryFlushAt = undefined;
+    sessionEntry.memoryFlush = undefined;
     // Runtime model fields are persisted last-run cache, not user selection.
     // Reset must drop them so the next turn resolves current defaults or the
     // explicit providerOverride/modelOverride values preserved above.
     sessionEntry.modelProvider = undefined;
     sessionEntry.model = undefined;
-    sessionEntry.fallbackNoticeSelectedModel = undefined;
-    sessionEntry.fallbackNoticeActiveModel = undefined;
-    sessionEntry.fallbackNoticeReason = undefined;
+    sessionEntry.fallbackNotice = undefined;
     sessionEntry.systemPromptReport = undefined;
-    sessionEntry.memoryFlushFailureCount = undefined;
-    sessionEntry.memoryFlushLastFailedAt = undefined;
-    sessionEntry.memoryFlushLastFailureError = undefined;
-    // Clear stale context hash so the first flush in the new session is not
-    // incorrectly skipped due to a hash match with the old transcript (#30115).
-    sessionEntry.memoryFlushContextHash = undefined;
     sessionEntry.startedAt = undefined;
     sessionEntry.endedAt = undefined;
     sessionEntry.runtimeMs = undefined;
@@ -1147,6 +1153,21 @@ async function initSessionStateAttemptLocked(
     sessionStore,
   });
   const previousSessionTranscript = committed.previousSessionTranscript;
+  if (previousSessionEntry?.sessionId) {
+    emitSessionAutoResetHook({
+      cfg,
+      sessionId: previousSessionEntry.sessionId,
+      sessionKey,
+      reason: previousSessionEndReason,
+      sessionFile: previousSessionTranscript.sessionFile,
+      transcriptArchived: previousSessionTranscript.transcriptArchived,
+      nextSessionId: sessionId,
+      nextSessionKey: sessionKey,
+      agentId,
+      workspaceDir: previousSessionEntry.spawnedWorkspaceDir,
+      storePath,
+    });
+  }
 
   if (previousSessionEntry?.sessionId) {
     await retireSessionMcpRuntime({
@@ -1162,7 +1183,7 @@ async function initSessionStateAttemptLocked(
       agentId,
       sessionId: previousSessionEntry.sessionId,
       sessionKey,
-      sessionFile: previousSessionEntry.sessionFile,
+      sessionFile: sessionKey,
       reason: previousSessionEndReason ?? "unknown",
     });
     // Direct-message browser tabs use a peer-scoped runtime identity even when
@@ -1226,7 +1247,7 @@ async function initSessionStateAttemptLocked(
         sessionKey,
         sessionId: effectiveSessionId,
         storePath,
-        sessionFile: sessionEntry?.sessionFile,
+        sessionFile: sessionKey,
         agentId,
       });
     }

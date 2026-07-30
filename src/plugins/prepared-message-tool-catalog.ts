@@ -1,12 +1,23 @@
 /** Registry-owned message-tool metadata prepared once per channel registry generation. */
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { PreparedMessageToolCatalog } from "../channels/plugins/message-action-discovery.js";
-import { CHAT_CHANNEL_ORDER } from "../channels/registry.js";
+import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registry-loaded.js";
+import type { ChannelMessageActionAdapter } from "../channels/plugins/types.core.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
   getActivePluginChannelRegistrySnapshotFromState,
   type ActivePluginChannelRegistrySnapshot,
 } from "./runtime-channel-state.js";
+
+type PreparedMessageToolCatalogEntry = Readonly<{
+  id: string;
+  actions?: ChannelMessageActionAdapter;
+  reconcilesUnknownSend: boolean;
+}>;
+
+export type PreparedMessageToolCatalog = Readonly<{
+  version: number;
+  channels: readonly PreparedMessageToolCatalogEntry[];
+  getChannel: (id: string) => PreparedMessageToolCatalogEntry | undefined;
+}>;
 
 const catalogsByRegistry = new WeakMap<PluginRegistry, Map<number, PreparedMessageToolCatalog>>();
 const latestCatalogByRegistry = new WeakMap<PluginRegistry, PreparedMessageToolCatalog>();
@@ -16,25 +27,6 @@ export const EMPTY_PREPARED_MESSAGE_TOOL_CATALOG: PreparedMessageToolCatalog = O
   channels: Object.freeze([]),
   getChannel: () => undefined,
 });
-
-function listPreparedChannels(registry: PluginRegistry) {
-  const byId = new Map<string, PluginRegistry["channels"][number]["plugin"]>();
-  (registry.channels ?? []).forEach((registration) => {
-    const id = normalizeOptionalString(registration.plugin.id);
-    if (id && !byId.has(id)) {
-      byId.set(id, registration.plugin);
-    }
-  });
-  return [...byId.values()].toSorted((left, right) => {
-    const leftId = normalizeOptionalString(left.id) ?? "";
-    const rightId = normalizeOptionalString(right.id) ?? "";
-    const leftKnownOrder = CHAT_CHANNEL_ORDER.indexOf(leftId);
-    const rightKnownOrder = CHAT_CHANNEL_ORDER.indexOf(rightId);
-    const leftOrder = left.meta.order ?? (leftKnownOrder === -1 ? 999 : leftKnownOrder);
-    const rightOrder = right.meta.order ?? (rightKnownOrder === -1 ? 999 : rightKnownOrder);
-    return leftOrder === rightOrder ? leftId.localeCompare(rightId) : leftOrder - rightOrder;
-  });
-}
 
 function selectedRegistry(
   snapshot: ActivePluginChannelRegistrySnapshot,
@@ -62,7 +54,7 @@ export function settlePreparedMessageToolCatalog(
     return existing;
   }
   const channels = Object.freeze(
-    listPreparedChannels(registry).map((plugin) =>
+    listLoadedChannelPluginsForRegistry(registry).map((plugin) =>
       Object.freeze({
         id: plugin.id,
         ...(plugin.actions ? { actions: plugin.actions } : {}),

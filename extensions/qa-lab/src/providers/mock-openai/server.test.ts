@@ -1,6 +1,7 @@
 // Qa Lab tests cover server plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
+import { readTargetFromPrompt } from "./mock-openai-tooling.js";
 import { startQaMockOpenAiServer } from "./server.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -20,6 +21,8 @@ const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT =
   "Empty response exhaustion QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-EXHAUSTED-OK.";
 const QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT =
   "Empty response after write recovery QA check: write qa-empty-response-side-effect.txt, then answer with exactly TELEGRAM-EMPTY-WRITE-RECOVERED-OK.";
+const QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT =
+  "Anthropic thinking error QA check: read QA_KICKOFF_TASK.md, then answer with exactly ANTHROPIC-THINKING-ERROR-RECOVERED-OK.";
 const QA_REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 const QA_EMPTY_RESPONSE_RETRY_INSTRUCTION =
@@ -147,7 +150,7 @@ function makeWhatsAppStructuredUserInput(text: string, mediaKind?: "sticker") {
     return makeUserInput(text);
   }
   const mediaContext = [
-    "WhatsApp media (untrusted metadata):",
+    "WhatsApp media: ⟦openclaw:ctx⟧",
     "```json",
     JSON.stringify({ source: "whatsapp", type: "media", payload: { kind: mediaKind } }),
     "```",
@@ -196,6 +199,7 @@ const SESSIONS_SPAWN_TOOL = { type: "function", name: "sessions_spawn" } as cons
 const SESSIONS_YIELD_TOOL = { type: "function", name: "sessions_yield" } as const;
 const READ_TOOL = { type: "function", name: "read" } as const;
 const MESSAGE_TOOL = { type: "function", name: "message" } as const;
+const IMAGE_GENERATE_TOOL = { type: "function", name: "image_generate" } as const;
 const SLACK_CHART_SUMMARY_TOKEN = "SLACK_QA_CHART_SUMMARY_TEST";
 const SLACK_CHART_DONE_TOKEN = "SLACK_QA_CHART_DONE_TEST";
 const SLACK_CHART_MESSAGE_TOOL_ARGS = {
@@ -501,7 +505,9 @@ describe("qa mock openai server", () => {
 
     const initialText = initialBody.output?.[0]?.content?.[0]?.text ?? "";
     expect(initialText).toContain("QA-STRANDED-85714");
-    expect(initialText.length).toBeGreaterThanOrEqual(120);
+    expect(initialText).toContain("近 7 日營收較前期增加");
+    expect(initialText).toHaveLength(167);
+    expect(initialText.match(/[.!?]+(?:\s|$)/g) ?? []).toHaveLength(0);
     expect(outputItems(initialBody).some((item) => item.type === "function_call")).toBe(false);
 
     const retryBody = await expectResponsesJson(server, {
@@ -522,7 +528,7 @@ describe("qa mock openai server", () => {
     const toolCall = outputToolCall(retryBody, "message");
     expect(outputToolArgsFromItem(toolCall)).toEqual({
       action: "send",
-      message: "QA-STRANDED-85714",
+      message: initialText,
     });
   });
 
@@ -806,6 +812,41 @@ describe("qa mock openai server", () => {
     expect(final.output[0]?.content?.[0]?.text).toBe("TOOL_PROGRESS_MARKER_OK");
   });
 
+  it("prefers a current tool-result marker over system and stale user directives", async () => {
+    const server = await startMockServer();
+    const prompt = [
+      "Tool progress QA check: call the read tool exactly once on `QA_KICKOFF_TASK.md` before answering.",
+      "The only valid final marker is inside that file.",
+      "After the read completes, reply with only the exact marker from the file.",
+    ].join(" ");
+    const marker = "TOOL_PROGRESS_OUTPUT_MARKER_OK";
+
+    const final = await expectResponsesJson<{
+      output: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      instructions: "If nothing needs attention, reply exactly: HEARTBEAT_OK",
+      input: [
+        makeUserInput(
+          "Earlier tool progress QA check: after the tool returns, reply exactly `STALE_PROGRESS_MARKER`.",
+        ),
+        makeUserInput(prompt),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_1",
+          output: [
+            "Matrix tool progress QA task.",
+            "Reply with only this exact marker and no other text:",
+            marker,
+          ].join("\n"),
+        },
+        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+      ],
+    });
+
+    expect(final.output[0]?.content?.[0]?.text).toBe(marker);
+  });
+
   it("plans deterministic tool-progress exec commands from exact command prompts", async () => {
     const server = await startMockServer();
     const command =
@@ -937,7 +978,7 @@ describe("qa mock openai server", () => {
     expect(errorOutput.output[0]?.content?.[0]?.text).toBe("TOOL_PROGRESS_ERROR_OK");
   });
 
-  it("uses the latest user prompt path for tool-progress plans", async () => {
+  it("uses the latest user tool-progress prompt kind and target for plans", async () => {
     const server = await startMockServer();
 
     const response = await postResponses(server, {
@@ -960,6 +1001,253 @@ describe("qa mock openai server", () => {
     expect(body).toContain('"name":"read"');
     expect(body).toContain("latest-missing-progress-target.txt");
     expect(body).not.toContain("older-progress-target.txt");
+
+    const command = "sleep 2; cat 'current-progress-target.txt'";
+    const currentNormal = await postResponses(server, {
+      stream: true,
+      input: [
+        makeUserInput(
+          "Tool progress error QA check: read `stale-missing-progress-target.txt` before answering. After the read fails, reply exactly `STALE_PROGRESS_OK`.",
+        ),
+        {
+          type: "function_call_output",
+          call_id: "call_stale_progress_read",
+          output: JSON.stringify({ error: "ENOENT: stale turn" }),
+        },
+        makeUserInput(
+          `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`${command}\`. After that command completes, reply exactly \`CURRENT_PROGRESS_OK\`.`,
+        ),
+      ],
+    });
+
+    expect(currentNormal.status).toBe(200);
+    const currentNormalBody = await currentNormal.text();
+    expect(currentNormalBody).toContain('"name":"exec"');
+    expect(currentNormalBody).toContain(command);
+    expect(currentNormalBody).not.toContain("stale-missing-progress-target.txt");
+  });
+
+  it.each([
+    {
+      name: "preview",
+      prompt:
+        "@openclaw:matrix-qa.test Tool progress QA check: call the read tool exactly once on `QA_KICKOFF_TASK.md` before answering. After that read completes, reply exactly `CURRENT_PREVIEW_OK`.",
+      toolName: "read",
+      expectedArgs: { path: "QA_KICKOFF_TASK.md" },
+    },
+    {
+      name: "command preview",
+      prompt:
+        "@openclaw:matrix-qa.test Tool progress QA check: call the exec tool exactly once with this exact command before answering: `printf 'matrix-command-progress-start\\n'; sleep 2`. After that exec command completes or fails, reply exactly `CURRENT_COMMAND_OK`.",
+      toolName: "exec",
+      expectedArgs: { command: "printf 'matrix-command-progress-start\\n'; sleep 2" },
+    },
+    {
+      name: "error",
+      prompt:
+        "@openclaw:matrix-qa.test Tool progress error QA check: read `missing-matrix-tool-progress-target.txt` before answering. After the read fails, reply exactly `CURRENT_ERROR_OK`.",
+      toolName: "read",
+      expectedArgs: { path: "missing-matrix-tool-progress-target.txt" },
+    },
+    {
+      name: "mention safety",
+      prompt:
+        "@openclaw:matrix-qa.test Tool progress QA check: read the missing workspace file `matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt` before answering. After that read fails, reply exactly `CURRENT_MENTION_OK`.",
+      toolName: "read",
+      expectedArgs: {
+        path: "matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt",
+      },
+    },
+  ])("routes current Matrix $name after stale streaming history", async (fixture) => {
+    const server = await startMockServer();
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_STREAMING_OK`.",
+        ),
+        makeUserInput(fixture.prompt),
+        makeUserInput("Continue with the current Matrix QA scenario."),
+      ],
+    });
+
+    const toolCall = outputToolCall(payload, fixture.toolName);
+    expect(outputToolArgsFromItem(toolCall)).toEqual(fixture.expectedArgs);
+    expect(JSON.stringify(payload)).not.toContain("STALE_STREAMING_OK");
+  });
+
+  it("does not let a prior Matrix tool result satisfy the current progress prompt", async () => {
+    const server = await startMockServer();
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "@openclaw:matrix-qa.test Tool progress QA check: read `stale-progress-target.txt` before answering. Reply exactly `STALE_PROGRESS_OK`.",
+        ),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_stale_progress",
+          output: "STALE_PROGRESS_OK",
+        },
+        makeUserInput(
+          "@openclaw:matrix-qa.test Tool progress QA check: read `current-progress-target.txt` before answering. Reply exactly `CURRENT_PROGRESS_OK`.",
+        ),
+      ],
+    });
+
+    const toolCall = outputToolCall(payload, "read");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({ path: "current-progress-target.txt" });
+    expect(JSON.stringify(payload)).not.toContain("STALE_PROGRESS_OK");
+  });
+
+  it.each([
+    {
+      name: "quiet streaming",
+      stalePrompt:
+        "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_QUIET_OK`.",
+    },
+    {
+      name: "tool progress",
+      stalePrompt:
+        "@openclaw:matrix-qa.test Tool progress QA check: read `stale-progress-target.txt` before answering. Reply exactly `STALE_PROGRESS_OK`.",
+    },
+  ])("does not resurrect stale Matrix $name across an ordinary turn", async (fixture) => {
+    const server = await startMockServer();
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(fixture.stalePrompt),
+        makeUserInput("Reply exactly `CURRENT_ORDINARY_OK`."),
+      ],
+    });
+
+    expect(outputText(payload)).toBe("CURRENT_ORDINARY_OK");
+    expect(JSON.stringify(payload)).not.toContain("stale-progress-target.txt");
+  });
+
+  it("does not treat an ordinary retry request as a Matrix scenario continuation", async () => {
+    const server = await startMockServer();
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_STREAMING_OK`.",
+        ),
+        makeUserInput(
+          "Please retry the new database operation, then reply exactly `CURRENT_RETRY_OK`.",
+        ),
+      ],
+    });
+
+    expect(outputText(payload)).toBe("CURRENT_RETRY_OK");
+    expect(JSON.stringify(payload)).not.toContain("STALE_STREAMING_OK");
+  });
+
+  it("uses the current tool result marker after stale streaming history", async () => {
+    const server = await startMockServer();
+    const currentPrompt =
+      "@openclaw:matrix-qa.test Tool progress QA check: call the read tool exactly once on `QA_KICKOFF_TASK.md` before answering. The only valid final marker is inside that file.";
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_STREAMING_OK`.",
+        ),
+        makeUserInput(currentPrompt),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_current_progress",
+          output: "Reply with only this exact marker and no other text:\nCURRENT_PROGRESS_OK",
+        },
+      ],
+    });
+
+    expect(outputText(payload)).toBe("CURRENT_PROGRESS_OK");
+  });
+
+  it("selects tool progress after quiet streaming in one user envelope", async () => {
+    const server = await startMockServer();
+    const currentPrompt =
+      "@openclaw:matrix-qa.test Tool progress QA check: call the read tool exactly once on `QA_KICKOFF_TASK.md` before answering. The only valid final marker is inside that file.";
+    const envelope = [
+      "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_ENVELOPE_OK`.",
+      currentPrompt,
+    ].join("\n");
+    const plan = await expectResponsesJson(server, {
+      stream: false,
+      input: [makeUserInput(envelope)],
+    });
+
+    const toolCall = outputToolCall(plan, "read");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({ path: "QA_KICKOFF_TASK.md" });
+    expect(JSON.stringify(plan)).not.toContain("STALE_ENVELOPE_OK");
+
+    const final = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(envelope),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_current_envelope",
+          output: "Reply with only this exact marker and no other text:\nCURRENT_ENVELOPE_OK",
+        },
+      ],
+    });
+
+    expect(outputText(final)).toBe("CURRENT_ENVELOPE_OK");
+  });
+
+  it("selects the latest tool-progress target in one user envelope", async () => {
+    const server = await startMockServer();
+    const envelope = [
+      "Tool progress QA check: read `stale-progress-target.txt` before answering. Reply exactly `STALE_PROGRESS_OK`.",
+      "Tool progress QA check: read `current-progress-target.txt` before answering. Reply exactly `CURRENT_PROGRESS_OK`.",
+    ].join("\n");
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [makeUserInput(envelope)],
+    });
+
+    const toolCall = outputToolCall(payload, "read");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({ path: "current-progress-target.txt" });
+    expect(JSON.stringify(payload)).not.toContain("stale-progress-target.txt");
+  });
+
+  it("selects the latest block-streaming markers and target in one user envelope", async () => {
+    const server = await startMockServer();
+    const envelope = [
+      "Block streaming QA check: first exact marker: `STALE_ONE`; read `stale-block.txt`; second exact marker: `STALE_TWO`.",
+      "Block streaming QA check: first exact marker: `CURRENT_ONE`; read `current-block.txt`; second exact marker: `CURRENT_TWO`.",
+    ].join("\n");
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [makeUserInput(envelope)],
+    });
+
+    expect(outputText(payload)).toBe("CURRENT_ONE");
+    const toolCall = outputToolCall(payload, "read");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({ path: "current-block.txt" });
+    expect(JSON.stringify(payload)).not.toContain("STALE_ONE");
+    expect(JSON.stringify(payload)).not.toContain("stale-block.txt");
+  });
+
+  it("rejects successful error-progress results without a prompt directive", async () => {
+    const server = await startMockServer();
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "Tool progress error QA check: read `missing-progress-target.txt` before answering. The final marker is supplied only after the tool runs.",
+        ),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_unexpected_success",
+          output: "Reply with only this exact marker and no other text:\nFALSE_POSITIVE_OK",
+        },
+      ],
+    });
+
+    expect(outputText(payload)).toBe("BUG-TOOL-DID-NOT-FAIL");
   });
 
   it("prefers path-like refs over generic quoted keys in prompts", async () => {
@@ -993,6 +1281,15 @@ describe("qa mock openai server", () => {
       'Please inspect "message_id" metadata first, then read `./QA_KICKOFF_TASK.md`.',
     );
     expect(debugPayload.plannedToolName).toBe("read");
+  });
+
+  it("keeps unformatted Matrix mention-shaped filenames intact", () => {
+    expect(
+      readTargetFromPrompt(
+        "Read the missing workspace file matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt before answering.",
+      ),
+    ).toBe("matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt");
+    expect(readTargetFromPrompt("Read _fixture.json before answering.")).toBe("_fixture.json");
   });
 
   it("reads unquoted fixture paths and honors exact replies after tool output", async () => {
@@ -1723,39 +2020,6 @@ describe("qa mock openai server", () => {
     expect(await response.text()).toContain(
       '"arguments":"{\\"path\\":\\"FOLLOWTHROUGH_INPUT.md\\"}"',
     );
-  });
-
-  it("keeps the dreaming shadow trial ahead of system exact-reply fallbacks", async () => {
-    const server = await startMockServer();
-    const response = await postResponses(server, {
-      stream: true,
-      model: "gpt-5.6-luna",
-      input: [
-        {
-          role: "system",
-          content: [
-            {
-              type: "input_text",
-              text: "Nothing to say: entire reply exactly NO_REPLY",
-            },
-          ],
-        },
-        makeUserInput(
-          "Dreaming shadow trial report check. Read DREAMING_SHADOW_TRIAL_BRIEF.md and DREAMING_CANDIDATE_EVIDENCE.md first. Reply with the report path and exact marker DREAMING-SHADOW-TRIAL-OK.",
-        ),
-      ],
-    });
-
-    expect(response.status).toBe(200);
-    const body = await response.text();
-    expect(body).toContain('"name":"read"');
-    expect(body).toContain('"arguments":"{\\"path\\":\\"DREAMING_SHADOW_TRIAL_BRIEF.md\\"}"');
-    expect(body).not.toContain('"text":"NO_REPLY"');
-
-    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
-    expect(debugResponse.status).toBe(200);
-    const debugPayload = requireRecord(await debugResponse.json(), "debug request");
-    expect(debugPayload.plannedToolName).toBe("read");
   });
 
   it("advances personal task followthrough when transcript text is newer than extracted tool output", async () => {
@@ -2501,7 +2765,7 @@ describe("qa mock openai server", () => {
     expect(structuredThreadMemorySummary.status).toBe(200);
     expect(JSON.stringify(await structuredThreadMemorySummary.json())).toContain("ORBIT-22");
 
-    const systemFallbackThreadMemorySummary = await postResponses(server, {
+    const unavailableThreadMemorySummary = await postResponses(server, {
       stream: false,
       input: [
         {
@@ -2522,8 +2786,31 @@ describe("qa mock openai server", () => {
         },
       ],
     });
-    expect(systemFallbackThreadMemorySummary.status).toBe(200);
-    expect(JSON.stringify(await systemFallbackThreadMemorySummary.json())).toContain("ORBIT-22");
+    expect(unavailableThreadMemorySummary.status).toBe(200);
+    const unavailableThreadMemoryText = JSON.stringify(await unavailableThreadMemorySummary.json());
+    expect(unavailableThreadMemoryText).toContain("NONE");
+    expect(unavailableThreadMemoryText).not.toContain("ORBIT-22");
+
+    const emptyThreadMemorySummary = await postResponses(server, {
+      stream: false,
+      input: [
+        {
+          role: "system",
+          content: "## /workspace/MEMORY.md\nThread-hidden codename: ORBIT-22.",
+        },
+        makeUserInput(
+          "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
+        ),
+        {
+          type: "function_call_output",
+          output: JSON.stringify({ results: [] }),
+        },
+      ],
+    });
+    expect(emptyThreadMemorySummary.status).toBe(200);
+    const emptyThreadMemoryText = JSON.stringify(await emptyThreadMemorySummary.json());
+    expect(emptyThreadMemoryText).toContain("NONE");
+    expect(emptyThreadMemoryText).not.toContain("ORBIT-22");
 
     const memoryFollowup = await postResponses(server, {
       stream: true,
@@ -2545,6 +2832,7 @@ describe("qa mock openai server", () => {
                 path: "sessions/qa-session-memory-ranking.jsonl",
                 startLine: 2,
                 endLine: 3,
+                snippet: "Project Nebula current codename: ORBIT-10.",
               },
             ],
           }),
@@ -2576,11 +2864,13 @@ describe("qa mock openai server", () => {
                 path: "MEMORY.md",
                 startLine: 1,
                 endLine: 2,
+                snippet: "Project Nebula stale codename: ORBIT-9.",
               },
               {
                 path: "sessions/qa-session-memory-ranking.jsonl",
                 startLine: 2,
                 endLine: 3,
+                snippet: "Project Nebula current codename: ORBIT-10.",
               },
             ],
           }),
@@ -2591,6 +2881,81 @@ describe("qa mock openai server", () => {
     expect(await memoryFollowupPrefersSessionResult.text()).toContain(
       "Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10.",
     );
+
+    const pathOnlySessionMemory = await postResponses(server, {
+      stream: true,
+      input: [
+        makeUserInput(
+          "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.",
+        ),
+        {
+          type: "function_call_output",
+          output: JSON.stringify({
+            results: [
+              {
+                path: "sessions/qa-session-memory-ranking.jsonl",
+                startLine: 2,
+                endLine: 3,
+              },
+            ],
+          }),
+        },
+      ],
+    });
+    expect(pathOnlySessionMemory.status).toBe(200);
+    const pathOnlySessionMemoryText = await pathOnlySessionMemory.text();
+    expect(pathOnlySessionMemoryText).toContain('"name":"memory_get"');
+    expect(pathOnlySessionMemoryText).not.toContain("codename is ORBIT-10");
+
+    const unavailableSessionMemory = await postResponses(server, {
+      stream: true,
+      input: [
+        makeUserInput(
+          "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.",
+        ),
+        {
+          type: "function_call_output",
+          output: JSON.stringify({
+            results: [
+              {
+                path: "sessions/qa-session-memory-ranking.jsonl",
+                snippet: "Project Nebula current codename: ORBIT-10.",
+              },
+            ],
+            unavailable: true,
+            error: "database is not open",
+          }),
+        },
+      ],
+    });
+    expect(unavailableSessionMemory.status).toBe(200);
+    const unavailableSessionMemoryText = await unavailableSessionMemory.text();
+    expect(unavailableSessionMemoryText).toContain("NONE");
+    expect(unavailableSessionMemoryText).not.toContain("codename is ORBIT-10");
+
+    const differentlyRankedSessionMemory = await postResponses(server, {
+      stream: true,
+      input: [
+        makeUserInput(
+          "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.",
+        ),
+        {
+          type: "function_call_output",
+          output: JSON.stringify({
+            results: [
+              {
+                path: "sessions/qa-session-memory-ranking.jsonl",
+                snippet: "Project Nebula current codename: ORBIT-9.",
+              },
+            ],
+          }),
+        },
+      ],
+    });
+    expect(differentlyRankedSessionMemory.status).toBe(200);
+    const differentlyRankedSessionMemoryText = await differentlyRankedSessionMemory.text();
+    expect(differentlyRankedSessionMemoryText).toContain("codename is ORBIT-9");
+    expect(differentlyRankedSessionMemoryText).not.toContain("codename is ORBIT-10");
 
     const activeMemorySearch = await postResponses(server, {
       stream: true,
@@ -3519,7 +3884,7 @@ describe("qa mock openai server", () => {
         previousExactMarkerInput,
         makeUserInput(
           [
-            "Conversation info (untrusted metadata):",
+            "Conversation info: ⟦openclaw:ctx⟧",
             "```json",
             '{"inbound_event_kind":"user_request"}',
             "```",
@@ -3535,9 +3900,7 @@ describe("qa mock openai server", () => {
         setupInput,
         previousExactMarkerInput,
         makeUserInput(
-          ["Sender (untrusted metadata):", "```json", '{"name":"QA"}', "```", "", "<contact>"].join(
-            "\n",
-          ),
+          ["Sender: ⟦openclaw:ctx⟧", "```json", '{"name":"QA"}', "```", "", "<contact>"].join("\n"),
         ),
       ],
     });
@@ -3548,7 +3911,7 @@ describe("qa mock openai server", () => {
         previousExactMarkerInput,
         makeWhatsAppStructuredUserInput(
           [
-            "Conversation info (untrusted metadata):",
+            "Conversation info: ⟦openclaw:ctx⟧",
             "```json",
             '{"inbound_event_kind":"user_request"}',
             "```",
@@ -3700,7 +4063,7 @@ describe("qa mock openai server", () => {
         "Sticker note: <media:sticker>",
       ].join("\n"),
       [
-        "WhatsApp media (untrusted metadata):",
+        "WhatsApp media: ⟦openclaw:ctx⟧",
         "```json",
         '{"source":"whatsapp","type":"media","payload":{"kind":"image"}}',
         "```",
@@ -3773,6 +4136,7 @@ describe("qa mock openai server", () => {
 
     const toolPlan = await postResponses(server, {
       stream: false,
+      tools: [IMAGE_GENERATE_TOOL],
       input: [makeUserInput(channelPrompt), makeUserInput(genericPrompt)],
     });
 
@@ -3808,6 +4172,86 @@ describe("qa mock openai server", () => {
 
     expect(toolResult.status).toBe(200);
     expect(outputText(await toolResult.json())).toContain("Attachment: /tmp/qa-lighthouse.png");
+  });
+
+  it("completes an image without replaying a tool unavailable to the completion turn", async () => {
+    const server = await startMockServer();
+    const prompt = "Image generation check: generate a QA lighthouse image.";
+    const imagePlan = await expectResponsesJson<unknown>(server, {
+      stream: false,
+      tools: [IMAGE_GENERATE_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+    const imageCall = outputToolCall(imagePlan, "image_generate");
+    const callId = outputToolCallId(imageCall, "call_mock_image_generate_unavailable");
+    const completionEvent = [
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "OpenClaw runtime context (internal):",
+      "",
+      "[Internal task completion event]",
+      "source: image_generation",
+      "task: A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
+      "status: completed successfully",
+      "Generated media:",
+      "MEDIA:/tmp/qa-lighthouse.png",
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    ].join("\n");
+    const completion = await expectResponsesJson<unknown>(server, {
+      stream: false,
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call",
+          name: "image_generate",
+          call_id: callId,
+          arguments: String(imageCall.arguments),
+        },
+        {
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify({
+            content: [{ type: "text", text: "Background image generation started." }],
+            details: { async: true, status: "started" },
+          }),
+        },
+        makeUserInput(completionEvent),
+      ],
+    });
+
+    expect(
+      outputItems(completion).some(
+        (item) => item.type === "function_call" && item.name === "image_generate",
+      ),
+    ).toBe(false);
+    expect(outputText(completion)).toBe(
+      "Protocol note: generated the QA lighthouse image successfully.\nMEDIA:/tmp/qa-lighthouse.png",
+    );
+  });
+
+  it("does not replay a historical image completion on a new marker turn", async () => {
+    const server = await startMockServer();
+    const completion = await expectResponsesJson<unknown>(server, {
+      stream: false,
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(
+          [
+            "[Internal task completion event]",
+            "source: image_generation",
+            "status: completed successfully",
+            "MEDIA:/tmp/qa-lighthouse.png",
+          ].join("\n"),
+        ),
+        {
+          role: "assistant",
+          content: [{ type: "output_text", text: "MEDIA:/tmp/qa-lighthouse.png" }],
+        },
+        makeUserInput("Marker exact marker: `fresh-image-completion-marker`"),
+      ],
+    });
+
+    expect(outputText(completion)).toBe("fresh-image-completion-marker");
   });
 
   it("plans QA tool-search calls for instruction-declared Codex dynamic tools", async () => {
@@ -4004,6 +4448,227 @@ describe("qa mock openai server", () => {
     expect(toolPlanOutput.type).toBe("function_call");
     expect(toolPlanOutput.name).toBe("web_search");
     expect(String(toolPlanOutput.arguments)).toContain("OPENCLAW_QA_WEB_SEARCH_DENIED_INPUT");
+  });
+
+  it.each([
+    {
+      label: "workspace-local happy",
+      prompt:
+        "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+      operation: "Add File",
+      patchPath: "runtime-tool-fixture-patch.txt",
+    },
+    {
+      label: "workspace-escaping failure",
+      prompt:
+        "tool search qa failure target=apply_patch. Exercise the denied-input path once and then summarize.",
+      operation: "Update File",
+      patchPath: "../runtime-tool-fixture-denied.txt",
+    },
+  ])("plans a valid $label apply_patch envelope", async ({ prompt, operation, patchPath }) => {
+    const server = await startMockServer();
+    const response = await postResponses(server, {
+      stream: false,
+      input: [makeUserInput(prompt)],
+    });
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(outputItem(payload)).toMatchObject({ type: "function_call", name: "apply_patch" });
+    const args = outputToolArgs(payload);
+    expect(args).not.toHaveProperty("__qaFailureMode");
+    expect(args.input).toBeTypeOf("string");
+    expect(args.input).toContain("*** Begin Patch\n");
+    expect(args.input).toContain(`*** ${operation}: ${patchPath}\n`);
+    if (operation === "Update File") {
+      expect(args.input).toContain("\n@@\n-runtime-tool-fixture-denied-original\n");
+    }
+    expect(args.input).toContain("\n*** End Patch\n");
+  });
+
+  it.each([
+    {
+      label: "workspace-local happy",
+      prompt:
+        "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+      operation: "Add File",
+      patchPath: "runtime-tool-fixture-patch.txt",
+    },
+    {
+      label: "workspace-escaping failure",
+      prompt:
+        "tool search qa failure target=apply_patch. Exercise the denied-input path once and then summarize.",
+      operation: "Update File",
+      patchPath: "../runtime-tool-fixture-denied.txt",
+    },
+  ])("plans an actual $label native freeform patch", async (testCase) => {
+    const server = await startMockServer();
+    const response = await postResponses(server, {
+      stream: false,
+      tools: [
+        {
+          type: "custom",
+          name: "apply_patch",
+          format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
+        },
+      ],
+      input: [makeUserInput(testCase.prompt)],
+    });
+
+    expect(response.status).toBe(200);
+    const item = outputItem(await response.json());
+    expect(item).toMatchObject({ type: "custom_tool_call", name: "apply_patch" });
+    expect(item).not.toHaveProperty("arguments");
+    expect(item.input).toEqual(
+      expect.stringContaining(`*** ${testCase.operation}: ${testCase.patchPath}\n`),
+    );
+    if (testCase.operation === "Update File") {
+      expect(item.input).toEqual(
+        expect.stringContaining("\n@@\n-runtime-tool-fixture-denied-original\n"),
+      );
+    }
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    const debug = requireRecord(await debugResponse.json(), "native patch plan debug request");
+    expect(debug.plannedToolName).toBe("apply_patch");
+    expect(debug.plannedToolCallId).toBe(item.call_id);
+    expect(debug.plannedToolArgs).toEqual({ input: item.input });
+  });
+
+  it("streams native Codex patch input as custom-tool SSE", async () => {
+    const server = await startMockServer();
+    const response = await postResponses(server, {
+      stream: true,
+      tools: [
+        {
+          type: "custom",
+          name: "apply_patch",
+          format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
+        },
+      ],
+      input: [
+        makeUserInput(
+          "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+        ),
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    const events = body
+      .split("\n")
+      .filter((line) => line.startsWith("data: {"))
+      .map(
+        (line) =>
+          JSON.parse(line.slice("data: ".length)) as {
+            type: string;
+            response?: { id?: string; output?: Array<Record<string, unknown>> };
+            item?: Record<string, unknown>;
+            item_id?: string;
+            call_id?: string;
+            delta?: string;
+          },
+      );
+    expect(events.map((event) => event.type)).toEqual([
+      "response.created",
+      "response.output_item.added",
+      "response.custom_tool_call_input.delta",
+      "response.output_item.done",
+      "response.completed",
+    ]);
+    const [created, added, delta, done, completed] = events;
+    expect(created?.response?.id).toBe(completed?.response?.id);
+    expect(added?.item).toMatchObject({
+      type: "custom_tool_call",
+      name: "apply_patch",
+      input: "",
+      status: "in_progress",
+    });
+    expect(done?.item).toMatchObject({
+      type: "custom_tool_call",
+      name: "apply_patch",
+      status: "completed",
+    });
+    expect(done?.item?.id).toEqual(expect.stringMatching(/^ctc_mock_apply_patch_/));
+    expect(delta?.item_id).toBe(done?.item?.id);
+    expect(delta?.call_id).toBe(done?.item?.call_id);
+    expect(delta?.delta).toBe(done?.item?.input);
+    expect(delta?.delta).toContain("runtime-tool-fixture-patch.txt");
+    expect(completed?.response?.output).toEqual([done?.item]);
+  });
+
+  it.each([
+    {
+      label: "successful native patch",
+      prompt:
+        "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+      output: "Successfully applied patch",
+      expectedOutput: "Successfully applied patch",
+      structuredError: false,
+    },
+    {
+      label: "denied native patch",
+      prompt:
+        "tool search qa failure target=apply_patch. Exercise the denied-input path once and then summarize.",
+      output: "Error: Path escapes sandbox root",
+      expectedOutput: "Error: Path escapes sandbox root",
+      structuredError: true,
+    },
+    {
+      label: "upstream Codex native patch rejection without a wire error flag",
+      prompt:
+        "tool search qa failure target=apply_patch. Exercise the denied-input path once and then summarize.",
+      output: "patch rejected: writing outside of the project; rejected by user approval settings",
+      expectedOutput:
+        "patch rejected: writing outside of the project; rejected by user approval settings",
+      structuredError: false,
+    },
+    {
+      label: "structured native patch output",
+      prompt:
+        "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+      output: [{ type: "input_text", text: "Successfully applied structured patch" }],
+      expectedOutput: "Successfully applied structured patch",
+      structuredError: false,
+    },
+  ])("links and completes $label custom-tool outputs", async (testCase) => {
+    const server = await startMockServer();
+    const planResponse = await postResponses(server, {
+      stream: false,
+      input: [makeUserInput(testCase.prompt)],
+    });
+    expect(planResponse.status).toBe(200);
+    const plannedCall = outputItem(await planResponse.json());
+    expect(plannedCall).toMatchObject({ type: "function_call", name: "apply_patch" });
+    const callId = outputToolCallId(plannedCall, "native-patch-call");
+
+    const continuationResponse = await postResponses(server, {
+      stream: false,
+      input: [
+        makeUserInput(testCase.prompt),
+        {
+          type: "custom_tool_call_output",
+          call_id: callId,
+          output: testCase.output,
+          ...(testCase.structuredError ? { is_error: true } : {}),
+        },
+      ],
+    });
+    expect(continuationResponse.status).toBe(200);
+    expect(outputItem(await continuationResponse.json()).type).toBe("message");
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    const debug = requireRecord(await debugResponse.json(), "custom patch debug request");
+    expect(debug.toolOutput).toBe(testCase.expectedOutput);
+    expect(debug.toolOutputCallId).toBe(callId);
+    if (testCase.structuredError) {
+      expect(debug.toolOutputStructuredError).toBe(true);
+    } else {
+      expect(debug).not.toHaveProperty("toolOutputStructuredError");
+    }
+    expect(debug).not.toHaveProperty("plannedToolName");
   });
 
   it("plans QA subagent handoff calls even when Codex dynamic tools are not in body.tools", async () => {
@@ -4411,7 +5076,7 @@ describe("qa mock openai server", () => {
           content: [
             {
               type: "input_text",
-              text: 'Conversation info (untrusted metadata): {"is_group_chat": true}\n\nhello team, no bot ping here',
+              text: 'Conversation info: ⟦openclaw:ctx⟧\n{"is_group_chat": true}\n\nhello team, no bot ping here',
             },
           ],
         },
@@ -4444,6 +5109,49 @@ describe("qa mock openai server", () => {
     expect(body.data.map((entry) => entry.id)).toEqual(
       expect.arrayContaining(["gpt-5.5", "gpt-5.5-alt", "gpt-image-1"]),
     );
+  });
+
+  it("advertises directly executable native Codex metadata alongside OpenAI models", async () => {
+    const server = await startMockServer({
+      modelRefs: ["mock-openai/gpt-5.6-luna", "mock-openai/gpt-5.6-luna-alt"],
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/models?client_version=0.142.0`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      data: Array<{ id: string; object: string }>;
+      models: Array<Record<string, unknown>>;
+    };
+    expect(body.data).toEqual(
+      expect.arrayContaining([
+        { id: "gpt-5.6-luna", object: "model" },
+        { id: "gpt-5.6-luna-alt", object: "model" },
+      ]),
+    );
+    expect(body.models).toHaveLength(2);
+    expect(body.models).toEqual([
+      expect.objectContaining({
+        slug: "gpt-5.6-luna",
+        display_name: "gpt-5.6-luna",
+        apply_patch_tool_type: "freeform",
+        tool_mode: "direct",
+        shell_type: "shell_command",
+        visibility: "list",
+        supported_in_api: true,
+        base_instructions: expect.any(String),
+        truncation_policy: { mode: "tokens", limit: 10_000 },
+        supported_reasoning_levels: expect.arrayContaining([
+          { effort: "medium", description: "Balanced QA reasoning" },
+        ]),
+        experimental_supported_tools: [],
+        input_modalities: ["text", "image"],
+      }),
+      expect.objectContaining({
+        slug: "gpt-5.6-luna-alt",
+        apply_patch_tool_type: "freeform",
+        tool_mode: "direct",
+      }),
+    ]);
   });
 
   it("serves deterministic OpenAI-compatible audio transcription responses", async () => {
@@ -4788,6 +5496,138 @@ describe("qa mock openai server", () => {
     };
     expect(debug.toolOutputCallId).toBe("toolu_mock_read_error");
     expect(debug.toolOutputStructuredError).toBe(true);
+  });
+
+  it("replays one signed Anthropic thinking error for each independent scenario", async () => {
+    const server = await startMockServer();
+    const readCallIds: string[] = [];
+    const scenarioPrompts: string[] = [];
+
+    const requestAnthropicStream = async (messages: unknown[]) => {
+      const response = await postJson(server, "/v1/messages", {
+        model: "claude-opus-4-8",
+        max_tokens: 256,
+        stream: true,
+        messages,
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      return response.text();
+    };
+
+    const readAnthropicToolCallId = (readStream: string) => {
+      const readEvents = readStream
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) =>
+          requireRecord(JSON.parse(line.slice("data: ".length)) as unknown, "Anthropic SSE event"),
+        );
+      const readEvent = readEvents.find(
+        (event) =>
+          event.type === "content_block_start" &&
+          requireRecord(event.content_block, "Anthropic content block").type === "tool_use",
+      );
+      const readTool = requireRecord(readEvent?.content_block, "Anthropic read tool call");
+      expect(readTool.name).toBe("read");
+      expect(readTool.input).toEqual({});
+      const readInputEvent = readEvents.find(
+        (event) => event.type === "content_block_delta" && event.index === readEvent?.index,
+      );
+      expect(requireRecord(readInputEvent?.delta, "Anthropic read tool input delta")).toEqual({
+        type: "input_json_delta",
+        partial_json: JSON.stringify({ path: "QA_KICKOFF_TASK.md" }),
+      });
+      const callId = readTool.id;
+      if (typeof callId !== "string" || callId.length === 0) {
+        throw new Error("Expected an Anthropic read tool call ID");
+      }
+      readCallIds.push(callId);
+      return callId;
+    };
+
+    const buildReplayMessages = (
+      promptMessage: { role: "user"; content: Array<{ type: "text"; text: string }> },
+      callId: string,
+    ) => [
+      promptMessage,
+      {
+        role: "assistant" as const,
+        content: [
+          {
+            type: "tool_use" as const,
+            id: callId,
+            name: "read",
+            input: { path: "QA_KICKOFF_TASK.md" },
+          },
+        ],
+      },
+      {
+        role: "user" as const,
+        content: [
+          {
+            type: "tool_result" as const,
+            tool_use_id: callId,
+            content: "QA kickoff task completed.",
+          },
+        ],
+      },
+    ];
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const scenarioPrompt = `${QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT} QA scenario run: direct-${attempt}`;
+      scenarioPrompts.push(scenarioPrompt);
+      const promptMessage = {
+        role: "user" as const,
+        content: [{ type: "text" as const, text: scenarioPrompt }],
+      };
+      const initialCallId = readAnthropicToolCallId(await requestAnthropicStream([promptMessage]));
+      const errorStream = await requestAnthropicStream(
+        buildReplayMessages(promptMessage, initialCallId),
+      );
+      expect(errorStream).toContain('"type":"thinking_delta"');
+      expect(errorStream).toContain('"type":"signature_delta"');
+      expect(errorStream).toContain('"signature":"qa_signed_thinking_block_91953"');
+      expect(errorStream).toContain("event: error");
+      expect(errorStream).toContain('"type":"api_error"');
+
+      const retryCallId = readAnthropicToolCallId(await requestAnthropicStream([promptMessage]));
+      expect(retryCallId).not.toBe(initialCallId);
+      const recoveryStream = await requestAnthropicStream(
+        buildReplayMessages(promptMessage, retryCallId),
+      );
+      expect(recoveryStream).toContain("event: message_stop");
+      expect(recoveryStream).toContain("ANTHROPIC-THINKING-ERROR-RECOVERED-OK");
+      expect(recoveryStream).not.toContain("event: error");
+    }
+
+    expect(new Set(readCallIds).size).toBe(4);
+    const debugResponse = await fetch(`${server.baseUrl}/debug/requests`);
+    expect(debugResponse.status).toBe(200);
+    const debugRequests = requireArray(await debugResponse.json(), "Anthropic debug requests").map(
+      (request) => requireRecord(request, "Anthropic debug request"),
+    );
+    expect(debugRequests).toHaveLength(8);
+    expect(debugRequests.every((request) => request.providerVariant === "anthropic")).toBe(true);
+    expect(debugRequests.map((request) => request.toolOutputCallId)).toEqual([
+      undefined,
+      readCallIds[0],
+      undefined,
+      readCallIds[1],
+      undefined,
+      readCallIds[2],
+      undefined,
+      readCallIds[3],
+    ]);
+    expect(debugRequests.map((request) => request.prompt)).toEqual([
+      scenarioPrompts[0],
+      scenarioPrompts[0],
+      scenarioPrompts[0],
+      scenarioPrompts[0],
+      scenarioPrompts[1],
+      scenarioPrompts[1],
+      scenarioPrompts[1],
+      scenarioPrompts[1],
+    ]);
   });
 
   it("streams Anthropic /v1/messages tool_use responses as SSE", async () => {

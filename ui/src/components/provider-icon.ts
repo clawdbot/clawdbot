@@ -73,8 +73,10 @@ const PROVIDER_ICON_ALIASES: Readonly<Record<string, string>> = {
   "github-copilot": "copilot",
   // CodexBar names its bundled OpenAI knot asset "codex".
   openai: "codex",
+  moonshot: "kimi",
   "opencode-go": "opencodego",
   "opencode-zen": "opencode",
+  qwen: "alibaba",
   xai: "grok",
   "vertex-ai": "vertexai",
   "z-ai": "zai",
@@ -86,8 +88,11 @@ const PROVIDER_DISPLAY_LABELS: Readonly<Record<string, string>> = {
   google: "Google",
   "github-copilot": "GitHub",
   openai: "OpenAI",
+  moonshot: "Moonshot AI",
   opencode: "OpenCode",
   openrouter: "OpenRouter",
+  qwen: "Qwen Cloud",
+  zai: "Z.AI",
 };
 
 /** Title-cased fallback label built from the provider id ("z-ai" → "Z Ai"). */

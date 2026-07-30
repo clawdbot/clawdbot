@@ -10,7 +10,11 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { ApiKeyCredential, AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
 import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
-import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
+import {
+  asObject,
+  readProviderJsonArrayFieldResponse,
+  readProviderJsonResponse,
+} from "../agents/provider-http-errors.js";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
@@ -45,15 +49,8 @@ const log = createSubsystemLogger("plugins/self-hosted-provider-setup");
 // unbounded JSON stream). Cap discovery response bodies before parsing so a
 // hostile or buggy endpoint cannot drive the setup wizard into OOM.
 const SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES = 16 * 1024 * 1024;
-
-type OpenAICompatModelsResponse = {
-  data?: Array<{
-    id?: string;
-    meta?: {
-      n_ctx_train?: unknown;
-    };
-  }>;
-};
+const SELF_HOSTED_RUNTIME_CONTEXT_MAX_MODELS = 200;
+const SELF_HOSTED_RUNTIME_CONTEXT_CONCURRENCY = 8;
 
 type LlamaCppPropsResponse = {
   default_generation_settings?: {
@@ -91,6 +88,24 @@ function readPositiveInteger(value: unknown): number | undefined {
     return undefined;
   }
   return Math.trunc(value);
+}
+
+const OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS = [
+  "context_length",
+  "context_window",
+  "context_size",
+] as const;
+
+function readOpenAICompatibleContextWindow(
+  model: Record<string, unknown> | undefined,
+): number | undefined {
+  for (const field of OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS) {
+    const contextWindow = readPositiveInteger(model?.[field]);
+    if (contextWindow !== undefined) {
+      return contextWindow;
+    }
+  }
+  return undefined;
 }
 
 async function readSelfHostedDiscoveryJson<T>(response: Response, label: string): Promise<T> {
@@ -167,6 +182,7 @@ export async function discoverOpenAICompatibleLocalModels(params: {
   apiKey?: string;
   label: string;
   contextWindow?: number;
+  discoverRuntimeContext?: boolean;
   maxTokens?: number;
   env?: NodeJS.ProcessEnv;
 }): Promise<ModelDefinitionConfig[]> {
@@ -194,42 +210,59 @@ export async function discoverOpenAICompatibleLocalModels(params: {
         log.warn(`Failed to discover ${params.label} models: ${response.status}`);
         return [];
       }
-      const data = await readSelfHostedDiscoveryJson<OpenAICompatModelsResponse>(
+      const models = await readProviderJsonArrayFieldResponse(
         response,
-        params.label,
+        `${params.label} discovery`,
+        "data",
+        { maxBytes: SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES },
       );
-      const models = data.data ?? [];
       if (models.length === 0) {
         log.warn(`No ${params.label} models found on local instance`);
         return [];
       }
 
-      const discoveredModels = models.flatMap((model) => {
-        const modelId = normalizeOptionalString(model.id);
+      const discoveredModels = models.flatMap((rawModel) => {
+        const model = asObject(rawModel);
+        const modelId = normalizeOptionalString(model?.id);
         if (!modelId) {
           return [];
         }
-        return [{ id: modelId, meta: model.meta }];
+        return [
+          {
+            id: modelId,
+            meta: asObject(model?.meta),
+            advertisedContextWindow: readOpenAICompatibleContextWindow(model),
+          },
+        ];
       });
       const runtimeContextTokensByModelId = new Map<string, number>();
-      if (params.contextWindow === undefined) {
+      if (params.contextWindow === undefined && params.discoverRuntimeContext !== false) {
         const uniqueModelIds = uniqueStrings(discoveredModels.map((model) => model.id));
-        const runtimeContextTokenResults = await Promise.all(
-          uniqueModelIds.map(
-            async (modelId) =>
-              [
-                modelId,
-                await discoverLlamaCppRuntimeContextTokens({
-                  baseUrl: trimmedBaseUrl,
-                  apiKey: params.apiKey,
-                  modelId: uniqueModelIds.length > 1 ? modelId : undefined,
-                }),
-              ] as const,
-          ),
-        );
-        for (const [modelId, runtimeContextTokens] of runtimeContextTokenResults) {
-          if (runtimeContextTokens) {
-            runtimeContextTokensByModelId.set(modelId, runtimeContextTokens);
+        const probeModelIds = uniqueModelIds.slice(0, SELF_HOSTED_RUNTIME_CONTEXT_MAX_MODELS);
+        // A valid large router catalog must not start hundreds of guarded
+        // fetches at once; unprobed models retain their advertised metadata.
+        for (
+          let offset = 0;
+          offset < probeModelIds.length;
+          offset += SELF_HOSTED_RUNTIME_CONTEXT_CONCURRENCY
+        ) {
+          const runtimeContextTokenResults = await Promise.all(
+            probeModelIds.slice(offset, offset + SELF_HOSTED_RUNTIME_CONTEXT_CONCURRENCY).map(
+              async (modelId) =>
+                [
+                  modelId,
+                  await discoverLlamaCppRuntimeContextTokens({
+                    baseUrl: trimmedBaseUrl,
+                    apiKey: params.apiKey,
+                    modelId: uniqueModelIds.length > 1 ? modelId : undefined,
+                  }),
+                ] as const,
+            ),
+          );
+          for (const [modelId, runtimeContextTokens] of runtimeContextTokenResults) {
+            if (runtimeContextTokens) {
+              runtimeContextTokensByModelId.set(modelId, runtimeContextTokens);
+            }
           }
         }
       }
@@ -244,6 +277,7 @@ export async function discoverOpenAICompatibleLocalModels(params: {
           contextWindow:
             params.contextWindow ??
             readPositiveInteger(model.meta?.n_ctx_train) ??
+            model.advertisedContextWindow ??
             SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
           maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
         };

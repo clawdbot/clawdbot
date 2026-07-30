@@ -1,10 +1,8 @@
 // Mattermost plugin module maps reaction transport events into system events.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  mapMattermostChannelTypeToChatType,
-  resolveMattermostMonitorInboundAccess,
-} from "./monitor-auth.js";
+import { resolveMattermostMonitorInboundAccess } from "./monitor-auth.js";
 import { resolveMattermostReactionChannelId } from "./monitor-context.js";
+import { buildMattermostEventPlan } from "./monitor-event-plan.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
 
@@ -12,7 +10,7 @@ type MattermostReaction = { user_id?: string; post_id?: string; emoji_name?: str
 
 export function createMattermostReactionHandler(monitor: MattermostMonitorContext) {
   const { account, botUserId, cfg, core, groupPolicy, pairing, resources } = monitor;
-  const { resolveChannelInfo, resolveUserInfo } = resources;
+  const { resolveUserInfo } = resources;
   return async (payload: MattermostEventPayload) => {
     const reactionData = payload.data?.reaction;
     if (!reactionData) {
@@ -45,15 +43,15 @@ export function createMattermostReactionHandler(monitor: MattermostMonitorContex
       );
       return;
     }
-    const channelInfo = await resolveChannelInfo(channelId);
-    if (!channelInfo?.type) {
-      // Cannot determine channel type — drop to avoid policy bypass.
-      monitor.logVerboseMessage(
-        `mattermost: drop reaction (cannot resolve channel type for ${channelId})`,
-      );
+    const eventPlan = await buildMattermostEventPlan(monitor, {
+      channelId,
+      senderId: userId,
+      dropLabel: "reaction",
+    });
+    if (!eventPlan) {
       return;
     }
-    const kind = mapMattermostChannelTypeToChatType(channelInfo.type);
+    const { kind, route } = eventPlan;
     const reactionAccess = await resolveMattermostMonitorInboundAccess({
       account,
       cfg,
@@ -77,16 +75,6 @@ export function createMattermostReactionHandler(monitor: MattermostMonitorContex
       return;
     }
 
-    const route = core.channel.routing.resolveAgentRoute({
-      cfg,
-      channel: "mattermost",
-      accountId: account.accountId,
-      teamId: channelInfo.team_id ?? undefined,
-      peer: {
-        kind,
-        id: kind === "direct" ? userId : channelId,
-      },
-    });
     const eventText = `Mattermost reaction ${action}: :${emojiName}: by @${senderName} on post ${postId} in channel ${channelId}`;
     core.system.enqueueSystemEvent(eventText, {
       sessionKey: route.sessionKey,

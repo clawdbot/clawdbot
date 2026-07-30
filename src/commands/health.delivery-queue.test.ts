@@ -20,7 +20,7 @@ vi.mock("../channels/message/ingress-queue.js", async (importOriginal) => {
   };
 });
 
-const { buildDeliveryQueueHealthSummary } = await import("./health.js");
+const { buildDeliveryQueueHealthSummary } = await import("../gateway/health/delivery-queue.js");
 
 describe("buildDeliveryQueueHealthSummary", () => {
   beforeEach(() => {

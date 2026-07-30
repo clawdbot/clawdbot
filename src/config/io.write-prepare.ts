@@ -1,6 +1,5 @@
 // Prepares config writes by diffing current state and preserving metadata.
 import { isDeepStrictEqual } from "node:util";
-import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   hasAgentRosterProperty,
@@ -13,14 +12,10 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
 import { configIncludeOwnsAgentRosterValues } from "./agent-roster-provenance.js";
-import { applyMergePatch } from "./merge-patch.js";
+import { applyMergePatch, createMergePatch } from "./merge-patch.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
 import type { OpenClawConfig } from "./types.js";
 
-const OPEN_DM_POLICY_ALLOW_FROM_RE =
-  /^(?<policyPath>[a-z0-9_.-]+)\s*=\s*"open"\s+requires\s+(?<allowPath>[a-z0-9_.-]+)(?:\s+\(or\s+[a-z0-9_.-]+\))?\s+to include "\*"$/i;
-
-const MANAGED_CONFIG_UNSET_PATHS = [["plugins", "installs"]] as const;
 const AGENT_ROSTER_PATHS = [
   ["agents", "entries"],
   ["agents", "list"],
@@ -56,55 +51,9 @@ function assertUniqueNormalizedLegacyRosterIds(value: readonly unknown[]): void 
   }
 }
 
-type ManifestModelIdNormalizationProvider = {
-  aliases?: Record<string, string>;
-  stripPrefixes?: string[];
-  prefixWhenBare?: string;
-  prefixWhenBareAfterAliasStartsWith?: {
-    modelPrefix: string;
-    prefix: string;
-  }[];
-};
-
 // Clone config fragments before patching so mutation preparation never aliases callers.
 function cloneUnknown<T>(value: T): T {
   return structuredClone(value);
-}
-
-/** Builds an RFC-7396-style merge patch between source and target config values. */
-export function createMergePatch(base: unknown, target: unknown): unknown {
-  if (!isRecord(base) || !isRecord(target)) {
-    return cloneUnknown(target);
-  }
-
-  const patch: Record<string, unknown> = {};
-  const keys = new Set([...Object.keys(base), ...Object.keys(target)]);
-  for (const key of keys) {
-    const hasBase = Object.hasOwn(base, key);
-    const hasTarget = Object.hasOwn(target, key);
-    if (!hasTarget) {
-      patch[key] = null;
-      continue;
-    }
-    const targetValue = target[key];
-    if (!hasBase) {
-      patch[key] = cloneUnknown(targetValue);
-      continue;
-    }
-    const baseValue = base[key];
-    if (isRecord(baseValue) && isRecord(targetValue)) {
-      const childPatch = createMergePatch(baseValue, targetValue);
-      if (isRecord(childPatch) && Object.keys(childPatch).length === 0) {
-        continue;
-      }
-      patch[key] = childPatch;
-      continue;
-    }
-    if (!isDeepStrictEqual(baseValue, targetValue)) {
-      patch[key] = cloneUnknown(targetValue);
-    }
-  }
-  return patch;
 }
 
 export function projectSourceOntoRuntimeShape(source: unknown, runtime: unknown): unknown {
@@ -362,6 +311,100 @@ function deletePathValue(value: unknown, path: string[]): unknown {
   return next;
 }
 
+function normalizeTouchedAgentModelMapEntries(params: {
+  projectedSource: unknown;
+  patch: unknown;
+  explicitSetPaths?: readonly (readonly string[])[];
+  explicitSetValueSource: unknown;
+}): unknown {
+  const touchedMaps = new Map<string, { path: string[]; canonicalKeys: Set<string> }>();
+  const addKey = (path: string[], modelId: string) => {
+    const serialized = path.join("\0");
+    const target = touchedMaps.get(serialized) ?? { path, canonicalKeys: new Set<string>() };
+    target.canonicalKeys.add(normalizeAgentModelRefForConfig(modelId));
+    touchedMaps.set(serialized, target);
+  };
+
+  const defaultsModelsPatch = getPathValue(params.patch, ["agents", "defaults", "models"]);
+  if (isRecord(defaultsModelsPatch)) {
+    for (const modelId of Object.keys(defaultsModelsPatch)) {
+      addKey(["agents", "defaults", "models"], modelId);
+    }
+  }
+  const entriesPatch = getPathValue(params.patch, ["agents", "entries"]);
+  if (isRecord(entriesPatch)) {
+    for (const [agentId, entryPatch] of Object.entries(entriesPatch)) {
+      if (isRecord(entryPatch) && isRecord(entryPatch.models)) {
+        for (const modelId of Object.keys(entryPatch.models)) {
+          addKey(["agents", "entries", agentId, "models"], modelId);
+        }
+      }
+    }
+  }
+  const explicitModelMaps: string[][] = [["agents", "defaults", "models"]];
+  const explicitEntries = getPathValue(params.explicitSetValueSource, ["agents", "entries"]);
+  if (isRecord(explicitEntries)) {
+    for (const agentId of Object.keys(explicitEntries)) {
+      explicitModelMaps.push(["agents", "entries", agentId, "models"]);
+    }
+  }
+  for (const modelMapPath of explicitModelMaps) {
+    for (const explicitPath of params.explicitSetPaths ?? []) {
+      if (pathStartsWith(explicitPath, modelMapPath) && explicitPath.length > modelMapPath.length) {
+        const modelId = explicitPath[modelMapPath.length];
+        if (modelId) {
+          addKey(modelMapPath, modelId);
+        }
+        continue;
+      }
+      if (
+        !pathStartsWith(explicitPath, modelMapPath) &&
+        !pathStartsWith(modelMapPath, explicitPath)
+      ) {
+        continue;
+      }
+      const explicitModels = getPathValue(params.explicitSetValueSource, modelMapPath);
+      if (!isRecord(explicitModels)) {
+        continue;
+      }
+      for (const modelId of Object.keys(explicitModels)) {
+        addKey(modelMapPath, modelId);
+      }
+    }
+  }
+
+  let next = params.projectedSource;
+  for (const { path, canonicalKeys } of touchedMaps.values()) {
+    const models = getPathValue(next, path);
+    if (!isRecord(models)) {
+      continue;
+    }
+    const touchedEntries: Array<[string, unknown]> = [];
+    const untouchedEntries: Array<[string, unknown]> = [];
+    let hasRetiredTouchedKey = false;
+    for (const [modelId, entry] of Object.entries(models)) {
+      const normalizedModelId = normalizeAgentModelRefForConfig(modelId);
+      if (!canonicalKeys.has(normalizedModelId)) {
+        untouchedEntries.push([modelId, entry]);
+        continue;
+      }
+      touchedEntries.push([modelId, entry]);
+      hasRetiredTouchedKey ||= normalizedModelId !== modelId;
+    }
+    if (hasRetiredTouchedKey) {
+      const normalizedTouchedEntries = normalizeAgentModelMapForConfig(
+        Object.fromEntries(touchedEntries),
+      );
+      next = setPathValue(
+        next,
+        path,
+        Object.fromEntries([...untouchedEntries, ...Object.entries(normalizedTouchedEntries)]),
+      );
+    }
+  }
+  return next;
+}
+
 function preserveSourceValueAtPath(params: {
   persistedCandidate: unknown;
   sourceConfig: unknown;
@@ -456,176 +499,6 @@ function preserveAuthoredAgentParams(params: {
     });
   }
   return next;
-}
-
-function normalizeAgentModelConfigForWrite(value: unknown): unknown {
-  if (typeof value === "string") {
-    const normalized = normalizeAgentModelRefForConfig(value);
-    return normalized === value ? value : normalized;
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
-
-  let mutated = false;
-  const next: Record<string, unknown> = { ...value };
-  if (typeof value.primary === "string") {
-    const primary = normalizeAgentModelRefForConfig(value.primary);
-    if (primary !== value.primary) {
-      next.primary = primary;
-      mutated = true;
-    }
-  }
-  if (Array.isArray(value.fallbacks)) {
-    const fallbacks = value.fallbacks.map((fallback) =>
-      typeof fallback === "string" ? normalizeAgentModelRefForConfig(fallback) : fallback,
-    );
-    if (!isDeepStrictEqual(fallbacks, value.fallbacks)) {
-      next.fallbacks = fallbacks;
-      mutated = true;
-    }
-  }
-  return mutated ? next : value;
-}
-
-const AGENT_MODEL_CONFIG_KEYS = ["model", "imageModel", "voiceModel", "pdfModel"] as const;
-
-function normalizeModelConfigPathForWrite(config: unknown, path: string[]): unknown {
-  const value = getPathValue(config, path);
-  if (value === undefined) {
-    return config;
-  }
-  const normalizedModel = normalizeAgentModelConfigForWrite(value);
-  return normalizedModel !== value ? setPathValue(config, path, normalizedModel) : config;
-}
-
-function normalizeModelStringPathForWrite(config: unknown, path: string[]): unknown {
-  const value = getPathValue(config, path);
-  if (typeof value !== "string") {
-    return config;
-  }
-  const normalized = normalizeAgentModelRefForConfig(value);
-  return normalized !== value ? setPathValue(config, path, normalized) : config;
-}
-
-function normalizeAgentModelRefsAtPathForWrite(config: unknown, path: string[]): unknown {
-  const agent = getPathValue(config, path);
-  if (!isRecord(agent)) {
-    return config;
-  }
-
-  let next = config;
-  for (const key of AGENT_MODEL_CONFIG_KEYS) {
-    next = normalizeModelConfigPathForWrite(next, [...path, key]);
-  }
-  for (const key of ["image", "video", "music"] as const) {
-    next = normalizeModelConfigPathForWrite(next, [...path, "mediaModels", key]);
-  }
-  next = normalizeModelStringPathForWrite(next, [...path, "utilityModel"]);
-  next = normalizeModelStringPathForWrite(next, [...path, "heartbeat", "model"]);
-  next = normalizeModelConfigPathForWrite(next, [...path, "subagents", "model"]);
-  next = normalizeModelStringPathForWrite(next, [...path, "compaction", "model"]);
-  next = normalizeModelStringPathForWrite(next, [...path, "compaction", "memoryFlush", "model"]);
-
-  const models = getPathValue(next, [...path, "models"]);
-  if (isRecord(models)) {
-    const normalizedModels = normalizeAgentModelMapForConfig(models);
-    if (normalizedModels !== models) {
-      next = setPathValue(next, [...path, "models"], normalizedModels);
-    }
-  }
-  return next;
-}
-
-function normalizeAgentListModelRefsForWrite(config: unknown): unknown {
-  const entries = getPathValue(config, ["agents", "entries"]);
-  if (!isRecord(entries)) {
-    return config;
-  }
-
-  let mutated = false;
-  const nextEntries = Object.fromEntries(
-    Object.entries(entries).map(([agentId, agent]) => {
-      if (!isRecord(agent)) {
-        return [agentId, agent];
-      }
-
-      const normalized = normalizeAgentModelRefsAtPathForWrite({ agent }, ["agent"]) as {
-        agent: unknown;
-      };
-      if (normalized.agent !== agent) {
-        mutated = true;
-        return [agentId, normalized.agent];
-      }
-      return [agentId, agent];
-    }),
-  );
-
-  return mutated ? setPathValue(config, ["agents", "entries"], nextEntries) : config;
-}
-
-function normalizeToolsModelRefsForWrite(config: unknown): unknown {
-  return normalizeModelConfigPathForWrite(config, ["tools", "subagents", "model"]);
-}
-
-function normalizeModelProviderCatalogRefsForWrite(
-  config: unknown,
-  modelIdNormalizationPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>,
-): unknown {
-  const providers = getPathValue(config, ["models", "providers"]);
-  if (!isRecord(providers)) {
-    return config;
-  }
-
-  let mutated = false;
-  const nextProviders: Record<string, unknown> = { ...providers };
-  for (const [provider, providerConfig] of Object.entries(providers)) {
-    if (!isRecord(providerConfig) || !Array.isArray(providerConfig.models)) {
-      continue;
-    }
-
-    let providerMutated = false;
-    const models = providerConfig.models.map((model) => {
-      if (!isRecord(model) || typeof model.id !== "string") {
-        return model;
-      }
-      const trimmed = model.id.trim();
-      if (!trimmed) {
-        return model;
-      }
-      const id = normalizeConfiguredProviderCatalogModelId(
-        provider,
-        trimmed,
-        modelIdNormalizationPolicies,
-      );
-      if (id === model.id) {
-        return model;
-      }
-      providerMutated = true;
-      return { ...model, id };
-    });
-
-    if (providerMutated) {
-      nextProviders[provider] = { ...providerConfig, models };
-      mutated = true;
-    }
-  }
-
-  return mutated ? setPathValue(config, ["models", "providers"], nextProviders) : config;
-}
-
-function normalizeModelRefsForWrite(
-  config: unknown,
-  modelIdNormalizationPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>,
-): unknown {
-  return normalizeModelProviderCatalogRefsForWrite(
-    normalizeToolsModelRefsForWrite(
-      normalizeAgentListModelRefsForWrite(
-        normalizeAgentModelRefsAtPathForWrite(config, ["agents", "defaults"]),
-      ),
-    ),
-    modelIdNormalizationPolicies,
-  );
 }
 
 type IncludeSiblingProjection =
@@ -1621,10 +1494,14 @@ export function resolvePersistCandidateForWrite(params: {
   explicitSetValueSource?: unknown;
   allowedAgentRosterRemovals?: readonly string[];
   allowIncludeAncestorExplicitSetPaths?: boolean;
-  modelIdNormalizationPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>;
 }): unknown {
   const patch = createMergePatch(params.runtimeConfig, params.nextConfig);
-  const projectedSource = projectSourceOntoRuntimeShape(params.sourceConfig, params.runtimeConfig);
+  const projectedSource = normalizeTouchedAgentModelMapEntries({
+    projectedSource: projectSourceOntoRuntimeShape(params.sourceConfig, params.runtimeConfig),
+    patch,
+    explicitSetPaths: params.explicitSetPaths,
+    explicitSetValueSource: params.explicitSetValueSource ?? params.nextConfig,
+  });
   const rootAuthoredConfig = params.rootAuthoredConfig ?? params.sourceConfig;
   const persistCanonicalRoster = shouldPersistCanonicalAgentRoster(params);
   const includeOwnsRoster =
@@ -1726,7 +1603,7 @@ export function resolvePersistCandidateForWrite(params: {
     persistedCandidate: withSchema,
     unsetPaths: params.unsetPaths,
   });
-  return normalizeModelRefsForWrite(withAuthoredParams, params.modelIdNormalizationPolicies);
+  return withAuthoredParams;
 }
 
 function readRootSchemaUri(value: unknown): string | undefined {
@@ -1758,306 +1635,11 @@ function preserveRootSchemaUri(params: {
   };
 }
 
-export function formatConfigValidationFailure(pathLabel: string, issueMessage: string): string {
-  const match = issueMessage.match(OPEN_DM_POLICY_ALLOW_FROM_RE);
-  const policyPath = match?.groups?.policyPath?.trim();
-  const allowPath = match?.groups?.allowPath?.trim();
-  if (!policyPath || !allowPath) {
-    return `Config validation failed: ${pathLabel}: ${issueMessage}`;
-  }
-
-  return [
-    `Config validation failed: ${pathLabel}`,
-    "",
-    `Configuration mismatch: ${policyPath} is "open", but ${allowPath} does not include "*".`,
-    "",
-    "Fix with:",
-    `  openclaw config set ${allowPath} '["*"]'`,
-    "",
-    "Or switch policy:",
-    `  openclaw config set ${policyPath} "pairing"`,
-  ].join("\n");
-}
-
 function isNumericPathSegment(raw: string): boolean {
   return parseArrayIndexPathSegment(raw) !== undefined;
 }
 
 function parseArrayIndexPathSegment(raw: string): number | undefined {
   return parseConfigPathArrayIndex(raw);
-}
-
-function isWritePlainObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function hasOwnObjectKey(value: Record<string, unknown>, key: string): boolean {
-  return Object.hasOwn(value, key);
-}
-
-const WRITE_PRUNED_OBJECT = Symbol("write-pruned-object");
-
-function coerceConfig(value: unknown): OpenClawConfig {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  return value as OpenClawConfig;
-}
-
-function unsetPathForWriteAt(
-  value: unknown,
-  pathSegments: string[],
-  depth: number,
-): { changed: boolean; value: unknown } {
-  if (depth >= pathSegments.length) {
-    return { changed: false, value };
-  }
-  const segment = expectDefined(pathSegments[depth], "path segments entry at depth");
-  const isLeaf = depth === pathSegments.length - 1;
-
-  if (Array.isArray(value)) {
-    const index = parseArrayIndexPathSegment(segment);
-    if (index === undefined || index >= value.length) {
-      return { changed: false, value };
-    }
-    if (isLeaf) {
-      const next = value.slice();
-      next.splice(index, 1);
-      return { changed: true, value: next };
-    }
-    const child = unsetPathForWriteAt(value[index], pathSegments, depth + 1);
-    if (!child.changed) {
-      return { changed: false, value };
-    }
-    const next = value.slice();
-    if (child.value === WRITE_PRUNED_OBJECT) {
-      next.splice(index, 1);
-    } else {
-      next[index] = child.value;
-    }
-    return { changed: true, value: next };
-  }
-
-  if (
-    isBlockedObjectKey(segment) ||
-    !isWritePlainObject(value) ||
-    !hasOwnObjectKey(value, segment)
-  ) {
-    return { changed: false, value };
-  }
-  if (isLeaf) {
-    const next: Record<string, unknown> = { ...value };
-    delete next[segment];
-    return {
-      changed: true,
-      value: Object.keys(next).length === 0 ? WRITE_PRUNED_OBJECT : next,
-    };
-  }
-
-  const child = unsetPathForWriteAt(value[segment], pathSegments, depth + 1);
-  if (!child.changed) {
-    return { changed: false, value };
-  }
-  const next: Record<string, unknown> = { ...value };
-  if (child.value === WRITE_PRUNED_OBJECT) {
-    delete next[segment];
-  } else {
-    next[segment] = child.value;
-  }
-  return {
-    changed: true,
-    value: Object.keys(next).length === 0 ? WRITE_PRUNED_OBJECT : next,
-  };
-}
-
-function unsetPathForWrite(
-  root: OpenClawConfig,
-  pathSegments: string[],
-): { changed: boolean; next: OpenClawConfig } {
-  if (pathSegments.length === 0) {
-    return { changed: false, next: root };
-  }
-  const result = unsetPathForWriteAt(root, pathSegments, 0);
-  if (!result.changed) {
-    return { changed: false, next: root };
-  }
-  if (result.value === WRITE_PRUNED_OBJECT) {
-    return { changed: true, next: {} };
-  }
-  if (isWritePlainObject(result.value)) {
-    return { changed: true, next: coerceConfig(result.value) };
-  }
-  return { changed: false, next: root };
-}
-
-export function applyUnsetPathsForWrite(
-  root: OpenClawConfig,
-  unsetPaths: readonly string[][] | undefined,
-): OpenClawConfig {
-  let next = root;
-  for (const unsetPath of unsetPaths ?? []) {
-    if (!Array.isArray(unsetPath) || unsetPath.length === 0) {
-      continue;
-    }
-    const unsetResult = unsetPathForWrite(next, unsetPath);
-    if (unsetResult.changed) {
-      next = unsetResult.next;
-    }
-  }
-  return next;
-}
-
-export function resolveManagedUnsetPathsForWrite(
-  unsetPaths: readonly string[][] | undefined,
-): string[][] {
-  const next: string[][] = [];
-  for (const managedPath of MANAGED_CONFIG_UNSET_PATHS) {
-    next.push(Array.from(managedPath));
-  }
-  for (const unsetPath of unsetPaths ?? []) {
-    if (!Array.isArray(unsetPath) || unsetPath.length === 0) {
-      continue;
-    }
-    if (next.some((existing) => isDeepStrictEqual(existing, unsetPath))) {
-      continue;
-    }
-    next.push([...unsetPath]);
-  }
-  return next;
-}
-
-export function collectChangedPaths(
-  base: unknown,
-  target: unknown,
-  path: string,
-  output: Set<string>,
-): void {
-  if (Array.isArray(base) && Array.isArray(target)) {
-    const max = Math.max(base.length, target.length);
-    for (let index = 0; index < max; index += 1) {
-      const childPath = path ? `${path}[${index}]` : `[${index}]`;
-      if (index >= base.length || index >= target.length) {
-        output.add(childPath);
-        continue;
-      }
-      collectChangedPaths(base[index], target[index], childPath, output);
-    }
-    return;
-  }
-  if (isRecord(base) && isRecord(target)) {
-    const keys = new Set([...Object.keys(base), ...Object.keys(target)]);
-    for (const key of keys) {
-      const childPath = path ? `${path}.${key}` : key;
-      const hasBase = Object.hasOwn(base, key);
-      const hasTarget = Object.hasOwn(target, key);
-      if (!hasTarget || !hasBase) {
-        output.add(childPath);
-        continue;
-      }
-      collectChangedPaths(base[key], target[key], childPath, output);
-    }
-    return;
-  }
-  if (!isDeepStrictEqual(base, target)) {
-    output.add(path);
-  }
-}
-
-function parentPath(value: string): string {
-  if (!value) {
-    return "";
-  }
-  if (value.endsWith("]")) {
-    const index = value.lastIndexOf("[");
-    return index > 0 ? value.slice(0, index) : "";
-  }
-  const index = value.lastIndexOf(".");
-  return index >= 0 ? value.slice(0, index) : "";
-}
-
-function isPathChanged(path: string, changedPaths: Set<string>): boolean {
-  if (changedPaths.has(path)) {
-    return true;
-  }
-  let current = parentPath(path);
-  while (current) {
-    if (changedPaths.has(current)) {
-      return true;
-    }
-    current = parentPath(current);
-  }
-  return changedPaths.has("");
-}
-
-export function restoreEnvRefsFromMap(
-  value: unknown,
-  path: string,
-  envRefMap: Map<string, string>,
-  changedPaths: Set<string>,
-  identityRestoredPaths: ReadonlySet<string> = new Set(),
-): unknown {
-  if (typeof value === "string") {
-    if (identityRestoredPaths.has(path)) {
-      return value;
-    }
-    if (!isPathChanged(path, changedPaths)) {
-      const original = envRefMap.get(path);
-      if (original !== undefined) {
-        return original;
-      }
-    }
-    return value;
-  }
-  if (Array.isArray(value)) {
-    let changed = false;
-    const next = value.map((item, index) => {
-      const updated = restoreEnvRefsFromMap(
-        item,
-        `${path}[${index}]`,
-        envRefMap,
-        changedPaths,
-        identityRestoredPaths,
-      );
-      if (updated !== item) {
-        changed = true;
-      }
-      return updated;
-    });
-    return changed ? next : value;
-  }
-  if (isRecord(value)) {
-    let changed = false;
-    const next: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value)) {
-      const childPath = path ? `${path}.${key}` : key;
-      const updated = restoreEnvRefsFromMap(
-        child,
-        childPath,
-        envRefMap,
-        changedPaths,
-        identityRestoredPaths,
-      );
-      if (updated !== child) {
-        changed = true;
-      }
-      next[key] = updated;
-    }
-    return changed ? next : value;
-  }
-  return value;
-}
-
-export function resolveWriteEnvSnapshotForPath(params: {
-  actualConfigPath: string;
-  expectedConfigPath?: string;
-  envSnapshotForRestore?: Record<string, string | undefined>;
-}): Record<string, string | undefined> | undefined {
-  if (
-    params.expectedConfigPath === undefined ||
-    params.expectedConfigPath === params.actualConfigPath
-  ) {
-    return params.envSnapshotForRestore;
-  }
-  return undefined;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

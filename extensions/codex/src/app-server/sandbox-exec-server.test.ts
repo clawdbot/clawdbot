@@ -5,6 +5,7 @@ import {
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,
 } from "./sandbox-exec-server.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 const CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES = 100 * 1024 * 1024;
 import {
@@ -47,7 +48,7 @@ describe("OpenClaw Codex sandbox exec-server", () => {
   it("reports unavailable app-server remote environment support without exposing an environment", async () => {
     const sandbox = createSandboxContext({});
     const client = {
-      getServerVersion: vi.fn(() => "0.132.0"),
+      getServerVersion: vi.fn(() => CODEX_APP_SERVER_VERSION),
       request: vi.fn(async () => {
         throw new Error("unknown variant environment/add");
       }),
@@ -60,6 +61,40 @@ describe("OpenClaw Codex sandbox exec-server", () => {
       }),
     ).resolves.toBeUndefined();
   });
+
+  it.each([
+    { containerWorkdir: "/workspace", cwd: "file:///workspace" },
+    {
+      containerWorkdir: "/workspace/space #project",
+      cwd: "file:///workspace/space%20%23project",
+    },
+  ])(
+    "reports target shell, encoded workdir, and readiness for $containerWorkdir",
+    async ({ containerWorkdir, cwd }) => {
+      const sandbox = createSandboxContext({});
+      sandbox.containerWorkdir = containerWorkdir;
+      const client = createClient();
+
+      await ensureCodexSandboxExecServerEnvironment({
+        client: client as never,
+        sandbox,
+      });
+      const socket = await openSocket(execServerUrlFromClient(client));
+      await rpc(socket, "initialize", { clientName: "test" });
+      socket.send(JSON.stringify({ method: "initialized" }));
+
+      await expect(rpc(socket, "environment/info", {})).resolves.toEqual({
+        shell: { name: "sh", path: "/bin/sh" },
+        cwd,
+        capabilities: { networkProxyLaunch: false },
+      });
+      await expect(rpc(socket, "environment/status", {})).resolves.toEqual({
+        status: "ready",
+      });
+
+      socket.close();
+    },
+  );
 
   it("does not advertise a local exec-server URL to remote app-servers", async () => {
     const sandbox = createSandboxContext({});
@@ -112,7 +147,7 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     const sandbox = createSandboxContext({ buildExecSpec });
     const requests: Array<{ method: string; params: unknown }> = [];
     const client = {
-      getServerVersion: vi.fn(() => "0.132.0"),
+      getServerVersion: vi.fn(() => CODEX_APP_SERVER_VERSION),
       request: vi.fn(async (method: string, params: unknown) => {
         requests.push({ method, params });
         return {};
@@ -500,6 +535,36 @@ describe("OpenClaw Codex sandbox exec-server", () => {
         processId: "missing",
       }),
     ).resolves.toEqual({ running: false });
+    socket.close();
+  });
+
+  it("distinguishes unsupported exec methods from missing filesystem resources", async () => {
+    const sandbox = createSandboxContext({ stat: async () => null });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    for (const method of ["fs/walk", "process/signal", "unsupported/method"]) {
+      await expect(rpc(socket, method, {})).rejects.toMatchObject({
+        code: -32601,
+        message: `Unsupported OpenClaw sandbox exec-server method: ${method}`,
+      });
+    }
+    await expect(
+      rpc(socket, "fs/getMetadata", { path: "file:///workspace/missing" }),
+    ).rejects.toMatchObject({
+      code: -32004,
+      message: "file not found",
+    });
+    await expect(rpc(socket, "environment/status", {})).resolves.toEqual({
+      status: "ready",
+    });
+
     socket.close();
   });
 

@@ -5,6 +5,7 @@ import { isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
+import { collectChangedPaths } from "./config-change-paths.js";
 import {
   configSnapshotAuditRecordMatchesPath,
   fingerprintConfigSnapshotAuthoredConfig,
@@ -12,7 +13,15 @@ import {
   restoreConfigSnapshotAuditRecord,
   upsertConfigSnapshotAuditRecord,
 } from "./config-journal-snapshot.js";
-import { EnvRefArrayMutationError, restoreEnvVarRefs } from "./env-preserve.js";
+import {
+  applyUnsetPathsForWrite,
+  resolveManagedUnsetPathsForWrite,
+} from "./config-path-mutation.js";
+import {
+  EnvRefArrayMutationError,
+  restoreEnvRefsFromMap,
+  restoreEnvVarRefs,
+} from "./env-preserve.js";
 import { INCLUDE_KEY, readConfigIncludeFileWithGuards, resolveConfigIncludes } from "./includes.js";
 import {
   appendConfigAuditRecord,
@@ -24,7 +33,6 @@ import {
   type ConfigWriteAuditResult,
 } from "./io.audit.js";
 import type { ConfigIoContext } from "./io.context.js";
-import { resolveModelIdNormalizationPolicies } from "./io.context.js";
 import { recordConfigWriteMetadata } from "./io.meta.js";
 import {
   collectEnvRefPaths,
@@ -44,14 +52,10 @@ import type {
 } from "./io.types.js";
 import { ConfigRuntimeRefreshError, configWritePostCommitRollback } from "./io.types.js";
 import { logConfigWarningsOnce } from "./io.warnings.js";
+import { formatConfigValidationFailure } from "./io.write-errors.js";
 import {
-  applyUnsetPathsForWrite,
-  collectChangedPaths,
-  formatConfigValidationFailure,
   preserveIncludeOwnedConfigForWrite,
-  resolveManagedUnsetPathsForWrite,
   resolvePersistCandidateForWrite,
-  restoreEnvRefsFromMap,
 } from "./io.write-prepare.js";
 import {
   assertBaseSnapshotStillCurrent,
@@ -136,15 +140,12 @@ export async function writeConfigFileFromContext(
       sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
       nextConfig: cfg,
       rootAuthoredConfig: snapshot.parsed,
-      agentRosterIncludeOwned: snapshot.includeProvenance?.agentRoster,
+      agentRosterIncludeOwned: snapshot.agentRosterIncludeOwned,
       unsetPaths,
       explicitSetPaths: options.explicitSetPaths,
       explicitSetValueSource: options.explicitSetValueSource,
       allowedAgentRosterRemovals: options.allowedAgentRosterRemovals,
       allowIncludeAncestorExplicitSetPaths: options.allowIncludeAncestorExplicitSetPaths,
-      modelIdNormalizationPolicies: resolveModelIdNormalizationPolicies(
-        snapshotRead.pluginMetadataSnapshot,
-      ),
     });
   } else if (snapshot.exists && hasAuthoredIncludes) {
     persistCandidate = preserveIncludeOwnedConfigForWrite({

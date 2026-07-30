@@ -14,7 +14,9 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
   nativeGatewaysCapability: () => nativeGateways.current,
 }));
 
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import type {
   NativeGatewaysCapability,
   NativeGatewaysSnapshot,
@@ -33,6 +35,7 @@ import { ChatPage } from "./chat-page.ts";
 import { loadChatRoute } from "./route-loader.ts";
 
 const WORK_SESSION_KEY = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+const SESSION_VIEWERS_SET_METHOD = "sessions.viewers.set";
 const CATALOG_KEY = {
   catalogId: "claude",
   hostId: "gateway:local",
@@ -131,13 +134,14 @@ function getDropIndicator(page: ChatPage) {
 function setNavigationContext(page: ChatPage) {
   const navigate = vi.fn();
   const replace = vi.fn();
+  const patch = vi.fn(async () => null);
   const agentSelectionState = { selectedId: "main" };
   const setAgent = vi.fn((agentId: string) => {
     agentSelectionState.selectedId = agentId;
   });
   const context = {
     basePath: "",
-    sessions: { state: { result: null }, subscribe: () => () => undefined },
+    sessions: { state: { result: null }, subscribe: () => () => undefined, patch },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
     gateway: { snapshot: { hello: null } },
     navigate,
@@ -145,7 +149,47 @@ function setNavigationContext(page: ChatPage) {
     agentSelection: { state: agentSelectionState, set: setAgent },
   } as unknown as ApplicationContext;
   (page as unknown as { context: ApplicationContext }).context = context;
-  return { context, navigate, replace, setAgent };
+  return { context, navigate, replace, setAgent, patch };
+}
+
+function setViewerPresenceContext(page: ChatPage) {
+  const navigation = setNavigationContext(page);
+  const request = vi.fn<GatewayBrowserClient["request"]>().mockResolvedValue({ sessionKeys: [] });
+  const client = { request } as unknown as GatewayBrowserClient;
+  const hello = {
+    type: "hello-ok",
+    protocol: 1,
+    auth: { role: "operator", scopes: [] },
+    features: { methods: [SESSION_VIEWERS_SET_METHOD] },
+    snapshot: { sessionDefaults: { mainSessionKey: "agent:main:main" } },
+  } as GatewayHelloOk;
+  const snapshotListeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
+  (navigation.context as unknown as { gateway: ApplicationContext["gateway"] }).gateway = {
+    snapshot: {
+      client,
+      phase: "connected",
+      offlineStable: false,
+      hello,
+      canvasPluginSurfaceUrl: null,
+      assistantAgentId: "main",
+      sessionKey: "agent:main:main",
+      lastError: null,
+      lastErrorCode: null,
+    },
+    connection: { gatewayUrl: "ws://example.test", token: "", bootstrapToken: "", password: "" },
+    eventLog: [],
+    connect: vi.fn(),
+    setSessionKey: vi.fn(),
+    start: vi.fn(),
+    stop: vi.fn(),
+    subscribe: (listener) => {
+      snapshotListeners.add(listener);
+      return () => snapshotListeners.delete(listener);
+    },
+    subscribeEventLog: () => () => {},
+    subscribeEvents: () => () => {},
+  };
+  return { ...navigation, request };
 }
 
 function stubMatchMedia(matches: boolean) {
@@ -379,6 +423,7 @@ describe("chat page split layout host", () => {
   });
 
   it("replaces a cold literal main route after canonical defaults resolve", async () => {
+    window.history.replaceState({}, "", "/chat/research/workspace?draft=ship");
     const page = new ChatPage();
     const navigation = setNavigationContext(page);
     const canonicalLocation = deferred<RouteLocation | null>();
@@ -387,6 +432,11 @@ describe("chat page split layout host", () => {
       face: "chat",
       draft: "ship",
       canonicalLocationReady: canonicalLocation.promise,
+      canonicalLocationSource: {
+        pathname: "/chat/research/workspace",
+        search: "?draft=ship",
+        hash: "",
+      },
     };
     document.body.append(page);
     await page.updateComplete;
@@ -405,6 +455,91 @@ describe("chat page split layout host", () => {
         hash: "",
       }),
     );
+  });
+
+  it("does not let a cold chat canonicalization replace a newer route", async () => {
+    window.history.replaceState({}, "", "/chat/research/workspace");
+    const page = new ChatPage();
+    const navigation = setNavigationContext(page);
+    const canonicalLocation = deferred<RouteLocation | null>();
+    page.data = {
+      sessionKey: "agent:research:workspace",
+      face: "chat",
+      canonicalLocationReady: canonicalLocation.promise,
+      canonicalLocationSource: {
+        pathname: "/chat/research/workspace",
+        search: "",
+        hash: "",
+      },
+    };
+    document.body.append(page);
+    await page.updateComplete;
+
+    window.history.replaceState({}, "", "/settings/appearance");
+    canonicalLocation.resolve({ pathname: "/chat/research", search: "", hash: "" });
+    await canonicalLocation.promise;
+    await Promise.resolve();
+
+    expect(navigation.replace).not.toHaveBeenCalled();
+  });
+
+  it("does not let a cold chat canonicalization replace a newer draft", async () => {
+    window.history.replaceState({}, "", "/chat/research/workspace?draft=old");
+    const page = new ChatPage();
+    const navigation = setNavigationContext(page);
+    const canonicalLocation = deferred<RouteLocation | null>();
+    page.data = {
+      sessionKey: "agent:research:workspace",
+      face: "chat",
+      draft: "old",
+      canonicalLocationReady: canonicalLocation.promise,
+      canonicalLocationSource: {
+        pathname: "/chat/research/workspace",
+        search: "?draft=old",
+        hash: "",
+      },
+    };
+    document.body.append(page);
+    await page.updateComplete;
+    await Promise.resolve();
+    navigation.replace.mockClear();
+
+    window.history.replaceState({}, "", "/chat/research/workspace?draft=new");
+    canonicalLocation.resolve({ pathname: "/chat/research", search: "?draft=old", hash: "" });
+    await canonicalLocation.promise;
+    await Promise.resolve();
+
+    expect(navigation.replace).not.toHaveBeenCalled();
+  });
+
+  it("replaces into the canonical face namespace without adding history", async () => {
+    window.history.replaceState({}, "", "/chat");
+    const page = new ChatPage();
+    const navigation = setNavigationContext(page);
+    // The loader resolved this session to its stored dashboard face while the route was
+    // matched under /chat, so the replacement has to be routed by the resolved face.
+    page.data = {
+      sessionKey: WORK_SESSION_KEY,
+      face: "dashboard",
+      canonicalLocation: {
+        pathname: "/dashboard/main/deploy-monitor-12345678",
+        search: "",
+        hash: "",
+      },
+      canonicalLocationSource: {
+        pathname: "/chat",
+        search: "",
+        hash: "",
+      },
+    };
+    document.body.append(page);
+    await page.updateComplete;
+
+    expect(navigation.replace).toHaveBeenCalledWith("dashboard", {
+      pathname: "/dashboard/main/deploy-monitor-12345678",
+      search: "",
+      hash: "",
+    });
   });
 
   it("keeps catalog identity when consuming a route draft", async () => {
@@ -482,6 +617,11 @@ describe("chat page split layout host", () => {
     expect(navigation.navigate).toHaveBeenCalledWith("dashboard", {
       pathname: "/dashboard/main/1234567890",
     });
+    expect(navigation.patch).toHaveBeenCalledWith(
+      WORK_SESSION_KEY,
+      { boardFace: "dashboard" },
+      { agentId: "main" },
+    );
   });
 
   it("passes an empty session key while route data is still unresolved", async () => {
@@ -516,6 +656,65 @@ describe("chat page split layout host", () => {
     ).toBe(true);
     expect(panes.every((pane) => pane.onOpenSplitView === undefined)).toBe(true);
     expect(panes[0]?.chatMessagesBySession).toBe(panes[1]?.chatMessagesBySession);
+  });
+
+  it("declares split panes, session switches, pane closes, and page disposal", async () => {
+    const page = new ChatPage();
+    const { request } = setViewerPresenceContext(page);
+    page.data = { sessionKey: "main" };
+    document.body.append(page);
+    setLayout(page, {
+      columns: [
+        {
+          id: "c1",
+          panes: [{ id: "p1", sessionKey: "main" }],
+          paneWeights: [1],
+        },
+        {
+          id: "c2",
+          panes: [{ id: "p2", sessionKey: "agent:main:other" }],
+          paneWeights: [1],
+        },
+      ],
+      columnWeights: [0.5, 0.5],
+      activePaneId: "p2",
+    });
+    await page.updateComplete;
+    await Promise.resolve();
+    expect(request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
+      sessionKeys: ["agent:main:main", "agent:main:other"],
+    });
+
+    const otherPane = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].find(
+      (pane) => pane.paneId === "p2",
+    );
+    otherPane?.onClosePane?.("p2");
+    await page.updateComplete;
+    await Promise.resolve();
+    expect(request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
+      sessionKeys: ["agent:main:main"],
+    });
+
+    page.data = { sessionKey: "agent:main:replacement" };
+    await page.updateComplete;
+    await Promise.resolve();
+    expect(request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
+      sessionKeys: ["agent:main:replacement"],
+    });
+
+    page.requestUpdate();
+    page.remove();
+    await page.updateComplete;
+    expect(request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, { sessionKeys: [] });
+
+    document.body.append(page);
+    await Promise.resolve();
+    expect(request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
+      sessionKeys: ["agent:main:replacement"],
+    });
+    page.remove();
+    await Promise.resolve();
+    expect(request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, { sessionKeys: [] });
   });
 
   it("renders only the active pane from a preserved split on narrow viewports", async () => {

@@ -1,8 +1,8 @@
 /** Preflights local model-provider endpoints before scheduled cron runner startup. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isLocalProviderBaseUrl } from "../../agents/model-provider-local.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
@@ -69,45 +69,6 @@ function normalizeBaseUrl(value: unknown): string | undefined {
 function normalizeProbeApi(providerConfig: ModelProviderConfig): PreflightApi | undefined {
   const api = normalizeLowercaseStringOrEmpty(providerConfig.api);
   return api === "ollama" || api === "openai-completions" ? api : undefined;
-}
-
-function isPrivateIpv4Host(host: string): boolean {
-  if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
-    return false;
-  }
-  const octets = host.split(".").map((part) => Number.parseInt(part, 10));
-  if (octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return false;
-  }
-  const [a, b] = octets;
-  return (
-    a === 10 ||
-    (a === 172 &&
-      expectDefined(b, "model preflight.runtime b") >= 16 &&
-      expectDefined(b, "model preflight.runtime b") <= 31) ||
-    (a === 192 && b === 168)
-  );
-}
-
-function isLocalProviderBaseUrl(baseUrl: string): boolean {
-  try {
-    let host = normalizeLowercaseStringOrEmpty(new URL(baseUrl).hostname);
-    if (host.startsWith("[") && host.endsWith("]")) {
-      host = host.slice(1, -1);
-    }
-    return (
-      host === "localhost" ||
-      host === "127.0.0.1" ||
-      host === "0.0.0.0" ||
-      host === "::1" ||
-      host === "::ffff:7f00:1" ||
-      host === "::ffff:127.0.0.1" ||
-      host.endsWith(".local") ||
-      isPrivateIpv4Host(host)
-    );
-  } catch {
-    return false;
-  }
 }
 
 function buildProbeUrl(api: PreflightApi, baseUrl: string): string {
@@ -254,6 +215,11 @@ async function probeLocalProviderEndpoint(params: {
     // have the full provider context.
     void response.status;
   } finally {
+    // Captured responses can tee their body, so awaiting branch cancellation
+    // would hang the cron probe; start cancellation before closing the agent.
+    if (!response.bodyUsed) {
+      void response.body?.cancel().catch(() => undefined);
+    }
     await release();
   }
 }

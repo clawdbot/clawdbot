@@ -103,6 +103,28 @@ function sessionTableHeaders(container: HTMLElement): Array<string | undefined> 
 const SESSION_TABLE_HEADERS = ["", "Key", "Kind", "Status", "Updated", "Tokens", "Actions"];
 
 describe("sessions view", () => {
+  it("uses the stored face for generic session links", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+            kind: "direct",
+            boardFace: "dashboard",
+            updatedAt: 1,
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector<HTMLAnchorElement>(".session-link")?.getAttribute("href")).toBe(
+      "/dashboard/main/12345678",
+    );
+  });
+
   it("keeps transcript search distinct from the loaded-roster filter", async () => {
     const container = document.createElement("div");
     const onTranscriptSearchChange = vi.fn();

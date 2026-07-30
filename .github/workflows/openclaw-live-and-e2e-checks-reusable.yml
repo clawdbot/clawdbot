@@ -974,12 +974,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export OPENSHELL_VERSION=v0.0.68
+          export OPENSHELL_VERSION=v0.0.92
           installer_path="$(mktemp "${RUNNER_TEMP}/openshell-install.XXXXXX")"
           trap 'rm -f "$installer_path"' EXIT
           curl -LsSf --connect-timeout 10 --max-time 120 \
             -o "$installer_path" \
-            https://raw.githubusercontent.com/NVIDIA/OpenShell/d64542f69d06694cbd203b64929d286dd0533bbb/install.sh
+            https://raw.githubusercontent.com/NVIDIA/OpenShell/2d108818f84be568e63232d5d0aba53775cea4f7/install.sh
           sh "$installer_path"
           openshell --version
 
@@ -1990,18 +1990,21 @@ jobs:
 
       - name: Setup artifact package validation environment
         if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''
-        uses: ./.release-harness/.github/actions/setup-node-env
+        uses: ./.release-harness/.github/actions/setup-pnpm-store-cache
         with:
           node-version: ${{ env.NODE_VERSION }}
-          install-bun: "false"
-          install-deps: "false"
+          package-manager-file: .release-harness/package.json
           use-actions-cache: "false"
 
       - name: Install trusted package validation dependencies
         if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''
         env:
           CI: "true"
-        run: pnpm --dir .release-harness install --frozen-lockfile --prefer-offline --ignore-scripts
+        # Corepack resolves packageManager from the process cwd before pnpm can
+        # process --dir. Keep this in the trusted harness so a frozen candidate
+        # pin cannot select a different pnpm binary for its harness install.
+        working-directory: .release-harness
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Validate OpenClaw package artifact identity
         id: input_package_artifact

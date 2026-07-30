@@ -121,6 +121,19 @@ function serviceLane(name, command, options = {}) {
   });
 }
 
+function releaseTypedOnboardingLane() {
+  return npmLane(
+    "release-typed-onboarding",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:release-typed-onboarding",
+    {
+      resources: ["npm", "service"],
+      stateScenario: "empty",
+      timeoutMs: 20 * 60 * 1000,
+      weight: 3,
+    },
+  );
+}
+
 function createPackageUpdateMaintenanceLanes() {
   return [
     npmLane("doctor-switch", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:doctor-switch", {
@@ -234,6 +247,18 @@ function liveCodexNpmPluginLane() {
       resources: ["npm"],
       stateScenario: "empty",
       timeoutMs: 30 * 60 * 1000,
+      weight: 3,
+    },
+  );
+}
+
+function mcpCodeModeGatewayLane() {
+  return serviceLane(
+    "mcp-code-mode-gateway",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:mcp-code-mode-gateway",
+    {
+      resources: ["npm"],
+      stateScenario: "empty",
       weight: 3,
     },
   );
@@ -410,16 +435,7 @@ export const mainLanes = [
       weight: 4,
     },
   ),
-  npmLane(
-    "release-typed-onboarding",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:release-typed-onboarding",
-    {
-      resources: ["npm", "service"],
-      stateScenario: "empty",
-      timeoutMs: 20 * 60 * 1000,
-      weight: 3,
-    },
-  ),
+  releaseTypedOnboardingLane(),
   npmLane(
     "release-media-memory",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:release-media-memory",
@@ -457,6 +473,15 @@ export const mainLanes = [
     weight: 3,
   }),
   serviceLane(
+    "sandbox-browser-sidecar",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:sandbox-browser-sidecar",
+    {
+      stateScenario: "empty",
+      timeoutMs: 20 * 60 * 1000,
+      weight: 4,
+    },
+  ),
+  serviceLane(
     "agents-delete-shared-workspace",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:agents-delete-shared-workspace",
     { stateScenario: "empty" },
@@ -466,15 +491,7 @@ export const mainLanes = [
     stateScenario: "empty",
     weight: 3,
   }),
-  serviceLane(
-    "mcp-code-mode-gateway",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:mcp-code-mode-gateway",
-    {
-      resources: ["npm"],
-      stateScenario: "empty",
-      weight: 3,
-    },
-  ),
+  mcpCodeModeGatewayLane(),
   lane(
     "agent-bundle-mcp-tools",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:agent-bundle-mcp-tools",
@@ -789,6 +806,7 @@ const releasePathPackageInstallOpenAiLanes = [
     timeoutMs: 30 * 60 * 1000,
     weight: 3,
   }),
+  releaseTypedOnboardingLane(),
 ];
 
 const releasePathPackageInstallAnthropicLanes = [
@@ -865,6 +883,7 @@ const primaryReleasePathChunks = {
       stateScenario: "empty",
       weight: 3,
     }),
+    mcpCodeModeGatewayLane(),
   ],
   "package-update-openai": releasePathPackageInstallOpenAiLanes,
   "package-update-anthropic": releasePathPackageInstallAnthropicLanes,

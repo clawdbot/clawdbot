@@ -88,10 +88,10 @@ describe("cron tool", () => {
   it("tells models to keep cron expressions in local wall-clock time for tz", () => {
     const tool = createTestCronTool();
 
-    expect(tool.description).toContain("requested local wall time");
+    expect(tool.description).toContain("expr is wall time in tz");
     expect(tool.description).toContain("never pre-convert to UTC");
-    expect(tool.description).toContain("Missing tz = Gateway host local");
-    expect(tool.description).toContain("timezone-less = UTC");
+    expect(tool.description).toContain("no tz=gateway host local");
+    expect(tool.description).toContain("no tz=UTC");
     expect(tool.description).toContain('expr:"0 18 * * *"');
     expect(tool.description).toContain('tz:"Asia/Shanghai"');
   });
@@ -450,6 +450,41 @@ describe("cron tool", () => {
     });
   });
 
+  it("does not let requested pagination bypass the scoped current-job scan", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      jobs: [{ id: "job-current", name: "current" }],
+      total: 1,
+      offset: 0,
+      limit: 200,
+      hasMore: false,
+      nextOffset: null,
+    });
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:agent-123:cron:job-current:run:abc",
+      selfRemoveOnlyJobId: "job-current",
+    });
+
+    const result = await tool.execute("call-scoped-list-requested-pagination", {
+      action: "list",
+      limit: 1,
+      offset: 200,
+    });
+
+    expectSingleGatewayCallMethod("cron.list");
+    expect(readGatewayCall().params).toEqual({
+      includeDisabled: false,
+      compact: true,
+      agentId: "agent-123",
+      limit: 200,
+      offset: 0,
+    });
+    expect(result.details).toMatchObject({
+      jobs: [{ id: "job-current", name: "current" }],
+      total: 1,
+      hasMore: false,
+    });
+  });
+
   it.each([
     ["add", { action: "add", job: buildReminderAgentTurnJob() }],
     ["update", { action: "update", jobId: "job-current", patch: { enabled: false } }],
@@ -513,6 +548,87 @@ describe("cron tool", () => {
       compact: true,
       agentId: "worker",
     });
+  });
+
+  it("loads cron jobs beyond the first bounded page", async () => {
+    const firstPage = {
+      jobs: Array.from({ length: 200 }, (_, index) => ({
+        id: `job-${index}`,
+        name: `job ${index}`,
+      })),
+      total: 201,
+      offset: 0,
+      limit: 200,
+      hasMore: true,
+      nextOffset: 200,
+    };
+    const secondPage = {
+      jobs: [{ id: "job-200", name: "job 200" }],
+      total: 201,
+      offset: 200,
+      limit: 200,
+      hasMore: false,
+      nextOffset: null,
+    };
+    callGatewayMock.mockResolvedValueOnce(firstPage).mockResolvedValueOnce(secondPage);
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:agent-123:telegram:direct:channing",
+    });
+
+    const firstResult = await tool.execute("call-list-first-page", {
+      action: "list",
+      limit: 200,
+      offset: 0,
+    });
+    const secondResult = await tool.execute("call-list-second-page", {
+      action: "list",
+      limit: 200,
+      offset: firstPage.nextOffset,
+    });
+
+    expect(readGatewayCall(0)).toEqual({
+      method: "cron.list",
+      params: {
+        includeDisabled: false,
+        compact: true,
+        agentId: "agent-123",
+        limit: 200,
+        offset: 0,
+      },
+    });
+    expect(readGatewayCall(1)).toEqual({
+      method: "cron.list",
+      params: {
+        includeDisabled: false,
+        compact: true,
+        agentId: "agent-123",
+        limit: 200,
+        offset: 200,
+      },
+    });
+    expect(firstResult.details).toEqual(firstPage);
+    expect(secondResult.details).toEqual(secondPage);
+  });
+
+  it.each([
+    ["zero limit", { limit: 0 }],
+    ["negative limit", { limit: -1 }],
+    ["fractional limit", { limit: 1.5 }],
+    ["oversized limit", { limit: 201 }],
+    ["unsafe limit", { limit: Number.MAX_SAFE_INTEGER + 1 }],
+    ["malformed limit", { limit: "1x" }],
+    ["negative offset", { offset: -1 }],
+    ["fractional offset", { offset: 1.5 }],
+    ["unsafe offset", { offset: Number.MAX_SAFE_INTEGER + 1 }],
+    ["malformed offset", { offset: "1x" }],
+  ])("rejects a %s before calling the cron gateway", async (_label, pagination) => {
+    const tool = createTestCronTool();
+
+    await expect(
+      tool.execute("call-invalid-list-pagination", { action: "list", ...pagination }),
+    ).rejects.toThrow(/(?:limit|offset) must be a (?:positive|non-negative) integer/);
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("retries cron.list without compact for older gateways", async () => {
@@ -690,29 +806,27 @@ describe("cron tool", () => {
 
   it("documents deferred follow-up guidance in the tool description", () => {
     const tool = createTestCronTool();
-    expect(tool.description).toContain("reminders, later checks/follow-ups, recurring work");
-    expect(tool.description).toContain("Never exec sleep/process-poll as timer.");
+    expect(tool.description).toContain("reminders, delayed self-wakeups, loops, recurring work");
+    expect(tool.description).toContain("Never exec sleep/poll as timer.");
   });
 
   it("documents the event-trigger authoring contract", () => {
     const tool = createTestCronTool();
 
-    expect(tool.description).toContain("Requires cron.triggers.enabled");
-    expect(tool.description).toContain("quiet check has no model");
-    expect(tool.description).toContain("trigger.state");
-    expect(tool.description).toContain("fire:false saves state only; no payload/history");
-    expect(tool.description).toContain("fired state saves only after payload success");
-    expect(tool.description).toContain("every actionable state, including failures/timeouts");
-    expect(tool.description).toContain("success-only watchers go silent when broken");
     expect(tool.description).toContain(
-      "Dedupe by comparing trigger.state and returning new state, never memory",
+      "needs cron.triggers.enabled — if off, say so; never model-poll instead",
     );
-    expect(tool.description).toContain("scripts read-only; actions belong in payload");
-    expect(tool.description).toContain("message must be self-contained");
-    expect(tool.description).toContain("the fired run's entire context");
-    expect(tool.description).toContain('Silent watcher: top-level delivery.mode="none"');
-    expect(tool.description).toContain("missing route may fail");
-    expect(tool.description).toContain("once:true disables after first successful fire");
+    expect(tool.description).toContain("Quiet headless check, no model");
+    expect(tool.description).toContain("trigger.state");
+    expect(tool.description).toContain("fire:false saves state only");
+    expect(tool.description).toContain("fire:true runs payload");
+    expect(tool.description).toContain("Fire on failures/timeouts too");
+    expect(tool.description).toContain("success-only watchers look healthy when broken");
+    expect(tool.description).toContain("dedupe via state, never memory");
+    expect(tool.description).toContain("Script stays read-only; actions belong in payload");
+    expect(tool.description).toContain("message is that run's entire context — self-contained");
+    expect(tool.description).toContain('Silent watcher=>mode:"none"');
+    expect(tool.description).toContain("once:true disables after first fire");
     expect(tool.description).toContain('await tools.call("exec"');
   });
 
@@ -721,7 +835,7 @@ describe("cron tool", () => {
     const parameters = tool.parameters as SchemaLike;
     const runMode = parameters.properties?.runMode;
 
-    expect(tool.description).toContain('run jobId (due only; runMode="force" now)');
+    expect(tool.description).toContain('run jobId (runMode "force"=now)');
     expect(runMode?.description).toContain('omitted defaults to "due"');
     expect(runMode?.description).toContain('use "force" to trigger now');
   });
@@ -1550,6 +1664,22 @@ describe("cron tool", () => {
       agentSessionKey: callerSessionKey,
     });
     expect(sessionKey).toBe(callerSessionKey);
+  });
+
+  it("defaults scoped agentTurn adds to the creating conversation", async () => {
+    const callerSessionKey = "agent:main:discord:channel:ops";
+    const tool = createTestCronTool({ agentSessionKey: callerSessionKey });
+
+    await tool.execute("call-current-default", {
+      action: "add",
+      job: buildReminderAgentTurnJob(),
+    });
+
+    expect(expectSingleGatewayCallMethod("cron.add")).toMatchObject({
+      sessionTarget: "current",
+      sessionKey: callerSessionKey,
+      delivery: { mode: "announce" },
+    });
   });
 
   it("forwards authenticated source account separately from delivery account", async () => {

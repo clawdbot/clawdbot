@@ -27,11 +27,14 @@ function normalizeSpawnDepth(value: unknown): number | undefined {
   return undefined;
 }
 
-function readSessionStore(storePath: string, agentId: string): Record<string, SessionDepthEntry> {
+export function readSubagentSessionStore<T extends SessionDepthEntry = SessionDepthEntry>(
+  storePath: string,
+  agentId: string,
+): Record<string, T> {
   try {
     return Object.fromEntries(
       listSessionEntriesReadOnly({ agentId, storePath, clone: false }).map(
-        ({ sessionKey, entry }) => [sessionKey, entry],
+        ({ sessionKey, entry }) => [sessionKey, entry as unknown as T],
       ),
     );
   } catch {
@@ -55,10 +58,10 @@ function buildKeyCandidates(rawKey: string, cfg?: OpenClawConfig): string[] {
   return prefixed === rawKey ? [rawKey] : [rawKey, prefixed];
 }
 
-function findEntryBySessionId(
-  store: Record<string, SessionDepthEntry>,
+export function findSubagentSessionEntryById<T extends SessionDepthEntry>(
+  store: Record<string, T>,
   sessionId: string,
-): SessionDepthEntry | undefined {
+): T | undefined {
   const normalizedSessionId = normalizeOptionalString(sessionId);
   if (!normalizedSessionId) {
     return undefined;
@@ -87,7 +90,7 @@ function resolveEntryForSessionKey(params: {
         return entry;
       }
     }
-    const entry = findEntryBySessionId(params.store, params.sessionKey);
+    const entry = findSubagentSessionEntryById(params.store, params.sessionKey);
     if (entry || !params.cfg) {
       return entry;
     }
@@ -105,10 +108,10 @@ function resolveEntryForSessionKey(params: {
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed.agentId });
     let store = params.cache.get(storePath);
     if (!store) {
-      store = readSessionStore(storePath, parsed.agentId);
+      store = readSubagentSessionStore(storePath, parsed.agentId);
       params.cache.set(storePath, store);
     }
-    const entry = store[key] ?? findEntryBySessionId(store, params.sessionKey);
+    const entry = store[key] ?? findSubagentSessionEntryById(store, params.sessionKey);
     if (entry) {
       return entry;
     }

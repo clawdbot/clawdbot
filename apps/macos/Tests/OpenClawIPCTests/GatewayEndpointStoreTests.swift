@@ -1106,6 +1106,30 @@ extension GatewayEndpointStoreTests {
         #expect(url?.absoluteString == "ws://100.123.224.76:18789")
     }
 
+    @Test func `gateway url validation guidance matches trusted plaintext policy`() {
+        let accepted = [
+            "ws://localhost:18789",
+            "ws://192.168.0.202:18789",
+            "ws://169.254.20.1:18789",
+            "ws://gateway.local:18789",
+            "ws://gateway.example.ts.net:18789",
+            "ws://100.123.224.76:18789",
+        ]
+        for rawURL in accepted {
+            #expect(GatewayRemoteConfig.normalizeGatewayUrl(rawURL) != nil)
+        }
+        #expect(GatewayRemoteConfig.normalizeGatewayUrl("ws://gateway.example:18789") == nil)
+
+        let message = GatewayRemoteConfig.directGatewayUrlValidationMessage
+        #expect(message.contains("public hosts"))
+        #expect(message.contains("localhost"))
+        #expect(message.contains("LAN"))
+        #expect(message.contains("link-local"))
+        #expect(message.contains(".local"))
+        #expect(message.contains("Tailnet"))
+        #expect(!message.contains("only for localhost"))
+    }
+
     @Test func `missing transport infers direct from private remote URL`() {
         let root: [String: Any] = [
             "gateway": [
@@ -1200,6 +1224,36 @@ extension GatewayEndpointStoreTests {
                 identity: routeA.identity,
                 remotePort: routeA.remotePort,
                 hostKeyPolicy: .openssh)))
+    }
+
+    @Test func `ssh restart backoff propagates cancellation`() async {
+        await #expect(throws: CancellationError.self) {
+            try await RemoteTunnelManager._testWaitForRestartBackoff(seconds: 2) { _ in
+                throw CancellationError()
+            }
+        }
+    }
+
+    @Test func `stale ssh waiter cannot replace current tunnel create`() throws {
+        let oldTarget = try #require(CommandResolver.parseSSHTarget("alice@gateway-a.example"))
+        let newTarget = try #require(CommandResolver.parseSSHTarget("alice@gateway-b.example"))
+        let oldConfiguration = RemotePortTunnel.Configuration(
+            target: oldTarget,
+            identity: "/tmp/id-a",
+            remotePort: 18789,
+            hostKeyPolicy: .strict)
+        let newConfiguration = RemotePortTunnel.Configuration(
+            target: newTarget,
+            identity: "/tmp/id-b",
+            remotePort: 18789,
+            hostKeyPolicy: .strict)
+
+        #expect(!RemoteTunnelManager._testIsCurrentConfiguration(
+            requested: oldConfiguration,
+            current: newConfiguration))
+        #expect(RemoteTunnelManager._testIsCurrentConfiguration(
+            requested: newConfiguration,
+            current: newConfiguration))
     }
 
     @Test func `normalize gateway url rejects public host ws`() {

@@ -258,7 +258,7 @@ export async function runRemoteGatewayInferenceOnboarding(
     // Setup applies on the remote gateway through its chat; the local
     // custodian flow (question zero, local setup apply, local hatch) is wrong here.
     handoffMode: "chat",
-    runSetupMemoryImportStep: async () => {},
+    runSetupMemoryImportStep: async () => ({ status: "skipped", providers: [] }),
     ...(deps.createPrompter ? { createPrompter: deps.createPrompter } : {}),
     runSystemAgentChat: async () => {
       const prompter = await (deps.createPrompter?.() ??

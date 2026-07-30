@@ -1,14 +1,23 @@
 import type { FastMode, SessionsPatchResult } from "../../api/types.ts";
 
+export type SessionToolOverrides = {
+  mcpServers?: Record<string, boolean>;
+  mcpToolsDeny?: Record<string, string[]>;
+  skills?: Record<string, boolean>;
+  webSearch?: boolean;
+};
+
 export type SessionPatch = {
   label?: string | null;
   category?: string | null;
+  boardFace?: "chat" | "dashboard";
   icon?: string | null;
   model?: string | null;
   thinkingLevel?: string | null;
   fastMode?: FastMode | null;
   verboseLevel?: string | null;
   reasoningLevel?: string | null;
+  toolOverrides?: SessionToolOverrides | null;
   archived?: boolean;
   pinned?: boolean;
   unread?: boolean;

@@ -125,6 +125,24 @@ describe("loadSettings default gateway URL derivation", () => {
     vi.unstubAllGlobals();
   });
 
+  it("keeps IPv6 dev-page default gateway hosts dialable", () => {
+    setTestLocation({ protocol: "http:", host: "[::1]:5173", pathname: "/" });
+    // A vite client script marks the page as dev, which reroutes the default
+    // gateway to port 18789 via formatHostWithPort.
+    vi.stubGlobal("document", {
+      querySelector: (selector: string) => (selector.includes("@vite/client") ? {} : null),
+      documentElement: { getAttribute: () => null },
+    } as unknown as Document);
+
+    try {
+      expect(loadSettings().gatewayUrl).toBe("ws://[::1]:18789");
+    } finally {
+      // The document stub is unique to this test; drop it before the shared
+      // afterEach persistence pass instead of leaving it to unstubAllGlobals.
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("uses configured base path and normalizes trailing slash", () => {
     setTestLocation({
       protocol: "https:",
@@ -765,7 +783,7 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().chatSplitLayout).toEqual(chatSplitLayout);
   });
 
-  it("persists the last dashboard face and active tab per session", () => {
+  it("persists dashboard tab and dock state per session", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -774,11 +792,9 @@ describe("loadSettings default gateway URL derivation", () => {
     const settings = loadSettings();
     const boardSessionViews = {
       "agent:main:main": {
-        face: "dashboard" as const,
         activeTabId: "research",
         reopenDockByTab: { research: "left" as const },
       },
-      "agent:main:plain": { face: "chat" as const },
     };
 
     saveSettings({ ...settings, boardSessionViews });
@@ -786,7 +802,7 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().boardSessionViews).toEqual(boardSessionViews);
   });
 
-  it("drops invalid stored dashboard view settings", () => {
+  it("silently drops legacy local face while preserving per-device tab state", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -803,7 +819,9 @@ describe("loadSettings default gateway URL derivation", () => {
       }),
     );
 
-    expect(loadSettings().boardSessionViews).toEqual({});
+    expect(loadSettings().boardSessionViews).toEqual({
+      "agent:main:main": { activeTabId: "research" },
+    });
   });
 
   it("persists normalized sidebar layouts per session", () => {

@@ -8,15 +8,18 @@ import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   canonicalUiSessionKeyForPersistence,
+  isUiGlobalSessionKey,
+  isUiGlobalScopeConfigured,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiDefaultAgentId,
   resolveUiConfiguredMainKey,
   resolveUiKnownSelectedGlobalAgentId,
   resolveUiSelectedGlobalAgentId,
+  uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
 import { syncVisibleChatQueueProjection } from "./chat-queue.ts";
-import { resetChatRealtimeConversation } from "./chat-realtime.ts";
+import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatComposerMemoryFallback, ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
@@ -57,6 +60,37 @@ export function canCreateChatSession(state: ChatPageHost) {
     state.chatStream === null &&
     state.chatQueue.length === 0
   );
+}
+
+export function selectedChatSessionRow(state: ChatPageHost) {
+  const rows = state.sessionsResult?.sessions ?? [];
+  const exact = rows.find((candidate) =>
+    areUiSessionKeysEquivalent(candidate.key, state.sessionKey),
+  );
+  const row =
+    exact ??
+    (isUiGlobalScopeConfigured(state)
+      ? rows.find((candidate) =>
+          uiSessionRowMatchesSelectedChat(state, candidate.key, state.sessionKey),
+        )
+      : undefined);
+  if (!row || !isUiGlobalSessionKey(row.key)) {
+    return row;
+  }
+  const selectedAgentId = resolveUiSelectedGlobalAgentId(state);
+  if (
+    state.sessionsResultAgentId &&
+    normalizeAgentId(state.sessionsResultAgentId) !== selectedAgentId
+  ) {
+    return undefined;
+  }
+  if (
+    row.observerDigest?.agentId &&
+    normalizeAgentId(row.observerDigest.agentId) !== selectedAgentId
+  ) {
+    return { ...row, observerDigest: undefined };
+  }
+  return row;
 }
 
 function saveChatQueueForSession(state: ChatPageHost, sessionKey: string) {
@@ -219,6 +253,7 @@ export function resetChatStateForRouteSession(
   } = {},
 ): ChatComposerRouteResetResult {
   cancelChatStreamRenderFrame(state);
+  stopChatRealtimeTalk(state);
   const previousSessionKey = state.sessionKey;
   const previousComposerScopeKey = storedChatOutboxScopeKey(
     options.previousComposerScope ?? resolveStoredChatOutboxScope(state, previousSessionKey),
@@ -287,7 +322,6 @@ export function resetChatStateForRouteSession(
   state.chatAvatarStatus = null;
   state.chatAvatarReason = null;
   clearAuthoritativeTerminal(state);
-  resetChatRealtimeConversation(state);
   state.chatQueue = restoreChatQueueForSession(state, sessionKey);
   restoreChatComposerState(state);
   // Composer hydration reads crash-safe queue states. Reapply the process-live

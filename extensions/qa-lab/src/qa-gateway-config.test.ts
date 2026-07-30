@@ -1,4 +1,5 @@
 // Qa Lab tests cover qa gateway config plugin behavior.
+import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import {
   buildQaGatewayConfig,
@@ -59,6 +60,21 @@ function expectQaLabPluginEnabled(cfg: ReturnType<typeof buildQaGatewayConfig>) 
 }
 
 describe("buildQaGatewayConfig", () => {
+  it("stamps fresh QA configs with the current OpenClaw version", () => {
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      workspaceDir: "/tmp/qa-workspace",
+      ...createQaChannelTransportParams(),
+    });
+
+    expect(cfg.meta).toEqual({ lastTouchedVersion: OPENCLAW_VERSION });
+    expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "qa-lab", "qa-channel"]);
+    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("mock-openai/gpt-5.6-luna");
+    expect(cfg.channels?.["qa-channel"]?.baseUrl).toBe("http://127.0.0.1:43124");
+  });
+
   it("keeps mock-openai as the default provider lane", () => {
     const cfg = buildQaGatewayConfig({
       bind: "loopback",
@@ -288,7 +304,34 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.6-luna"]).toEqual({});
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.4"]).toEqual({});
     expect(cfg.agents?.entries?.qa?.fastModeDefault).toBe(true);
+    expect(cfg.plugins?.allow).toContain("codex");
+    expect(cfg.plugins?.entries?.codex).toEqual({
+      enabled: true,
+      config: { appServer: { sandbox: "workspace-write", serviceTier: "priority" } },
+    });
   });
+
+  it.each(["mock-openai", "live-frontier"] as const)(
+    "automatically stages a confined Codex harness for %s parity",
+    (providerMode) => {
+      const cfg = buildQaGatewayConfig({
+        bind: "loopback",
+        gatewayPort: 18789,
+        gatewayToken: "token",
+        workspaceDir: "/tmp/qa-workspace",
+        providerMode,
+        forcedRuntime: "codex",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna",
+      });
+
+      expect(cfg.plugins?.allow).toContain("codex");
+      expect(cfg.plugins?.entries?.codex).toEqual({
+        enabled: true,
+        config: { appServer: { sandbox: "workspace-write" } },
+      });
+    },
+  );
 
   it("routes forced Codex mock cells through the app-server OpenAI provider", () => {
     const cfg = buildQaGatewayConfig({
@@ -325,7 +368,10 @@ describe("buildQaGatewayConfig", () => {
       "openai",
       "qa-channel",
     ]);
-    expect(cfg.plugins?.entries?.codex).toEqual({ enabled: true });
+    expect(cfg.plugins?.entries?.codex).toEqual({
+      enabled: true,
+      config: { appServer: { sandbox: "workspace-write" } },
+    });
     expect(cfg.plugins?.entries?.openai).toEqual({ enabled: true });
     expect(cfg.agents?.defaults?.models).toEqual({
       "openai/gpt-5.6-luna": {},

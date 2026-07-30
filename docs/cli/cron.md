@@ -56,6 +56,8 @@ openclaw cron create "*/15 * * * *" \
 
 `--session` accepts `main`, `isolated`, `current`, or `session:<id>`.
 
+Agent-turn jobs default to the creating conversation when session context is available. Without a session key, including ordinary CLI calls and API calls that omit one, the target falls back to `isolated`.
+
 <AccordionGroup>
   <Accordion title="Session keys">
     - `main` binds to the agent's main session.
@@ -107,6 +109,8 @@ Failure notifications resolve in this order:
 <Note>
 Main-session jobs may only use `delivery.failureDestination` when primary delivery mode is `webhook`. Isolated jobs accept it in all modes.
 </Note>
+
+Chat failure notifications include the run start time in the agent's configured user timezone. Webhook message text stays stable and exposes the instant as `runAtMs`.
 
 Isolated cron runs treat run-level agent failures as job errors even when no reply payload is produced, so model/provider failures still increment error counters and trigger failure notifications.
 

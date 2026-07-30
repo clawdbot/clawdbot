@@ -4,11 +4,18 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { BuzzBus } from "./buzz-bus.js";
-import type { BuzzInboundMessage } from "./message-event.js";
+import {
+  BUZZ_DIFF_MESSAGE_KIND,
+  formatBuzzMessageForAgent,
+  type BuzzInboundMessage,
+} from "./message-event.js";
 import { getBuzzRuntime } from "./runtime.js";
 import { buildBuzzTarget, parseBuzzTarget } from "./target.js";
 import type { ResolvedBuzzAccount } from "./types.js";
+
+const log = createSubsystemLogger("buzz/inbound");
 
 function senderLabel(pubkey: string): string {
   return `${pubkey.slice(0, 8)}...${pubkey.slice(-6)}`;
@@ -24,21 +31,24 @@ export async function handleBuzzInbound(params: {
   const { account, cfg, bus, message } = params;
   const channelId = parseBuzzTarget(message.channelId);
   const target = buildBuzzTarget(channelId);
+  const textForAgent = formatBuzzMessageForAgent(message);
   const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
     cfg,
     channel: "buzz",
     accountId: account.accountId,
     peer: { kind: "group", id: target },
   });
-  const textMention = runtime.channel.mentions.matchesMentionPatterns(
-    message.text,
-    runtime.channel.mentions.buildMentionRegexes(cfg, route.agentId),
-  );
+  const supportsTextInterpretation = message.kind !== BUZZ_DIFF_MESSAGE_KIND;
+  const textMention =
+    supportsTextInterpretation &&
+    runtime.channel.mentions.matchesMentionPatterns(
+      message.text,
+      runtime.channel.mentions.buildMentionRegexes(cfg, route.agentId),
+    );
   const wasMentioned = message.mentionedPubkeys.includes(bus.publicKey) || textMention;
-  const shouldComputeCommandAuthorized = runtime.channel.commands.shouldComputeCommandAuthorized(
-    message.text,
-    cfg,
-  );
+  const shouldComputeCommandAuthorized =
+    supportsTextInterpretation &&
+    runtime.channel.commands.shouldComputeCommandAuthorized(message.text, cfg);
   const hasControlCommand =
     shouldComputeCommandAuthorized && runtime.channel.text.hasControlCommand(message.text, cfg);
   const groupConfig = account.config.groups?.[channelId];
@@ -77,7 +87,7 @@ export async function handleBuzzInbound(params: {
     channel: "Buzz",
     from: senderName,
     timestamp: new Date(message.createdAt * 1000),
-    body: message.text,
+    body: textForAgent,
   });
   const ctxPayload = buildChannelInboundEventContext({
     channel: "buzz",
@@ -109,9 +119,9 @@ export async function handleBuzzInbound(params: {
     },
     message: {
       body,
-      bodyForAgent: message.text,
+      bodyForAgent: textForAgent,
       rawBody: message.text,
-      commandBody: message.text,
+      commandBody: supportsTextInterpretation ? message.text : "",
     },
     access: {
       commands: { authorized: access.commandAccess.authorized },
@@ -120,6 +130,7 @@ export async function handleBuzzInbound(params: {
     extra: {
       GroupChannel: channelId,
       GroupSubject: channelId,
+      BuzzEventKind: message.kind,
     },
   });
 
@@ -153,7 +164,21 @@ export async function handleBuzzInbound(params: {
         throw error instanceof Error ? error : new Error(String(error));
       },
     },
-    replyPipeline: {},
+    replyPipeline: {
+      typing: {
+        start: async () => {
+          await bus.sendTyping({
+            channelId,
+            threadId: message.threadId,
+            replyToId: message.id,
+          });
+        },
+        keepaliveIntervalMs: 3_000,
+        onStartError: (error: unknown) => {
+          log.error(`[${account.accountId}] Buzz typing failed for ${channelId}: ${String(error)}`);
+        },
+      },
+    },
     record: {
       onRecordError: (error) => {
         throw error instanceof Error

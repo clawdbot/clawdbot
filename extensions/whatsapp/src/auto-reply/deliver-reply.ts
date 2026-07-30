@@ -37,6 +37,35 @@ export type WhatsAppReplyDeliveryResult = {
   providerAccepted: boolean;
 };
 
+export type WhatsAppReplyTransportContext = {
+  accountId: string;
+  conversationId: string;
+  conversationKind: "direct" | "group";
+  chatJid: string;
+  senderJid?: string;
+  recipientJid: string;
+  correlationId?: string;
+  reply: AdmittedWebInboundMessage["platform"]["reply"];
+  sendMedia: AdmittedWebInboundMessage["platform"]["sendMedia"];
+};
+
+export function createWhatsAppReplyTransportContext(
+  msg: AdmittedWebInboundMessage,
+): WhatsAppReplyTransportContext {
+  const admission = requireWhatsAppInboundAdmission(msg);
+  return {
+    accountId: admission.accountId,
+    conversationId: admission.conversation.id,
+    conversationKind: admission.conversation.kind,
+    chatJid: msg.platform.chatJid,
+    senderJid: msg.platform.senderJid,
+    recipientJid: msg.platform.recipientJid,
+    correlationId: msg.event.id,
+    reply: msg.platform.reply,
+    sendMedia: msg.platform.sendMedia,
+  };
+}
+
 function resolveWhatsAppReceiptKind(
   results: readonly WhatsAppSendResult[],
 ): Parameters<typeof createMessageReceiptFromOutboundResults>[0]["kind"] {
@@ -87,7 +116,7 @@ function createWhatsAppReplyDeliveryReceipt(
 export async function deliverWebReply(params: {
   replyResult: ReplyPayload;
   normalizedReplyResult?: DeliverableWhatsAppOutboundPayload<ReplyPayload>;
-  msg: AdmittedWebInboundMessage;
+  transport: WhatsAppReplyTransportContext;
   mediaLocalRoots?: readonly string[];
   maxMediaBytes: number;
   textLimit: number;
@@ -100,10 +129,10 @@ export async function deliverWebReply(params: {
   skipLog?: boolean;
   tableMode?: MarkdownTableMode;
 }): Promise<WhatsAppReplyDeliveryResult> {
-  const { replyResult, msg, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } = params;
-  const admission = requireWhatsAppInboundAdmission(msg);
-  const conversationId = admission.conversation.id;
-  const isGroupConversation = admission.conversation.kind === "group";
+  const { replyResult, transport, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } =
+    params;
+  const conversationId = transport.conversationId;
+  const isGroupConversation = transport.conversationKind === "group";
   const replyStarted = Date.now();
   const sendResults: WhatsAppSendResult[] = [];
   const rememberSendResult = (result: WhatsAppSendResult | undefined) => {
@@ -146,16 +175,15 @@ export async function deliverWebReply(params: {
     // per-message target.  Look up cached metadata for the specific
     // message being quoted — msg.payload.body may be a combined batch body.
     const cached = lookupInboundMessageMeta(
-      admission.accountId,
-      msg.platform.chatJid,
+      transport.accountId,
+      transport.chatJid,
       replyResult.replyToId,
     );
     return buildQuotedMessageOptions({
       messageId: replyResult.replyToId,
-      remoteJid: msg.platform.chatJid,
+      remoteJid: transport.chatJid,
       fromMe: cached?.fromMe ?? false,
-      participant:
-        cached?.participant ?? (isGroupConversation ? msg.platform.senderJid : undefined),
+      participant: cached?.participant ?? (isGroupConversation ? transport.senderJid : undefined),
       messageText: cached?.body ?? "",
       media: cached?.media,
     });
@@ -185,7 +213,7 @@ export async function deliverWebReply(params: {
     for (const [index, chunk] of textChunks.entries()) {
       const chunkStarted = Date.now();
       const quote = getQuote();
-      rememberSendResult(await sendWithRetry(() => msg.platform.reply(chunk, quote), "text"));
+      rememberSendResult(await sendWithRetry(() => transport.reply(chunk, quote), "text"));
       if (!skipLog) {
         const durationMs = Date.now() - chunkStarted;
         whatsappOutboundLog.debug(
@@ -195,10 +223,10 @@ export async function deliverWebReply(params: {
     }
     const delivery = finishDelivery();
     const logPayload = {
-      correlationId: msg.event.id ?? newConnectionId(),
+      correlationId: transport.correlationId ?? newConnectionId(),
       connectionId: connectionId ?? null,
       to: conversationId,
-      from: msg.platform.recipientJid,
+      from: transport.recipientJid,
       text: elide(replyResult.text, 240),
       mediaUrl: null,
       mediaSizeBytes: null,
@@ -239,7 +267,7 @@ export async function deliverWebReply(params: {
         rememberSendResult(
           await sendWithRetry(
             () =>
-              msg.platform.sendMedia(
+              transport.sendMedia(
                 {
                   image: media.buffer,
                   caption,
@@ -255,7 +283,7 @@ export async function deliverWebReply(params: {
         rememberSendResult(
           await sendWithRetry(
             () =>
-              msg.platform.sendMedia(
+              transport.sendMedia(
                 {
                   audio: media.buffer,
                   ptt: true,
@@ -268,7 +296,7 @@ export async function deliverWebReply(params: {
         );
         if (caption) {
           rememberSendResult(
-            await sendWithRetry(() => msg.platform.reply(caption, quote), "media:audio-text"),
+            await sendWithRetry(() => transport.reply(caption, quote), "media:audio-text"),
           );
         }
       } else if (media.kind === "video") {
@@ -276,7 +304,7 @@ export async function deliverWebReply(params: {
         rememberSendResult(
           await sendWithRetry(
             () =>
-              msg.platform.sendMedia(
+              transport.sendMedia(
                 {
                   video: media.buffer,
                   caption,
@@ -292,7 +320,7 @@ export async function deliverWebReply(params: {
         rememberSendResult(
           await sendWithRetry(
             () =>
-              msg.platform.sendMedia(
+              transport.sendMedia(
                 {
                   document: media.buffer,
                   fileName: media.fileName,
@@ -310,10 +338,10 @@ export async function deliverWebReply(params: {
       );
       replyLogger.info(
         {
-          correlationId: msg.event.id ?? newConnectionId(),
+          correlationId: transport.correlationId ?? newConnectionId(),
           connectionId: connectionId ?? null,
           to: conversationId,
-          from: msg.platform.recipientJid,
+          from: transport.recipientJid,
           text: caption ?? null,
           mediaUrl,
           mediaSizeBytes: media.buffer.length,
@@ -334,7 +362,7 @@ export async function deliverWebReply(params: {
         whatsappOutboundLog.warn(`Trailing media failed; sent warning to ${conversationId}`);
         rememberSendResult(
           await sendWithRetry(
-            () => msg.platform.reply("⚠️ Media unavailable.", getQuote()),
+            () => transport.reply("⚠️ Media unavailable.", getQuote()),
             "media:fallback-unavailable",
           ),
         );
@@ -348,19 +376,14 @@ export async function deliverWebReply(params: {
       }
       whatsappOutboundLog.warn(`Media skipped; sent text-only to ${conversationId}`);
       rememberSendResult(
-        await sendWithRetry(
-          () => msg.platform.reply(fallbackText, getQuote()),
-          "media:fallback-text",
-        ),
+        await sendWithRetry(() => transport.reply(fallbackText, getQuote()), "media:fallback-text"),
       );
     },
   });
 
   // Remaining text chunks after media
   for (const chunk of remainingText) {
-    rememberSendResult(
-      await sendWithRetry(() => msg.platform.reply(chunk, getQuote()), "media:text"),
-    );
+    rememberSendResult(await sendWithRetry(() => transport.reply(chunk, getQuote()), "media:text"));
   }
   return finishDelivery();
 }

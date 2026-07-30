@@ -6,6 +6,7 @@ import { LiveSessionModelSwitchError } from "../../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../../live-model-switch.js";
 import type { normalizeUsage } from "../../usage.js";
 import { log } from "../logger.js";
+import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
 import type { prepareAndDispatchEmbeddedRunAttempt } from "./attempt-dispatch-preparation.js";
@@ -22,6 +23,7 @@ import { recoverEmbeddedRunOverflow } from "./overflow-context-recovery.js";
 import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
 import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
+import { isEmbeddedRunTerminalInterrupted } from "./terminal-outcome.js";
 import { recoverEmbeddedRunTimeout } from "./timeout-context-recovery.js";
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
@@ -86,21 +88,10 @@ export async function recoverEmbeddedRunAttempt(input: {
   const runtime = preparedRuntime.snapshot();
   const {
     attempt,
-    terminalProjection: {
-      aborted,
-      externalAbort,
-      promptError,
-      promptErrorSource,
-      timedOut,
-      timedOutDuringCompaction,
-      timedOutDuringToolExecution,
-      timedOutByRunBudget,
-    },
     sessionIdUsed,
     attemptAssistant,
     currentAttemptCompletedAssistant,
-    terminalInterrupted,
-    signalOwnedInterruption,
+    terminalState,
     setTerminalLifecycleMeta,
     attemptCompactionCount,
     activeErrorContext,
@@ -108,6 +99,18 @@ export async function recoverEmbeddedRunAttempt(input: {
     assistantErrorText,
     canRestartForLiveSwitch,
   } = normalizedAttempt;
+  const {
+    aborted,
+    externalAbort,
+    promptError,
+    promptErrorSource,
+    timedOut,
+    timedOutDuringCompaction,
+    timedOutDuringToolExecution,
+    timedOutByRunBudget,
+  } = projectAgentRunAttemptTerminal(attempt.terminal);
+  const terminalInterrupted = isEmbeddedRunTerminalInterrupted(terminalState.outcome);
+  const { signalOwnedInterruption } = terminalState;
   const assistantOverflowCandidate =
     currentAttemptCompletedAssistant !== undefined
       ? currentAttemptCompletedAssistant.stopReason === "error" ||
@@ -174,6 +177,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     contextTokenBudget: runtime.contextTokenBudget,
     genericCompactionRecoveryAllowed: preparedRuntime.genericCompactionRecoveryAllowed,
     attempt,
+    toolResultPromptProjectionState: getEmbeddedSessionPromptState(params.sessionId).toolResults,
     runtimeAuthPlan: runtimePlan.auth,
     resolvedSessionKey: runInput.resolvedSessionKey,
     sessionAgentId: input.sessionAgentId,
