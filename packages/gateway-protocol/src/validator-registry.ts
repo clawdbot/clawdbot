@@ -82,6 +82,8 @@ import {
   NodePendingAckParamsSchema,
   NodeDescribeParamsSchema,
   NodeInvokeParamsSchema,
+  NodeInvokeRequestEventSchema,
+  NodeInvokeInputEventSchema,
   NodeInvokeResultParamsSchema,
   NodeInvokeProgressParamsSchema,
   NodeEventParamsSchema,
@@ -441,6 +443,8 @@ export const validateSystemInfoResult = lazyCompile(SystemInfoResultSchema);
 export const validateNodePendingAckParams = lazyCompile(NodePendingAckParamsSchema);
 export const validateNodeDescribeParams = lazyCompile(NodeDescribeParamsSchema);
 export const validateNodeInvokeParams = lazyCompile(NodeInvokeParamsSchema);
+export const validateNodeInvokeRequestEvent = lazyCompile(NodeInvokeRequestEventSchema);
+export const validateNodeInvokeInputEvent = lazyCompile(NodeInvokeInputEventSchema);
 export const validateNodeInvokeResultParams = lazyCompile(NodeInvokeResultParamsSchema);
 export const validateNodeInvokeProgressParams = lazyCompile(NodeInvokeProgressParamsSchema);
 export const validateNodeEventParams = lazyCompile(NodeEventParamsSchema);

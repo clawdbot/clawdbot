@@ -733,24 +733,7 @@ impl NodeSession {
         if !self.activated {
             return Err(ClientError::NotActivated);
         }
-        let params = match result {
-            InvocationResult::Success(payload) => json!({
-                "id": invocation.id,
-                "nodeId": invocation.node_id,
-                "ok": true,
-                "payload": payload,
-            }),
-            InvocationResult::Failure { code, message } => {
-                let code = require_non_empty_result_field("error code", code)?;
-                let message = require_non_empty_result_field("error message", message)?;
-                json!({
-                    "id": invocation.id,
-                    "nodeId": invocation.node_id,
-                    "ok": false,
-                    "error": { "code": code, "message": message },
-                })
-            }
-        };
+        let params = invocation_result_params(invocation, result)?;
         self.request("node.invoke.result", params).await.map(|_| ())
     }
 
@@ -780,6 +763,30 @@ impl NodeSession {
     pub async fn wait_closed(&self) -> Result<(), ClientError> {
         self.gateway.wait_closed().await.map_err(map_gateway_error)
     }
+}
+
+fn invocation_result_params(
+    invocation: &NodeInvocation,
+    result: InvocationResult,
+) -> Result<Value, ClientError> {
+    Ok(match result {
+        InvocationResult::Success(payload) => json!({
+            "id": invocation.id,
+            "nodeId": invocation.node_id,
+            "ok": true,
+            "payload": payload,
+        }),
+        InvocationResult::Failure { code, message } => {
+            let code = require_non_empty_result_field("error code", code)?;
+            let message = require_non_empty_result_field("error message", message)?;
+            json!({
+                "id": invocation.id,
+                "nodeId": invocation.node_id,
+                "ok": false,
+                "error": { "code": code, "message": message },
+            })
+        }
+    })
 }
 
 fn map_gateway_error(error: GatewayClientError) -> ClientError {
@@ -956,22 +963,64 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_gateway_invocation_input() {
-        assert_eq!(
-            parse_invocation_input(json!({
-                "id": "invoke-1",
-                "nodeId": "node-1",
-                "seq": 2,
-                "payloadJSON": "{\"kind\":\"data\"}"
-            }))
-            .expect("valid Gateway input"),
-            NodeSessionEvent::InvocationInput {
-                invoke_id: "invoke-1".into(),
-                node_id: "node-1".into(),
-                seq: 2,
-                payload_json: "{\"kind\":\"data\"}".into(),
-            }
+    fn shared_invocation_lifecycle_contract_matches_openclaw() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test/fixtures/node-invoke-lifecycle-contract.json"
+        )))
+        .expect("valid node invocation lifecycle fixture");
+        assert_eq!(fixture["version"], 1);
+
+        let invocation = parse_invocation(fixture["request"]["canonical"].clone(), Instant::now())
+            .expect("canonical invocation request");
+        assert_eq!(invocation.id, "invoke-1");
+        assert_eq!(invocation.command, "example.duplex");
+        assert_eq!(invocation.params, Value::Null);
+        assert_eq!(invocation.timeout_ms, Some(0));
+        assert_eq!(invocation.idempotency_key.as_deref(), Some("idem-1"));
+        assert_eq!(invocation.session_key.as_deref(), Some("agent:main:main"));
+        assert!(parse_invocation(fixture["request"]["invalid"].clone(), Instant::now()).is_err());
+
+        let inputs = fixture["input"]["canonical"]
+            .as_array()
+            .expect("canonical input array");
+        for (seq, payload) in inputs.iter().enumerate() {
+            assert_eq!(
+                parse_invocation_input(payload.clone()).expect("canonical invocation input"),
+                NodeSessionEvent::InvocationInput {
+                    invoke_id: "invoke-1".into(),
+                    node_id: "node-1".into(),
+                    seq: seq as u64,
+                    payload_json: if seq == 0 { "one" } else { "two" }.into(),
+                }
+            );
+        }
+        assert!(parse_invocation_input(fixture["input"]["invalid"].clone()).is_err());
+
+        let success = invocation_result_params(
+            &invocation,
+            InvocationResult::success(fixture["results"]["success"]["payload"].clone()),
+        )
+        .expect("canonical success result");
+        assert_eq!(success, fixture["results"]["success"]);
+        let failure = &fixture["results"]["failure"];
+        let failed_invocation = NodeInvocation::new(
+            failure["id"].as_str().expect("failure invocation id"),
+            failure["nodeId"].as_str().expect("failure node id"),
+            "example.duplex",
+            Value::Null,
         );
+        let failure_params = invocation_result_params(
+            &failed_invocation,
+            InvocationResult::failure(
+                failure["error"]["code"].as_str().expect("failure code"),
+                failure["error"]["message"]
+                    .as_str()
+                    .expect("failure message"),
+            ),
+        )
+        .expect("canonical failure result");
+        assert_eq!(failure_params, failure.clone());
     }
 
     #[test]
@@ -1006,7 +1055,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn invocation_accepts_gateway_null_params_and_session_key() {
         let invocation = parse_invocation(
