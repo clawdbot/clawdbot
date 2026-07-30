@@ -10,6 +10,7 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
+import { NODE_SYSTEM_RUN_COMMANDS } from "../infra/node-commands.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
@@ -502,7 +503,7 @@ describe("node.invoke approval bypass", () => {
     const node = await connectLinuxNode(() => {
       sawInvoke = true;
     });
-    const ws = await connectOperator(["operator.write"]);
+    const ws = await connectOperator(["operator.admin"]);
     try {
       const nodeId = await getConnectedNodeIdForTest(ws);
       const cases = [
@@ -586,6 +587,43 @@ describe("node.invoke approval bypass", () => {
         expect(res.error?.message ?? "").toContain(
           `node.invoke cannot mutate persistent browser profiles via ${command}`,
         );
+        await expectNoForwardedInvoke(() => sawInvoke);
+      } finally {
+        ws.close();
+        node.stop();
+      }
+    },
+  );
+
+  test.each(NODE_SYSTEM_RUN_COMMANDS)(
+    "requires admin scope for direct %s node.invoke",
+    async (command) => {
+      let sawInvoke = false;
+      const nodeIdentity = createDeviceIdentity();
+      const node = await connectLinuxNode(
+        () => {
+          sawInvoke = true;
+        },
+        nodeIdentity,
+        [command],
+      );
+      const ws = await connectDeviceTokenOperator(["operator.write"]);
+      try {
+        const directRun = await rpcReq(ws, "node.invoke", {
+          nodeId: nodeIdentity.deviceId,
+          command,
+          params: {},
+          idempotencyKey: crypto.randomUUID(),
+        });
+        expect(directRun.ok).toBe(false);
+        expect(directRun.error).toMatchObject({
+          code: "FORBIDDEN",
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope: "operator.admin",
+            requiredScopes: ["operator.admin"],
+          },
+        });
         await expectNoForwardedInvoke(() => sawInvoke);
       } finally {
         ws.close();
@@ -732,9 +770,13 @@ describe("node.invoke approval bypass", () => {
     const invokeCapture = createInvokeParamCapture();
     const node = await connectLinuxNode(invokeCapture.onInvoke);
 
-    const wsApprover = await connectOperator(["operator.write", "operator.approvals"]);
-    const wsCaller = await connectOperator(["operator.write"]);
-    const wsOtherDevice = await connectOperatorWithNewDevice(["operator.write"]);
+    const wsApprover = await connectOperator([
+      "operator.admin",
+      "operator.write",
+      "operator.approvals",
+    ]);
+    const wsCaller = await connectOperator(["operator.admin", "operator.write"]);
+    const wsOtherDevice = await connectOperatorWithNewDevice(["operator.admin", "operator.write"]);
 
     try {
       const nodeId = await getConnectedNodeIdForTest(wsApprover);
@@ -776,8 +818,16 @@ describe("node.invoke approval bypass", () => {
     const invokeCapture = createInvokeParamCapture();
     const node = await connectLinuxNode(invokeCapture.onInvoke);
 
-    const wsRequest = await connectTrustedBackend(["operator.write", "operator.approvals"]);
-    const wsReplay = await connectTrustedBackend(["operator.write", "operator.approvals"]);
+    const wsRequest = await connectTrustedBackend([
+      "operator.admin",
+      "operator.write",
+      "operator.approvals",
+    ]);
+    const wsReplay = await connectTrustedBackend([
+      "operator.admin",
+      "operator.write",
+      "operator.approvals",
+    ]);
 
     try {
       const nodeId = await getConnectedNodeIdForTest(wsRequest);
@@ -843,8 +893,12 @@ describe("node.invoke approval bypass", () => {
     const nodeA = await connectLinuxNode(onInvoke, createDeviceIdentity());
     const nodeB = await connectLinuxNode(onInvoke, createDeviceIdentity());
 
-    const wsApprover = await connectOperator(["operator.write", "operator.approvals"]);
-    const wsCaller = await connectOperator(["operator.write"]);
+    const wsApprover = await connectOperator([
+      "operator.admin",
+      "operator.write",
+      "operator.approvals",
+    ]);
+    const wsCaller = await connectOperator(["operator.admin", "operator.write"]);
 
     try {
       await expect

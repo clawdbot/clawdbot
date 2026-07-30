@@ -153,6 +153,14 @@ describe("method scope resolution", () => {
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", { command: "device.info" }),
     ).toEqual(["operator.write"]);
+    for (const command of ["system.run.prepare", "system.run", "system.which"]) {
+      expect(resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", { command })).toEqual([
+        "operator.admin",
+      ]);
+      expect(
+        authorizeOperatorScopesForMethod("node.invoke", ["operator.write"], { command }),
+      ).toEqual({ allowed: false, missingScope: "operator.admin" });
+    }
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", { command: "browser.proxy" }),
     ).toEqual(["operator.admin"]);

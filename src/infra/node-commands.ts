@@ -30,6 +30,7 @@ export const NODE_EXEC_APPROVALS_COMMANDS = [
 
 // Direct node.invoke and pairing approval share this admin-only subset.
 const NODE_ADMIN_ONLY_INVOKE_COMMANDS = [
+  ...NODE_SYSTEM_RUN_COMMANDS,
   ...NODE_BROWSER_PROXY_COMMANDS,
   NODE_FS_LIST_DIR_COMMAND,
   NODE_TERMINAL_UPLOAD_COMMAND,

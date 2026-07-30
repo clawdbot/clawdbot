@@ -11,6 +11,7 @@ import {
 import { resolveNodePairApprovalScopes } from "./node-pairing-authz.js";
 
 const ADMIN_ONLY_INVOKE_COMMANDS = [
+  ...NODE_SYSTEM_RUN_COMMANDS,
   ...NODE_BROWSER_PROXY_COMMANDS,
   NODE_FS_LIST_DIR_COMMAND,
   NODE_TERMINAL_UPLOAD_COMMAND,
@@ -24,15 +25,12 @@ describe("resolveNodePairApprovalScopes", () => {
     ]);
   });
 
-  it.each([...NODE_SYSTEM_RUN_COMMANDS, ...ADMIN_ONLY_INVOKE_COMMANDS])(
-    "requires operator.admin for %s commands",
-    (command) => {
-      expect(resolveNodePairApprovalScopes([command])).toEqual([
-        "operator.pairing",
-        "operator.admin",
-      ]);
-    },
-  );
+  it.each(ADMIN_ONLY_INVOKE_COMMANDS)("requires operator.admin for %s commands", (command) => {
+    expect(resolveNodePairApprovalScopes([command])).toEqual([
+      "operator.pairing",
+      "operator.admin",
+    ]);
+  });
 
   it.each(ADMIN_ONLY_INVOKE_COMMANDS)("classifies %s as admin-only at invocation", (command) => {
     expect(isAdminOnlyNodeInvokeCommand(command)).toBe(true);

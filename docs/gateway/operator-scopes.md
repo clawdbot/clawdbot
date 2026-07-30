@@ -52,8 +52,9 @@ dispatch so authorization failures have one canonical structured response:
 - `agent` needs `operator.write` for ordinary turns and `operator.admin` for
   `/new` or `/reset` session lifecycle commands.
 - `node.invoke` needs `operator.write` for ordinary relay commands and
-  `operator.admin` for `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`,
-  and `terminal.upload`.
+  `operator.admin` for `system.run`, `system.run.prepare`, `system.which`,
+  `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`, and
+  `terminal.upload`.
 - `talk.config` needs `operator.read`; `includeSecrets: true` also needs
   `operator.talk.secrets`.
 - `talk.client.*`, `talk.session.*`, `talk.speak`, and `talk.mode` need
