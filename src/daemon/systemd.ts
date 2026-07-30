@@ -1597,8 +1597,7 @@ async function runSystemdServiceAction(params: {
       // systemd latches a unit into failed/start-limit-hit after it crashes faster
       // than StartLimitBurst allows and then stops auto-restarting it. Clear the
       // latch before start/restart so an operator can recover a crash-looped
-      // gateway with the natural `openclaw gateway start` command; reset-failed is
-      // idempotent and a no-op on a healthy unit.
+      // gateway with the natural start command. Idempotent on healthy units.
       await execSystemctl(["reset-failed", unitName], env);
     }
     const res = await execSystemctl([params.action, unitName], env);
@@ -1612,9 +1611,8 @@ async function runSystemdServiceAction(params: {
   await assertSystemdAvailable(env);
   if (params.action !== "stop") {
     await assertNoSystemGatewayOwnership(env);
-    // Clear any failed/start-limit-hit latch before start/restart so a
-    // crash-looped gateway recovers (see system-scope branch above). Idempotent on
-    // healthy units.
+    // Clear the same latch for user-scope start/restart after the ownership
+    // guard, so a conflicting system unit is never mutated.
     await execSystemctlUser(env, ["reset-failed", unitName]);
   }
   const res = await execSystemctlUser(env, [params.action, unitName]);
