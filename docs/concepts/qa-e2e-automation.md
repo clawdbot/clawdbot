@@ -514,7 +514,6 @@ The default scenarios are:
 
 - `channel-canary`
 - `channel-mention-gating`
-- `thread-follow-up`
 
 Each run writes `qa-suite-report.md`, `qa-suite-summary.json`, and
 `qa-evidence.json` under the selected output directory. The report identifies

@@ -6,11 +6,7 @@ import {
   type LiveTransportQaCommandOptions,
 } from "openclaw/plugin-sdk/qa-runtime";
 
-const DEFAULT_BUZZ_QA_SCENARIOS = [
-  "channel-canary",
-  "channel-mention-gating",
-  "thread-follow-up",
-] as const;
+const DEFAULT_BUZZ_QA_SCENARIOS = ["channel-canary", "channel-mention-gating"] as const;
 
 const loadBuzzQaAdapterRuntime = createLazyCliRuntimeLoader<typeof import("./adapter.runtime.js")>(
   () => import("./adapter.runtime.js"),

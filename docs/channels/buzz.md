@@ -349,8 +349,8 @@ pnpm openclaw qa buzz \
   --provider-mode mock-openai
 ```
 
-The command runs a real relay canary, mention-gating check, and threaded
-follow-up while using the deterministic mock model. The private JSON credential
+The command runs a real relay canary and mention-gating check while using the
+deterministic mock model. The private JSON credential
 file contains `relayUrl`, `roomId`, `driverPrivateKey`, and `sutPrivateKey`, plus
 optional `driverAuthTag` and `sutAuthTag` values for closed relays. Both test
 public keys must be room members, and the SUT public key must have the **Bot**

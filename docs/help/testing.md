@@ -406,8 +406,8 @@ gh workflow run package-acceptance.yml --ref main \
   - Local runs use `--credential-file <path>` with `relayUrl`, `roomId`,
     `driverPrivateKey`, and `sutPrivateKey`. Closed relays may also need
     `driverAuthTag` and `sutAuthTag`.
-  - Defaults to `mock-openai` and runs canary, mention-gating, and threaded
-    follow-up scenarios through the real Buzz plugin path.
+  - Defaults to `mock-openai` and runs canary and mention-gating scenarios
+    through the real Buzz plugin path.
   - Supports `--credential-source convex` with a pooled `kind: "buzz"` row.
     Both public keys must be relay/room members, and the SUT must have the
     **Bot** room role. Never use a human owner or admin private key.

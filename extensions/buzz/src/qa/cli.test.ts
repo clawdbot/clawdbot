@@ -18,7 +18,7 @@ describe("Buzz QA CLI", () => {
     runLiveTransportQaSuiteCommand.mockClear();
   });
 
-  it("runs the portable canary, mention, and thread scenarios", async () => {
+  it("runs the portable canary and mention-gating scenarios", async () => {
     const qa = new Command();
     buzzQaCliRegistration.register(qa);
 
@@ -46,6 +46,6 @@ describe("Buzz QA CLI", () => {
         primaryModel: "openai/gpt-5.4",
         providerMode: "mock-openai",
       }),
-    ).toEqual(["channel-canary", "channel-mention-gating", "thread-follow-up"]);
+    ).toEqual(["channel-canary", "channel-mention-gating"]);
   });
 });
