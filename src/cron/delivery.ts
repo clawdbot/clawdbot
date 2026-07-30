@@ -72,6 +72,9 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
     (delivery as { channel?: unknown } | undefined)?.channel,
   );
   const deliveryTo = normalizeTo((delivery as { to?: unknown } | undefined)?.to);
+  // Issue #7 fix: don't default channel/to to "last" — caller (effectiveChannel/effectiveTo)
+  // already gates on mode. Returning undefined here prevents stale "last" leaking into
+  // mode=none plans and confusing downstream delivery resolution.
   const channel = deliveryChannel ?? payloadChannel ?? "last";
   const to = deliveryTo ?? payloadTo;
   const deliveryAccountId = normalizeAccountId(
@@ -98,10 +101,15 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   const hasExplicitTarget = Boolean(to);
   const requested = legacyMode === "explicit" || (legacyMode === "auto" && hasExplicitTarget);
 
+  // Issue #7 fix: when mode resolves to "none" (legacy off / no target), suppress
+  // channel/to so downstream code doesn't try to deliver to the stale "last" channel.
+  const effectiveChannelNone = requested ? channel : undefined;
+  const effectiveToNone = requested ? to : undefined;
+
   return {
     mode: requested ? "announce" : "none",
-    channel,
-    to,
+    channel: effectiveChannelNone,
+    to: effectiveToNone,
     threadId: payload?.threadId,
     source: "payload",
     requested,
