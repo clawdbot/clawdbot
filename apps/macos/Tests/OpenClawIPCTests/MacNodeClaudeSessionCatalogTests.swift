@@ -457,6 +457,77 @@ struct MacNodeClaudeSessionCatalogTests {
         #expect(enumerations.value() == 1)
     }
 
+    @Test func `missing pagination lease falls back to current discovery`() throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let project = home.appendingPathComponent(".claude/projects/-workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        let sessionId = "lease-session"
+        let transcript = project.appendingPathComponent("\(sessionId).jsonl")
+        try writeJSON(
+            [
+                "version": 1,
+                "entries": [[
+                    "sessionId": sessionId,
+                    "fullPath": transcript.path,
+                    "isSidechain": false,
+                ]],
+            ],
+            to: project.appendingPathComponent("sessions-index.json")
+        )
+        try writeTranscript([
+            message(sessionId: sessionId, role: "user", text: "old", index: 1),
+            message(sessionId: sessionId, role: "assistant", text: "new", index: 2),
+        ], to: transcript)
+
+        let enumerations = EnumerationCounter()
+        MacNodeClaudeSessionCatalog.setCatalogEnumerationObserverForTesting { rootPath in
+            if rootPath == home.appendingPathComponent(".claude/projects").standardizedFileURL.path {
+                enumerations.increment()
+            }
+        }
+        defer { MacNodeClaudeSessionCatalog.setCatalogEnumerationObserverForTesting(nil) }
+
+        let firstJSON = try MacNodeClaudeSessionCatalog.read(
+            paramsJSON: #"{"threadId":"lease-session","limit":1}"#,
+            homeURL: home
+        )
+        let first = try #require(
+            JSONSerialization.jsonObject(with: Data(firstJSON.utf8)) as? [String: Any]
+        )
+        var encoded = try #require(first["nextCursor"] as? String)
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        encoded += String(repeating: "=", count: (4 - encoded.count % 4) % 4)
+        let cursorData = try #require(Data(base64Encoded: encoded))
+        var cursorValue = try #require(
+            JSONSerialization.jsonObject(with: cursorData) as? [String: Any]
+        )
+        cursorValue["lease"] = UUID().uuidString
+        let missingLeaseCursor = try JSONSerialization.data(
+            withJSONObject: cursorValue,
+            options: [.sortedKeys]
+        ).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+
+        let secondParams = try #require(String(
+            data: JSONSerialization.data(withJSONObject: [
+                "threadId": sessionId,
+                "limit": 1,
+                "cursor": missingLeaseCursor,
+            ]),
+            encoding: .utf8
+        ))
+        let secondJSON = try MacNodeClaudeSessionCatalog.read(paramsJSON: secondParams, homeURL: home)
+        let second = try #require(
+            JSONSerialization.jsonObject(with: Data(secondJSON.utf8)) as? [String: Any]
+        )
+        #expect((second["items"] as? [[String: Any]])?.first?["text"] as? String == "old")
+        #expect(enumerations.value() == 2)
+    }
+
     @Test func `fresh reads recheck catalog eligibility after a pagination lease`() throws {
         let home = try makeHome()
         defer { try? FileManager.default.removeItem(at: home) }

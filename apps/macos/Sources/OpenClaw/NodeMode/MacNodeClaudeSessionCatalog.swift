@@ -333,11 +333,12 @@ enum MacNodeClaudeSessionCatalog {
         try Task.checkCancellation()
         let params = try decodeReadParams(paramsJSON)
         let cursor = try params.cursor.map(self.decodeTranscriptCursor)
-        guard let fileURL = try sessionFileForRead(
+        guard let target = try sessionFileForRead(
             homeURL: homeURL,
             threadId: params.threadId,
             leaseId: cursor?.leaseId)
         else { throw CatalogError.invalidParams("Claude session is unavailable") }
+        let fileURL = target.fileURL
 
         let handle = try FileHandle(forReadingFrom: fileURL)
         defer { try? handle.close() }
@@ -427,7 +428,7 @@ enum MacNodeClaudeSessionCatalog {
             "items": selected.map(\.item),
         ]
         if hasEarlierItems, let earliest = selected.last?.start, earliest > 0 {
-            let leaseId = cursor?.leaseId ?? self.transcriptReadLeases.store(
+            let leaseId = target.leaseId ?? self.transcriptReadLeases.store(
                 rootPath: self.projectsURL(homeURL: homeURL).standardizedFileURL.path,
                 threadId: params.threadId,
                 fileURL: fileURL)
@@ -535,11 +536,11 @@ extension MacNodeClaudeSessionCatalog {
     private static func sessionFileForRead(
         homeURL: URL,
         threadId: String,
-        leaseId: String?) throws -> URL?
+        leaseId: String?) throws -> (fileURL: URL, leaseId: String?)?
     {
         let rootPath = self.projectsURL(homeURL: homeURL).standardizedFileURL.path
         if let leaseId {
-            guard let candidate = self.transcriptReadLeases.lookup(
+            if let candidate = self.transcriptReadLeases.lookup(
                 leaseId: leaseId,
                 rootPath: rootPath,
                 threadId: threadId),
@@ -547,20 +548,23 @@ extension MacNodeClaudeSessionCatalog {
                     homeURL: homeURL,
                     threadId: threadId,
                     candidate: candidate)
-            else {
-                self.transcriptReadLeases.remove(leaseId: leaseId)
-                throw CatalogError.invalidParams("transcript cursor is invalid")
+            {
+                return (fileURL, leaseId)
             }
-            return fileURL
+            // A lease is only an optimization. App restart, expiry, eviction, or
+            // a moved file must fall back to current eligibility discovery.
+            self.transcriptReadLeases.remove(leaseId: leaseId)
         }
 
         guard let candidate = try self.sessions(homeURL: homeURL)
             .first(where: { $0.threadId == threadId })?.fileURL
         else { return nil }
-        return self.revalidatedSessionFile(
+        guard let fileURL = self.revalidatedSessionFile(
             homeURL: homeURL,
             threadId: threadId,
             candidate: candidate)
+        else { return nil }
+        return (fileURL, nil)
     }
 
     private static func desktopMetadata(homeURL: URL) throws -> (
