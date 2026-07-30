@@ -187,7 +187,7 @@ function finiteAtomValues(source: string): string[] | null {
     return Array.from({ length: 10 }, (_, index) => String(index));
   }
   if (source === "\\w") {
-    return [..."ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz0123456789"];
+    return Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz0123456789");
   }
   if (source === "\\s") {
     return [
@@ -222,7 +222,7 @@ function finiteAtomValues(source: string): string[] | null {
     const escaped = readEscapedLiteral(source, 0);
     return escaped?.next === source.length ? [escaped.value] : null;
   }
-  const characters = [...source];
+  const characters = Array.from(source);
   return characters.length === 1 && !/^[.^$*+?()[\]{}|]$/.test(source) ? characters : null;
 }
 
@@ -243,8 +243,8 @@ function atomsMayOverlap(left: string, right: string, flags: string): boolean {
     const rightValues = finiteAtomValues(right);
     const candidates = new Set([
       ...ASCII_ATOM_SAMPLES,
-      ...left,
-      ...right,
+      ...Array.from(left),
+      ...Array.from(right),
       ...(leftValues ?? []),
       ...(rightValues ?? []),
     ]);
@@ -400,8 +400,8 @@ function tokenizePattern(source: string): PatternToken[] {
       continue;
     }
 
-    const codePoint = source.codePointAt(i);
-    const atom = codePoint === undefined ? ch : String.fromCodePoint(codePoint);
+    const codePoint = expectDefined(source.codePointAt(i), "pattern code point");
+    const atom = String.fromCodePoint(codePoint);
     tokens.push({ kind: "simple-token", source: atom });
     i += atom.length - 1;
   }
