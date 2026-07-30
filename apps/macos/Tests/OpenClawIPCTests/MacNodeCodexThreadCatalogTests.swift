@@ -1350,6 +1350,106 @@ extension MacNodeCodexThreadCatalogTests {
         #expect((decoded["sessions"] as? [Any])?.count == 50)
     }
 
+    @Test func `drains a large final frame before handling process exit`() async throws {
+        let threads: [[String: Any]] = (0..<100).map { index in
+            [
+                "id": "thread-\(index)",
+                "name": "Final catalog \(index)",
+                "cwd": "/workspace/\(String(repeating: "x", count: 3500))",
+                "status": ["type": "notLoaded"],
+            ]
+        }
+        let responseData = try JSONSerialization.data(withJSONObject: [
+            "id": 2,
+            "result": ["data": threads],
+        ])
+        let response = try #require(String(data: responseData, encoding: .utf8))
+        #expect(response.utf8.count > 256 * 1024)
+        let fake = try makeFakeCodex("""
+        #!/bin/sh
+        IFS= read -r initialize || exit 2
+        printf '%s\n' '{"id":1,"result":{}}'
+        IFS= read -r initialized || exit 3
+        IFS= read -r list || exit 4
+        printf '%s\n' '\(response)'
+        """)
+        defer { try? FileManager.default.removeItem(at: fake.directory) }
+
+        let payload = try await MacNodeCodexThreadCatalog.list(
+            paramsJSON: #"{"limit":100}"#,
+            executable: fake.executable.path,
+            timeoutSeconds: 10)
+        let decoded = try #require(
+            JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
+        #expect((decoded["sessions"] as? [Any])?.count == 100)
+    }
+
+    @Test func `accepts coalesced JSONL frames within the per-frame limit`() async throws {
+        let fake = try makeFakeCodex(#"""
+        #!/bin/sh
+        IFS= read -r initialize || exit 2
+        printf '%s\n' '{"id":1,"result":{}}'
+        IFS= read -r initialized || exit 3
+        IFS= read -r list || exit 4
+        printf '%s\n%s\n' \
+          '{"method":"thread/started","params":{"padding":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}' \
+          '{"id":2,"result":{"data":[]}}'
+        sleep 1
+        """#)
+        defer { try? FileManager.default.removeItem(at: fake.directory) }
+        let client = CodexAppServerThreadClient(idleTimeoutSeconds: 10)
+
+        let result = try await self.requestEmptyList(
+            client: client,
+            executable: fake.executable,
+            maxLineBytes: 128)
+
+        #expect(try (JSONSerialization.jsonObject(with: result) as? [String: Any])?["data"] != nil)
+        await client.shutdown()
+    }
+
+    @Test func `uses the active request frame limit after advancing the queue`() async throws {
+        let fake = try makeFakeCodex(#"""
+        #!/bin/sh
+        IFS= read -r initialize || exit 2
+        printf '%s\n' '{"id":1,"result":{}}'
+        IFS= read -r initialized || exit 3
+        IFS= read -r first || exit 4
+        first_id=$(printf '%s\n' "$first" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+        touch "${0}.first-started"
+        sleep 0.1
+        printf '{"id":%s,"result":{"data":[]}}\n' "$first_id"
+        IFS= read -r second || exit 5
+        second_id=$(printf '%s\n' "$second" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+        padding=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        printf '{"id":%s,"result":{"data":[],"padding":"%s"}}\n' "$second_id" "$padding"
+        sleep 1
+        """#)
+        defer { try? FileManager.default.removeItem(at: fake.directory) }
+        let client = CodexAppServerThreadClient(idleTimeoutSeconds: 10)
+
+        let first = Task {
+            try await self.requestEmptyList(
+                client: client,
+                executable: fake.executable,
+                maxLineBytes: 1024)
+        }
+        #expect(await self.waitForFile(
+            URL(fileURLWithPath: fake.executable.path + ".first-started")))
+        let second = Task {
+            try await self.requestEmptyList(
+                client: client,
+                executable: fake.executable,
+                maxLineBytes: 64)
+        }
+
+        _ = try await first.value
+        await #expect(throws: MacNodeCodexThreadCatalog.CatalogError.responseTooLarge) {
+            try await second.value
+        }
+        await client.shutdown()
+    }
+
     @Test func `default deadline allows cold large catalog scans`() {
         #expect(MacNodeCodexThreadCatalog.defaultTimeoutSeconds == 60)
     }

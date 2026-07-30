@@ -90,6 +90,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         var stdoutBuffer = Data()
         var initialized = false
         var exited = false
+        var stdoutReachedEOF = false
 
         init(
             invocation: MacNodeCodexThreadCatalog.ResolvedInvocation,
@@ -101,6 +102,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
     }
 
     private static let maxQueuedRequests = 64
+    private static let maxStdoutDrainBytes = 256 * 1024
 
     private let queue = DispatchQueue(label: "ai.openclaw.codex-thread-catalog")
     private let idleTimeoutSeconds: Double
@@ -110,11 +112,6 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
     private var active: PendingRequest?
     private var connection: Connection?
     private var idleTimer: DispatchSourceTimer?
-
-    private struct ReadChunk {
-        var data: Data
-        var reachedEOF: Bool
-    }
 
     init(
         idleTimeoutSeconds: Double = MacNodeCodexThreadCatalog.defaultIdleTimeoutSeconds,
@@ -320,39 +317,83 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
 
     private func drainStdout(from handle: FileHandle, generation: UUID) {
         guard let connection = self.connection, connection.generation == generation else { return }
-        let maxLineBytes = self.active?.maxLineBytes ?? self.idleReadLimit
-        let chunk = Self.readAvailable(from: handle, maxBytes: maxLineBytes)
-        if chunk.reachedEOF {
+        var drainedBytes = 0
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        while true {
+            // Yield after a bounded batch so request timers, cancellation, and
+            // shutdown work queued behind a noisy App Server can still run.
+            if drainedBytes >= Self.maxStdoutDrainBytes {
+                self.queue.async { [weak self] in
+                    self?.drainStdout(from: handle, generation: generation)
+                }
+                return
+            }
+            let count = buffer.withUnsafeMutableBytes { bytes in
+                Darwin.read(handle.fileDescriptor, bytes.baseAddress, bytes.count)
+            }
+            if count > 0 {
+                drainedBytes += count
+                self.consumeStdout(
+                    Data(buffer.prefix(count)),
+                    connection: connection)
+                guard self.connection?.generation == generation else { return }
+                continue
+            }
+            if count == 0 {
+                connection.stdoutReachedEOF = true
+                handle.readabilityHandler = nil
+                self.finishTerminatedConnectionIfNeeded(generation: generation)
+                return
+            }
+            if errno == EINTR { continue }
+            if errno == EAGAIN || errno == EWOULDBLOCK {
+                if connection.exited {
+                    self.queue.asyncAfter(deadline: .now() + .milliseconds(1)) { [weak self] in
+                        self?.drainStdout(from: handle, generation: generation)
+                    }
+                }
+                return
+            }
+            connection.stdoutReachedEOF = true
             handle.readabilityHandler = nil
+            self.finishTerminatedConnectionIfNeeded(generation: generation)
+            return
         }
-        guard !chunk.data.isEmpty else { return }
-        self.consumeStdout(chunk.data, connection: connection, maxLineBytes: maxLineBytes)
     }
 
     private func consumeStdout(
         _ data: Data,
-        connection: Connection,
-        maxLineBytes: Int)
+        connection: Connection)
     {
         connection.stdoutBuffer.append(data)
-        guard connection.stdoutBuffer.count <= maxLineBytes else {
-            if self.active == nil {
-                self.stopConnection()
-                self.startNextIfNeeded()
-            } else {
-                self.finishActive(
-                    .failure(MacNodeCodexThreadCatalog.CatalogError.responseTooLarge),
-                    restartConnection: true)
-            }
-            return
-        }
 
         while let newline = connection.stdoutBuffer.firstIndex(of: 0x0A) {
             let line = connection.stdoutBuffer.prefix(upTo: newline)
+            let maxLineBytes = self.active?.maxLineBytes ?? self.idleReadLimit
+            guard line.count <= maxLineBytes else {
+                self.rejectOversizedFrame()
+                return
+            }
             connection.stdoutBuffer.removeSubrange(...newline)
             guard !line.isEmpty else { continue }
             self.handleLine(Data(line), connection: connection)
             guard self.connection?.generation == connection.generation else { return }
+        }
+        let maxLineBytes = self.active?.maxLineBytes ?? self.idleReadLimit
+        guard connection.stdoutBuffer.count <= maxLineBytes else {
+            self.rejectOversizedFrame()
+            return
+        }
+    }
+
+    private func rejectOversizedFrame() {
+        if self.active == nil {
+            self.stopConnection()
+            self.startNextIfNeeded()
+        } else {
+            self.finishActive(
+                .failure(MacNodeCodexThreadCatalog.CatalogError.responseTooLarge),
+                restartConnection: true)
         }
     }
 
@@ -401,7 +442,15 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         self.drainStdout(
             from: connection.stdoutPipe.fileHandleForReading,
             generation: generation)
-        guard self.connection?.generation == generation else { return }
+        self.finishTerminatedConnectionIfNeeded(generation: generation)
+    }
+
+    private func finishTerminatedConnectionIfNeeded(generation: UUID) {
+        guard let connection = self.connection,
+              connection.generation == generation,
+              connection.exited,
+              connection.stdoutReachedEOF
+        else { return }
         if self.active != nil {
             self.finishActive(
                 .failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable),
@@ -514,36 +563,6 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
 
     private static func jsonData(_ object: Any) throws -> Data {
         try JSONSerialization.data(withJSONObject: object)
-    }
-
-    private static func readAvailable(from handle: FileHandle, maxBytes: Int) -> ReadChunk {
-        // FileHandle.read(upToCount:) can wait for EOF despite a readability callback.
-        // The descriptor is non-blocking, so drain one complete JSONL frame (or
-        // the response cap plus one byte) without waiting for the App Server to exit.
-        var data = Data()
-        let captureLimit = maxBytes == Int.max ? Int.max : maxBytes + 1
-        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
-        while true {
-            let count = buffer.withUnsafeMutableBytes { bytes in
-                Darwin.read(handle.fileDescriptor, bytes.baseAddress, bytes.count)
-            }
-            if count > 0 {
-                let remaining = max(0, captureLimit - data.count)
-                data.append(contentsOf: buffer.prefix(min(count, remaining)))
-                if data.count > maxBytes {
-                    return ReadChunk(data: data, reachedEOF: false)
-                }
-                continue
-            }
-            if count == 0 {
-                return ReadChunk(data: data, reachedEOF: true)
-            }
-            if errno == EINTR { continue }
-            if errno == EAGAIN || errno == EWOULDBLOCK {
-                return ReadChunk(data: data, reachedEOF: false)
-            }
-            return ReadChunk(data: data, reachedEOF: true)
-        }
     }
 
     private static func drainAvailable(from handle: FileHandle) -> Bool {
