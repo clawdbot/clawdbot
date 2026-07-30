@@ -161,7 +161,12 @@ describe("short-term promotion score calibration", () => {
       oneoff: [0.529376, 0.569376, 0.606376],
     });
 
-    const promoted = await rankShortTermPromotionCandidates({ workspaceDir, nowMs: NOW_MS });
+    const promoted = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: NOW_MS,
+    });
     expect(promoted.map((candidate) => candidate.key).toSorted()).toEqual([
       "genuine-a",
       "genuine-b",
