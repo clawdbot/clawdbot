@@ -74,16 +74,28 @@ describe("formatTelegramFallbackError", () => {
     );
   });
 
-  it("maps 404 to model not found message", () => {
-    expect(formatTelegramFallbackError(new Error("404 Not Found"))).toBe(
-      "⚠️ The selected model was not found. Try a different model.",
-    );
-  });
-
   it("maps 'model not found' to model not found message", () => {
     expect(formatTelegramFallbackError(new Error("model not found: gpt-xyz"))).toBe(
       "⚠️ The selected model was not found. Try a different model.",
     );
+  });
+
+  it("maps 'no such model' to model not found message", () => {
+    expect(formatTelegramFallbackError(new Error("no such model: claude-xyz"))).toBe(
+      "⚠️ The selected model was not found. Try a different model.",
+    );
+  });
+
+  it("returns generic message for bare 404 without model-specific text", () => {
+    expect(formatTelegramFallbackError(new Error("404 Not Found"))).toBe(
+      "Something went wrong while processing your request. Please try again.",
+    );
+  });
+
+  it("returns generic message for non-model 404 (missing endpoint)", () => {
+    expect(
+      formatTelegramFallbackError(new Error("404: /v1/deployments/xyz/completions not found")),
+    ).toBe("Something went wrong while processing your request. Please try again.");
   });
 
   it("maps context overflow to context overflow message", () => {
