@@ -8,10 +8,13 @@
  * See issue #73691.
  *
  * Strategy: drop the OLDEST auto-promoted sections (date-ordered) until
- * the file plus the new section fit within the budget. User-authored
- * content (anything that is not a `## Promoted From Short-Term Memory
- * (DATE)` section) is preserved unconditionally — only dreaming-owned
- * sections are eligible for compaction.
+ * the file plus the new section fit within the budget. A section counts as
+ * dreaming-owned only when a `## Promoted From Short-Term Memory (DATE)`
+ * heading is backed by at least one authoritative
+ * `<!-- openclaw-memory-promotion:... -->` marker, which every generated
+ * section carries (see `buildPromotionSection`). Everything else, including
+ * user-authored content under a heading that merely looks generated, is
+ * preserved unconditionally.
  */
 
 const PROMOTION_SECTION_HEADING_RE = /^## Promoted From Short-Term Memory \(([^)]+)\)\s*$/;
@@ -46,6 +49,10 @@ type MemoryBlock =
   | { kind: "preserved"; text: string }
   | { kind: "promotion"; date: string; text: string };
 
+function hasPromotionEntryMarker(lines: string[]): boolean {
+  return lines.some((line) => PROMOTION_ENTRY_MARKER_RE.test(line));
+}
+
 function startsGeneratedPromotionSubsection(lines: string[], index: number): boolean {
   if (!PROMOTION_SUBSECTION_HEADING_RE.test(lines[index] ?? "")) {
     return false;
@@ -69,7 +76,7 @@ function takeSetextHeadingLines(lines: string[]): string[] | undefined {
     return undefined;
   }
   const headingLines = lines.slice(start);
-  if (headingLines.some((line) => PROMOTION_ENTRY_MARKER_RE.test(line))) {
+  if (hasPromotionEntryMarker(headingLines)) {
     return undefined;
   }
   lines.splice(start);
@@ -91,7 +98,7 @@ function parseMemoryBlocks(content: string): MemoryBlock[] {
       return;
     }
     const text = currentLines.join("\n");
-    if (currentKind === "promotion" && currentDate) {
+    if (currentKind === "promotion" && currentDate && hasPromotionEntryMarker(currentLines)) {
       blocks.push({ kind: "promotion", date: currentDate, text });
     } else {
       blocks.push({ kind: "preserved", text });
@@ -152,7 +159,8 @@ type CompactMemoryResult = {
  *
  * Guarantees:
  * - Non-promotion content (user-authored markdown, the file header, any
- *   heading of any level not matching the promotion pattern) is preserved.
+ *   heading of any level not matching the promotion pattern, and any
+ *   matching heading whose section carries no promotion marker) is preserved.
  * - Promotion sections are dropped in ascending date order (oldest first).
  * - If `existingMemory + newSection` already fits the budget, the existing
  *   memory is returned unchanged.

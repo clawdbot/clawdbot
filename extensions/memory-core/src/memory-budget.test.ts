@@ -2,10 +2,17 @@
 import { describe, expect, it } from "vitest";
 import { compactMemoryForBudget, DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
 
+const PROMOTION_MARKER_LINE = "<!-- openclaw-memory-promotion:memory/short-term.md#entry -->";
+
 function promotionSection(date: string, sizeChars: number): string {
   const heading = `## Promoted From Short-Term Memory (${date})\n`;
-  const padding = "x".repeat(Math.max(0, sizeChars - heading.length));
-  return `${heading}${padding}`;
+  const marker = `${PROMOTION_MARKER_LINE}\n`;
+  const padding = "x".repeat(Math.max(0, sizeChars - heading.length - marker.length));
+  return `${heading}${marker}${padding}`;
+}
+
+function markerFreeSection(date: string, body: string): string {
+  return `## Promoted From Short-Term Memory (${date})\n${body}\n`;
 }
 
 function projectGroupedSection(date: string): string {
@@ -334,6 +341,57 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
       expect(result.compacted).toContain("Keep this user-authored paragraph.");
     },
   );
+
+  it("preserves a marker-free section whose heading matches the generated promotion pattern", () => {
+    const existing = `# Long-Term Memory\n\n${markerFreeSection(
+      "2026-04-10",
+      "USER-AUTHORED: recovery key is paper-copy-17",
+    )}`;
+    const newSection = `\n${promotionSection("2026-04-29", 600)}`;
+    const result = compactMemoryForBudget({
+      existingMemory: existing,
+      newSection,
+      budgetChars: 400,
+    });
+    expect(result.droppedDates).toEqual([]);
+    expect(result.compacted).toBe(existing);
+    expect(result.compacted).toContain("USER-AUTHORED: recovery key is paper-copy-17");
+  });
+
+  it("drops only the marker-backed section when a marker-free lookalike sits beside it", () => {
+    const userSection = markerFreeSection(
+      "2026-04-10",
+      "USER-AUTHORED: recovery key is paper-copy-17",
+    );
+    const existing = `# Long-Term Memory\n\n${userSection}\n${promotionSection("2026-04-20", 600)}`;
+    const newSection = `\n${promotionSection("2026-04-29", 600)}`;
+    const result = compactMemoryForBudget({
+      existingMemory: existing,
+      newSection,
+      budgetChars: 700,
+    });
+    expect(result.droppedDates).toEqual(["2026-04-20"]);
+    expect(result.compacted).not.toContain("(2026-04-20)");
+    expect(result.compacted).toContain("## Promoted From Short-Term Memory (2026-04-10)");
+    expect(result.compacted).toContain("USER-AUTHORED: recovery key is paper-copy-17");
+  });
+
+  it("still drops a marker-backed multi-project section that a user heading follows", () => {
+    const existing =
+      `${projectGroupedSection("2026-04-10")}\n` +
+      "### Global\n\nMy own global rule, not a promoted entry.\n\n" +
+      projectGroupedSection("2026-04-20");
+    const newSection = `\n${projectGroupedSection("2026-04-29")}`;
+    const result = compactMemoryForBudget({
+      existingMemory: existing,
+      newSection,
+      budgetChars: 900,
+    });
+    expect(result.droppedDates).toContain("2026-04-10");
+    expect(result.compacted).not.toContain("### Project: alpha");
+    expect(result.compacted).toContain("### Global");
+    expect(result.compacted).toContain("My own global rule, not a promoted entry.");
+  });
 
   it("exposes a sane default budget below the bootstrap injection cap", () => {
     // Bootstrap injection is capped at 12_000 chars per file (see
