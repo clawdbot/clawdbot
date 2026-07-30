@@ -309,6 +309,24 @@ import {
 import type { ValidationError } from "./validation-errors.js";
 
 // Validator names mirror schemas so callers can pair them with wire contracts.
+function utf8FieldLimitPrecheck(field: string, limit: number) {
+  return (data: unknown) => {
+    if (typeof data !== "object" || data === null || !(field in data)) {
+      return undefined;
+    }
+    const value = (data as Record<string, unknown>)[field];
+    if (typeof value !== "string" || new TextEncoder().encode(value).byteLength <= limit) {
+      return undefined;
+    }
+    return {
+      keyword: "maxUtf8Bytes",
+      instancePath: `/${field}`,
+      params: { limit },
+      message: `must not exceed ${limit} UTF-8 bytes`,
+    };
+  };
+}
+
 export const validateCommandsListParams = lazyCompile(CommandsListParamsSchema);
 export const validateConnectParams = lazyCompile(ConnectParamsSchema);
 export const validateWorkerAdmissionHandshake = lazyCompile(WorkerAdmissionHandshakeSchema);
@@ -444,27 +462,14 @@ export const validateNodePendingAckParams = lazyCompile(NodePendingAckParamsSche
 export const validateNodeDescribeParams = lazyCompile(NodeDescribeParamsSchema);
 export const validateNodeInvokeParams = lazyCompile(NodeInvokeParamsSchema);
 export const validateNodeInvokeRequestEvent = lazyCompile(NodeInvokeRequestEventSchema);
-export const validateNodeInvokeInputEvent = lazyCompile(NodeInvokeInputEventSchema);
+export const validateNodeInvokeInputEvent = lazyCompile(
+  NodeInvokeInputEventSchema,
+  utf8FieldLimitPrecheck("payloadJSON", 16 * 1024),
+);
 export const validateNodeInvokeResultParams = lazyCompile(NodeInvokeResultParamsSchema);
 export const validateNodeInvokeProgressParams = lazyCompile(
   NodeInvokeProgressParamsSchema,
-  (data) => {
-    if (
-      typeof data === "object" &&
-      data !== null &&
-      "chunk" in data &&
-      typeof data.chunk === "string" &&
-      new TextEncoder().encode(data.chunk).byteLength > 16 * 1024
-    ) {
-      return {
-        keyword: "maxUtf8Bytes",
-        instancePath: "/chunk",
-        params: { limit: 16 * 1024 },
-        message: "must not exceed 16384 UTF-8 bytes",
-      };
-    }
-    return undefined;
-  },
+  utf8FieldLimitPrecheck("chunk", 16 * 1024),
 );
 export const validateNodeEventParams = lazyCompile(NodeEventParamsSchema);
 export const validateNodePresenceActivityPayload = lazyCompile(NodePresenceActivityPayloadSchema);
