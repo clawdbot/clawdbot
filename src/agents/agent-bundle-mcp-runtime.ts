@@ -16,6 +16,7 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
 import { logWarn } from "../logger.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -816,19 +817,49 @@ export function createSessionMcpRuntime(params: {
               }
               session.catalogUseCount += 1;
               try {
-                failIfDisposed();
-                await ensureSessionConnected(session, resolved.connectionTimeoutMs);
-                failIfDisposed();
-                const capabilities = summarizeServerCapabilities(
-                  session.client.getServerCapabilities(),
+                const timelineSpanOptions = {
+                  attributes: {
+                    reusedSession,
+                    safeServerName,
+                    serverName,
+                    transportType: resolved.transportType,
+                  },
+                  ...(params.cfg ? { config: params.cfg } : {}),
+                  omitErrorMessage: true,
+                };
+                const { capabilities, listedTools } = await measureDiagnosticsTimelineSpan(
+                  "bundle-mcp.server",
+                  async () => {
+                    failIfDisposed();
+                    await measureDiagnosticsTimelineSpan(
+                      "bundle-mcp.connect",
+                      () => ensureSessionConnected(session, resolved.connectionTimeoutMs),
+                      timelineSpanOptions,
+                    );
+                    failIfDisposed();
+                    const serverCapabilities = summarizeServerCapabilities(
+                      session.client.getServerCapabilities(),
+                    );
+                    const serverTools = await measureDiagnosticsTimelineSpan(
+                      "bundle-mcp.tools-list",
+                      () =>
+                        listAllToolsBestEffort({
+                          client: session.client,
+                          timeoutMs: getCatalogListTimeoutMs(rawServer, resolved.requestTimeoutMs),
+                          suppressUnsupported: Boolean(
+                            !serverCapabilities.tools &&
+                            (serverCapabilities.resources || serverCapabilities.prompts),
+                          ),
+                        }),
+                      timelineSpanOptions,
+                    );
+                    return {
+                      capabilities: serverCapabilities,
+                      listedTools: serverTools,
+                    };
+                  },
+                  timelineSpanOptions,
                 );
-                const listedTools = await listAllToolsBestEffort({
-                  client: session.client,
-                  timeoutMs: getCatalogListTimeoutMs(rawServer, resolved.requestTimeoutMs),
-                  suppressUnsupported: Boolean(
-                    !capabilities.tools && (capabilities.resources || capabilities.prompts),
-                  ),
-                });
                 failIfDisposed();
                 const selection = getMcpToolSelection(rawServer);
                 const denialMap = params.toolOverrides?.mcpToolsDeny;

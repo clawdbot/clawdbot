@@ -454,6 +454,87 @@ describe("session MCP runtime", () => {
     });
   });
 
+  it("emits nested diagnostics timeline spans for server catalog discovery", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-timeline-");
+    const serverPath = path.join(tempDir, "server.mjs");
+    const serverLogPath = path.join(tempDir, "server.log");
+    const timelinePath = path.join(tempDir, "timeline.jsonl");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath: serverLogPath,
+      tools: [{ name: "timeline_tool", inputSchema: { type: "object" } }],
+    });
+    const previousTimelinePath = process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH;
+    let runtime: SessionMcpRuntime | undefined;
+
+    try {
+      process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = timelinePath;
+      runtime = createSessionMcpRuntime({
+        sessionId: "session-timeline",
+        workspaceDir: tempDir,
+        cfg: {
+          diagnostics: { flags: ["timeline"] },
+          mcp: {
+            servers: {
+              bundleProbe: {
+                command: process.execPath,
+                args: [serverPath],
+              },
+            },
+          },
+        },
+      });
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["timeline_tool"]);
+      const timelineText = await fs.readFile(timelinePath, "utf8");
+      const events = timelineText
+        .trim()
+        .split("\n")
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              attributes?: Record<string, unknown>;
+              durationMs?: number;
+              name: string;
+              parentSpanId?: string;
+              spanId?: string;
+              type: string;
+            },
+        );
+      const endEvent = (name: string) =>
+        events.find((event) => event.name === name && event.type === "span.end");
+      const serverSpan = endEvent("bundle-mcp.server");
+      const connectSpan = endEvent("bundle-mcp.connect");
+      const toolsListSpan = endEvent("bundle-mcp.tools-list");
+
+      expect(serverSpan).toMatchObject({
+        attributes: {
+          reusedSession: false,
+          safeServerName: "bundleProbe",
+          serverName: "bundleProbe",
+          transportType: "stdio",
+        },
+        durationMs: expect.any(Number),
+      });
+      expect(connectSpan).toMatchObject({
+        durationMs: expect.any(Number),
+        parentSpanId: serverSpan?.spanId,
+      });
+      expect(toolsListSpan).toMatchObject({
+        durationMs: expect.any(Number),
+        parentSpanId: serverSpan?.spanId,
+      });
+      expect(timelineText).not.toContain(serverPath);
+    } finally {
+      await runtime?.dispose();
+      if (previousTimelinePath === undefined) {
+        delete process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH;
+      } else {
+        process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = previousTimelinePath;
+      }
+    }
+  });
+
   it("catalogs canonical and deprecated MCP App tool metadata", async () => {
     const tempDir = tempDirTracker.make("bundle-mcp-app-metadata-");
     const serverPath = path.join(tempDir, "app-metadata.mjs");
