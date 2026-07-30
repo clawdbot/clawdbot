@@ -139,6 +139,73 @@ describe("Slack live QA runtime helpers", () => {
     ]);
   });
 
+  it("selects the MPIM app-mention dedupe scenario", () => {
+    expect(
+      testing.findScenario(["slack-mpim-app-mention-dedupe"]).map((scenario) => scenario.id),
+    ).toEqual(["slack-mpim-app-mention-dedupe"]);
+  });
+
+  it("enables group DMs for the MPIM app-mention scenario", () => {
+    const cfg = testing.buildSlackQaConfig(
+      {},
+      {
+        channelId: "C123456789",
+        driverBotUserId: "U999999999",
+        overrides: { groupDmEnabled: true },
+        sutAccountId: "sut",
+        sutAppToken: "xapp-sut",
+        sutBotToken: "xoxb-sut",
+      },
+    );
+
+    expect(cfg.channels?.slack?.accounts?.sut?.dm).toEqual({
+      enabled: true,
+      groupEnabled: true,
+    });
+  });
+
+  it("surfaces MPIM cleanup failures and retains ownership for a retry", async () => {
+    const run = testing.findScenario(["slack-mpim-app-mention-dedupe"])[0]?.buildRun("U_SUT");
+    if (
+      !run ||
+      run.kind === "approval" ||
+      run.kind === "codex-approval" ||
+      run.kind === "direct-transport"
+    ) {
+      throw new Error("expected Slack MPIM message scenario");
+    }
+    const close = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("close failed"))
+      .mockRejectedValueOnce(new Error("close failed again"))
+      .mockResolvedValueOnce({});
+    const context = {
+      channelId: "C_QA",
+      driverClient: { auth: { test: vi.fn(async () => ({ user_id: "U_DRIVER" })) } },
+      sutIdentity: { userId: "U_SUT" },
+      sutReadClient: {
+        conversations: {
+          close,
+          info: vi.fn(async () => {
+            throw new Error("metadata unavailable");
+          }),
+          members: vi.fn(async () => ({ members: ["U_DRIVER", "U_SUT", "U_HUMAN"] })),
+          open: vi.fn(async () => ({ channel: { id: "C_MPIM" } })),
+        },
+        users: { info: vi.fn(async () => ({ user: { id: "U_HUMAN" } })) },
+      },
+    } as never;
+
+    await expect(run.beforeRun?.(context)).rejects.toThrow("metadata unavailable");
+    await expect(run.cleanup?.(context)).rejects.toThrow("close failed again");
+    await expect(run.cleanup?.(context)).resolves.toBeUndefined();
+
+    expect(close).toHaveBeenCalledTimes(3);
+    expect(close).toHaveBeenNthCalledWith(1, { channel: "C_MPIM" });
+    expect(close).toHaveBeenNthCalledWith(2, { channel: "C_MPIM" });
+    expect(close).toHaveBeenNthCalledWith(3, { channel: "C_MPIM" });
+  });
+
   it("selects native scenarios by explicit id", () => {
     expect(
       testing

@@ -1413,6 +1413,115 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     });
   });
 
+  it("keeps multibyte command output and error tails within the byte budget", async () => {
+    await withTempDirAsync("openclaw-cross-os-run-command-utf8-tail-", async (dir) => {
+      const logPath = join(dir, "command.log");
+      const result = await runCommand(
+        process.execPath,
+        ["-e", "process.stdout.write('a😀bbbb'); process.stderr.write('a😀cccc');"],
+        { cwd: dir, env: process.env, logPath, maxOutputBytes: 6 },
+      );
+
+      expect(result.stdout).toBe("bbbb");
+      expect(result.stderr).toBe("cccc");
+      expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(6);
+      expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(6);
+      const log = readFileSync(logPath, "utf8");
+      expect(log).toContain("a😀bbbb");
+      expect(log).toContain("a😀cccc");
+    });
+  });
+
+  it("keeps rolling multibyte command output and error tails within the byte budget", async () => {
+    await withTempDirAsync("openclaw-cross-os-run-command-utf8-rolling-", async (dir) => {
+      const logPath = join(dir, "command.log");
+      const script = [
+        "process.stdout.write('a😀');",
+        "process.stderr.write('a😀');",
+        "setTimeout(() => { process.stdout.write('bbbb'); process.stderr.write('cccc'); }, 25);",
+      ].join("");
+      const result = await runCommand(process.execPath, ["-e", script], {
+        cwd: dir,
+        env: process.env,
+        logPath,
+        maxOutputBytes: 7,
+      });
+
+      expect(result.stdout).toBe("bbbb");
+      expect(result.stderr).toBe("cccc");
+      expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(7);
+      expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(7);
+    });
+  });
+
+  it.each(["stdout", "stderr"] as const)(
+    "preserves a UTF-8 character split across real %s chunks and its full log",
+    async (stream) => {
+      await withTempDirAsync("openclaw-cross-os-run-command-utf8-split-", async (dir) => {
+        const logPath = join(dir, "command.log");
+        const script = [
+          `process.${stream}.write('A');`,
+          `process.${stream}.write(Buffer.from([0xf0, 0x9f]));`,
+          `setTimeout(() => { process.${stream}.write(Buffer.from([0x98, 0x80])); process.${stream}.write('Z'); }, 25);`,
+        ].join("");
+        const result = await runCommand(process.execPath, ["-e", script], {
+          cwd: dir,
+          env: process.env,
+          logPath,
+          maxOutputBytes: 64,
+        });
+
+        expect(result[stream]).toBe("A😀Z");
+        expect(readFileSync(logPath, "utf8")).toContain("A😀Z");
+      });
+    },
+  );
+
+  it.each([1, 2, 3])(
+    "never exceeds a %i-byte command output budget with a truncated UTF-8 character",
+    async (maxOutputBytes) => {
+      await withTempDirAsync("openclaw-cross-os-run-command-utf8-budget-", async (dir) => {
+        const logPath = join(dir, "command.log");
+        const result = await runCommand(
+          process.execPath,
+          ["-e", "process.stdout.write('😀'); process.stderr.write('😀');"],
+          { cwd: dir, env: process.env, logPath, maxOutputBytes },
+        );
+
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toBe("");
+        expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(maxOutputBytes);
+        expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(maxOutputBytes);
+      });
+    },
+  );
+
+  it.each([
+    { maxOutputBytes: 1, expected: "" },
+    { maxOutputBytes: 2, expected: "" },
+    { maxOutputBytes: 3, expected: "�" },
+  ])(
+    "bounds incomplete UTF-8 command output to $maxOutputBytes bytes",
+    async ({ maxOutputBytes, expected }) => {
+      await withTempDirAsync("openclaw-cross-os-run-command-utf8-incomplete-", async (dir) => {
+        const logPath = join(dir, "command.log");
+        const result = await runCommand(
+          process.execPath,
+          [
+            "-e",
+            "process.stdout.write(Buffer.from([0xf0])); process.stderr.write(Buffer.from([0xf0]));",
+          ],
+          { cwd: dir, env: process.env, logPath, maxOutputBytes },
+        );
+
+        expect(result.stdout).toBe(expected);
+        expect(result.stderr).toBe(expected);
+        expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(maxOutputBytes);
+        expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(maxOutputBytes);
+      });
+    },
+  );
+
   it("flushes command logs before resolving", async () => {
     await withTempDirAsync("openclaw-cross-os-run-command-flush-", async (dir) => {
       const logPath = join(dir, "flush.log");

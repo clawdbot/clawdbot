@@ -8,6 +8,7 @@ import { CommanderError } from "commander";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { loggingState } from "../logging/state.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
@@ -2667,6 +2668,54 @@ describe("runCli exit behavior", () => {
     expect(stderrDuringPluginRegistration).toBe(true);
     expect(stderrDuringParse).toBe(true);
     expect(loggingState.forceConsoleToStderr).toBe(false);
+  });
+
+  it("retains stderr routing for late subsystem logs in one-shot JSON commands", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const previousRawConsole = loggingState.rawConsole;
+    const previousOverrideSettings = loggingState.overrideSettings;
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(((
+      value: string | Uint8Array,
+    ) => {
+      stdout.push(String(value));
+      return true;
+    }) as typeof process.stdout.write);
+    loggingState.overrideSettings = {
+      level: "silent",
+      consoleLevel: "info",
+      consoleStyle: "compact",
+    };
+    loggingState.rawConsole = {
+      log: (value) => stdout.push(String(value)),
+      info: (value) => stdout.push(String(value)),
+      warn: (value) => stderr.push(String(value)),
+      error: (value) => stderr.push(String(value)),
+    };
+    buildProgramMock.mockReturnValueOnce({
+      commands: [],
+      parseAsync: vi.fn(async () => {
+        process.stdout.write('{"ok":true,"status":"ok"}\n');
+      }),
+    });
+
+    try {
+      await runCli(["node", "openclaw", "agent", "exec", "inspect", "--json"], {
+        retainConsoleRoutingUntilProcessExit: true,
+      });
+      createSubsystemLogger("state/db").info("late migration diagnostic");
+
+      expect(JSON.parse(stdout.join(""))).toEqual({ ok: true, status: "ok" });
+      expect(stderr).toEqual([expect.stringContaining("late migration diagnostic")]);
+      expect(loggingState.forceConsoleToStderr).toBe(true);
+    } finally {
+      stdoutWrite.mockRestore();
+      loggingState.rawConsole = previousRawConsole;
+      loggingState.overrideSettings = previousOverrideSettings;
+      loggingState.forceConsoleToStderr = false;
+      loggingState.earlyConsoleRoutingRestore = null;
+    }
   });
 
   it("routes plugin registration logs for descriptor-declared machine output", async () => {

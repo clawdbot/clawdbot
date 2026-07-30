@@ -14,6 +14,7 @@ import {
   modelSupportsInput,
 } from "../agents/model-catalog.js";
 import {
+  findNormalizedProviderValue,
   inferUniqueProviderFromConfiguredModels,
   isCliProvider,
   parseModelRef,
@@ -21,6 +22,7 @@ import {
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
+import { publishedModelCatalogOwnerMatchesAgent } from "../agents/prepared-model-catalog-owner.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import {
   concretizeAgentRuntime,
@@ -34,6 +36,7 @@ import {
 import { resolveAgentMainSessionKey, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 import {
   createSessionRowModelCacheKey,
   type SessionListRowContext,
@@ -305,8 +308,84 @@ export function getSessionDefaults(
   };
 }
 
+function normalizeGatewayModelCapabilityBaseUrl(value: string | undefined): string | undefined {
+  const baseUrl = normalizeOptionalString(value);
+  if (!baseUrl) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(baseUrl);
+    parsed.pathname = parsed.pathname.replace(/\/+$/u, "") || "/";
+    return parsed.toString();
+  } catch {
+    return baseUrl.replace(/\/+$/u, "");
+  }
+}
+
+function resolveGatewayProviderStaticModel(params: {
+  snapshot: GatewayModelCatalogSnapshot;
+  agentId?: string;
+  provider?: string;
+  model: string;
+  catalogEntry?: ModelCatalogEntry;
+}): ModelCatalogEntry | undefined {
+  if (
+    !params.agentId ||
+    !params.provider ||
+    !publishedModelCatalogOwnerMatchesAgent(params.snapshot, params.agentId)
+  ) {
+    return undefined;
+  }
+  const staticEntry = findModelCatalogEntry(params.snapshot.staticEntries ?? [], {
+    provider: params.provider,
+    modelId: params.model,
+  });
+  if (!staticEntry) {
+    return undefined;
+  }
+  if (params.catalogEntry?.api && params.catalogEntry.api !== staticEntry.api) {
+    return undefined;
+  }
+  const catalogBaseUrl = normalizeGatewayModelCapabilityBaseUrl(params.catalogEntry?.baseUrl);
+  const staticBaseUrl = normalizeGatewayModelCapabilityBaseUrl(staticEntry.baseUrl);
+  if (catalogBaseUrl && catalogBaseUrl !== staticBaseUrl) {
+    return undefined;
+  }
+
+  const configuredProvider = findNormalizedProviderValue(
+    params.snapshot.config.models?.providers,
+    params.provider,
+  );
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(params.model);
+  const configuredModel = configuredProvider?.models?.find(
+    (model) => normalizeLowercaseStringOrEmpty(model.id) === normalizedModelId,
+  );
+  if (configuredModel?.input && !configuredModel.input.includes("image")) {
+    return undefined;
+  }
+  const configuredApi = configuredModel?.api ?? configuredProvider?.api;
+  if (configuredApi && configuredApi !== staticEntry.api) {
+    return undefined;
+  }
+  const configuredBaseUrl = normalizeGatewayModelCapabilityBaseUrl(
+    configuredModel?.baseUrl ?? configuredProvider?.baseUrl,
+  );
+  if (configuredBaseUrl && configuredBaseUrl !== staticBaseUrl) {
+    return undefined;
+  }
+  return staticEntry;
+}
+
 export async function resolveGatewayModelSupportsImages(params: {
-  loadGatewayModelCatalog: (params?: { readOnly?: boolean }) => Promise<ModelCatalogEntry[]>;
+  loadGatewayModelCatalog: (params?: {
+    agentId?: string;
+    readOnly?: boolean;
+  }) => Promise<ModelCatalogEntry[]>;
+  loadGatewayModelCatalogSnapshot?: (params?: {
+    agentId?: string;
+    readOnly?: boolean;
+  }) => Promise<GatewayModelCatalogSnapshot>;
+  agentId?: string;
   provider?: string;
   model?: string;
 }): Promise<boolean> {
@@ -315,11 +394,31 @@ export async function resolveGatewayModelSupportsImages(params: {
   }
 
   try {
-    const catalog = await params.loadGatewayModelCatalog({ readOnly: false });
-    const modelEntry = findModelCatalogEntry(catalog, {
+    const loadParams = {
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      readOnly: false,
+    };
+    const snapshot = params.loadGatewayModelCatalogSnapshot
+      ? await params.loadGatewayModelCatalogSnapshot(loadParams)
+      : undefined;
+    const catalog = snapshot ? snapshot.entries : await params.loadGatewayModelCatalog(loadParams);
+    const catalogEntry = findModelCatalogEntry(catalog, {
       provider: params.provider,
       modelId: params.model,
     });
+    // Same-generation provider facts repair stale discovered capabilities without
+    // crossing agent ownership, physical routes, or authored input policy.
+    const staticEntry =
+      snapshot && (!catalogEntry || !modelSupportsInput(catalogEntry, "image"))
+        ? resolveGatewayProviderStaticModel({
+            snapshot,
+            agentId: params.agentId,
+            provider: params.provider,
+            model: params.model,
+            catalogEntry,
+          })
+        : undefined;
+    const modelEntry = staticEntry ?? catalogEntry;
     const normalizedProvider = normalizeOptionalLowercaseString(
       params.provider ?? modelEntry?.provider,
     );

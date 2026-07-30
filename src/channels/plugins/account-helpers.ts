@@ -42,40 +42,24 @@ export function createAccountListHelpers<
   function hasImplicitDefaultAccount(cfg: OpenClawConfig): boolean {
     // Legacy single-account configs and env-only setup imply the default account even when
     // channels.<id>.accounts is absent.
-    if (options?.hasImplicitDefaultAccount?.(cfg)) {
-      return true;
-    }
     const channel = cfg.channels?.[channelKey] as Record<string, unknown> | undefined;
-    for (const key of options?.implicitDefaultAccount?.channelKeys ?? []) {
-      if (hasConfiguredAccountValue(channel?.[key])) {
-        return true;
-      }
-    }
-    for (const key of options?.implicitDefaultAccount?.envVars ?? []) {
-      if (hasConfiguredAccountValue(process.env[key])) {
-        return true;
-      }
-    }
-    return false;
+    return Boolean(
+      options?.hasImplicitDefaultAccount?.(cfg) ||
+      options?.implicitDefaultAccount?.channelKeys?.some((key) =>
+        hasConfiguredAccountValue(channel?.[key]),
+      ) ||
+      options?.implicitDefaultAccount?.envVars?.some((key) =>
+        hasConfiguredAccountValue(process.env[key]),
+      ),
+    );
   }
 
   function resolveConfiguredDefaultAccountId(cfg: OpenClawConfig): string | undefined {
     const channel = cfg.channels?.[channelKey] as Record<string, unknown> | undefined;
-    const preferred = normalizeOptionalAccountId(
+    // The canonical default resolver validates this preference against the same listed ids.
+    return normalizeOptionalAccountId(
       typeof channel?.defaultAccount === "string" ? channel.defaultAccount : undefined,
     );
-    if (!preferred) {
-      return undefined;
-    }
-    const ids = listAccountIds(cfg);
-    if (options?.allowUnlistedDefaultAccount) {
-      return preferred;
-    }
-    // Reject stale defaultAccount values unless the channel explicitly supports external ids.
-    if (ids.some((id) => normalizeAccountId(id) === preferred)) {
-      return preferred;
-    }
-    return undefined;
   }
 
   function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
@@ -159,19 +143,16 @@ export function listCombinedAccountIds(params: {
   fallbackAccountIdWhenEmpty?: string | undefined;
 }): string[] {
   const ids = new Set<string>();
-
-  for (const id of params.configuredAccountIds) {
-    if (id) {
-      ids.add(id);
+  for (const accountIds of [
+    params.configuredAccountIds,
+    params.additionalAccountIds ?? [],
+    params.implicitAccountId ? [params.implicitAccountId] : [],
+  ]) {
+    for (const accountId of accountIds) {
+      if (accountId) {
+        ids.add(accountId);
+      }
     }
-  }
-  for (const id of params.additionalAccountIds ?? []) {
-    if (id) {
-      ids.add(id);
-    }
-  }
-  if (params.implicitAccountId) {
-    ids.add(params.implicitAccountId);
   }
 
   if (ids.size === 0 && params.fallbackAccountIdWhenEmpty) {

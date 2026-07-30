@@ -545,6 +545,77 @@ describe("probeIMessage", () => {
     expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
   });
 
+  it("explains how to update imsg when its private status subcommand is unsupported", async () => {
+    const runCommand = vi.spyOn(processRuntime, "runCommandWithTimeout").mockResolvedValueOnce({
+      stdout: "",
+      stderr: "Unknown subcommand 'status' for command 'imsg'",
+      code: 1,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    await expect(
+      probeIMessagePrivateApi("imsg-legacy-private-status", 1000),
+    ).resolves.toMatchObject({
+      available: false,
+      v2Ready: false,
+      selectors: {},
+      rpcMethods: [],
+      cliCapabilities: {
+        sendRichSupportsAttachment: false,
+        pollSendSupportsNoComment: false,
+      },
+      error:
+        'imsg CLI does not support the "status" subcommand. Update imsg on the Messages Mac: brew update && brew upgrade imsg',
+    });
+    expect(runCommand).toHaveBeenCalledExactlyOnceWith(
+      ["imsg-legacy-private-status", "status", "--json"],
+      { timeoutMs: 1000 },
+    );
+  });
+
+  it("keeps foundational RPC healthy when an older imsg lacks private status", async () => {
+    const runCommand = vi
+      .spyOn(processRuntime, "runCommandWithTimeout")
+      .mockResolvedValueOnce({
+        stdout: "rpc help",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      })
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: "Unknown subcommand 'status' for command 'imsg'",
+        code: 1,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      });
+    const request = vi.fn().mockResolvedValue({ chats: [] });
+    const stop = vi.fn().mockResolvedValue(undefined);
+    vi.spyOn(clientModule, "createIMessageRpcClient").mockResolvedValue({
+      request,
+      stop,
+    } as unknown as Awaited<ReturnType<typeof clientModule.createIMessageRpcClient>>);
+
+    await expect(
+      probeIMessage(1000, { cliPath: "imsg-legacy-foundational-rpc", platform: "darwin" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      privateApi: {
+        available: false,
+        error:
+          'imsg CLI does not support the "status" subcommand. Update imsg on the Messages Mac: brew update && brew upgrade imsg',
+      },
+    });
+    expect(runCommand).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledWith("chats.list", { limit: 1 }, { timeoutMs: 1000 });
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
   it("explains how to install imsg when the default binary is missing", async () => {
     vi.spyOn(setupRuntime, "detectBinary").mockResolvedValue(false);
     const createIMessageRpcClientMock = vi

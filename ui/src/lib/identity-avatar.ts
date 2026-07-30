@@ -171,15 +171,19 @@ function loadIdentityAvatar(url: string): string | Promise<string | null> {
   return entry.promise;
 }
 
-/** Fetch protected or cross-origin profile images once and render CSP-safe blobs. */
+/** Fetch connected-gateway profile images once and render CSP-safe blobs. */
 export function resolveAvatarImageUrl(value: string): string | Promise<string | null> | null {
   const trusted = toTrustedAvatarUrl(value, appGatewayOrigin);
   if (!trusted) {
     return null;
   }
+  // Connected same-origin routes need the loader too: it resolves a missing
+  // avatar before Lit can reconcile an <img> error back over its initials.
   const pageOrigin = globalThis.location?.origin;
   const crossOrigin = pageOrigin ? new URL(trusted, pageOrigin).origin !== pageOrigin : false;
-  return appGatewayAuthHeader || crossOrigin ? loadIdentityAvatar(trusted) : trusted;
+  return appGatewayOrigin || appGatewayAuthHeader || crossOrigin
+    ? loadIdentityAvatar(trusted)
+    : trusted;
 }
 
 /** A blob stays live until its image has finished loading or definitively failed. */

@@ -89,7 +89,7 @@ describe("hosted model pricing", () => {
     ).toEqual({ input: 2.5, output: 10, cacheRead: 1.25, cacheWrite: 0 });
   });
 
-  it("prefers merged catalog pricing over configured pricing", () => {
+  it("prefers configured pricing over merged catalog pricing", () => {
     const agentDir = tempDirs.make("openclaw-catalog-pricing-");
     const config = {
       models: {
@@ -109,7 +109,7 @@ describe("hosted model pricing", () => {
     } as unknown as OpenClawConfig;
     expect(
       resolveModelCostConfig({ config, agentDir, provider: "openai", model: "gpt-catalog" }),
-    ).toEqual({ input: 1, output: 2, cacheRead: 0, cacheWrite: 0 });
+    ).toEqual({ input: 99, output: 99, cacheRead: 0, cacheWrite: 0 });
   });
 
   it("does not apply hosted pricing to private endpoints or unknown models", () => {

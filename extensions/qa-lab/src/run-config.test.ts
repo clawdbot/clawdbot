@@ -352,7 +352,7 @@ describe("qa run config", () => {
     expect(execution.excludedScenarios).toEqual([]);
   });
 
-  it("excludes live-only and unsupported thread scenarios from Crabline plans", () => {
+  it("keeps portable threads but excludes live-only scenarios from Crabline plans", () => {
     const catalog = readQaScenarioPack();
     const scenarioIds = new Set([
       "matrix-approval-channel-target-both",
@@ -378,7 +378,10 @@ describe("qa run config", () => {
       supportsChannel: () => true,
     });
 
-    expect(execution.selectedScenarios).toEqual([]);
+    expect(execution.selectedScenarios.map((scenario) => scenario.id).toSorted()).toEqual([
+      "thread-follow-up",
+      "thread-isolation",
+    ]);
     expect(
       Object.fromEntries(
         execution.excludedScenarios.map(({ scenario, reasons }) => [scenario.id, reasons]),
@@ -393,8 +396,6 @@ describe("qa run config", () => {
       "matrix-mxid-prefixed-command-block": ["channelDriver=live"],
       "slack-codex-approval-exec-native": ["channelDriver=live"],
       "slack-codex-approval-plugin-native": ["channelDriver=live"],
-      "thread-follow-up": ["channel=qa-channel|slack|matrix"],
-      "thread-isolation": ["channel=qa-channel|slack|matrix"],
     });
   });
 

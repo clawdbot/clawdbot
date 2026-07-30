@@ -29,6 +29,7 @@ import {
   uiProtocolFreshnessIssueToRepairEffects,
 } from "../commands/doctor-ui.js";
 import { collectDisabledCodexPluginRouteIssues } from "../commands/doctor/shared/codex-route-warnings.js";
+import { isDefaultInstallIdentity } from "../config/paths.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import type { CronListPageResult } from "../cron/service/list-page-types.js";
@@ -311,7 +312,7 @@ const skillWorkshopToolPolicyCheck: HealthCheck = {
   async detect(ctx) {
     const diagnostic = detectSkillWorkshopToolPolicyDiagnostic({
       config: ctx.cfg,
-      workshopEnabled: resolveSkillWorkshopConfig(ctx.cfg).autonomous.enabled,
+      workshopEnabled: resolveSkillWorkshopConfig(ctx.cfg).autonomous.mode !== "off",
     });
     if (!diagnostic) {
       return [];
@@ -932,6 +933,9 @@ const gatewayPlatformNotesCheck: HealthCheck = {
   description: "Gateway platform notes are captured as structured findings.",
   source: "doctor",
   async detect(ctx) {
+    if (!isDefaultInstallIdentity(process.env)) {
+      return [];
+    }
     const { collectMacGatewayPlatformWarnings } =
       await import("../commands/doctor-platform-notes.js");
     const warnings = await collectMacGatewayPlatformWarnings(ctx.cfg);

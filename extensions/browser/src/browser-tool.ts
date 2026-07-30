@@ -1,3 +1,4 @@
+import { BROWSER_PROXY_COMMAND } from "./browser-node-commands.js";
 /**
  * Browser agent tool registration.
  *
@@ -213,12 +214,14 @@ function readActRequestParam(params: Record<string, unknown>) {
 type BrowserNodeTarget = {
   nodeId: string;
   label?: string;
+  commands: string[];
+  pendingDeclaredCommands: string[];
 };
 
 function isBrowserNode(node: NodeListNode) {
   const caps = Array.isArray(node.caps) ? node.caps : [];
   const commands = Array.isArray(node.commands) ? node.commands : [];
-  return caps.includes("browser") || commands.includes("browser.proxy");
+  return caps.includes("browser") || commands.includes(BROWSER_PROXY_COMMAND);
 }
 
 async function resolveBrowserNodeTarget(params: {
@@ -268,7 +271,14 @@ async function resolveBrowserNodeTarget(params: {
       allowCompactDisplayName: true,
     });
     const node = browserNodes.find((entry) => entry.nodeId === nodeId);
-    return { nodeId, label: node?.displayName ?? node?.remoteIp ?? nodeId };
+    return {
+      nodeId,
+      label: node?.displayName ?? node?.remoteIp ?? nodeId,
+      commands: Array.isArray(node?.commands) ? node.commands : [],
+      pendingDeclaredCommands: Array.isArray(node?.pendingDeclaredCommands)
+        ? node.pendingDeclaredCommands
+        : [],
+    };
   }
 
   const selected = selectDefaultNodeFromList(browserNodes, {
@@ -281,6 +291,10 @@ async function resolveBrowserNodeTarget(params: {
       return {
         nodeId: selected.nodeId,
         label: selected.displayName ?? selected.remoteIp ?? selected.nodeId,
+        commands: Array.isArray(selected.commands) ? selected.commands : [],
+        pendingDeclaredCommands: Array.isArray(selected.pendingDeclaredCommands)
+          ? selected.pendingDeclaredCommands
+          : [],
       };
     }
     throw new Error(
@@ -296,6 +310,10 @@ async function resolveBrowserNodeTarget(params: {
     return {
       nodeId: selected.nodeId,
       label: selected.displayName ?? selected.remoteIp ?? selected.nodeId,
+      commands: Array.isArray(selected.commands) ? selected.commands : [],
+      pendingDeclaredCommands: Array.isArray(selected.pendingDeclaredCommands)
+        ? selected.pendingDeclaredCommands
+        : [],
     };
   }
   return null;
@@ -435,6 +453,7 @@ export function createBrowserTool(opts?: {
   return {
     label: "Browser",
     name: "browser",
+    resultContentSource: "network",
     description: describeBrowserTool({ targetDefault, hostHint }),
     parameters: BrowserToolSchema,
     outputSchema: BrowserToolOutputSchema,

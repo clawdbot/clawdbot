@@ -325,21 +325,12 @@ Values:
 
 ### `agents.defaults.userTimezone`
 
-Timezone for system prompt context (not message timestamps). Falls back to host timezone.
+Timezone for message envelopes, queued system events, and the system prompt's local
+date context. Falls back to the host timezone.
 
 ```json5
 {
   agents: { defaults: { userTimezone: "America/Chicago" } },
-}
-```
-
-### `agents.defaults.timeFormat`
-
-Time format in system prompt. Default: `auto` (OS preference).
-
-```json5
-{
-  agents: { defaults: { timeFormat: "auto" } }, // auto | 12 | 24
 }
 ```
 

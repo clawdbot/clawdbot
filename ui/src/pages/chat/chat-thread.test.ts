@@ -1216,13 +1216,21 @@ describe("buildCachedChatItems working spark", () => {
       streamingItems.find((item) => item.kind === "stream" && item.isStreaming),
       "visible live stream",
     );
+    const streamingIndicator = expectDefined(
+      streamingItems.find((item) => item.kind === "reading-indicator"),
+      "streaming working indicator",
+    );
     const streamingRun = expectDefined(
       coalesceStreamRuns(streamingItems).find((item) => item.kind === "stream-run"),
       "streaming run",
     );
 
     expect(visibleStream.key).toBe(pendingIndicator.key);
-    expect(streamingRun.key).toBe(pendingRun.key);
+    expect(streamingIndicator.key).toBe(pendingIndicator.key);
+    expect(streamingRun).toMatchObject({
+      key: pendingRun.key,
+      parts: [{ kind: "stream" }, { kind: "reading-indicator" }],
+    });
 
     const nextRunIndicator = expectDefined(
       readingIndicator({
@@ -1305,21 +1313,24 @@ describe("buildCachedChatItems working spark", () => {
     expect(hasReadingIndicator({ runWorking: true, loading: true })).toBe(false);
   });
 
-  it("does not stack the spark under a visible running tool row", () => {
-    expect(hasReadingIndicator({ runWorking: true, toolMessages: [liveTool(false)] })).toBe(false);
+  it("keeps the non-null empty-stream fallback during initial history loading", () => {
+    expect(hasReadingIndicator({ stream: "", loading: true })).toBe(true);
   });
 
-  it("keeps the approval status row beside a visible running tool", () => {
-    expect(
-      hasReadingIndicator({
-        runWorking: true,
-        waitingApproval: true,
-        toolMessages: [liveTool(false)],
-      }),
-    ).toBe(true);
+  it("does not suppress active telemetry once a live stream exists", () => {
+    const items = buildCachedChatItems(
+      createProps({ runWorking: true, loading: true, stream: "The reply has started." }),
+    );
+
+    expect(items.filter((item) => item.kind === "stream")).toHaveLength(1);
+    expect(items.filter((item) => item.kind === "reading-indicator")).toHaveLength(1);
   });
 
-  it("returns the spark once the running tool resolves", () => {
+  it("keeps the telemetry row beside a visible running tool", () => {
+    expect(hasReadingIndicator({ runWorking: true, toolMessages: [liveTool(false)] })).toBe(true);
+  });
+
+  it("keeps the telemetry row once the running tool resolves", () => {
     expect(hasReadingIndicator({ runWorking: true, toolMessages: [liveTool(true)] })).toBe(true);
   });
 

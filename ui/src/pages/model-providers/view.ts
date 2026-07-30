@@ -16,10 +16,8 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { BASE_THINKING_LEVELS } from "../../lib/chat/thinking.ts";
-import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
 import { formatCost, formatTimeMs, formatTokens } from "../../lib/format.ts";
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
-import { renderConfigApplyBanner, renderConfigAutoSaveStatus } from "../config/view.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
 import type {
@@ -49,14 +47,6 @@ type ModelProvidersViewProps = {
   thinkingLevel: string;
   fastMode: FastMode | undefined;
   configBusy: boolean;
-  configConnected: boolean;
-  configLoading: boolean;
-  configSaving: boolean;
-  configApplying: boolean;
-  configUpdating: boolean;
-  configNeedsApply: boolean;
-  configRawDraftPending: boolean;
-  configAutoSaveStatus: ConfigAutoSaveStatus;
   unconfiguredProviders: ProviderOption[];
   canMutate: boolean;
   mutationBlockedReason: string | null;
@@ -92,9 +82,6 @@ type ModelProvidersViewProps = {
   onDefaultModelsReset: () => void;
   onThinkingChange: (level: string) => void;
   onFastModeChange: (mode: FastMode) => void;
-  onApplyConfig: () => void;
-  onRetrySaveConfig: () => void;
-  onDiscardConfig: () => void;
 };
 
 // The global default intentionally omits "minimal"; the full list stays
@@ -103,31 +90,6 @@ const THINKING_LEVELS = BASE_THINKING_LEVELS.filter((level) => level !== "minima
 
 function fastModeOptionValue(value: "auto" | "on" | "off"): FastMode {
   return value === "auto" ? "auto" : value === "on";
-}
-
-function renderModelConfigWorkflow(props: ModelProvidersViewProps) {
-  const status = renderConfigAutoSaveStatus({
-    status: props.configAutoSaveStatus,
-    onRetry: props.onRetrySaveConfig,
-    onReload: props.onDiscardConfig,
-  });
-  return html`
-    ${status === nothing
-      ? nothing
-      : html`<div class="config-toolbar__status" role="status" aria-live="polite">${status}</div>`}
-    ${renderConfigApplyBanner({
-      needsApply: props.configNeedsApply,
-      applying: props.configApplying,
-      busy:
-        props.configSaving ||
-        props.configLoading ||
-        props.configUpdating ||
-        props.configAutoSaveStatus === "saving" ||
-        props.configRawDraftPending,
-      connected: props.configConnected,
-      onApply: props.onApplyConfig,
-    })}
-  `;
 }
 
 function renderModelBehavior(props: ModelProvidersViewProps) {
@@ -567,7 +529,7 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
   }
   if (props.loading) {
     return renderSettingsPage(html`
-      ${renderModelConfigWorkflow(props)} ${renderModelBehavior(props)}
+      ${renderModelBehavior(props)}
       <div aria-busy="true">${renderSettingsGroup(renderSettingsEmpty(t("common.loading")))}</div>
     `);
   }
@@ -605,7 +567,7 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
       onSave: props.onDefaultModelsSave,
       onReset: props.onDefaultModelsReset,
     })}
-    ${renderModelConfigWorkflow(props)} ${renderModelBehavior(props)}
+    ${renderModelBehavior(props)}
     ${renderSettingsSection(
       {
         title: t("modelProviders.title"),

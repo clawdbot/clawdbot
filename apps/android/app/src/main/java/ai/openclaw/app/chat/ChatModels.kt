@@ -63,7 +63,7 @@ data class ChatTranscriptAnchorState(
 )
 
 /**
- * One content part in a chat message; images carry either bounded base64 or a managed artifact reference.
+ * One content part in a chat message; media carries either bounded base64 or a managed artifact reference.
  */
 data class ChatMessageContent(
   val type: String = "text",
@@ -79,6 +79,7 @@ data class ChatMessageContent(
   val sizeBytes: Long? = null,
   val base64: String? = null,
   val durationMs: Long? = null,
+  val playback: String? = null,
   val widget: ChatWidgetPreview? = null,
 )
 
@@ -181,6 +182,13 @@ internal val defaultChatThinkingLevelSelection =
       ),
     isGatewayProvided = false,
   )
+
+internal data class ChatActiveRunPresentation(
+  val count: Int = 0,
+  val runId: String? = null,
+  val clockKey: String? = null,
+  val outputTokens: Long? = null,
+)
 
 /**
  * Stable session selector row; [key] is the gateway session key used in chat requests.

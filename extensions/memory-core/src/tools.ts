@@ -1,8 +1,9 @@
 // Memory Core plugin module implements tools behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type {
-  MemoryReadResult,
-  MemorySource,
+import {
+  stripMemoryAnnotationCarriers,
+  type MemoryReadResult,
+  type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   asToolParamsRecord,
@@ -469,6 +470,7 @@ export function createMemorySearchTool(options: {
   sandboxed?: boolean;
   oneShotCliRun?: boolean;
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
+  activeProjectKeys?: readonly string[];
   acquireLocalService?: MemoryCoreAcquireLocalService;
   withLease?: PluginStateLeaseRunner;
 }) {
@@ -662,6 +664,9 @@ export function createMemorySearchTool(options: {
                     minScore,
                     sessionKey: options.agentSessionKey,
                     qmdSearchModeOverride,
+                    activeProjectKeys: options.activeProjectKeys
+                      ? [...options.activeProjectKeys]
+                      : undefined,
                     signal,
                     onDebug: (debug: MemorySearchRuntimeDebug) => {
                       runtimeDebug.push(debug);
@@ -752,7 +757,11 @@ export function createMemorySearchTool(options: {
                   rawResults = rawResults.filter((hit) => hit.source === "memory");
                 }
                 const status = activeMemory.manager.status();
-                const decorated = decorateCitations(rawResults, includeCitations);
+                const payloadResults = rawResults.map((result) => ({
+                  ...result,
+                  snippet: stripMemoryAnnotationCarriers(result.snippet),
+                }));
+                const decorated = decorateCitations(payloadResults, includeCitations);
                 const memoryResults =
                   status.backend === "qmd"
                     ? clampResultsByInjectedChars(

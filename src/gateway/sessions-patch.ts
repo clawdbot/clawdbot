@@ -33,7 +33,7 @@ import {
   normalizeUsageDisplay,
   resolveSupportedThinkingLevel,
 } from "../auto-reply/thinking.js";
-import type { SessionEntry } from "../config/sessions.js";
+import type { SessionEntry, SessionToolOverrides } from "../config/sessions.js";
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeExecTarget } from "../infra/exec-approvals.js";
@@ -124,6 +124,38 @@ function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined
     return normalized;
   }
   return undefined;
+}
+
+function normalizeSessionToolOverrides(
+  raw: SessionToolOverrides,
+): SessionToolOverrides | undefined {
+  const normalizeBooleanMap = (value: Record<string, boolean> | undefined) => {
+    const entries = Object.entries(value ?? {}).toSorted(([left], [right]) =>
+      left.localeCompare(right),
+    );
+    return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  };
+  const mcpToolsDeny = Object.fromEntries(
+    Object.entries(raw.mcpToolsDeny ?? {})
+      .map(
+        ([serverName, toolNames]) =>
+          [
+            serverName,
+            [...new Set(toolNames)].toSorted((left, right) => left.localeCompare(right)),
+          ] as const,
+      )
+      .filter(([, toolNames]) => toolNames.length > 0)
+      .toSorted(([left], [right]) => left.localeCompare(right)),
+  );
+  const mcpServers = normalizeBooleanMap(raw.mcpServers);
+  const skills = normalizeBooleanMap(raw.skills);
+  const normalized: SessionToolOverrides = {
+    ...(mcpServers ? { mcpServers } : {}),
+    ...(Object.keys(mcpToolsDeny).length > 0 ? { mcpToolsDeny } : {}),
+    ...(skills ? { skills } : {}),
+    ...(raw.webSearch === false ? { webSearch: false } : {}),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 type SessionPatchProjectionEntry = {
@@ -393,6 +425,21 @@ export async function projectSessionsPatchEntry(params: {
         return invalid('invalid fastMode (use true, false, or "auto")');
       }
       next.fastMode = normalized;
+    }
+  }
+
+  if ("toolOverrides" in patch) {
+    const raw = patch.toolOverrides;
+    if (raw === null) {
+      delete next.toolOverrides;
+    } else if (raw !== undefined) {
+      // Session patches replace this sparse overlay atomically; they never deep-merge old policy.
+      const normalized = normalizeSessionToolOverrides(raw);
+      if (normalized) {
+        next.toolOverrides = normalized;
+      } else {
+        delete next.toolOverrides;
+      }
     }
   }
 

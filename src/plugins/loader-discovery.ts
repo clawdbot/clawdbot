@@ -1,4 +1,3 @@
-import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   discoverOpenClawPlugins,
   type PluginCandidate,
@@ -65,7 +64,8 @@ export function resolvePluginLoadDiscovery(params: {
       env: context.env,
       candidates: discovery.candidates,
       diagnostics: discovery.diagnostics,
-      installRecords: nonEmptyInstallRecords(context.installRecords),
+      installRecords:
+        Object.keys(context.installRecords).length > 0 ? context.installRecords : undefined,
     });
   pushDiagnostics(params.diagnostics, manifestRegistry.diagnostics);
   warnWhenAllowlistIsOpen({
@@ -107,10 +107,4 @@ export function resolvePluginLoadDiscovery(params: {
     }),
   );
   return { discovery, manifestRegistry, orderedCandidates, manifestBySource, provenance };
-}
-
-function nonEmptyInstallRecords(
-  records: Record<string, PluginInstallRecord>,
-): Record<string, PluginInstallRecord> | undefined {
-  return Object.keys(records).length > 0 ? records : undefined;
 }

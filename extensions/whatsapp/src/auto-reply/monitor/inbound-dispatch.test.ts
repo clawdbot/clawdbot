@@ -877,6 +877,7 @@ describe("whatsapp inbound dispatch", () => {
     });
     const deliverReply = vi.fn().mockRejectedValueOnce(error);
     let deferredFinalization: Promise<unknown> | undefined;
+    let replacementFailure: unknown;
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
       async (params: CapturedDispatchParams) => {
         capturedDispatchParams = params;
@@ -892,12 +893,14 @@ describe("whatsapp inbound dispatch", () => {
           "deferred media result",
         );
         deferredFinalization = deferred.finalization as Promise<unknown>;
-        await expect(
-          deliver(
+        try {
+          await deliver(
             { text: "captioned replacement", mediaUrls: ["/tmp/generated.jpg"] },
             { kind: "block" },
-          ),
-        ).rejects.toBe(error);
+          );
+        } catch (deliveryError: unknown) {
+          replacementFailure = deliveryError;
+        }
         await params.dispatcherOptions?.onSettled?.();
         return { queuedFinal: false, counts: { tool: 1, block: 1, final: 0 } };
       },
@@ -907,6 +910,16 @@ describe("whatsapp inbound dispatch", () => {
 
     await expect(deferredFinalization).resolves.toEqual({ visibleReplySent: false });
     expect(deliverReply).toHaveBeenCalledTimes(1);
+    expect(replacementFailure).toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
+        content: "captioned replacement",
+        visibleReplySent: true,
+      },
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+    expect((replacementFailure as Error).cause).toBe(error);
   });
 
   it("drops deferred media when replacement bookkeeping fails after provider acceptance", async () => {
@@ -916,6 +929,7 @@ describe("whatsapp inbound dispatch", () => {
       throw error;
     });
     let deferredFinalization: Promise<unknown> | undefined;
+    let replacementFailure: unknown;
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
       async (params: CapturedDispatchParams) => {
         capturedDispatchParams = params;
@@ -931,15 +945,14 @@ describe("whatsapp inbound dispatch", () => {
           "deferred media result",
         );
         deferredFinalization = deferred.finalization as Promise<unknown>;
-        await expect(
-          deliver(
+        try {
+          await deliver(
             { text: "captioned replacement", mediaUrls: ["/tmp/generated.jpg"] },
             { kind: "block" },
-          ),
-        ).rejects.toMatchObject({
-          sentBeforeError: true,
-          visibleReplySent: true,
-        });
+          );
+        } catch (deliveryError: unknown) {
+          replacementFailure = deliveryError;
+        }
         await params.dispatcherOptions?.onSettled?.();
         return { queuedFinal: false, counts: { tool: 1, block: 1, final: 0 } };
       },
@@ -949,7 +962,32 @@ describe("whatsapp inbound dispatch", () => {
 
     await expect(deferredFinalization).resolves.toEqual({ visibleReplySent: false });
     expect(deliverReply).toHaveBeenCalledTimes(1);
-    expect(error).toMatchObject({ sentBeforeError: true, visibleReplySent: true });
+    expect(replacementFailure).toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
+        content: "captioned replacement",
+        messageIds: ["wa-sent-1"],
+        receipt: testReceipt(["wa-sent-1"]),
+        visibleReplySent: true,
+      },
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+    expect((replacementFailure as Error).cause).toBe(error);
+  });
+
+  it("returns receipt-backed delivery facts for native text fallback", async () => {
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+
+    await dispatchBufferedReply({ deliverReply });
+
+    const deliver = getCapturedDeliver();
+    await expect(deliver?.({ text: "fallback text" }, { kind: "final" })).resolves.toMatchObject({
+      content: "fallback text",
+      messageIds: ["wa-sent-1"],
+      receipt: testReceipt(["wa-sent-1"]),
+      visibleReplySent: true,
+    });
   });
 
   it.each([
@@ -1160,7 +1198,12 @@ describe("whatsapp inbound dispatch", () => {
     await expect(deliver?.({ text: "cancelled final" }, { kind: "final" })).resolves.toMatchObject({
       visibleReplySent: false,
     });
-    await expect(deferred.finalization).resolves.toMatchObject({ visibleReplySent: true });
+    await expect(deferred.finalization).resolves.toMatchObject({
+      visibleReplySent: true,
+      messageIds: ["wa-sent-1"],
+      content: "",
+      receipt: testReceipt(["wa-sent-1"]),
+    });
     expect(deliverReply).toHaveBeenCalledTimes(1);
   });
 

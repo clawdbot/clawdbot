@@ -158,7 +158,10 @@ export function renderMarkdownCodeBlock(
 
   if (isJson) {
     const lineCount = text.split("\n").length;
-    const label = lineCount > 1 ? `JSON &middot; ${lineCount} lines` : "JSON";
+    const label =
+      lineCount > 1
+        ? escapeMarkdownHtml(t("chat.codeBlock.jsonLines", { count: String(lineCount) }))
+        : "JSON";
     return `<details class="json-collapse"><summary>${label}</summary><div class="code-block-wrapper">${header}${codeBlock}</div></details>`;
   }
 

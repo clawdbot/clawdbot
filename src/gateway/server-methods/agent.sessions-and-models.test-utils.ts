@@ -20,6 +20,7 @@ import {
 } from "../../tasks/task-runtime.test-helpers.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
+import { registerPluginSubagentRunFromGateway } from "./agent-task-tracking.js";
 import {
   applyGatewaySubagentRegistryTestDeps,
   getAgentTestMocks,
@@ -179,12 +180,16 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("tracks plugin SDK subagent agent runs through the subagent registry only", async () => {
+  it.each([
+    { identity: "ASCII", runId: "plugin-subagent-task-run" },
+    { identity: "astral prefix", runId: "abc😀" + "x".repeat(10) },
+    { identity: "astral suffix", runId: "x".repeat(10) + "😀abc" },
+    { identity: "astral prefix and suffix", runId: "abc😀" + "x".repeat(10) + "😀xyz" },
+  ])("tracks plugin subagent $identity runs through the registry", async ({ runId }) => {
     await withTempDir({ prefix: "openclaw-gateway-plugin-subagent-task-" }, async (root) => {
       useTestStateDir(root);
       resetTaskRegistryForTests();
       resetSubagentRegistryForTests({ persist: false });
-      const runId = "plugin-subagent-task-run";
       const childSessionKey = "agent:work:subagent:plugin-helper";
       const cfg = {
         session: { mainKey: "main", scope: "per-sender" },
@@ -321,6 +326,50 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("registers host-owned requester lineage for plugin subagent completion", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-plugin-subagent-requester-" }, async (root) => {
+      useTestStateDir(root);
+      resetSubagentRegistryForTests({ persist: false });
+      const childSessionKey = "agent:work:subagent:plugin-completion";
+      const requester = {
+        sessionKey: "agent:main:telegram:direct:123",
+        origin: {
+          channel: "telegram",
+          to: "telegram:123",
+          accountId: "work",
+          threadId: 42,
+        },
+      } as const;
+
+      await registerPluginSubagentRunFromGateway({
+        cfg: {
+          session: { mainKey: "main", scope: "per-sender" },
+          agents: {
+            list: [{ id: "main", default: true }, { id: "work" }],
+          },
+        },
+        runId: "plugin-subagent-current-requester",
+        childSessionKey,
+        task: "background plugin subagent task",
+        requester,
+        pluginId: "memory-core",
+      });
+
+      const run = requireValue(
+        getSubagentRunByChildSessionKey(childSessionKey),
+        "expected requester-bound plugin subagent run",
+      );
+      expectRecordFields(run, {
+        controllerSessionKey: "agent:work:main",
+        requesterSessionKey: requester.sessionKey,
+        requesterDisplayKey: requester.sessionKey,
+        requesterOrigin: requester.origin,
+        label: "plugin:memory-core",
+      });
+      expectRecordFields(run.completion, { required: true });
+    });
+  });
+
   it("keeps plugin SDK subagent runs best-effort when registry persistence fails", async () => {
     await withTempDir(
       { prefix: "openclaw-gateway-plugin-subagent-registry-fail-" },
@@ -330,10 +379,11 @@ describe("gateway agent handler", () => {
         resetSubagentRegistryForTests({ persist: false });
         // Route through the harness helper so the ensureRuntimePluginsLoaded
         // pin survives this wholesale deps override.
+        const persistSubagentRunsToDiskOrThrow = vi.fn(() => {
+          throw new Error("disk full");
+        });
         applyGatewaySubagentRegistryTestDeps({
-          persistSubagentRunsToDiskOrThrow: () => {
-            throw new Error("disk full");
-          },
+          persistSubagentRunsToDiskOrThrow,
         });
         const runId = "plugin-subagent-registry-fail";
         const childSessionKey = "agent:main:subagent:registry-fail";
@@ -387,6 +437,7 @@ describe("gateway agent handler", () => {
           },
         );
 
+        expect(persistSubagentRunsToDiskOrThrow).toHaveBeenCalledTimes(1);
         expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount + 1);
         await waitForAssertion(() => {
           const task = requireValue(findTaskByRunId(runId), "expected fallback cli task");

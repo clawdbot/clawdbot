@@ -2,14 +2,16 @@
 import type { StatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
 import {
   buildChannelInboundEventContext,
+  createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
   type CommandFacts,
   type ChannelInboundTurnPlan,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
 import {
   bindIngressLifecycleToReplyOptions,
+  listMessageReceiptPlatformIds,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
@@ -25,6 +27,7 @@ import {
 } from "../../outbound-media-contract.js";
 import type { WhatsAppReplyDeliveryResult } from "../deliver-reply.js";
 import { markWhatsAppVisibleDeliveryError } from "../util.js";
+import type { EchoTracker } from "./echo.js";
 import { formatGroupMembers } from "./group-members.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
 import {
@@ -100,12 +103,28 @@ function normalizeErrForLog(err: unknown): unknown {
 
 type WhatsAppReplyDeliveryVisibility = {
   visibleReplySent: boolean;
+  receipt?: WhatsAppReplyDeliveryResult["receipt"];
+  messageIds?: string[];
+  content?: string;
 };
 
 function whatsAppReplyDeliveryVisibility(
   visibleReplySent: boolean,
 ): WhatsAppReplyDeliveryVisibility {
   return { visibleReplySent };
+}
+
+function createWhatsAppChannelDeliveryResult(params: {
+  content: string;
+  delivery: WhatsAppReplyDeliveryResult;
+}): WhatsAppReplyDeliveryVisibility {
+  const messageIds = listMessageReceiptPlatformIds(params.delivery.receipt);
+  return {
+    receipt: params.delivery.receipt,
+    ...(messageIds.length > 0 ? { messageIds } : {}),
+    content: params.content,
+    visibleReplySent: params.delivery.providerAccepted,
+  };
 }
 
 function isWhatsAppVisibleDeliveryError(error: unknown): boolean {
@@ -388,7 +407,7 @@ export async function buildWhatsAppInboundContext(params: {
         })
       : undefined;
 
-  const media = toInboundMediaFacts(
+  const media = await toInboundMediaFactsWithMetadata(
     params.msg.payload.media
       ? [
           {
@@ -580,14 +599,7 @@ export function createWhatsAppReplyPlan(params: {
   maxMediaTextChunkLimit?: number;
   msg: AdmittedWebInboundMessage;
   onModelSelected?: ChannelReplyOnModelSelected;
-  rememberSentText: (
-    text: string | undefined,
-    opts: {
-      combinedBody?: string;
-      combinedBodySessionKey?: string;
-      logVerboseMessage?: boolean;
-    },
-  ) => void;
+  rememberSentText: EchoTracker["rememberText"];
   replyLogger: ReturnType<typeof getChildLogger>;
   replyPipeline: WhatsAppDispatchPipeline;
   replyResolver: typeof getReplyFromConfig;
@@ -630,6 +642,7 @@ export function createWhatsAppReplyPlan(params: {
     params.rememberSentText(payload.text, {
       combinedBody: params.context.Body as string | undefined,
       combinedBodySessionKey: params.route.sessionKey,
+      conversationId,
       logVerboseMessage: shouldLog,
     });
     if (shouldLogVerbose()) {
@@ -648,20 +661,35 @@ export function createWhatsAppReplyPlan(params: {
     if (!reply.hasMedia && !reply.text.trim()) {
       return whatsAppReplyDeliveryVisibility(false);
     }
-    const delivery = await params.deliverReply({
-      replyResult: normalizedDeliveryPayload,
-      normalizedReplyResult: normalizedDeliveryPayload,
-      msg: params.msg,
-      mediaLocalRoots,
-      maxMediaBytes: params.maxMediaBytes,
-      textLimit,
-      chunkMode,
-      replyLogger: params.replyLogger,
-      connectionId: params.connectionId,
-      skipLog: false,
-      tableMode,
+    let delivery: WhatsAppReplyDeliveryResult;
+    try {
+      delivery = await params.deliverReply({
+        replyResult: normalizedDeliveryPayload,
+        normalizedReplyResult: normalizedDeliveryPayload,
+        msg: params.msg,
+        mediaLocalRoots,
+        maxMediaBytes: params.maxMediaBytes,
+        textLimit,
+        chunkMode,
+        replyLogger: params.replyLogger,
+        connectionId: params.connectionId,
+        skipLog: false,
+        tableMode,
+      });
+    } catch (error: unknown) {
+      if (isWhatsAppVisibleDeliveryError(error) && !isChannelPartialDeliveryError(error)) {
+        throw createChannelPartialDeliveryError(error, {
+          content: reply.text,
+          visibleReplySent: true,
+        });
+      }
+      throw error;
+    }
+    const result = createWhatsAppChannelDeliveryResult({
+      content: reply.text,
+      delivery,
     });
-    if (!delivery.providerAccepted) {
+    if (!result.visibleReplySent) {
       params.replyLogger.warn(
         {
           correlationId: params.msg.event.id ?? null,
@@ -674,17 +702,19 @@ export function createWhatsAppReplyPlan(params: {
         },
         "auto-reply was not accepted by WhatsApp provider",
       );
-      return whatsAppReplyDeliveryVisibility(false);
+      return result;
     }
     if (options?.recordDelivery !== false) {
       try {
         recordDeliveredPayload(normalizedDeliveryPayload);
       } catch (error: unknown) {
-        // Native delivery is already accepted; bookkeeping failure must retain visibility.
-        throw markWhatsAppVisibleDeliveryError(error);
+        throw createChannelPartialDeliveryError(error, {
+          ...result,
+          visibleReplySent: true,
+        });
       }
     }
-    return whatsAppReplyDeliveryVisibility(true);
+    return result;
   };
 
   const mediaOnlyCoalescer = createWhatsAppMediaOnlyReplyCoalescer({
@@ -709,6 +739,7 @@ export function createWhatsAppReplyPlan(params: {
     onReplyStart: params.msg.platform.sendComposing,
   };
   const delivery: ChannelInboundTurnPlan["delivery"] = {
+    observeMessageSent: true,
     preparePayload: async (payload: ReplyPayload, info: { kind: ReplyLifecycleKind }) => {
       const deliveryPayload = resolveWhatsAppDeliverablePayload(payload, info);
       if (!deliveryPayload) {

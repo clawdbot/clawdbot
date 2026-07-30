@@ -235,6 +235,87 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         XCTAssertNil(errorText)
     }
 
+    func testVideoFileStagesWithoutTranscodeAndSendsOriginalPayloadMetadata() async throws {
+        let capture = AttachmentSendCapture()
+        let data = Data("fixture-video-container".utf8)
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("composer-video-\(UUID().uuidString).mp4")
+        try data.write(to: fileURL)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let viewModel = await MainActor.run {
+            OpenClawChatViewModel(
+                sessionKey: "main",
+                transport: AttachmentProcessingTransport(capture: capture))
+        }
+
+        await MainActor.run { viewModel.addAttachments(urls: [fileURL]) }
+        try await waitUntil("video attachment staged") {
+            await MainActor.run { !viewModel.attachments.isEmpty || viewModel.errorText != nil }
+        }
+
+        let staged = try await MainActor.run { () throws -> (Data, String, String) in
+            let attachment = try XCTUnwrap(viewModel.attachments.first)
+            return (attachment.data, attachment.fileName, attachment.mimeType)
+        }
+        XCTAssertEqual(staged.0, data)
+        XCTAssertEqual(staged.1, fileURL.lastPathComponent)
+        XCTAssertEqual(staged.2, "video/mp4")
+
+        await MainActor.run { viewModel.send() }
+        try await waitUntil("video attachment sent") {
+            await capture.count() == 1
+        }
+        let capturedPayload = await capture.first()
+        let payload = try XCTUnwrap(capturedPayload)
+        XCTAssertEqual(payload.type, "file")
+        XCTAssertEqual(payload.fileName, fileURL.lastPathComponent)
+        XCTAssertEqual(payload.mimeType, "video/mp4")
+        XCTAssertEqual(payload.content, data.base64EncodedString())
+    }
+
+    func testVideoFileUsesServerDefaultTwentyMiBCap() async throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("composer-video-oversize-\(UUID().uuidString).mp4")
+        try Data(count: OpenClawChatViewModel.maxVideoAttachmentBytes + 1).write(to: fileURL)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let viewModel = await MainActor.run {
+            OpenClawChatViewModel(sessionKey: "main", transport: AttachmentProcessingTransport())
+        }
+
+        await MainActor.run { viewModel.addAttachments(urls: [fileURL]) }
+        try await waitUntil("oversize video rejected") {
+            await MainActor.run { viewModel.errorText != nil }
+        }
+
+        let state = await MainActor.run { (viewModel.attachments.isEmpty, viewModel.errorText) }
+        XCTAssertTrue(state.0)
+        XCTAssertEqual(
+            state.1,
+            "Attachment \(fileURL.lastPathComponent) exceeds the 20 MB video limit")
+    }
+
+    func testUnsupportedAudioFileIsRejectedBeforeReadingItsPayload() async throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("composer-audio-oversize-\(UUID().uuidString).mp3")
+        XCTAssertTrue(FileManager.default.createFile(atPath: fileURL.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: fileURL)
+        try handle.truncate(atOffset: UInt64(OpenClawChatViewModel.maxVideoAttachmentBytes * 10))
+        try handle.close()
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let viewModel = await MainActor.run {
+            OpenClawChatViewModel(sessionKey: "main", transport: AttachmentProcessingTransport())
+        }
+
+        await MainActor.run { viewModel.addAttachments(urls: [fileURL]) }
+        try await waitUntil("unsupported audio rejected") {
+            await MainActor.run { viewModel.errorText != nil }
+        }
+
+        let state = await MainActor.run { (viewModel.attachments.isEmpty, viewModel.errorText) }
+        XCTAssertTrue(state.0)
+        XCTAssertEqual(state.1, "Only image and video attachments are supported right now")
+    }
+
     func testVoiceNoteAttachmentStagesAudioAndDeletesTemporaryFile() async throws {
         let fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("voice-note-20260706-120000.m4a")

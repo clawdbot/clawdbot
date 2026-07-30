@@ -5,6 +5,11 @@ import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import {
+  TSDOWN_PACKAGE_CONFIG_GROUP,
+  TSDOWN_UNIFIED_CONFIG_GROUP,
+  TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+} from "../../scripts/lib/tsdown-config-groups.mjs";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
   cleanTsdownOutputRoots,
@@ -152,7 +157,7 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.args.slice(-2)).toEqual(["--format", "esm"]);
   });
 
-  it("builds AI, package, and unified declarations without overlapping the main graphs", () => {
+  it("builds AI, packages, runtime, and bounded declarations sequentially", () => {
     const results = resolveTsdownBuildInvocations({
       args: ["--format", "esm"],
       platform: "linux",
@@ -162,16 +167,22 @@ describe("resolveTsdownBuildInvocation", () => {
       ...NO_MEMORY_LIMIT,
     });
 
-    expect(results).toHaveLength(3);
+    expect(results).toHaveLength(3 + TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length);
     expect(results[0]?.args).toEqual(
       expect.arrayContaining(["--config", "tsdown.ai.config.ts", "--format", "esm"]),
     );
-    expect(results[1]?.args).toEqual(
-      expect.arrayContaining(["--filter", "openclaw-packages", "--format", "esm"]),
-    );
-    expect(results[2]?.args).toEqual(
-      expect.arrayContaining(["--filter", "openclaw-unified", "--format", "esm"]),
-    );
+    const filters = results.slice(1).map((result) => {
+      const filterIndex = result.args.indexOf("--filter");
+      return result.args[filterIndex + 1];
+    });
+    expect(filters).toEqual([
+      TSDOWN_PACKAGE_CONFIG_GROUP,
+      TSDOWN_UNIFIED_CONFIG_GROUP,
+      ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+    ]);
+    for (const result of results.slice(1)) {
+      expect(result.args).toEqual(expect.arrayContaining(["--format", "esm"]));
+    }
   });
 
   it.each([
@@ -202,9 +213,42 @@ describe("resolveTsdownBuildInvocation", () => {
       ...NO_MEMORY_LIMIT,
     });
 
-    expect(results).toHaveLength(3);
+    expect(results).toHaveLength(3 + TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length);
     expect(results[1]?.args).toEqual(expect.arrayContaining(["--filter", "openclaw-packages"]));
     expect(results[2]?.args).toEqual(expect.arrayContaining(["--filter", "openclaw-unified"]));
+    expect(results.at(-1)?.args).toEqual(
+      expect.arrayContaining(["--filter", TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.at(-1)]),
+    );
+  });
+
+  it("expands the full-build unified selector into one runtime and bounded declaration graphs", () => {
+    const results = resolveTsdownBuildInvocations({
+      args: [
+        "--config",
+        "tsdown.config.ts",
+        "--filter",
+        TSDOWN_UNIFIED_CONFIG_GROUP,
+        "--format",
+        "esm",
+      ],
+      platform: "linux",
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(results).toHaveLength(1 + TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length);
+    expect(
+      results.map((result) => {
+        const filterIndex = result.args.indexOf("--filter");
+        return result.args[filterIndex + 1];
+      }),
+    ).toEqual([TSDOWN_UNIFIED_CONFIG_GROUP, ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS]);
+    for (const result of results) {
+      expect(result.args).toEqual(expect.arrayContaining(["--config", "tsdown.config.ts"]));
+      expect(result.args).toEqual(expect.arrayContaining(["--format", "esm"]));
+    }
   });
 
   it.each([
@@ -486,6 +530,12 @@ describe("resolveTsdownBuildInvocation", () => {
       "dist",
       "dist-runtime",
     ]);
+    expect(
+      resolveTsdownCleanOutputRoots([
+        "-c=tsdown.config.ts",
+        `-F=${TSDOWN_UNIFIED_DTS_CONFIG_GROUPS[0]}`,
+      ]),
+    ).toEqual(["dist", "dist-runtime"]);
     expect(
       resolveTsdownCleanOutputRoots([
         "--config",

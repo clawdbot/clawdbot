@@ -11,7 +11,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     private let globalAgentId: String?
     private let outboxGatewayID: String?
     private let sessionMutationRequest: (@Sendable (OpenClawChatGatewayRequest) async throws -> Data)?
-    private let imageArtifactLoader: IOSImageArtifactLoader?
+    private let mediaArtifactLoader: IOSMediaArtifactLoader?
 
     var outboxRequiresSessionRoutingContract: Bool {
         true
@@ -23,7 +23,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         globalAgentId: String? = nil,
         outboxGatewayID: String? = nil,
         sessionMutationRequest: (@Sendable (OpenClawChatGatewayRequest) async throws -> Data)? = nil,
-        imageArtifactLoader: IOSImageArtifactLoader? = nil)
+        mediaArtifactLoader: IOSMediaArtifactLoader? = nil)
     {
         self.gateway = gateway
         self.widgetGateway = widgetGateway
@@ -32,7 +32,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         let normalizedGatewayID = outboxGatewayID?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.outboxGatewayID = normalizedGatewayID?.isEmpty == false ? normalizedGatewayID : nil
         self.sessionMutationRequest = sessionMutationRequest
-        self.imageArtifactLoader = imageArtifactLoader
+        self.mediaArtifactLoader = mediaArtifactLoader
     }
 
     func acquireOutboxRouteLease() async -> OpenClawChatTransportRouteLeaseResult {
@@ -565,11 +565,14 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             })
     }
 
-    func loadImageArtifact(
+    func loadMediaArtifact(
         sessionKey: String,
-        artifactId: String) async throws -> OpenClawChatLoadedImage?
+        artifactId: String,
+        kind: OpenClawChatMediaKind,
+        playback: OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
     {
-        guard let imageArtifactLoader,
+        guard kind.acceptsManagedArtifactID(artifactId),
+              let mediaArtifactLoader,
               let route = await gateway.currentRoute(),
               let gatewayID = await gateway.currentGatewayID(ifCurrentRoute: route)
         else { return nil }
@@ -580,11 +583,11 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             artifactId: artifactId)
         let data = try await gateway.request(request, ifCurrentRoute: route)
         let response = try JSONDecoder().decode(ArtifactsDownloadResult.self, from: data)
-        guard let url = response.url?.trimmingCharacters(in: .whitespacesAndNewlines), !url.isEmpty
-        else { return nil }
         guard await self.gateway.currentRoute() == route else { throw CancellationError() }
-        let loaded = try await imageArtifactLoader.load(
-            ticketedPath: url,
+        let loaded = try await mediaArtifactLoader.load(
+            response: response,
+            kind: kind,
+            playback: playback,
             expectedGatewayID: gatewayID)
         guard await self.gateway.currentRoute() == route else { throw CancellationError() }
         return loaded
@@ -684,7 +687,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         agentID: String? = nil,
         expectedSessionRoutingContract: String? = nil,
         message: String,
-        thinking: String,
+        thinking: String?,
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload],
         ifCurrentRoute expectedRoute: GatewayNodeSessionRoute?,

@@ -77,6 +77,7 @@ function writeJsonFile(targetPath, value) {
 
 const PRIVATE_LOCAL_ONLY_PLUGIN_SDK_DIST_FILE_NAME_FALLBACK = [
   "codex-mcp-projection.js",
+  "codex-session-transcript-runtime.js",
   "qa-channel.js",
   "qa-channel-protocol.js",
   "qa-lab.js",

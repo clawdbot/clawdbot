@@ -104,6 +104,9 @@ describe("ConfigPage moved section routes", () => {
       context: { navigate: typeof navigate };
       pageId: "communications";
       routeData: {
+        pathname: string;
+        search: string;
+        hash: string;
         section: string;
         advanced: boolean;
         tab: string | null;
@@ -113,7 +116,15 @@ describe("ConfigPage moved section routes", () => {
     };
     state.context = { navigate };
     state.pageId = "communications";
-    state.routeData = { section, advanced: false, tab: null, targetBlockId: null };
+    state.routeData = {
+      pathname: "/settings/communications",
+      search: `?section=${section}`,
+      hash: "",
+      section,
+      advanced: false,
+      tab: null,
+      targetBlockId: null,
+    };
 
     state.syncRouteData();
 
@@ -127,6 +138,9 @@ describe("ConfigPage moved section routes", () => {
       context: { navigate: typeof navigate };
       pageId: "ai-agents";
       routeData: {
+        pathname: string;
+        search: string;
+        hash: string;
         section: string;
         advanced: boolean;
         tab: string | null;
@@ -136,42 +150,19 @@ describe("ConfigPage moved section routes", () => {
     };
     state.context = { navigate };
     state.pageId = "ai-agents";
-    state.routeData = { section: "models", advanced: false, tab: null, targetBlockId: null };
+    state.routeData = {
+      pathname: "/settings/ai-agents",
+      search: "?section=models",
+      hash: "",
+      section: "models",
+      advanced: false,
+      tab: null,
+      targetBlockId: null,
+    };
 
     state.syncRouteData();
 
     expect(navigate).toHaveBeenCalledWith("model-providers", { search: "", hash: "" });
-  });
-
-  it("redirects the former General model scroll target to the Models behavior section", () => {
-    const navigate = vi.fn();
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      context: { navigate: typeof navigate };
-      pageId: "config";
-      routeData: {
-        section: string | null;
-        advanced: boolean;
-        tab: string | null;
-        targetBlockId: string | null;
-      };
-      syncRouteData: () => void;
-    };
-    state.context = { navigate };
-    state.pageId = "config";
-    state.routeData = {
-      section: null,
-      advanced: false,
-      tab: null,
-      targetBlockId: "settings-general-model",
-    };
-
-    state.syncRouteData();
-
-    expect(navigate).toHaveBeenCalledWith("model-providers", {
-      search: "",
-      hash: "#settings-model-behavior",
-    });
   });
 });
 
@@ -251,7 +242,7 @@ describe("ConfigPage media discovery", () => {
 });
 
 describe("ConfigPage camera selection", () => {
-  it("clears recovered errors and ignores failures from superseded selections", async () => {
+  it("persists only confirmed camera selections and ignores superseded failures", async () => {
     let rejectFirst: (error: Error) => void = () => undefined;
     const first = new Promise<void>((_resolve, reject) => {
       rejectFirst = reject;
@@ -265,23 +256,32 @@ describe("ConfigPage camera selection", () => {
     const state = page as unknown as {
       cameraError: string | null;
       selectCamera: (deviceId: string) => Promise<void>;
-      applySettings: () => void;
+      applySettings: ReturnType<typeof vi.fn>;
     };
-    state.applySettings = () => undefined;
+    state.applySettings = vi.fn();
 
     await state.selectCamera("missing-camera");
     expect(state.cameraError).toBe("The selected camera is unavailable");
+    expect(state.applySettings).not.toHaveBeenCalled();
 
     const staleSelection = state.selectCamera("slow-camera");
     expect(state.cameraError).toBeNull();
     await state.selectCamera("back-camera");
+    expect(state.applySettings).toHaveBeenCalledOnce();
+    expect(state.applySettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ realtimeTalkVideoDeviceId: "back-camera" }),
+    );
     rejectFirst(new Error("The selected camera is unavailable"));
     await staleSelection;
     expect(state.cameraError).toBeNull();
+    expect(state.applySettings).toHaveBeenCalledOnce();
 
     state.cameraError = "Another camera error";
     await state.selectCamera("");
     expect(state.cameraError).toBeNull();
+    expect(state.applySettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ realtimeTalkVideoDeviceId: undefined }),
+    );
   });
 });
 
@@ -327,8 +327,11 @@ describe("ConfigPage session observer models", () => {
     expect(chatModels.loadModels).toHaveBeenCalledTimes(2);
   });
 
-  it("marks a failed client unavailable without polling it again", async () => {
-    vi.spyOn(chatModels, "loadModels").mockRejectedValue(new Error("catalog unavailable"));
+  it("retries a transient catalog failure on the next status refresh", async () => {
+    const recoveredModels = [{ id: "small", name: "Small", provider: "openai" }];
+    vi.spyOn(chatModels, "loadModels")
+      .mockRejectedValueOnce(new Error("catalog unavailable"))
+      .mockResolvedValueOnce(recoveredModels);
     const client = {} as GatewayBrowserClient;
     const gateway = {
       snapshot: { client, phase: "connected" },
@@ -346,11 +349,49 @@ describe("ConfigPage session observer models", () => {
     state.systemInfoGatewaySource = gateway;
 
     await state.ensureSessionObserverModels(client);
-    await state.ensureSessionObserverModels(client);
-
     expect(state.sessionObserverModels).toEqual([]);
     expect(state.sessionObserverModelsUnavailable).toBe(true);
-    expect(chatModels.loadModels).toHaveBeenCalledOnce();
+
+    await state.ensureSessionObserverModels(client);
+
+    expect(state.sessionObserverModels).toEqual(recoveredModels);
+    expect(state.sessionObserverModelsUnavailable).toBe(false);
+    expect(chatModels.loadModels).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("ConfigPage curated mutation eligibility", () => {
+  it.each([
+    ["offline", { connected: false }, ["operator.admin"], false],
+    ["read-only operator", { connected: true }, ["operator.read"], false],
+    ["config save", { connected: true, configSaving: true }, ["operator.admin"], false],
+    ["app update", { connected: true }, ["operator.admin"], true],
+    ["idle administrator", { connected: true }, ["operator.admin"], false],
+  ])("locks server-backed controls for %s", (_name, statePatch, scopes, updateRunning) => {
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: ApplicationContext;
+      isCuratedConfigMutationDisabled: () => boolean;
+    };
+    state.context = {
+      runtimeConfig: {
+        state: {
+          configLoading: false,
+          configSaving: false,
+          configApplying: false,
+          ...statePatch,
+        },
+      },
+      gateway: {
+        snapshot: { hello: { auth: { role: "operator", scopes } } },
+      },
+      overlays: {
+        snapshot: { updateRunning, updateReconciliationPending: false },
+      },
+    } as unknown as ApplicationContext;
+
+    const expectedUnlocked = _name === "idle administrator";
+    expect(state.isCuratedConfigMutationDisabled()).toBe(!expectedUnlocked);
   });
 });
 

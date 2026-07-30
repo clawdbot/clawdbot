@@ -5,6 +5,7 @@ import type {
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
   refreshSessionCatalogsLive,
@@ -69,6 +70,14 @@ export function resolveSessionCatalogAgentId(
 ): string | null {
   const context = owner.context;
   const gateway = context?.gateway.snapshot;
+  // Only an authoritative connected hello can revoke catalog ownership; a
+  // transient reconnect still preserves its rows until the replacement lands.
+  if (
+    gateway?.phase === "connected" &&
+    isGatewayMethodAdvertised(gateway, "sessions.catalog.list") === false
+  ) {
+    return null;
+  }
   const agentsState = context?.agents.state;
   const agentsList =
     gateway?.phase === "connected" &&

@@ -589,7 +589,7 @@ export class RealtimeCallHandler {
       },
       onTalkEvent: (event) => appendRecentTalkEventMetadata(callRecord, event),
     });
-    const providerHandlesInputAudioBargeIn =
+    let providerHandlesInputAudioBargeIn =
       this.realtimeProvider.capabilities?.handlesInputAudioBargeIn === true;
     const cancelOutputAudioForBargeIn = (
       source: "local" | "provider",
@@ -895,6 +895,8 @@ export class RealtimeCallHandler {
           });
       },
     });
+    providerHandlesInputAudioBargeIn =
+      session.bridge.handlesInputAudioBargeIn ?? providerHandlesInputAudioBargeIn;
     const closeTelephony = (reason: TelephonyCloseReason) => {
       try {
         session.close();

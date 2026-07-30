@@ -8,6 +8,11 @@ import type { ThinkLevel, listThinkingLevelOptions } from "../auto-reply/thinkin
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions.js";
 import type { ModelCostConfig } from "../utils/usage-format.js";
 
+export type SessionActorProfileIdentity = {
+  label?: string;
+  avatarUrl?: string;
+};
+
 export type SessionListRowContext = {
   subagentRuns: ReturnType<typeof buildSubagentRunReadIndex>;
   storeChildSessionsByKey: Map<string, string[]>;
@@ -21,7 +26,7 @@ export type SessionListRowContext = {
   >;
   displayModelIdentityByKey: Map<string, { provider?: string; model?: string }>;
   modelCostConfigByModelRef: Map<string, ModelCostConfig | undefined>;
-  userProfileLabelById: Map<string, string | undefined>;
+  userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined>;
   acpSessionMetaByEntry: Map<SessionEntry, SessionAcpMeta | undefined>;
 };
 

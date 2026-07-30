@@ -1,6 +1,9 @@
 /** Session-scoped MCP runtime catalog loader and transport lifecycle. */
 import { Client, type ClientOptions } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import {
+  StreamableHTTPClientTransport,
+  StreamableHTTPError,
+} from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   ErrorCode,
@@ -11,6 +14,7 @@ import {
 import type { ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { redactToolPayloadText } from "../logging/redact.js";
@@ -403,6 +407,7 @@ export function createSessionMcpRuntime(params: {
   redactConnectionServerNames?: ReadonlySet<string>;
   requesterScope?: SessionMcpRequesterScope;
   configFingerprint?: string;
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 }): SessionMcpRuntime {
   const { loaded, fingerprint: computedFingerprint } = loadSessionMcpConfig({
     workspaceDir: params.workspaceDir,
@@ -413,6 +418,7 @@ export function createSessionMcpRuntime(params: {
     excludeServerNames: params.excludeServerNames,
     redactConnectionServerNames: params.redactConnectionServerNames,
     safeServerNamesByServer: params.safeServerNamesByServer,
+    toolOverrides: params.toolOverrides,
   });
   const configFingerprint = params.configFingerprint ?? computedFingerprint;
   const mcpAppsEnabled = params.cfg?.mcp?.apps?.enabled === true;
@@ -587,20 +593,37 @@ export function createSessionMcpRuntime(params: {
       }
       return result;
     } catch (error) {
-      if (tracksFailureBackoff) {
+      // A stateful server uses HTTP 404 to invalidate an expired MCP session.
+      // Reinitialize a fresh client, but never replay a possibly mutating call.
+      const sessionExpired =
+        session.transportType === "streamable-http" &&
+        session.transport instanceof StreamableHTTPClientTransport &&
+        session.transport.sessionId !== undefined &&
+        error instanceof StreamableHTTPError &&
+        error.code === 404;
+      let recycleReason: "expired HTTP session" | "repeated request timeouts" | undefined;
+      if (sessionExpired) {
+        recycleReason = "expired HTTP session";
+      } else if (tracksFailureBackoff) {
         const failures = recordServerToolFailure(serverName, session, nowMs);
         const requestTimedOut =
           error !== null && typeof error === "object" && localRequestTimeouts.has(error);
         if (requestTimedOut && failures && failures >= BUNDLE_MCP_FAILURE_THRESHOLD) {
-          serverBackoff.delete(serverName);
-          scheduleCatalogServerRetry(serverName, "repeated request timeouts");
-          logWarn(`bundle-mcp: recycling server "${serverName}" after repeated timeouts`);
-          void retireSessionIfCurrent(serverName, session).catch((retireError: unknown) => {
-            logWarn(
-              `bundle-mcp: failed to retire timed-out server "${serverName}": ${redactMcpDiagnosticError(retireError)}`,
-            );
-          });
+          recycleReason = "repeated request timeouts";
         }
+      }
+      if (recycleReason) {
+        serverBackoff.delete(serverName);
+        scheduleCatalogServerRetry(serverName, recycleReason);
+        const timedOut = recycleReason === "repeated request timeouts";
+        logWarn(
+          `bundle-mcp: recycling server "${serverName}" after ${timedOut ? "repeated timeouts" : "an expired HTTP session"}`,
+        );
+        void retireSessionIfCurrent(serverName, session).catch((retireError: unknown) => {
+          logWarn(
+            `bundle-mcp: failed to retire ${timedOut ? "timed-out" : "expired-session"} server "${serverName}": ${redactMcpDiagnosticError(retireError)}`,
+          );
+        });
       }
       throw error;
     }
@@ -635,6 +658,9 @@ export function createSessionMcpRuntime(params: {
       const tools: McpCatalogTool[] = (retryBaseCatalog?.tools ?? []).filter(
         (tool) => !retryServerNames?.has(tool.serverName),
       );
+      const sessionDeniedTools: McpCatalogTool[] = (
+        retryBaseCatalog?.sessionDeniedTools ?? []
+      ).filter((tool) => !retryServerNames?.has(tool.serverName));
       const diagnostics: McpToolCatalogDiagnostic[] = [];
       // Prefer session-wide precomputed assignments; fall back only for isolated runtimes.
       const safeServerNamesByServer =
@@ -805,9 +831,17 @@ export function createSessionMcpRuntime(params: {
                 });
                 failIfDisposed();
                 const selection = getMcpToolSelection(rawServer);
-                const exposedTools = listedTools.filter((tool) =>
+                const denialMap = params.toolOverrides?.mcpToolsDeny;
+                const deniedToolNames = new Set(
+                  denialMap && Object.hasOwn(denialMap, serverName) ? denialMap[serverName] : [],
+                );
+                const policyEligibleTools = listedTools.filter((tool) =>
                   shouldExposeMcpTool(selection, tool.name.trim()),
                 );
+                const exposedTools = policyEligibleTools.filter((tool) => {
+                  const toolName = tool.name.trim();
+                  return !deniedToolNames.has(toolName);
+                });
                 const serverEntry: McpServerCatalog = {
                   serverName,
                   safeServerName,
@@ -835,9 +869,12 @@ export function createSessionMcpRuntime(params: {
                         },
                       }
                     : {}),
+                  ...(deniedToolNames.size > 0
+                    ? { deniedToolNames: [...deniedToolNames].toSorted() }
+                    : {}),
                 };
                 const toolEntries: McpCatalogTool[] = [];
-                for (const tool of exposedTools) {
+                for (const tool of policyEligibleTools) {
                   const toolName = tool.name.trim();
                   if (!toolName) {
                     continue;
@@ -863,6 +900,7 @@ export function createSessionMcpRuntime(params: {
                     fallbackDescription: `Provided by bundle MCP server "${serverName}" (${launchDescription}).`,
                     ...(uiResourceUri ? { uiResourceUri } : {}),
                     ...(uiVisibility ? { uiVisibility } : {}),
+                    ...(deniedToolNames.has(toolName) ? { deniedBySession: true } : {}),
                   });
                 }
                 return {
@@ -930,7 +968,13 @@ export function createSessionMcpRuntime(params: {
           if (serverEntry) {
             servers[result.serverName] = serverEntry;
           }
-          tools.push(...toolEntries);
+          for (const tool of toolEntries) {
+            if (tool.deniedBySession) {
+              sessionDeniedTools.push(tool);
+            } else {
+              tools.push(tool);
+            }
+          }
           diagnostics.push(...serverDiags);
         }
 
@@ -940,6 +984,7 @@ export function createSessionMcpRuntime(params: {
           generatedAt: Date.now(),
           servers,
           tools,
+          ...(sessionDeniedTools.length > 0 ? { sessionDeniedTools } : {}),
           ...(diagnostics.length > 0 ? { diagnostics } : {}),
         };
       } catch (error) {
