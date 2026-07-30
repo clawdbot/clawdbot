@@ -6,7 +6,11 @@ import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-time
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../../../sessions/input-provenance.js";
 import { hasPersistedMedia, MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import { buildLateMediaAttachedProjection } from "../../../sessions/user-turn-transcript.js";
-import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
+import {
+  hasInternalRuntimeContext,
+  stripHistoricalRuntimeContextCustomMessages,
+  stripInternalRuntimeContext,
+} from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { stripToolResultDetails } from "../../session-transcript-repair.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
@@ -457,6 +461,36 @@ function messageRuntimeTimestampMatchesCurrentUserOverride(
   return true;
 }
 
+/**
+ * Runtime context reaches the model only through the dedicated hidden carrier
+ * message, so an internal-context block sitting inside user text is a leak or a
+ * spoof and never legitimate content (#115978). Applied to the active and the
+ * historical form alike so a user turn's bytes stay identical in both positions.
+ */
+function stripLeakedRuntimeContext(text: string): string {
+  return hasInternalRuntimeContext(text) ? stripInternalRuntimeContext(text) : text;
+}
+
+/**
+ * Emptiness decisions must be made on the post-strip text. A media turn whose only
+ * visible text was the leaked block still looks non-blank before stripping, so the
+ * media-only substitution would be skipped and the turn would reach the model empty.
+ */
+function stripLeakedRuntimeContextFromContent(content: unknown): unknown {
+  if (typeof content === "string") {
+    return stripLeakedRuntimeContext(content);
+  }
+  if (!Array.isArray(content)) {
+    return content;
+  }
+  return content.map((block) => {
+    const textBlock = block as { type?: string; text?: string };
+    return textBlock?.type === "text" && typeof textBlock.text === "string"
+      ? { ...textBlock, text: stripLeakedRuntimeContext(textBlock.text) }
+      : block;
+  });
+}
+
 function stripHistoricalInboundMetadataFromUserMessages(
   messages: AgentMessage[],
   options: LlmBoundaryOptions | undefined,
@@ -468,7 +502,9 @@ function stripHistoricalInboundMetadataFromUserMessages(
       return message;
     }
     const content = (message as { content?: unknown }).content;
-    const injectMediaText = hasPersistedMedia(message) && !hasNonBlankUserText(content);
+    const injectMediaText =
+      hasPersistedMedia(message) &&
+      !hasNonBlankUserText(stripLeakedRuntimeContextFromContent(content));
     // #111204: restore marked path lines here, never in UI-visible transcript storage.
     const mediaOnlyText = buildLateMediaAttachedProjection(message).text ?? MEDIA_ONLY_USER_TEXT;
     const isActive = index === activeUserMessageIndex;
@@ -495,7 +531,8 @@ function stripHistoricalInboundMetadataFromUserMessages(
     // keeps such messages byte-stable across current↔historical (the envelope is
     // present in both forms) and avoids double-stamping.
     const transformText = (raw: string): string => {
-      const sourceText = injectMediaText && !raw.trim() ? mediaOnlyText : raw;
+      const text = stripLeakedRuntimeContext(raw);
+      const sourceText = injectMediaText && !text.trim() ? mediaOnlyText : text;
       const { body, envelope } = splitLeadingTimestampEnvelope(sourceText);
       if (envelope || sourceText.includes(BOUNDARY_CRON_TIME_MARKER)) {
         if (isActive) {
@@ -557,7 +594,8 @@ function stripHistoricalInboundMetadataFromUserMessages(
         nextText = transformText(textBlock.text);
         processedFirstText = true;
       } else {
-        nextText = isActive ? textBlock.text : stripInboundMetadata(textBlock.text);
+        const blockText = stripLeakedRuntimeContext(textBlock.text);
+        nextText = isActive ? blockText : stripInboundMetadata(blockText);
       }
       if (nextText === textBlock.text) {
         return block;
