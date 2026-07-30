@@ -1057,7 +1057,9 @@ struct MacNodeCodexThreadCatalogTests {
             .split(whereSeparator: \.isNewline)
         #expect(requests.count == 2)
     }
+}
 
+extension MacNodeCodexThreadCatalogTests {
     @Test func `restarts the lifecycle client when the resolved invocation changes`() async throws {
         let first = try makeFakeCodex(#"""
         #!/bin/sh
