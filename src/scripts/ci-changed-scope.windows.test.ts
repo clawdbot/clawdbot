@@ -59,4 +59,17 @@ describe("detectChangedScope Windows routing", () => {
       });
     }
   });
+
+  it("routes MXC runtime changes and Windows-only suites to Windows", () => {
+    for (const mxcPath of [
+      "extensions/mxc/src/mxc-backend.ts",
+      "extensions/mxc/test/mxc-backend.test.ts",
+      "extensions/mxc/test/sandbox-policy-loader.test.ts",
+    ]) {
+      expect(detectChangedScope([mxcPath]), mxcPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
 });

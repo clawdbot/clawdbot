@@ -244,4 +244,11 @@ describe("package scripts", () => {
       "test/scripts/ts-topology.test.ts",
     );
   });
+
+  it("runs Windows-only MXC backend coverage in Windows CI", () => {
+    const script = readPackageJson().scripts["test:windows:ci"];
+
+    expect(script).toContain("extensions/mxc/test/mxc-backend.test.ts");
+    expect(script).toContain("extensions/mxc/test/sandbox-policy-loader.test.ts");
+  });
 });
