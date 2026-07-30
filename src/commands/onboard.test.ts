@@ -833,7 +833,14 @@ describe("setupWizardCommand", () => {
 
     // Unset Commander booleans arrive as false and must not force classic.
     await setupWizardCommand(
-      { skipChannels: false, skipSkills: false, acceptRisk: false, json: false },
+      {
+        skipChannels: false,
+        skipSkills: false,
+        acceptRisk: false,
+        json: false,
+        tailscaleResetOnExit: undefined,
+        customImageInput: undefined,
+      },
       runtime,
     );
 
@@ -861,6 +868,8 @@ describe("setupWizardCommand", () => {
     ["--remote-url", { remoteUrl: "wss://gw.example.ts.net" }],
     ["--skip-bootstrap", { skipBootstrap: true }],
     ["--no-install-daemon", { installDaemon: false }],
+    ["--no-tailscale-reset-on-exit", { tailscaleResetOnExit: false }],
+    ["--custom-text-input", { customImageInput: false }],
     ["--daemon-runtime", { daemonRuntime: "node" as const }],
     ["a provider auth flag", { mistralApiKey: "sk-x" }],
   ])("keeps the classic interactive wizard for %s", async (_label, opts) => {

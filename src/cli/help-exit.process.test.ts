@@ -249,6 +249,19 @@ describe("CLI help process exit", () => {
     );
   });
 
+  it("treats --help as a required option value when Commander does", async () => {
+    let failure: CliProcessFailure | undefined;
+    try {
+      await runCliProcess({ args: ["secrets", "apply", "--from", "--help"], config: {} });
+    } catch (error) {
+      failure = error as CliProcessFailure;
+    }
+
+    expect(failure?.code).toBe(1);
+    expect(failure?.stdout ?? "").not.toContain("Usage:");
+    expect(failure?.stderr).toContain("plan file not found: --help");
+  });
+
   it.each(LAZY_GROUP_HELP_CASES)(
     "renders in-process help for $group",
     async ({ group, usageCommand, registry }) => {
@@ -356,6 +369,19 @@ describe("JSON console style process output", () => {
 
     expect(result.stderr).toBe("");
     expect(JSON.parse(result.stdout)).toEqual([]);
+  });
+
+  it("emits one JSON object for baseline setup", async () => {
+    const result = await runCliProcess({ args: ["setup", "--baseline", "--json"], config: {} });
+
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      configPath: expect.any(String),
+      configStatus: "updated",
+      workspaceDir: expect.any(String),
+      sessionsDir: expect.any(String),
+    });
   });
 
   it("structures invalid log-level environment warnings", async () => {
