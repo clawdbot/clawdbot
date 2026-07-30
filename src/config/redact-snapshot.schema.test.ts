@@ -108,7 +108,14 @@ describe("realredactConfigSnapshot_real", () => {
     });
 
     const result = redactConfigSnapshot(snapshot, hints);
-    expect(result.config.tools.web.fetch.headers["X-Routing-Target"]).toBe(REDACTED_SENTINEL);
+    const tools = expectDefined(result.config.tools, "result.config.tools test invariant");
+    const web = expectDefined(tools.web, "result.config.tools.web test invariant");
+    const fetch = expectDefined(web.fetch, "result.config.tools.web.fetch test invariant");
+    const headers = expectDefined(
+      fetch.headers,
+      "result.config.tools.web.fetch.headers test invariant",
+    );
+    expect(headers["X-Routing-Target"]).toBe(REDACTED_SENTINEL);
 
     const restored = restoreRedactedValues(result.config, snapshot.config, hints);
     expect(restored.tools.web.fetch.headers["X-Routing-Target"]).toBe("staging-private-route");

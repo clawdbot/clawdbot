@@ -420,7 +420,7 @@ describe("web_fetch provider fallback normalization", () => {
         throw new Error("network failed");
       }),
     );
-    const providerExecute = vi.fn(async () => ({ text: "provider body" }));
+    const providerExecute = vi.fn(async (_input: unknown) => ({ text: "provider body" }));
     resolveWebFetchDefinitionMock.mockReturnValue({
       provider: { id: "firecrawl" },
       definition: {
