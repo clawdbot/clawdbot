@@ -177,7 +177,7 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     path: ["channels", "feishu"],
     message:
       'channels.feishu[.accounts.<id>].domain must be an HTTPS API base URL. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyFeishuCustomDomain(asObjectRecord(value)),
+    match: (value) => hasLegacyFeishuCustomDomain(asObjectRecord(value) ?? undefined),
   },
 ];
 

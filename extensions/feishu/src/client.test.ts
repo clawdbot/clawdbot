@@ -277,6 +277,23 @@ describe("Feishu default User-Agent interceptor", () => {
   });
 });
 
+describe("createFeishuClient custom domains", () => {
+  it("keeps a normalized custom API base path for Lark SDK route construction", () => {
+    const domain = FeishuConfigSchema.parse({
+      domain: "HTTPS://tenant.example/base/",
+    }).domain;
+
+    createFeishuClient({
+      appId: "app-custom-domain",
+      appSecret: "secret-custom-domain", // pragma: allowlist secret
+      accountId: "custom-domain-base-path",
+      domain,
+    });
+
+    expect(readCallOptions(clientCtorMock).domain).toBe("https://tenant.example/base");
+  });
+});
+
 describe("createFeishuClient HTTP timeout", () => {
   const readLastClientHttpInstance = (): HttpInstanceLike =>
     requireHttpInstance(readCallOptions(clientCtorMock).httpInstance);

@@ -72,7 +72,6 @@ describe("FeishuConfigSchema custom domain", () => {
     );
   });
 
-
   it("rejects a custom HTTP domain", () => {
     expectSchemaIssue(FeishuConfigSchema.safeParse({ domain: "http://tenant.example" }), "domain");
     expectSchemaIssue(

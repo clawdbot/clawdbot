@@ -31,7 +31,10 @@ const FeishuGroupPolicySchema = z.union([
 const FeishuCustomDomainSchema = z
   .intersection(
     z.string().trim().url(),
-    z.string().trim().regex(/^[Hh][Tt][Tt][Pp][Ss]:\/\//),
+    z
+      .string()
+      .trim()
+      .regex(/^[Hh][Tt][Tt][Pp][Ss]:\/\//),
   )
   .transform((value) => new URL(value))
   .superRefine((url, ctx) => {
