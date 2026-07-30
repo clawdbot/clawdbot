@@ -43,8 +43,10 @@ import {
   type TelegramNativeQuoteCandidateByMessageId,
 } from "./bot/native-quote.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
+import { formatTelegramFallbackError } from "./telegram-error-presenter.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
 
 async function resolveStickerVisionSupport(
@@ -77,8 +79,6 @@ function includeStickerDescription(params: {
   if (!current) {
     return params.formattedDescription;
   }
-  // Cached descriptions can already be present from inbound context construction.
-  // Keep that body intact so captions, forwarded text, and supplemental context survive.
   if (params.body.includes(params.formattedDescription)) {
     return params.body;
   }
@@ -315,14 +315,11 @@ export const dispatchTelegramMessage = async ({
   const forceBlockStreamingForReasoning =
     resolvedReasoningLevel === "on" && streamMode !== "progress";
   const quote = resolveTelegramQuoteContext({ context: dispatchContext, replyToMode });
-  // Draft messages are provider-visible before final modifiers run. Suppress them when a hook
-  // can rewrite or cancel, or the original payload can flash before the normal delivery gate.
   const hookRunner = getGlobalHookRunner();
   const allowProviderPreview = !(
     (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
     (hookRunner?.hasHooks("message_sending") ?? false)
   );
-  // Pre-adoption abort is drain-owned via turnAdoptionLifecycle.abortSignal.
   const isDispatchSuperseded = () => turnAdoptionLifecycle?.abortSignal?.aborted === true;
   const dispatchGeneration = 0;
   const draft = createTelegramDraftController({
@@ -454,7 +451,7 @@ export const dispatchTelegramMessage = async ({
       try {
         await delivery.finalizePendingAnswerBlockDraft(state);
       } catch (err) {
-        state.dispatchError ??= err;
+        state.deliveryError ??= err;
         runtime.error?.(danger(`telegram terminal block delivery failed: ${String(err)}`));
       }
       await draft.cleanup(isDispatchSuperseded());
@@ -489,12 +486,15 @@ export const dispatchTelegramMessage = async ({
     !suppressFailureFallback &&
     !progress.finalAnswerDelivered() &&
     (state.dispatchError ||
+      state.deliveryError ||
       deliverySummary.failedNonSilent > 0 ||
       (deliverySummary.skippedNonSilent > 0 && !state.suppressSilentReplyFallback));
   if (shouldSendFailureFallback) {
     const fallbackText = state.dispatchError
-      ? "Something went wrong while processing your request. Please try again."
-      : EMPTY_RESPONSE_FALLBACK;
+      ? formatTelegramFallbackError(state.dispatchError)
+      : state.deliveryError
+        ? "Something went wrong while processing your request. Please try again."
+        : EMPTY_RESPONSE_FALLBACK;
     const result = await delivery.deliverFallback(
       [{ text: fallbackText }],
       telegramCfg.silentErrorReplies === true &&
@@ -549,6 +549,7 @@ export const dispatchTelegramMessage = async ({
     (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0);
   const retryableDispatchFailure =
     state.dispatchError ??
+    state.deliveryError ??
     (deliveryFailureWithoutFinalResponse
       ? new Error(
           `Telegram reply delivery failed without a final response (failed=${deliverySummary.failedNonSilent}, skipped=${deliverySummary.skippedNonSilent})`,
@@ -560,8 +561,11 @@ export const dispatchTelegramMessage = async ({
   }
   const shouldReturnRetryableDispatchFailure =
     retryDispatchErrors &&
-    ((state.dispatchError != null && !hasFinalResponse) ||
-      (state.dispatchError == null && deliveryFailureWithoutFinalResponse && !hasVisibleResponse));
+    (((state.dispatchError != null || state.deliveryError != null) && !hasFinalResponse) ||
+      (state.dispatchError == null &&
+        state.deliveryError == null &&
+        deliveryFailureWithoutFinalResponse &&
+        !hasVisibleResponse));
   if (retryableDispatchFailure && shouldReturnRetryableDispatchFailure) {
     return { kind: "failed-retryable", error: retryableDispatchFailure };
   }
@@ -580,7 +584,8 @@ export const dispatchTelegramMessage = async ({
     status.finalizeInBackground(
       {
         outcome:
-          !progress.finalAnswerDelivered() && (state.dispatchError != null || sentFallback)
+          !progress.finalAnswerDelivered() &&
+          (state.dispatchError != null || state.deliveryError != null || sentFallback)
             ? "error"
             : "done",
       },
@@ -588,4 +593,4 @@ export const dispatchTelegramMessage = async ({
     );
   }
   return { kind: "completed" };
-};
+}

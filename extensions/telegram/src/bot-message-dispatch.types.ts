@@ -26,10 +26,6 @@ export type DispatchTelegramMessageParams = {
   opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb">;
   retryDispatchErrors?: boolean;
   suppressFailureFallback?: boolean;
-  /**
-   * Canonical turn ownership lifecycle from the durable ingress drain
-   * (or a test double). Pre-adoption abort + adopt/defer/abandon.
-   */
   turnAdoptionLifecycle?: {
     admission?: "exclusive" | "cancel-only";
     onAdopted: () => void | Promise<void>;
@@ -68,5 +64,8 @@ export type TelegramDispatchTurnState = {
   queuedFinal: boolean;
   suppressSilentReplyFallback: boolean;
   hadErrorReplyFailureOrSkip: boolean;
+  /** Error from the agent/provider dispatch turn (provider failures). */
   dispatchError?: unknown;
+  /** Error from terminal Telegram delivery (transport failures). */
+  deliveryError?: unknown;
 };
