@@ -58,6 +58,21 @@ describe("resolveCommandTurnContext", () => {
     expect(isExplicitCommandTurn(commandTurn)).toBe(false);
   });
 
+  it("keeps an empty canonical command authoritative over stale aliases", () => {
+    const input = {
+      commandText: "",
+      CommandBody: "/reset",
+      CommandAuthorized: true,
+    };
+
+    expect(resolveCommandTurnContext(input)).toMatchObject({
+      kind: "normal",
+      body: "",
+      commandName: undefined,
+    });
+    expect(isExplicitCommandTurnContext(input, emptyConfig)).toBe(false);
+  });
+
   it("treats authorized control command bodies as explicit without legacy source tags", () => {
     expect(
       isExplicitCommandTurnContext(

@@ -1,8 +1,7 @@
 {
   "id": "codex",
   "name": "Codex",
-  "description": "Codex app-server harness, model provider, and native session catalog.",
-  "providers": ["codex"],
+  "description": "Codex app-server harness and native session catalog.",
   "contracts": {
     "mediaUnderstandingProviders": ["codex"],
     "migrationProviders": ["codex"],
@@ -24,9 +23,6 @@
       }
     }
   },
-  "providerCatalogEntry": "./provider-discovery.ts",
-  "syntheticAuthRefs": ["codex"],
-  "nonSecretAuthMarkers": ["codex-app-server"],
   "activation": {
     "onStartup": false,
     "onAgentHarnesses": ["codex"],
@@ -269,6 +265,10 @@
             "type": "boolean",
             "default": false
           },
+          "loopDetectionPreToolUseRelay": {
+            "type": "boolean",
+            "default": true
+          },
           "requestTimeoutMs": {
             "type": "number",
             "minimum": 1,
@@ -278,6 +278,11 @@
             "type": "number",
             "minimum": 1,
             "default": 60000
+          },
+          "turnAssistantCompletionIdleTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 10000
           },
           "postToolRawAssistantCompletionIdleTimeoutMs": {
             "type": "number",
@@ -536,7 +541,7 @@
     },
     "appServer.transport": {
       "label": "Transport",
-      "help": "Use stdio to spawn Codex locally, unix for the shared local control socket, or websocket for a remote app-server.",
+      "help": "Use stdio to spawn Codex locally or unix for the shared local control socket. Remote websocket transport is experimental and unsupported by Codex.",
       "advanced": true
     },
     "appServer.homeScope": {
@@ -586,6 +591,11 @@
       "help": "Expose Codex's code-mode-only tool surface. OpenClaw dynamic tools remain available through Codex nested tool calls.",
       "advanced": true
     },
+    "appServer.loopDetectionPreToolUseRelay": {
+      "label": "Loop Detection Pre-tool Relay",
+      "help": "Install the Codex PreToolUse subprocess used only for OpenClaw loop detection and its no-policy marker. Disable to reduce per-tool process fan-out; before-tool and trusted policy relays remain enforced.",
+      "advanced": true
+    },
     "appServer.requestTimeoutMs": {
       "label": "Request Timeout",
       "help": "Maximum time to wait for Codex app-server control-plane requests.",
@@ -594,6 +604,11 @@
     "appServer.turnCompletionIdleTimeoutMs": {
       "label": "Turn Completion Idle Timeout",
       "help": "Maximum quiet time after Codex accepts a turn or after a turn-scoped app-server request before OpenClaw interrupts the turn while waiting for turn/completed.",
+      "advanced": true
+    },
+    "appServer.turnAssistantCompletionIdleTimeoutMs": {
+      "label": "Assistant Completion Idle Timeout",
+      "help": "Short quiet-time guard after Codex reports a completed assistant message before OpenClaw releases the turn.",
       "advanced": true
     },
     "appServer.postToolRawAssistantCompletionIdleTimeoutMs": {

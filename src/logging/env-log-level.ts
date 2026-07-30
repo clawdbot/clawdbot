@@ -1,5 +1,6 @@
 // Env log level helpers normalize log level values from environment variables.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { formatConsoleDiagnosticLine } from "./json-console-line.js";
 import { ALLOWED_LOG_LEVELS, type LogLevel, tryParseLogLevel } from "./levels.js";
 import { loggingState } from "./state.js";
 
@@ -17,9 +18,8 @@ export function resolveEnvLogLevelOverride(): LogLevel | undefined {
   }
   if (loggingState.invalidEnvLogLevelValue !== trimmed) {
     loggingState.invalidEnvLogLevelValue = trimmed;
-    process.stderr.write(
-      `[openclaw] Ignoring invalid OPENCLAW_LOG_LEVEL="${trimmed}" (allowed: ${ALLOWED_LOG_LEVELS.join("|")}).\n`,
-    );
+    const message = `[openclaw] Ignoring invalid OPENCLAW_LOG_LEVEL="${trimmed}" (allowed: ${ALLOWED_LOG_LEVELS.join("|")}).`;
+    process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message })}\n`);
   }
   return undefined;
 }

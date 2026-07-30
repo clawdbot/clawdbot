@@ -191,7 +191,7 @@ export function listTaskFlowAuditFindings(
       );
     }
 
-    if (flow.status === "blocked" && ageMs >= staleBlockedMs) {
+    if (flow.status === "blocked" && flow.endedAt == null && ageMs >= staleBlockedMs) {
       findings.push(
         createFinding({
           severity: "warn",
@@ -246,7 +246,7 @@ export function listTaskFlowAuditFindings(
       );
     }
 
-    if (flow.blockedTaskId?.trim()) {
+    if (flow.endedAt == null && flow.blockedTaskId?.trim()) {
       const blockedTaskId = flow.blockedTaskId.trim();
       if (!linkedTasks.some((task) => task.taskId === blockedTaskId)) {
         findings.push(

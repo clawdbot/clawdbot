@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
@@ -16,6 +16,7 @@ import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
+import { SessionHistorySseState } from "./session-history-state.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
@@ -43,7 +44,7 @@ afterEach(async () => {
 const AGENT_ID = "main";
 type SessionHistoryTestDatabase = Pick<
   OpenClawAgentKyselyDatabase,
-  "session_entries" | "session_routes" | "sessions"
+  "session_nodes" | "session_windows"
 >;
 
 async function createSessionStoreFile(): Promise<string> {
@@ -117,7 +118,28 @@ function seedRawSessionRows(params: {
         executeSqliteQuerySync(
           database.db,
           db
-            .insertInto("sessions")
+            .insertInto("session_nodes")
+            .values({
+              current_session_id: row.sessionId,
+              entry_json: JSON.stringify({
+                sessionId: row.sessionId,
+                updatedAt: row.updatedAt,
+              }),
+              session_key: row.sessionKey,
+              updated_at: row.updatedAt,
+            })
+            .onConflict((conflict) =>
+              conflict.column("session_key").doUpdateSet({
+                current_session_id: (eb) => eb.ref("excluded.current_session_id"),
+                entry_json: (eb) => eb.ref("excluded.entry_json"),
+                updated_at: (eb) => eb.ref("excluded.updated_at"),
+              }),
+            ),
+        );
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .insertInto("session_windows")
             .values({
               session_id: row.sessionId,
               session_key: row.sessionKey,
@@ -127,43 +149,6 @@ function seedRawSessionRows(params: {
             .onConflict((conflict) =>
               conflict.column("session_id").doUpdateSet({
                 session_key: (eb) => eb.ref("excluded.session_key"),
-                updated_at: (eb) => eb.ref("excluded.updated_at"),
-              }),
-            ),
-        );
-        executeSqliteQuerySync(
-          database.db,
-          db
-            .insertInto("session_routes")
-            .values({
-              session_key: row.sessionKey,
-              session_id: row.sessionId,
-              updated_at: row.updatedAt,
-            })
-            .onConflict((conflict) =>
-              conflict.column("session_key").doUpdateSet({
-                session_id: (eb) => eb.ref("excluded.session_id"),
-                updated_at: (eb) => eb.ref("excluded.updated_at"),
-              }),
-            ),
-        );
-        executeSqliteQuerySync(
-          database.db,
-          db
-            .insertInto("session_entries")
-            .values({
-              session_id: row.sessionId,
-              session_key: row.sessionKey,
-              entry_json: JSON.stringify({
-                sessionId: row.sessionId,
-                updatedAt: row.updatedAt,
-              }),
-              updated_at: row.updatedAt,
-            })
-            .onConflict((conflict) =>
-              conflict.column("session_key").doUpdateSet({
-                session_id: (eb) => eb.ref("excluded.session_id"),
-                entry_json: (eb) => eb.ref("excluded.entry_json"),
                 updated_at: (eb) => eb.ref("excluded.updated_at"),
               }),
             ),
@@ -474,7 +459,7 @@ describe("session history HTTP endpoints", () => {
       expect(body.messages).toHaveLength(1);
       expect(body.messages?.[0]?.content?.[0]?.text).toBe("hello from history");
       expectOpenClawMetadata(body.messages?.[0]?.["__openclaw"], {
-        seq: 2,
+        seq: 1,
       });
     });
   });
@@ -558,8 +543,13 @@ describe("session history HTTP endpoints", () => {
           throw new Error(`append failed: ${appended.reason}`);
         }
         emitSessionTranscriptUpdate({
-          sessionFile: appended.sessionFile,
+          sessionFile: appended.target.sessionKey,
           sessionKey: "agent:main:main",
+          target: {
+            agentId: appended.target.agentId ?? "main",
+            sessionId: appended.target.sessionId,
+            sessionKey: appended.target.sessionKey,
+          },
           message: activeMessage,
           messageId: appended.messageId,
           messageSeq: 2,
@@ -614,7 +604,6 @@ describe("session history HTTP endpoints", () => {
   });
 
   test("prefers the freshest duplicate row for direct history reads", async () => {
-    testState.agentsConfig = { list: [{ id: "main", default: true }] };
     testState.sessionConfig = { mainKey: "work" };
     const storePath = await createSessionStoreFile();
     await replaceTranscriptEvents(
@@ -691,9 +680,9 @@ describe("session history HTTP endpoints", () => {
         "second message",
         "third message",
       ]);
-      expect(firstBody.messages?.map((message) => message["__openclaw"]?.seq)).toEqual([3, 4]);
+      expect(firstBody.messages?.map((message) => message["__openclaw"]?.seq)).toEqual([2, 3]);
       expect(firstBody.hasMore).toBe(true);
-      expect(firstBody.nextCursor).toBe("3");
+      expect(firstBody.nextCursor).toBe("2");
 
       const secondPage = await fetchSessionHistory(harness.port, "agent:main:main", {
         query: `?limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
@@ -703,7 +692,7 @@ describe("session history HTTP endpoints", () => {
       expect(secondBody.items?.map((message) => message.content?.[0]?.text)).toEqual([
         "first message",
       ]);
-      expect(secondBody.messages?.map((message) => message["__openclaw"]?.seq)).toEqual([2]);
+      expect(secondBody.messages?.map((message) => message["__openclaw"]?.seq)).toEqual([1]);
       expect(secondBody.hasMore).toBe(false);
       expect(secondBody.nextCursor).toBeUndefined();
     });
@@ -737,6 +726,44 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
+  test.each(["", " ", "abc", "0", "-5", "1.5"])(
+    "rejects invalid limit %j with 400",
+    async (limit) => {
+      await seedSession({ text: "first message" });
+      await withGatewayHarness(async (harness) => {
+        const res = await fetchSessionHistory(harness.port, "agent:main:main", {
+          query: `?limit=${encodeURIComponent(limit)}`,
+        });
+        expect(res.status).toBe(400);
+        const body = await res.json();
+        expect(body.error?.type).toBe("invalid_request_error");
+        expect(body.error?.message).toBe("limit must be a positive integer");
+      });
+    },
+  );
+
+  test.each(["1", "+1"])(
+    "returns the requested bounded history for valid limit %s",
+    async (limit) => {
+      const { storePath } = await seedSession({ text: "first message" });
+      await appendVisibleAssistantMessage({
+        sessionKey: "agent:main:main",
+        text: "second message",
+        storePath,
+      });
+
+      await withGatewayHarness(async (harness) => {
+        const body = await readSessionHistoryBody(harness.port, "agent:main:main", {
+          query: `?limit=${encodeURIComponent(limit)}`,
+        });
+        expect(body.messages?.map((message) => message.content?.[0]?.text)).toEqual([
+          "second message",
+        ]);
+        expect(body.hasMore).toBe(true);
+      });
+    },
+  );
+
   test("streams bounded history windows over SSE", async () => {
     const { storePath } = await seedSession({ text: "first message" });
 
@@ -761,7 +788,7 @@ describe("session history HTTP endpoints", () => {
       expect(nextData.messages?.[0]?.content?.[0]?.text).toBe("third message");
       expectOpenClawMetadata(nextData.messages?.[0]?.["__openclaw"], {
         id: thirdMessageId,
-        seq: 4,
+        seq: 3,
       });
 
       await stream.reader.cancel();
@@ -787,7 +814,7 @@ describe("session history HTTP endpoints", () => {
         messages?: Array<{ content?: Array<{ text?: string }>; __openclaw?: { seq?: number } }>;
       };
       expect(refreshData.messages?.[0]?.content?.[0]?.text).toBe("second message");
-      expect(refreshData.messages?.[0]?.["__openclaw"]?.seq).toBe(3);
+      expect(refreshData.messages?.[0]?.["__openclaw"]?.seq).toBe(2);
 
       await stream.reader.cancel();
     });
@@ -851,7 +878,7 @@ describe("session history HTTP endpoints", () => {
       expect(body.messages?.[0]?.content?.[0]?.text).toBe("Done.");
       expectOpenClawMetadata(body.messages?.[0]?.["__openclaw"], {
         id: visibleMessageId,
-        seq: 3,
+        seq: 2,
       });
     });
   });
@@ -867,10 +894,120 @@ describe("session history HTTP endpoints", () => {
       });
       await expectMessageEventMatch(stream, {
         text: "second message",
-        seq: 3,
+        seq: 2,
         id: appendedId,
       });
     });
+  });
+
+  test("bounds retained SSE history without truncating full history or live updates", async () => {
+    const retainedMessageLimit = 1_000;
+    const initialMessageCount = retainedMessageLimit + 2;
+    const sessionKey = "agent:main:main";
+    const { storePath } = await seedSession();
+    await replaceTranscriptEvents(
+      {
+        agentId: AGENT_ID,
+        sessionId: "sess-main",
+        sessionKey,
+        storePath,
+      },
+      [
+        { type: "session", version: 1, id: "sess-main" },
+        ...Array.from({ length: initialMessageCount }, (_, index) => ({
+          id: `history-message-${index + 1}`,
+          parentId: index === 0 ? null : `history-message-${index}`,
+          message: makeTranscriptAssistantMessage({ text: `history message ${index + 1}` }),
+        })),
+      ],
+    );
+
+    const snapshotSpy = vi.spyOn(SessionHistorySseState.prototype, "snapshot");
+    try {
+      await withGatewayHarness(async (harness) => {
+        const stream = await openSessionHistorySse(harness.port, sessionKey);
+        try {
+          const initialEvent = await readSseEvent(stream.reader, stream.streamState);
+          expect(initialEvent.event).toBe("history");
+          const initialMessages = (initialEvent.data as SessionHistoryBody).messages ?? [];
+          expect(initialMessages).toHaveLength(initialMessageCount);
+          expect(initialMessages[0]?.content?.[0]?.text).toBe("history message 1");
+
+          const retained = snapshotSpy.mock.results.at(-1)?.value as
+            | { messages?: SessionHistoryMessage[] }
+            | undefined;
+          expect(retained?.messages).toHaveLength(retainedMessageLimit);
+          expect(retained?.messages?.[0]?.content?.[0]?.text).toBe("history message 3");
+
+          const cursorStream = await openSessionHistorySse(harness.port, sessionKey, {
+            query: `?cursor=${initialMessageCount + 1}`,
+          });
+          try {
+            const cursorEvent = await readSseEvent(cursorStream.reader, cursorStream.streamState);
+            expect(cursorEvent.event).toBe("history");
+            expect((cursorEvent.data as SessionHistoryBody).messages).toHaveLength(
+              initialMessageCount,
+            );
+            const cursorSnapshot = snapshotSpy.mock.results.at(-1)?.value as
+              | { messages?: SessionHistoryMessage[] }
+              | undefined;
+            expect(cursorSnapshot?.messages).toHaveLength(retainedMessageLimit);
+            expect(cursorSnapshot?.messages?.[0]?.content?.[0]?.text).toBe("history message 3");
+
+            const messageId = await appendVisibleAssistantMessage({
+              sessionKey,
+              text: "live history message",
+              storePath,
+            });
+            const lastSequence = initialMessages.at(-1)?.["__openclaw"]?.seq;
+            expect(lastSequence).toEqual(expect.any(Number));
+            await expectMessageEventMatch(stream, {
+              text: "live history message",
+              seq: (lastSequence ?? 0) + 1,
+              id: messageId,
+            });
+
+            const liveRetained = snapshotSpy.mock.results.findLast((result) => {
+              const snapshot = result.value as { messages?: SessionHistoryMessage[] } | undefined;
+              return snapshot?.messages?.at(-1)?.content?.[0]?.text === "live history message";
+            })?.value as { messages?: SessionHistoryMessage[] } | undefined;
+            expect(liveRetained?.messages).toHaveLength(retainedMessageLimit);
+            expect(liveRetained?.messages?.at(-1)?.content?.[0]?.text).toBe("live history message");
+
+            const refreshedCursorEvent = await readSseEvent(
+              cursorStream.reader,
+              cursorStream.streamState,
+            );
+            expect(refreshedCursorEvent.event).toBe("history");
+            const refreshedCursorMessages =
+              (refreshedCursorEvent.data as SessionHistoryBody).messages ?? [];
+            expect(refreshedCursorMessages).toHaveLength(initialMessageCount);
+            expect(refreshedCursorMessages[0]?.content?.[0]?.text).toBe("history message 1");
+
+            const refreshedCursorSnapshot = snapshotSpy.mock.results.at(-1)?.value as
+              | { messages?: SessionHistoryMessage[] }
+              | undefined;
+            expect(refreshedCursorSnapshot?.messages).toHaveLength(retainedMessageLimit);
+
+            const completeHistory = await vi.waitFor(
+              async () => await readSessionHistoryBody(harness.port, sessionKey),
+              { interval: 25, timeout: 5_000 },
+            );
+            expect(completeHistory.messages).toHaveLength(initialMessageCount + 1);
+            expect(completeHistory.messages?.[0]?.content?.[0]?.text).toBe("history message 1");
+            expect(completeHistory.messages?.at(-1)?.content?.[0]?.text).toBe(
+              "live history message",
+            );
+          } finally {
+            await cursorStream.reader.cancel();
+          }
+        } finally {
+          await stream.reader.cancel();
+        }
+      });
+    } finally {
+      snapshotSpy.mockRestore();
+    }
   });
 
   test("streams identity-only transcript updates over SSE", async () => {
@@ -937,8 +1074,12 @@ describe("session history HTTP endpoints", () => {
       await expectHistoryEventTexts(stream, ["first message", "second message"]);
 
       emitSessionTranscriptUpdate({
-        sessionFile: `sqlite:main:sess-main:${storePath}`,
-        sessionKey: "agent:main:main",
+        target: {
+          agentId: AGENT_ID,
+          sessionId: "sess-main",
+          sessionKey: "agent:main:main",
+          storePath,
+        },
         message: makeTranscriptAssistantMessage({ text: "rewound branch message" }),
         messageId: "msg-rewound",
         messageSeq: 1,
@@ -968,7 +1109,7 @@ describe("session history HTTP endpoints", () => {
 
       await expectMessageEventMatch(stream, {
         text: "third visible message",
-        seq: 4,
+        seq: 3,
       });
     });
   });
@@ -991,7 +1132,7 @@ describe("session history HTTP endpoints", () => {
       });
       await expectMessageEventMatch(stream, {
         text: "third visible message",
-        seq: 4,
+        seq: 3,
         id: visibleId,
       });
     });
@@ -1009,7 +1150,7 @@ describe("session history HTTP endpoints", () => {
 
       await expectMessageEventMatch(stream, {
         text: "second visible message",
-        seq: 3,
+        seq: 2,
       });
       await appendTranscriptMessage({
         sessionKey: "agent:main:main",
@@ -1027,7 +1168,7 @@ describe("session history HTTP endpoints", () => {
       });
       await expectMessageEventMatch(stream, {
         text: "third visible message",
-        seq: 5,
+        seq: 4,
         id: thirdId,
       });
     });
@@ -1111,7 +1252,7 @@ describe("session history HTTP endpoints", () => {
 
       await expectMessageEventMatch(stream, {
         text: "bearer sse update",
-        seq: 3,
+        seq: 2,
         id: appendedId,
       });
 

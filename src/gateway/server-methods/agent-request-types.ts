@@ -44,6 +44,8 @@ export type AgentRunRequest = {
   idempotencyKey: string;
   sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
   disableMessageTool?: boolean;
+  swarmCollector?: boolean;
+  swarmOutputSchema?: Record<string, unknown>;
   forceRestartSafeTools?: boolean;
   timeout?: number;
   bestEffortDeliver?: boolean;

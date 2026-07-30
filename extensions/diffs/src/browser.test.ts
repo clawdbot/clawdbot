@@ -3,6 +3,11 @@ import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import type {
+  PluginBlobEntry,
+  PluginBlobEntryInfo,
+  PluginBlobStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -319,6 +324,7 @@ describe("diffs plugin registration", () => {
         },
       },
     } as OpenClawConfig;
+    const blobStore = createMemoryBlobStore();
 
     const api = createTestPluginApi({
       id: "diffs",
@@ -347,6 +353,7 @@ describe("diffs plugin registration", () => {
         config: {
           current: () => configFile,
         },
+        state: { openBlobStore: () => blobStore },
       } as never,
       registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {
         registeredToolFactory = typeof tool === "function" ? tool : () => tool;
@@ -445,6 +452,7 @@ describe("diffs plugin registration", () => {
         },
       },
     } as OpenClawConfig;
+    const blobStore = createMemoryBlobStore();
 
     const api = createTestPluginApi({
       id: "diffs",
@@ -475,6 +483,7 @@ describe("diffs plugin registration", () => {
         config: {
           current: () => configFile,
         },
+        state: { openBlobStore: () => blobStore },
       } as never,
       registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {
         registeredToolFactory = typeof tool === "function" ? tool : () => tool;
@@ -499,11 +508,15 @@ describe("diffs plugin registration", () => {
         "When you need to show edits as a real diff, prefer the `diffs` tool instead of writing a manual summary.",
         "It accepts either `before` + `after` text or a unified `patch`.",
         "Check `details.changed`: identical before/after input returns `false` without creating an artifact; rendered results return `true`.",
-        "`mode=view` returns `details.viewerUrl` for canvas use; `mode=file` returns `details.filePath`; `mode=both` returns both.",
-        "If you need to send the rendered file, use the `message` tool with `path` or `filePath`.",
+        "`mode=view` returns `details.viewerUrl` for interactive viewing; `mode=file` returns `details.filePath`; `mode=both` returns both.",
+        "To send the rendered file, use an available file-sending tool to send `details.filePath` as an attachment.",
         "Include `path` when you know the filename, and omit presentation overrides unless needed.",
       ].join("\n"),
     );
+    // This guidance is prepended unconditionally, so it must not name a tool owned by
+    // another toolset: `message` is absent whenever `disableMessageTool` is set, and
+    // `canvas` ships as a separate plugin.
+    expect(promptResult?.prependSystemContext).not.toMatch(/\bmessage\b|\bcanvas\b/i);
     expect(promptResult?.prependContext).toBeUndefined();
 
     const registeredTool = registeredToolFactory?.({
@@ -601,6 +614,7 @@ describe("diffs plugin registration", () => {
         },
       },
     } as OpenClawConfig;
+    const blobStore = createMemoryBlobStore();
 
     const api = createTestPluginApi({
       id: "diffs",
@@ -622,6 +636,7 @@ describe("diffs plugin registration", () => {
         config: {
           current: () => configFile,
         },
+        state: { openBlobStore: () => blobStore },
       } as never,
       registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {
         registeredToolFactory = typeof tool === "function" ? tool : () => tool;
@@ -671,6 +686,105 @@ describe("diffs plugin registration", () => {
     expect(proxiedRes.statusCode).toBe(404);
   });
 });
+
+function createMemoryBlobStore<TMetadata>(): PluginBlobStore<TMetadata> {
+  const entries = new Map<
+    string,
+    {
+      bytes: Uint8Array;
+      metadata: TMetadata;
+      createdAt: number;
+      expiresAt?: number;
+    }
+  >();
+  const read = (key: string): PluginBlobEntry<TMetadata> | undefined => {
+    const entry = entries.get(key);
+    if (!entry) {
+      return undefined;
+    }
+    if (entry.expiresAt !== undefined && entry.expiresAt <= Date.now()) {
+      entries.delete(key);
+      return undefined;
+    }
+    return {
+      key,
+      bytes: entry.bytes.slice(),
+      metadata: entry.metadata,
+      sizeBytes: entry.bytes.byteLength,
+      createdAt: entry.createdAt,
+      ...(entry.expiresAt !== undefined ? { expiresAt: entry.expiresAt } : {}),
+    };
+  };
+  const register: PluginBlobStore<TMetadata>["register"] = async (key, bytes, metadata, opts) => {
+    const createdAt = Date.now();
+    entries.set(key, {
+      bytes: bytes.slice(),
+      metadata,
+      createdAt,
+      ...(opts?.ttlMs ? { expiresAt: createdAt + opts.ttlMs } : {}),
+    });
+  };
+  return {
+    register,
+    async registerIfAbsent(key, bytes, metadata, opts) {
+      if (read(key)) {
+        return false;
+      }
+      await register(key, bytes, metadata, opts);
+      return true;
+    },
+    async lookup(key) {
+      return read(key);
+    },
+    async entries() {
+      return [...entries.keys()].flatMap((key) => {
+        const entry = read(key);
+        if (!entry) {
+          return [];
+        }
+        const { bytes: _bytes, ...info } = entry;
+        return [info];
+      });
+    },
+    async delete(key) {
+      return entries.delete(key);
+    },
+    async deleteExpiredKey(key) {
+      const entry = entries.get(key);
+      if (!entry || entry.expiresAt === undefined || entry.expiresAt > Date.now()) {
+        return undefined;
+      }
+      entries.delete(key);
+      return {
+        key,
+        metadata: entry.metadata,
+        sizeBytes: entry.bytes.byteLength,
+        createdAt: entry.createdAt,
+        expiresAt: entry.expiresAt,
+      };
+    },
+    async deleteExpired() {
+      const expired: PluginBlobEntryInfo<TMetadata>[] = [];
+      for (const [key, entry] of entries) {
+        if (entry.expiresAt === undefined || entry.expiresAt > Date.now()) {
+          continue;
+        }
+        entries.delete(key);
+        expired.push({
+          key,
+          metadata: entry.metadata,
+          sizeBytes: entry.bytes.byteLength,
+          createdAt: entry.createdAt,
+          expiresAt: entry.expiresAt,
+        });
+      }
+      return expired;
+    },
+    async clear() {
+      entries.clear();
+    },
+  };
+}
 
 function createConfig(): OpenClawConfig {
   return {

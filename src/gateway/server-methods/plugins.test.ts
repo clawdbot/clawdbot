@@ -68,7 +68,10 @@ async function callHandler(
     req: {} as never,
     client: null as never,
     isWebchatConnect: () => false,
-    context: { getRuntimeConfig: () => runtimeConfig } as never,
+    context: {
+      getRuntimeConfig: () => runtimeConfig,
+      notifyPluginMetadataChanged: pluginMetadataChanged,
+    } as never,
     respond: (success, result, requestError) => {
       ok = success;
       response = result;
@@ -77,6 +80,8 @@ async function callHandler(
   });
   return { ok, response, error };
 }
+
+const pluginMetadataChanged = vi.fn();
 
 const workboard = {
   id: "workboard",
@@ -90,11 +95,19 @@ const workboard = {
 
 describe("plugin management Gateway handlers", () => {
   beforeEach(() => {
+    pluginMetadataChanged.mockReset();
     managementMocks.install.mockReset();
     managementMocks.list.mockReset();
     managementMocks.setEnabled.mockReset();
     managementMocks.uninstall.mockReset();
     searchMock.mockReset();
+  });
+
+  it("signals the config reloader after persisted plugin metadata changes", async () => {
+    const result = await callHandler("plugins.refresh", {});
+
+    expect(pluginMetadataChanged).toHaveBeenCalledOnce();
+    expect(result).toEqual({ ok: true, response: { ok: true }, error: undefined });
   });
 
   it("returns cold Workboard inventory without claiming runtime loaded state", async () => {
@@ -215,7 +228,7 @@ describe("plugin management Gateway handlers", () => {
 
   it.each([
     { mode: "off", restartRequired: true },
-    { mode: "restart", restartRequired: true },
+    { mode: "restart", restartRequired: false },
     { mode: "hot", restartRequired: false },
   ] as const)(
     "reports restartRequired=$restartRequired for $mode reload mode",

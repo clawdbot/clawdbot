@@ -13,15 +13,15 @@ import {
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  hasInteractiveReplyBlocks,
+  hasLegacyInteractiveReplyBlocks,
   hasMessagePresentationBlocks,
   hasReplyChannelData,
   hasReplyPayloadContent,
-  normalizeInteractiveReply,
+  normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
   renderMessagePresentationChartFallbackText,
   renderMessagePresentationTableFallbackText,
-  type InteractiveReply,
+  type LegacyInteractiveReply,
   type MessagePresentation,
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
@@ -34,8 +34,9 @@ export type NormalizedOutboundPayload = {
   mediaUrls: string[];
   audioAsVoice?: boolean;
   presentation?: MessagePresentation;
+  presentationTextMode?: ReplyPayload["presentationTextMode"];
   delivery?: ReplyPayloadDelivery;
-  interactive?: InteractiveReply;
+  interactive?: LegacyInteractiveReply;
   channelData?: Record<string, unknown>;
   location?: ReplyPayload["location"];
   /** Hook-only content for audio-only TTS payloads. Never used as channel text/caption. */
@@ -49,8 +50,9 @@ export type OutboundPayloadJson = {
   mediaUrls?: string[];
   audioAsVoice?: boolean;
   presentation?: MessagePresentation;
+  presentationTextMode?: ReplyPayload["presentationTextMode"];
   delivery?: ReplyPayloadDelivery;
-  interactive?: InteractiveReply;
+  interactive?: LegacyInteractiveReply;
   channelData?: Record<string, unknown>;
   location?: ReplyPayload["location"];
 };
@@ -79,7 +81,9 @@ type OutboundPayloadMirror = {
   mediaUrls: string[];
 };
 
-type MirrorTextBlock = MessagePresentation["blocks"][number] | InteractiveReply["blocks"][number];
+type MirrorTextBlock =
+  | MessagePresentation["blocks"][number]
+  | LegacyInteractiveReply["blocks"][number];
 
 function collectBlockMirrorText(
   blocks: readonly MirrorTextBlock[],
@@ -136,7 +140,7 @@ function collectPresentationMirrorText(presentation: MessagePresentation | undef
   return lines;
 }
 
-function collectInteractiveMirrorText(interactive: InteractiveReply | undefined): string[] {
+function collectInteractiveMirrorText(interactive: LegacyInteractiveReply | undefined): string[] {
   if (!interactive) {
     return [];
   }
@@ -154,7 +158,7 @@ function resolveOutboundMirrorText(entry: OutboundPayloadPlan): string {
       : [];
     return [text, ...structuredDataText].join("\n");
   }
-  const interactive = normalizeInteractiveReply(entry.payload.interactive);
+  const interactive = normalizeLegacyInteractiveReply(entry.payload.interactive);
   return [
     ...collectPresentationMirrorText(presentation),
     ...collectInteractiveMirrorText(interactive),
@@ -269,7 +273,7 @@ function createOutboundPayloadPlanEntry(
   return {
     payload: normalizedPayload,
     hasPresentation: hasMessagePresentationBlocks(normalizedPayload.presentation),
-    hasInteractive: hasInteractiveReplyBlocks(normalizedPayload.interactive),
+    hasInteractive: hasLegacyInteractiveReplyBlocks(normalizedPayload.interactive),
     hasChannelData,
     isSilent,
   };
@@ -341,6 +345,9 @@ export function projectOutboundPayloadPlanForOutbound(
       mediaUrls: entry.parts.mediaUrls,
       audioAsVoice: payload.audioAsVoice === true ? true : undefined,
       ...(entry.hasPresentation ? { presentation: payload.presentation } : {}),
+      ...(entry.hasPresentation && payload.presentationTextMode
+        ? { presentationTextMode: payload.presentationTextMode }
+        : {}),
       ...(payload.delivery ? { delivery: payload.delivery } : {}),
       ...(entry.hasInteractive ? { interactive: payload.interactive } : {}),
       ...(entry.hasChannelData ? { channelData: payload.channelData } : {}),
@@ -363,6 +370,9 @@ export function projectOutboundPayloadPlanForJson(
       mediaUrls: entry.parts.mediaUrls.length ? entry.parts.mediaUrls : undefined,
       audioAsVoice: payload.audioAsVoice === true ? true : undefined,
       presentation: payload.presentation,
+      ...(payload.presentationTextMode
+        ? { presentationTextMode: payload.presentationTextMode }
+        : {}),
       delivery: payload.delivery,
       interactive: payload.interactive,
       channelData: payload.channelData,
@@ -401,6 +411,7 @@ export function summarizeOutboundPayloadForTransport(
     mediaUrls: parts.mediaUrls,
     audioAsVoice: payload.audioAsVoice === true ? true : undefined,
     presentation: payload.presentation,
+    ...(payload.presentationTextMode ? { presentationTextMode: payload.presentationTextMode } : {}),
     delivery: payload.delivery,
     interactive: payload.interactive,
     channelData: payload.channelData,

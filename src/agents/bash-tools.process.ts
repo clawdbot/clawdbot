@@ -20,6 +20,7 @@ import {
   setJobTtlMs,
 } from "./bash-process-registry.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
+import { appendExecTimeoutRetryGuidance } from "./bash-tools.exec-output.js";
 import {
   handleProcessSendKeys,
   type WritableStdin,
@@ -394,16 +395,18 @@ export function createProcessTool(
                 content: [
                   {
                     type: "text",
-                    text:
+                    text: appendExecTimeoutRetryGuidance(
                       (scopedFinished.tail ||
                         `(no output recorded${
                           scopedFinished.truncated ? " — truncated to cap" : ""
                         })`) +
-                      `\n\nProcess exited with ${
-                        scopedFinished.exitSignal
-                          ? `signal ${scopedFinished.exitSignal}`
-                          : `code ${scopedFinished.exitCode ?? 0}`
-                      }.`,
+                        `\n\nProcess exited with ${
+                          scopedFinished.exitSignal
+                            ? `signal ${scopedFinished.exitSignal}`
+                            : `code ${scopedFinished.exitCode ?? 0}`
+                        }.`,
+                      scopedFinished.exitReason,
+                    ),
                   },
                 ],
                 details: {
@@ -475,13 +478,15 @@ export function createProcessTool(
             content: [
               {
                 type: "text",
-                text:
+                text: appendExecTimeoutRetryGuidance(
                   (output || "(no new output)") +
-                  (exited
-                    ? `\n\nProcess exited with ${
-                        exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`
-                      }.`
-                    : buildInputWaitHint(runtime) || "\n\nProcess still running."),
+                    (exited
+                      ? `\n\nProcess exited with ${
+                          exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`
+                        }.`
+                      : buildInputWaitHint(runtime) || "\n\nProcess still running."),
+                  exited ? scopedSession.exitReason : undefined,
+                ),
               },
             ],
             details: {
@@ -599,7 +604,7 @@ export function createProcessTool(
           }
           return runningSessionResult(
             resolved.session,
-            `Wrote ${(params.data ?? "").length} bytes to session ${params.sessionId}${
+            `Wrote ${Buffer.byteLength(params.data ?? "", "utf8")} bytes to session ${params.sessionId}${
               params.eof ? " (stdin closed)" : ""
             }.`,
           );

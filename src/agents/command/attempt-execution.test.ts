@@ -8,13 +8,15 @@ import { cliBackendLog } from "../cli-runner/log.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
-  claudeCliSessionTranscriptPath,
   claudeCliSessionTranscriptHasOrphanedToolUse,
   createAcpVisibleTextAccumulator,
-  formatClaudeCliFallbackPrelude,
   resolveFallbackRetryPrompt,
   sessionFileHasContent,
 } from "./attempt-execution.helpers.js";
+import {
+  claudeCliSessionTranscriptPath,
+  formatClaudeCliFallbackPrelude,
+} from "./attempt-execution.helpers.test-support.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
 describe("resolveFallbackRetryPrompt", () => {

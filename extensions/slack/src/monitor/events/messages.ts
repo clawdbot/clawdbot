@@ -16,6 +16,7 @@ import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
 import { normalizeSlackChannelType } from "../channel-type.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackEventScope, type SlackEventScope } from "../event-scope.js";
+import { resolveSlackIngressTurnLifecycle } from "../ingress.js";
 import type { SlackMessageHandler } from "../message-handler.js";
 import type { SlackMessageChangedEvent } from "../types.js";
 import { resolveSlackMessageSubtypeHandler } from "./message-subtype-handlers.js";
@@ -56,6 +57,32 @@ function isSlackUserId(value: string): boolean {
 
 function isBotAuthoredEnterpriseEvent(event: { bot_id?: unknown; subtype?: unknown }): boolean {
   return Boolean(asString(event.bot_id)) || event.subtype === "bot_message";
+}
+
+async function resolveSlackAppMentionChannelType(params: {
+  ctx: SlackMonitorContext;
+  eventScope?: SlackEventScope;
+  mention: SlackAppMentionEvent;
+}): Promise<SlackMessageEvent["channel_type"] | undefined> {
+  const explicitType = asString(params.mention.channel_type);
+  if (explicitType) {
+    return normalizeSlackChannelType(explicitType, params.mention.channel);
+  }
+  const rememberedType = params.ctx.recallSlackChannelType(
+    params.mention.channel,
+    params.eventScope,
+  );
+  if (rememberedType) {
+    return normalizeSlackChannelType(rememberedType, params.mention.channel);
+  }
+  // app_mention omits channel_type, and Slack ID prefixes are not a type contract.
+  // Only an authoritative event/cache/API type may choose this event's owner.
+  const resolved = await params.ctx
+    .resolveChannelName(params.mention.channel, params.eventScope)
+    .catch(() => ({ type: undefined }));
+  return resolved.type
+    ? normalizeSlackChannelType(resolved.type, params.mention.channel)
+    : undefined;
 }
 
 function addUserCandidate(candidates: Set<string>, value: unknown, botUserId: string): void {
@@ -196,6 +223,7 @@ export function registerSlackMessageEvents(params: {
     context: AllMiddlewareArgs["context"];
     client: AllMiddlewareArgs["client"];
   }) => {
+    const turnAdoptionLifecycle = resolveSlackIngressTurnLifecycle(context);
     try {
       const eventScope = resolveEventScope({ body, context, client });
       if (eventScope === null) {
@@ -224,7 +252,9 @@ export function registerSlackMessageEvents(params: {
       if (assistantChangedInbound) {
         await handleSlackMessage(assistantChangedInbound, {
           source: "message",
-          ...(eventScope ? { eventScope, awaitDispatch: true } : {}),
+          ...(eventScope ? { eventScope } : {}),
+          ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
+          ...(eventScope || turnAdoptionLifecycle ? { awaitDispatch: true } : {}),
         });
         return;
       }
@@ -264,9 +294,14 @@ export function registerSlackMessageEvents(params: {
 
       await handleSlackMessage(message, {
         source: "message",
-        ...(eventScope ? { eventScope, awaitDispatch: true } : {}),
+        ...(eventScope ? { eventScope } : {}),
+        ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
+        ...(eventScope || turnAdoptionLifecycle ? { awaitDispatch: true } : {}),
       });
     } catch (err) {
+      if (turnAdoptionLifecycle) {
+        throw err;
+      }
       ctx.runtime.error?.(danger(`slack handler failed: ${formatErrorMessage(err)}`));
     }
   };
@@ -288,6 +323,7 @@ export function registerSlackMessageEvents(params: {
     "app_mention",
     async (args: SlackEventMiddlewareArgs<"app_mention"> & AllMiddlewareArgs) => {
       const { event, body, context, client } = args;
+      const turnAdoptionLifecycle = resolveSlackIngressTurnLifecycle(context);
       try {
         const eventScope = resolveEventScope({ body, context, client });
         if (eventScope === null) {
@@ -303,9 +339,21 @@ export function registerSlackMessageEvents(params: {
           return;
         }
 
-        // Skip app_mention for DMs - they're already handled by message.im event
-        // This prevents duplicate processing when both message and app_mention fire for DMs
-        const channelType = normalizeSlackChannelType(mention.channel_type, mention.channel);
+        // DM and MPIM messages are owned by message.im/message.mpim. Resolve the
+        // omitted type before this guard so event ordering cannot change ownership.
+        const channelType = await resolveSlackAppMentionChannelType({
+          ctx,
+          mention,
+          ...(eventScope ? { eventScope } : {}),
+        });
+        if (!channelType) {
+          // OpenClaw manifests pair app_mention with message.channels/groups/im/mpim.
+          // Never guess here: the canonical message event still owns delivery.
+          logVerbose(
+            `slack: drop typeless app_mention channel=${mention.channel} (conversation type unresolved; waiting for message event)`,
+          );
+          return;
+        }
         if (channelType === "im" || channelType === "mpim") {
           return;
         }
@@ -328,9 +376,14 @@ export function registerSlackMessageEvents(params: {
         await handleSlackMessage(mention as unknown as SlackMessageEvent, {
           source: "app_mention",
           wasMentioned: true,
-          ...(eventScope ? { eventScope, awaitDispatch: true } : {}),
+          ...(eventScope ? { eventScope } : {}),
+          ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
+          ...(eventScope || turnAdoptionLifecycle ? { awaitDispatch: true } : {}),
         });
       } catch (err) {
+        if (turnAdoptionLifecycle) {
+          throw err;
+        }
         ctx.runtime.error?.(danger(`slack mention handler failed: ${formatErrorMessage(err)}`));
       }
     },

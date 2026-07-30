@@ -11,11 +11,7 @@ import { definePluginEntry, type AnyAgentTool } from "openclaw/plugin-sdk/plugin
 import { validateSupportedA2UIJsonl } from "./src/a2ui-jsonl.js";
 import { canvasConfigSchema, isCanvasHostEnabled } from "./src/config.js";
 import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "./src/host/a2ui-shared.js";
-import {
-  CanvasToolSchema,
-  SHOW_WIDGET_REQUIRED_CLIENT_CAPS,
-  ShowWidgetToolSchema,
-} from "./src/tool-schema.js";
+import { CanvasToolSchema } from "./src/tool-schema.js";
 
 const CANVAS_NODE_COMMANDS = [
   "canvas.present",
@@ -48,26 +44,6 @@ function createLazyCanvasTool(params: {
     description:
       "Control node canvases (present/hide/navigate/eval/snapshot/A2UI). Use snapshot to capture the rendered UI.",
     parameters: CanvasToolSchema,
-    execute: async (...args: Parameters<AnyAgentTool["execute"]>) =>
-      await (await loadTool()).execute(...args),
-  };
-}
-
-function createLazyShowWidgetTool(params: {
-  config?: OpenClawConfig;
-  sessionId?: string;
-  agentId?: string;
-}): AnyAgentTool {
-  const loadTool = createLazyRuntimeModule(() =>
-    import("./src/widget-tool.js").then(({ createShowWidgetTool }) => createShowWidgetTool(params)),
-  );
-  return {
-    label: "Show Widget",
-    name: "show_widget",
-    description:
-      "Render self-contained SVG or HTML inline in web chat. Use for visual or interactive results; external resources are blocked, so inline all required code and data.",
-    parameters: ShowWidgetToolSchema,
-    requiredClientCaps: SHOW_WIDGET_REQUIRED_CLIENT_CAPS,
     execute: async (...args: Parameters<AnyAgentTool["execute"]>) =>
       await (await loadTool()).execute(...args),
   };
@@ -134,14 +110,6 @@ export default definePluginEntry({
           await httpRouteHandler?.close();
         },
       });
-      const loadResolveCanvasHttpPathToLocalPath = createLazyRuntimeModule(() =>
-        import("./src/documents.js").then(
-          ({ resolveCanvasHttpPathToLocalPath }) => resolveCanvasHttpPathToLocalPath,
-        ),
-      );
-      api.registerHostedMediaResolver(async (mediaUrl) => {
-        return (await loadResolveCanvasHttpPathToLocalPath())(mediaUrl);
-      });
     }
     api.registerNodeInvokePolicy({
       commands: CANVAS_NODE_COMMANDS,
@@ -180,17 +148,6 @@ export default definePluginEntry({
         workspaceDir: ctx.workspaceDir,
         agentSessionKey: ctx.sessionKey,
       }),
-    );
-    api.registerTool(
-      (ctx) =>
-        isCanvasHostEnabled(ctx.runtimeConfig ?? ctx.config)
-          ? createLazyShowWidgetTool({
-              config: ctx.runtimeConfig ?? ctx.config,
-              sessionId: ctx.sessionId,
-              agentId: ctx.agentId,
-            })
-          : null,
-      { name: "show_widget" },
     );
     api.registerNodeCliFeature(
       async ({ program }) => {

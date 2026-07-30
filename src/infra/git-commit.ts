@@ -4,7 +4,9 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { readFileWindowFullySync } from "./file-read.js";
 import { resolveGitHeadPath } from "./git-root.js";
+import { pruneMapToMaxSize } from "./map-size.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 
 const formatCommit = (value?: string | null) => {
@@ -23,6 +25,7 @@ const formatCommit = (value?: string | null) => {
 };
 
 const cachedGitCommitBySearchDir = new Map<string, string | null>();
+const GIT_COMMIT_CACHE_LIMIT = 256;
 
 type CommitMetadataReaders = {
   readGitCommit?: (searchDir: string, packageRoot: string | null) => string | null | undefined;
@@ -57,7 +60,7 @@ const safeReadFilePrefix = (filePath: string, limit = 256) => {
   const fd = fs.openSync(filePath, "r");
   try {
     const buf = Buffer.alloc(limit);
-    const bytesRead = fs.readSync(fd, buf, 0, limit, 0);
+    const bytesRead = readFileWindowFullySync(fd, buf, 0);
     return buf.subarray(0, bytesRead).toString("utf-8");
   } finally {
     fs.closeSync(fd);
@@ -66,6 +69,7 @@ const safeReadFilePrefix = (filePath: string, limit = 256) => {
 
 const cacheGitCommit = (searchDir: string, commit: string | null) => {
   cachedGitCommitBySearchDir.set(searchDir, commit);
+  pruneMapToMaxSize(cachedGitCommitBySearchDir, GIT_COMMIT_CACHE_LIMIT);
   return commit;
 };
 const resolveGitLookupDepth = (searchDir: string, packageRoot: string | null) => {
@@ -224,7 +228,12 @@ export const resolveCommitHash = (
   }
   const searchDir = resolveCommitSearchDir(options);
   if (cachedGitCommitBySearchDir.has(searchDir)) {
-    return cachedGitCommitBySearchDir.get(searchDir) ?? null;
+    const cached = cachedGitCommitBySearchDir.get(searchDir) ?? null;
+    // Git discovery reads multiple files; keep active directories ahead of cold entries when
+    // the shared insertion-order pruning helper enforces the bound.
+    cachedGitCommitBySearchDir.delete(searchDir);
+    cachedGitCommitBySearchDir.set(searchDir, cached);
+    return cached;
   }
   const packageRoot = resolveOpenClawPackageRootSync({
     cwd: options.cwd,

@@ -3,6 +3,42 @@
 /** HTTP path for the Control UI bootstrap config payload. */
 export const CONTROL_UI_BOOTSTRAP_CONFIG_PATH = "/control-ui-config.json";
 
+/** Authenticated same-origin prefix for plugin manifest/catalog icon bytes. */
+export const CONTROL_UI_PLUGIN_ICON_PATH_PREFIX = "/__openclaw__/plugin-icon";
+
+/** Authenticated same-origin prefix for allowlisted catalog icon bytes. */
+export const CONTROL_UI_CATALOG_ICON_PATH_PREFIX = "/__openclaw__/catalog-icon";
+
+/** Lifetime shared by server-minted plugin-tab grants and parent-side renewal. */
+export const CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS = 5 * 60 * 1000;
+
+/** Targeted pushed PR snapshot event for subscribed Control UI connections. */
+export const CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT =
+  "controlUi.sessionPullRequests.changed";
+
+/** Maximum session keys retained by one Control UI PR subscription. */
+export const CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS = 200;
+
+/** Reserved query key for the sandbox cookie capability probe. */
+export const CONTROL_UI_PLUGIN_AUTH_PROBE_QUERY = "__openclaw_plugin_frame_auth_probe";
+
+/** Exact parent origin that may receive the successful probe message. */
+export const CONTROL_UI_PLUGIN_AUTH_PROBE_ORIGIN_QUERY = "__openclaw_plugin_frame_auth_origin";
+
+/** Message emitted only by a successful sandbox cookie capability probe. */
+export const CONTROL_UI_PLUGIN_AUTH_PROBE_MESSAGE = "openclaw-plugin-frame-auth-probe";
+
+/** Extracts the same-origin route pathname from a tab descriptor URL. */
+export function resolveControlUiPluginTabPathname(path: string): string | undefined {
+  try {
+    const baseUrl = new URL("http://openclaw.invalid");
+    const tabUrl = new URL(path, baseUrl);
+    return tabUrl.origin === baseUrl.origin ? tabUrl.pathname : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Carries the gateway-configured Control UI mount path into browser bootstrap. */
 export const CONTROL_UI_BASE_PATH_ATTRIBUTE = "data-openclaw-control-ui-base-path";
 
@@ -11,6 +47,13 @@ export const CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE = "data-openclaw-terminal-ena
 
 /** Sandbox policy for assistant-provided embed surfaces inside Control UI. */
 export type ControlUiEmbedSandboxMode = "strict" | "scripts" | "trusted";
+
+/** Route grant successfully issued during authenticated Control UI bootstrap. */
+export type ControlUiPluginFrameGrantAck = {
+  pluginId: string;
+  path: string;
+  match: "exact" | "prefix";
+};
 
 /** Public GitHub metadata rendered by Control UI link hover cards. */
 export type ControlUiGitHubPreview = {
@@ -93,6 +136,16 @@ export type ControlUiSessionPullRequests = {
   rateLimited: boolean;
 };
 
+/** Per-session pushed state; unavailable snapshots preserve prior UI state. */
+export type ControlUiSessionPullRequestSnapshot = ControlUiSessionPullRequests & {
+  status: "ready" | "rate-limited" | "unavailable";
+};
+
+/** Targeted delta event for sessions watched by one Control UI connection. */
+export type ControlUiSessionPullRequestsChanged = {
+  sessions: Record<string, ControlUiSessionPullRequestSnapshot>;
+};
+
 /** Runtime config consumed by the browser Control UI during bootstrap. */
 export type ControlUiBootstrapConfig = {
   basePath: string;
@@ -101,7 +154,7 @@ export type ControlUiBootstrapConfig = {
   assistantAvatarSource?: string | null;
   assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   assistantAvatarReason?: string | null;
-  assistantAgentId: string;
+  assistantAgentId?: string;
   serverVersion?: string;
   /**
    * Git branch of a source-checkout (non-release) gateway install. Omitted for
@@ -112,14 +165,12 @@ export type ControlUiBootstrapConfig = {
   localMediaPreviewRoots?: string[];
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
-  chatMessageMaxWidth?: string;
   seamColor?: string;
-  /** Resolved `agents.defaults.timeFormat`; "auto" keeps the browser locale default. */
-  timeFormat?: "auto" | "12" | "24";
   /**
    * Whether the operator terminal surface is enabled (`gateway.terminal.enabled`).
    * The Control UI hides the terminal entirely when false so a disabled kill
    * switch removes the surface rather than showing a button that errors on open.
    */
   terminalEnabled?: boolean;
+  pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
 };

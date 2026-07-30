@@ -1,3 +1,4 @@
+import type { SessionToolOverrides } from "../config/sessions/types.js";
 /**
  * Shared types for projecting bundle MCP config into Codex app-server threads.
  */
@@ -24,4 +25,5 @@ export type LoadCodexBundleMcpThreadConfigParams = {
   toolsEnabled?: boolean;
   disableTools?: boolean;
   toolsAllow?: string[];
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 };

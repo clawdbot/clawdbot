@@ -91,6 +91,9 @@ describe("scripts/test-live-shard", () => {
     expect(selectLiveShardFiles("native-live-src-agents", allFiles)).toContain(
       "src/skills/workshop/experience-review.live.test.ts",
     );
+    expect(selectLiveShardFiles("native-live-src-agents", allFiles)).toContain(
+      "src/agents/zai.live.test.ts",
+    );
     expect(selectLiveShardFiles("native-live-src-agents-zai-coding", allFiles)).toEqual([
       "src/agents/zai.live.test.ts",
     ]);
@@ -105,6 +108,7 @@ describe("scripts/test-live-shard", () => {
       "src/gateway/gateway-acp-spawn-defaults.live.test.ts",
       "src/gateway/gateway-trajectory-export.live.test.ts",
       "src/system-agent/rescue-channel.live.test.ts",
+      "src/system-agent/setup-app-recommendations.live.test.ts",
     ]);
     expect(selectLiveShardFiles("native-live-src-infra", allFiles)).toEqual([
       "src/infra/push-apns-http2.live.test.ts",
@@ -112,6 +116,7 @@ describe("scripts/test-live-shard", () => {
     expect(selectLiveShardFiles("native-live-test", allFiles)).toEqual([
       "test/image-generation.infer-cli.live.test.ts",
       "test/image-generation.runtime.live.test.ts",
+      "test/openai-onboarding.live.test.ts",
     ]);
     expect(selectLiveShardFiles("native-live-extensions-media", allFiles)).toEqual([
       "extensions/minimax/minimax.live.test.ts",
@@ -124,6 +129,8 @@ describe("scripts/test-live-shard", () => {
     expect(selectLiveShardFiles("native-live-extensions-openai", allFiles)).toEqual([
       "extensions/openai/openai-provider.live.test.ts",
       "extensions/openai/openai.live.test.ts",
+      "extensions/openai/realtime-quicksilver-gateway-bridge.live.test.ts",
+      "extensions/openai/realtime-quicksilver.live.test.ts",
     ]);
     expect(selectLiveShardFiles("native-live-extensions-l-n", allFiles)).toEqual([
       "extensions/memory-lancedb/memory-lancedb.live.test.ts",
@@ -549,12 +556,12 @@ function writeFakePnpm(filePath: string): void {
       '  "-e",',
       "  \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\",",
       "], { stdio: 'ignore' });",
-      "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH, String(child.pid));",
-      "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_PID_PATH, String(process.pid));",
       'process.on("SIGTERM", () => {',
       '  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_SIGNALED_PATH, "SIGTERM");',
       "  process.exit(0);",
       "});",
+      "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH, String(child.pid));",
+      "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_PID_PATH, String(process.pid));",
       "setInterval(() => {}, 1000);",
       "",
     ].join("\n"),
@@ -568,7 +575,7 @@ async function waitFor(condition: () => boolean, timeoutMs: number): Promise<voi
     if (Date.now() - startedAt > timeoutMs) {
       throw new Error("timed out waiting for condition");
     }
-    await delay(25);
+    await delay(5);
   }
 }
 
@@ -580,7 +587,7 @@ async function waitForClose(
     new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
       child.once("close", (code, signal) => resolve({ code, signal }));
     }),
-    delay(timeoutMs).then(() => {
+    delay(timeoutMs, undefined, { ref: false }).then(() => {
       throw new Error("timed out waiting for child close");
     }),
   ]);

@@ -280,8 +280,14 @@ function findRecentStartedMediaGenerationTaskForSession(params: {
 }
 
 /** Clears in-memory duplicate guards between tests. */
-export function resetRecentMediaGenerationDuplicateGuardsForTests() {
+function resetRecentMediaGenerationDuplicateGuardsForTests() {
   recentMediaGenerationTaskStarts.clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.mediaGenerationDuplicateGuardTestApi")
+  ] = { resetRecentMediaGenerationDuplicateGuardsForTests };
 }
 
 /** Extracts a provider id from a media task source id with the given prefix. */

@@ -852,6 +852,12 @@ describe("stripMinimaxToolCallXml", () => {
 });
 
 describe("sanitizeAssistantVisibleText", () => {
+  it("does not preserve reasoning inside unequal backtick runs", () => {
+    expect(sanitizeAssistantVisibleText("before ```<think>private</think>`` after")).toBe(
+      "before ````` after",
+    );
+  });
+
   it("strips minimax, tool XML, downgraded tool markers, and think tags in one pass", () => {
     const input = [
       '<invoke name="read">payload</invoke></minimax:tool_call>',
@@ -900,6 +906,10 @@ describe("sanitizeAssistantVisibleText", () => {
       "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
       "⚠️ 🛠️ gh search issues --repo openclaw/openclaw --state open --no-search-pages.jsonl /tmp/openclaw_open_unlabeled_current.json (agent) failed",
       "⚠️ 🛠️ gh search issues --repo openclaw/openclaw --state open (agent) failed: command timed out",
+      "⚠️ 🛠️ Exec failed: `python3 /path/to/daily-cost-audit.py` (exit 1)",
+      "⚠️ 🛠️ Bash failed: `git status` (workspace) (exit 1)",
+      "⚠️ 🛠️ Exec failed (exit 1)",
+      "⚠️ 🛠️ Bash failed",
       "🛠️ run git status",
       "Visible outro.",
     ].join("\n");
@@ -907,10 +917,20 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe("Visible intro.\nVisible outro.");
   });
 
+  it("preserves assistant warnings that are not internal trace formats", () => {
+    const input = [
+      "⚠️ 🛠️ The deployment failed",
+      "⚠️ 🛠️ Exec failed to start, so I used the fallback",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
   it("preserves internal tool trace examples inside fenced code", () => {
     const input = [
       "Example:",
       "```",
+      "⚠️ 🛠️ Exec failed: `python3 /path/to/daily-cost-audit.py` (exit 1)",
       "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
       "```",
     ].join("\n");

@@ -243,9 +243,8 @@ extension View {
 /// can assert copy and symbols without instantiating views.
 enum PairingCardPresentation {
     struct AccessRow: Identifiable, Equatable {
-        /// Derived from the raw grant, not display text: distinct grants can
-        /// render identically (e.g. caps `voice`/`audio`) and colliding ids
-        /// would let SwiftUI drop rows from the approval surface.
+        /// Single grants use their raw value; intentional grouped grants use a
+        /// dedicated group id so SwiftUI never drops a rendered access row.
         let id: String
         let symbol: String
         let text: String
@@ -358,7 +357,7 @@ enum PairingCardPresentation {
                     isElevated: true))
             }
             rows.append(contentsOf: self.friendlyCapNames(card.caps).map {
-                AccessRow(id: "cap:\($0.raw)", symbol: $0.symbol, text: $0.text, isElevated: false)
+                AccessRow(id: $0.id, symbol: $0.symbol, text: $0.text, isElevated: false)
             })
             // Approval persists the whole declared command surface; list the
             // remaining commands so none of it is granted invisibly.
@@ -526,28 +525,57 @@ enum PairingCardPresentation {
         }
     }
 
-    static func friendlyCapNames(_ caps: [String]) -> [(raw: String, symbol: String, text: String)] {
+    private static let sessionProviderByCapability = [
+        "codex-app-server-threads": "Codex",
+        "codex-cli-sessions": "Codex",
+        "claude-sessions": "Claude",
+        "opencode-sessions": "OpenCode",
+        "pi-sessions": "Pi",
+    ]
+
+    static func friendlyCapNames(_ caps: [String]) -> [(id: String, symbol: String, text: String)] {
         var seen = Set<String>()
-        return caps.compactMap { cap in
+        let normalizedCaps = caps.compactMap { cap -> String? in
             let normalized = cap.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             guard !normalized.isEmpty, seen.insert(normalized).inserted else {
                 return nil
             }
+            return normalized
+        }
+
+        var seenSessionProviders = Set<String>()
+        let sessionProviders = normalizedCaps.compactMap { capability -> String? in
+            guard let provider = self.sessionProviderByCapability[capability],
+                  seenSessionProviders.insert(provider).inserted
+            else { return nil }
+            return provider
+        }
+        var renderedSessionGroup = false
+
+        return normalizedCaps.compactMap { normalized in
+            if self.sessionProviderByCapability[normalized] != nil {
+                guard !renderedSessionGroup else { return nil }
+                renderedSessionGroup = true
+                return (
+                    "cap-group:sessions",
+                    "rectangle.stack",
+                    "Sessions: \(sessionProviders.joined(separator: ", "))")
+            }
             switch normalized {
             case "screen":
-                return (normalized, "rectangle.inset.filled.badge.record", "Screen capture")
+                return ("cap:\(normalized)", "rectangle.inset.filled.badge.record", "Screen capture")
             case "camera":
-                return (normalized, "camera", "Camera")
+                return ("cap:\(normalized)", "camera", "Camera")
             case "file":
-                return (normalized, "folder", "File transfer")
+                return ("cap:\(normalized)", "folder", "File transfer")
             case "location":
-                return (normalized, "location", "Location")
+                return ("cap:\(normalized)", "location", "Location")
             case "voice", "audio":
-                return (normalized, "mic", "Microphone and voice")
+                return ("cap:\(normalized)", "mic", "Microphone and voice")
             case "canvas":
-                return (normalized, "paintbrush", "Canvas display")
+                return ("cap:\(normalized)", "paintbrush", "Canvas display")
             default:
-                return (normalized, "puzzlepiece.extension", self.prettifyRawName(normalized))
+                return ("cap:\(normalized)", "puzzlepiece.extension", self.prettifyRawName(normalized))
             }
         }
     }

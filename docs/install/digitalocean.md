@@ -44,8 +44,8 @@ DigitalOcean is a straightforward paid VPS path. For cheaper or free options:
 
     apt update && apt upgrade -y
 
-    # Install Node.js 24
-    curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
+    # Install Node.js 26
+    curl -fsSL https://deb.nodesource.com/setup_26.x | bash -
     apt install -y nodejs
 
     # Install OpenClaw

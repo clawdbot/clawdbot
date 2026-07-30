@@ -4,20 +4,42 @@ import { startSmsGatewayAccount } from "./gateway.js";
 import type { SmsChannelRuntime } from "./inbound.js";
 import type { ResolvedSmsAccount } from "./types.js";
 
-const { registeredRoutes, registerPluginHttpRoute, waitUntilAbort } = vi.hoisted(() => {
-  const routeCleanups: Array<() => void> = [];
-  return {
-    registeredRoutes: routeCleanups,
-    registerPluginHttpRoute: vi.fn(() => vi.fn()),
-    waitUntilAbort: vi.fn(async (_signal: AbortSignal, onAbort?: () => void) => {
-      if (onAbort) {
-        routeCleanups.push(onAbort);
-      }
-    }),
-  };
-});
+const startSmsIngress = vi.hoisted(() => vi.fn());
+const pauseSmsIngress = vi.hoisted(() => vi.fn<() => Promise<void>>(async () => {}));
+const stopSmsIngress = vi.hoisted(() => vi.fn<() => Promise<void>>(async () => {}));
+const createSmsIngressSpool = vi.hoisted(() =>
+  vi.fn((_params: { abortSignal?: AbortSignal }) => ({
+    enqueue: vi.fn(),
+    start: startSmsIngress,
+    pause: pauseSmsIngress,
+    stop: stopSmsIngress,
+  })),
+);
+
+const { registeredRoutes, routeUnregisters, registerPluginHttpRoute, waitUntilAbort } = vi.hoisted(
+  () => {
+    const routeCleanups: Array<() => void | Promise<void>> = [];
+    const unregisters: Array<ReturnType<typeof vi.fn>> = [];
+    return {
+      registeredRoutes: routeCleanups,
+      routeUnregisters: unregisters,
+      registerPluginHttpRoute: vi.fn(() => {
+        const unregister = vi.fn();
+        unregisters.push(unregister);
+        return unregister;
+      }),
+      waitUntilAbort: vi.fn(async (_signal: AbortSignal, onAbort?: () => void | Promise<void>) => {
+        if (onAbort) {
+          routeCleanups.push(onAbort);
+        }
+      }),
+    };
+  },
+);
 
 vi.mock("openclaw/plugin-sdk/channel-outbound", () => ({ waitUntilAbort }));
+
+vi.mock("./ingress-spool.js", () => ({ createSmsIngressSpool }));
 
 vi.mock("openclaw/plugin-sdk/webhook-ingress", () => ({
   createFixedWindowRateLimiter: () => ({
@@ -51,11 +73,16 @@ describe("startSmsGatewayAccount", () => {
   beforeEach(() => {
     registerPluginHttpRoute.mockClear();
     waitUntilAbort.mockClear();
+    createSmsIngressSpool.mockClear();
+    startSmsIngress.mockClear();
+    pauseSmsIngress.mockClear();
+    stopSmsIngress.mockClear();
+    routeUnregisters.length = 0;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     for (const unregister of registeredRoutes.toReversed()) {
-      unregister();
+      await unregister();
     }
     registeredRoutes.length = 0;
   });
@@ -118,5 +145,141 @@ describe("startSmsGatewayAccount", () => {
     });
 
     expect(registerPluginHttpRoute).toHaveBeenCalledTimes(2);
+  });
+
+  it("serializes overlapping replacements of the same webhook route", async () => {
+    let releaseStop: (() => void) | undefined;
+    stopSmsIngress.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseStop = resolve;
+        }),
+    );
+    const params = {
+      cfg: {},
+      account: createAccount("default"),
+      channelRuntime: {} as SmsChannelRuntime,
+    };
+    await startRoute(params);
+
+    const firstReplacement = startRoute(params);
+    await vi.waitFor(() => expect(stopSmsIngress).toHaveBeenCalledTimes(1));
+    expect(registerPluginHttpRoute).toHaveBeenCalledTimes(2);
+    expect(startSmsIngress).toHaveBeenCalledTimes(1);
+    const secondReplacement = startRoute(params);
+    await Promise.resolve();
+
+    expect(registerPluginHttpRoute).toHaveBeenCalledTimes(3);
+    expect(startSmsIngress).toHaveBeenCalledTimes(1);
+    releaseStop?.();
+    await Promise.all([firstReplacement, secondReplacement]);
+    expect(startSmsIngress).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a replacement route live while abort cleanup stops its predecessor", async () => {
+    let releaseStop: (() => void) | undefined;
+    stopSmsIngress.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseStop = resolve;
+        }),
+    );
+    const params = {
+      cfg: {},
+      account: createAccount("default"),
+      channelRuntime: {} as SmsChannelRuntime,
+    };
+    await startRoute(params);
+
+    const shutdown = registeredRoutes[0]?.();
+    await vi.waitFor(() => expect(stopSmsIngress).toHaveBeenCalledTimes(1));
+    const replacement = startRoute(params);
+    await Promise.resolve();
+
+    expect(registerPluginHttpRoute).toHaveBeenCalledTimes(2);
+    expect(startSmsIngress).toHaveBeenCalledTimes(1);
+    releaseStop?.();
+    await Promise.all([shutdown, replacement]);
+    expect(startSmsIngress).toHaveBeenCalledTimes(2);
+  });
+
+  it("binds replacement abort cleanup before its predecessor finishes stopping", async () => {
+    let releaseStop: (() => void) | undefined;
+    stopSmsIngress.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseStop = resolve;
+        }),
+    );
+    const params = {
+      cfg: {},
+      account: createAccount("default"),
+      channelRuntime: {} as SmsChannelRuntime,
+    };
+    await startRoute(params);
+
+    const replacement = startRoute(params);
+    await vi.waitFor(() => expect(registeredRoutes).toHaveLength(2));
+    await vi.waitFor(() => expect(stopSmsIngress).toHaveBeenCalledTimes(1));
+    const abortReplacement = registeredRoutes[1]?.();
+
+    expect(routeUnregisters[1]).toHaveBeenCalledOnce();
+    releaseStop?.();
+    await Promise.all([replacement, abortReplacement]);
+    expect(startSmsIngress).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops both ingress instances when predecessor pause fails", async () => {
+    const params = {
+      cfg: {},
+      account: createAccount("default"),
+      channelRuntime: {} as SmsChannelRuntime,
+    };
+    await startRoute(params);
+    let replacementLifecycleSignal: AbortSignal | undefined;
+    waitUntilAbort.mockImplementationOnce(async (signal, onAbort) => {
+      replacementLifecycleSignal = signal;
+      await new Promise<void>((resolve) => {
+        if (signal.aborted) {
+          resolve();
+          return;
+        }
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      await onAbort?.();
+    });
+    pauseSmsIngress.mockRejectedValueOnce(new Error("pause failed"));
+
+    await expect(startRoute(params)).rejects.toThrow("pause failed");
+
+    expect(replacementLifecycleSignal?.aborted).toBe(true);
+    expect(stopSmsIngress).toHaveBeenCalledTimes(2);
+    registeredRoutes.length = 0;
+  });
+
+  it("pauses the predecessor pump before exposing a replacement route", async () => {
+    let releasePause: (() => void) | undefined;
+    pauseSmsIngress.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releasePause = resolve;
+        }),
+    );
+    const params = {
+      cfg: {},
+      account: createAccount("default"),
+      channelRuntime: {} as SmsChannelRuntime,
+    };
+    await startRoute(params);
+
+    const replacement = startRoute(params);
+    await vi.waitFor(() => expect(registerPluginHttpRoute).toHaveBeenCalledTimes(2));
+
+    expect(pauseSmsIngress).toHaveBeenCalledTimes(1);
+    expect(stopSmsIngress).not.toHaveBeenCalled();
+    expect(createSmsIngressSpool.mock.calls[0]?.[0]).not.toHaveProperty("abortSignal");
+    releasePause?.();
+    await replacement;
+    expect(stopSmsIngress).toHaveBeenCalledTimes(1);
   });
 });

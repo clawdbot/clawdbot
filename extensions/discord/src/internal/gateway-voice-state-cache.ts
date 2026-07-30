@@ -62,9 +62,17 @@ export class DiscordGatewayVoiceStateCache {
         return;
       }
       const states = new Map<string, APIVoiceState>();
+      const membersByUserId = new Map(
+        (guild.members ?? []).map((member) => [member.user.id, member] as const),
+      );
       for (const state of guild.voice_states as APIBaseVoiceState[]) {
         if (state.channel_id) {
-          states.set(state.user_id, { ...state, guild_id: guild.id });
+          const member = state.member ?? membersByUserId.get(state.user_id);
+          states.set(state.user_id, {
+            ...state,
+            ...(member ? { member } : {}),
+            guild_id: guild.id,
+          });
         }
       }
       this.statesByGuild.set(guild.id, states);
@@ -78,7 +86,13 @@ export class DiscordGatewayVoiceStateCache {
       }
       const states = this.statesByGuild.get(guildId) ?? new Map<string, APIVoiceState>();
       const previous = states.get(state.user_id);
-      const current = { ...state, guild_id: guildId };
+      // Discord may omit member metadata from a later state update. Keep the
+      // snapshot identity so participant labels and human/bot policy stay stable.
+      const current = {
+        ...state,
+        ...(state.member ? {} : previous?.member ? { member: previous.member } : {}),
+        guild_id: guildId,
+      };
       this.transitionsByState.set(state, {
         current,
         ...(previous ? { previous: { ...previous } } : {}),

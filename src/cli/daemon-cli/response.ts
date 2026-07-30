@@ -29,7 +29,7 @@ type DaemonHintItem = {
 };
 
 /** Machine-readable response shape for service lifecycle commands. */
-export type DaemonActionResponse = {
+type DaemonActionResponse = {
   ok: boolean;
   action: DaemonAction;
   result?: string;
@@ -95,6 +95,70 @@ export function buildDaemonServiceSnapshot(service: GatewayService, loaded: bool
     loadedText: service.loadedText,
     notLoadedText: service.notLoadedText,
   };
+}
+
+type DaemonEmit = (payload: Omit<DaemonActionResponse, "action">) => void;
+
+/** Emit a lifecycle result and mirror its message to text output. */
+function emitDaemonActionMessage(params: {
+  json: boolean;
+  emit: DaemonEmit;
+  payload: Omit<DaemonActionResponse, "action">;
+}): void {
+  params.emit(params.payload);
+  if (!params.json && params.payload.message) {
+    defaultRuntime.log(params.payload.message);
+  }
+}
+
+/** Emit the no-op success returned when a service is already running. */
+export function emitDaemonAlreadyRunning(params: {
+  serviceNoun: string;
+  service: GatewayService;
+  pid?: number;
+  json: boolean;
+  warnings: string[];
+  emit: DaemonEmit;
+}): void {
+  const message =
+    params.pid === undefined
+      ? `${params.serviceNoun} service already running.`
+      : `${params.serviceNoun} service already running (pid ${params.pid}).`;
+  emitDaemonActionMessage({
+    json: params.json,
+    emit: params.emit,
+    payload: {
+      ok: true,
+      result: "already-running",
+      message,
+      service: buildDaemonServiceSnapshot(params.service, true),
+      warnings: params.warnings.length ? params.warnings : undefined,
+    },
+  });
+}
+
+/** Emit a service-manager restart that has been accepted but not completed. */
+export function emitDaemonScheduledRestart(params: {
+  json: boolean;
+  emit: DaemonEmit;
+  result: string;
+  message: string;
+  service: GatewayService;
+  loaded: boolean;
+  warnings: string[];
+}): true {
+  emitDaemonActionMessage({
+    json: params.json,
+    emit: params.emit,
+    payload: {
+      ok: true,
+      result: params.result,
+      message: params.message,
+      service: buildDaemonServiceSnapshot(params.service, params.loaded),
+      warnings: params.warnings.length ? params.warnings : undefined,
+    },
+  });
+  return true;
 }
 
 /** Writable sink used when JSON output should suppress service command stdout. */

@@ -1,6 +1,7 @@
 // Telegram tests cover account throttler plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { clearAccountThrottlersForTest, getOrCreateAccountThrottler } from "./account-throttler.js";
+import { getOrCreateAccountThrottler } from "./account-throttler.js";
+import { resetTelegramAccountThrottlersForTest } from "./runtime.test-support.js";
 
 type TelegramTransform = ReturnType<typeof getOrCreateAccountThrottler>;
 type TelegramPreviousCall = Parameters<TelegramTransform>[0];
@@ -29,7 +30,7 @@ function deferred<T>() {
 
 describe("getOrCreateAccountThrottler", () => {
   beforeEach(() => {
-    clearAccountThrottlersForTest();
+    resetTelegramAccountThrottlersForTest();
   });
 
   it("shares throttlers per bot token", () => {

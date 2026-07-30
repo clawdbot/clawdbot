@@ -1,6 +1,12 @@
 // Resolves the configured default agent route shared by OpenClaw inference calls.
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  listAgentEntries,
+  resolveDefaultAgentId,
+  toAgentEntriesRecord,
+} from "../agents/agent-scope-config.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
   resolveCliExecutionAuthProfileId,
@@ -24,8 +30,22 @@ export type SystemAgentConfiguredRoute = {
     }
 );
 
+export function resolveSystemAgentTargetAgentId(
+  config: OpenClawConfig,
+  requestedAgentId?: string,
+): string {
+  const configuredAgentId =
+    normalizeOptionalString(requestedAgentId) ??
+    normalizeOptionalString(config.agents?.defaults?.systemAgent?.agentId);
+  if (configuredAgentId) {
+    return normalizeAgentId(configuredAgentId);
+  }
+  return normalizeAgentId(resolveDefaultAgentId(config));
+}
+
 export type SystemAgentConfiguredRouteDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
+  loadAuthProfileStoreForRuntime?: typeof import("../agents/auth-profiles/store.js").loadAuthProfileStoreForRuntime;
 };
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
@@ -50,8 +70,8 @@ function projectSystemAgentExecutionConfig(
   config: OpenClawConfig,
   routeAgentId: string,
 ): OpenClawConfig {
-  const agents = config.agents?.list;
-  if (!agents) {
+  const agents = listAgentEntries(config);
+  if (agents.length === 0) {
     return config;
   }
   const routeAgent =
@@ -65,32 +85,36 @@ function projectSystemAgentExecutionConfig(
   if (retainedAgents.length === agents.length && !hasProjectedSettings) {
     return config;
   }
+  const projectedAgents = [
+    ...retainedAgents,
+    ...(hasProjectedSettings
+      ? [
+          {
+            id: SYSTEM_AGENT_EXECUTION_AGENT_ID,
+            ...(routeAgent?.params !== undefined
+              ? { params: structuredClone(routeAgent.params) }
+              : {}),
+            ...(routeAgent?.tools !== undefined
+              ? { tools: structuredClone(routeAgent.tools) }
+              : {}),
+          },
+        ]
+      : []),
+  ];
+  const { list: _legacyList, ...agentsConfig } = config.agents ?? {};
   return {
     ...config,
     agents: {
-      ...config.agents,
-      list: [
-        ...retainedAgents,
-        ...(hasProjectedSettings
-          ? [
-              {
-                id: SYSTEM_AGENT_EXECUTION_AGENT_ID,
-                ...(routeAgent?.params !== undefined
-                  ? { params: structuredClone(routeAgent.params) }
-                  : {}),
-                ...(routeAgent?.tools !== undefined
-                  ? { tools: structuredClone(routeAgent.tools) }
-                  : {}),
-              },
-            ]
-          : []),
-      ],
+      ...agentsConfig,
+      entries: toAgentEntriesRecord(projectedAgents),
     },
   };
 }
 
 export async function resolveSystemAgentConfiguredRouteFromConfig(
   runConfig: OpenClawConfig,
+  requestedAgentId?: string,
+  deps: Pick<SystemAgentConfiguredRouteDeps, "loadAuthProfileStoreForRuntime"> = {},
 ): Promise<SystemAgentConfiguredRoute | null> {
   const [agentScope, modelSelection, modelRuntimeAliases, simpleCompletion, harnessPolicy] =
     await Promise.all([
@@ -100,7 +124,7 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
       import("../agents/simple-completion-runtime.js"),
       import("../agents/harness/policy.js"),
     ]);
-  const modelOwnerAgentId = agentScope.resolveDefaultAgentId(runConfig);
+  const modelOwnerAgentId = resolveSystemAgentTargetAgentId(runConfig, requestedAgentId);
   if (!agentScope.resolveAgentEffectiveModelPrimary(runConfig, modelOwnerAgentId)) {
     return null;
   }
@@ -140,6 +164,9 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
                 authProfileIdSource: "user",
               },
             }
+          : {}),
+        ...(deps.loadAuthProfileStoreForRuntime
+          ? { loadAuthProfileStoreForRuntime: deps.loadAuthProfileStoreForRuntime }
           : {}),
       })
     : undefined;
@@ -194,15 +221,21 @@ function projectRelevantModelMap(params: {
 export async function projectDefaultInferenceRoute(
   config: OpenClawConfig,
 ): Promise<DefaultInferenceRouteProjection> {
-  const [{ resolveDefaultAgentId }, { resolveProviderIdForAuth }] = await Promise.all([
-    import("../agents/agent-scope.js"),
-    import("../agents/provider-auth-aliases.js"),
-  ]);
-  const defaultAgentId = resolveDefaultAgentId(config);
-  const route = await resolveSystemAgentConfiguredRouteFromConfig(config);
-  const list = config.agents?.list ?? [];
-  const agent = list.find((entry) => normalizeAgentId(entry.id) === defaultAgentId);
-  const executionAgent = route?.runConfig.agents?.list?.find(
+  return await projectInferenceRoute(config);
+}
+
+/** Project every config input that can change one configured agent route. */
+export async function projectInferenceRoute(
+  config: OpenClawConfig,
+  requestedAgentId?: string,
+  deps: Pick<SystemAgentConfiguredRouteDeps, "loadAuthProfileStoreForRuntime"> = {},
+): Promise<DefaultInferenceRouteProjection> {
+  const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
+  const routeAgentId = resolveSystemAgentTargetAgentId(config, requestedAgentId);
+  const route = await resolveSystemAgentConfiguredRouteFromConfig(config, routeAgentId, deps);
+  const list = listAgentEntries(config);
+  const agent = list.find((entry) => normalizeAgentId(entry.id) === routeAgentId);
+  const executionAgent = listAgentEntries(route?.runConfig ?? {}).find(
     (entry) => normalizeAgentId(entry.id) === SYSTEM_AGENT_EXECUTION_AGENT_ID,
   );
   const defaults = config.agents?.defaults;
@@ -241,21 +274,20 @@ export async function projectDefaultInferenceRoute(
     const { runConfig: _runConfig, ...routeWithoutConfig } = route;
     projectedRoute = routeWithoutConfig;
   }
-  const explicitDefaultIds = list
-    .filter((entry) => entry.default)
-    .map((entry) => normalizeAgentId(entry.id));
+  const explicitDefaultIds = requestedAgentId
+    ? [routeAgentId]
+    : list.filter((entry) => entry.default).map((entry) => normalizeAgentId(entry.id));
   return {
     route: projectedRoute,
     defaultSelection: {
       explicitIds: explicitDefaultIds,
-      ...(explicitDefaultIds.length === 0 && list[0]?.id
+      ...(!requestedAgentId && explicitDefaultIds.length === 0 && list[0]?.id
         ? { fallbackId: normalizeAgentId(list[0].id) }
         : {}),
     },
     auth: {
       profiles: authProfiles,
       order: authOrder,
-      cooldowns: structuredClone(config.auth?.cooldowns),
     },
     models: {
       mode: config.models?.mode,
@@ -271,11 +303,6 @@ export async function projectDefaultInferenceRoute(
         rawModel,
       }),
       agentRuntime: structuredClone(defaults?.agentRuntime),
-      cliBackends: Object.fromEntries(
-        Object.entries(defaults?.cliBackends ?? {}).filter(([provider]) =>
-          providerIds.has(normalizeProviderId(provider)),
-        ),
-      ),
     },
     ...(agent
       ? {

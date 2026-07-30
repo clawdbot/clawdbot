@@ -15,6 +15,21 @@ token-delta streaming** to channel messages today:
 - **Preview streaming (Telegram/Discord/Slack/Matrix/Mattermost/MS Teams):**
   update a temporary **preview message** while generating (send + edits/appends).
 
+## Control UI startup status
+
+After `chat.send` acknowledges an active run, the Gateway can send a typed,
+coarse startup status before assistant text or tool activity is visible. The
+Control UI shows this status beside the working indicator, with stages for
+workspace preparation, environment provisioning, context preparation, and
+model startup.
+
+The first assistant delta or tool start permanently replaces startup status for
+that run. Approval status takes precedence while a tool is waiting for operator
+action. Worktree creation and initial cloud dispatch happen before a chat run
+exists, so their pre-run RPC progress is not presented as run startup status;
+environment provisioning appears here only when an active run reprovisions a
+reclaimed worker.
+
 ## Block streaming (channel messages)
 
 Block streaming sends assistant output in coarse chunks as it becomes available.
@@ -53,10 +68,8 @@ exceeds the limit.
 Bundled channels spell these overrides as
 `channels.<id>.streaming.{chunkMode,block.enabled,block.coalesce}`. The flat
 `*.chunkMode` / `*.blockStreaming` / `*.blockStreamingCoalesce` spellings are
-legacy on every bundled channel: `openclaw doctor --fix` migrates them into
-the nested shape, and channel schemas reject them. External SDK plugin
-configs that still use the flat spellings keep working through a deprecated
-fallback (with a runtime warning) until the next release train.
+rejected everywhere. `openclaw doctor --fix` migrates legacy configs into the
+nested shape.
 
 **Boundary semantics** for `blockStreamingBreak`:
 
@@ -120,7 +133,7 @@ replies, after the first block, so multi-bubble responses feel more natural.
 | `natural`                         | 800-2500ms random pause |
 | `custom`                          | `minMs`/`maxMs`         |
 
-Override per agent via `agents.list[].humanDelay`. Applies only to **block
+Override per agent via `agents.entries.*.humanDelay`. Applies only to **block
 replies**, not final replies or tool summaries.
 
 ## "Stream chunks or everything"
@@ -164,13 +177,16 @@ instead of being overwritten in one editable draft.
 
 ### Channel mapping
 
-| Channel    | `off` | `partial` | `block` | `progress`              |
-| ---------- | ----- | --------- | ------- | ----------------------- |
-| Telegram   | Yes   | Yes       | Yes     | editable progress draft |
-| Discord    | Yes   | Yes       | Yes     | editable progress draft |
-| Slack      | Yes   | Yes       | Yes     | Yes                     |
-| Mattermost | Yes   | Yes       | Yes     | Yes                     |
-| MS Teams   | Yes   | Yes       | Yes     | native progress stream  |
+Discord and Telegram default to `progress` when `streaming` is unset; Slack,
+Mattermost, and MS Teams default to `partial`.
+
+| Channel    | `off` | `partial` | `block` | `progress`                        |
+| ---------- | ----- | --------- | ------- | --------------------------------- |
+| Telegram   | Yes   | Yes       | Yes     | editable progress draft (default) |
+| Discord    | Yes   | Yes       | Yes     | editable progress draft (default) |
+| Slack      | Yes   | Yes       | Yes     | Yes                               |
+| Mattermost | Yes   | Yes       | Yes     | Yes                               |
+| MS Teams   | Yes   | Yes       | Yes     | native progress stream            |
 
 Preview chunk config (`streaming.preview.chunk.*`, e.g. under
 `channels.discord.streaming` or `channels.telegram.streaming`) defaults to
@@ -312,8 +328,9 @@ Supported surfaces:
   messages, while approval prompts, media payloads, and errors still route
   normally.
 - To keep preview streaming but hide tool-progress lines, set
-  `streaming.preview.toolProgress` to `false` for that channel (default
-  `true`). To keep tool-progress lines visible while hiding command/exec text,
+  `streaming.preview.toolProgress` or `streaming.progress.toolProgress` to
+  `false` for that channel (both default `true`, and both are honored in every
+  mode). To keep tool-progress lines visible while hiding command/exec text,
   set `streaming.preview.commandText` to `"status"` or
   `streaming.progress.commandText` to `"status"`; the default is `"raw"` to
   preserve released behavior. This policy is shared by draft/progress channels

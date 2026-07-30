@@ -9,15 +9,8 @@ import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { listPairingChannels, notifyPairingApproved } from "../channels/plugins/pairing.js";
-import {
-  formatCommandOwnerFromChannelSender,
-  hasConfiguredCommandOwners,
-} from "../commands/doctor-command-owner.js";
-import {
-  getRuntimeConfig,
-  readConfigFileSnapshotForWrite,
-  replaceConfigFile,
-} from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
+import { bootstrapCommandOwnerFromPairing } from "../pairing/command-owner.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import { approveChannelPairingCode, listChannelPairingRequests } from "../pairing/pairing-store.js";
 import type { PairingChannel } from "../pairing/pairing-store.types.js";
@@ -55,35 +48,6 @@ function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel 
 async function notifyApproved(channel: PairingChannel, id: string, accountId?: string) {
   const cfg = getRuntimeConfig();
   await notifyPairingApproved({ channelId: channel, id, cfg, ...(accountId ? { accountId } : {}) });
-}
-
-async function maybeBootstrapCommandOwnerFromPairing(params: {
-  channel: PairingChannel;
-  id: string;
-}): Promise<{ ownerEntry: string | null; bootstrapped: boolean }> {
-  // First approved pairing can seed ownerAllowFrom so command access is not left open-ended.
-  const ownerEntry = formatCommandOwnerFromChannelSender(params);
-  if (!ownerEntry) {
-    return { ownerEntry: null, bootstrapped: false };
-  }
-
-  const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
-  if (hasConfiguredCommandOwners(snapshot.sourceConfig)) {
-    return { ownerEntry, bootstrapped: false };
-  }
-
-  const nextConfig = structuredClone(snapshot.sourceConfig);
-  nextConfig.commands = {
-    ...nextConfig.commands,
-    ownerAllowFrom: [ownerEntry],
-  };
-  await replaceConfigFile({
-    nextConfig,
-    snapshot,
-    writeOptions,
-    afterWrite: { mode: "auto" },
-  });
-  return { ownerEntry, bootstrapped: true };
 }
 
 export function registerPairingCli(program: Command) {
@@ -208,11 +172,11 @@ export function registerPairingCli(program: Command) {
       defaultRuntime.log(
         `${theme.success("Approved")} ${theme.muted(channel)} sender ${theme.command(approved.id)}.`,
       );
-      const ownerBootstrap = await maybeBootstrapCommandOwnerFromPairing({
+      const ownerBootstrap = await bootstrapCommandOwnerFromPairing({
         channel,
         id: approved.id,
       });
-      if (ownerBootstrap.bootstrapped && ownerBootstrap.ownerEntry) {
+      if (ownerBootstrap.status === "configured" && ownerBootstrap.ownerEntry) {
         defaultRuntime.log(
           `${theme.success("Command owner configured")} ${theme.command(ownerBootstrap.ownerEntry)} ${theme.muted("(commands.ownerAllowFrom was empty).")}`,
         );

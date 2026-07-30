@@ -24,7 +24,6 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import { interruptSessionRunIfActive } from "./sessions-messaging.js";
 import {
   loadAccessorSessionEntryForGatewayTarget,
-  rejectWebchatSessionMutation,
   requireSessionKey,
   resolveSessionWorkerPlacementMutationError,
   respondSessionWorkerPlacementMutationError,
@@ -179,9 +178,6 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
     const p = params;
     const key = requireSessionKey(p.key, respond);
     if (!key) {
-      return;
-    }
-    if (rejectWebchatSessionMutation({ action: "restore", client, isWebchatConnect, respond })) {
       return;
     }
     const checkpointId =

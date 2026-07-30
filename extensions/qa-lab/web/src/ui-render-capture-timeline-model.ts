@@ -283,5 +283,3 @@ export function buildCaptureTimelineModel(params: {
     visibleTimelineLanes,
   };
 }
-
-export type CaptureTimelineModel = ReturnType<typeof buildCaptureTimelineModel>;

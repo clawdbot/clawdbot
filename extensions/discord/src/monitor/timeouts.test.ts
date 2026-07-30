@@ -1,9 +1,9 @@
 // Discord tests cover timeouts plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mergeAbortSignals } from "../../api.js";
 import {
   isAbortError as runtimeApiIsAbortError,
-  mergeAbortSignals as runtimeApiMergeAbortSignals,
   normalizeDiscordInboundWorkerTimeoutMs as runtimeApiNormalizeDiscordInboundWorkerTimeoutMs,
   normalizeDiscordListenerTimeoutMs as runtimeApiNormalizeDiscordListenerTimeoutMs,
   runDiscordTaskWithTimeout as runtimeApiRunDiscordTaskWithTimeout,
@@ -12,7 +12,6 @@ import {
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
   isAbortError,
-  mergeAbortSignals,
   normalizeDiscordInboundWorkerTimeoutMs,
   normalizeDiscordListenerTimeoutMs,
   raceWithTimeout,
@@ -26,9 +25,8 @@ afterEach(() => {
 });
 
 describe("discord monitor timeouts", () => {
-  it("keeps deprecated timeout helpers on the runtime api compatibility surface", () => {
+  it("keeps deprecated timeout helpers on shipped compatibility surfaces", () => {
     expect(runtimeApiIsAbortError).toBe(isAbortError);
-    expect(runtimeApiMergeAbortSignals).toBe(mergeAbortSignals);
     expect(runtimeApiNormalizeDiscordInboundWorkerTimeoutMs).toBe(
       normalizeDiscordInboundWorkerTimeoutMs,
     );
@@ -36,10 +34,14 @@ describe("discord monitor timeouts", () => {
     expect(runtimeApiRunDiscordTaskWithTimeout).toBe(runDiscordTaskWithTimeout);
   });
 
-  it("keeps first-reason semantics on the abort-signal compatibility helper", () => {
+  it("keeps the shipped public abort-signal compatibility semantics", () => {
     const first = new AbortController();
     const second = new AbortController();
     const reason = new Error("first stopped");
+
+    expect(mergeAbortSignals([])).toBeUndefined();
+    expect(mergeAbortSignals([undefined, first.signal])).toBe(first.signal);
+
     const signal = mergeAbortSignals([first.signal, second.signal]);
 
     first.abort(reason);

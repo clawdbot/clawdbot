@@ -165,6 +165,40 @@ describe("SessionHistorySseState", () => {
     expect(snapshot.rawTranscriptSeq).toBe(2);
   });
 
+  test("retains the recent projection without changing carried inline sequence", () => {
+    const state = newState([
+      assistantTextMessage("first", 1),
+      assistantTextMessage("second", 2),
+      assistantTextMessage("third", 3),
+      assistantTextMessage("fourth", 4),
+    ]);
+
+    const retained = state.retainRecentMessages(2);
+
+    expect(retained.items).toBe(retained.messages);
+    expect(retained.messages).toEqual([
+      assistantTextMessage("third", 3),
+      assistantTextMessage("fourth", 4),
+    ]);
+    expect(retained.hasMore).toBe(true);
+    expect(retained.nextCursor).toBe("3");
+
+    const appended = appendAssistantText(state, "fifth", 5);
+    expect(appended?.messageSeq).toBe(5);
+    expect(appended?.message?.content).toEqual(textContent("fifth"));
+    expect(state.retainRecentMessages(2).messages).toEqual([
+      assistantTextMessage("fourth", 4),
+      assistantTextMessage("fifth", 5),
+    ]);
+  });
+
+  test("keeps the existing projection when it already fits the retention window", () => {
+    const state = newState([assistantTextMessage("first", 1)]);
+    const initialSnapshot = state.snapshot();
+
+    expect(state.retainRecentMessages(2)).toBe(initialSnapshot);
+  });
+
   test("uses carried sequence for inline SSE appends", () => {
     const state = newState([assistantTextMessage("initial", 2)]);
 
@@ -588,8 +622,41 @@ describe("SessionHistorySseState", () => {
       ],
     });
 
-    expectOnlyAssistantText(snapshot, "Disk usage crossed 95 percent.", 4);
+    expect(snapshot.history.messages).toEqual([
+      {
+        ...assistantTextMessage("Disk usage crossed 95 percent.", 4),
+        __openclaw: { seq: 4, turnBoundary: true },
+      },
+    ]);
     expect(snapshot.rawTranscriptSeq).toBe(4);
+  });
+
+  test("carries a hidden heartbeat boundary into the next visible SSE append", () => {
+    const state = newState([
+      assistantTextMessage("already visible", 1),
+      {
+        role: "user",
+        content: HEARTBEAT_PROMPT,
+        __openclaw: { seq: 2 },
+      },
+    ]);
+
+    expect(appendAssistantText(state, "HEARTBEAT_OK", 3)).toBeNull();
+
+    const compaction = state.appendInlineMessage({
+      message: {
+        role: "system",
+        content: textContent("Compaction summary"),
+      },
+      messageSeq: 4,
+    });
+    expect(compaction?.message?.["__openclaw"]?.turnBoundary).toBeUndefined();
+
+    const appended = appendAssistantText(state, "Disk usage crossed 95 percent.", 5);
+    expect(appended?.message).toMatchObject({
+      role: "assistant",
+      __openclaw: { seq: 5, turnBoundary: true },
+    });
   });
 
   test("does not append heartbeat or internal-only SSE messages", () => {

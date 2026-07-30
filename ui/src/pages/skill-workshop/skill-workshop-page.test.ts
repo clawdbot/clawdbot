@@ -20,6 +20,10 @@ type SkillWorkshopPageTestElement = HTMLElement & {
   requestUpdate: () => void;
 };
 
+function waitForSkillWorkshop(assertion: () => void) {
+  return vi.waitFor(assertion, { interval: 1 });
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((next) => {
@@ -62,8 +66,9 @@ function createContext(
   const client = { request } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected: true,
-    reconnecting: false,
+    phase: "connected",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "research",
     sessionKey: "global",
@@ -109,6 +114,7 @@ describe("SkillWorkshopPage lifecycle", () => {
       body: "## Workflow\n- test",
       status: "pending",
       version: 1,
+      revisionHash: null,
       createdAt: 0,
       recencyGroup: "today",
       ageLabel: "now",
@@ -149,6 +155,7 @@ describe("SkillWorkshopPage lifecycle", () => {
       body: `## Workflow\n- ${previewText}`,
       status: "pending",
       version: 1,
+      revisionHash: null,
       createdAt: 0,
       updatedAt: 0,
       recencyGroup: "today",
@@ -201,7 +208,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     page.requestUpdate();
     await page.updateComplete;
 
-    await vi.waitFor(() =>
+    await waitForSkillWorkshop(() =>
       expect(secondRequest).toHaveBeenCalledWith("skills.proposals.list", {
         agentId: "research",
       }),
@@ -232,7 +239,7 @@ describe("SkillWorkshopPage lifecycle", () => {
       updatedAt: "2026-07-08T00:00:00.000Z",
       proposals: [],
     });
-    await vi.waitFor(() => expect(page.state?.skillWorkshopLoaded).toBe(true));
+    await waitForSkillWorkshop(() => expect(page.state?.skillWorkshopLoaded).toBe(true));
     expect(callsFor(request, "skills.proposals.list")).toHaveLength(1);
   });
 
@@ -246,7 +253,9 @@ describe("SkillWorkshopPage lifecycle", () => {
     page.context = createContext(request);
     document.body.append(page);
     await page.updateComplete;
-    await vi.waitFor(() => expect(page.state?.skillWorkshopError).toContain("gateway offline"));
+    await waitForSkillWorkshop(() =>
+      expect(page.state?.skillWorkshopError).toContain("gateway offline"),
+    );
 
     page.requestUpdate();
     await page.updateComplete;
@@ -273,10 +282,12 @@ describe("SkillWorkshopPage lifecycle", () => {
     await page.updateComplete;
     page.requestUpdate();
     await page.updateComplete;
-    await vi.waitFor(() => expect(callsFor(request, "skills.proposals.list")).toHaveLength(1));
+    await waitForSkillWorkshop(() =>
+      expect(callsFor(request, "skills.proposals.list")).toHaveLength(1),
+    );
     const loadingState = page.state;
 
-    gatewayListener?.({ ...context.gateway.snapshot, connected: false });
+    gatewayListener?.({ ...context.gateway.snapshot, phase: "stopped" });
     expect(page.state).not.toBe(loadingState);
     expect(page.state?.skillWorkshopLoaded).toBe(false);
 
@@ -313,6 +324,7 @@ describe("SkillWorkshopPage lifecycle", () => {
       body: "",
       status: "pending",
       version: 1,
+      revisionHash: null,
       createdAt: 0,
       updatedAt: 0,
       recencyGroup: "today",
@@ -337,7 +349,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     await page.updateComplete;
 
     const revision = page.handleRevisionRequest("revise it", proposal, "research");
-    await vi.waitFor(() => expect(oldSessions.list).toHaveBeenCalledTimes(1));
+    await waitForSkillWorkshop(() => expect(oldSessions.list).toHaveBeenCalledTimes(1));
 
     const newContext = createContext(vi.fn(async () => ({})));
     page.context = newContext;
@@ -391,14 +403,24 @@ describe("SkillWorkshopPage lifecycle", () => {
     page.context = createContext(oldRequest);
     document.body.append(page);
     await page.updateComplete;
-    await vi.waitFor(() => expect(callsFor(oldRequest, "skills.proposals.list")).toHaveLength(1));
-    await vi.waitFor(() =>
+    await waitForSkillWorkshop(() =>
+      expect(callsFor(oldRequest, "skills.proposals.list")).toHaveLength(1),
+    );
+    await waitForSkillWorkshop(() =>
       expect(callsFor(oldRequest, "skills.proposals.historyStatus")).toHaveLength(1),
     );
-    await vi.waitFor(() => expect(page.state?.skillWorkshopHistoryScan.loaded).toBe(true));
+    await waitForSkillWorkshop(() =>
+      expect(page.state?.skillWorkshopHistoryScan.loaded).toBe(true),
+    );
+    await page.updateComplete;
+    await waitForSkillWorkshop(() =>
+      expect(page.querySelector<HTMLButtonElement>(".sw-history__action button")?.disabled).toBe(
+        false,
+      ),
+    );
 
     page.querySelector<HTMLButtonElement>(".sw-history__action button")?.click();
-    await vi.waitFor(() =>
+    await waitForSkillWorkshop(() =>
       expect(oldRequest).toHaveBeenCalledWith("skills.proposals.historyScan", {
         agentId: "research",
         direction: "older",
@@ -457,10 +479,18 @@ describe("SkillWorkshopPage lifecycle", () => {
     page.context = createContext(firstRequest);
     document.body.append(page);
     await page.updateComplete;
-    await vi.waitFor(() => expect(page.state?.skillWorkshopHistoryScan.loaded).toBe(true));
+    await waitForSkillWorkshop(() =>
+      expect(page.state?.skillWorkshopHistoryScan.loaded).toBe(true),
+    );
+    await page.updateComplete;
+    await waitForSkillWorkshop(() =>
+      expect(page.querySelector<HTMLButtonElement>(".sw-history__action button")?.disabled).toBe(
+        false,
+      ),
+    );
 
     page.querySelector<HTMLButtonElement>(".sw-history__action button")?.click();
-    await vi.waitFor(() =>
+    await waitForSkillWorkshop(() =>
       expect(firstRequest).toHaveBeenCalledWith("skills.proposals.historyScan", {
         agentId: "research",
         direction: "older",
@@ -491,14 +521,14 @@ describe("SkillWorkshopPage lifecycle", () => {
     page.context = createContext(returnedRequest);
     page.requestUpdate();
     await page.updateComplete;
-    await vi.waitFor(() =>
+    await waitForSkillWorkshop(() =>
       expect(callsFor(returnedRequest, "skills.proposals.historyStatus")).toHaveLength(1),
     );
 
     scan.resolve({ ...scanStatus, hasScanned: true, reviewedSessions: 8 });
     await Promise.resolve();
     firstReturnedStatus.resolve(scanStatus);
-    await vi.waitFor(() =>
+    await waitForSkillWorkshop(() =>
       expect(callsFor(returnedRequest, "skills.proposals.historyStatus")).toHaveLength(2),
     );
     expect(page.state?.skillWorkshopHistoryScan.result?.reviewedSessions).toBe(8);
@@ -533,24 +563,36 @@ describe("SkillWorkshopPage lifecycle", () => {
     page.context = createContext(request);
     document.body.append(page);
     await page.updateComplete;
-    await vi.waitFor(() => expect(callsFor(request, "skills.proposals.list")).toHaveLength(1));
-    await vi.waitFor(() =>
+    await waitForSkillWorkshop(() =>
+      expect(callsFor(request, "skills.proposals.list")).toHaveLength(1),
+    );
+    await waitForSkillWorkshop(() =>
       expect(callsFor(request, "skills.proposals.historyStatus")).toHaveLength(1),
     );
-    await vi.waitFor(() => expect(page.state?.skillWorkshopHistoryScan.loaded).toBe(true));
+    await waitForSkillWorkshop(() =>
+      expect(page.state?.skillWorkshopHistoryScan.loaded).toBe(true),
+    );
+    await page.updateComplete;
+    await waitForSkillWorkshop(() =>
+      expect(page.querySelector<HTMLButtonElement>(".sw-history__action button")?.disabled).toBe(
+        false,
+      ),
+    );
 
     page.querySelector<HTMLButtonElement>(".sw-history__action button")?.click();
 
-    await vi.waitFor(() =>
+    await waitForSkillWorkshop(() =>
       expect(request).toHaveBeenCalledWith("skills.proposals.historyScan", {
         agentId: "research",
         direction: "older",
       }),
     );
-    await vi.waitFor(() =>
+    await waitForSkillWorkshop(() =>
       expect(callsFor(request, "skills.proposals.historyStatus")).toHaveLength(2),
     );
-    await vi.waitFor(() => expect(callsFor(request, "skills.proposals.list")).toHaveLength(2));
+    await waitForSkillWorkshop(() =>
+      expect(callsFor(request, "skills.proposals.list")).toHaveLength(2),
+    );
     expect(page.state?.skillWorkshopHistoryScan.error).toBe("late review failure");
   });
 });
@@ -575,12 +617,12 @@ describe("SkillWorkshopPage self-learning toggle", () => {
   it("reflects the config value in the header toggle and hides it without a snapshot", async () => {
     const enabledPage = createLoadedPage(
       createRuntimeConfigStub({
-        sourceConfig: { skills: { workshop: { autonomous: { enabled: true } } } },
+        sourceConfig: { skills: { workshop: { autonomous: { mode: "auto" } } } },
       }),
     );
     await enabledPage.updateComplete;
     const toggle = enabledPage.querySelector<HTMLInputElement>(
-      ".sw-header-controls input[aria-label='Toggle self-learning skill proposals']",
+      ".sw-header-controls input[aria-label='Toggle autonomous self-learning']",
     );
     expect(toggle?.checked).toBe(true);
     document.body.replaceChildren();
@@ -589,14 +631,17 @@ describe("SkillWorkshopPage self-learning toggle", () => {
     await noSnapshotPage.updateComplete;
     expect(
       noSnapshotPage.querySelector(
-        ".sw-header-controls input[aria-label='Toggle self-learning skill proposals']",
+        ".sw-header-controls input[aria-label='Toggle autonomous self-learning']",
       ),
     ).toBeNull();
   });
 
   it("enables self-learning from the empty-state pitch via a config merge patch", async () => {
     const patch = vi.fn(async () => true);
-    const runtimeConfig = createRuntimeConfigStub({ sourceConfig: {}, patch });
+    const runtimeConfig = createRuntimeConfigStub({
+      sourceConfig: { skills: { workshop: { autonomous: { mode: "off" } } } },
+      patch,
+    });
     const page = createLoadedPage(runtimeConfig);
     await page.updateComplete;
 
@@ -604,17 +649,19 @@ describe("SkillWorkshopPage self-learning toggle", () => {
     expect(button).not.toBeNull();
     button?.click();
 
-    await vi.waitFor(() =>
+    await waitForSkillWorkshop(() =>
       expect(patch).toHaveBeenCalledWith({
-        raw: { skills: { workshop: { autonomous: { enabled: true } } } },
+        raw: { skills: { workshop: { autonomous: { mode: "auto" } } } },
         note: "Enable Skill Workshop self-learning",
       }),
     );
-    await vi.waitFor(() => expect(runtimeConfig.refresh).toHaveBeenCalledTimes(1));
+    await waitForSkillWorkshop(() => expect(runtimeConfig.refresh).toHaveBeenCalledTimes(1));
   });
 
   it("refreshes a stale config snapshot and retries the self-learning toggle", async () => {
-    const runtimeConfig = createRuntimeConfigStub({ sourceConfig: {} });
+    const runtimeConfig = createRuntimeConfigStub({
+      sourceConfig: { skills: { workshop: { autonomous: { mode: "off" } } } },
+    });
     runtimeConfig.patch = vi
       .fn()
       .mockImplementationOnce(async () => {
@@ -631,7 +678,7 @@ describe("SkillWorkshopPage self-learning toggle", () => {
       if (runtimeConfig.patch.mock.calls.length === 2) {
         runtimeConfig.state.configSnapshot = {
           hash: "hash-3",
-          sourceConfig: { skills: { workshop: { autonomous: { enabled: true } } } },
+          sourceConfig: { skills: { workshop: { autonomous: { mode: "auto" } } } },
         };
       }
     });
@@ -640,32 +687,35 @@ describe("SkillWorkshopPage self-learning toggle", () => {
 
     page.querySelector<HTMLButtonElement>(".sw-empty-state__selflearn button")?.click();
 
-    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(runtimeConfig.refresh).toHaveBeenCalledTimes(2));
+    await waitForSkillWorkshop(() => expect(runtimeConfig.patch).toHaveBeenCalledTimes(2));
+    await waitForSkillWorkshop(() => expect(runtimeConfig.refresh).toHaveBeenCalledTimes(2));
     await page.updateComplete;
     expect(page.querySelector(".sw-error")).toBeNull();
     expect(
       page.querySelector<HTMLInputElement>(
-        ".sw-header-controls input[aria-label='Toggle self-learning skill proposals']",
+        ".sw-header-controls input[aria-label='Toggle autonomous self-learning']",
       )?.checked,
     ).toBe(true);
   });
 
   it("surfaces a patch failure and keeps the toggle off", async () => {
     const patch = vi.fn(async () => false);
-    const runtimeConfig = createRuntimeConfigStub({ sourceConfig: {}, patch });
+    const runtimeConfig = createRuntimeConfigStub({
+      sourceConfig: { skills: { workshop: { autonomous: { mode: "off" } } } },
+      patch,
+    });
     const page = createLoadedPage(runtimeConfig);
     await page.updateComplete;
 
     page.querySelector<HTMLButtonElement>(".sw-empty-state__selflearn button")?.click();
-    await vi.waitFor(() =>
+    await waitForSkillWorkshop(() =>
       expect(page.querySelector(".sw-error")?.textContent).toContain(
         "Could not update the self-learning setting.",
       ),
     );
     expect(runtimeConfig.refresh).not.toHaveBeenCalled();
     const toggle = page.querySelector<HTMLInputElement>(
-      ".sw-header-controls input[aria-label='Toggle self-learning skill proposals']",
+      ".sw-header-controls input[aria-label='Toggle autonomous self-learning']",
     );
     expect(toggle?.checked).toBe(false);
   });

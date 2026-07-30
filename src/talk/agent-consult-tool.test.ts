@@ -30,6 +30,20 @@ describe("realtime voice agent consult tool", () => {
     );
   });
 
+  it("normalizes a server-issued spoken confirmation id", () => {
+    expect(
+      parseRealtimeVoiceAgentConsultArgs({
+        question: "Send it now",
+        confirmationId: " confirm-123 ",
+      }),
+    ).toStrictEqual({
+      question: "Send it now",
+      context: undefined,
+      responseStyle: undefined,
+      confirmationId: "confirm-123",
+    });
+  });
+
   it("accepts provider question aliases from realtime tool calls", () => {
     expect(parseRealtimeVoiceAgentConsultArgs({ prompt: "  Check the repo. " })).toStrictEqual({
       context: undefined,

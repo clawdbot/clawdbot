@@ -1,9 +1,9 @@
 /** Caches plugin tool descriptors by plugin source, contract names, and runtime context. */
-import fs from "node:fs";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { JsonObject, ToolDescriptor } from "../tools/types.js";
 import type { PluginLoadOptions } from "./loader.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
@@ -25,20 +25,21 @@ export const pluginToolDescriptorCacheState = {
   runtimeRegistries: new WeakMap<CachedPluginToolDescriptor, PluginRegistry>(),
 };
 
+function clearPluginToolDescriptorCache(): void {
+  pluginToolDescriptorCacheState.descriptors.clear();
+  pluginToolDescriptorCacheState.objectIds = new WeakMap();
+  pluginToolDescriptorCacheState.nextObjectId = 1;
+  pluginToolDescriptorCacheState.runtimeRegistries = new WeakMap();
+}
+
+// Plugin source and retained registries stay stable until their metadata lifecycle is retired.
+registerPluginMetadataProcessMemoLifecycleClear(clearPluginToolDescriptorCache);
+
 export type PluginToolDescriptorConfigCacheKeyMemo = WeakMap<object, string | number | null>;
 
 /** Creates a memo table for config cache keys reused across descriptor cache calls. */
 export function createPluginToolDescriptorConfigCacheKeyMemo(): PluginToolDescriptorConfigCacheKeyMemo {
   return new WeakMap();
-}
-
-function sourceFingerprint(source: string): string {
-  try {
-    const stat = fs.statSync(source);
-    return `${stat.size}:${Math.round(stat.mtimeMs)}`;
-  } catch {
-    return "missing";
-  }
 }
 
 function getDescriptorCacheObjectId(value: object | null | undefined): number | null {
@@ -125,14 +126,15 @@ export function buildPluginToolDescriptorCacheKey(params: {
   ctx: OpenClawPluginToolContext;
   currentRuntimeConfig?: PluginLoadOptions["config"] | null;
   configCacheKeyMemo?: PluginToolDescriptorConfigCacheKeyMemo;
+  clientCaps?: readonly string[];
 }): string {
   return JSON.stringify({
     version: PLUGIN_TOOL_DESCRIPTOR_CACHE_VERSION,
     pluginId: params.pluginId,
     source: params.source,
     rootDir: params.rootDir ?? null,
-    sourceFingerprint: sourceFingerprint(params.source),
     contractToolNames: [...params.contractToolNames].toSorted(),
+    clientCaps: [...(params.clientCaps ?? [])].toSorted(),
     context: buildDescriptorContextCacheKey({
       ctx: params.ctx,
       currentRuntimeConfig: params.currentRuntimeConfig,
@@ -163,6 +165,7 @@ export function capturePluginToolDescriptor(params: {
       ...(title ? { title } : {}),
       description: params.tool.description,
       inputSchema: asJsonObject(params.tool.parameters),
+      ...(params.tool.outputSchema ? { outputSchema: asJsonObject(params.tool.outputSchema) } : {}),
       owner: { kind: "plugin", pluginId: params.pluginId },
       executor: { kind: "plugin", pluginId: params.pluginId, toolName: params.tool.name },
     },

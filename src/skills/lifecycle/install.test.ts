@@ -13,7 +13,8 @@ import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "../loadin
 import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "../loading/local-loader.js";
 import { runCommandWithTimeoutMock } from "../test-support/install-test-mocks.js";
 import type { SkillEntry } from "../types.js";
-import { installSkill, testing as skillsInstallTesting } from "./install.js";
+import { installSkill } from "./install.js";
+import { skillsInstallTesting } from "./install.test-support.js";
 
 vi.mock("../../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),

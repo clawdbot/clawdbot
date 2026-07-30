@@ -7,7 +7,10 @@ import { normalizeOpenClawVersionBase } from "../config/version.js";
 import { listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
-import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
+import {
+  inspectBundleMcpRuntimeSupport,
+  inspectNativePluginMcpRuntimeSupport,
+} from "./bundle-mcp.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
@@ -45,7 +48,6 @@ export type { PluginCapabilityKind, PluginInspectShape } from "./inspect-shape.j
 export type PluginCompatibilityNotice = {
   pluginId: string;
   code:
-    | "legacy-before-agent-start"
     | "hook-only"
     | "deprecated-memory-embedding-provider-api"
     | "removed-session-transcript-file-api";
@@ -103,27 +105,16 @@ export type PluginInspectReport = {
     allowedModels: string[];
     hasAllowedModelsConfig: boolean;
   };
-  usesLegacyBeforeAgentStart: boolean;
   compatibility: PluginCompatibilityNotice[];
 };
 
 function buildCompatibilityNoticesForInspect(
-  inspect: Pick<PluginInspectReport, "plugin" | "shape" | "usesLegacyBeforeAgentStart"> & {
+  inspect: Pick<PluginInspectReport, "plugin" | "shape"> & {
     diagnostics: readonly PluginDiagnostic[];
     hasRuntimeMemoryEmbeddingProviderRegistration: boolean;
   },
 ): PluginCompatibilityNotice[] {
   const warnings: PluginCompatibilityNotice[] = [];
-  if (inspect.usesLegacyBeforeAgentStart) {
-    warnings.push({
-      pluginId: inspect.plugin.id,
-      code: "legacy-before-agent-start",
-      compatCode: "legacy-before-agent-start",
-      severity: "warn",
-      message:
-        "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
-    });
-  }
   if (inspect.shape === "hook-only") {
     warnings.push({
       pluginId: inspect.plugin.id,
@@ -401,24 +392,34 @@ export function buildPluginInspectReport(params: {
     )
     .map((descriptor) => descriptor.name);
 
-  // Populate MCP server info for bundle-format plugins with a known rootDir.
+  // MCP metadata is process-stable and comes from the discovered plugin manifest.
   let mcpServers: PluginInspectReport["mcpServers"] = [];
-  if (plugin.format === "bundle" && plugin.bundleFormat && plugin.rootDir) {
-    const mcpSupport = inspectBundleMcpRuntimeSupport({
-      pluginId: plugin.id,
-      rootDir: plugin.rootDir,
-      bundleFormat: plugin.bundleFormat,
-    });
-    mcpServers = [
-      ...mcpSupport.supportedServerNames.map((name) => ({
-        name,
-        hasStdioTransport: true,
-      })),
-      ...mcpSupport.unsupportedServerNames.map((name) => ({
-        name,
-        hasStdioTransport: false,
-      })),
-    ];
+  if (plugin.rootDir) {
+    const mcpSupport =
+      plugin.format === "bundle" && plugin.bundleFormat
+        ? inspectBundleMcpRuntimeSupport({
+            pluginId: plugin.id,
+            rootDir: plugin.rootDir,
+            bundleFormat: plugin.bundleFormat,
+          })
+        : plugin.mcpServers
+          ? inspectNativePluginMcpRuntimeSupport({
+              rootDir: plugin.rootDir,
+              mcpServers: plugin.mcpServers,
+            })
+          : undefined;
+    if (mcpSupport) {
+      mcpServers = [
+        ...mcpSupport.supportedServerNames.map((name) => ({
+          name,
+          hasStdioTransport: true,
+        })),
+        ...mcpSupport.unsupportedServerNames.map((name) => ({
+          name,
+          hasStdioTransport: false,
+        })),
+      ];
+    }
   }
 
   // Populate LSP server info for bundle-format plugins with a known rootDir.
@@ -441,14 +442,12 @@ export function buildPluginInspectReport(params: {
     ];
   }
 
-  const usesLegacyBeforeAgentStart = shapeSummary.usesLegacyBeforeAgentStart;
   const hasRuntimeMemoryEmbeddingProviderRegistration = report.memoryEmbeddingProviders.some(
     (entry) => entry.pluginId === plugin.id,
   );
   const compatibility = buildCompatibilityNoticesForInspect({
     plugin,
     shape,
-    usesLegacyBeforeAgentStart,
     diagnostics,
     hasRuntimeMemoryEmbeddingProviderRegistration,
   });
@@ -481,7 +480,6 @@ export function buildPluginInspectReport(params: {
       allowedModels: [...(policyEntry?.subagent?.allowedModels ?? [])],
       hasAllowedModelsConfig: policyEntry?.subagent?.hasAllowedModelsConfig === true,
     },
-    usesLegacyBeforeAgentStart,
     compatibility,
   };
 }

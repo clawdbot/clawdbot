@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, test } from "vitest";
+import { ANTHROPIC_CONTEXT_1M_TOKENS } from "../agents/context-resolution.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -29,7 +30,6 @@ const MAIN_SESSION_ID = "sess-main";
 const TRANSCRIPT_TOTAL_TOKENS = 3_200;
 const TRANSCRIPT_COST_USD = 0.007725;
 const ANTHROPIC_MODEL = "claude-sonnet-4-6";
-const ANTHROPIC_CONTEXT_TOKENS = 1_048_576;
 const FREE_OPENAI_MODEL = "gpt-5.3-codex-spark";
 
 type TranscriptUsageFixture = {
@@ -317,7 +317,7 @@ function transcriptFallbackEntry(now: number, overrides: Partial<SessionEntry> =
 
 function expectAnthropicBackfill(session: ListedSession | undefined) {
   expectTranscriptBackfill(session, {
-    contextTokens: ANTHROPIC_CONTEXT_TOKENS,
+    contextTokens: ANTHROPIC_CONTEXT_1M_TOKENS,
     estimatedCostUsd: TRANSCRIPT_COST_USD,
   });
 }

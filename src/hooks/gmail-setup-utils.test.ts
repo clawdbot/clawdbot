@@ -4,12 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
-import {
-  ensureTailscaleEndpoint,
-  resetGmailSetupUtilsCachesForTest,
-  runGcloud,
-} from "./gmail-setup-utils.js";
-
 const itUnix = process.platform === "win32" ? it.skip : it;
 const runCommandWithTimeoutMock = vi.fn();
 
@@ -18,14 +12,19 @@ vi.mock("../process/exec.js", () => ({
 }));
 
 beforeEach(() => {
+  vi.resetModules();
   runCommandWithTimeoutMock.mockClear();
-  resetGmailSetupUtilsCachesForTest();
 });
+
+async function loadGmailSetupUtils() {
+  return await import("./gmail-setup-utils.js");
+}
 
 describe("runGcloud interpreter resolution", () => {
   itUnix(
     "resolves a working python path and caches the result",
     async () => {
+      const { runGcloud } = await loadGmailSetupUtils();
       const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-python-"));
       try {
         const realPython = path.join(tmp, "python-real");
@@ -41,7 +40,7 @@ describe("runGcloud interpreter resolution", () => {
         await withEnvAsync({ PATH: `${shimDir}${path.delimiter}/usr/bin` }, async () => {
           runCommandWithTimeoutMock
             .mockResolvedValueOnce({
-              stdout: `${realPython}\n`,
+              stdout: `${realPython}\n3.12\n`,
               stderr: "",
               code: 0,
               signal: null,
@@ -72,12 +71,84 @@ describe("runGcloud interpreter resolution", () => {
     },
     60_000,
   );
+
+  itUnix(
+    "skips Python versions below and above gcloud's supported range",
+    async () => {
+      const { runGcloud } = await loadGmailSetupUtils();
+      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-python-ver-"));
+      try {
+        const oldPython = path.join(tmp, "python-old");
+        await fs.writeFile(oldPython, "#!/bin/sh\nexit 0\n", "utf-8");
+        await fs.chmod(oldPython, 0o755);
+        const goodPython = path.join(tmp, "python-good");
+        await fs.writeFile(goodPython, "#!/bin/sh\nexit 0\n", "utf-8");
+        await fs.chmod(goodPython, 0o755);
+
+        const shimDirs = ["old", "future", "supported"].map((name) =>
+          path.join(tmp, `${name}-shims`),
+        );
+        for (const shimDir of shimDirs) {
+          await fs.mkdir(shimDir, { recursive: true });
+          const shim = path.join(shimDir, "python3");
+          await fs.writeFile(shim, "#!/bin/sh\nexit 0\n", "utf-8");
+          await fs.chmod(shim, 0o755);
+        }
+
+        await withEnvAsync({ PATH: shimDirs.join(path.delimiter) }, async () => {
+          runCommandWithTimeoutMock
+            // python3 -> Python 3.9 (unsupported by gcloud): must be skipped.
+            .mockResolvedValueOnce({
+              stdout: `${oldPython}\n3.9\n`,
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+            })
+            // A future Python beyond gcloud's current cap must also be skipped.
+            .mockResolvedValueOnce({
+              stdout: `${path.join(tmp, "python-future")}\n3.15\n`,
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+            })
+            // Python 3.12 is supported and should be selected.
+            .mockResolvedValueOnce({
+              stdout: `${goodPython}\n3.12\n`,
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+            })
+            .mockResolvedValue({
+              stdout: "",
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+            });
+
+          await runGcloud(["config", "list"]);
+
+          expect(runCommandWithTimeoutMock).toHaveBeenLastCalledWith(["gcloud", "config", "list"], {
+            timeoutMs: 120_000,
+            env: { CLOUDSDK_PYTHON: goodPython, CLOUDSDK_PYTHON_ARGS: undefined },
+          });
+        });
+      } finally {
+        await fs.rm(tmp, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
 });
 
 describe("runGcloud", () => {
   itUnix(
     "overrides an inherited CLOUDSDK_PYTHON value with a resolved interpreter",
     async () => {
+      const { runGcloud } = await loadGmailSetupUtils();
       const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gcloud-python-"));
       try {
         const realPython = path.join(tmp, "python-real");
@@ -99,7 +170,7 @@ describe("runGcloud", () => {
           async () => {
             runCommandWithTimeoutMock
               .mockResolvedValueOnce({
-                stdout: `${realPython}\n`,
+                stdout: `${realPython}\n3.12\n`,
                 stderr: "",
                 code: 0,
                 signal: null,
@@ -132,6 +203,7 @@ describe("runGcloud", () => {
   );
 
   itUnix("unsets inherited CLOUDSDK_PYTHON when no trusted interpreter is found", async () => {
+    const { runGcloud } = await loadGmailSetupUtils();
     await withEnvAsync(
       {
         CLOUDSDK_PYTHON: "/tmp/attacker-python",
@@ -161,6 +233,7 @@ describe("runGcloud", () => {
 
 describe("ensureTailscaleEndpoint", () => {
   it("includes stdout and exit code when tailscale serve fails", async () => {
+    const { ensureTailscaleEndpoint } = await loadGmailSetupUtils();
     runCommandWithTimeoutMock
       .mockResolvedValueOnce({
         stdout: JSON.stringify({ Self: { DNSName: "host.tailnet.ts.net." } }),
@@ -194,6 +267,7 @@ describe("ensureTailscaleEndpoint", () => {
   });
 
   it("includes JSON parse failure details with stdout", async () => {
+    const { ensureTailscaleEndpoint } = await loadGmailSetupUtils();
     runCommandWithTimeoutMock.mockResolvedValueOnce({
       stdout: "not-json",
       stderr: "",
@@ -219,6 +293,7 @@ describe("ensureTailscaleEndpoint", () => {
   });
 
   it("passes abort signal to tailscale status and serve commands", async () => {
+    const { ensureTailscaleEndpoint } = await loadGmailSetupUtils();
     const abortController = new AbortController();
     runCommandWithTimeoutMock
       .mockResolvedValueOnce({

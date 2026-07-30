@@ -7,10 +7,8 @@ import type { ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
-import {
-  recordInboundSessionMeta,
-  resolveStorePath,
-} from "../../config/sessions/inbound.runtime.js";
+import { resolveStorePath, updateSessionLastRoute } from "../../config/sessions/inbound.runtime.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RoutePeer } from "../../routing/resolve-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -25,7 +23,9 @@ export type OutboundSessionRoute = {
   recipientSessionExact?: boolean | "direct-alias" | "delivery-identity";
   peer: RoutePeer;
   chatType: "direct" | "group" | "channel";
+  /** Canonical conversation identity mirrored into MsgContext.From. */
   from: string;
+  /** Routable delivery address mirrored into MsgContext.To. */
   to: string;
   threadId?: string | number;
 };
@@ -225,13 +225,16 @@ export async function resolveOutboundSessionRoute(
   return resolveFallbackSession(nextParams);
 }
 
-/** Persists best-effort session metadata for an outbound-only route. */
-export async function ensureOutboundSessionEntry(params: {
+type OutboundSessionEntryParams = {
   cfg: OpenClawConfig;
   channel: ChannelId;
   accountId?: string | null;
   route: OutboundSessionRoute;
-}): Promise<void> {
+};
+
+async function persistOutboundSessionEntry(
+  params: OutboundSessionEntryParams,
+): Promise<SessionEntry | null> {
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: resolveAgentIdFromSessionKey(params.route.sessionKey),
   });
@@ -246,14 +249,40 @@ export async function ensureOutboundSessionEntry(params: {
     MessageThreadId: params.route.threadId,
     OriginatingChannel: params.channel,
     OriginatingTo: params.route.to,
+    NativeDirectUserId: params.route.peer.kind === "direct" ? params.route.peer.id : undefined,
+    NativeChannelId: params.route.peer.kind === "direct" ? undefined : params.route.peer.id,
   };
+  // Shared-main context may still point at another channel. Commit route and
+  // origin together so its conversation identity binds the exact destination.
+  return await updateSessionLastRoute({
+    storePath,
+    sessionKey: params.route.sessionKey,
+    // Creation is part of this helper's contract: directory-discovered peers
+    // may not have a local session row until their first outbound turn.
+    createIfMissing: true,
+    channel: params.channel,
+    to: params.route.to,
+    accountId: params.accountId ?? undefined,
+    threadId: params.route.threadId,
+    ctx,
+  });
+}
+
+/** Persists best-effort session metadata for an outbound-only route. */
+export async function ensureOutboundSessionEntry(
+  params: OutboundSessionEntryParams,
+): Promise<void> {
   try {
-    await recordInboundSessionMeta({
-      storePath,
-      sessionKey: params.route.sessionKey,
-      ctx,
-    });
+    await persistOutboundSessionEntry(params);
   } catch {
     // Do not block outbound sends on session meta writes.
+  }
+}
+
+/** Persists the route required to bind an exact conversation address to local context. */
+export async function bindOutboundSessionEntry(params: OutboundSessionEntryParams): Promise<void> {
+  const entry = await persistOutboundSessionEntry(params);
+  if (!entry) {
+    throw new Error(`Failed to bind outbound session ${params.route.sessionKey}`);
   }
 }

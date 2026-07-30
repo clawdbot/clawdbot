@@ -79,7 +79,7 @@ export function upsertSessionUpstreamLink(
     marker: SessionUpstreamJsonValue;
   },
   options: OpenClawStateDatabaseOptions & { now?: number } = {},
-): void {
+): boolean {
   const now = options.now ?? Date.now();
   try {
     runOpenClawStateWriteTransaction(({ db }) => {
@@ -141,8 +141,10 @@ export function upsertSessionUpstreamLink(
           ),
       );
     }, options);
+    return true;
   } catch (error) {
     log.warn(`failed to upsert session upstream link: ${String(error)}`);
+    return false;
   }
 }
 

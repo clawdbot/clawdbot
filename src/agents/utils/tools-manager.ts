@@ -23,6 +23,7 @@ import chalk from "chalk";
 import { extractArchive } from "../../infra/archive.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { APP_NAME, getBinDir } from "../config.js";
+import { readProviderJsonResponse } from "../provider-http-errors.js";
 
 const TOOLS_DIR = getBinDir();
 const NETWORK_TIMEOUT_MS = 10_000;
@@ -32,6 +33,7 @@ const MAX_EXTRACTED_BYTES = 500 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES = 1_000;
 const ARCHIVE_EXTRACT_TIMEOUT_MS = 60_000;
 const CONTENT_LENGTH_RE = /^\d+$/;
+const GITHUB_RELEASE_JSON_MAX_BYTES = 1024 * 1024;
 
 async function cancelUnreadResponseBody(response: Response): Promise<void> {
   if (!response.bodyUsed) {
@@ -103,7 +105,11 @@ const TOOLS: Record<string, ToolConfig> = {
 // Check if a command exists in PATH by trying to run it
 function commandExists(cmd: string): boolean {
   try {
-    const result = spawnSync(cmd, ["--version"], { stdio: "pipe", timeout: 5_000 });
+    const result = spawnSync(cmd, ["--version"], {
+      killSignal: "SIGKILL",
+      stdio: "pipe",
+      timeout: 5_000,
+    });
     // Require a clean exit, not just a successful spawn. An installed-but-broken
     // binary (e.g. GLIBC mismatch after a system upgrade, missing shared lib)
     // spawns fine but exits non-zero; without the status check it would be
@@ -156,7 +162,9 @@ async function getLatestVersion(repo: string): Promise<string> {
       throw new Error(`GitHub API error: ${response.status}`);
     }
 
-    const data = (await response.json()) as { tag_name: string };
+    const data = await readProviderJsonResponse<{ tag_name: string }>(response, "GitHub release", {
+      maxBytes: GITHUB_RELEASE_JSON_MAX_BYTES,
+    });
     return data.tag_name.replace(/^v/, "");
   } finally {
     await guarded.release();
@@ -417,6 +425,12 @@ export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<str
   }
 }
 
-export const testing = {
+const testing = {
   downloadFile,
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.toolsManagerTestApi")] = {
+    testing,
+  };
+}

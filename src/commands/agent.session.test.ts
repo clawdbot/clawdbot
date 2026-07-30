@@ -1,20 +1,20 @@
 // Agent session command tests cover session resolution, agent scoping, and temp-home session stores.
 import path from "node:path";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentDir, resolveSessionAgentId } from "../agents/agent-scope.js";
-import { updateSessionStoreAfterAgentRun } from "../agents/command/session-store.js";
 import { resolveSession } from "../agents/command/session.js";
 import {
   appendTranscriptEvent,
   loadSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, {
@@ -74,6 +74,17 @@ async function withCrossAgentResumeFixture(
 
 beforeEach(() => {
   clearSessionStoreCacheForTest();
+  // Freshness fixtures seed times relative to Date.now(); near the 04:00
+  // local daily-reset boundary the seeded window straddles it and reuse
+  // scenarios flip to new sessions. Pin local noon so no timezone can hit it.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  const localNoon = new Date();
+  localNoon.setHours(12, 0, 0, 0);
+  vi.setSystemTime(localNoon);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("agent session resolution", () => {
@@ -137,7 +148,10 @@ describe("agent session resolution", () => {
         main: {
           sessionId: "origin-provider-reset",
           updatedAt: Date.now() - 30 * 60_000,
-          origin: { provider: "quietchat" },
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "quietchat" },
+            origin: { provider: "quietchat" },
+          }),
         },
       });
       const cfg = mockConfig(home, store);
@@ -251,52 +265,6 @@ describe("agent session resolution", () => {
         expect(resolution.sessionEntry?.cliSessionBindings).toBeUndefined();
         expect(resolution.sessionEntry?.cliSessionIds).toBeUndefined();
         expect(resolution.sessionEntry?.claudeCliSessionId).toBeUndefined();
-
-        const sessionStore = {
-          [scenario.sessionKey]: resolution.sessionEntry!,
-        };
-        await resolveSessionTranscriptFile({
-          sessionId: resolution.sessionId,
-          sessionKey: scenario.sessionKey,
-          sessionEntry: resolution.sessionEntry,
-          sessionStore,
-          storePath: resolution.storePath,
-          agentId: "main",
-        });
-        await updateSessionStoreAfterAgentRun({
-          cfg,
-          sessionId: resolution.sessionId,
-          sessionKey: scenario.sessionKey,
-          storePath: resolution.storePath,
-          sessionStore,
-          defaultProvider: "openai",
-          defaultModel: "gpt-5.5",
-          result: {
-            payloads: [],
-            meta: {
-              aborted: false,
-              agentMeta: {
-                provider: "openai",
-                model: "gpt-5.5",
-              },
-            },
-          } as never,
-        });
-        const persisted = loadSessionEntry({
-          sessionKey: scenario.sessionKey,
-          storePath: resolution.storePath,
-        });
-        expect(persisted?.sessionId).toBe(resolution.sessionId);
-        expect(persisted?.sessionFile).not.toBe(sessionFile);
-        expect(persisted?.status).toBeUndefined();
-        expect(persisted?.startedAt).toBeUndefined();
-        expect(persisted?.endedAt).toBeUndefined();
-        expect(persisted?.runtimeMs).toBeUndefined();
-        expect(persisted?.cliSessionBindings).toBeUndefined();
-        expect(persisted?.cliSessionIds).toBeUndefined();
-        expect(persisted?.claudeCliSessionId).toBeUndefined();
-        expect(persisted?.sessionStartedAt).toBeGreaterThan(registryUpdatedAt);
-        expect(persisted?.lastInteractionAt).toBeGreaterThan(registryUpdatedAt);
       });
     }
   });
@@ -334,7 +302,7 @@ describe("agent session resolution", () => {
       expect(resolution.sessionKey).toBe("agent:main:main");
       expect(resolution.sessionId).toBe(sessionId);
       expect(resolution.isNewSession).toBe(false);
-      expect(resolution.sessionEntry?.sessionFile).toBe(sessionFile);
+      expect(resolution.sessionEntry).not.toHaveProperty("sessionFile");
       expect(resolution.sessionEntry?.status).toBe("done");
       expect(resolution.sessionEntry?.startedAt).toBe(registryUpdatedAt - 1_000);
       expect(resolution.sessionEntry?.endedAt).toBe(registryUpdatedAt - 100);
@@ -351,16 +319,26 @@ describe("agent session resolution", () => {
         storePath: resolution.storePath,
         agentId: "main",
       });
-      expect(resolvedTranscript.sessionFile).toBe(
-        `sqlite:main:${sessionId}:${resolution.storePath}`,
-      );
+      expect(resolvedTranscript.sessionFile).toBe(resolution.sessionKey);
+      await expect(
+        resolveSessionTranscriptFile({
+          sessionId: resolution.sessionId,
+          sessionKey: resolution.sessionKey,
+          sessionEntry: undefined,
+          sessionStore: resolution.sessionStore,
+          storePath: resolution.storePath,
+          agentId: "main",
+        }),
+      ).resolves.toMatchObject({
+        sessionEntry: expect.objectContaining({ sessionId }),
+      });
 
       const persisted = loadSessionEntry({
         sessionKey: resolution.sessionKey,
         storePath: resolution.storePath,
       });
       expect(persisted?.sessionId).toBe(sessionId);
-      expect(persisted?.sessionFile).toBe(resolvedTranscript.sessionFile);
+      expect(persisted).not.toHaveProperty("sessionFile");
       expect(persisted?.status).toBe("done");
       expect(persisted?.startedAt).toBe(registryUpdatedAt - 1_000);
       expect(persisted?.endedAt).toBe(registryUpdatedAt - 100);

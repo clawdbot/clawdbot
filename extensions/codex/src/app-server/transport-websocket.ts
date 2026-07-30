@@ -6,6 +6,7 @@ import { EventEmitter } from "node:events";
 import net from "node:net";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import WebSocket, { type RawData } from "ws";
 import { resolveCodexAppServerUserHomeDir, type CodexAppServerStartOptions } from "./config.js";
 import type { CodexAppServerTransport } from "./transport.js";
@@ -39,6 +40,8 @@ export function createWebSocketTransport(
       })
     : new WebSocket(options.url, websocketOptions);
   const pendingFrames: string[] = [];
+  const stdinDecoder = new StringDecoder("utf8");
+  let pendingLine = "";
   let killed = false;
 
   const sendFrame = (frame: string) => {
@@ -72,9 +75,20 @@ export function createWebSocketTransport(
 
   const stdin = new Writable({
     write(chunk, _encoding, callback) {
-      for (const frame of chunk.toString("utf8").split("\n")) {
+      pendingLine += stdinDecoder.write(chunk);
+      const lines = pendingLine.split("\n");
+      pendingLine = lines.pop() ?? "";
+      for (const frame of lines) {
         sendFrame(frame);
       }
+      callback();
+    },
+    final(callback) {
+      pendingLine += stdinDecoder.end();
+      if (pendingLine) {
+        sendFrame(pendingLine);
+      }
+      pendingLine = "";
       callback();
     },
   });

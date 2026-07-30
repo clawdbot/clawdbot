@@ -135,6 +135,8 @@ struct CommandSessionActionsModifier: ViewModifier {
     let categories: [String]
     let isArchived: Bool
     let isEnabled: Bool
+    let canArchive: Bool
+    let canDelete: Bool
     let actions: CommandSessionActions
 
     @State private var editor: Editor?
@@ -156,7 +158,9 @@ struct CommandSessionActionsModifier: ViewModifier {
                     self.actionButton("Unarchive", systemImage: "archivebox") {
                         self.actions.toggleArchived()
                     }
-                    self.deleteButton
+                    if self.canDelete {
+                        self.deleteButton
+                    }
                 } else {
                     self.actionButton(
                         self.session.pinned == true
@@ -181,10 +185,14 @@ struct CommandSessionActionsModifier: ViewModifier {
                         self.actions.fork()
                     }
                     self.groupMenu
-                    self.actionButton("Archive", systemImage: "archivebox") {
-                        self.actions.toggleArchived()
+                    if self.canArchive {
+                        self.actionButton("Archive", systemImage: "archivebox") {
+                            self.actions.toggleArchived()
+                        }
                     }
-                    self.deleteButton
+                    if self.canDelete {
+                        self.deleteButton
+                    }
                 }
             }
             .alert(self.editorTitle, isPresented: self.editorBinding) {
@@ -328,6 +336,8 @@ extension View {
         categories: [String],
         isArchived: Bool = false,
         isEnabled: Bool = true,
+        canArchive: Bool = true,
+        canDelete: Bool = true,
         actions: CommandSessionActions) -> some View
     {
         self.modifier(CommandSessionActionsModifier(
@@ -335,6 +345,8 @@ extension View {
             categories: categories,
             isArchived: isArchived,
             isEnabled: isEnabled,
+            canArchive: canArchive,
+            canDelete: canDelete,
             actions: actions))
     }
 }

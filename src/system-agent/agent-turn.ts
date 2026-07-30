@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveCliBackendConfig, type ResolvedCliBackend } from "../agents/cli-backends.js";
 import { normalizeCliModel } from "../agents/cli-runner/helpers.js";
+import { SessionManager } from "../agents/sessions/index.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { CliSessionBinding } from "../config/sessions.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
@@ -11,6 +12,7 @@ import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import { SYSTEM_AGENT_SYSTEM_PROMPT } from "./assistant-prompts.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
+import type { SystemAgentOperation } from "./operations.js";
 import type { SystemAgentOverview } from "./overview.js";
 import {
   resolveSystemAgentExpectedAgentHarnessRuntimeArtifact,
@@ -28,8 +30,11 @@ import {
  * Turns share one persistent session so the conversation has genuine
  * multi-turn memory. Inference setup must succeed before this runner is entered.
  */
+// Flat budget for both route classes: agent-loop turns run multi-step tool
+// calls, so even metered external routes need the full window, and 120s
+// already covers local startup + generation (planner evidence).
 const AGENT_TURN_TIMEOUT_MS = 120_000;
-const SYSTEM_AGENT_MCP_TOOL_NAME = "mcp__openclaw__openclaw";
+const SYSTEM_AGENT_TOOL_NAME = "openclaw";
 
 export type SystemAgentTurnDirective =
   import("../agents/tools/system-agent-tool.js").SystemAgentToolDirective;
@@ -53,14 +58,16 @@ export type SystemAgentTurnRunner = (params: {
 export type SystemAgentSession = {
   sessionId: string;
   /** Exact live-tested inference owner for this ephemeral conversation. */
-  readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
+  verifiedInference: SystemAgentVerifiedInferenceBinding;
   /** Host-owned pending-proposal fingerprint; see system-agent-tool.ts. */
-  proposalRef: { current?: string };
+  proposalRef: { current?: string; operation?: SystemAgentOperation };
   /** Native CLI continuity, bound to the exact configured model/auth owner route. */
   cliSession?: {
     routeKey: string;
     binding: CliSessionBinding;
   };
+  /** Process-lifetime transcript shared by embedded and CLI-backed turns. */
+  sessionManager?: SessionManager;
 };
 
 export function createSystemAgentSession(
@@ -117,25 +124,16 @@ function extractRunText(result: EmbeddedRunResult): string | undefined {
   );
 }
 
-async function ensureSystemAgentDirs(
-  sessionId: string,
-): Promise<{ workspaceDir: string; sessionFile: string }> {
+async function ensureSystemAgentDirs(): Promise<{ workspaceDir: string }> {
   const base = path.join(resolveStateDir(), "openclaw");
   const workspaceDir = path.join(base, "workspace");
   await fs.mkdir(workspaceDir, { recursive: true });
-  await fs.mkdir(path.join(base, "sessions"), { recursive: true });
-  return { workspaceDir, sessionFile: path.join(base, "sessions", `${sessionId}.jsonl`) };
+  return { workspaceDir };
 }
 
 export async function cleanupSystemAgentSession(session: SystemAgentSession): Promise<void> {
-  const sessionFile = path.join(
-    resolveStateDir(),
-    "openclaw",
-    "sessions",
-    `${session.sessionId}.jsonl`,
-  );
   delete session.cliSession;
-  await fs.rm(sessionFile, { force: true });
+  delete session.sessionManager;
 }
 
 type SystemAgentTurnParams = Parameters<SystemAgentTurnRunner>[0];
@@ -146,6 +144,7 @@ function clearSystemAgentCliSession(session: SystemAgentSession): void {
 
 function clearFailedSystemAgentSessionState(session: SystemAgentSession): void {
   session.proposalRef.current = undefined;
+  session.proposalRef.operation = undefined;
   clearSystemAgentCliSession(session);
 }
 
@@ -181,6 +180,7 @@ function cliRouteKey(
           bundleMcpMode: backend.bundleMcpMode,
           authEpochMode: backend.authEpochMode,
           nativeToolMode: backend.nativeToolMode,
+          toolAvailabilityEnforcement: backend.toolAvailabilityEnforcement,
           sideQuestionToolMode: backend.sideQuestionToolMode,
         }
       : null,
@@ -206,12 +206,16 @@ function resolveSystemAgentCliBackend(
 
 function resolveSystemAgentCliToolAvailability(
   backend: ResolvedCliBackend | null,
-): { native: []; mcp: string[] } | undefined {
+): { native: []; openClaw: string[] } | undefined {
   if (backend?.nativeToolMode === "none") {
     return undefined;
   }
-  if (backend?.nativeToolMode === "selectable" && backend.resolveExecutionArgs) {
-    return { native: [], mcp: [SYSTEM_AGENT_MCP_TOOL_NAME] };
+  if (
+    backend?.nativeToolMode === "selectable" &&
+    ((backend.toolAvailabilityEnforcement === "execution-args" && backend.resolveExecutionArgs) ||
+      (backend.toolAvailabilityEnforcement === "prepare-execution" && backend.prepareExecution))
+  ) {
+    return { native: [], openClaw: [SYSTEM_AGENT_TOOL_NAME] };
   }
   const backendId = backend?.id ?? "unknown";
   throw new Error(`CLI backend ${backendId} cannot enforce OpenClaw's exact tool availability`);
@@ -227,7 +231,7 @@ function resolveSystemAgentCliToolAvailability(
  */
 async function mirrorSystemAgentToolStateFromEvents(params: {
   runId: string;
-  proposalRef: { current?: string };
+  proposalRef: { current?: string; operation?: SystemAgentOperation };
   directiveRef: { current?: SystemAgentTurnDirective };
 }): Promise<() => void> {
   const [
@@ -256,6 +260,7 @@ async function mirrorSystemAgentToolStateFromEvents(params: {
     const transition = resolveSystemAgentProposalTransition({ args, resultText });
     if (transition) {
       params.proposalRef.current = transition.proposal;
+      params.proposalRef.operation = transition.operation;
     }
     const directive = resolveSystemAgentDirectiveTransition({ args, resultText });
     if (directive && params.directiveRef.current?.kind !== "approved-operation") {
@@ -269,7 +274,7 @@ async function mirrorSystemAgentToolStateFromEvents(params: {
  * output failures are typed so callers may try another inference path without
  * mistaking the failure for deterministic setup authority.
  */
-export async function runSystemAgentTurnWithDeps(
+async function runSystemAgentTurnWithDeps(
   params: SystemAgentTurnParams,
   deps: SystemAgentTurnDeps = {},
 ): Promise<SystemAgentTurnReply | null> {
@@ -299,9 +304,8 @@ export async function runSystemAgentTurnWithDeps(
     return throwSystemAgentInferenceUnavailable({ session: params.session, failures: [error] });
   }
   let workspaceDir: string;
-  let sessionFile: string;
   try {
-    ({ workspaceDir, sessionFile } = await ensureSystemAgentDirs(params.session.sessionId));
+    ({ workspaceDir } = await ensureSystemAgentDirs());
   } catch (error) {
     return throwSystemAgentInferenceUnavailable({
       session: params.session,
@@ -310,19 +314,24 @@ export async function runSystemAgentTurnWithDeps(
   }
 
   const runId = `openclaw-turn-${randomUUID()}`;
+  const sessionManager = params.session.sessionManager ?? SessionManager.inMemory(workspaceDir);
+  params.session.sessionManager = sessionManager;
   const shared = {
     sessionId: params.session.sessionId,
     sessionKey: buildAgentMainSessionKey({ agentId: SYSTEM_AGENT_ID }),
     agentId: SYSTEM_AGENT_ID,
     trigger: "manual" as const,
-    sessionFile,
+    sessionFile: `in-memory:${params.session.sessionId}`,
+    sessionManager,
     workspaceDir,
     config: plan.runConfig,
     prompt: params.input,
     timeoutMs: AGENT_TURN_TIMEOUT_MS,
+    thinkLevel: "off" as const,
     runId,
     messageChannel: "openclaw",
     messageProvider: "openclaw",
+    disableTrajectory: true,
   };
   // Directives are per-turn: the tool records at most one interactive handoff
   // and the engine executes it after the reply.
@@ -432,3 +441,9 @@ export async function runSystemAgentTurnWithDeps(
 
 export const runSystemAgentTurn: SystemAgentTurnRunner = (params) =>
   runSystemAgentTurnWithDeps(params);
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.systemAgentTurnTestApi")] = {
+    runSystemAgentTurnWithDeps,
+  };
+}

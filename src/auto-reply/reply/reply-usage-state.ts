@@ -5,6 +5,7 @@ import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 
 const TTL_MS = 5 * 60_000;
+const MAX_REPLY_USAGE_STATE_ENTRIES = 1_024;
 
 const store = new Map<string, { snapshot: PluginHookReplyUsageState; expiresAt: number }>();
 
@@ -109,6 +110,15 @@ function prune(now: number): void {
     if (value.expiresAt < now) {
       store.delete(key);
     }
+  }
+  // This handoff is best-effort metadata for an optional hook. Bound bursts so
+  // completed runs cannot retain one full snapshot each for the whole TTL.
+  while (store.size > MAX_REPLY_USAGE_STATE_ENTRIES) {
+    const oldest = store.keys().next();
+    if (oldest.done) {
+      return;
+    }
+    store.delete(oldest.value);
   }
 }
 

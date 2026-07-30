@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  execGhApiRead,
   execPlainGh,
   plainGhEnv,
   PLAIN_GH_SYSTEM_CANDIDATES,
@@ -35,6 +36,7 @@ printf 'FORCE_COLOR=%s\\n' "\${FORCE_COLOR-}"
 printf 'CLICOLOR=%s\\n' "\${CLICOLOR-}"
 printf 'CLICOLOR_FORCE=%s\\n' "\${CLICOLOR_FORCE-}"
 printf 'COLORTERM_SET=%s\\n' "\${COLORTERM+x}"
+printf 'OPENCLAW_GH_BIN_SET=%s\\n' "\${OPENCLAW_GH_BIN+x}"
 `,
   );
   chmodSync(ghPath, 0o755);
@@ -95,6 +97,21 @@ describe("plain gh helpers", () => {
     });
     expect(plainGhEnv({ COLORTERM: "truecolor" })).not.toHaveProperty("COLORTERM");
     expect(plainGhEnv({ GH_FORCE_TTY: "120" })).not.toHaveProperty("GH_FORCE_TTY");
+  });
+
+  it("routes explicit GET reads through the PATH shim", () => {
+    const ghPath = makeFakeGh();
+    const output = execGhApiRead("repos/openclaw/openclaw/pulls/1", {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_GH_BIN: "/identity-sensitive/plain-gh",
+        PATH: `${path.dirname(ghPath)}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+    });
+
+    expect(output).toContain("argv=api repos/openclaw/openclaw/pulls/1 --method GET");
+    expect(output).toContain("OPENCLAW_GH_BIN_SET=");
   });
 
   it("runs the shell helper with color disabled", () => {

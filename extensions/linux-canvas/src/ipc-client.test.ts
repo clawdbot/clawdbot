@@ -2,20 +2,55 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_REQUEST_TIMEOUT_MS, LinuxCanvasIpcClient } from "./ipc-client.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { LinuxCanvasIpcClient } from "./ipc-client.js";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
 describe("Linux Canvas IPC client", () => {
-  it("keeps the outer timeout above the app's complete A2UI phase budget", () => {
-    expect(DEFAULT_REQUEST_TIMEOUT_MS).toBeGreaterThan(8_000 + 6_000 + 8_000);
+  it("keeps the outer timeout above the app's complete A2UI phase budget", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-linux-canvas-timeout-"));
+    tempDirs.push(dir);
+    const socketPath = path.join(dir, "canvas.sock");
+    let resolveRequest: (() => void) | undefined;
+    const requestReceived = new Promise<void>((resolve) => {
+      resolveRequest = resolve;
+    });
+    const server = net.createServer((socket) => {
+      socket.once("data", () => {
+        resolveRequest?.();
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, resolve);
+    });
+
+    const client = new LinuxCanvasIpcClient(socketPath);
+    try {
+      const request = client.request("canvas.present", "{}");
+      const settled = vi.fn();
+      void request.then(settled, settled);
+      await requestReceived;
+
+      await vi.advanceTimersByTimeAsync(8_000 + 6_000 + 8_000);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(8_000);
+      await expect(request).rejects.toThrow("desktop app timed out handling canvas.present");
+    } finally {
+      client.close();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
   });
 
   it("maps requests to responses without corrupting split UTF-8 frames", async () => {

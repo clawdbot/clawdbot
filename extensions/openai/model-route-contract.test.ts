@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   OPENAI_CHATGPT_MODERN_MODEL_IDS,
-  OPENAI_DUAL_ROUTE_MODEL_IDS,
-  OPENAI_PLATFORM_ONLY_ROUTE_MODEL_IDS,
   OPENAI_PROVIDER_MODERN_MODEL_IDS,
-  OPENAI_SUBSCRIPTION_ONLY_ROUTE_MODEL_IDS,
   isOpenAIDualRouteModelId,
   isOpenAIPlatformOnlyRouteModelId,
   isOpenAISubscriptionOnlyRouteModelId,
@@ -37,12 +34,25 @@ describe("OpenAI model route contract", () => {
     const provider = buildOpenAIProvider();
     const chatGPTHooks = buildOpenAICodexProviderHooks();
     const routeModelIds = [
-      ...OPENAI_DUAL_ROUTE_MODEL_IDS,
-      ...OPENAI_PLATFORM_ONLY_ROUTE_MODEL_IDS,
-      ...OPENAI_SUBSCRIPTION_ONLY_ROUTE_MODEL_IDS,
+      ...new Set([...OPENAI_PROVIDER_MODERN_MODEL_IDS, ...OPENAI_CHATGPT_MODERN_MODEL_IDS]),
     ];
+    const dualRouteModelIds = routeModelIds.filter(isOpenAIDualRouteModelId);
+    const platformOnlyRouteModelIds = routeModelIds.filter(isOpenAIPlatformOnlyRouteModelId);
+    const subscriptionOnlyRouteModelIds = routeModelIds.filter(
+      isOpenAISubscriptionOnlyRouteModelId,
+    );
 
-    expect(new Set(routeModelIds).size).toBe(routeModelIds.length);
+    expect(
+      new Set([
+        ...dualRouteModelIds,
+        ...platformOnlyRouteModelIds,
+        ...subscriptionOnlyRouteModelIds,
+      ]).size,
+    ).toBe(
+      dualRouteModelIds.length +
+        platformOnlyRouteModelIds.length +
+        subscriptionOnlyRouteModelIds.length,
+    );
 
     for (const modelId of OPENAI_PROVIDER_MODERN_MODEL_IDS) {
       expect(provider.isModernModelRef?.({ provider: "openai", modelId })).toBe(true);
@@ -51,20 +61,20 @@ describe("OpenAI model route contract", () => {
       expect(chatGPTHooks.isModernModelRef?.({ provider: "openai", modelId })).toBe(true);
     }
 
-    for (const modelId of OPENAI_DUAL_ROUTE_MODEL_IDS) {
+    for (const modelId of dualRouteModelIds) {
       const resolution = resolveUnconfiguredModel(modelId);
       expect(
         resolution.kind === "routes" ? resolution.routes.map((route) => route.api) : [],
       ).toEqual(["openai-responses", "openai-chatgpt-responses"]);
     }
-    for (const modelId of OPENAI_PLATFORM_ONLY_ROUTE_MODEL_IDS) {
+    for (const modelId of platformOnlyRouteModelIds) {
       expect(resolveUnconfiguredModel(modelId)).toMatchObject({
         kind: "routes",
         defaultRuntimeId: "codex",
         routes: [{ api: "openai-responses", authRequirement: "api-key" }],
       });
     }
-    for (const modelId of OPENAI_SUBSCRIPTION_ONLY_ROUTE_MODEL_IDS) {
+    for (const modelId of subscriptionOnlyRouteModelIds) {
       expect(resolveUnconfiguredModel(modelId)).toMatchObject({
         kind: "routes",
         defaultRuntimeId: "codex",

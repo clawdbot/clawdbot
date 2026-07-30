@@ -83,7 +83,7 @@ export function createVoiceCallContinueOperationStore(params: {
     const ttsTimeoutMs =
       rt.config.tts?.timeoutMs ??
       params.config.tts?.timeoutMs ??
-      params.coreConfig.messages?.tts?.timeoutMs ??
+      params.coreConfig.tts?.timeoutMs ??
       TELEPHONY_DEFAULT_TTS_TIMEOUT_MS;
     return resolveTimerTimeoutMs(
       (rt.config.transcriptTimeoutMs ?? params.config.transcriptTimeoutMs) +

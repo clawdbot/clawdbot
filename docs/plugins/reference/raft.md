@@ -16,7 +16,7 @@ OpenClaw Raft channel plugin for secure CLI wake bridges.
 
 ## Surface
 
-channels: raft
+channels: `raft`
 
 ## Related docs
 

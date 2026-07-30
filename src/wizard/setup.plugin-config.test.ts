@@ -394,19 +394,35 @@ describe("setupPluginConfig", () => {
     expect(({} as Record<string, unknown>)[pollutionProbe]).toBeUndefined();
   });
 
-  it("coerces integer schema fields from text input", async () => {
+  it("coerces only JSON-compatible numeric inputs", async () => {
     loadPluginManifestRegistry.mockReturnValue({
       plugins: [
         makeManifestPlugin(
-          "retry-plugin",
+          "numeric-plugin",
           {
+            decimal: { label: "Decimal" },
+            scientific: { label: "Scientific" },
             retries: { label: "Retries" },
+            hexadecimal: { label: "Hexadecimal" },
+            fractionalRetries: { label: "Fractional retries" },
           },
           {
             type: "object",
             additionalProperties: false,
             properties: {
+              decimal: {
+                type: "number",
+              },
+              scientific: {
+                type: "number",
+              },
               retries: {
+                type: "integer",
+              },
+              hexadecimal: {
+                type: "number",
+              },
+              fractionalRetries: {
                 type: "integer",
               },
             },
@@ -415,11 +431,13 @@ describe("setupPluginConfig", () => {
       ],
     });
 
+    const answers = ["1.5", "1e2", "3", "0x10", "1.5"];
+
     const result = await setupPluginConfig({
       config: {
         plugins: {
           entries: {
-            "retry-plugin": {
+            "numeric-plugin": {
               enabled: true,
             },
           },
@@ -431,15 +449,17 @@ describe("setupPluginConfig", () => {
         note: vi.fn(async () => {}),
         select: vi.fn(async () => "") as unknown as WizardPrompter["select"],
         multiselect: vi.fn(async () => [
-          "retry-plugin",
+          "numeric-plugin",
         ]) as unknown as WizardPrompter["multiselect"],
-        text: vi.fn(async () => "3") as unknown as WizardPrompter["text"],
+        text: vi.fn(async () => answers.shift() ?? "") as unknown as WizardPrompter["text"],
         confirm: vi.fn(async () => true),
         progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
       },
     });
 
-    expect(result.plugins?.entries?.["retry-plugin"]?.config).toEqual({
+    expect(result.plugins?.entries?.["numeric-plugin"]?.config).toEqual({
+      decimal: 1.5,
+      scientific: 100,
       retries: 3,
     });
   });

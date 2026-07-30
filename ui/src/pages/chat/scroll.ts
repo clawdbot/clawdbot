@@ -1,10 +1,90 @@
 // Control UI module implements app scroll behavior.
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
+import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
 /** Distance (px) from the bottom within which we consider the user "near bottom". */
 const NEAR_BOTTOM_THRESHOLD = 450;
 const LATEST_MESSAGE_THRESHOLD = 1;
 const FOLLOW_REACQUIRE_THRESHOLD = 8;
+// Route navigation may replace a pane element while retaining its logical id.
+// Bound both dimensions so those short-lived owners cannot leak scroll state.
+const MAX_CACHED_TRANSCRIPT_SCROLL_PANES = 8;
+export type ChatSessionScrollPosition = {
+  scrollTop: number;
+  anchorToEnd: boolean;
+};
+
+const transcriptScrollTopByPane = new Map<string, Map<string, ChatSessionScrollPosition>>();
+
+function getPaneScrollTops(paneId: string): Map<string, ChatSessionScrollPosition> {
+  const existing = transcriptScrollTopByPane.get(paneId);
+  if (existing) {
+    transcriptScrollTopByPane.delete(paneId);
+    transcriptScrollTopByPane.set(paneId, existing);
+    return existing;
+  }
+  const created = new Map<string, ChatSessionScrollPosition>();
+  transcriptScrollTopByPane.set(paneId, created);
+  while (transcriptScrollTopByPane.size > MAX_CACHED_TRANSCRIPT_SCROLL_PANES) {
+    const oldest = transcriptScrollTopByPane.keys().next().value;
+    if (typeof oldest !== "string") {
+      break;
+    }
+    transcriptScrollTopByPane.delete(oldest);
+  }
+  return created;
+}
+
+export function getChatSessionScrollPosition(
+  paneId: string,
+  sessionKey: string,
+): ChatSessionScrollPosition | undefined {
+  const scrollTops = getPaneScrollTops(paneId);
+  const exact = getSessionCacheValue(scrollTops, sessionKey);
+  if (exact !== undefined) {
+    return exact;
+  }
+  for (const [cachedKey, position] of scrollTops) {
+    if (!areUiSessionKeysEquivalent(cachedKey, sessionKey)) {
+      continue;
+    }
+    scrollTops.delete(cachedKey);
+    setSessionCacheValue(scrollTops, sessionKey, position);
+    return position;
+  }
+  return undefined;
+}
+
+export function saveChatSessionScrollPosition(
+  paneId: string,
+  sessionKey: string,
+  position: ChatSessionScrollPosition,
+): void {
+  const scrollTops = getPaneScrollTops(paneId);
+  for (const cachedKey of scrollTops.keys()) {
+    if (areUiSessionKeysEquivalent(cachedKey, sessionKey)) {
+      scrollTops.delete(cachedKey);
+    }
+  }
+  setSessionCacheValue(scrollTops, sessionKey, {
+    scrollTop: Math.max(0, position.scrollTop),
+    anchorToEnd: position.anchorToEnd,
+  });
+}
+
+export function captureChatSessionScrollPosition(target: {
+  scrollHeight: number;
+  scrollTop: number;
+  clientHeight: number;
+}): ChatSessionScrollPosition {
+  const maxScrollTop = Math.max(0, target.scrollHeight - target.clientHeight);
+  const scrollTop = Math.min(Math.max(0, target.scrollTop), maxScrollTop);
+  return {
+    scrollTop,
+    anchorToEnd: maxScrollTop - scrollTop <= FOLLOW_REACQUIRE_THRESHOLD,
+  };
+}
 
 type ChatScrollHost = {
   renderLifecycle: RenderLifecycle;
@@ -12,7 +92,6 @@ type ChatScrollHost = {
   chatScrollCommitCleanup: (() => void) | null;
   chatScrollFrame: number | null;
   chatScrollGuardFrame: number | null;
-  chatScrollTimeout: number | null;
   chatScrollGeneration: number;
   chatLastScrollTop: number;
   chatLastScrollHeight?: number;
@@ -22,6 +101,7 @@ type ChatScrollHost = {
   chatNewMessagesBelow: boolean;
   chatIsProgrammaticScroll: boolean;
   chatProgrammaticScrollTarget: number;
+  chatScrollToEnd?: (options: { behavior?: ScrollBehavior }) => void;
 };
 
 function queryHost(host: Partial<ChatScrollHost>, selectors: string): Element | null {
@@ -41,10 +121,6 @@ function cancelCommittedChatScroll(host: ChatScrollHost): void {
   if (host.chatScrollGuardFrame != null) {
     cancelAnimationFrame(host.chatScrollGuardFrame);
     host.chatScrollGuardFrame = null;
-  }
-  if (host.chatScrollTimeout != null) {
-    clearTimeout(host.chatScrollTimeout);
-    host.chatScrollTimeout = null;
   }
   host.chatIsProgrammaticScroll = false;
 }
@@ -91,18 +167,7 @@ function scheduleProgrammaticScrollGuardClear(
 }
 
 function pickScrollTarget(host: ChatScrollHost): HTMLElement | null {
-  const container = queryHost(host, ".chat-thread") as HTMLElement | null;
-  if (container) {
-    const overflowY = getComputedStyle(container).overflowY;
-    const canScroll =
-      overflowY === "auto" ||
-      overflowY === "scroll" ||
-      container.scrollHeight - container.clientHeight > 1;
-    if (canScroll) {
-      return container;
-    }
-  }
-  return (document.scrollingElement ?? document.documentElement) as HTMLElement | null;
+  return queryHost(host, ".chat-thread") as HTMLElement | null;
 }
 
 /** Schedule layout work when the caller already runs after the DOM commit. */
@@ -156,41 +221,21 @@ export function scheduleCommittedChatScroll(
     const scrollTop = target.scrollHeight;
     host.chatProgrammaticScrollTarget = scrollTop;
     host.chatIsProgrammaticScroll = true;
-    if (typeof target.scrollTo === "function") {
+    if (host.chatScrollToEnd) {
+      host.chatScrollToEnd({ behavior: smoothEnabled ? "smooth" : "auto" });
+    } else if (typeof target.scrollTo === "function") {
       target.scrollTo({ top: scrollTop, behavior: smoothEnabled ? "smooth" : "auto" });
     } else {
       target.scrollTop = scrollTop;
     }
-    scheduleProgrammaticScrollGuardClear(host, generation, target, smoothEnabled);
+    scheduleProgrammaticScrollGuardClear(
+      host,
+      generation,
+      target,
+      smoothEnabled || Boolean(host.chatScrollToEnd),
+    );
     host.chatUserNearBottom = true;
     setNewMessagesBelow(host, false);
-
-    // Markdown, images, and mobile controls can grow after the first layout.
-    const retryDelay = effectiveForce ? 150 : 120;
-    host.chatScrollTimeout = window.setTimeout(() => {
-      host.chatScrollTimeout = null;
-      if (generation !== host.chatScrollGeneration) {
-        return;
-      }
-      const latest = pickScrollTarget(host);
-      if (!latest) {
-        return;
-      }
-      const latestDistanceFromBottom = latest.scrollHeight - latest.scrollTop - latest.clientHeight;
-      const shouldStickRetry =
-        manualScroll ||
-        effectiveForce ||
-        (!host.chatFollowLocked &&
-          (host.chatUserNearBottom || latestDistanceFromBottom < NEAR_BOTTOM_THRESHOLD));
-      if (!shouldStickRetry) {
-        return;
-      }
-      host.chatProgrammaticScrollTarget = latest.scrollHeight;
-      host.chatIsProgrammaticScroll = true;
-      latest.scrollTop = latest.scrollHeight;
-      scheduleProgrammaticScrollGuardClear(host, generation, latest, false);
-      host.chatUserNearBottom = true;
-    }, retryDelay);
   });
 }
 
@@ -237,10 +282,6 @@ export function handleChatScroll(host: ChatScrollHost, event: Event): void {
       cancelAnimationFrame(host.chatScrollGuardFrame);
       host.chatScrollGuardFrame = null;
     }
-    if (host.chatScrollTimeout != null) {
-      clearTimeout(host.chatScrollTimeout);
-      host.chatScrollTimeout = null;
-    }
     host.chatIsProgrammaticScroll = false;
   }
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
@@ -256,6 +297,29 @@ export function handleChatScroll(host: ChatScrollHost, event: Event): void {
     container.scrollHeight - container.clientHeight > LATEST_MESSAGE_THRESHOLD &&
       distanceFromBottom > LATEST_MESSAGE_THRESHOLD,
   );
+}
+
+export function restoreChatScroll(
+  host: ChatScrollHost,
+  target: HTMLElement,
+  scrollTop: number,
+): number {
+  cancelChatScroll(host);
+  const maxScrollTop = Math.max(0, target.scrollHeight - target.clientHeight);
+  target.scrollTop = Math.min(Math.max(0, scrollTop), maxScrollTop);
+  const restoredScrollTop = target.scrollTop;
+  const distanceFromBottom = maxScrollTop - restoredScrollTop;
+  host.chatLastScrollTop = restoredScrollTop;
+  host.chatLastScrollHeight = target.scrollHeight;
+  host.chatHasAutoScrolled = true;
+  // A virtualized transcript may not expose its final scroll height yet. Keep
+  // the restored viewport locked until the requested offset becomes reachable.
+  host.chatFollowLocked = scrollTop > maxScrollTop || distanceFromBottom > LATEST_MESSAGE_THRESHOLD;
+  host.chatUserNearBottom = !host.chatFollowLocked && distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
+  host.chatIsProgrammaticScroll = false;
+  host.chatProgrammaticScrollTarget = restoredScrollTop;
+  setNewMessagesBelow(host, host.chatFollowLocked);
+  return restoredScrollTop;
 }
 
 export function resetChatScroll(host: ChatScrollHost): void {

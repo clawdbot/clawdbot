@@ -75,8 +75,8 @@ describe("OpenAI provider policy artifact", () => {
   });
 
   it.each([
-    ["gpt-5.6-sol", "codex", "low"],
-    ["gpt-5.6-sol", "openclaw", "low"],
+    ["gpt-5.6-sol", "codex", "medium"],
+    ["gpt-5.6-sol", "openclaw", "medium"],
     ["gpt-5.6-terra", "codex", "medium"],
     ["gpt-5.6-terra", "openclaw", "medium"],
     ["gpt-5.6-luna", "codex", "medium"],
@@ -124,8 +124,9 @@ describe("OpenAI provider policy artifact", () => {
         provider: "openai",
         modelId,
         agentRuntime: "codex",
+        api: "openai-responses",
         compat: {
-          supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
         },
       })?.levels.map((level) => level.id);
 
@@ -151,12 +152,14 @@ describe("OpenAI provider policy artifact", () => {
       provider: "openai",
       modelId: "gpt-5.6-sol",
       agentRuntime: "codex",
+      api: "openai-chatgpt-responses",
       compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
     })?.levels.map((level) => level.id);
     const terraLevels = resolveThinkingProfile({
       provider: "openai",
       modelId: "gpt-5.6-terra",
       agentRuntime: "codex",
+      api: "openai-chatgpt-responses",
       compat: {
         supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
       },
@@ -174,6 +177,7 @@ describe("OpenAI provider policy artifact", () => {
       provider: "openai",
       modelId: "gpt-5.6-sol",
       agentRuntime: "codex",
+      api: "openai-chatgpt-responses",
       compat: { supportedReasoningEfforts: efforts },
     });
 
@@ -186,6 +190,7 @@ describe("OpenAI provider policy artifact", () => {
       provider: "openai",
       modelId: "gpt-5.6-luna",
       agentRuntime: "codex",
+      api: "openai-responses",
       compat: {
         supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
       },

@@ -18,6 +18,7 @@ import {
   type ThinkingConfig,
   TurnCoverage,
 } from "@google/genai";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
@@ -468,6 +469,8 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private hasConnectedSession = false;
+  private terminalError: Error | undefined;
+  private terminalCloseNotified = false;
   private readonly pendingTranscripts: Record<RealtimeVoiceRole, string> = {
     user: "",
     assistant: "",
@@ -480,6 +483,9 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   async connect(): Promise<void> {
+    if (this.terminalError) {
+      throw this.terminalError;
+    }
     const canResumeSession =
       this.config.sessionResumption !== false && Boolean(this.resumptionHandle);
     if (this.hasConnectedSession && !canResumeSession) {
@@ -534,6 +540,10 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
           this.sessionConfigured = false;
           this.pendingFunctionNames.clear();
           this.session = null;
+          if (this.terminalError) {
+            this.notifyTerminalClose();
+            return;
+          }
           if (this.intentionallyClosed) {
             this.config.onClose?.("completed");
             return;
@@ -788,7 +798,12 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
     for (const part of content.modelTurn?.parts ?? []) {
       if (part.inlineData?.data) {
-        const pcm = Buffer.from(part.inlineData.data, "base64");
+        const canonicalAudio = canonicalizeBase64(part.inlineData.data);
+        if (!canonicalAudio) {
+          this.failConnection(new Error("Google Live stream returned malformed base64 audio data"));
+          return;
+        }
+        const pcm = Buffer.from(canonicalAudio, "base64");
         const sampleRate = parsePcmSampleRate(part.inlineData.mimeType);
         const audio = this.toOutputAudio(pcm, sampleRate);
         if (audio.length > 0) {
@@ -843,6 +858,41 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private resetPendingTranscripts(): void {
     this.pendingTranscripts.user = "";
     this.pendingTranscripts.assistant = "";
+  }
+
+  private failConnection(error: Error): void {
+    if (this.terminalError) {
+      return;
+    }
+    this.terminalError = error;
+    this.intentionallyClosed = true;
+    this.connected = false;
+    this.sessionConfigured = false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
+    this.pendingFunctionNames.clear();
+    this.flushPendingTranscripts();
+    const session = this.session;
+    this.session = null;
+    try {
+      this.config.onError?.(error);
+    } finally {
+      try {
+        session?.close();
+      } finally {
+        this.notifyTerminalClose();
+      }
+    }
+  }
+
+  private notifyTerminalClose(): void {
+    if (this.terminalCloseNotified) {
+      return;
+    }
+    this.terminalCloseNotified = true;
+    this.config.onClose?.("error");
   }
 
   private handleToolCall(toolCall: LiveServerToolCall): void {

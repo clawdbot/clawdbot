@@ -279,6 +279,26 @@ describe("buildGatewayInstallPlan", () => {
     expect(serviceEnvRequest?.extraPathDirs).toStrictEqual(["/custom"]);
   });
 
+  it("passes only the existing service NODE_OPTIONS to heap resolution", async () => {
+    mockNodeGatewayPlanFixture();
+
+    await buildGatewayInstallPlan({
+      env: {
+        HOME: isolatedHome,
+        NODE_OPTIONS: "--max-old-space-size=16384",
+      },
+      port: 3000,
+      runtime: "node",
+      existingEnvironment: {
+        NODE_OPTIONS: "--max-old-space-size=6144",
+      },
+    });
+
+    expect(
+      firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").existingNodeOptions,
+    ).toBe("--max-old-space-size=6144");
+  });
+
   it("adds the active openclaw command bin directory to the managed service PATH", async () => {
     mockNodeGatewayPlanFixture();
     const originalArgv = process.argv;
@@ -602,7 +622,6 @@ describe("buildGatewayInstallPlan", () => {
               command: "/usr/bin/op",
               args: ["read", "op://Private/Discord/password"],
               passEnv: ["OP_CONNECT_TOKEN"],
-              allowInsecurePath: true,
             },
           },
         },
@@ -706,7 +725,6 @@ describe("buildGatewayInstallPlan", () => {
               command: "/usr/bin/op",
               args: ["read", "op://Private/OpenAI/api-key"],
               passEnv: ["OP_CONNECT_TOKEN"],
-              allowInsecurePath: true,
             },
           },
         },
@@ -838,7 +856,6 @@ describe("buildGatewayInstallPlan", () => {
                 "DOCKER_HOST",
                 "NODE_TLS_REJECT_UNAUTHORIZED",
               ],
-              allowInsecurePath: true,
             },
           },
         },
@@ -900,7 +917,6 @@ describe("buildGatewayInstallPlan", () => {
               command: "/usr/bin/op",
               args: ["read", "op://Private/OpenAI/api-key"],
               passEnv: ["HOME", "NODE_OPTIONS"],
-              allowInsecurePath: true,
             },
           },
         },
@@ -953,7 +969,6 @@ describe("buildGatewayInstallPlan", () => {
               source: "exec",
               command: "/usr/bin/op",
               passEnv: ["OP_CONNECT_TOKEN"],
-              allowInsecurePath: true,
             },
           },
         },
@@ -1690,7 +1705,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(plan.environment.CUSTOM_TOOL_HOME).toBe("/Users/test/.custom-tool");
   });
 
-  it("keeps source metadata for EnvironmentFile-backed preserved vars", async () => {
+  it("keeps differently-cased source metadata for EnvironmentFile-backed preserved vars", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         HOME: "/from-service",
@@ -1708,9 +1723,9 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
         OPENCLAW_GATEWAY_TOKEN: "old-token",
       },
       existingEnvironmentValueSources: {
-        OPENROUTER_API_KEY: "file",
-        CUSTOM_TOOL_HOME: "inline",
-        OPENCLAW_GATEWAY_TOKEN: "file",
+        openrouter_api_key: "file",
+        custom_tool_home: "inline",
+        openclaw_gateway_token: "file",
       },
     });
 

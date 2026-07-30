@@ -1,5 +1,6 @@
 import type { OpenClawPluginNodeHostCommandAvailabilityContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { CommandOptions, SpawnResult } from "openclaw/plugin-sdk/process-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   resolveLinuxNodePluginConfigFromHost,
   type ResolvedLinuxNodePluginConfig,
@@ -32,7 +33,7 @@ export function clamp(value: number, minimum: number, maximum: number): number {
 export function formatToolError(result: SpawnResult): string {
   const detail = result.stderr.trim() || result.stdout.trim();
   return detail
-    ? detail.replaceAll(/\s+/gu, " ").slice(0, 300)
+    ? truncateUtf16Safe(detail.replaceAll(/\s+/gu, " "), 300)
     : `exit ${result.code ?? "unknown"}`;
 }
 

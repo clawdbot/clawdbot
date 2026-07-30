@@ -5,11 +5,12 @@ scenario:
   surface: control-ui
   coverage:
     primary:
-      - ui.control
-      - ui.dashboard-auth-bootstrap
+      - control-ui.dashboard-open-auth-bootstrap
+      - control-ui.gateway-hosted-ui-control
+      - control-ui.chat-send-lifecycle-control
     secondary:
-      - media.image-understanding
-      - channels.qa-channel
+      - media.image-summary-image-understanding
+      - channels.inbound-routing-qa-channel
   objective: Verify the embedded Control UI can observe a qa-channel-backed session while the fake channel injects text and image turns that the agent answers correctly.
   successCriteria:
     - Control UI opens directly on the target qa-channel session.
@@ -23,14 +24,14 @@ scenario:
     - extensions/qa-lab/src/scenario-runtime-api.ts
     - extensions/qa-lab/src/suite.ts
     - extensions/qa-lab/src/web-runtime.ts
-    - ui/src/ui/views/chat.ts
+    - ui/src/pages/chat/chat-view.ts
   gatewayRuntime:
     forwardHostHome: true
   execution:
     kind: flow
     summary: Open the Control UI on a qa-channel session with the generic QA web driver, inject text and image turns through qa-channel, and verify the replies in both the transport log and the UI transcript.
+    channel: qa-channel
     config:
-      requiredChannelDriver: qa-channel
       conversationId: control-ui-e2e
       textPrompt: "Control UI bridge check. Marker exact marker: `ui bridge armed`"
       uiExpectedNeedle: ui bridge armed

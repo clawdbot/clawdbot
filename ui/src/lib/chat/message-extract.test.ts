@@ -1,6 +1,12 @@
+// @vitest-environment node
 // Control UI tests cover message extract behavior.
 import { describe, expect, it } from "vitest";
-import { extractText, extractTextCached, extractThinkingCached } from "./message-extract.ts";
+import {
+  extractRawText,
+  extractText,
+  extractTextCached,
+  extractThinkingCached,
+} from "./message-extract.ts";
 
 describe("extractTextCached", () => {
   it("matches extractText output", () => {
@@ -134,5 +140,18 @@ describe("extractThinkingCached", () => {
     };
     expect(extractThinkingCached(message)).toBe("Plan A");
     expect(extractThinkingCached(message)).toBe("Plan A");
+  });
+});
+
+describe("nullish messages", () => {
+  // Chat events can arrive without a message (tool-only or heartbeat finals);
+  // every unknown-typed extractor must read that as "no text", not throw.
+  it("returns null instead of throwing for absent messages", () => {
+    for (const message of [undefined, null]) {
+      expect(extractText(message)).toBeNull();
+      expect(extractTextCached(message)).toBeNull();
+      expect(extractRawText(message)).toBeNull();
+      expect(extractThinkingCached(message)).toBeNull();
+    }
   });
 });

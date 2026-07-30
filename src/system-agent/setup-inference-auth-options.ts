@@ -4,16 +4,26 @@ import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choice
 export type SetupInferenceManualProvider = {
   /** Provider-auth choice id sent back to `openclaw.setup.activate`. */
   id: string;
+  /** Canonical provider identity for clients with bundled brand artwork. */
+  brandId?: string;
+  /** Provider family shown above the specific credential method. */
+  groupLabel?: string;
   label: string;
   hint?: string;
+  icon?: string;
+  website?: string;
 };
 
 export type SetupInferenceAuthOption = {
   /** Provider-auth choice id sent to `openclaw.setup.auth.start`. */
   id: string;
+  /** Canonical provider identity for clients with bundled brand artwork. */
+  brandId?: string;
   label: string;
   hint?: string;
   groupLabel?: string;
+  icon?: string;
+  website?: string;
   kind: "oauth" | "device-code";
   featured: boolean;
 };
@@ -39,12 +49,22 @@ export function listSetupInferenceManualProviders(
     }
     choices.set(id, {
       id,
+      brandId: choice.providerId,
+      ...(choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {}),
       label: choice.choiceLabel,
       ...(choice.choiceHint?.trim() ? { hint: choice.choiceHint.trim() } : {}),
+      ...(choice.icon ? { icon: choice.icon } : {}),
+      ...(choice.website ? { website: choice.website } : {}),
     });
   }
   return [...choices.values()].toSorted(
-    (a, b) => a.label.localeCompare(b.label, "en") || a.id.localeCompare(b.id, "en"),
+    (a, b) =>
+      compareProviderAuthChoiceGroups(
+        { id: a.brandId ?? a.id, label: a.groupLabel ?? a.label },
+        { id: b.brandId ?? b.id, label: b.groupLabel ?? b.label },
+      ) ||
+      a.label.localeCompare(b.label, "en") ||
+      a.id.localeCompare(b.id, "en"),
   );
 }
 
@@ -70,9 +90,12 @@ export function listSetupInferenceAuthOptions(
       metadata: choice,
       option: {
         id,
+        brandId: choice.providerId,
         label: choice.choiceLabel,
         ...(choice.choiceHint?.trim() ? { hint: choice.choiceHint.trim() } : {}),
         ...(choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {}),
+        ...(choice.icon ? { icon: choice.icon } : {}),
+        ...(choice.website ? { website: choice.website } : {}),
         kind: choice.appGuidedAuth,
         featured: choice.onboardingFeatured === true,
       },

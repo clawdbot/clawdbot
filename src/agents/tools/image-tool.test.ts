@@ -22,7 +22,8 @@ import { minimaxUnderstandImage } from "../minimax-vlm.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
-import { testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
+import { createImageTool } from "./image-tool.js";
+import { testing, resolveImageModelConfigForTool } from "./image-tool.test-support.js";
 import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
 
 function jsonRoundTrip<T>(value: T): T {
@@ -222,9 +223,6 @@ vi.mock("../model-auth.js", () => ({
     modelApi?: string;
   }) => {
     const providerConfig = params.cfg?.models?.providers?.[params.provider];
-    if (params.provider === "codex") {
-      return process.env.OPENCLAW_TEST_CODEX_ROUTE === "1";
-    }
     if (params.provider === "openai" && params.modelApi === "openai-responses") {
       return Boolean(process.env.OPENAI_API_KEY || providerConfig?.apiKey);
     }
@@ -258,6 +256,15 @@ vi.mock("../model-auth.js", () => ({
     };
   },
 }));
+
+const minimaxUnderstandImageMock = vi.hoisted(() => vi.fn());
+vi.mock("../minimax-vlm.js", async () => {
+  const mod = await vi.importActual<typeof import("../minimax-vlm.js")>("../minimax-vlm.js");
+  return {
+    ...mod,
+    minimaxUnderstandImage: minimaxUnderstandImageMock,
+  };
+});
 
 async function writeAuthProfiles(agentDir: string, profiles: unknown) {
   await fs.mkdir(agentDir, { recursive: true });
@@ -361,6 +368,12 @@ function registerImageToolEnvReset(priorFetch: typeof global.fetch, keys: string
 }
 
 function stubMinimaxOkFetch() {
+  minimaxUnderstandImageMock.mockReset();
+  vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+  minimaxUnderstandImageMock.mockResolvedValue("ok");
+  // Tests that fall back to the generic image runtime still hit a mocked
+  // global.fetch because media-understanding/image.ts is not behind the
+  // minimax-vlm module mock.
   const fetch = vi.fn().mockImplementation(async () =>
     Response.json({
       content: "ok",
@@ -368,11 +381,22 @@ function stubMinimaxOkFetch() {
     }),
   );
   global.fetch = withFetchPreconnect(fetch);
-  vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
-  return fetch;
+  return minimaxUnderstandImageMock;
 }
 
 function stubMinimaxFetch(baseResp: { status_code: number; status_msg: string }, content = "ok") {
+  minimaxUnderstandImageMock.mockReset();
+  if (baseResp.status_code !== 0) {
+    minimaxUnderstandImageMock.mockRejectedValue(
+      new Error(
+        `MiniMax VLM API error (${baseResp.status_code})${
+          baseResp.status_msg ? `: ${baseResp.status_msg}` : ""
+        }.`,
+      ),
+    );
+  } else {
+    minimaxUnderstandImageMock.mockResolvedValue(content);
+  }
   const fetch = vi.fn().mockImplementation(async () =>
     Response.json({
       content,
@@ -380,7 +404,7 @@ function stubMinimaxFetch(baseResp: { status_code: number; status_msg: string },
     }),
   );
   global.fetch = withFetchPreconnect(fetch);
-  return fetch;
+  return minimaxUnderstandImageMock;
 }
 
 function stubOpenAiCompletionsOkFetch(text = "ok") {
@@ -581,6 +605,12 @@ const moonshotProvider = {
   describeImages: describeMoonshotImages,
 } satisfies MediaUnderstandingProvider;
 
+const codexMediaProvider = {
+  id: "codex",
+  capabilities: ["image"],
+  defaultModels: { image: "gpt-5.5" },
+} satisfies MediaUnderstandingProvider;
+
 const resolveConfiguredImageModelForTest: NonNullable<
   Parameters<typeof testing.setProviderDepsForTest>[0]
 >["resolveModelAsync"] = async (provider, model, _agentDir, cfg) => {
@@ -645,6 +675,11 @@ function installImageUnderstandingProviderDeps(
       capability === "image" ? ["openai", "anthropic"] : [],
     resolveDefaultMediaModel: ({ providerId, capability }) =>
       capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined,
+    resolveRegisteredMediaUnderstandingProvider: ({ providerId }) =>
+      imageProviderHarness.getMediaUnderstandingProvider(
+        providerId,
+        imageProviderHarness.buildProviderRegistry(),
+      ),
     resolveModelAsync: options?.resolveModelAsync ?? resolveConfiguredImageModelForTest,
     ...(options?.resolveImageCompressionPolicy
       ? { resolveImageCompressionPolicy: options.resolveImageCompressionPolicy }
@@ -828,7 +863,7 @@ describe("image tool implicit imageModel config", () => {
     name: string;
     cfg: OpenClawConfig;
     profiles?: Profiles;
-    codexRoute?: boolean;
+    codexProvider?: boolean;
     openAiApiKey?: boolean;
     expected: ReturnType<typeof resolveImageModelConfigForTool>;
   };
@@ -874,7 +909,6 @@ describe("image tool implicit imageModel config", () => {
     "ZAI_API_KEY",
     "Z_AI_API_KEY",
     "OPENCLAW_TEST_CODEX_CLI_OAUTH",
-    "OPENCLAW_TEST_CODEX_ROUTE",
     // Avoid implicit Copilot provider discovery hitting the network in tests.
     "COPILOT_GITHUB_TOKEN",
     "GH_TOKEN",
@@ -895,21 +929,21 @@ describe("image tool implicit imageModel config", () => {
       name: "uses Codex media for implicit OpenAI image defaults on canonical OAuth-only auth",
       cfg: openAiPrimaryCfg,
       profiles: { "openai:chatgpt": openAiOAuthProfile() },
-      codexRoute: true,
+      codexProvider: true,
       expected: codexImageModel,
     },
     {
       name: "uses Codex media for implicit OpenAI image defaults on canonical token-only auth",
       cfg: openAiPrimaryCfg,
       profiles: { "openai:token": openAiTokenProfile() },
-      codexRoute: true,
+      codexProvider: true,
       expected: codexImageModel,
     },
     {
       name: "uses Codex media for implicit OpenAI image auto candidates on OAuth-only auth",
       cfg: anthropicPrimaryCfg,
       profiles: { "openai:chatgpt": openAiOAuthProfile() },
-      codexRoute: true,
+      codexProvider: true,
       expected: codexImageModel,
     },
     {
@@ -934,7 +968,7 @@ describe("image tool implicit imageModel config", () => {
       name: "does not treat legacy openai-codex profiles as canonical Codex OAuth",
       cfg: openAiPrimaryCfg,
       profiles: { "openai-codex:default": openAiOAuthProfile("openai-codex") },
-      codexRoute: true,
+      codexProvider: true,
       expected: null,
     },
   ];
@@ -946,11 +980,52 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("does not mix a prepared media family with a live Codex provider", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await writeProfiles(agentDir, { "openai:chatgpt": openAiOAuthProfile() });
+      installImageUnderstandingProviderStubs(minimaxProvider, moonshotProvider, codexMediaProvider);
+
+      expect(
+        resolveImageModelConfigForTool({
+          cfg: openAiPrimaryCfg,
+          agentDir,
+          preparedModelRuntime: {
+            mediaCapabilityProviders: { mediaUnderstandingProviders: [] },
+          } as never,
+        }),
+      ).toBeNull();
+    });
+  });
+
+  it("resolves a Codex alias from the prepared media family", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await writeProfiles(agentDir, { "openai:chatgpt": openAiOAuthProfile() });
+
+      expect(
+        resolveImageModelConfigForTool({
+          cfg: openAiPrimaryCfg,
+          agentDir,
+          preparedModelRuntime: {
+            mediaCapabilityProviders: {
+              mediaUnderstandingProviders: [
+                { ...codexMediaProvider, id: "codex-owner", aliases: ["codex"] },
+              ],
+            },
+          } as never,
+        }),
+      ).toEqual(codexImageModel);
+    });
+  });
+
   it.each(implicitImageRoutingCases)(
     "$name",
-    async ({ cfg, profiles, codexRoute, openAiApiKey, expected }) => {
-      if (codexRoute) {
-        vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
+    async ({ cfg, profiles, codexProvider, openAiApiKey, expected }) => {
+      if (codexProvider) {
+        installImageUnderstandingProviderStubs(
+          minimaxProvider,
+          moonshotProvider,
+          codexMediaProvider,
+        );
       }
       if (openAiApiKey) {
         vi.stubEnv("OPENAI_API_KEY", "openai-test");
@@ -973,7 +1048,7 @@ describe("image tool implicit imageModel config", () => {
   it("uses Codex media when OAuth-only OpenAI has configured vision model metadata", async () => {
     await withTempAgentDir(async (agentDir) => {
       await writeProfiles(agentDir, { "openai:chatgpt": openAiOAuthProfile() });
-      vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
+      installImageUnderstandingProviderStubs(minimaxProvider, moonshotProvider, codexMediaProvider);
       const cfg: OpenClawConfig = {
         ...openAiPrimaryCfg,
         models: {
@@ -1049,7 +1124,7 @@ describe("image tool implicit imageModel config", () => {
   it("lets external CLI Codex OAuth survive the candidate auth filter", async () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("OPENCLAW_TEST_CODEX_CLI_OAUTH", "1");
-      vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
+      installImageUnderstandingProviderStubs(minimaxProvider, moonshotProvider, codexMediaProvider);
 
       expect(resolveImageModelConfigForTool({ cfg: openAiPrimaryCfg, agentDir })).toEqual(
         codexImageModel,
@@ -1060,7 +1135,7 @@ describe("image tool implicit imageModel config", () => {
   it("lets external CLI Codex OAuth survive a supplied scoped auth store", async () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("OPENCLAW_TEST_CODEX_CLI_OAUTH", "1");
-      vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
+      installImageUnderstandingProviderStubs(minimaxProvider, moonshotProvider, codexMediaProvider);
 
       expect(
         resolveImageModelConfigForTool({
@@ -1075,7 +1150,7 @@ describe("image tool implicit imageModel config", () => {
   it("does not re-import persisted OpenAI OAuth when a scoped auth store is supplied", async () => {
     await withTempAgentDir(async (agentDir) => {
       await writeProfiles(agentDir, { "openai:chatgpt": openAiOAuthProfile() });
-      vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
+      installImageUnderstandingProviderStubs(minimaxProvider, moonshotProvider, codexMediaProvider);
 
       expect(
         resolveImageModelConfigForTool({
@@ -1399,16 +1474,15 @@ describe("image tool implicit imageModel config", () => {
           },
           tools: {
             media: {
-              image: {
-                timeoutSeconds: 180,
-                models: [
-                  {
-                    provider: "ollama",
-                    model: "gemma4:26b-a4b-it-q4_K_M",
-                    timeoutSeconds: 300,
-                  },
-                ],
-              },
+              image: { timeoutSeconds: 180 },
+              models: [
+                {
+                  provider: "ollama",
+                  model: "gemma4:26b-a4b-it-q4_K_M",
+                  timeoutSeconds: 300,
+                  capabilities: ["image"],
+                },
+              ],
             },
           },
         };
@@ -1940,7 +2014,15 @@ describe("image tool implicit imageModel config", () => {
           },
         },
       });
-      const fetch = stubMinimaxOkFetch();
+      // The generic image runtime still uses global.fetch, so mock it directly.
+      const fetch = vi.fn().mockImplementation(async () =>
+        Response.json({
+          content: "ok",
+          base_resp: { status_code: 0, status_msg: "" },
+        }),
+      );
+      global.fetch = withFetchPreconnect(fetch);
+      vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -2550,33 +2632,28 @@ describe("image tool data URL support", () => {
 
 describe("image tool MiniMax VLM routing", () => {
   const priorFetch = global.fetch;
-  registerImageToolEnvReset(priorFetch, [
-    "MINIMAX_API_KEY",
-    "COPILOT_GITHUB_TOKEN",
-    "GH_TOKEN",
-    "GITHUB_TOKEN",
-  ]);
 
   beforeEach(() => {
     installImageUnderstandingProviderStubs(minimaxProvider);
   });
 
   afterEach(() => {
+    global.fetch = priorFetch;
     imageProviderHarness.reset();
     testing.setProviderDepsForTest();
   });
 
   async function createMinimaxVlmFixture(baseResp: { status_code: number; status_msg: string }) {
-    const fetch = stubMinimaxFetch(baseResp, baseResp.status_code === 0 ? "ok" : "");
+    const fetchMock = stubMinimaxFetch(baseResp, baseResp.status_code === 0 ? "ok" : "");
 
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-minimax-vlm-"));
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
     const cfg = createMinimaxImageConfig();
     const tool = createRequiredImageTool({ config: cfg, agentDir });
-    return { fetch, tool };
+    return { fetch: fetchMock, tool };
   }
 
-  it("accepts image for single-image requests and calls /v1/coding_plan/vlm", async () => {
+  it("accepts image for single-image requests and calls minimaxUnderstandImage", async () => {
     const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
 
     const res = await tool.execute("t1", {
@@ -2585,15 +2662,16 @@ describe("image tool MiniMax VLM routing", () => {
     });
 
     expect(fetch).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchCallAt(fetch, 0) as [
-      unknown,
-      { body?: unknown; headers?: unknown; method?: unknown },
-    ];
-    expect(String(url)).toBe("https://api.minimax.io/v1/coding_plan/vlm");
-    expect(init?.method).toBe("POST");
-    expect((init?.headers as Record<string, string>)?.Authorization).toBe("Bearer minimax-test");
-    expect(String(init?.body)).toContain('"prompt":"Describe the image."');
-    expect(String(init?.body)).toContain('"image_url":"data:image/');
+    const callArgs = fetch.mock.calls[0]?.[0] as {
+      apiKey?: string;
+      prompt?: string;
+      imageDataUrl?: string;
+      provider?: string;
+      modelBaseUrl?: string;
+    };
+    expect(callArgs?.apiKey).toBe("minimax-test");
+    expect(callArgs?.prompt).toBe("Describe the image.");
+    expect(callArgs?.imageDataUrl).toContain("data:image/png;base64,");
 
     const text = res.content?.find((b) => b.type === "text")?.text ?? "";
     expect(text).toBe("ok");
@@ -2738,7 +2816,7 @@ describe("image tool managed inbound media", () => {
 
   it("resolves media://inbound refs", async () => {
     await withManagedInboundPng(async ({ stateDir, mediaId }) => {
-      installImageUnderstandingProviderStubs();
+      installImageUnderstandingProviderStubs(minimaxProvider);
       const fetch = stubMinimaxOkFetch();
       const workspaceDir = path.join(stateDir, "workspace-agent");
       await fs.mkdir(workspaceDir, { recursive: true });
@@ -2758,7 +2836,7 @@ describe("image tool managed inbound media", () => {
 
   it("allows managed inbound absolute paths when workspaceOnly is enabled", async () => {
     await withManagedInboundPng(async ({ mediaPath }) => {
-      installImageUnderstandingProviderStubs();
+      installImageUnderstandingProviderStubs(minimaxProvider);
       const fetch = stubMinimaxOkFetch();
       await withTempAgentDir(async (agentDir) => {
         const tool = createRequiredImageTool({
@@ -3085,8 +3163,8 @@ describe("image compression policy", () => {
       testing.resolveImageCompressionPolicy({
         cfg: {},
         imageModelConfig: {
-          primary: "anthropic/claude-opus-4-7",
-          fallbacks: ["anthropic/claude-sonnet-4-6"],
+          primary: "anthropic/claude-opus-4-8",
+          fallbacks: ["anthropic/claude-haiku-4-5"],
         },
         imageCount: 1,
       }),
@@ -3218,6 +3296,164 @@ describe("image compression policy", () => {
       }),
     ).resolves.toMatchObject({
       models: [{ maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" }],
+    });
+  });
+});
+
+type MockImageLoadWebMedia = Awaited<
+  ReturnType<
+    NonNullable<
+      NonNullable<Parameters<typeof testing.setProviderDepsForTest>[0]>["loadImageWebMediaRuntime"]
+    >
+  >
+>["loadWebMedia"];
+
+describe("image tool run abort", () => {
+  afterEach(() => {
+    imageProviderHarness.reset();
+    testing.setProviderDepsForTest();
+  });
+
+  function makeDescribeSpies() {
+    const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
+      text: "ok",
+      model: params.model,
+    }));
+    const describeImages = vi.fn(async (params: ImagesDescriptionRequest) => ({
+      text: "ok",
+      model: params.model,
+    }));
+    return { describeImage, describeImages };
+  }
+
+  function installAbortImageDeps(
+    loadWebMedia: MockImageLoadWebMedia,
+    spies: ReturnType<typeof makeDescribeSpies>,
+    providers: MediaUnderstandingProvider[] = [minimaxProvider, moonshotProvider],
+  ) {
+    installImageUnderstandingProviderDeps(providers, {
+      loadImageWebMediaRuntime: async () => ({
+        loadWebMedia,
+        optimizeImageBufferForWebMedia: async ({ buffer, contentType, fileName }) => ({
+          buffer,
+          contentType: contentType ?? "image/png",
+          kind: "image",
+          fileName,
+        }),
+      }),
+      describeImageWithModel: spies.describeImage,
+      describeImagesWithModel: spies.describeImages,
+    });
+  }
+
+  it("forwards the run signal through the provider request contract", async () => {
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+    const loadWebMedia: MockImageLoadWebMedia = vi.fn(async () => ({
+      buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      contentType: "image/png",
+      kind: "image" as const,
+    }));
+    const spies = makeDescribeSpies();
+    installAbortImageDeps(loadWebMedia, spies, [{ id: "minimax", capabilities: ["image"] }]);
+    const controller = new AbortController();
+
+    await withTempAgentDir(async (agentDir) => {
+      const tool = createRequiredImageTool({ config: createMinimaxImageConfig(), agentDir });
+      await tool.execute(
+        "t1",
+        {
+          prompt: "Describe the images.",
+          images: ["https://example.test/a.png", "https://example.test/b.png"],
+        },
+        controller.signal,
+      );
+    });
+
+    expect(spies.describeImages).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+
+  it("throws before downloading or calling the provider when the run signal is already aborted", async () => {
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+    const loadWebMedia: MockImageLoadWebMedia = vi.fn(async () => ({
+      buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      contentType: "image/png",
+      kind: "image" as const,
+    }));
+    const spies = makeDescribeSpies();
+    installAbortImageDeps(loadWebMedia, spies);
+
+    await withTempAgentDir(async (agentDir) => {
+      const tool = createRequiredImageTool({ config: createMinimaxImageConfig(), agentDir });
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(
+        tool.execute(
+          "t1",
+          {
+            prompt: "Describe the images.",
+            images: ["https://example.test/a.png", "https://example.test/b.png"],
+          },
+          controller.signal,
+        ),
+      ).rejects.toThrow();
+
+      // Aborted run must not spend bandwidth on downloads or a paid vision call.
+      expect(loadWebMedia).not.toHaveBeenCalled();
+      expect(spies.describeImage).not.toHaveBeenCalled();
+      expect(spies.describeImages).not.toHaveBeenCalled();
+    });
+  });
+
+  it("stops remaining downloads and skips the provider call when aborted mid-run", async () => {
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+    const controller = new AbortController();
+    let markDownloadStarted: (() => void) | undefined;
+    const downloadStarted = new Promise<void>((resolve) => {
+      markDownloadStarted = resolve;
+    });
+    const loadWebMedia: MockImageLoadWebMedia = vi.fn(async (_url, options) => {
+      const downloadSignal = options?.requestInit?.signal;
+      expect(downloadSignal).toBe(controller.signal);
+      markDownloadStarted?.();
+      return await new Promise<never>((_, reject) => {
+        downloadSignal?.addEventListener(
+          "abort",
+          () => reject(new Error("aborted", { cause: downloadSignal.reason })),
+          { once: true },
+        );
+      });
+    });
+    const spies = makeDescribeSpies();
+    installAbortImageDeps(loadWebMedia, spies);
+
+    await withTempAgentDir(async (agentDir) => {
+      const tool = createRequiredImageTool({ config: createMinimaxImageConfig(), agentDir });
+
+      const execution = tool.execute(
+        "t1",
+        {
+          prompt: "Describe the images.",
+          images: [
+            "https://example.test/a.png",
+            "https://example.test/b.png",
+            "https://example.test/c.png",
+          ],
+        },
+        controller.signal,
+      );
+      await downloadStarted;
+      controller.abort();
+
+      await expect(execution).rejects.toThrow();
+
+      // Only the first image is fetched; the loop exits before the rest and the
+      // paid vision provider is never called for the dead run.
+      expect(loadWebMedia).toHaveBeenCalledTimes(1);
+      expect(spies.describeImage).not.toHaveBeenCalled();
+      expect(spies.describeImages).not.toHaveBeenCalled();
     });
   });
 });

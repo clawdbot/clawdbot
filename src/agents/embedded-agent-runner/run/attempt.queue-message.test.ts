@@ -38,6 +38,42 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     expect(steer).toHaveBeenCalledWith("runtime prompt", undefined, recorder);
   });
 
+  it("forwards ordered images with a queued steering message", async () => {
+    const steer = vi.fn(async () => undefined);
+    const images = [
+      { type: "image" as const, data: "first", mimeType: "image/jpeg" },
+      { type: "image" as const, data: "second", mimeType: "image/png" },
+    ];
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      steer,
+      subscribe: () => () => {},
+    };
+
+    await steerActiveSessionWithOptionalDeliveryWait(activeSession, "compare these", { images });
+
+    expect(steer).toHaveBeenCalledWith("compare these", images);
+  });
+
+  it("forwards ordered prompt facts with a queued steering message", async () => {
+    const steer = vi.fn(async () => undefined);
+    const media = [
+      { path: "/tmp/a.png", contentType: "image/png" },
+      { path: "/tmp/b.pdf", contentType: "application/pdf" },
+    ];
+    const imageOrder = ["offloaded", "inline"] as const;
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      steer,
+      subscribe: () => () => {},
+    };
+
+    await steerActiveSessionWithOptionalDeliveryWait(activeSession, "inspect both", {
+      media,
+      imageOrder: [...imageOrder],
+    });
+
+    expect(steer).toHaveBeenCalledWith("inspect both", undefined, undefined, media, imageOrder);
+  });
+
   it("waits for the queued user message_end transcript boundary", async () => {
     // A queued steer is only durable once the user message_end event lands in
     // the active transcript.

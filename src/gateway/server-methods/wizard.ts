@@ -5,13 +5,14 @@ import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
+  GatewayErrorDetailCodes,
   validateWizardCancelParams,
   validateWizardNextParams,
   validateWizardStartParams,
   validateWizardStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OnboardOptions } from "../../commands/onboard-types.js";
-import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { createNonExitingRuntime, ExitError, type RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { WizardSession } from "../../wizard/session.js";
 import { formatForLog } from "../ws-log.js";
@@ -44,6 +45,19 @@ export const runDefaultChannelSetupWizard: ChannelSetupWizardRunner = async (...
   return runChannelsSetupWizard(...args);
 };
 
+async function runHostedWizard(run: (runtime: RuntimeEnv) => Promise<void>): Promise<void> {
+  try {
+    await run(createNonExitingRuntime());
+  } catch (error) {
+    // Hosted wizards share the Gateway process; a successful CLI-style exit
+    // must complete only its session, while failures remain session errors.
+    if (error instanceof ExitError && error.code === 0) {
+      return;
+    }
+    throw error;
+  }
+}
+
 function readWizardStatus(session: WizardSession) {
   return {
     status: session.getStatus(),
@@ -59,7 +73,13 @@ function findWizardSessionOrRespond(params: {
 }): WizardSession | null {
   const session = params.context.wizardSessions.get(params.sessionId);
   if (!session) {
-    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found"));
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found", {
+        details: { code: GatewayErrorDetailCodes.WIZARD_NOT_FOUND },
+      }),
+    );
     return null;
   }
   return session;
@@ -81,26 +101,31 @@ export const wizardHandlers: GatewayRequestHandlers = {
     const session =
       flow === "channels"
         ? new WizardSession((prompter, _signal, wizardSession) =>
-            context.channelWizardRunner(
-              {
-                channel: readStringValue(params.channel),
-                onConfigured: (accounts) => wizardSession.setConfiguredAccounts(accounts),
-                // Durable effects (plugin installs, config commit) must finish
-                // even if the client cancels mid-write.
-                beforePersistentEffect: async () => wizardSession.lockCancellation(),
-              },
-              defaultRuntime,
-              prompter,
+            runHostedWizard((runtime) =>
+              context.channelWizardRunner(
+                {
+                  channel: readStringValue(params.channel),
+                  onConfigured: (accounts) => wizardSession.setConfiguredAccounts(accounts),
+                  // Durable effects (plugin installs, config commit) must finish
+                  // even if the client cancels mid-write.
+                  beforePersistentEffect: async () => wizardSession.lockCancellation(),
+                },
+                runtime,
+                prompter,
+              ),
             ),
           )
         : new WizardSession((prompter) =>
-            context.wizardRunner(
-              {
-                mode: params.mode,
-                workspace: readStringValue(params.workspace),
-              },
-              defaultRuntime,
-              prompter,
+            runHostedWizard((runtime) =>
+              context.wizardRunner(
+                {
+                  mode: params.mode,
+                  workspace: readStringValue(params.workspace),
+                  installDaemon: params.installDaemon,
+                },
+                runtime,
+                prompter,
+              ),
             ),
           );
     context.wizardSessions.set(sessionId, session);
@@ -157,8 +182,10 @@ export const wizardHandlers: GatewayRequestHandlers = {
     }
     const cancelled = session.cancel();
     const status = readWizardStatus(session);
-    if (cancelled || status.status !== "running") {
-      context.wizardSessions.delete(sessionId);
+    if (cancelled) {
+      void session.whenSettled().then(() => context.purgeWizardSession(sessionId));
+    } else {
+      context.purgeWizardSession(sessionId);
     }
     respond(true, status, undefined);
   },
@@ -172,9 +199,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
       return;
     }
     const status = readWizardStatus(session);
-    if (status.status !== "running") {
-      context.wizardSessions.delete(sessionId);
-    }
+    context.purgeWizardSession(sessionId);
     respond(true, status, undefined);
   },
 };
