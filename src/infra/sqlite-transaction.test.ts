@@ -312,6 +312,27 @@ describe("runSqliteImmediateTransactionSync", () => {
     );
   });
 
+  it("does not warn for fast successful steps with a zero busy timeout", () => {
+    const logger = { warn: vi.fn() };
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => {
+      const value = now;
+      now += 1;
+      return value;
+    });
+    const db = {
+      exec() {},
+    } as unknown as import("node:sqlite").DatabaseSync;
+
+    runSqliteImmediateTransactionSync(db, () => "committed", {
+      busyTimeoutMs: 0,
+      databaseLabel: "agent.sqlite",
+      logger,
+    });
+
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
   it("waits for a separate writer and exposes the synchronous event-loop cost", async () => {
     const holdMs = 200;
     const tempDir = tempDirs.make("openclaw-sqlite-contention-");
