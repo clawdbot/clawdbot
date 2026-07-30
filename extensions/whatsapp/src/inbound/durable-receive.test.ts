@@ -193,6 +193,47 @@ describe("createWhatsAppIngressMonitor", () => {
       await monitor.stop();
     });
   });
+
+  it("dispatches every accepted pending record past the legacy 450-entry cap", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
+        channelId: "whatsapp",
+        accountId: "acct",
+        stateDir,
+      });
+      const transportIds = Array.from(
+        { length: 451 },
+        (_unused, index) => `msg-${String(index).padStart(3, "0")}`,
+      );
+      for (const [index, transportId] of transportIds.entries()) {
+        await queue.enqueue(eventId(transportId), payload(transportId), {
+          laneKey: REMOTE_JID,
+          receivedAt: index + 1,
+        });
+      }
+
+      const dispatched: string[] = [];
+      const monitor = createWhatsAppIngressMonitor({
+        queue,
+        pollIntervalMs: 10,
+        dispatch: async (admission) => {
+          const id = admission.message.key.id;
+          if (!id) {
+            throw new Error("expected transport id");
+          }
+          dispatched.push(id);
+          return { kind: "completed" };
+        },
+      });
+
+      monitor.start();
+      await monitor.waitForIdle();
+      await monitor.stop();
+
+      expect(dispatched.toSorted()).toEqual(transportIds.toSorted());
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+    });
+  });
 });
 
 describe("WhatsApp durable message serialization", () => {
