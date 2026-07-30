@@ -915,7 +915,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     ] as never);
     const dispatcher = createDispatcher("personal");
     const stream = getStreamMock();
-    stream.close.mockImplementation(async () => {
+    stream.close.mockImplementation(() => {
       stream.canceled = true;
       return undefined;
     });
@@ -929,7 +929,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     }
     await dispatcher.dispatcherOptions.onSettled?.();
 
-    const nativeResult = results.find((result) => result?.finalization);
+    const nativeResult = results.find((result) => result?.finalization !== undefined);
     await expect(nativeResult?.finalization).resolves.toEqual({
       visibleReplySent: true,
       messageIds: ["stream-acknowledged"],
