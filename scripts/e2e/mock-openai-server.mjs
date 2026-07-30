@@ -600,6 +600,10 @@ const server = http.createServer((req, res) => {
           );
           return;
         }
+        // Hold the final answer so the turn outlives the progress-draft start
+        // gate. Without this the whole turn finishes in well under a second and
+        // no draft is created, which is correct behavior but proves nothing.
+        await delay(readPositiveIntEnv("MOCK_DRAFTPROOF_FINAL_DELAY_MS", 6000));
         writeChatCompletion(res, body.stream !== false, "OPENCLAW_E2E_DRAFTPROOF");
         return;
       }
