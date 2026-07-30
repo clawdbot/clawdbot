@@ -101,6 +101,21 @@ function computeReplacements(
       );
     }
 
+    // When the tolerant matcher (trim, normalize punctuation) locates a hunk,
+    // the model's retyped context lines may differ from the original file bytes
+    // (trailing whitespace, tab indentation, typographic punctuation). Preserve
+    // the original bytes for context lines — lines that appear with the same
+    // semantic content in both oldLines and newLines.
+    let exactMatch = true;
+    for (let i = 0; exactMatch && i < pattern.length; i++) {
+      if (originalLines[found + i] !== pattern[i]) {
+        exactMatch = false;
+      }
+    }
+    if (!exactMatch) {
+      newSlice = preserveContextLines(originalLines, found, chunk.oldLines, chunk.newLines, newSlice);
+    }
+
     replacements.push([found, pattern.length, newSlice]);
     lineIndex = found + pattern.length;
   }
@@ -190,4 +205,61 @@ function normalizePunctuation(value: string): string {
     .replace(SINGLE_QUOTE_PUNCTUATION, "'")
     .replace(DOUBLE_QUOTE_PUNCTUATION, '"')
     .replace(SPACE_PUNCTUATION, " ");
+}
+
+/**
+ * When the tolerant matcher locates a hunk at a position where the original
+ * file bytes differ from the patch pattern (trailing whitespace, tab indentation,
+ * typographic punctuation), this function preserves the original bytes for
+ * context lines — lines that appear with the same semantic content in both
+ * chunk.oldLines and chunk.newLines (and thus were never marked as changed by
+ * the patch).
+ *
+ * Without this, a tolerant match replaces the entire matched span with the
+ * model's retyped lines, silently overwriting trailing whitespace, tabs, and
+ * typographic punctuation on lines the patch never intended to change.
+ */
+function preserveContextLines(
+  originalLines: string[],
+  found: number,
+  oldLines: string[],
+  newLines: string[],
+  newSlice: string[],
+): string[] {
+  const result = newSlice.slice();
+  let oldPos = 0;
+  let newPos = 0;
+
+  while (oldPos < oldLines.length && newPos < result.length) {
+    if (newPos < newLines.length && newLines[newPos] === oldLines[oldPos]) {
+      // Context line: same content in old and new → preserve original bytes
+      const orig = originalLines[found + oldPos];
+      if (orig !== undefined && result[newPos] !== orig) {
+        result[newPos] = orig;
+      }
+      oldPos++;
+      newPos++;
+    } else if (
+      oldPos + 1 < oldLines.length &&
+      newPos < newLines.length &&
+      newLines[newPos] === oldLines[oldPos + 1]
+    ) {
+      // Current old line is a removal (next old line matches current new)
+      oldPos++;
+    } else if (
+      newPos + 1 < newLines.length &&
+      oldPos < oldLines.length &&
+      oldLines[oldPos] === newLines[newPos + 1]
+    ) {
+      // Current new line is an addition (next new line matches current old)
+      newPos++;
+    } else {
+      // Both changed simultaneously (removal + addition at same position)
+      // Keep the model's version for this changed line
+      oldPos++;
+      newPos++;
+    }
+  }
+
+  return result;
 }
