@@ -67,6 +67,27 @@ export function resolveLocalSignalTransportPort(baseUrl: string): number | undef
   }
 }
 
+// Managed daemon bind port when httpPort is absent: follow an explicit local
+// plain-http connection URL so autoStart and the client probe agree (#116165).
+// signal-cli's bind is plain HTTP, so an https URL is a proxy endpoint and a
+// non-local URL is a remote daemon — neither may steer the bind port.
+export function deriveSignalManagedNativeBindPort(
+  baseUrl: string | undefined,
+): number | undefined {
+  if (!baseUrl) {
+    return undefined;
+  }
+  try {
+    if (new URL(baseUrl).protocol !== "http:") {
+      return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+  const port = resolveLocalSignalTransportPort(baseUrl);
+  return port !== undefined && isValidSignalManagedNativePort(port) ? port : undefined;
+}
+
 export function isSignalManagedNativeConnectionUrlForBind(
   transport: SignalTransportConfig,
 ): boolean {

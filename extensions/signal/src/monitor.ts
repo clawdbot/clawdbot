@@ -49,6 +49,7 @@ import { addSignalApprovalReactionHintToStructuredPayload } from "./approval-rea
 import { signalRpcRequest, signalCheck } from "./client-adapter.js";
 import type { SignalTransportKind } from "./client-adapter.js";
 import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
+import { deriveSignalManagedNativeBindPort } from "./transport-policy.js";
 import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
 import type {
@@ -599,7 +600,13 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       normalizeOptionalString(opts.configPath) ??
       normalizeOptionalString(managedTransport?.configPath);
     const httpHost = opts.httpHost ?? managedTransport?.httpHost ?? "127.0.0.1";
-    const httpPort = opts.httpPort ?? managedTransport?.httpPort ?? 8080;
+    // Absent httpPort follows a local plain-http baseUrl so the daemon binds
+    // the port the client probes; otherwise the two silently diverge (#116165).
+    const httpPort =
+      opts.httpPort ??
+      managedTransport?.httpPort ??
+      deriveSignalManagedNativeBindPort(baseUrl) ??
+      8080;
     daemonHandle = spawnSignalDaemon({
       cliPath,
       ...(configPath ? { configPath } : {}),
