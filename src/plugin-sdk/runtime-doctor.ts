@@ -46,10 +46,10 @@ export {
   detectOpenClawStateDatabaseSchemaMigrations,
   repairOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
+export type { OpenClawStateDatabaseSchemaMigration } from "../state/openclaw-state-db.js";
 /** Doctor migrations that own durable channel-queue state open the queue directly;
  *  runtime code keeps going through the plugin runtime proxy instead. */
 export { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
-export type { OpenClawStateDatabaseSchemaMigration } from "../state/openclaw-state-db.js";
 export { removePluginFromConfig } from "../plugins/uninstall.js";
 export type {
   PluginDoctorStateMigration,
