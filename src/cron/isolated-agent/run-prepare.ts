@@ -28,7 +28,11 @@ import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { isDetachedCronSessionTarget } from "../session-target.js";
 import type { CronJob, CronRunDiagnostics } from "../types.js";
-import { resolveCronModelSelection, resolveCronModelSelectionOwner } from "./model-selection.js";
+import {
+  resolveCronModelSelection,
+  resolveCronModelSelectionOwner,
+  resolveCronThinkingCatalog,
+} from "./model-selection.js";
 import { buildCronAgentDefaultsConfig, resolveCronActiveRuntimeConfig } from "./run-config.js";
 import { buildCurrentConversationContextBlock } from "./run-current-context.js";
 import {
@@ -369,7 +373,7 @@ export async function prepareCronRunContext(params: {
       };
     }
     const cfgWithAgentDefaults = resolvedModelSelection.cfgWithAgentDefaults;
-    const thinkingCatalog = modelOwner.modelCatalog.entries;
+    let thinkingCatalog = modelOwner.modelCatalog.entries;
     const ownerAgentConfig = resolveAgentConfig(modelOwner.config, modelOwner.agentId);
     const matchesDefaultFallbackAgentStringModel =
       typeof ownerAgentConfig?.model === "string" &&
@@ -450,7 +454,6 @@ export async function prepareCronRunContext(params: {
       provider = selectedPreflightCandidate.provider;
       model = selectedPreflightCandidate.model;
     }
-
     const hooksGmailThinking = isGmailHook
       ? normalizeThinkLevel(runtimeCfg.hooks?.gmail?.thinking)
       : undefined;
@@ -459,6 +462,13 @@ export async function prepareCronRunContext(params: {
         undefined,
     );
     const sessionThink = normalizeThinkLevel(cronSession.sessionEntry.thinkingLevel);
+    if ((jobThink ?? hooksGmailThinking ?? sessionThink) !== "off") {
+      thinkingCatalog = await resolveCronThinkingCatalog({
+        owner: modelOwner,
+        provider,
+        model,
+      });
+    }
     const effectiveAgentRuntime = resolveEffectiveAgentRuntime({
       cfg: cfgWithAgentDefaults,
       provider,

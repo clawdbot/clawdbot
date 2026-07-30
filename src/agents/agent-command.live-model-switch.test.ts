@@ -95,6 +95,10 @@ const state = vi.hoisted(() => ({
   resolveSupportedThinkingLevelMock: vi.fn(({ level }: { level?: string }) => level),
   resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
   loadManifestModelCatalogMock: vi.fn(() => []),
+  loadPreparedModelCatalogSnapshotMock: vi.fn(async () => ({
+    entries: [],
+    routeVariants: [],
+  })),
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]): unknown => ({
     prompt: "",
     skills: [],
@@ -529,6 +533,10 @@ vi.mock("./model-catalog.js", () => ({
   loadManifestModelCatalog: state.loadManifestModelCatalogMock,
 }));
 
+vi.mock("./model-catalog.runtime.js", () => ({
+  loadPreparedModelCatalogSnapshot: state.loadPreparedModelCatalogSnapshotMock,
+}));
+
 vi.mock("./model-selection.js", () => ({
   buildAllowedModelSet: buildTestAllowedModelSet,
   createModelVisibilityPolicy: createTestModelVisibilityPolicy,
@@ -840,6 +848,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveThinkingDefaultMock.mockReturnValue("low");
     state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
     state.loadManifestModelCatalogMock.mockReturnValue([]);
+    state.loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
+      entries: [],
+      routeVariants: [],
+    });
     state.hasLegacyAutoFallbackWithoutOriginMock.mockReturnValue(false);
     state.isModelSelectionLockedMock.mockImplementation(
       (entry: unknown) =>
@@ -3319,6 +3331,63 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       id: "gpt-5.4",
       compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
     });
+  });
+
+  it("hydrates live catalog metadata before validating an explicit thinking level", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {
+            "openai/*": {},
+            "ollama/*": {},
+          },
+        },
+      },
+    };
+    state.loadManifestModelCatalogMock.mockReturnValue([]);
+    state.loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
+      entries: [
+        {
+          provider: "ollama",
+          id: "minimax-m3:cloud",
+          name: "minimax-m3:cloud",
+          reasoning: true,
+        },
+      ],
+      routeVariants: [],
+    });
+    state.isThinkingLevelSupportedMock.mockImplementation(
+      ({ catalog, level }: { catalog?: Array<{ reasoning?: boolean }>; level?: string }) =>
+        level === "off" || catalog?.some((entry) => entry.reasoning === true) === true,
+    );
+    setupSuccessfulAttempt("ollama", "minimax-m3:cloud");
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      model: "ollama/minimax-m3:cloud",
+      thinking: "medium",
+      allowModelOverride: true,
+    });
+
+    expect(state.loadPreparedModelCatalogSnapshotMock).toHaveBeenCalledWith({
+      config: state.runtimeConfigMock,
+      agentId: "default",
+      workspaceDir: "/tmp/workspace",
+    });
+    const thinkingArgs = requireRecord(
+      mockCallArg(state.isThinkingLevelSupportedMock),
+      "thinking args",
+    );
+    expect(thinkingArgs.level).toBe("medium");
+    expect(thinkingArgs.catalog).toEqual([
+      expect.objectContaining({
+        provider: "ollama",
+        id: "minimax-m3:cloud",
+        reasoning: true,
+      }),
+    ]);
   });
 
   it("resolves explicit model aliases before thinking validation", async () => {

@@ -1,4 +1,3 @@
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/embedded-agent-runner/types.js";
@@ -15,7 +14,7 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import type { ElevatedLevel, ThinkingCatalogEntry } from "../thinking.js";
+import type { ElevatedLevel } from "../thinking.js";
 import { isSystemEventProvider } from "./effective-reply-route.js";
 import type { ExecOverrides } from "./get-reply-run.types.js";
 import {
@@ -91,23 +90,6 @@ export function buildPersistedMediaImageLayout(params: {
     slots,
     ...(suppressedFactIndexes.length > 0 ? { suppressedFactIndexes } : {}),
   };
-}
-
-export function hasResolvedThinkingCatalogEntry(params: {
-  catalog?: readonly ThinkingCatalogEntry[];
-  provider: string;
-  model: string;
-}): boolean {
-  const modelId = normalizeOptionalString(params.model);
-  if (!modelId) {
-    return false;
-  }
-  const normalizedProvider = normalizeProviderId(params.provider);
-  const entry = params.catalog?.find(
-    (candidate) =>
-      normalizeProviderId(candidate.provider) === normalizedProvider && candidate.id === modelId,
-  );
-  return entry?.reasoning !== undefined;
 }
 
 export function routeThreadIdsMatch(

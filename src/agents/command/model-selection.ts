@@ -52,7 +52,10 @@ import {
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
-import { resolveEffectiveAgentRuntime } from "../thinking-runtime.js";
+import {
+  hasResolvedThinkingCatalogEntry,
+  resolveEffectiveAgentRuntime,
+} from "../thinking-runtime.js";
 import {
   normalizeAgentCommandDefaultModelRef,
   normalizeAgentCommandModelRef,
@@ -473,12 +476,47 @@ export async function resolveEmbeddedModelSelection(params: {
     }
   }
 
-  const catalogForThinking =
+  const configuredThinkLevel = normalizeThinkLevel(
+    resolveAgentConfig(params.cfg, params.sessionAgentId)?.thinkingDefault,
+  );
+  const immutableThinkLevel = params.requestedThinkLevel ?? configuredThinkLevel;
+  let catalogForThinking =
     allowedModelCatalog.length > 0
       ? allowedModelCatalog
       : modelCatalog && modelCatalog.length > 0
         ? modelCatalog
         : params.configuredThinkingCatalog;
+  if (
+    params.pluginsEnabled &&
+    immutableThinkLevel !== "off" &&
+    !hasResolvedThinkingCatalogEntry({ catalog: catalogForThinking, provider, model })
+  ) {
+    const { loadPreparedModelCatalogSnapshot } = await import("../model-catalog.runtime.js");
+    const runtimeCatalog = (
+      await loadPreparedModelCatalogSnapshot({
+        config: params.cfg,
+        agentId: params.sessionAgentId,
+        workspaceDir: params.workspaceDir,
+      })
+    ).entries;
+    const allowedRuntimeCatalog = createModelVisibilityPolicy({
+      cfg: params.cfg,
+      catalog: runtimeCatalog,
+      defaultProvider,
+      defaultModel,
+      agentId: params.sessionAgentId,
+      allowManifestNormalization: true,
+      allowPluginNormalization: params.pluginsEnabled,
+      ...params.modelManifestContext,
+    }).allowedCatalog;
+    if (
+      allowedRuntimeCatalog.some(
+        (entry) => modelKey(entry.provider, entry.id) === modelKey(provider, model),
+      )
+    ) {
+      catalogForThinking = allowedRuntimeCatalog;
+    }
+  }
   const thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
   const thinkingRuntime = resolveEffectiveAgentRuntime({
     cfg: params.cfg,
@@ -488,10 +526,6 @@ export async function resolveEmbeddedModelSelection(params: {
     sessionKey: params.sessionKey,
     sessionEntry: sessionEntryForAttempt,
   });
-  const configuredThinkLevel = normalizeThinkLevel(
-    resolveAgentConfig(params.cfg, params.sessionAgentId)?.thinkingDefault,
-  );
-  const immutableThinkLevel = params.requestedThinkLevel ?? configuredThinkLevel;
   const primaryThinkLevel =
     immutableThinkLevel ??
     resolveThinkingDefault({

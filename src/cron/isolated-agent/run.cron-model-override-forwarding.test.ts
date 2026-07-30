@@ -500,6 +500,67 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     expect(embeddedCall.thinkLevel).toBe("medium");
   });
 
+  it("hydrates live catalog metadata for a runtime-only cron model override", async () => {
+    resolveAllowedModelRefMock.mockReturnValue({
+      ref: { provider: "ollama", model: "minimax-m3:cloud" },
+    });
+    loadModelCatalogMock.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      {
+        provider: "ollama",
+        id: "minimax-m3:cloud",
+        name: "minimax-m3:cloud",
+        reasoning: true,
+      },
+    ]);
+    isThinkingLevelSupportedMock.mockImplementation(
+      ({ catalog, level }: { catalog?: Array<{ reasoning?: boolean }>; level?: string }) =>
+        level === "off" || catalog?.some((entry) => entry.reasoning === true) === true,
+    );
+    resolveSupportedThinkingLevelMock.mockReturnValue("off");
+    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => ({
+      result: await run(provider, model),
+      provider,
+      model,
+      attempts: [],
+    }));
+
+    await runCronIsolatedAgentTurn(
+      makeParams({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "ollama/*": {},
+              },
+            },
+          },
+        },
+        job: makeJob({
+          payload: {
+            kind: "agentTurn",
+            message: "summarize",
+            model: "ollama/minimax-m3:cloud",
+            thinking: "medium",
+          },
+        }),
+      }),
+    );
+
+    expect(loadModelCatalogMock).toHaveBeenCalledTimes(2);
+    const embeddedCall = firstMockArg(runEmbeddedAgentMock);
+    expect(embeddedCall.provider).toBe("ollama");
+    expect(embeddedCall.model).toBe("minimax-m3:cloud");
+    expect(embeddedCall.thinkLevel).toBe("medium");
+    const thinkingCall = firstMockArg(isThinkingLevelSupportedMock);
+    expect(thinkingCall.catalog).toEqual([
+      expect.objectContaining({
+        provider: "ollama",
+        id: "minimax-m3:cloud",
+        reasoning: true,
+      }),
+    ]);
+  });
+
   it("passes the resolved default thinking level to the embedded agent runner", async () => {
     resolveThinkingDefaultMock.mockReturnValue("low");
     isThinkingLevelSupportedMock.mockReturnValue(true);

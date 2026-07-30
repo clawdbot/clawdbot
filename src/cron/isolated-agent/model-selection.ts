@@ -1,4 +1,6 @@
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
+import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
 /** Resolves provider/model precedence for isolated cron runs. */
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -9,6 +11,7 @@ import {
   DEFAULT_PROVIDER,
   getModelRefStatus,
   loadResolvedPublishedModelCatalogOwner,
+  loadPreparedModelCatalogSnapshot,
   normalizeModelSelection,
   publishedModelCatalogOwnerMatchesAgent,
   resolveAgentConfig,
@@ -100,6 +103,31 @@ export async function resolveCronModelSelectionOwner(params: {
     );
   }
   return owner;
+}
+
+export async function resolveCronThinkingCatalog(params: {
+  owner: ResolvedPublishedModelCatalogOwner;
+  provider: string;
+  model: string;
+}): Promise<ModelCatalogEntry[]> {
+  const catalog = params.owner.modelCatalog.entries;
+  if (
+    hasResolvedThinkingCatalogEntry({
+      catalog,
+      provider: params.provider,
+      model: params.model,
+    })
+  ) {
+    return catalog;
+  }
+  return (
+    await loadPreparedModelCatalogSnapshot({
+      config: params.owner.config,
+      agentId: params.owner.agentId,
+      agentDir: params.owner.agentDir,
+      workspaceDir: params.owner.workspaceDir,
+    })
+  ).entries;
 }
 
 /** Resolves the effective model for an isolated cron run across defaults, agents, hooks, payload, and session state. */
