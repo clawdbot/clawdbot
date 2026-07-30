@@ -134,8 +134,10 @@ async function acquireOwnerLease(params: {
   const resolvedOwnerPath = resolveUserPath(params.authDir);
   await fs.mkdir(resolvedOwnerPath, { recursive: true });
   const ownerPath = await fs.realpath(resolvedOwnerPath);
-  // Reserve before awaiting the filesystem so concurrent callers cannot use the
-  // underlying file lock's intentionally re-entrant mode for two sockets.
+  // Reserve before awaiting the filesystem so concurrent local callers queue
+  // here instead of contending on the sidecar. The file lock (fs-safe 0.5) is
+  // non-reentrant without an owner key: a second same-process acquire would
+  // retry against our own hold until file_lock_timeout, not fail fast.
   const processOwner = await reserveProcessOwner({
     authDir: params.authDir,
     ownerPath,

@@ -261,8 +261,12 @@ async function materializeMemoryHostEventExport(params: {
   });
   const workspaceKey = workspaceRoot.rootReal;
   const owner = await resolveMemoryHostEventExportOwner(workspaceKey);
-  // The queue handles re-entrant calls in this process; the sidecar lock makes
-  // snapshot, cleanup, and replacement one ordered operation across processes.
+  // The queue serializes concurrent exporters in this process; the sidecar
+  // lock makes snapshot, cleanup, and replacement one ordered operation across
+  // processes. Neither is re-entrant: a same-key enqueue from inside the task
+  // awaits its own tail forever, and the file lock (fs-safe 0.5) spins to
+  // file_lock_timeout without a matching reentrantOwner — never re-enter the
+  // export path from inside this callback.
   // State-qualified paths keep different profiles from replacing each other's export.
   return memoryHostEventExportQueue.enqueue(owner.queueKey, async () => {
     const absolutePath = path.join(workspaceKey, ...owner.relativePath.split("/"));
