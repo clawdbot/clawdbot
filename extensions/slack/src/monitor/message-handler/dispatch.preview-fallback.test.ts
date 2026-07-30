@@ -3806,7 +3806,9 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(capturedReplyOptions?.commentaryProgressEnabled).toBeUndefined();
     expect(capturedReplyOptions?.onVerboseProgressVisibility).toBeUndefined();
     expect(capturedReplyOptions?.progressPreambleEnabled).toBe(true);
-    expect(draftStream.update).toHaveBeenLastCalledWith("Keeping the released behavior");
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      "Keeping the released behavior\n\n• pnpm test",
+    );
   });
 
   it("preserves Slack preamble previews outside progress mode", async () => {

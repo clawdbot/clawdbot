@@ -457,7 +457,7 @@ describe("createChannelProgressDraftCompositor", () => {
     });
   });
 
-  it("replaces tool lines with narration and drops redundant edits", async () => {
+  it("keeps tool lines under narration and drops redundant edits", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
       entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
@@ -470,24 +470,26 @@ describe("createChannelProgressDraftCompositor", () => {
     await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
     await progress.pushNarrationProgress("Updating the config file now.");
     expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\nUpdating the config file now.",
+      "Shelling\n\nUpdating the config file now.\n\n🛠️ Exec",
       expect.anything(),
     );
 
-    // Tool events keep accumulating underneath without editing the message.
-    const callsAfterNarration = update.mock.calls.length;
+    // Tool events stay visible under the headline, so each new line edits.
     await progress.pushToolProgress("🛠️ Wc", { startImmediately: true });
-    expect(update.mock.calls.length).toBe(callsAfterNarration);
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\nUpdating the config file now.\n\n🛠️ Exec\n🛠️ Wc",
+      expect.anything(),
+    );
 
     // Identical narration is dropped; changed narration edits once.
     expect(await progress.pushNarrationProgress("Updating the config file now.")).toBe(false);
     await progress.pushNarrationProgress("Restarting the gateway.");
     expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\nRestarting the gateway.",
+      "Shelling\n\nRestarting the gateway.\n\n🛠️ Exec\n🛠️ Wc",
       expect.anything(),
     );
 
-    // Narration stopping (empty update) falls back to the raw tool lines.
+    // Narration stopping (empty update) leaves the raw tool lines.
     await progress.pushNarrationProgress("");
     expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n🛠️ Wc", expect.anything());
   });
@@ -545,7 +547,7 @@ describe("createChannelProgressDraftCompositor", () => {
     await progress.pushToolProgress("🛠️ Exec one", { startImmediately: true });
     await progress.pushToolProgress("🛠️ Exec two", { startImmediately: true });
 
-    expect(update).toHaveBeenLastCalledWith("Reading the workspace.", {
+    expect(update).toHaveBeenLastCalledWith("Reading the workspace.\n\n🛠️ Exec one\n🛠️ Exec two", {
       lines: ["🛠️ Exec one", "🛠️ Exec two"],
     });
   });
@@ -829,7 +831,7 @@ describe("createChannelProgressDraftCompositor", () => {
       expect(update).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(1);
-      expect(update).toHaveBeenCalledWith("Reading the gateway config.", {
+      expect(update).toHaveBeenCalledWith("Reading the gateway config.\n\n🛠️ Exec", {
         flush: true,
         lines: ["🛠️ Exec"],
       });

@@ -77,6 +77,8 @@ describe("matrix scenario environment", () => {
       config: {},
       gateway,
       outputDir: "/tmp/matrix-qa/output",
+      scenarioId: "matrix-observer-reset",
+      scenarioTitle: "Matrix observer reset",
       timeoutMs: 1_000,
       waitForConfigRestartSettle: vi.fn(),
     };
@@ -168,6 +170,8 @@ describe("matrix scenario environment", () => {
       config: {},
       gateway,
       outputDir: "/tmp/matrix-qa/output",
+      scenarioId: "matrix-approval",
+      scenarioTitle: "Matrix approval",
       timeoutMs: 1_000,
       waitForConfigRestartSettle,
     });
@@ -285,6 +289,8 @@ describe("matrix scenario environment", () => {
       config: {},
       gateway,
       outputDir: "/tmp/matrix-qa/output",
+      scenarioId: "matrix-restart",
+      scenarioTitle: "Matrix restart",
       timeoutMs: 1_000,
       waitForConfigRestartSettle,
     });
