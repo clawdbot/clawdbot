@@ -15,6 +15,7 @@ import {
 } from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { SkillEligibilityContext, SkillUsagePath } from "../../skills/types.js";
+import { resolveAgentWorkspaceDir } from "../agent-scope.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import { getSandboxBackendWorkdirResolver, requireSandboxBackendFactory } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
@@ -91,11 +92,13 @@ async function ensureSandboxWorkspaceLayout(params: {
   workspaceDir: string;
 }> {
   const { cfg, rawSessionKey } = params;
+  const resolvedAgentWorkspaceDir =
+    params.workspaceDir?.trim() || resolveAgentWorkspaceDir(params.config ?? {}, params.agentId);
   const { agentWorkspaceDir, sandboxWorkspaceDir, scopeKey, skillsWorkspaceDir, workspaceDir } =
     resolveSandboxWorkspaceLayoutPaths({
       cfg,
       rawSessionKey,
-      workspaceDir: params.workspaceDir,
+      workspaceDir: resolvedAgentWorkspaceDir,
     });
 
   let syncedSkills: Awaited<ReturnType<typeof syncSandboxSkillsToWorkspace>>;
