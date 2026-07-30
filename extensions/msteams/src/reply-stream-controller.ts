@@ -115,6 +115,7 @@ export function createTeamsReplyStreamController(params: {
   let emittedText = "";
   let acknowledgedText = "";
   let acknowledgedStreamId: string | undefined;
+  let failedSegmentFallbackPrepared = false;
   const streamEvents = (stream as { events?: TeamsStreamChunkEvents } | undefined)?.events;
   let streamChunkSubscription: number | undefined;
 
@@ -146,6 +147,17 @@ export function createTeamsReplyStreamController(params: {
     }
     streamEvents?.off(streamChunkSubscription);
     streamChunkSubscription = undefined;
+  };
+
+  const acknowledgedNativeDelivery = (): MSTeamsNativeDeliveryFinalization => {
+    if (!acknowledgedStreamId || !acknowledgedText) {
+      return { visibleReplySent: false };
+    }
+    return {
+      visibleReplySent: true,
+      content: acknowledgedText,
+      messageId: acknowledgedStreamId,
+    };
   };
 
   const fallbackPayloadAfterAcknowledgedText = (payload: ReplyPayload): Maybe<ReplyPayload> => {
@@ -385,13 +397,13 @@ export function createTeamsReplyStreamController(params: {
         return hasMedia ? { ...payload, text: undefined } : undefined;
       }
       if (streamFailed) {
-        const fallback = fallbackPayloadAfterAcknowledgedText(payload);
-        // An acknowledged prefix belongs to this failed segment only;
-        // later tool-round payloads must never inherit its trimming state.
+        // Trim the provider-acknowledged prefix only from the failed segment.
+        // Retain its ID/text for final settlement while later tool rounds fall through whole.
+        const fallback = failedSegmentFallbackPrepared
+          ? payload
+          : fallbackPayloadAfterAcknowledgedText(payload);
+        failedSegmentFallbackPrepared = true;
         pendingFinalPayload = undefined;
-        acknowledgedText = "";
-        acknowledgedStreamId = undefined;
-        releaseStreamChunkSubscription();
         return fallback;
       }
       // Progress mode (or partial mode that received no tokens — e.g. a
@@ -438,23 +450,15 @@ export function createTeamsReplyStreamController(params: {
         releaseStreamChunkSubscription();
         return { visibleReplySent: false };
       }
-      const content = wasCanceled()
-        ? acknowledgedText || undefined
-        : (pendingFinalPayload?.text ?? (emittedText || undefined));
+      const content = pendingFinalPayload?.text ?? (emittedText || undefined);
       try {
         if (wasCanceled()) {
           pendingFinalPayload = undefined;
           streamFinalizationPending = false;
-          return {
-            visibleReplySent: content !== undefined,
-            ...(content === undefined ? {} : { content }),
-          };
+          return acknowledgedNativeDelivery();
         }
         if (!streamFinalizationPending) {
-          return {
-            visibleReplySent: true,
-            ...(content === undefined ? {} : { content }),
-          };
+          return acknowledgedNativeDelivery();
         }
         // Emit a final MessageActivity carrying the AI-generated marker and (if
         // enabled) the feedback channelData. The SDK's HttpStream merges this
@@ -485,13 +489,12 @@ export function createTeamsReplyStreamController(params: {
           const fallbackPayload =
             fallback && !wasCanceled() ? fallbackPayloadAfterAcknowledgedText(fallback) : undefined;
           return {
-            visibleReplySent: true,
-            ...(content === undefined ? {} : { content }),
+            ...acknowledgedNativeDelivery(),
             ...(fallbackPayload ? { fallbackPayload } : {}),
           };
         }
         pendingFinalPayload = undefined;
-        const messageId = extractMessageId(result) ?? undefined;
+        const messageId = extractMessageId(result) ?? acknowledgedStreamId;
         return {
           visibleReplySent: true,
           ...(content === undefined ? {} : { content }),
@@ -502,14 +505,10 @@ export function createTeamsReplyStreamController(params: {
           canceledLocally = true;
           pendingFinalPayload = undefined;
           streamFinalizationPending = false;
-          return {
-            visibleReplySent: true,
-            ...(content === undefined ? {} : { content }),
-          };
+          return acknowledgedNativeDelivery();
         }
-        // Non-cancel failure during the closing emit/close. The streamed
-        // prefix is already visible to the user; the only loss is the
-        // closing activity (AI-Generated marker, feedback channelData).
+        // Non-cancel failure during the closing emit/close. Preserve only a
+        // prefix acknowledged by Teams; queued bytes alone do not prove visibility.
         // Latch streamFailed for parity with the mid-stream path and
         // swallow the error — a thrown finalize would otherwise blow up
         // the reply pipeline after the user already saw the response.
@@ -524,8 +523,7 @@ export function createTeamsReplyStreamController(params: {
           ? fallbackPayloadAfterAcknowledgedText(fallback)
           : undefined;
         return {
-          visibleReplySent: true,
-          ...(content === undefined ? {} : { content }),
+          ...acknowledgedNativeDelivery(),
           ...(fallbackPayload ? { fallbackPayload } : {}),
         };
       } finally {

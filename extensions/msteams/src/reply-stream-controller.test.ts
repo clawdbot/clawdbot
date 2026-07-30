@@ -286,8 +286,7 @@ describe("createTeamsReplyStreamController", () => {
     expect(ctrl.preparePayload({ text: "streamed final" })).toBeUndefined();
 
     await expect(ctrl.finalize()).resolves.toEqual({
-      visibleReplySent: true,
-      content: "streamed final",
+      visibleReplySent: false,
       fallbackPayload: { text: "streamed final" },
     });
   });
@@ -304,8 +303,7 @@ describe("createTeamsReplyStreamController", () => {
     });
 
     await expect(ctrl.finalize()).resolves.toEqual({
-      visibleReplySent: true,
-      content: "streamed final",
+      visibleReplySent: false,
       fallbackPayload: {
         text: "streamed final",
         mediaUrl: undefined,
@@ -323,8 +321,7 @@ describe("createTeamsReplyStreamController", () => {
     expect(ctrl.preparePayload({ text: "streamed final" })).toBeUndefined();
 
     await expect(ctrl.finalize()).resolves.toEqual({
-      visibleReplySent: true,
-      content: "streamed final",
+      visibleReplySent: false,
       fallbackPayload: { text: "streamed final" },
     });
   });
@@ -522,6 +519,7 @@ describe("createTeamsReplyStreamController", () => {
       const stream = makeStream();
       const ctrl = makeController({ stream });
       ctrl.onPartialReply({ text: "partial" });
+      expect(ctrl.preparePayload({ text: "partial" })).toBeUndefined();
       // Cancel after we've started streaming, then make the final emit throw.
       stream.emit.mockImplementation(() => {
         throw makeCancelError();
@@ -529,8 +527,7 @@ describe("createTeamsReplyStreamController", () => {
       // Must not throw — finalize's pre-check on stream.canceled may miss
       // the cancellation that happens between check and emit.
       await expect(ctrl.finalize()).resolves.toEqual({
-        visibleReplySent: true,
-        content: "partial",
+        visibleReplySent: false,
       });
     });
 
@@ -613,7 +610,7 @@ describe("createTeamsReplyStreamController", () => {
       expect(ctrl.preparePayload({ text: "hello again" })).toEqual({
         text: "hello again",
       });
-      expect(stream.events.off).toHaveBeenCalledOnce();
+      expect(stream.events.off).not.toHaveBeenCalled();
     });
 
     it("ignores unrelated, informative, and out-of-order stream acknowledgements", () => {
@@ -681,7 +678,8 @@ describe("createTeamsReplyStreamController", () => {
 
       await expect(ctrl.finalize()).resolves.toEqual({
         visibleReplySent: true,
-        content: "hello world",
+        content: "hello",
+        messageId: "stream-acknowledged",
         fallbackPayload: { text: " world" },
       });
       expect(stream.events.off).toHaveBeenCalledWith(0);
@@ -699,6 +697,7 @@ describe("createTeamsReplyStreamController", () => {
       await expect(ctrl.finalize()).resolves.toEqual({
         visibleReplySent: true,
         content: "hello",
+        messageId: "stream-acknowledged",
       });
       expect(stream.events.off).toHaveBeenCalledWith(0);
     });
@@ -715,6 +714,7 @@ describe("createTeamsReplyStreamController", () => {
       await expect(ctrl.finalize()).resolves.toEqual({
         visibleReplySent: true,
         content: "hello",
+        messageId: "stream-acknowledged",
       });
       expect(stream.events.off).toHaveBeenCalledWith(0);
     });
@@ -739,8 +739,7 @@ describe("createTeamsReplyStreamController", () => {
       // Finalize must not propagate; it returns the retained payload so the
       // dispatcher can fall back to normal Teams delivery.
       await expect(ctrl.finalize()).resolves.toEqual({
-        visibleReplySent: true,
-        content: "partial final",
+        visibleReplySent: false,
         fallbackPayload: { text: "partial final" },
       });
     });

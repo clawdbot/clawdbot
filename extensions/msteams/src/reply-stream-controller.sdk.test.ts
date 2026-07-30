@@ -178,7 +178,8 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
 
     await expect(controller.finalize()).resolves.toEqual({
       visibleReplySent: true,
-      content: completeReply,
+      content: acknowledgedPrefix,
+      messageId: "stream-size-limit",
       fallbackPayload: { text: "b".repeat(200) },
     });
     // Finalization queues its own metadata activity; this is a second
@@ -221,6 +222,7 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
     await expect(controller.finalize()).resolves.toEqual({
       visibleReplySent: true,
       content: acknowledgedPrefix,
+      messageId: "stream-cancel",
     });
     expect(requests.filter((request) => request.scenario === "cancel")).toHaveLength(2);
   });
