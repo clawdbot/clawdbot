@@ -818,7 +818,16 @@ describe("config io write prepare", () => {
     };
     expect(
       resolvePersistCandidateForWrite({
-        runtimeConfig: sourceConfig,
+        runtimeConfig: {
+          agents: {
+            defaults: {
+              model: { primary: "google/gemini-3.1-pro-preview" },
+              models: {
+                "google/gemini-3.1-pro-preview": { alias: "Gemini", params },
+              },
+            },
+          },
+        },
         sourceConfig,
         nextConfig: {
           agents: {
@@ -832,8 +841,148 @@ describe("config io write prepare", () => {
     ).toEqual({
       agents: {
         defaults: {
-          model: { primary: "google/gemini-3.1-pro-preview" },
+          model: { primary: "google/gemini-3-pro-preview" },
           models: { "google/gemini-3.1-pro-preview": { params } },
+        },
+      },
+    });
+  });
+
+  it("canonicalizes only agent model maps touched through normalized runtime identities", () => {
+    const retired = "google/gemini-3-pro-preview";
+    const canonical = "google/gemini-3.1-pro-preview";
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          models: {
+            [retired]: { alias: "Default before", agentRuntime: { id: "codex" } },
+          },
+        },
+        entries: { ops: { models: { [retired]: { alias: "Ops before" } } } },
+      },
+    };
+    const runtimeConfig = {
+      agents: {
+        defaults: {
+          models: {
+            [canonical]: { alias: "Default before", agentRuntime: { id: "codex" } },
+          },
+        },
+        entries: { ops: { models: { [canonical]: { alias: "Ops before" } } } },
+      },
+    };
+
+    expect(
+      resolvePersistCandidateForWrite({
+        runtimeConfig,
+        sourceConfig,
+        nextConfig: {
+          agents: {
+            defaults: {
+              models: {
+                [canonical]: { alias: "Default after", agentRuntime: { id: "codex" } },
+              },
+            },
+            entries: { ops: { models: { [canonical]: { alias: "Ops after" } } } },
+          },
+        },
+      }),
+    ).toEqual({
+      agents: {
+        defaults: {
+          models: {
+            [canonical]: { alias: "Default after", agentRuntime: { id: "codex" } },
+          },
+        },
+        entries: { ops: { models: { [canonical]: { alias: "Ops after" } } } },
+      },
+    });
+  });
+
+  it("leaves untouched retired model maps for doctor instead of normalizing unrelated writes", () => {
+    const retired = "google/gemini-3-pro-preview";
+    const canonical = "google/gemini-3.1-pro-preview";
+    const sourceConfig = {
+      agents: { defaults: { models: { [retired]: { alias: "Gemini" } } } },
+      gateway: { port: 18789 },
+    };
+    const runtimeConfig = {
+      agents: { defaults: { models: { [canonical]: { alias: "Gemini" } } } },
+      gateway: { port: 18789 },
+    };
+
+    expect(
+      resolvePersistCandidateForWrite({
+        runtimeConfig,
+        sourceConfig,
+        nextConfig: { ...runtimeConfig, gateway: { port: 18888 } },
+      }),
+    ).toEqual({
+      agents: { defaults: { models: { [retired]: { alias: "Gemini" } } } },
+      gateway: { port: 18888 },
+    });
+  });
+
+  it("canonicalizes an explicitly persisted model-map path even when runtime values are equal", () => {
+    const retired = "google/gemini-3-pro-preview";
+    const canonical = "google/gemini-3.1-pro-preview";
+    const sourceConfig = {
+      agents: { defaults: { models: { [retired]: { alias: "Gemini" } } } },
+    };
+    const runtimeConfig = {
+      agents: { defaults: { models: { [canonical]: { alias: "Gemini" } } } },
+    };
+
+    expect(
+      resolvePersistCandidateForWrite({
+        runtimeConfig,
+        sourceConfig,
+        nextConfig: runtimeConfig,
+        explicitSetPaths: [["agents", "defaults", "models"]],
+      }),
+    ).toEqual(runtimeConfig);
+  });
+
+  it("canonicalizes only the model identity selected by an explicit descendant path", () => {
+    const retiredA = "google/gemini-3-pro-preview";
+    const canonicalA = "google/gemini-3.1-pro-preview";
+    const retiredB = "google/gemma-4-26b";
+    const canonicalB = "google/gemma-4-26b-a4b-it";
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          models: {
+            [retiredA]: { alias: "Gemini" },
+            [retiredB]: { alias: "Gemma" },
+          },
+        },
+      },
+    };
+    const runtimeConfig = {
+      agents: {
+        defaults: {
+          models: {
+            [canonicalA]: { alias: "Gemini" },
+            [canonicalB]: { alias: "Gemma" },
+          },
+        },
+      },
+    };
+
+    expect(
+      resolvePersistCandidateForWrite({
+        runtimeConfig,
+        sourceConfig,
+        nextConfig: runtimeConfig,
+        explicitSetPaths: [["agents", "defaults", "models", canonicalA, "alias"]],
+      }),
+    ).toEqual({
+      agents: {
+        defaults: {
+          models: {
+            [canonicalA]: { alias: "Gemini" },
+            [retiredB]: { alias: "Gemma" },
+          },
         },
       },
     });
@@ -860,105 +1009,6 @@ describe("config io write prepare", () => {
     expect(
       resolvePersistCandidateForWrite({ runtimeConfig: sourceConfig, sourceConfig, nextConfig }),
     ).toEqual(nextConfig);
-  });
-
-  it("normalizes retired Google model refs during unrelated config writes", () => {
-    function makeGoogleConfig(modelRef: string): OpenClawConfig {
-      return {
-        agents: {
-          defaults: {
-            model: { primary: modelRef, fallbacks: [modelRef, "openai/gpt-5.5"] },
-            utilityModel: modelRef,
-            heartbeat: { model: modelRef },
-            subagents: { model: { primary: modelRef, fallbacks: [modelRef] } },
-            compaction: { model: modelRef, memoryFlush: { model: modelRef } },
-            models: { [modelRef]: { alias: "Gemini" } },
-          },
-          entries: {
-            ops: {
-              model: { primary: modelRef, fallbacks: [modelRef] },
-              utilityModel: modelRef,
-              heartbeat: { model: modelRef },
-              subagents: { model: modelRef },
-              models: { [modelRef]: { alias: "Ops Gemini" } },
-            },
-          },
-        },
-        gateway: { port: 18789 },
-      };
-    }
-    const runtimeConfig = makeGoogleConfig("google/gemini-3.1-pro-preview");
-    expect(
-      resolvePersistCandidateForWrite({
-        runtimeConfig,
-        sourceConfig: makeGoogleConfig("google/gemini-3-pro-preview"),
-        nextConfig: { ...runtimeConfig, gateway: { port: 18888 } },
-      }),
-    ).toEqual({ ...runtimeConfig, gateway: { port: 18888 } });
-  });
-
-  it("normalizes retired Google provider catalog refs during unrelated config writes", () => {
-    const makeModel = (id: string, name: string) => ({
-      id,
-      name,
-      reasoning: true,
-      input: ["text" as const],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 1_048_576,
-      maxTokens: 65_536,
-    });
-    const makeConfig = (id: string): OpenClawConfig => ({
-      models: {
-        providers: {
-          google: {
-            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-            models: [makeModel(id, "Gemini 3 Pro")],
-          },
-          kilocode: {
-            baseUrl: "https://kilocode.test/v1",
-            models: [makeModel(id, "Gemini via Kilo")],
-          },
-        },
-      },
-      gateway: { port: 18789 },
-    });
-    const runtimeConfig = makeConfig("google/gemini-3.1-pro-preview");
-    expect(
-      resolvePersistCandidateForWrite({
-        runtimeConfig,
-        sourceConfig: makeConfig("google/gemini-3-pro-preview"),
-        nextConfig: { ...runtimeConfig, gateway: { port: 18888 } },
-      }),
-    ).toEqual({ ...runtimeConfig, gateway: { port: 18888 } });
-  });
-
-  it("normalizes manifest-backed provider catalog refs during unrelated config writes", () => {
-    const makeModel = (id: string) => ({
-      id,
-      name: "Custom latest",
-      reasoning: false,
-      input: ["text" as const],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200_000,
-      maxTokens: 8192,
-    });
-    const makeConfig = (id: string): OpenClawConfig => ({
-      models: {
-        providers: { myproxy: { baseUrl: "https://proxy.example/v1", models: [makeModel(id)] } },
-      },
-      gateway: { port: 18789 },
-    });
-    const runtimeConfig = makeConfig("vendor/modern-model");
-    expect(
-      resolvePersistCandidateForWrite({
-        runtimeConfig,
-        sourceConfig: makeConfig("latest"),
-        nextConfig: { ...runtimeConfig, gateway: { port: 18888 } },
-        modelIdNormalizationPolicies: new Map([
-          ["myproxy", { aliases: { latest: "modern-model" }, prefixWhenBare: "vendor" }],
-        ]),
-      }),
-    ).toEqual({ ...runtimeConfig, gateway: { port: 18888 } });
   });
 
   it("allows explicit unsets to remove authored agent provider params", () => {

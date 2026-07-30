@@ -8,14 +8,8 @@ const DOCKER_E2E_CHUNKS = [
   },
   {
     chunk_id: "package-update-openai",
-    label: "package/update OpenAI install",
+    label: "package/update OpenAI",
     timeout_minutes: 45,
-    profiles: "beta minimum stable full",
-  },
-  {
-    chunk_id: "package-update-anthropic",
-    label: "package/update Anthropic install",
-    timeout_minutes: 60,
     profiles: "beta minimum stable full",
   },
   {

@@ -146,6 +146,7 @@ export type ClickClackChannel = {
   external_ref?: string;
   external_url?: string;
   sidebar_section?: string;
+  display_title?: string;
   archived?: boolean;
   created_at: string;
 };

@@ -74,9 +74,17 @@ export type SetupInferenceCandidate = {
 
 export type SetupInferenceUnavailableCandidate = {
   id: string;
+  /** Canonical provider identity for clients with bundled brand artwork. */
+  brandId?: string;
   label: string;
   detail: string;
   reason: string;
+  /** Provider-owned interactive sign-in that can replace the unavailable route. */
+  authOptionId?: string;
+  /** Provider-owned manual secret route that can replace the unavailable route. */
+  manualProviderId?: string;
+  icon?: string;
+  website?: string;
 };
 
 export type SetupInferenceDetection = {

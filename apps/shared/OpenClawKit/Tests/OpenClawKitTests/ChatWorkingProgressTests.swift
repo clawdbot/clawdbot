@@ -177,13 +177,21 @@ struct ChatWorkingProgressTests {
         #expect(!ChatWorkingDurationFormatter.compact(milliseconds: 1e30).isEmpty)
     }
 
+    @Test func `recap duration uses localized full wording with two units`() {
+        let locale = Locale(identifier: "en_US")
+        #expect(ChatWorkingDurationFormatter.full(milliseconds: 30000, locale: locale) == "30 seconds")
+        #expect(ChatWorkingDurationFormatter.full(
+            milliseconds: 14_520_000,
+            locale: locale) == "4 hours, 2 minutes")
+    }
+
     @Test func `recap token text distinguishes unknown zero one and many`() {
         let locale = Locale(identifier: "en_US")
         #expect(ChatTurnRecapText.tokens(nil, locale: locale) == nil)
         #expect(ChatTurnRecapText.tokens(0, locale: locale) == "0 tokens")
         #expect(ChatTurnRecapText.tokens(1, locale: locale) == "1 token")
         #expect(ChatTurnRecapText.tokens(485, locale: locale) == "485 tokens")
-        #expect(ChatTurnRecapText.done(runtimeMs: 51000, locale: locale) == "Done in 51s")
+        #expect(ChatTurnRecapText.done(runtimeMs: 51000, locale: locale) == "Done in 51 seconds")
     }
 
     @Test func `recap resolves on a fresh terminal then sticks`() {

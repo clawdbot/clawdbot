@@ -70,11 +70,6 @@ flow:
                       sessionMemory: true
                     query:
                       minScore: 0
-                      hybrid:
-                        enabled: true
-                        temporalDecay:
-                          enabled: true
-                          halfLifeDays: 1
         - call: waitForGatewayHealthy
           args:
             - ref: env

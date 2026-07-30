@@ -30,6 +30,7 @@ export {
   getTaskById,
   hasActiveTaskForChildSessionKey,
   listFreshTasksForOwnerKey,
+  listTaskRecordPage,
   listTaskRecords,
   listTaskRecordsUnsorted,
   listTasksForAgentId,

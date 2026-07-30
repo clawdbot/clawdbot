@@ -20,6 +20,9 @@ export function wrapToolDefinition<
     name: definition.name,
     label: definition.label,
     ...(definition.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
+    ...(definition.resultContentSource
+      ? { resultContentSource: definition.resultContentSource }
+      : {}),
     description: definition.description,
     parameters: definition.parameters,
     ...(definition.outputSchema ? { outputSchema: definition.outputSchema } : {}),
@@ -49,6 +52,7 @@ export function createToolDefinitionFromAgentTool(tool: AgentTool): ToolDefiniti
     name: tool.name,
     label: tool.label,
     ...(tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
+    ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
     description: tool.description,
     parameters: tool.parameters,
     ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),

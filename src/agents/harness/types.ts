@@ -1,3 +1,5 @@
+import type { SessionToolOverrides } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 /**
  * Public native agent harness contracts and capability shapes.
  */
@@ -6,6 +8,7 @@ import type {
   ProviderModelRouteRuntimePolicy,
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
+import type { McpToolCatalog } from "../agent-bundle-mcp-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
 
 export type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
@@ -324,6 +327,22 @@ type AgentHarnessProviderUsageCapability = {
     | undefined;
 };
 
+type AgentHarnessMcpCatalogParams = {
+  config: OpenClawConfig;
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  workspaceDir: string;
+  /** OpenClaw-configured servers whose session policy this harness can enforce. */
+  mcpServerNames: readonly string[];
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
+};
+
+type AgentHarnessMcpCatalogCapability = {
+  /** Lists the MCP tools owned by this session's native runtime, if it is already bound. */
+  loadMcpToolCatalog?(params: AgentHarnessMcpCatalogParams): Promise<McpToolCatalog | undefined>;
+};
+
 export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessSideQuestionCapability &
   AgentHarnessClassificationCapability &
@@ -331,6 +350,7 @@ export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessRuntimeArtifactCapability &
   AgentHarnessAuthBindingCapability &
   AgentHarnessProviderUsageCapability &
+  AgentHarnessMcpCatalogCapability &
   AgentHarnessSessionForkCapability &
   AgentHarnessSessionLifecycleCapability;
 

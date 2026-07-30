@@ -167,12 +167,15 @@ export async function executeCliProcess(params: {
     ? createCliJsonlStreamingParser({
         backend: params.backend,
         providerId: context.backendResolved.id,
+        parseJsonlEvent: context.backendResolved.parseJsonlEvent,
         onAssistantDelta: params.events.emitCliAssistantDelta,
         onThinkingDelta: params.events.emitCliThinkingDelta,
         onThinkingProgress: params.events.emitCliThinkingProgress,
         onPlanUpdate: params.events.emitCliPlanUpdate,
         onToolUseStart: params.events.emitParsedToolUseStart,
         onToolResult: params.events.emitParsedToolResult,
+        onDisplayToolUseStart: params.events.emitCliDisplayToolUseStart,
+        onDisplayToolResult: params.events.emitCliDisplayToolResult,
         onCommentaryText:
           params.events.emitLiveEvents && runParams.emitCommentaryText
             ? params.events.emitCliCommentaryText
@@ -254,47 +257,53 @@ export async function executeCliProcess(params: {
       backendId: context.backendResolved.id,
       cliSessionId: params.useResume ? params.resolvedSessionId : undefined,
     });
-    const managedRun = await supervisor.spawn({
-      sessionId: runParams.sessionId,
-      backendId: context.backendResolved.id,
-      scopeKey,
-      replaceExistingScope: Boolean(params.useResume && scopeKey),
-      mode: "child",
-      argv: [params.executionCommand, ...params.executionLeadingArgv, ...params.executionArgs],
-      timeoutMs: runParams.timeoutMs,
-      noOutputTimeoutMs: params.noOutputTimeoutMs,
-      cwd: context.cwd ?? context.workspaceDir,
-      env: params.env,
-      input: params.stdin ?? "",
-      secretInput: context.preparedBackend.secretInput,
-      captureOutput: false,
-      onStdout: consumeStdout,
-      onStderr: consumeStderr,
-    });
-    managedRunPid = managedRun.pid;
-    let replyBackendCompleted = false;
-    const replyBackendHandle = runParams.replyOperation
-      ? {
-          kind: "cli" as const,
-          cancel: () => managedRun.cancel("manual-cancel"),
-          isStreaming: () => !replyBackendCompleted,
-        }
-      : undefined;
-    if (replyBackendHandle) {
-      runParams.replyOperation?.attachBackend(replyBackendHandle);
-    }
-    const abortManagedRun = () => managedRun.cancel("manual-cancel");
-    runParams.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
     if (runParams.abortSignal?.aborted) {
-      abortManagedRun();
+      throw createCliAbortError();
     }
+    // Startup can wait behind another scoped run. Reserve cancellation under
+    // the caller's run id before awaiting the child or replacement fence.
+    const abortManagedRun = () => supervisor.cancel(runParams.runId, "manual-cancel");
+    runParams.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
     try {
-      result = await managedRun.wait();
-    } finally {
-      replyBackendCompleted = true;
+      const managedRun = await supervisor.spawn({
+        runId: runParams.runId,
+        sessionId: runParams.sessionId,
+        backendId: context.backendResolved.id,
+        scopeKey,
+        replaceExistingScope: Boolean(params.useResume && scopeKey),
+        mode: "child",
+        argv: [params.executionCommand, ...params.executionLeadingArgv, ...params.executionArgs],
+        timeoutMs: runParams.timeoutMs,
+        noOutputTimeoutMs: params.noOutputTimeoutMs,
+        cwd: context.cwd ?? context.workspaceDir,
+        env: params.env,
+        input: params.stdin ?? "",
+        secretInput: context.preparedBackend.secretInput,
+        captureOutput: false,
+        onStdout: consumeStdout,
+        onStderr: consumeStderr,
+      });
+      managedRunPid = managedRun.pid;
+      let replyBackendCompleted = false;
+      const replyBackendHandle = runParams.replyOperation
+        ? {
+            kind: "cli" as const,
+            cancel: () => managedRun.cancel("manual-cancel"),
+            isStreaming: () => !replyBackendCompleted,
+          }
+        : undefined;
       if (replyBackendHandle) {
-        runParams.replyOperation?.detachBackend(replyBackendHandle);
+        runParams.replyOperation?.attachBackend(replyBackendHandle);
       }
+      try {
+        result = await managedRun.wait();
+      } finally {
+        replyBackendCompleted = true;
+        if (replyBackendHandle) {
+          runParams.replyOperation?.detachBackend(replyBackendHandle);
+        }
+      }
+    } finally {
       runParams.abortSignal?.removeEventListener("abort", abortManagedRun);
     }
   }

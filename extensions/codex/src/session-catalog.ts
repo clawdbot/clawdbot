@@ -16,7 +16,10 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import { resolveCodexAppServerClientInstanceId } from "./app-server/client.js";
-import { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config.js";
+import {
+  resolveCodexSupervisionAppServerRuntimeOptions,
+  type CodexAppServerStartOptions,
+} from "./app-server/config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./app-server/plugin-app-cache-key.js";
 import { assertCodexThreadForkParams } from "./app-server/protocol-validators.js";
 import type {
@@ -103,6 +106,8 @@ import { toGenericTranscriptItem } from "./session-catalog-transcript-item.js";
 import type {
   CodexSessionCatalogControl,
   CodexSessionCatalogHost,
+  CodexSessionCatalogPage,
+  CodexSessionCatalogPageParams,
   CodexSessionCatalogParams,
   CodexSessionCatalogResult,
   CodexSessionCatalogSession,
@@ -119,6 +124,30 @@ const boundCatalogSessionId = (value: unknown) =>
   boundedCatalogString(value, MAX_SESSION_ID_LENGTH);
 
 const CODEX_SUPERVISION_SESSION_KEY_PREFIX = "harness:codex:supervision:";
+const CODEX_SESSION_CATALOG_LIST_TTL_MS = 32_000;
+const CODEX_SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES = 32;
+
+type CodexCatalogRequestOptions = {
+  config: OpenClawConfig | undefined;
+  startOptions: CodexAppServerStartOptions;
+};
+
+type CodexCatalogPageCacheEntry = {
+  expiresAt: number;
+  page: Promise<CodexSessionCatalogPage>;
+  settledPage?: Promise<CodexSessionCatalogPage>;
+  stalePage?: Promise<CodexSessionCatalogPage>;
+};
+
+function codexCatalogPageCacheKey(params: CodexSessionCatalogPageParams): string {
+  // Mirror listPage's search/cwd normalization; these trimmed values are what reach app-server.
+  return JSON.stringify([
+    params.cursor ?? null,
+    params.limit ?? null,
+    params.searchTerm?.trim().toLocaleLowerCase() || null,
+    params.cwd?.trim() || null,
+  ]);
+}
 
 export {
   CODEX_LOCAL_SESSION_HOST_ID,
@@ -239,13 +268,35 @@ export function createCodexSessionCatalogControl(params: {
 }): CodexSessionCatalogControl {
   const now = params.now ?? Date.now;
   const getPluginConfig = () => params.getPluginConfig();
+  const requestOptionsByConfig = new WeakMap<OpenClawConfig, CodexCatalogRequestOptions>();
+  const catalogPagesByConfig = new WeakMap<
+    OpenClawConfig,
+    Map<string, CodexCatalogPageCacheEntry>
+  >();
+  const resolveRequestOptions = (
+    startOptions: CodexAppServerStartOptions,
+  ): CodexCatalogRequestOptions => {
+    const runtimeConfig = params.getRuntimeConfig();
+    if (!runtimeConfig) {
+      return { config: undefined, startOptions: structuredClone(startOptions) };
+    }
+    const cached = requestOptionsByConfig.get(runtimeConfig);
+    if (cached) {
+      // Plugin start options derive from this same immutable config snapshot. Config reload changes
+      // object identity; re-cloning on every poll only adds CPU and allocation to the catalog path.
+      return cached;
+    }
+    const resolved = {
+      config: structuredClone(runtimeConfig),
+      startOptions: structuredClone(startOptions),
+    };
+    requestOptionsByConfig.set(runtimeConfig, resolved);
+    return resolved;
+  };
   const createRequestSnapshot = (): CodexSessionCatalogRequestSnapshot => {
     const pluginConfig = getPluginConfig();
     const runtime = resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig });
-    const requestOptions = {
-      config: structuredClone(params.getRuntimeConfig()),
-      startOptions: structuredClone(runtime.start),
-    };
+    const requestOptions = resolveRequestOptions(runtime.start);
     return {
       requestTimeoutMs: runtime.requestTimeoutMs,
       listThreads: async (listParams, timeoutMs) =>
@@ -290,8 +341,7 @@ export function createCodexSessionCatalogControl(params: {
   const withPinnedConnection: CodexSessionCatalogControl["withPinnedConnection"] = async (run) => {
     const pluginConfig = getPluginConfig();
     const runtime = resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig });
-    const runtimeConfig = structuredClone(params.getRuntimeConfig());
-    const startOptions = structuredClone(runtime.start);
+    const { config: runtimeConfig, startOptions } = resolveRequestOptions(runtime.start);
     const client = await getLeasedSharedCodexAppServerClient({
       config: runtimeConfig,
       startOptions,
@@ -361,11 +411,132 @@ export function createCodexSessionCatalogControl(params: {
     }
   };
 
-  return createCodexSessionCatalogControlFromRequests({
+  const control = createCodexSessionCatalogControlFromRequests({
     createRequestSnapshot,
     now,
     withPinnedConnection,
   });
+  return {
+    ...control,
+    async listPage(pageParams) {
+      const runtimeConfig = params.getRuntimeConfig();
+      if (!runtimeConfig) {
+        return await control.listPage(pageParams);
+      }
+      let cache = catalogPagesByConfig.get(runtimeConfig);
+      if (!cache) {
+        cache = new Map();
+        catalogPagesByConfig.set(runtimeConfig, cache);
+      }
+      const key = codexCatalogPageCacheKey(pageParams);
+      const cached = cache.get(key);
+      if (pageParams.forceRefresh !== true && cached) {
+        // A settled page always serves immediately. Expiry only starts one background refresh;
+        // its result becomes visible on the next poll (one polling cycle, about 30s, for a native
+        // session created outside OpenClaw). The TTL is a refresh trigger, never a serve gate.
+        cache.delete(key);
+        cache.set(key, cached);
+        if (cached.stalePage) {
+          return await cached.stalePage;
+        }
+        if (cached.expiresAt > now()) {
+          return await cached.page;
+        }
+
+        const stalePage = cached.settledPage;
+        if (!stalePage) {
+          return await cached.page;
+        }
+        const page = control.listPage(pageParams);
+        const entry: CodexCatalogPageCacheEntry = {
+          expiresAt: Number.POSITIVE_INFINITY,
+          page,
+          settledPage: stalePage,
+          stalePage,
+        };
+        cache.set(key, entry);
+        void page.then(
+          () => {
+            if (cache.get(key) === entry) {
+              delete entry.stalePage;
+              entry.settledPage = page;
+              entry.expiresAt = now() + CODEX_SESSION_CATALOG_LIST_TTL_MS;
+            }
+          },
+          async () => {
+            let stale: CodexSessionCatalogPage | undefined;
+            try {
+              stale = await stalePage;
+            } catch {
+              // A still-pending cold fill is not a real stale page.
+            }
+            if (cache.get(key) !== entry) {
+              return;
+            }
+            if (stale) {
+              cache.delete(key);
+              const settledPage = Promise.resolve(stale);
+              cache.set(key, { expiresAt: now(), page: settledPage, settledPage });
+            } else {
+              cache.delete(key);
+            }
+          },
+        );
+        return await stalePage;
+      }
+      if (cached) {
+        cache.delete(key);
+      }
+      const serveStaleOnError = pageParams.forceRefresh !== true;
+      const page = control.listPage(pageParams);
+      const stalePage = cached?.settledPage;
+      const entry: CodexCatalogPageCacheEntry = {
+        expiresAt: Number.POSITIVE_INFINITY,
+        page,
+        ...(stalePage ? { stalePage, settledPage: stalePage } : {}),
+      };
+      cache.set(key, entry);
+      while (cache.size > CODEX_SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES) {
+        const oldest = cache.keys().next();
+        if (oldest.done) {
+          break;
+        }
+        cache.delete(oldest.value);
+      }
+      try {
+        const result = await page;
+        if (cache.get(key) === entry) {
+          delete entry.stalePage;
+          entry.settledPage = page;
+          entry.expiresAt = now() + CODEX_SESSION_CATALOG_LIST_TTL_MS;
+        }
+        return result;
+      } catch (error) {
+        if (stalePage) {
+          let stale: CodexSessionCatalogPage | undefined;
+          try {
+            stale = await stalePage;
+          } catch {
+            // The prior page was not real data, so propagate the current app-server failure.
+          }
+          if (stale) {
+            if (cache.get(key) === entry) {
+              cache.delete(key);
+              const settledPage = Promise.resolve(stale);
+              cache.set(key, { expiresAt: now(), page: settledPage, settledPage });
+            }
+            if (serveStaleOnError) {
+              return stale;
+            }
+          }
+        }
+        if (cache.get(key) === entry) {
+          cache.delete(key);
+        }
+        throw error;
+      }
+    },
+  };
 }
 
 async function listGatewayHost(params: {
@@ -422,6 +593,7 @@ async function listCodexSessionCatalog(params: {
   runtime: PluginRuntime;
   control: CodexSessionCatalogControl;
   query?: CodexSessionCatalogParams;
+  listNodes?: Parameters<SessionCatalogProvider["list"]>[0]["listNodes"];
   onHost?: (host: CodexSessionCatalogHost) => void;
   sessionEntries?: SessionCatalogEntrySnapshot;
 }): Promise<CodexSessionCatalogResult> {
@@ -452,7 +624,7 @@ async function listCodexSessionCatalog(params: {
   }
   let nodes: CatalogNode[];
   try {
-    nodes = (await params.runtime.nodes.list()).nodes
+    nodes = (await (params.listNodes?.() ?? params.runtime.nodes.list())).nodes
       .filter(
         (node) =>
           node.commands?.includes(CODEX_APP_SERVER_THREADS_LIST_COMMAND) &&
@@ -1273,7 +1445,7 @@ function registerCodexSessionCatalog(params: {
       ),
     list: async (query) => {
       const localTerminalAvailable = resolveLocalCodexTerminalExecutable() !== undefined;
-      const { onHost, sessionEntries, ...gatewayQuery } = query;
+      const { listNodes, onHost, sessionEntries, ...gatewayQuery } = query;
       const mapHost = (host: CodexSessionCatalogHost) =>
         toGenericCatalogHost(host, localTerminalAvailable);
       return (
@@ -1283,6 +1455,7 @@ function registerCodexSessionCatalog(params: {
           runtime: params.api.runtime,
           control: params.control,
           query: gatewayQuery,
+          listNodes,
           sessionEntries,
           ...(onHost ? { onHost: (host) => onHost(mapHost(host)) } : {}),
         })

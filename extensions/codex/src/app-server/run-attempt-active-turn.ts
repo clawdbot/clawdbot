@@ -14,6 +14,7 @@ import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexNativeMcpAppResultDetailsPreparer } from "./native-mcp-app.js";
 import type { CodexTurnStartResponse, JsonObject } from "./protocol.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
+import { readBoundedCodexRemoteWorkspaceFile } from "./remote-workspace-media.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
@@ -53,7 +54,7 @@ export async function activateCodexAttemptTurn(
     sandboxSessionKey,
     effectiveCwd,
   } = connection;
-  const { dynamicToolParams, computerContextEpoch } = attemptTools;
+  const { dynamicToolParams, computerContextEpoch, toolBridge } = attemptTools;
   const { state, userInputBridgeRef, steeringQueueRef, turnWatches } = turnRuntime;
   const { emitExecutionPhaseOnce, emitLifecycleStart, maybeAnnounceFastModeAutoOff } = lifecycle;
   const { enqueueNotification } = notifications;
@@ -96,7 +97,18 @@ export async function activateCodexAttemptTurn(
         resourceState.nativeHookRelay.shouldRelayEvent("post_tool_use"),
       readRecentRateLimits: () => readRecentCodexRateLimits(resourceState.client),
       runAbortSignal: runAbortController.signal,
+      remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
+      remoteWorkspaceRequestTimeoutMs: connection.appServer.requestTimeoutMs,
+      readRemoteWorkspaceFile: ({ path, maxBytes, signal, timeoutMs }) =>
+        readBoundedCodexRemoteWorkspaceFile({
+          client: resourceState.client,
+          path,
+          maxBytes,
+          signal,
+          timeoutMs,
+        }),
       trajectoryRecorder,
+      resolveDynamicToolResultContentSource: toolBridge.resultContentSourceForTool,
       onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
       ...(prepareNativeMcpAppResultDetails ? { prepareNativeMcpAppResultDetails } : {}),
       upstreamUserText: turnState.codexTurnPromptText,

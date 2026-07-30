@@ -17,6 +17,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { minimatch } from "minimatch";
+import { isDefaultStateDir } from "../../config/paths.js";
 import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ignore-rules.js";
 import { CONFIG_DIR_NAME } from "../config.js";
 import { type GitSource, parseGitUrl } from "../utils/git.js";
@@ -1359,19 +1360,21 @@ export class DefaultPackageManager implements PackageManager {
       globalBaseDir,
     );
 
-    // User skills from ~/.agents/ (with its own baseDir)
-    const userAgentsBaseDir = dirname(userAgentsSkillsDir);
-    const userAgentsMetadata: PathMetadata = {
-      ...userMetadata,
-      baseDir: userAgentsBaseDir,
-    };
-    addResources(
-      "skills",
-      collectAutoSkillEntries(userAgentsSkillsDir, "agents"),
-      userAgentsMetadata,
-      userOverrides.skills,
-      userAgentsBaseDir,
-    );
+    if (isDefaultStateDir()) {
+      // Home-scoped personal skills belong to the default install, not isolated state roots.
+      const userAgentsBaseDir = dirname(userAgentsSkillsDir);
+      const userAgentsMetadata: PathMetadata = {
+        ...userMetadata,
+        baseDir: userAgentsBaseDir,
+      };
+      addResources(
+        "skills",
+        collectAutoSkillEntries(userAgentsSkillsDir, "agents"),
+        userAgentsMetadata,
+        userOverrides.skills,
+        userAgentsBaseDir,
+      );
+    }
 
     addResources(
       "prompts",

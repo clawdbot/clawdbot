@@ -41,13 +41,14 @@ The prompt is compact, with fixed sections:
 - **Documentation**: local docs/source path and when to read them.
 - **Workspace Files (injected)**: notes that bootstrap files are included below.
 - **Sandbox** (when enabled): sandboxed runtime, sandbox paths, elevated-exec availability.
-- **Current Date & Time**: time zone only (cache-stable; the live clock comes from `session_status`).
+- **Temporal Context**: local date and time zone below the cache boundary; exact time comes from `session_status` when available.
 - **Assistant Output Directives**: compact attachment, voice-note, and reply-tag syntax.
+- **Collapsible Details** (when supported): teaches the model to keep optional depth in `<details>` disclosures while leaving the primary answer and required actions visible.
 - **Heartbeats**: heartbeat prompt and ack behavior, when heartbeats are enabled for the default agent.
 - **Runtime**: host, OS, node, model, repo root (when detected), thinking level (one line).
 - **Reasoning**: current visibility level plus the `/reasoning` toggle hint.
 
-Large stable content (including **Project Context**) stays above the internal prompt cache boundary. Volatile per-turn sections (Control UI embed guidance, **Messaging**, **Voice**, **Group Chat Context**, **Reactions**, **Heartbeats**, **Runtime**) are appended below that boundary so local backends with prefix caches can reuse the stable workspace prefix across channel turns. Tool descriptions should avoid embedding current channel names when the accepted schema already carries that runtime detail.
+Large stable content (including **Project Context**) stays above the internal prompt cache boundary. Volatile per-turn sections (Control UI embed guidance, **Messaging**, **Collapsible Details**, **Voice**, **Group Chat Context**, **Reactions**, **Heartbeats**, **Runtime**) are appended below that boundary so local backends with prefix caches can reuse the stable workspace prefix across channel turns. Tool descriptions should avoid embedding current channel names when the accepted schema already carries that runtime detail.
 
 Tooling also carries long-running-work guidance:
 
@@ -71,7 +72,7 @@ On channels with native approval cards/buttons, the prompt tells the agent to re
 OpenClaw renders smaller system prompts for sub-agents. The runtime sets a `promptMode` per run (not user-facing config):
 
 - `full` (default): all sections above.
-- `minimal`: used for sub-agents; omits the memory prompt section (bundled as **Memory Recall**), **OpenClaw Self-Update**, **Model Aliases**, **User Identity**, **Assistant Output Directives**, **Messaging**, **Silent Replies**, and **Heartbeats**. Tooling, **Safety**, **Skills** (when supplied), Workspace, Sandbox, Current Date & Time (when known), Runtime, and injected context stay available.
+- `minimal`: used for sub-agents; omits the memory prompt section (bundled as **Memory Recall**), **OpenClaw Self-Update**, **Model Aliases**, **User Identity**, **Assistant Output Directives**, **Messaging**, **Collapsible Details**, **Silent Replies**, and **Heartbeats**. Tooling, **Safety**, **Skills** (when supplied), Workspace, Sandbox, Current Date & Time (when known), Runtime, and injected context stay available.
 - `none`: returns only the base identity line.
 
 Under `promptMode=minimal`, extra injected prompts are labeled **Subagent Context** instead of **Group Chat Context**.
@@ -131,14 +132,13 @@ To inspect how much each injected file contributes (raw vs injected, truncation,
 
 ## Time handling
 
-The **Current Date & Time** section appears only when the user timezone is known, and only includes the **time zone** (no dynamic clock or time format) to keep the prompt cache-stable.
+The **Temporal Context** section includes the user-local calendar date and time zone. It appears below the cache boundary, so day rollover or a timezone change does not invalidate the stable prefix.
 
-Use `session_status` when the agent needs the current time; its status card includes a timestamp line. The same tool can optionally set a per-session model override (`model=default` clears it).
+Use `session_status` when the agent needs the exact current time and the tool is available; its status card includes a timestamp line. The same tool can optionally set a per-session model override (`model=default` clears it).
 
 Configure with:
 
 - `agents.defaults.userTimezone`
-- `agents.defaults.timeFormat` (`auto` | `12` | `24`)
 
 See [Timezones](/concepts/timezone) and [Date & Time](/date-time) for full behavior details.
 

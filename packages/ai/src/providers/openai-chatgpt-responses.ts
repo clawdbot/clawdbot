@@ -290,7 +290,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       const modelHeaders = resolveAiTransportHeaderSentinels(model.headers);
       const optionHeaders = resolveAiTransportHeaderSentinels(options?.headers);
 
-      const accountId = resolveOpenAICodexRequestAccountId(apiKey, model.baseUrl);
+      const accountId = extractOpenAICodexAccountId(apiKey);
       let body = buildRequestBody(model, context, options);
       const nextBody = await options?.onPayload?.(body, model);
       if (nextBody !== undefined) {
@@ -301,16 +301,6 @@ export const streamOpenAICodexResponses: StreamFunction<
       // backend routes by session_id/x-client-request-id). Left as-is for this fix;
       // see the SSE-path session_id addition in buildOpenAIClientHeaders (agents/openai-transport-stream.ts).
       const sessionId = clampOpenAIPromptCacheKey(options?.sessionId);
-      const websocketRequestId = sessionId || createCodexRequestId();
-      const sseHeaders = buildSSEHeaders(modelHeaders, optionHeaders, accountId, apiKey, sessionId);
-      const websocketHeaders = buildWebSocketHeaders(
-        modelHeaders,
-        optionHeaders,
-        accountId,
-        apiKey,
-        websocketRequestId,
-      );
-      const bodyJson = JSON.stringify(body);
       requestTimeoutMs = resolveRequestTimeoutMs(options);
       requestTimeoutSignal = buildRequestSignal(options?.signal, requestTimeoutMs);
       firstEventAbort = createFirstStreamEventAbortController(requestTimeoutSignal);
@@ -322,6 +312,13 @@ export const streamOpenAICodexResponses: StreamFunction<
         transport === "auto" && isWebSocketSseFallbackActive(options?.sessionId);
 
       if (transport !== "sse" && !websocketDisabledForSession) {
+        const websocketHeaders = buildWebSocketHeaders(
+          modelHeaders,
+          optionHeaders,
+          accountId,
+          apiKey,
+          sessionId || createCodexRequestId(),
+        );
         let websocketStarted = false;
         let retriedWebSocketConnectionLimit = false;
         while (true) {
@@ -371,7 +368,7 @@ export const streamOpenAICodexResponses: StreamFunction<
                 phase: websocketStarted
                   ? "after_message_stream_start"
                   : "before_message_stream_start",
-                requestBytes: new TextEncoder().encode(bodyJson).byteLength,
+                requestBytes: new TextEncoder().encode(JSON.stringify(body)).byteLength,
               }),
             );
             if (transport === "auto" && options?.sessionId) {
@@ -385,6 +382,8 @@ export const streamOpenAICodexResponses: StreamFunction<
         }
       }
 
+      const sseHeaders = buildSSEHeaders(modelHeaders, optionHeaders, accountId, apiKey, sessionId);
+      const bodyJson = JSON.stringify(body);
       const canCompressSseBody = model.provider === "openai" && !sseHeaders.has("content-encoding");
       const compressedBody = canCompressSseBody ? compressRequestBodyZstd(bodyJson) : null;
       if (compressedBody) {
@@ -1024,6 +1023,13 @@ function closeWebSocketSilently(socket: WebSocketLike, code = 1000, reason = "do
   } catch {}
 }
 
+// A delayed release or expiry owns its captured socket, not a newer session lease.
+function deleteOwnedWebSocketSession(sessionId: string, entry: CachedWebSocketConnection): void {
+  if (websocketSessionCache.get(sessionId) === entry) {
+    websocketSessionCache.delete(sessionId);
+  }
+}
+
 function scheduleSessionWebSocketExpiry(sessionId: string, entry: CachedWebSocketConnection): void {
   if (entry.idleTimer) {
     clearTimeout(entry.idleTimer);
@@ -1033,7 +1039,7 @@ function scheduleSessionWebSocketExpiry(sessionId: string, entry: CachedWebSocke
       return;
     }
     closeWebSocketSilently(entry.socket, 1000, "idle_timeout");
-    websocketSessionCache.delete(sessionId);
+    deleteOwnedWebSocketSession(sessionId, entry);
   }, SESSION_WEBSOCKET_CACHE_TTL_MS);
 }
 
@@ -1157,7 +1163,7 @@ async function acquireWebSocket(
         release: ({ keep } = {}) => {
           if (!keep || !isWebSocketReusable(cached.socket)) {
             closeWebSocketSilently(cached.socket);
-            websocketSessionCache.delete(sessionId);
+            deleteOwnedWebSocketSession(sessionId, cached);
             return;
           }
           cached.busy = false;
@@ -1192,9 +1198,7 @@ async function acquireWebSocket(
         if (entry.idleTimer) {
           clearTimeout(entry.idleTimer);
         }
-        if (websocketSessionCache.get(sessionId) === entry) {
-          websocketSessionCache.delete(sessionId);
-        }
+        deleteOwnedWebSocketSession(sessionId, entry);
         return;
       }
       entry.busy = false;
@@ -1643,36 +1647,6 @@ export function extractOpenAICodexAccountId(token: string): string {
   throw new Error("Failed to extract accountId from token");
 }
 
-function resolveOpenAICodexRequestAccountId(token: string, baseUrl: string): string | undefined {
-  const accountId = resolveOpenAICodexAccountId(token);
-  if (accountId) {
-    return accountId;
-  }
-  if (isLoopbackCodexProxyBaseUrl(baseUrl)) {
-    return undefined;
-  }
-  throw new Error("Failed to extract accountId from token");
-}
-
-function isLoopbackCodexProxyBaseUrl(baseUrl: string): boolean {
-  try {
-    const url = new URL(baseUrl);
-    const hostname = url.hostname.toLowerCase();
-    const path = url.pathname.replace(/\/+$/u, "");
-    return (
-      (url.protocol === "http:" || url.protocol === "https:") &&
-      (hostname === "127.0.0.1" || hostname === "[::1]") &&
-      !url.username &&
-      !url.password &&
-      !url.search &&
-      !url.hash &&
-      path.endsWith("/codex")
-    );
-  } catch {
-    return false;
-  }
-}
-
 function createCodexRequestId(): string {
   const crypto = globalThis.crypto;
   if (typeof crypto?.randomUUID === "function") {
@@ -1689,7 +1663,7 @@ function createCodexRequestId(): string {
 function buildBaseCodexHeaders(
   initHeaders: Record<string, string> | undefined,
   additionalHeaders: Record<string, string> | undefined,
-  accountId: string | undefined,
+  accountId: string,
   token: string,
 ): Headers {
   const headers = new Headers(initHeaders);
@@ -1697,11 +1671,7 @@ function buildBaseCodexHeaders(
     headers.set(key, value);
   }
   headers.set("Authorization", `Bearer ${token}`);
-  if (accountId) {
-    headers.set("chatgpt-account-id", accountId);
-  } else {
-    headers.delete("chatgpt-account-id");
-  }
+  headers.set("chatgpt-account-id", accountId);
   headers.set("originator", "openclaw");
   const userAgent = os
     ? `openclaw (${os.platform()} ${os.release()}; ${os.arch()})`
@@ -1713,7 +1683,7 @@ function buildBaseCodexHeaders(
 function buildSSEHeaders(
   initHeaders: Record<string, string> | undefined,
   additionalHeaders: Record<string, string> | undefined,
-  accountId: string | undefined,
+  accountId: string,
   token: string,
   sessionId?: string,
 ): Headers {
@@ -1733,7 +1703,7 @@ function buildSSEHeaders(
 function buildWebSocketHeaders(
   initHeaders: Record<string, string> | undefined,
   additionalHeaders: Record<string, string> | undefined,
-  accountId: string | undefined,
+  accountId: string,
   token: string,
   requestId: string,
 ): Headers {

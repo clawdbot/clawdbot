@@ -19,7 +19,6 @@ import {
   type HeartbeatConfig,
 } from "./heartbeat-runner-config.js";
 import { runHeartbeatOnce } from "./heartbeat-runner-run.js";
-import { resolveHeartbeatSession } from "./heartbeat-runner-session.js";
 import {
   computeNextHeartbeatPhaseDueMs,
   resolveHeartbeatPhaseMs,
@@ -357,6 +356,7 @@ export function startHeartbeatRunner(opts: {
           intent,
           reason,
           runScope: "global",
+          tasks: requestedTasks,
           deps: { runtime: state.runtime },
         });
       } catch (err) {
@@ -382,11 +382,8 @@ export function startHeartbeatRunner(opts: {
       advanceAgentSchedule(agent, now, reason);
       let agentRan = res.status === "ran";
 
-      const defaultSessionKey = resolveHeartbeatSession(
-        wakeConfig,
-        agent.agentId,
-        agent.heartbeat,
-      ).sessionKey;
+      // Re-read pending commitments after the global turn so a task-preempted
+      // default session gets an isolated follow-up without duplicating sends.
       const dueSessionKeys = canHeartbeatDeliverCommitments(agent.heartbeat)
         ? await listDueCommitmentSessionKeys({
             cfg: wakeConfig,
@@ -396,9 +393,6 @@ export function startHeartbeatRunner(opts: {
           })
         : [];
       for (const dueSessionKey of dueSessionKeys) {
-        if (dueSessionKey === defaultSessionKey) {
-          continue;
-        }
         let commitmentRes: HeartbeatRunResult;
         try {
           commitmentRes = await runOnce({
@@ -457,7 +451,12 @@ export function startHeartbeatRunner(opts: {
       if (!targetAgent && !allowsUnscheduledTarget) {
         return { status: "skipped", reason: "disabled" };
       }
-      if (isInterval && targetAgent && !requestedSessionKey && !requestedHeartbeat) {
+      if (
+        (isInterval || authoritativeScheduledTick) &&
+        targetAgent &&
+        !requestedSessionKey &&
+        !requestedHeartbeat
+      ) {
         // Cron monitor tick for one enrolled agent: use the full per-agent
         // path — including due-commitment sessions — that the broadcast
         // interval owned before cadence moved to cron. Wakes carrying
@@ -586,10 +585,15 @@ export function startHeartbeatRunner(opts: {
       return;
     }
     state.stopped = true;
+    opts.abortSignal?.removeEventListener("abort", cleanup);
     disposeWakeHandler();
   };
 
-  opts.abortSignal?.addEventListener("abort", cleanup, { once: true });
+  if (opts.abortSignal?.aborted) {
+    cleanup();
+  } else {
+    opts.abortSignal?.addEventListener("abort", cleanup, { once: true });
+  }
 
   return { stop: cleanup, updateConfig };
 }

@@ -19,6 +19,7 @@ import {
   decodePluginModelCatalogRelativePathPluginId,
   encodePluginModelCatalogRelativePath,
   loadPersistedPluginModelCatalogs,
+  loadPersistedPluginModelCatalogsReadOnly,
   migrateLegacyPluginModelCatalogs,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
   replacePersistedPluginModelCatalogs,
@@ -50,6 +51,31 @@ function catalogContents(provider: string, apiKey?: string): string {
   });
 }
 
+function readCatalogCacheRow(
+  agentDir: string,
+  pluginId: string,
+): {
+  value_json: string;
+  updated_at: number;
+} {
+  const database = new DatabaseSync(join(agentDir, "openclaw-agent.sqlite"), {
+    readOnly: true,
+  });
+  try {
+    const row = database
+      .prepare("SELECT value_json, updated_at FROM cache_entries WHERE scope = ? AND key = ?")
+      .get("plugin-model-catalog-v1", pluginId) as
+      | { value_json: string; updated_at: number }
+      | undefined;
+    if (!row) {
+      throw new Error(`Missing generated catalog cache row for ${pluginId}`);
+    }
+    return row;
+  } finally {
+    database.close();
+  }
+}
+
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   for (const agentDir of tempDirs.splice(0)) {
@@ -58,6 +84,172 @@ afterEach(() => {
 });
 
 describe("SQLite-backed plugin model catalogs", () => {
+  it("reads only named catalog rows without running migration or repair", () => {
+    const agentDir = createAgentDir();
+    const zai = catalogContents("zai");
+    const anthropic = catalogContents("anthropic");
+    replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: {
+        [encodePluginModelCatalogRelativePath("zai")]: zai,
+        [encodePluginModelCatalogRelativePath("anthropic")]: anthropic,
+      },
+    });
+    const legacyPath = join(agentDir, encodePluginModelCatalogRelativePath("legacy"));
+    mkdirSync(join(agentDir, "plugins", "legacy"), { recursive: true });
+    writeFileSync(legacyPath, catalogContents("legacy"), "utf8");
+
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir, ["zai"])).toEqual([
+      { pluginId: "zai", contents: zai },
+    ]);
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
+      { pluginId: "anthropic", contents: anthropic },
+      { pluginId: "zai", contents: zai },
+    ]);
+    expect(existsSync(legacyPath)).toBe(true);
+  });
+
+  it("removes generated model rows whose API semantics cannot be derived", () => {
+    const agentDir = createAgentDir();
+    const relativePath = encodePluginModelCatalogRelativePath("nvidia");
+    replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: {
+        [relativePath]: JSON.stringify({
+          generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+          providers: {
+            nvidia: {
+              baseUrl: "https://integrate.api.nvidia.com/v1",
+              apiKey: "NVIDIA_API_KEY",
+              models: [
+                { id: "meta-llama/llama-3.3-70b-instruct" },
+                { id: "model-owned-api", api: "openai-completions" },
+              ],
+            },
+          },
+        }),
+      },
+    });
+
+    const persisted = listPersistedPluginModelCatalogs(agentDir);
+    expect(persisted).toHaveLength(1);
+    const catalog = JSON.parse(persisted[0]?.contents ?? "{}") as {
+      providers?: {
+        nvidia?: { api?: string; apiKey?: string; models?: Array<{ id?: string; api?: string }> };
+      };
+    };
+    expect(catalog.providers?.nvidia).toMatchObject({
+      apiKey: "NVIDIA_API_KEY",
+      models: [{ id: "model-owned-api", api: "openai-completions" }],
+    });
+    expect(catalog.providers?.nvidia).not.toHaveProperty("api");
+  });
+
+  it("repairs malformed persisted catalogs once without touching valid siblings", () => {
+    const agentDir = createAgentDir();
+    const validNvidia = catalogContents("nvidia", "NVIDIA_API_KEY");
+    const validZai = catalogContents("zai", "ZAI_API_KEY");
+    replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: {
+        [encodePluginModelCatalogRelativePath("nvidia")]: validNvidia,
+        [encodePluginModelCatalogRelativePath("zai")]: validZai,
+      },
+    });
+    const malformedNvidia = JSON.stringify({
+      generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+      providers: {
+        nvidia: {
+          baseUrl: "https://integrate.api.nvidia.com/v1",
+          apiKey: "NVIDIA_API_KEY",
+          models: [{ id: "meta-llama/llama-3.3-70b-instruct" }],
+        },
+      },
+    });
+    const database = new DatabaseSync(join(agentDir, "openclaw-agent.sqlite"));
+    try {
+      database
+        .prepare(
+          "UPDATE cache_entries SET value_json = ?, updated_at = 42 WHERE scope = ? AND key = ?",
+        )
+        .run(malformedNvidia, "plugin-model-catalog-v1", "nvidia");
+    } finally {
+      database.close();
+    }
+
+    const firstLoad = listPersistedPluginModelCatalogs(agentDir);
+    const repairedNvidia = JSON.parse(
+      firstLoad.find((catalog) => catalog.pluginId === "nvidia")?.contents ?? "{}",
+    ) as {
+      providers?: { nvidia?: { api?: string; apiKey?: string; models?: unknown[] } };
+    };
+    expect(repairedNvidia.providers?.nvidia).toMatchObject({
+      apiKey: "NVIDIA_API_KEY",
+      models: [],
+    });
+    expect(repairedNvidia.providers?.nvidia).not.toHaveProperty("api");
+    expect(firstLoad.find((catalog) => catalog.pluginId === "zai")?.contents).toBe(validZai);
+
+    const repairedRow = readCatalogCacheRow(agentDir, "nvidia");
+    expect(repairedRow.updated_at).not.toBe(42);
+    const secondLoad = listPersistedPluginModelCatalogs(agentDir);
+    expect(secondLoad).toEqual(firstLoad);
+    expect(readCatalogCacheRow(agentDir, "nvidia")).toEqual(repairedRow);
+  });
+
+  it("re-reads a concurrent refresh that wins the repair compare-and-set", () => {
+    const agentDir = createAgentDir();
+    const relativePath = encodePluginModelCatalogRelativePath("nvidia");
+    const refreshed = catalogContents("nvidia", "concurrently-refreshed-provider-test-key");
+    replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: { [relativePath]: refreshed },
+    });
+    const malformed = JSON.stringify({
+      generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+      providers: {
+        nvidia: {
+          baseUrl: "https://integrate.api.nvidia.com/v1",
+          apiKey: "NVIDIA_API_KEY",
+          models: [{ id: "meta-llama/llama-3.3-70b-instruct" }],
+        },
+      },
+    });
+    const database = new DatabaseSync(join(agentDir, "openclaw-agent.sqlite"));
+    try {
+      database
+        .prepare(
+          "UPDATE cache_entries SET value_json = ?, updated_at = 42 WHERE scope = ? AND key = ?",
+        )
+        .run(malformed, "plugin-model-catalog-v1", "nvidia");
+      database.exec("CREATE TABLE catalog_repair_refresh (value_json TEXT NOT NULL)");
+      database.prepare("INSERT INTO catalog_repair_refresh (value_json) VALUES (?)").run(refreshed);
+      database.exec(`
+        CREATE TRIGGER refresh_catalog_before_repair
+        BEFORE UPDATE OF value_json ON cache_entries
+        WHEN OLD.scope = 'plugin-model-catalog-v1'
+          AND OLD.key = 'nvidia'
+          AND NEW.value_json != (SELECT value_json FROM catalog_repair_refresh)
+        BEGIN
+          UPDATE cache_entries
+          SET value_json = (SELECT value_json FROM catalog_repair_refresh), updated_at = 99
+          WHERE scope = OLD.scope AND key = OLD.key;
+          SELECT RAISE(IGNORE);
+        END
+      `);
+    } finally {
+      database.close();
+    }
+
+    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+      { pluginId: "nvidia", contents: refreshed },
+    ]);
+    expect(readCatalogCacheRow(agentDir, "nvidia")).toEqual({
+      value_json: refreshed,
+      updated_at: 99,
+    });
+  });
+
   it("does not create an agent database for a read-only cache miss", () => {
     const agentDir = createAgentDir();
 

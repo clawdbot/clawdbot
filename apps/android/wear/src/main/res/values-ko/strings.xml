@@ -11,10 +11,12 @@
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"받아쓰기"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"라이브"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"스레드"</string>
+    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"스레드 열기"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← 스와이프 →"</string>
     <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"길게 누르기"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"탭"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"두 번 탭"</string>
+    <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"새 메시지 표시"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"대화를 보려면 Live를 시작하세요."</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"새로 만들기"</string>
     <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"입력"</string>

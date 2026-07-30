@@ -1,6 +1,7 @@
 // Verifies models.json writes, plugin catalog writes, and ready-cache serialization.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -22,6 +23,31 @@ function listPersistedPluginModelCatalogs(agentDir: string) {
   return loadPersistedPluginModelCatalogs(agentDir).catalogs;
 }
 
+function readRawCatalogCacheRow(
+  agentDir: string,
+  pluginId: string,
+): {
+  value_json: string;
+  updated_at: number;
+} {
+  const database = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"), {
+    readOnly: true,
+  });
+  try {
+    const row = database
+      .prepare("SELECT value_json, updated_at FROM cache_entries WHERE scope = ? AND key = ?")
+      .get("plugin-model-catalog-v1", pluginId) as
+      | { value_json: string; updated_at: number }
+      | undefined;
+    if (!row) {
+      throw new Error(`Missing generated catalog cache row for ${pluginId}`);
+    }
+    return row;
+  } finally {
+    database.close();
+  }
+}
+
 const planOpenClawModelsJsonMock = vi.fn();
 const writePrivateStoreTextWriteMock = vi.fn();
 let actualPrivateFileStore:
@@ -31,7 +57,8 @@ let actualPrivateFileStore:
 installModelsConfigTestHooks();
 
 let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
-let clearCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata-snapshot.js").clearCurrentPluginMetadataSnapshot;
+let planOpenClawModelsJsonSource: typeof import("./models-config.js").planOpenClawModelsJsonSource;
+let clearCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata-state.js").clearCurrentPluginMetadataSnapshot;
 let setCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
 
 function createPluginMetadataSnapshot(workspaceDir: string): PluginMetadataSnapshot {
@@ -133,8 +160,10 @@ beforeAll(async () => {
       },
     };
   });
-  ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
-  ({ clearCurrentPluginMetadataSnapshot, setCurrentPluginMetadataSnapshot } =
+  ({ ensureOpenClawModelsJson, planOpenClawModelsJsonSource } = await import("./models-config.js"));
+  ({ clearCurrentPluginMetadataSnapshot } =
+    await import("../plugins/current-plugin-metadata-state.js"));
+  ({ setCurrentPluginMetadataSnapshot } =
     await import("../plugins/current-plugin-metadata-snapshot.js"));
 });
 
@@ -162,6 +191,54 @@ beforeEach(() => {
 });
 
 describe("models-config write serialization", () => {
+  it("materializes an authoritative plugin catalog replacement without mutating state", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      const workspaceDir = path.join(home, "workspace");
+      const rootContents = `${JSON.stringify({ providers: { existing: { models: [] } } })}\n`;
+      const existingPluginContents = `${JSON.stringify({
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {},
+      })}\n`;
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(path.join(agentDir, "models.json"), rootContents);
+      replacePersistedPluginModelCatalogs({
+        agentDir,
+        pluginCatalogWrites: {
+          [encodePluginModelCatalogRelativePath("existing-plugin")]: existingPluginContents,
+        },
+      });
+      const originalPluginRow = readRawCatalogCacheRow(agentDir, "existing-plugin");
+      const plannedPluginContents = `${JSON.stringify({
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {},
+      })}\n`;
+      planOpenClawModelsJsonMock.mockResolvedValue({
+        action: "write",
+        contents: `${JSON.stringify({ providers: { discovered: { models: [] } } })}\n`,
+        pluginCatalogWrites: {
+          [encodePluginModelCatalogRelativePath("planned-plugin")]: plannedPluginContents,
+        },
+      });
+
+      const planned = await planOpenClawModelsJsonSource({}, agentDir, {
+        workspaceDir,
+        pluginMetadataSnapshot: createPluginMetadataSnapshot(workspaceDir),
+      });
+
+      expect(planned.modelsJsonContents).toContain("discovered");
+      expect(planned.pluginCatalogs).toEqual([
+        { pluginId: "planned-plugin", contents: plannedPluginContents },
+      ]);
+      expect(await fs.readFile(path.join(agentDir, "models.json"), "utf8")).toBe(rootContents);
+      expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+        { pluginId: "existing-plugin", contents: existingPluginContents },
+      ]);
+      expect(readRawCatalogCacheRow(agentDir, "existing-plugin")).toEqual(originalPluginRow);
+      expect(writePrivateStoreTextWriteMock).not.toHaveBeenCalled();
+    });
+  });
+
   it("does not reuse default workspace plugin metadata for explicit agent dirs without workspace", async () => {
     await withModelsTempHome(async (home) => {
       const snapshot = createPluginMetadataSnapshot(path.join(home, "default-workspace"));
@@ -426,6 +503,64 @@ describe("models-config write serialization", () => {
       expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
         expect.objectContaining({ pluginId: "zai" }),
       ]);
+    });
+  });
+
+  it("repairs malformed catalog state before startup planning and fingerprints it once", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      replacePersistedPluginModelCatalogs({
+        agentDir,
+        pluginCatalogWrites: {
+          [encodePluginModelCatalogRelativePath("nvidia")]: JSON.stringify({
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: {
+              nvidia: {
+                baseUrl: "https://integrate.api.nvidia.com/v1",
+                api: "openai-completions",
+                apiKey: "NVIDIA_API_KEY",
+                models: [{ id: "meta-llama/llama-3.3-70b-instruct" }],
+              },
+            },
+          }),
+        },
+      });
+      const malformed = JSON.stringify({
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          nvidia: {
+            baseUrl: "https://integrate.api.nvidia.com/v1",
+            apiKey: "NVIDIA_API_KEY",
+            models: [{ id: "meta-llama/llama-3.3-70b-instruct" }],
+          },
+        },
+      });
+      const database = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
+      try {
+        database
+          .prepare(
+            "UPDATE cache_entries SET value_json = ?, updated_at = 42 WHERE scope = ? AND key = ?",
+          )
+          .run(malformed, "plugin-model-catalog-v1", "nvidia");
+      } finally {
+        database.close();
+      }
+      planOpenClawModelsJsonMock.mockImplementation(async () => {
+        const parsed = JSON.parse(readRawCatalogCacheRow(agentDir, "nvidia").value_json) as {
+          providers?: { nvidia?: { api?: string; models?: unknown[] } };
+        };
+        expect(parsed.providers?.nvidia?.models).toEqual([]);
+        expect(parsed.providers?.nvidia).not.toHaveProperty("api");
+        return { action: "skip" };
+      });
+
+      await ensureOpenClawModelsJson({}, agentDir);
+      const repaired = readRawCatalogCacheRow(agentDir, "nvidia");
+      expect(repaired.updated_at).not.toBe(42);
+      await ensureOpenClawModelsJson({}, agentDir);
+
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledOnce();
+      expect(readRawCatalogCacheRow(agentDir, "nvidia")).toEqual(repaired);
     });
   });
 

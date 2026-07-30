@@ -7,6 +7,7 @@ import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareRuntime,
+  AgentToolResultMiddlewareScope,
 } from "./agent-tool-result-middleware-types.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { PluginCompatCode } from "./compat/registry.js";
@@ -22,6 +23,7 @@ import type {
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import type {
   PluginBundleFormat,
   PluginConfigUiHint,
@@ -253,8 +255,14 @@ export type PluginAgentToolResultMiddlewareRegistration = {
   rawHandler: AgentToolResultMiddleware;
   handler: AgentToolResultMiddleware;
   runtimes: AgentToolResultMiddlewareRuntime[];
+  scopes?: AgentToolResultMiddlewareScope[];
   source: string;
   rootDir?: string;
+};
+export type PluginAgentToolResultMiddlewareOwner = {
+  pluginId: string;
+  runtimes: AgentToolResultMiddlewareRuntime[];
+  manifest: PluginManifestRecord;
 };
 type PluginAgentHarnessRegistration = {
   pluginId: string;
@@ -415,6 +423,7 @@ type PluginConversationBindingResolvedHandlerRegistration = {
 export type PluginRecord = {
   id: string;
   name: string;
+  packageVersion?: string;
   version?: string;
   builtWithOpenClawVersion?: string;
   packageName?: string;
@@ -502,6 +511,7 @@ export type PluginRegistry = {
   workerProviders: Map<string, PluginWorkerProviderRegistration>;
   migrationProviders: PluginMigrationProviderRegistration[];
   codexAppServerExtensionFactories: PluginCodexAppServerExtensionFactoryRegistration[];
+  agentToolResultMiddlewareOwners: PluginAgentToolResultMiddlewareOwner[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
   memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];

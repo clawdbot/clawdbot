@@ -25,6 +25,7 @@ scenario:
           enabled: true
           config:
             enabled: true
+            mode: always
             agents: []
             toolsAllow:
               - memory_search
@@ -34,7 +35,7 @@ scenario:
             queryMode: message
             maxSummaryChars: 220
   successCriteria:
-    - Two private conversations keep distinct session keys and transcript files.
+    - Two private conversations keep distinct session keys and persisted transcript identities.
     - A private reply recalls the relevant fact from the other private conversation.
     - Accepted memory-search evidence excludes the group transcript and anchor transcript.
     - Group destinations, the disabled setting, and a session-scoped pause do not start product recall.
@@ -205,23 +206,26 @@ flow:
                 value:
                   expr: seededStore[groupSessionKey]
               - assert:
-                  expr: "Boolean(sourceSession?.sessionId && sourceSession?.sessionFile)"
+                  expr: "Boolean(sourceSession?.sessionId)"
                   message:
                     expr: "`private source session missing: key=${sourceSessionKey} storeKeys=${Object.keys(seededStore).join(',')}`"
               - assert:
-                  expr: "Boolean(targetSession?.sessionId && targetSession?.sessionFile)"
+                  expr: "Boolean(targetSession?.sessionId)"
                   message:
                     expr: "`private target session missing: key=${targetSessionKey} storeKeys=${Object.keys(seededStore).join(',')}`"
               - assert:
-                  expr: "Boolean(groupSession?.sessionId && groupSession?.sessionFile)"
+                  expr: "Boolean(groupSession?.sessionId)"
                   message:
                     expr: "`group source session missing: key=${groupSessionKey} storeKeys=${Object.keys(seededStore).join(',')}`"
               - assert:
                   expr: "new Set([sourceSession.sessionId, targetSession.sessionId, groupSession.sessionId]).size === 3"
                   message: source, target, and group sessions unexpectedly share a transcript id
+              - set: seededTranscripts
+                value:
+                  expr: "await Promise.all([sourceSessionKey, targetSessionKey, groupSessionKey].map((sessionKey) => readSessionTranscriptSummary(env, sessionKey)))"
               - assert:
-                  expr: "new Set([sourceSession.sessionFile, targetSession.sessionFile, groupSession.sessionFile]).size === 3"
-                  message: source, target, and group sessions unexpectedly share a transcript file
+                  expr: "seededTranscripts.every((transcript) => transcript.eventCursor > 0)"
+                  message: source, target, and group sessions must each own a persisted transcript
               - call: runQaCli
                 args:
                   - ref: env
@@ -362,7 +366,7 @@ flow:
                           expr: "`group destination received private recall context: ${JSON.stringify(groupDestinationRequests)}`"
                     - set: pauseCommandStartIndex
                       value:
-                        expr: state.getSnapshot().messages.length
+                        expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
                     - sendInbound:
                         conversation:
                           id:
@@ -371,19 +375,16 @@ flow:
                         senderId: qa-operator
                         senderName: QA Operator
                         text: /active-memory off
-                    - call: sleep
+                    - call: waitForOutboundMessage
+                      saveAs: pauseCommandOutbound
                       args:
-                        - 2000
-                    - set: pauseCommandMessages
-                      value:
-                        expr: state.getSnapshot().messages.slice(pauseCommandStartIndex)
-                    - set: pauseCommandOutbound
-                      value:
-                        expr: "pauseCommandMessages.find((candidate) => candidate.direction === 'outbound')"
-                    - assert:
-                        expr: Boolean(pauseCommandOutbound)
-                        message:
-                          expr: "`Active Memory command produced no outbound message: ${JSON.stringify(pauseCommandMessages)}`"
+                        - ref: state
+                        - lambda:
+                            params: [candidate]
+                            expr: "candidate.direction === 'outbound' && candidate.conversation.id === config.pausedConversationId && candidate.text.includes('Active Memory: off for this session.')"
+                        - expr: liveTurnTimeoutMs(env, 60000)
+                        - sinceIndex:
+                            ref: pauseCommandStartIndex
                     - assert:
                         expr: "pauseCommandOutbound.text.includes('Active Memory: off for this session.')"
                         message:

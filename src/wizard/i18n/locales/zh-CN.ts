@@ -687,7 +687,6 @@ export const zh_CN = {
       channelsLabel: "Slack 频道",
       envPrompt: "检测到 SLACK_BOT_TOKEN + SLACK_APP_TOKEN。使用环境变量？",
       examples: "示例：",
-      interactiveRepliesPrompt: "为 agent 响应启用 Slack 交互回复（按钮/选择器）？",
       multipleEntries: "多个条目请用逗号分隔。",
       socketModeTokensTitle: "Slack socket mode token",
     },

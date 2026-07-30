@@ -6,7 +6,7 @@ import Testing
 
 @Suite(.serialized)
 struct GatewayChannelConnectTests {
-    private actor NonCooperativeChallengeGate {
+    private actor NonCooperativeGate {
         private var isOpen = false
         private var didStart = false
         private var startWaiters: [CheckedContinuation<Void, Never>] = []
@@ -61,10 +61,10 @@ struct GatewayChannelConnectTests {
 
     private final class FirstChallengeTaskPlan: @unchecked Sendable {
         private let lock = NSLock()
-        private let gate: NonCooperativeChallengeGate
+        private let gate: NonCooperativeGate
         private var taskCount = 0
 
-        init(gate: NonCooperativeChallengeGate) {
+        init(gate: NonCooperativeGate) {
             self.gate = gate
         }
 
@@ -299,8 +299,86 @@ struct GatewayChannelConnectTests {
         #expect(session.snapshotMakeCount() == 1)
     }
 
+    @Test func `failed connect coalesces callers behind backoff`() async throws {
+        let gate = NonCooperativeGate()
+        let session = self.makeSession(response: .invalid(delayMs: 0))
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "ws://example.invalid")),
+            token: nil,
+            session: WebSocketSessionBox(session: session))
+
+        await #expect(throws: (any Error).self) {
+            try await channel.connect()
+        }
+        await channel._test_setConnectFailureBackoffWaitHandler {
+            await gate.wait()
+        }
+
+        let retries = (0..<5).map { _ in
+            Task { try await channel.connect() }
+        }
+        await gate.waitUntilStarted()
+        try await AsyncTimeout.withTimeout(
+            seconds: 2,
+            onTimeout: {
+                NSError(
+                    domain: "GatewayChannelConnectTests",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "retry callers did not join the shared connect attempt"])
+            },
+            operation: {
+                while await channel._test_connectWaiterCount() < retries.count {
+                    await Task.yield()
+                }
+            })
+        #expect(session.snapshotMakeCount() == 1)
+        await gate.open()
+
+        for retry in retries {
+            if case .success = await retry.result {
+                Issue.record("retry unexpectedly succeeded")
+            }
+        }
+        await channel._test_setConnectFailureBackoffWaitHandler(nil)
+        await channel.shutdown()
+
+        #expect(session.snapshotMakeCount() == 2)
+    }
+
+    @Test func `shutdown during connect backoff does not create a socket`() async throws {
+        let gate = NonCooperativeGate()
+        let completion = ConnectAttemptCompletionProbe()
+        let session = self.makeSession(response: .invalid(delayMs: 0))
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "ws://example.invalid")),
+            token: nil,
+            session: WebSocketSessionBox(session: session))
+
+        await #expect(throws: (any Error).self) {
+            try await channel.connect()
+        }
+        await channel._test_setConnectFailureBackoffWaitHandler {
+            await gate.wait()
+        }
+        await channel._test_setConnectRunFinishedHandler {
+            Task { await completion.record() }
+        }
+
+        let retry = Task { try await channel.connect() }
+        await gate.waitUntilStarted()
+        await channel.shutdown()
+        await gate.open()
+        await completion.wait(for: 1)
+        if case .success = await retry.result {
+            Issue.record("retry unexpectedly succeeded after shutdown")
+        }
+
+        await channel._test_setConnectRunFinishedHandler(nil)
+        #expect(session.snapshotMakeCount() == 1)
+    }
+
     @Test func `timed out connect cannot use retry socket after late challenge`() async throws {
-        let gate = NonCooperativeChallengeGate()
+        let gate = NonCooperativeGate()
         let completion = ConnectAttemptCompletionProbe()
         let plan = FirstChallengeTaskPlan(gate: gate)
         let session = GatewayTestWebSocketSession(taskFactory: { plan.makeTask() })

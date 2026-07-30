@@ -107,6 +107,53 @@ describe("Google Chat reply delivery", () => {
     );
   });
 
+  it("rejects when a later text chunk send fails instead of dropping it silently", async () => {
+    const core = createCore({ chunks: ["first chunk", "second chunk", "third chunk"] });
+    const runtime = createRuntime();
+    const sendError = new Error("API 500");
+    mocks.sendGoogleChatMessage
+      .mockResolvedValueOnce({ messageName: "spaces/AAA/messages/one" })
+      .mockRejectedValueOnce(sendError);
+
+    await expect(
+      deliverGoogleChatReply({
+        payload: { text: "three chunks", replyToId: "spaces/AAA/threads/root" },
+        account,
+        spaceId: "spaces/AAA",
+        runtime,
+        core,
+        config,
+      }),
+    ).rejects.toBe(sendError);
+
+    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects when the fallback resend after a typing update failure also fails", async () => {
+    const core = createCore({ chunks: ["only chunk"] });
+    const runtime = createRuntime();
+    const fallbackError = new Error("quota exceeded");
+    mocks.updateGoogleChatMessage.mockRejectedValueOnce(new Error("message not found"));
+    mocks.sendGoogleChatMessage.mockRejectedValueOnce(fallbackError);
+
+    await expect(
+      deliverGoogleChatReply({
+        payload: { text: "only chunk", replyToId: "spaces/AAA/threads/root" },
+        account,
+        spaceId: "spaces/AAA",
+        runtime,
+        core,
+        config,
+        typingMessage: {
+          name: "spaces/AAA/messages/typing",
+          thread: "spaces/AAA/threads/root",
+        },
+      }),
+    ).rejects.toBe(fallbackError);
+
+    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("replaces a typing message when the final reply target changed", async () => {
     const core = createCore();
     const runtime = createRuntime();

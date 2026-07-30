@@ -150,7 +150,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const parsedPath = parseConfigSetPath(opts.path);
-    const snapshot = await loadValidConfig(runtime);
+    const snapshot = await loadValidConfig(runtime, { observe: false, json: opts.json });
     const res = getAtPath(redactConfigObject(snapshot.config), parsedPath);
     if (!res.found) {
       if (opts.json) {
@@ -180,6 +180,11 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
   } catch (err) {
     if (err instanceof ExitError) {
       throw err;
+    }
+    if (opts.json) {
+      writeRuntimeJson(runtime, { error: String(err) });
+      runtime.exit(1);
+      return;
     }
     runtime.error(danger(String(err)));
     runtime.exit(1);
@@ -301,7 +306,7 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
   const runtime = opts.runtime ?? defaultRuntime;
   let outputPath = CONFIG_PATH ?? "openclaw.json";
   try {
-    const snapshot = await readConfigFileSnapshot();
+    const snapshot = await readConfigFileSnapshot({ observe: false });
     outputPath = snapshot.path;
     const shortPath = shortenHomePath(outputPath);
     if (!snapshot.exists) {

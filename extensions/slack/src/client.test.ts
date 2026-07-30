@@ -18,6 +18,7 @@ vi.mock("@slack/web-api", () => {
 });
 
 let createSlackWebClient: typeof import("./client.js").createSlackWebClient;
+let createSlackReadClient: typeof import("./client.js").createSlackReadClient;
 let createSlackStartupAuthClient: typeof import("./client.js").createSlackStartupAuthClient;
 let createSlackLookupClient: typeof import("./client.js").createSlackLookupClient;
 let createSlackWriteClient: typeof import("./client.js").createSlackWriteClient;
@@ -99,6 +100,7 @@ beforeAll(async () => {
   ({ resolveSlackProxyDispatcher } = await import("./client-options.js"));
   ({
     createSlackWebClient,
+    createSlackReadClient,
     createSlackStartupAuthClient,
     createSlackLookupClient,
     createSlackWriteClient,
@@ -128,6 +130,35 @@ describe("slack web client config", () => {
     const options = resolveSlackWebClientOptions();
 
     expect(options.retryConfig).toEqual(SLACK_DEFAULT_RETRY_OPTIONS);
+    expect(options.timeout).toBeUndefined();
+  });
+
+  it("applies a 30-second deadline only to dedicated read clients", () => {
+    clearProxyEnvForTest();
+    try {
+      createSlackReadClient("xoxb-read");
+
+      expect(WebClient).toHaveBeenCalledWith("xoxb-read", {
+        retryConfig: SLACK_DEFAULT_RETRY_OPTIONS,
+        timeout: 30_000,
+      });
+    } finally {
+      restoreProxyEnvForTest();
+    }
+  });
+
+  it("preserves an explicit dedicated read deadline", () => {
+    clearProxyEnvForTest();
+    try {
+      createSlackReadClient("xoxb-read", { timeout: 60_000 });
+
+      expect(WebClient).toHaveBeenCalledWith("xoxb-read", {
+        retryConfig: SLACK_DEFAULT_RETRY_OPTIONS,
+        timeout: 60_000,
+      });
+    } finally {
+      restoreProxyEnvForTest();
+    }
   });
 
   it("respects explicit retry config overrides", () => {

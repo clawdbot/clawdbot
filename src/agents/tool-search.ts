@@ -1,17 +1,16 @@
 /** Tool Search catalog compaction for large OpenClaw, MCP, and client tool inventories. */
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
-import { isCoreCodingSurfaceToolName } from "./core-tool-factory-descriptors.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
-  classifyTool,
-  reusableCatalogSnapshots,
+  getReusableCatalogSnapshotCountForTest,
+  isDirectVisibleCatalogTool,
   resolveCatalog,
-  sessionCatalogs,
 } from "./tool-search-catalog.js";
 import {
   appendToolSearchCodeStderrTail,
@@ -53,6 +52,7 @@ export {
   compactToolSearchCatalogEntry,
   createToolSearchCatalogRef,
   registerHeadlessToolSearchCatalog,
+  restrictToolSearchCatalog,
 } from "./tool-search-catalog.js";
 export { resolveToolSearchConfig } from "./tool-search-config.js";
 export {
@@ -101,19 +101,17 @@ export function applyToolSearchCatalog(params: {
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
   shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
+  directToolNames?: Iterable<string>;
 }) {
   const config = resolveToolSearchConfig(params.config);
+  const directToolNames = new Set(normalizeStringEntries(Array.from(params.directToolNames ?? [])));
   return applyToolCatalogCompaction({
     ...params,
     enabled: config.enabled,
     isVisibleControlTool: (tool) =>
       TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name) &&
       shouldExposeControlTool(tool.name, config.mode),
-    // Core file/shell primitives stay in the visible tool list (while remaining
-    // searchable); the source check keeps plugin/MCP tools that reuse a core
-    // name deferred like any other cataloged tool.
-    isVisibleCatalogTool: (tool) =>
-      isCoreCodingSurfaceToolName(tool.name) && classifyTool(tool).sourceName === "core",
+    isVisibleCatalogTool: (tool) => isDirectVisibleCatalogTool(tool, directToolNames),
   });
 }
 
@@ -228,8 +226,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
 }
 
 const testing = {
-  sessionCatalogs,
-  reusableCatalogSnapshots,
+  getReusableCatalogSnapshotCountForTest,
   maxToolSchemaDirectoryPromptChars: MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
   resolveToolSearchConfig,
   isToolSearchCodeModeSupported,

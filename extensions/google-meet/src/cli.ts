@@ -136,25 +136,6 @@ async function resolveMeetingForToken(params: {
     : { meeting };
 }
 
-function resolveCreateTokenOptions(
-  config: GoogleMeetConfig,
-  options: CreateOptions,
-): {
-  clientId?: string;
-  clientSecret?: string;
-  refreshToken?: string;
-  accessToken?: string;
-  expiresAt?: number;
-} {
-  return {
-    clientId: options.clientId?.trim() || config.oauth.clientId,
-    clientSecret: options.clientSecret?.trim() || config.oauth.clientSecret,
-    refreshToken: options.refreshToken?.trim() || config.oauth.refreshToken,
-    accessToken: options.accessToken?.trim() || config.oauth.accessToken,
-    expiresAt: parseOptionalNumber(options.expiresAt) ?? config.oauth.expiresAt,
-  };
-}
-
 function resolveArtifactTokenOptions(
   config: GoogleMeetConfig,
   options: MeetArtifactOptions,
@@ -291,7 +272,6 @@ export function registerGoogleMeetCli(params: {
     resolveOAuthTokenOptions,
     resolveTokenOptions,
     resolveMeetingForToken,
-    resolveCreateTokenOptions,
     resolveArtifactTokenOptions,
     hasCreateOAuth,
   };

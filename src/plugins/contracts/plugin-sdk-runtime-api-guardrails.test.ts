@@ -29,7 +29,6 @@ const UNGUARDED_RUNTIME_API_PLUGIN_IDS = [
   "memory-core",
   "ollama",
   "open-prose",
-  "phone-control",
   "qa-channel",
   "qa-lab",
   "qqbot",

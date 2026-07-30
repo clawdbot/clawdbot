@@ -74,6 +74,17 @@ export function collectWhatsAppStatusIssues(
         return;
       }
 
+      if (healthState === "logged-out") {
+        issues.push({
+          channel: "whatsapp",
+          accountId,
+          kind: "auth",
+          message: `Session logged out${lastError ? `: ${lastError}` : "."}`,
+          fix: `Run: ${formatCliCommand("openclaw channels login")} (scan QR on the gateway host).`,
+        });
+        return;
+      }
+
       if (!linked) {
         issues.push({
           channel: "whatsapp",
@@ -117,17 +128,6 @@ export function collectWhatsAppStatusIssues(
           kind: "runtime",
           message: `Linked but ${stateLabel}${reconnectAttempts != null ? ` (reconnectAttempts=${reconnectAttempts})` : ""}${lastError ? `: ${lastError}` : "."}`,
           fix: `Run: ${formatCliCommand("openclaw doctor")} (or restart the gateway). If it persists, relink via channels login and check logs.`,
-        });
-        return;
-      }
-
-      if (healthState === "logged-out") {
-        issues.push({
-          channel: "whatsapp",
-          accountId,
-          kind: "auth",
-          message: `Linked session logged out${lastError ? `: ${lastError}` : "."}`,
-          fix: `Run: ${formatCliCommand("openclaw channels login")} (scan QR on the gateway host).`,
         });
         return;
       }

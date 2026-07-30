@@ -1,13 +1,9 @@
 // Github Copilot tests cover models plugin behavior.
-import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { deriveCopilotApiBaseUrlFromToken } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CachedCopilotToken } from "./token-cache.js";
-import { CopilotTokenExchangeError } from "./token-exchange-error.js";
-import { resolveCopilotApiToken } from "./token.js";
+import { describe, expect, it, vi } from "vitest";
+import { CopilotRuntimeAuthError } from "./runtime-auth-error.js";
+import { resolveCopilotRuntimeAuth } from "./runtime-auth.js";
 import { fetchCopilotUsage } from "./usage.js";
 
 vi.mock("openclaw/plugin-sdk/provider-model-shared", async (importOriginal) => ({
@@ -18,16 +14,6 @@ vi.mock("openclaw/plugin-sdk/provider-model-shared", async (importOriginal) => (
     endpointClass: "custom",
     warnings: [],
   }),
-}));
-
-const jsonStoreMocks = vi.hoisted(() => ({
-  loadJsonFile: vi.fn(),
-  saveJsonFile: vi.fn(),
-}));
-
-vi.mock("openclaw/plugin-sdk/json-store", () => ({
-  loadJsonFile: jsonStoreMocks.loadJsonFile,
-  saveJsonFile: jsonStoreMocks.saveJsonFile,
 }));
 
 vi.mock("openclaw/plugin-sdk/state-paths", () => ({
@@ -57,10 +43,6 @@ function requireResolvedModel(ctx: ProviderResolveDynamicModelContext) {
     throw new Error(`expected model ${ctx.modelId} to resolve`);
   }
   return result;
-}
-
-function copilotCredentialFixture(proxyHost: string): string {
-  return `test-token-placeholder;proxy-ep=${proxyHost};`;
 }
 
 describe("resolveCopilotForwardCompatModel", () => {
@@ -301,6 +283,22 @@ describe("fetchCopilotUsage", () => {
     });
   });
 
+  it.each([
+    ["null", null],
+    ["an array", []],
+  ])("returns an empty window list for a non-object %s payload", async (_label, payload) => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, payload));
+
+    const result = await fetchCopilotUsage("token", 5000, mockFetch);
+
+    expect(result).toEqual({
+      provider: "github-copilot",
+      displayName: "Copilot",
+      windows: [],
+      plan: undefined,
+    });
+  });
+
   it("bounds the usage read and cancels the stream when the body exceeds the JSON byte cap", async () => {
     // Larger than the shared 16 MiB readProviderJsonResponse cap so the bounded reader cancels the
     // stream mid-flight; if the cap were removed the unbounded res.json() would buffer the whole body.
@@ -343,144 +341,144 @@ describe("fetchCopilotUsage", () => {
   });
 });
 
-describe("github-copilot token", () => {
-  const cachePath = "/tmp/openclaw-state/credentials/github-copilot.token.json";
+describe("github-copilot runtime auth", () => {
+  it("validates and preserves the source token while resolving the account API endpoint", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ endpoints: { api: "https://api.individual.githubcopilot.com/" } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
 
-  beforeEach(() => {
-    jsonStoreMocks.loadJsonFile.mockReset();
-    jsonStoreMocks.saveJsonFile.mockReset();
-  });
-
-  it("derives baseUrl only from trusted Copilot token hosts", () => {
-    expect(deriveCopilotApiBaseUrlFromToken("token;proxy-ep=proxy.example.com;")).toBeNull();
-    expect(deriveCopilotApiBaseUrlFromToken("token;proxy-ep=https://proxy.foo.bar;")).toBeNull();
-    expect(
-      deriveCopilotApiBaseUrlFromToken(
-        copilotCredentialFixture("proxy.individual.githubcopilot.com"),
-      ),
-    ).toBe("https://api.individual.githubcopilot.com");
-  });
-
-  it("uses cache when token is still valid", async () => {
-    const now = Date.now();
-    jsonStoreMocks.loadJsonFile.mockReturnValue({
-      token: "cached;proxy-ep=proxy.example.com;",
-      expiresAt: now + 60 * 60 * 1000,
-      updatedAt: now,
-      integrationId: "vscode-chat",
-      sourceCredentialFingerprint: createHash("sha256").update("gh").digest("hex"),
-      domain: "github.com",
+    const auth = await resolveCopilotRuntimeAuth({
+      githubToken: "github-source-token",
+      fetchImpl: fetchImpl as typeof fetch,
     });
 
-    const fetchImpl = vi.fn();
-    const res = await resolveCopilotApiToken({
-      githubToken: "gh",
-      cachePath,
-      loadJsonFileImpl: jsonStoreMocks.loadJsonFile,
-      saveJsonFileImpl: jsonStoreMocks.saveJsonFile,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+    expect(auth).toEqual({
+      apiKey: "github-source-token",
+      baseUrl: "https://api.individual.githubcopilot.com",
+      source: "validated:https://api.github.com/copilot_internal/user",
     });
-
-    expect(res.token).toBe("cached;proxy-ep=proxy.example.com;");
-    expect(res.baseUrl).toBe("https://api.individual.githubcopilot.com");
-    expect(res.source).toContain("cache:");
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("fetches and stores token when cache is missing", async () => {
-    jsonStoreMocks.loadJsonFile.mockReturnValue(undefined);
-
-    const fetchImpl = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          token: "fresh;proxy-ep=https://proxy.contoso.test;",
-          expires_at: Math.floor(Date.now() / 1000) + 3600,
-        }),
-        {
-          status: 200,
-          headers: { "content-type": "application/json" },
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://api.github.com/copilot_internal/user",
+      expect.objectContaining({
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          Authorization: "Bearer github-source-token",
         },
-      ),
+      }),
     );
-
-    const res = await resolveCopilotApiToken({
-      githubToken: "gh",
-      cachePath,
-      loadJsonFileImpl: jsonStoreMocks.loadJsonFile,
-      saveJsonFileImpl: jsonStoreMocks.saveJsonFile,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-    });
-
-    expect(res.token).toBe("fresh;proxy-ep=https://proxy.contoso.test;");
-    expect(res.baseUrl).toBe("https://api.individual.githubcopilot.com");
-    const [, calledInit] = fetchImpl.mock.calls[0] ?? [];
-    expect(((calledInit as RequestInit).headers as Record<string, string>)["Accept-Encoding"]).toBe(
-      "identity",
-    );
-    expect(jsonStoreMocks.saveJsonFile).toHaveBeenCalledTimes(1);
   });
 
-  it("explains how to recover from a forbidden token exchange", async () => {
-    jsonStoreMocks.loadJsonFile.mockReturnValue(undefined);
-    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 403 }));
+  it("accepts an account endpoint under the configured data-residency tenant", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ endpoints: { api: "https://copilot-api.acme.ghe.com" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
 
-    const rejection = resolveCopilotApiToken({
-      githubToken: "gh",
-      cachePath,
-      loadJsonFileImpl: jsonStoreMocks.loadJsonFile,
-      saveJsonFileImpl: jsonStoreMocks.saveJsonFile,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+    const auth = await resolveCopilotRuntimeAuth({
+      githubToken: "tenant-source-token",
+      githubDomain: "acme.ghe.com",
+      fetchImpl: fetchImpl as typeof fetch,
     });
 
-    await expect(rejection).rejects.toBeInstanceOf(CopilotTokenExchangeError);
+    expect(auth.baseUrl).toBe("https://copilot-api.acme.ghe.com");
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe("https://api.acme.ghe.com/copilot_internal/user");
+  });
+
+  it("uses a domain-safe fallback when account metadata omits the API endpoint", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ copilot_plan: "individual" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await expect(
+      resolveCopilotRuntimeAuth({
+        githubToken: "github-source-token",
+        fetchImpl: fetchImpl as typeof fetch,
+      }),
+    ).resolves.toMatchObject({
+      apiKey: "github-source-token",
+      baseUrl: "https://api.individual.githubcopilot.com",
+    });
+  });
+
+  it.each([
+    "http://api.individual.githubcopilot.com",
+    "https://api.individual.githubcopilot.com.attacker.test",
+    "https://user@api.individual.githubcopilot.com",
+  ])("rejects an untrusted account endpoint: %s", async (api) => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ endpoints: { api } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await expect(
+      resolveCopilotRuntimeAuth({
+        githubToken: "github-source-token",
+        fetchImpl: fetchImpl as typeof fetch,
+      }),
+    ).rejects.toThrow("untrusted endpoints.api URL");
+  });
+
+  it("explains how to recover from forbidden authentication", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 403 }));
+    const rejection = resolveCopilotRuntimeAuth({
+      githubToken: "github-source-token",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    await expect(rejection).rejects.toBeInstanceOf(CopilotRuntimeAuthError);
     await expect(rejection).rejects.toMatchObject({
-      code: "github_copilot_token_exchange_failed",
+      code: "github_copilot_auth_failed",
       reason: "http_error",
       status: 403,
       message: expect.stringContaining("login-github-copilot"),
     });
   });
 
-  it("keeps exchanges per source credential in plugin state", async () => {
-    const values = new Map<string, CachedCopilotToken>();
-    const register = vi.fn((key: string, value: CachedCopilotToken) => {
-      values.set(key, value);
-    });
-    const store = {
-      lookup: vi.fn((key: string) => values.get(key)),
-      register,
-    } as unknown as PluginStateSyncKeyedStore<CachedCopilotToken>;
-    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
-      const source = new Headers(init?.headers).get("authorization")?.replace(/^Bearer\s+/u, "");
-      const exchange = `exchange-${source};proxy-ep=proxy.individual.githubcopilot.com;`;
+  it("maps a stalled response body to a runtime-auth timeout", async () => {
+    const controller = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => controller.signal);
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal;
       return new Response(
-        JSON.stringify(
-          Object.fromEntries([
-            ["token", exchange],
-            ["expires_at", 2_000_000_000],
-          ]),
-        ),
+        new ReadableStream<Uint8Array>({
+          start(streamController) {
+            signal?.addEventListener("abort", () => streamController.error(signal.reason), {
+              once: true,
+            });
+            queueMicrotask(() => controller.abort(new DOMException("timed out", "TimeoutError")));
+          },
+        }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
     });
-    const resolve = (githubToken: string) =>
-      resolveCopilotApiToken({
-        githubToken,
-        fetchImpl: fetchImpl as typeof fetch,
-        openCacheStore: () => store,
+
+    try {
+      await expect(
+        resolveCopilotRuntimeAuth({
+          githubToken: "github-source-token",
+          fetchImpl: fetchImpl as typeof fetch,
+        }),
+      ).rejects.toMatchObject({
+        name: "CopilotRuntimeAuthError",
+        reason: "timeout",
+        timeoutMs: 30_000,
       });
-
-    const firstA = await resolve("source-a");
-    const firstB = await resolve("source-b");
-    const secondA = await resolve("source-a");
-
-    expect(firstA.token).toContain("exchange-source-a");
-    expect(firstB.token).toContain("exchange-source-b");
-    expect(secondA.token).toBe(firstA.token);
-    expect(secondA.source).toBe("cache:plugin-state");
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(register).toHaveBeenCalledTimes(2);
-    expect(values.size).toBe(2);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 });
 

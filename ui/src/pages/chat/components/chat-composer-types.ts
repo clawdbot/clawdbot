@@ -7,6 +7,7 @@ import type { ChatAttachment, ChatQueueItem } from "../../../lib/chat/chat-types
 import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
+import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
@@ -15,6 +16,10 @@ import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus, PlanStatus } from "../tool-stream.ts";
+import type {
+  ChatComposerPlusMenuProps,
+  ChatComposerPlusMenuView,
+} from "./chat-composer-plus-menu.ts";
 
 type ChatComposerDisabledBannerContent = {
   text: string;
@@ -49,6 +54,18 @@ export type ChatComposerProps = {
   queue: ChatQueueItem[];
   draft: string;
   sessions: SessionsListResult | null;
+  toolOverrides?: SessionToolOverrides;
+  capabilityMenu?: Omit<
+    ChatComposerPlusMenuProps,
+    | "attachments"
+    | "disabled"
+    | "open"
+    | "view"
+    | "toolOverrides"
+    | "onOpenChange"
+    | "onViewChange"
+    | "showCapabilities"
+  >;
   providerUsage?: ProviderUsageDisplayProps;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
@@ -116,6 +133,12 @@ type ComposingDraft = {
   value: string;
 };
 
+type SkillMenuTarget = {
+  start: number;
+  end: number;
+  query: string;
+};
+
 export type ChatComposerState = {
   slashMenuOpen: boolean;
   slashMenuItems: SlashCommandDef[];
@@ -125,6 +148,13 @@ export type ChatComposerState = {
   slashMenuArgItems: string[];
   slashMenuExpanded: boolean;
   slashCommandRefreshPending: boolean;
+  skillMenuOpen: boolean;
+  skillMenuItems: SlashCommandDef[];
+  skillMenuIndex: number;
+  skillMenuTarget: SkillMenuTarget | null;
+  skillCommandRefreshPending: boolean;
+  skillCommandRefreshGeneration: number;
+  skillCommandRefreshTargetStart: number | null;
   composerComposing: boolean;
   composingDraft: ComposingDraft | null;
   composerInputIntentKey: string | null;
@@ -140,6 +170,8 @@ export type ChatComposerState = {
   microphoneDevices: RealtimeTalkInputDevice[];
   microphoneWarning: string | null;
   microphoneDiscoveryRequest: number;
+  capabilityMenuOpen: boolean;
+  capabilityMenuView: ChatComposerPlusMenuView;
   // Stable Lit ref: an inline arrow would change identity per render and force
   // a layout re-measure of the textarea on every chat render, not just attach.
   textareaRef: ((element?: Element) => void) | null;

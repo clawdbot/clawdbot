@@ -151,6 +151,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Target agent ID for mapping execution when action routing should not use defaults. Use dedicated automation agents to isolate webhook behavior from interactive operator sessions.",
   "hooks.mappings[].sessionKey":
     "Explicit session key override for mapping-delivered messages to control thread continuity. Use stable scoped keys so repeated events correlate without leaking into unrelated conversations.",
+  "hooks.mappings[].sessionMode":
+    'Controls mapping session continuity: "isolated" starts a fresh run session, while "persistent" reuses the resolved sessionKey. Keep isolated unless the integration intentionally needs durable context.',
   "hooks.mappings[].messageTemplate":
     "Template for synthesizing structured mapping input into the final message content sent to the target action path. Keep templates deterministic so downstream parsing and behavior remain stable.",
   "hooks.mappings[].textTemplate":
@@ -324,7 +326,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "When true, suppress ⚠️ tool-error warnings from being shown to the user. The agent already sees errors in context and can retry. Default: false.",
   "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
   "messages.ackReactionScope":
-    'When to send ack reactions ("group-mentions", "group-all", "direct", "all", "off", "none"). "off"/"none" disables ack reactions entirely.',
+    'When to send ack reactions ("group-mentions", "group-all", "direct", "all", "off", "none"). "group-mentions" acks group messages that mention the agent, whether or not the group requires mentions; "group-all" acks every group message. "off"/"none" disables ack reactions entirely.',
   "messages.statusReactions":
     "Lifecycle status reactions that update the emoji on the trigger message as the agent progresses (queued → thinking → tool → done/error).",
   "messages.statusReactions.enabled":

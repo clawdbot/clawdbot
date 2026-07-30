@@ -7,6 +7,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { findGitCheckoutRoot } from "../agents/worktrees/git.js";
 import {
   findLiveRegistryWorktreeByOwner,
   listRegistryWorktrees,
@@ -22,7 +23,6 @@ import {
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -61,6 +61,21 @@ const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
   setupGatewaySessionsTestHarness();
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+async function makeNonGitTempDir(prefix: string): Promise<string> {
+  let root = await fs.realpath(os.tmpdir());
+  for (;;) {
+    const checkoutRoot = findGitCheckoutRoot(root);
+    if (!checkoutRoot) {
+      return tempDirs.make(prefix, root);
+    }
+    const parent = path.dirname(checkoutRoot);
+    if (parent === checkoutRoot) {
+      throw new Error("could not find a temp root outside a git checkout");
+    }
+    root = parent;
+  }
+}
 
 test("sessions.create and sessions.delete preserve every concurrent session lifecycle", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -128,6 +143,50 @@ test("concurrent sessions.create requests adopt one canonical keyed session", as
   );
 });
 
+test("keyed sessions remain recoverable across overlapping create and delete waves", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:main:dashboard:concurrent-lifecycle-waves";
+
+  for (let wave = 0; wave < 6; wave += 1) {
+    const operations = await Promise.all(
+      Array.from({ length: 12 }, (_, index) =>
+        index % 3 === 0
+          ? directSessionReq<{ deleted: boolean }>("sessions.delete", {
+              key,
+              deleteTranscript: false,
+            })
+          : directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
+              agentId: "main",
+              key,
+            }),
+      ),
+    );
+
+    expect(
+      operations.every((result) => result.ok),
+      `lifecycle wave ${wave}`,
+    ).toBe(true);
+
+    const recovered = await directSessionReq<{ key: string; sessionId: string }>(
+      "sessions.create",
+      { agentId: "main", key },
+    );
+    expect(recovered.ok, `creation after lifecycle wave ${wave}`).toBe(true);
+    expect(recovered.payload?.key).toBe(key);
+    expect(loadSessionEntry({ sessionKey: key, storePath })?.sessionId).toBe(
+      recovered.payload?.sessionId,
+    );
+
+    const deleted = await directSessionReq<{ deleted: boolean }>("sessions.delete", {
+      key,
+      deleteTranscript: false,
+    });
+    expect(deleted.ok, `deletion after lifecycle wave ${wave}`).toBe(true);
+    expect(deleted.payload?.deleted).toBe(true);
+    expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
+  }
+});
+
 test("sessions.create keeps incognito rows process-local through list, spawn, reset, and delete", async () => {
   const { storePath } = await createSessionStoreDir();
   try {
@@ -148,9 +207,7 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
     const entry = created.payload?.entry;
     expect(entry?.incognito).toBe(true);
     expect(entry?.parentSessionKey).toBeUndefined();
-    expect(parseSqliteSessionFileMarker(entry?.sessionFile)?.storePath).toBe(
-      resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-    );
+    expect(entry).not.toHaveProperty("sessionFile");
     const openedIncognitoDatabase = openOpenClawAgentDatabase({
       agentId: "main",
       path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
@@ -217,9 +274,7 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
     const childKey = requireNonEmptyString(child.payload?.key, "incognito child key");
     expect(child.payload?.entry.incognito).toBe(true);
     expect(child.payload?.entry.parentSessionKey).toBe(key);
-    expect(parseSqliteSessionFileMarker(child.payload?.entry.sessionFile)?.storePath).toBe(
-      resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-    );
+    expect(child.payload?.entry).not.toHaveProperty("sessionFile");
 
     const rejectedInheritedChannel = await directSessionReq("sessions.create", {
       agentId: "main",
@@ -1108,7 +1163,7 @@ test("sessions.create persists a Gateway cwd without a managed worktree", async 
 });
 
 test("sessions.create uses a non-git Gateway cwd directly but not as a worktree source", async () => {
-  const cwd = tempDirs.make("openclaw-session-direct-cwd-", await fs.realpath(os.tmpdir()));
+  const cwd = await makeNonGitTempDir("openclaw-session-direct-cwd-");
   const client = { client: { connect: { scopes: ["operator.admin"] } } as never };
   const direct = await directSessionReq("sessions.create", { cwd }, client);
   expect(direct.ok).toBe(true);
@@ -1330,9 +1385,7 @@ test("sessions.create reset-in-place persists the returned worktree cwd", async 
 });
 
 test("sessions.create rejects worktrees for non-git agent workspaces", async () => {
-  const workspace = await fs.mkdtemp(
-    path.join(await fs.realpath(os.tmpdir()), "openclaw-session-plain-workspace-"),
-  );
+  const workspace = await makeNonGitTempDir("openclaw-session-plain-workspace-");
   testState.agentConfig = { workspace };
   await createSessionStoreDir();
   try {
@@ -1349,7 +1402,6 @@ test("sessions.create rejects worktrees for non-git agent workspaces", async () 
     });
   } finally {
     testState.agentConfig = undefined;
-    await fs.rm(workspace, { recursive: true, force: true });
   }
 });
 
@@ -1388,10 +1440,7 @@ test("sessions.create stores dashboard model, thinking, and parent linkage, and 
   expect(created.payload?.entry?.modelOverride).toBe("gpt-test-a");
   expect(created.payload?.entry?.thinkingLevel).toBe("high");
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
-  const sessionFile = requireNonEmptyString(
-    created.payload?.entry?.sessionFile,
-    "created session file",
-  );
+  expect(created.payload?.entry).not.toHaveProperty("sessionFile");
   expect(created.payload?.sessionId).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
   );
@@ -1404,7 +1453,7 @@ test("sessions.create stores dashboard model, thinking, and parent linkage, and 
   expect(storedEntry?.modelOverride).toBe("gpt-test-a");
   expect(storedEntry?.thinkingLevel).toBe("high");
   expect(storedEntry?.parentSessionKey).toBe("agent:main:main");
-  expect(sessionFile).toBe(storedEntry?.sessionFile);
+  expect(storedEntry).not.toHaveProperty("sessionFile");
 
   await expect(
     loadTranscriptEvents({
@@ -2311,7 +2360,7 @@ test("sessions.create scopes the main alias to the requested agent", async () =>
 
   expect(created.ok).toBe(true);
   expect(created.payload?.key).toBe("agent:longmemeval:main");
-  requireNonEmptyString(created.payload?.entry?.sessionFile, "longmemeval session file");
+  expect(created.payload?.entry).not.toHaveProperty("sessionFile");
 
   expect(
     loadSessionEntry({
@@ -2388,7 +2437,7 @@ test("sessions.create preserves global and unknown sentinel keys", async () => {
 
   expect(globalCreated.ok).toBe(true);
   expect(globalCreated.payload?.key).toBe("global");
-  requireNonEmptyString(globalCreated.payload?.entry?.sessionFile, "global session file");
+  expect(globalCreated.payload?.entry).not.toHaveProperty("sessionFile");
 
   const unknownCreated = await directSessionReq<{
     key?: string;
@@ -2403,7 +2452,7 @@ test("sessions.create preserves global and unknown sentinel keys", async () => {
 
   expect(unknownCreated.ok).toBe(true);
   expect(unknownCreated.payload?.key).toBe("unknown");
-  requireNonEmptyString(unknownCreated.payload?.entry?.sessionFile, "unknown session file");
+  expect(unknownCreated.payload?.entry).not.toHaveProperty("sessionFile");
 
   expect(
     loadSessionEntry({ agentId: "longmemeval", sessionKey: "global", storePath })?.sessionId,
@@ -2451,7 +2500,7 @@ test("sessions.create stores selected global sessions in the requested agent sto
 
   expect(created.ok).toBe(true);
   expect(created.payload?.key).toBe("global");
-  requireNonEmptyString(created.payload?.entry?.sessionFile, "work global session file");
+  expect(created.payload?.entry).not.toHaveProperty("sessionFile");
   expect(
     loadSessionEntry({ agentId: "main", sessionKey: "global", storePath: mainStorePath }),
   ).toBeUndefined();
@@ -2822,10 +2871,7 @@ test("sessions.create forks the parent transcript into the new session", async (
   expect(created.payload?.entry?.totalTokens).toBeUndefined();
   expect(created.payload?.entry?.totalTokensFresh).toBe(false);
   expect(created.payload?.sessionId).not.toBe(parent.sessionId);
-  const forkedSessionFile = requireNonEmptyString(
-    created.payload?.entry?.sessionFile,
-    "forked session file",
-  );
+  expect(created.payload?.entry).not.toHaveProperty("sessionFile");
   const readMessages = async (scope: {
     sessionFile?: string;
     sessionId: string;
@@ -2846,7 +2892,6 @@ test("sessions.create forks the parent transcript into the new session", async (
   const forkedSessionId = requireNonEmptyString(created.payload?.sessionId, "forked session id");
   expect(
     await readMessages({
-      sessionFile: forkedSessionFile,
       sessionId: forkedSessionId,
       sessionKey: created.payload?.key ?? "",
       storePath,
@@ -2862,7 +2907,6 @@ test("sessions.create forks the parent transcript into the new session", async (
   const key = requireNonEmptyString(created.payload?.key, "forked session key");
   expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
     sessionId: created.payload?.sessionId,
-    sessionFile: forkedSessionFile,
     forkSource: {
       sessionKey: "agent:main:main",
       sessionId: parent.sessionId,
@@ -3114,13 +3158,9 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
       sessionId: parent.sessionId,
     });
     expect(created.payload?.entry?.forkedFromParent).toBe(true);
-    const forkedSessionFile = requireNonEmptyString(
-      created.payload?.entry?.sessionFile,
-      "agent-qualified forked session file",
-    );
+    expect(created.payload?.entry).not.toHaveProperty("sessionFile");
     await expect(
       loadTranscriptEvents({
-        sessionFile: forkedSessionFile,
         sessionId: requireNonEmptyString(
           created.payload?.sessionId,
           "agent-qualified forked session id",
@@ -3352,7 +3392,7 @@ test("sessions.create rejects unusable attachment-only input before creating a s
   });
 
   expect(created.ok).toBe(false);
-  expect(created.error?.message).toContain("attachments require usable content");
+  expect(created.error?.message).toContain("must be object");
   const listed = await directSessionReq<{ sessions?: unknown[] }>("sessions.list", {});
   expect(listed.payload?.sessions).toEqual([]);
 });

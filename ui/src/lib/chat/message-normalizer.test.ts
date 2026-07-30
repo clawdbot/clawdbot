@@ -36,6 +36,33 @@ describe("message-normalizer", () => {
         expect(isStandaloneToolMessageForDisplay(input)).toBe(false);
       },
     );
+
+    it.each([undefined, null, "malformed block", 42, true, []])(
+      "preserves valid assistant text after the malformed content block %o",
+      (block) => {
+        expect(
+          normalizeMessage({
+            role: "assistant",
+            content: [block, { type: "output_text", text: "The valid answer remains visible." }],
+          }),
+        ).toMatchObject({
+          role: "assistant",
+          content: [{ type: "text", text: "The valid answer remains visible." }],
+        });
+      },
+    );
+
+    it("preserves valid tool blocks after malformed content", () => {
+      expect(
+        normalizeMessage({
+          role: "assistant",
+          content: [null, { type: "tool_use", name: "read", args: { path: "notes.md" } }],
+        }),
+      ).toMatchObject({
+        role: "toolResult",
+        content: [{ type: "tool_use", name: "read", args: { path: "notes.md" } }],
+      });
+    });
   });
 
   describe("normalizeMessage", () => {
@@ -210,6 +237,42 @@ describe("message-normalizer", () => {
             kind: "audio",
             label: "clip.mp3",
             mimeType: "audio/mpeg",
+          },
+        },
+      ]);
+    });
+
+    it("preserves managed media playback and artifact metadata", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "audio",
+            artifactId: "artifact_managed_media_audio",
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/audio/full",
+            fileName: "voice.caf",
+            mimeType: "audio/x-caf",
+            playback: "transcode",
+            sizeBytes: 4096,
+            durationMs: 2_345,
+            isVoiceNote: true,
+          },
+        ],
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            artifactId: "artifact_managed_media_audio",
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/audio/full",
+            kind: "audio",
+            label: "voice.caf",
+            mimeType: "audio/x-caf",
+            playback: "transcode",
+            sizeBytes: 4096,
+            durationMs: 2_345,
+            isVoiceNote: true,
           },
         },
       ]);
@@ -538,6 +601,8 @@ describe("message-normalizer", () => {
               kind: "image",
               label: "test image.png",
               mimeType: "image/png",
+              width: 1280,
+              height: 720,
             },
           },
         ],
@@ -551,6 +616,8 @@ describe("message-normalizer", () => {
             kind: "image",
             label: "test image.png",
             mimeType: "image/png",
+            width: 1280,
+            height: 720,
           },
         },
       ]);

@@ -2,6 +2,7 @@ import type {
   SessionCatalogHost,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   listSessionEntriesReadOnly,
@@ -25,13 +26,34 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
   const entriesByAgentId = new Map<string, readonly SessionEntrySummary[]>();
   const entryIndexByAgentId = new Map<string, ReadonlyMap<string, SessionEntry>>();
   const actorBySessionKey = new Map<string, SessionCatalogSession["createdActor"]>();
+  let catalogEntries:
+    | ReturnType<NonNullable<SessionCatalogEntrySnapshot["entriesForCatalog"]>>
+    | undefined;
 
   const entriesForAgent = (rawAgentId: string): readonly SessionEntrySummary[] => {
     const agentId = normalizeAgentId(rawAgentId);
     if (!entriesByAgentId.has(agentId)) {
-      entriesByAgentId.set(agentId, listSessionEntriesReadOnly({ agentId }));
+      entriesByAgentId.set(
+        agentId,
+        listSessionEntriesReadOnly({ agentId, clone: false, projection: "list" }),
+      );
     }
     return entriesByAgentId.get(agentId) ?? [];
+  };
+
+  const entriesForCatalog: NonNullable<SessionCatalogEntrySnapshot["entriesForCatalog"]> = () => {
+    if (catalogEntries) {
+      return catalogEntries;
+    }
+    const defaultAgentId = resolveDefaultAgentId(params.cfg);
+    const agentIds = [
+      defaultAgentId,
+      ...listAgentIds(params.cfg).filter((agentId) => agentId !== defaultAgentId),
+    ];
+    catalogEntries = agentIds.flatMap((agentId) =>
+      entriesForAgent(agentId).map((entry) => Object.assign({}, entry, { agentId })),
+    );
+    return catalogEntries;
   };
 
   const entryIndexForAgent = (agentId: string): ReadonlyMap<string, SessionEntry> => {
@@ -72,7 +94,7 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
   };
 
   return {
-    sessionEntries: { entriesForAgent },
+    sessionEntries: { entriesForAgent, entriesForCatalog },
     projectHostCreatedActors: (host) => ({
       ...host,
       sessions: host.sessions.map(({ createdActor: _providerCreatedActor, ...session }) => {

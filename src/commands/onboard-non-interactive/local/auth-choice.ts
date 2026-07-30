@@ -95,6 +95,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     resolveNonInteractiveApiKey({
       ...input,
       agentDir: params.target.agentDir,
+      workspaceDir: params.target.workspaceDir,
       secretInputMode: requestedSecretInputMode,
     });
   const toApiKeyCredential = (paramsLocal: {
@@ -222,7 +223,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     resolveApiKey: (input) =>
       resolveApiKey({
         ...input,
-        cfg: baseConfig,
+        cfg: nextConfig,
         runtime,
       }),
     toApiKeyCredential,
@@ -263,7 +264,7 @@ export async function applyNonInteractiveAuthChoice(params: {
       });
       const resolvedCustomApiKey = await resolveApiKey({
         provider: resolvedProviderId.providerId,
-        cfg: baseConfig,
+        cfg: nextConfig,
         flagValue: customAuth.apiKey,
         flagName: "--custom-api-key",
         envVar: "CUSTOM_API_KEY",

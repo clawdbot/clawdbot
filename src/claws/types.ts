@@ -179,6 +179,7 @@ export type ClawReadResult =
   | {
       ok: true;
       manifest: ClawManifest;
+      clawMarkdownBody?: Buffer;
       openClawProfile?: ClawOpenClawProfile;
       source: ClawSourceIdentity;
       snapshot: ClawSourceSnapshot;
@@ -195,6 +196,7 @@ export type ClawAddPlanAction = {
   action: "create" | "write" | "install" | "configure" | "schedule";
   target: string;
   source?: string;
+  sourceKind?: "clawMarkdownBody";
   digest?: string;
   details?: Record<string, unknown>;
   blocked: boolean;
@@ -215,7 +217,14 @@ export type ClawAddCapabilityChange = {
 
 export type ClawLocalPrerequisite =
   | { kind: "environment"; mcpServer: string; name: string }
-  | { kind: "oauth"; mcpServer: string };
+  | { kind: "oauth"; mcpServer: string }
+  | {
+      kind: "plugin-setup";
+      plugin: string;
+      provider: string;
+      envVars: string[];
+      authMethods: string[];
+    };
 
 export type ClawAddPlan = {
   schemaVersion: typeof CLAW_ADD_PLAN_SCHEMA_VERSION;

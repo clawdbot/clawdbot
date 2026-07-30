@@ -1772,6 +1772,39 @@ describe("maybeRepairLegacyCronStore", () => {
     );
   });
 
+  it("does not migrate legacy notify fallback from a credential-bearing webhook URL", async () => {
+    const storePath = await makeTempStorePath();
+    const credentialUrl = new URL("https://example.invalid/cron-finished?token=placeholder");
+    credentialUrl.username = "user";
+    credentialUrl.password = "password";
+    await writeCronStore(storePath, [
+      createLegacyCronJob({
+        id: "notify-credential-config",
+        jobId: undefined,
+        delivery: undefined,
+      }),
+    ]);
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath, credentialUrl.href),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const jobs = await readPersistedJobs(storePath);
+    const job = requirePersistedJob(jobs, 0);
+    expect(job.notify).toBeUndefined();
+    expect(job.delivery).toBeUndefined();
+    const reloaded = await loadCronJobsStoreWithConfigJobs(storePath);
+    const persisted = reloaded.configJobs as unknown as Array<Record<string, unknown>>;
+    expect(persisted[0]?.notify).toBe(true);
+    expectNoteContaining(
+      "cron.webhook is not a valid HTTP(S) URL so doctor cannot migrate it automatically",
+      "Doctor warnings",
+    );
+    expect(JSON.stringify(noteMock.mock.calls)).not.toContain(credentialUrl.href);
+  });
+
   it("removes inert legacy notify:true for delivery.mode none when cron.webhook is unset and stops looping (#44460)", async () => {
     const storePath = await makeTempStorePath();
     await writeCronStore(storePath, [

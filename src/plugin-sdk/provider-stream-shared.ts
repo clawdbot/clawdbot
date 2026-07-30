@@ -457,21 +457,17 @@ function resolveDeepSeekV4ReasoningEffort(
   return thinkingLevel === "xhigh" || thinkingLevel === "max" ? "max" : "high";
 }
 
-function stripDeepSeekV4ReasoningContent(payload: Record<string, unknown>): void {
-  if (!Array.isArray(payload.messages)) {
-    return;
-  }
-  for (const message of payload.messages) {
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    delete (message as Record<string, unknown>).reasoning_content;
-  }
-}
-
-function ensureDeepSeekV4AssistantReasoningContent(
+/** Normalizes assistant reasoning replay shared by OpenAI-compatible provider families. */
+export function normalizeOpenAICompatibleReasoningReplay(
   payload: Record<string, unknown>,
-  params?: {
+  params: {
+    /** Disabled reasoning strips replay fields instead of backfilling assistant turns. */
+    thinkingEnabled: boolean;
+    /** Restricts disabled-reasoning cleanup to assistant messages when required. */
+    stripAssistantMessagesOnly?: boolean;
+    /** Replaces explicit null values for transports that require string reasoning. */
+    replaceNullReasoningContent?: boolean;
+    /** Preserves provider-specific tool-call selection for assistant replay. */
     shouldBackfillAssistantMessage?: (message: Record<string, unknown>) => boolean;
   },
 ): void {
@@ -483,13 +479,22 @@ function ensureDeepSeekV4AssistantReasoningContent(
       continue;
     }
     const record = message as Record<string, unknown>;
-    if (record.role !== "assistant") {
+    if (!params.thinkingEnabled) {
+      if (!params.stripAssistantMessagesOnly || record.role === "assistant") {
+        delete record.reasoning_content;
+      }
       continue;
     }
-    if (params?.shouldBackfillAssistantMessage && !params.shouldBackfillAssistantMessage(record)) {
+    if (
+      record.role !== "assistant" ||
+      (params.shouldBackfillAssistantMessage && !params.shouldBackfillAssistantMessage(record))
+    ) {
       continue;
     }
-    if (!("reasoning_content" in record)) {
+    if (
+      !("reasoning_content" in record) ||
+      (params.replaceNullReasoningContent && record.reasoning_content == null)
+    ) {
       record.reasoning_content = "";
     }
   }
@@ -518,13 +523,14 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
         payload.thinking = { type: "disabled" };
         delete payload.reasoning_effort;
         delete payload.reasoning;
-        stripDeepSeekV4ReasoningContent(payload);
+        normalizeOpenAICompatibleReasoningReplay(payload, { thinkingEnabled: false });
         return;
       }
 
       payload.thinking = { type: "enabled" };
       payload.reasoning_effort = resolveReasoningEffort(params.thinkingLevel);
-      ensureDeepSeekV4AssistantReasoningContent(payload, {
+      normalizeOpenAICompatibleReasoningReplay(payload, {
+        thinkingEnabled: true,
         shouldBackfillAssistantMessage: params.shouldBackfillAssistantReasoningContent,
       });
     });

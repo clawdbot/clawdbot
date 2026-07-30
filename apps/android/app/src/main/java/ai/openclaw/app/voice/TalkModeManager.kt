@@ -330,6 +330,7 @@ class TalkModeManager internal constructor(
   private var interruptOnSpeech: Boolean = false
   private var mainSessionKey: String = "main"
   private var speechLocale: String? = null
+  private var realtimeRelayModelSupported = true
 
   @Volatile private var pendingRunId: String? = null
   private var pendingFinal: CompletableDeferred<Boolean>? = null
@@ -463,6 +464,7 @@ class TalkModeManager internal constructor(
     silenceWindowMs = TalkDefaults.defaultSilenceTimeoutMs
     interruptOnSpeech = false
     speechLocale = null
+    realtimeRelayModelSupported = true
   }
 
   private suspend fun requestGateway(
@@ -1007,7 +1009,11 @@ class TalkModeManager internal constructor(
       try {
         ensureConfigLoaded()
         if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) return@launch
-        startRealtimeRelay(generation)
+        if (realtimeRelayModelSupported) {
+          startRealtimeRelay(generation)
+        } else {
+          startNativeTalk(generation)
+        }
       } catch (err: Throwable) {
         if (err is CancellationException) return@launch
         setStatus(nativeText("Start failed: \$message", err.message ?: err::class.simpleName.orEmpty()))
@@ -1160,6 +1166,34 @@ class TalkModeManager internal constructor(
       return
     }
     Log.d(tag, "realtime session started relaySessionId=$sessionId")
+  }
+
+  private suspend fun startNativeTalk(generation: Long) {
+    if (!isConnected()) {
+      setStatus(nativeText("Gateway not connected"))
+      disableRealtimeModeAndNotifyOwner()
+      return
+    }
+    val micOk =
+      ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+        PackageManager.PERMISSION_GRANTED
+    if (!micOk) {
+      setStatus(nativeText("Microphone permission required"))
+      disableRealtimeModeAndNotifyOwner()
+      return
+    }
+    if (!SpeechRecognizer.isRecognitionAvailable(context)) {
+      setStatus(nativeText("Speech recognizer unavailable"))
+      disableRealtimeModeAndNotifyOwner()
+      return
+    }
+    withContext(Dispatchers.Main) {
+      if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) return@withContext
+      recognizer?.cancel()
+      recognizer?.destroy()
+      recognizer = SpeechRecognizer.createSpeechRecognizer(context).also { it.setRecognitionListener(listener) }
+      startListeningInternal(markListening = true)
+    }
   }
 
   private fun disableRealtimeModeAndNotifyOwner() {
@@ -3076,12 +3110,14 @@ class TalkModeManager internal constructor(
       if (generation != gatewayGeneration.get()) return
       silenceWindowMs = parsed.silenceTimeoutMs
       speechLocale = parsed.speechLocale
+      realtimeRelayModelSupported = parsed.realtimeRelayModelSupported
       parsed.interruptOnSpeech?.let { interruptOnSpeech = it }
       configLoaded = true
     } catch (_: Throwable) {
       if (generation != gatewayGeneration.get()) return
       silenceWindowMs = TalkDefaults.defaultSilenceTimeoutMs
       speechLocale = null
+      realtimeRelayModelSupported = true
       configLoaded = false
     }
   }
@@ -3191,33 +3227,12 @@ class TalkModeManager internal constructor(
         if (stopRequested) return
         _isListening.value = false
         _inputLevel.value = 0f
-        if (activePttCaptureId != null) {
+        val pushToTalkActive = activePttCaptureId != null
+        if (pushToTalkActive) {
           pttReleaseCompletion?.let {
             it.complete(Unit)
             return
           }
-          if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
-            setStatus(nativeText("Microphone permission required"))
-            return
-          }
-          setStatus(
-            when (error) {
-              SpeechRecognizer.ERROR_AUDIO -> nativeText("Audio error")
-              SpeechRecognizer.ERROR_CLIENT -> nativeText("Client error")
-              SpeechRecognizer.ERROR_NETWORK -> nativeText("Network error")
-              SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> nativeText("Network timeout")
-              SpeechRecognizer.ERROR_NO_MATCH -> nativeText("Listening (PTT)")
-              SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> nativeText("Recognizer busy")
-              SpeechRecognizer.ERROR_SERVER -> nativeText("Server error")
-              SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> nativeText("Listening (PTT)")
-              else -> nativeText("Speech error (\$error)", error)
-            },
-          )
-          schedulePushToTalkRestart(
-            delayMs = 600L,
-            advanceRung = pttRecognitionRung !is PushToTalkRecognitionRung.RestartingSingleSession,
-          )
-          return
         }
         if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
           setStatus(nativeText("Microphone permission required"))
@@ -3230,13 +3245,21 @@ class TalkModeManager internal constructor(
             SpeechRecognizer.ERROR_CLIENT -> nativeText("Client error")
             SpeechRecognizer.ERROR_NETWORK -> nativeText("Network error")
             SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> nativeText("Network timeout")
-            SpeechRecognizer.ERROR_NO_MATCH -> nativeText("Listening")
+            SpeechRecognizer.ERROR_NO_MATCH,
+            SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
+            -> if (pushToTalkActive) nativeText("Listening (PTT)") else nativeText("Listening")
             SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> nativeText("Recognizer busy")
             SpeechRecognizer.ERROR_SERVER -> nativeText("Server error")
-            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> nativeText("Listening")
             else -> nativeText("Speech error (\$error)", error)
           },
         )
+        if (pushToTalkActive) {
+          schedulePushToTalkRestart(
+            delayMs = 600L,
+            advanceRung = pttRecognitionRung !is PushToTalkRecognitionRung.RestartingSingleSession,
+          )
+          return
+        }
         scheduleRestart(delayMs = 600)
       }
 
