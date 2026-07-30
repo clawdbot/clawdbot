@@ -593,6 +593,13 @@ already running elsewhere:
 }
 ```
 
+WebSocket transport proactively establishes the app-server connection at
+gateway startup, limits the opening handshake to 10 seconds, sends a WebSocket
+ping every 30 seconds, and reconnects with bounded backoff if a pong does not
+arrive within 10 seconds. Ping and pong frames are transport-level health
+checks: they do not start a Codex turn or invoke a model. Local stdio and Unix
+transports do not perform these remote connection checks.
+
 Local stdio app-server sessions default to the trusted local operator
 posture: `approvalPolicy: "never"`, `approvalsReviewer: "user"`, and
 `sandbox: "danger-full-access"`. If local Codex requirements disallow that

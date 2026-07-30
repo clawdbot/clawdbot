@@ -11,6 +11,10 @@ import WebSocket, { type RawData } from "ws";
 import { resolveCodexAppServerUserHomeDir, type CodexAppServerStartOptions } from "./config.js";
 import type { CodexAppServerTransport } from "./transport.js";
 
+const WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 10_000;
+const WEBSOCKET_PING_INTERVAL_MS = 30_000;
+const WEBSOCKET_PONG_TIMEOUT_MS = 10_000;
+
 /** Opens a WebSocket app-server transport and maps newline-delimited frames to stdout/stdin. */
 export function createWebSocketTransport(
   options: CodexAppServerStartOptions,
@@ -31,6 +35,9 @@ export function createWebSocketTransport(
     headers,
     // Codex app-server closes Unix upgrade handshakes that offer compression.
     perMessageDeflate: false,
+    ...(options.transport === "websocket"
+      ? { handshakeTimeout: WEBSOCKET_HANDSHAKE_TIMEOUT_MS }
+      : {}),
   };
   const unixSocketPath = resolveCodexAppServerUnixSocketPath(options);
   const socket = unixSocketPath
@@ -43,6 +50,19 @@ export function createWebSocketTransport(
   const stdinDecoder = new StringDecoder("utf8");
   let pendingLine = "";
   let killed = false;
+  let pingInterval: NodeJS.Timeout | undefined;
+  let pongTimeout: NodeJS.Timeout | undefined;
+
+  const clearConnectionHealthTimers = () => {
+    if (pingInterval) {
+      clearInterval(pingInterval);
+      pingInterval = undefined;
+    }
+    if (pongTimeout) {
+      clearTimeout(pongTimeout);
+      pongTimeout = undefined;
+    }
+  };
 
   const sendFrame = (frame: string) => {
     const trimmed = frame.trim();
@@ -62,9 +82,37 @@ export function createWebSocketTransport(
     for (const frame of pendingFrames.splice(0)) {
       socket.send(frame);
     }
+    if (options.transport === "websocket") {
+      pingInterval = setInterval(() => {
+        if (socket.readyState !== WebSocket.OPEN || pongTimeout) {
+          return;
+        }
+        pongTimeout = setTimeout(() => {
+          pongTimeout = undefined;
+          socket.terminate();
+        }, WEBSOCKET_PONG_TIMEOUT_MS);
+        pongTimeout.unref();
+        socket.ping((error) => {
+          if (error) {
+            socket.terminate();
+          }
+        });
+      }, WEBSOCKET_PING_INTERVAL_MS);
+      pingInterval.unref();
+    }
   });
-  socket.once("error", (error) => events.emit("error", error));
+  socket.on("pong", () => {
+    if (pongTimeout) {
+      clearTimeout(pongTimeout);
+      pongTimeout = undefined;
+    }
+  });
+  socket.once("error", (error) => {
+    clearConnectionHealthTimers();
+    events.emit("error", error);
+  });
   socket.once("close", (code, reason) => {
+    clearConnectionHealthTimers();
     killed = true;
     events.emit("exit", code, reason.toString("utf8"));
   });
@@ -110,6 +158,7 @@ export function createWebSocketTransport(
     },
     kill: () => {
       killed = true;
+      clearConnectionHealthTimers();
       socket.close();
     },
     once: (event, listener) => events.once(event, listener),
