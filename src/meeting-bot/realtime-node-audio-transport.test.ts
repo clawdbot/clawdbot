@@ -92,4 +92,48 @@ describe("node meeting realtime audio transport", () => {
 
     await transport.stop();
   });
+
+  it("fences output writes across clear and stop", async () => {
+    const invoke = vi.fn(async () => ({ ok: true }));
+    const transport = createTransport(invoke);
+
+    await transport.writeOutput(Buffer.from([1, 2, 3]));
+    await transport.clearOutput();
+    await transport.writeOutput(Buffer.from([4, 5, 6]));
+
+    expect(invoke).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        params: expect.objectContaining({
+          action: "pushAudio",
+          outputGeneration: 0,
+        }),
+      }),
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        params: {
+          action: "clearAudio",
+          bridgeId: "bridge-1",
+          outputGeneration: 1,
+        },
+      }),
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        params: expect.objectContaining({
+          action: "pushAudio",
+          outputGeneration: 1,
+        }),
+      }),
+    );
+
+    await transport.stop();
+    const invokeCountAfterStop = invoke.mock.calls.length;
+    await transport.writeOutput(Buffer.from([7, 8, 9]));
+    await transport.clearOutput();
+    expect(invoke).toHaveBeenCalledTimes(invokeCountAfterStop);
+  });
 });
