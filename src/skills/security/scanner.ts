@@ -279,7 +279,11 @@ const SKILL_CONTENT_RULES: SourceRule[] = [
 // Core scanner
 // ---------------------------------------------------------------------------
 
-function isBenignMemberExecMatch(line: string, match: RegExpExecArray): boolean {
+function isBenignMemberExecMatch(
+  line: string,
+  match: RegExpExecArray,
+  namespaceAliases: ReadonlySet<string>,
+): boolean {
   // Group 1 is the bare-call command; group 2 is the computed-member command.
   const command = match[1] ?? match[2];
   if (command !== "exec") {
@@ -296,10 +300,17 @@ function isBenignMemberExecMatch(line: string, match: RegExpExecArray): boolean 
     return !/\b(?:cp|childProcess|child_process)\s*\.\s*exec\s*\(/.test(line);
   }
 
-  // Computed form `["exec"](`: benign unless the object is a known
-  // child_process namespace. This preserves the RegExp.exec-style benign
-  // behavior for `someObj["exec"](` while still catching `cp["exec"](`.
-  return !/\b(?:cp|childProcess|child_process)\s*\[\s*["']exec["']\s*\]\s*\(/.test(line);
+  // Computed form `["exec"](`: benign unless the object is a known child_process
+  // namespace (including aliases bound from child_process imports/requires).
+  // This preserves the RegExp.exec-style benign behavior for `someObj["exec"](`
+  // while still catching `cp["exec"](` and `proc["exec"](` when `proc` is a
+  // child_process namespace alias.
+  for (const namespace of namespaceAliases) {
+    if (new RegExp(`\\b${namespace}\\s*\\[\\s*["']exec["']\\s*\\]\\s*\\(`).test(line)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 const DANGEROUS_EXEC_METHODS = new Set([
@@ -313,6 +324,13 @@ const DANGEROUS_EXEC_METHODS = new Set([
 
 const EMPTY_ALIAS_MAP = new Map<string, string>();
 
+// Known child_process namespace receiver names that always indicate a real
+// child_process call (never a benign RegExp.exec). Seeded with the literals
+// the bare-filter already recognized, then augmented with namespace aliases
+// collected from imports/requires so `proc["exec"]()` fires when `proc` is
+// bound from child_process.
+const DEFAULT_NAMESPACE_ALIASES = new Set(["cp", "childProcess", "child_process"]);
+
 // Matches `import { ... } from "child_process"` (ESM) or
 // `{ ... } = require("child_process")` (CJS) and collects `original -> alias`
 // bindings for dangerous exec methods. Only bindings sourced from
@@ -324,6 +342,13 @@ const CHILD_PROCESS_REQUIRE_PATTERN =
   /\{\s*([^}]*)\s*\}\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/;
 const ESM_ALIAS_PATTERN = /\b(\w+)\s+as\s+(\w+)/g;
 const CJS_ALIAS_PATTERN = /\b(\w+)\s*:\s*(\w+)/g;
+// Namespace imports/requires: `import cp from "child_process"`,
+// `import * as cp from "child_process"`, `const cp = require("child_process")`.
+// The negative lookahead excludes `import type { ... }`.
+const NAMESPACE_IMPORT_PATTERN =
+  /import\s+(?!type\b)(?:\*\s+as\s+)?(\w+)\s+from\s*["'](?:node:)?child_process["']/;
+const NAMESPACE_REQUIRE_PATTERN =
+  /(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/;
 
 function collectChildProcessAliases(lines: readonly string[]): Map<string, string> {
   const aliases = new Map<string, string>();
@@ -356,6 +381,19 @@ function matchChildProcessAliasCall(line: string, aliases: Map<string, string>):
     }
   }
   return false;
+}
+
+function collectChildProcessNamespaceAliases(lines: readonly string[]): Set<string> {
+  const aliases = new Set<string>(DEFAULT_NAMESPACE_ALIASES);
+  for (const line of lines) {
+    const importMatch = NAMESPACE_IMPORT_PATTERN.exec(line);
+    const requireMatch = !importMatch ? NAMESPACE_REQUIRE_PATTERN.exec(line) : null;
+    const name = importMatch?.[1] ?? requireMatch?.[1];
+    if (name !== undefined) {
+      aliases.add(name);
+    }
+  }
+  return aliases;
 }
 
 function stripCommentsForHeuristics(source: string): string {
@@ -475,6 +513,12 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
     // guarantees child_process is present whenever aliases can exist.
     const childProcessAliases =
       rule.ruleId === "dangerous-exec" ? collectChildProcessAliases(lines) : EMPTY_ALIAS_MAP;
+    // Namespace receiver aliases (e.g. `const proc = require("child_process")`)
+    // so computed `["exec"](` on a renamed namespace is not treated as benign.
+    const childProcessNamespaceAliases =
+      rule.ruleId === "dangerous-exec"
+        ? collectChildProcessNamespaceAliases(lines)
+        : DEFAULT_NAMESPACE_ALIASES;
 
     let acceptedMatches = 0;
     let omittedMatches = 0;
@@ -488,7 +532,10 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       );
       let matchedOnLine = false;
       for (const match of matches) {
-        if (rule.ruleId === "dangerous-exec" && isBenignMemberExecMatch(line, match)) {
+        if (
+          rule.ruleId === "dangerous-exec" &&
+          isBenignMemberExecMatch(line, match, childProcessNamespaceAliases)
+        ) {
           continue;
         }
 
