@@ -32,7 +32,7 @@ import type {
 } from "@github/copilot-sdk";
 
 /** Request shape forwarded to host-implemented policies. */
-export interface CopilotPermissionContext {
+interface CopilotPermissionContext {
   /** SDK session id that originated the request. */
   sessionId: string;
   /** Original SDK request payload. */
@@ -53,7 +53,7 @@ export type CopilotPermissionPolicy = (
 ) => SdkPermissionRequestResult | undefined | Promise<SdkPermissionRequestResult | undefined>;
 
 /** Built-in fail-closed default. Mirrors the pre-bridge attempt.ts stub. */
-export const REJECT_ALL_FEEDBACK =
+const REJECT_ALL_FEEDBACK =
   "copilot agent runtime: no permission policy installed (fail-closed default)";
 
 export const rejectAllPolicy: CopilotPermissionPolicy = () => ({

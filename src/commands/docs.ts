@@ -1,8 +1,8 @@
-// Implements docs link/search output for `openclaw docs`.
-import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
+// Implements docs link/search output for `openclaw docs`.
+import { readResponseWithLimit } from "../infra/http-body.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 const SEARCH_API = "https://docs.openclaw.ai/api/search";
@@ -75,12 +75,20 @@ async function fetchDocsSearch(query: string): Promise<DocResult[]> {
       signal: controller.signal,
     });
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       throw new Error(`HTTP ${response.status}`);
     }
     const bytes = await readResponseWithLimit(response, DOCS_SEARCH_RESPONSE_MAX_BYTES, {
       onOverflow: ({ maxBytes }) => new Error(`Docs search response exceeds ${maxBytes} bytes`),
     });
-    const payload = JSON.parse(new TextDecoder().decode(bytes)) as DocsSearchResponse;
+    let payload: DocsSearchResponse;
+    try {
+      payload = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+      ) as DocsSearchResponse;
+    } catch (cause) {
+      throw new Error("Docs search response is malformed JSON", { cause });
+    }
     return parseDocsSearchResults(payload.results);
   } finally {
     clearTimeout(timeout);

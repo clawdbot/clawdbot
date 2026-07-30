@@ -60,6 +60,19 @@ const {
           }),
         };
       }
+      if (dirName === "firecrawl" && artifactBasename === "web-fetch-provider.js") {
+        return {
+          createFirecrawlWebFetchProvider: () => ({
+            ...providerBase,
+            id: "firecrawl",
+            createTool: () => ({
+              description: "runtime firecrawl",
+              parameters: {},
+              execute: async () => ({}),
+            }),
+          }),
+        };
+      }
       throw new Error(
         `Unable to resolve bundled plugin public surface ${dirName}/${artifactBasename}`,
       );
@@ -112,6 +125,7 @@ vi.mock("./public-surface-loader.js", async (importOriginal) => {
   };
 });
 
+import { resolveBundledExplicitRuntimeWebFetchProvidersFromPublicArtifacts } from "./web-provider-public-artifacts.explicit.js";
 import {
   resolveBundledWebFetchProvidersFromPublicArtifacts,
   resolveBundledWebSearchProvidersFromPublicArtifacts,
@@ -194,5 +208,24 @@ describe("web provider public artifacts explicit fast path", () => {
       artifactBasename: "web-fetch-contract-api.js",
     });
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+  });
+
+  it("loads executable web fetch runtime artifacts instead of contract-only facades", () => {
+    const provider = expectSingleProvider(
+      resolveBundledExplicitRuntimeWebFetchProvidersFromPublicArtifacts({
+        onlyPluginIds: ["firecrawl"],
+      }),
+    );
+
+    expect(provider.pluginId).toBe("firecrawl");
+    expect(provider.createTool({ config: {} as never })).not.toBeNull();
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+      dirName: "firecrawl",
+      artifactBasename: "web-fetch-provider.js",
+    });
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalledWith({
+      dirName: "firecrawl",
+      artifactBasename: "web-fetch-contract-api.js",
+    });
   });
 });

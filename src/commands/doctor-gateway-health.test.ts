@@ -111,6 +111,90 @@ describe("checkGatewayHealth", () => {
     );
   });
 
+  it("lists every degraded SecretRef owner reported by Gateway status", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        degradedSecretOwners: [
+          {
+            ownerKind: "account",
+            ownerId: "discord:ops",
+            state: "unavailable",
+            paths: ["channels.discord.accounts.ops.token"],
+            reason: "secret reference was not found (env:default:PRIVATE_REF_ID)",
+          },
+          {
+            ownerKind: "capability",
+            ownerId: "tts",
+            state: "unavailable",
+            degradationState: "stale",
+            paths: ["tts.providers.elevenlabs.apiKey"],
+            reason: "secret provider policy denied resolution",
+          },
+          {
+            ownerKind: "capability",
+            ownerId: "web-fetch:firecrawl",
+            state: "unavailable",
+            paths: ["plugins.entries.firecrawl.config.webFetch.apiKey"],
+            reason: "resolved secret value was invalid",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({});
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
+
+    expect(note).toHaveBeenCalledWith(
+      [
+        "- cold account:discord:ops (channels.discord.accounts.ops.token): secret resolution failed",
+        "  Retry: openclaw secrets reload",
+        "- stale capability:tts (tts.providers.elevenlabs.apiKey): secret provider policy denied resolution",
+        "  Retry: openclaw secrets reload",
+        "- cold capability:web-fetch:firecrawl (plugins.entries.firecrawl.config.webFetch.apiKey): resolved secret value was invalid",
+        "  Retry: openclaw secrets reload",
+      ].join("\n"),
+      "Secret runtime degradation",
+    );
+  });
+
+  it("lists every plugin configured unavailable by Gateway startup", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        degradedPlugins: [
+          {
+            pluginId: "discord",
+            state: "configured-unavailable",
+            diagnostic: {
+              kind: "plugin-verification",
+              reason: "unreadable-package-json",
+              detail: "permission denied",
+            },
+          },
+          {
+            pluginId: "matrix",
+            state: "configured-unavailable",
+            diagnostic: {
+              kind: "plugin-verification",
+              reason: "missing-main-entry",
+              detail: "dist/index.js is missing",
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({});
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
+
+    expect(note).toHaveBeenCalledWith(
+      [
+        "- discord (unreadable-package-json): permission denied",
+        "- matrix (missing-main-entry): dist/index.js is missing",
+      ].join("\n"),
+      "Plugins configured unavailable",
+    );
+  });
+
   it("does not run follow-up channel probes when liveness fails", async () => {
     callGateway.mockRejectedValueOnce(new Error("gateway timeout after 3000ms"));
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -230,6 +314,28 @@ describe("probeGatewayMemoryStatus", () => {
       params: { probe: false },
       timeoutMs: 1234,
       config: cfg,
+    });
+  });
+
+  it("carries last-known llama.cpp facts from the gateway", async () => {
+    callGateway.mockResolvedValue({
+      embedding: { ok: true },
+      embeddingRuntime: {
+        engine: "llama.cpp",
+        state: "ready",
+        backend: "metal",
+        buildType: "prebuilt",
+      },
+    });
+
+    await expect(probeGatewayMemoryStatus({ cfg })).resolves.toMatchObject({
+      checked: true,
+      ready: true,
+      runtimeFacts: {
+        state: "ready",
+        backend: "metal",
+        buildType: "prebuilt",
+      },
     });
   });
 

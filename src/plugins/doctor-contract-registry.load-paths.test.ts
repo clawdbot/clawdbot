@@ -7,14 +7,12 @@ import { findLegacyConfigIssues } from "../config/legacy.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   applyPluginDoctorCompatibilityMigrations,
-  clearPluginDoctorContractRegistryCache,
   listPluginDoctorLegacyConfigRules,
   listPluginDoctorSessionRouteStateOwners,
-  listPluginDoctorSessionStoreAgentIds,
 } from "./doctor-contract-registry.js";
+import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
 
 const tempDirs: string[] = [];
-const repoRoot = path.resolve(import.meta.dirname, "../..");
 
 function makeTempDir(): string {
   const dir = fs.mkdtempSync(
@@ -307,35 +305,5 @@ describe("doctor contract registry load-path plugins", () => {
         authProfilePrefixes: ["load-path:"],
       },
     ]);
-  });
-
-  it("loads session-store agent IDs from the real Voice Call doctor contract", () => {
-    const stateDir = makeTempDir();
-    const pluginRoot = path.join(repoRoot, "extensions", "voice-call");
-    const config = {
-      plugins: {
-        load: { paths: [pluginRoot] },
-        entries: {
-          "voice-call": {
-            enabled: true,
-            config: {
-              agentId: "Voice",
-              numbers: {
-                "+15550001111": { agentId: "Cards" },
-                "+15550002222": {},
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(
-      listPluginDoctorSessionStoreAgentIds({
-        config,
-        env: makeHermeticDoctorEnv(stateDir),
-        pluginIds: ["voice-call"],
-      }),
-    ).toEqual(["cards", "voice"]);
   });
 });

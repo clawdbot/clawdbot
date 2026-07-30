@@ -7,18 +7,15 @@ read_when:
 title: "DuckDuckGo search"
 ---
 
-OpenClaw supports DuckDuckGo as a **key-free** `web_search` provider. No API
-key or account is required.
+OpenClaw supports DuckDuckGo as a **key-free** `web_search` provider. No API key or account is required.
 
 <Warning>
-  DuckDuckGo is an **experimental, unofficial** integration that pulls results
-  from DuckDuckGo's non-JavaScript search pages - not an official API. Expect
-  occasional breakage from bot-challenge pages or HTML changes.
+  DuckDuckGo is an **experimental, unofficial** integration that scrapes DuckDuckGo's non-JavaScript HTML search pages -- not an official API. Expect occasional breakage from bot-challenge pages or HTML changes.
 </Warning>
 
 ## Setup
 
-No API key needed - just set DuckDuckGo as your provider:
+DuckDuckGo is never auto-selected, since auto-detection only considers providers with usable credentials. Set it explicitly:
 
 <Steps>
   <Step title="Configure">
@@ -30,6 +27,8 @@ No API key needed - just set DuckDuckGo as your provider:
 </Steps>
 
 ## Config
+
+Set the provider directly in config:
 
 ```json5
 {
@@ -80,26 +79,18 @@ DuckDuckGo region code (e.g. `us-en`, `uk-en`, `de-de`).
 SafeSearch level.
 </ParamField>
 
-Region and SafeSearch can also be set in plugin config (see above) - tool
-parameters override config values per-query.
+`region` and `safeSearch` tool parameters override the plugin config values above on a per-query basis.
 
 ## Notes
 
-- **No API key** - works after you select DuckDuckGo as your `web_search`
-  provider
-- **Experimental** - gathers results from DuckDuckGo's non-JavaScript HTML
-  search pages, not an official API or SDK
-- **Bot-challenge risk** - DuckDuckGo may serve CAPTCHAs or block requests
-  under heavy or automated use
-- **HTML parsing** - results depend on page structure, which can change without
-  notice
-- **Explicit selection** - OpenClaw does not choose DuckDuckGo automatically
-  when no API-backed provider is configured
-- **SafeSearch defaults to moderate** when not configured
+- **No API key** -- works once DuckDuckGo is selected as the `web_search` provider.
+- **Experimental** -- scrapes DuckDuckGo's non-JavaScript HTML search pages, not an official API or SDK. Results depend on page structure, which can change without notice.
+- **Bot-challenge risk** -- DuckDuckGo may serve CAPTCHAs or block requests under heavy or automated use.
+- **Explicit selection only** -- OpenClaw's auto-detect only considers providers with usable credentials, so a key-free provider like DuckDuckGo is never chosen automatically; you must set `provider: "duckduckgo"`.
+- **SafeSearch defaults to `moderate`** when not configured.
 
 <Tip>
-  For production use, consider [Brave Search](/tools/brave-search) (free tier
-  available) or another API-backed provider.
+  For production use, consider [Brave Search](/tools/brave-search) (free tier available) or another API-backed provider.
 </Tip>
 
 ## Related

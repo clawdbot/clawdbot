@@ -12,10 +12,7 @@ import {
   type UploadPrepareResponse,
 } from "../types.js";
 import type { ApiClient } from "./api-client.js";
-import {
-  ChunkedMediaApi,
-  UploadDailyLimitExceededError,
-} from "./media-chunked.js";
+import { ChunkedMediaApi, UploadDailyLimitExceededError } from "./media-chunked.js";
 import type { UploadCacheAdapter } from "./media.js";
 import { UPLOAD_PREPARE_FALLBACK_CODE } from "./retry.js";
 import type { TokenManager } from "./token.js";
@@ -142,6 +139,7 @@ describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     globalThis.fetch = originalFetch;
     fetchWithSsrFGuardMock.mockReset();
     vi.restoreAllMocks();
@@ -281,7 +279,8 @@ describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
     expect(last.totalBytes).toBe(FIXTURE_BUFFER.length);
   });
 
-  it("bounds COS PUT error bodies without using response.text()", async () => {
+  it("bounds COS PUT error bodies on UTF-16 boundaries without using response.text()", async () => {
+    vi.useFakeTimers();
     const client = mockApiClient();
     const tm = mockTokenManager();
     const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
@@ -293,8 +292,10 @@ describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
     });
 
     const releases = [vi.fn(async () => {}), vi.fn(async () => {}), vi.fn(async () => {})];
+    const safeErrorPrefix = "x".repeat(119);
+    const safeLogPrefix = `${safeErrorPrefix}🎉${"y".repeat(38)}`;
     const trackedResponses = releases.map((release) => {
-      const tracked = cancelTrackedResponse(`${"cos gateway unavailable ".repeat(1024)}tail`, {
+      const tracked = cancelTrackedResponse(`${safeLogPrefix}🎉${"tail".repeat(4096)}`, {
         status: 503,
         statusText: "Service Unavailable",
         headers: {
@@ -324,29 +325,28 @@ describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
     });
 
     const api = new ChunkedMediaApi(client, tm, { logger });
-    let error: unknown;
-    try {
-      await api.uploadChunked({
+    const upload = api
+      .uploadChunked({
         scope: "group",
         targetId: "g1",
         fileType: MediaFileType.FILE,
         source: { kind: "buffer", buffer: Buffer.from("01234567"), fileName: "blob.bin" },
         creds: { appId: "a", clientSecret: "s" },
-      });
-    } catch (caught) {
-      error = caught;
-    }
+      })
+      .catch((error: unknown) => error);
+    await vi.runAllTimersAsync();
+    const error = await upload;
 
-    expect(String(error)).toContain("COS PUT failed: 503 Service Unavailable");
-    expect(String(error)).toContain("cos gateway unavailable");
-    expect(String(error)).not.toContain("tail");
+    expect((error as Error).message).toBe(
+      `COS PUT failed: 503 Service Unavailable - ${safeErrorPrefix}`,
+    );
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(3);
     for (const tracked of trackedResponses) {
       expect(tracked.wasCanceled()).toBe(true);
       expect(tracked.textSpy).not.toHaveBeenCalled();
       expect(tracked.release).toHaveBeenCalledTimes(1);
     }
-    expect(JSON.stringify(logger.error.mock.calls)).toContain("cos gateway unavailable");
+    expect(String(logger.error.mock.calls[0]?.[0]).split("body=")[1]).toBe(safeLogPrefix);
     expect(JSON.stringify(logger.error.mock.calls)).not.toContain("tail");
   });
 

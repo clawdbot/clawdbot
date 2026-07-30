@@ -18,7 +18,7 @@ export function assertSafeCronSessionTargetId(sessionId: string): string {
   return trimmed;
 }
 
-/** Extracts the session key from a `session:` cron target, if present. */
+/** Extracts the persistent session key from a `session:` cron target, if present. */
 export function resolveCronSessionTargetSessionKey(
   sessionTarget?: string | null,
 ): string | undefined {
@@ -30,14 +30,10 @@ export function resolveCronSessionTargetSessionKey(
 
 /** Returns whether cron executes the job in a detached run session. */
 export function isDetachedCronSessionTarget(sessionTarget?: string | null): boolean {
-  return (
-    sessionTarget === "isolated" ||
-    sessionTarget === "current" ||
-    (typeof sessionTarget === "string" && sessionTarget.startsWith("session:"))
-  );
+  return sessionTarget === "isolated" || sessionTarget === "current";
 }
 
-/** Resolves `current` at creation time so scheduled jobs do not depend on future active UI state. */
+/** Preserves `current` with a creation-time sessionKey so future active UI state is irrelevant. */
 export function resolveCronCurrentSessionTarget(params: {
   sessionTarget?: string | null;
   sessionKey?: string | null;
@@ -46,10 +42,10 @@ export function resolveCronCurrentSessionTarget(params: {
     return params.sessionTarget ?? undefined;
   }
   const sessionKey = params.sessionKey?.trim();
-  return sessionKey ? `session:${assertSafeCronSessionTargetId(sessionKey)}` : "isolated";
+  return sessionKey ? "current" : "isolated";
 }
 
-/** Chooses the session key used for cron delivery, preferring explicit session targets. */
+/** Chooses the session key used for cron delivery, preferring explicit persistent targets. */
 export function resolveCronDeliverySessionKey(job: {
   sessionTarget?: string | null;
   sessionKey?: string | null;

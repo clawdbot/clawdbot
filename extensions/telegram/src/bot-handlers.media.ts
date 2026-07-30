@@ -3,7 +3,25 @@ import type { Message } from "grammy/types";
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 
+const TELEGRAM_BOT_API_FILE_DOWNLOAD_LIMIT_MB = 20;
+
+export class TelegramBotApiFileTooLargeError extends MediaFetchError {
+  readonly limitMb = TELEGRAM_BOT_API_FILE_DOWNLOAD_LIMIT_MB;
+
+  constructor(cause: unknown) {
+    super(
+      "max_bytes",
+      `Telegram Bot API cannot download files larger than ${TELEGRAM_BOT_API_FILE_DOWNLOAD_LIMIT_MB} MB`,
+      { cause, status: 400 },
+    );
+    this.name = "TelegramBotApiFileTooLargeError";
+  }
+}
+
 export function isMediaSizeLimitError(err: unknown): boolean {
+  if (err instanceof TelegramBotApiFileTooLargeError) {
+    return true;
+  }
   const errMsg = String(err);
   return errMsg.includes("exceeds") && errMsg.includes("MB limit");
 }
@@ -27,7 +45,10 @@ export function isDurablyRetryableInboundMediaError(err: unknown): boolean {
     return false;
   }
   if (err.code === "http_error") {
-    return typeof err.status === "number" && (err.status === 408 || err.status >= 500);
+    return (
+      typeof err.status === "number" &&
+      (err.status === 408 || err.status === 429 || err.status >= 500)
+    );
   }
   if (err.code !== "fetch_failed") {
     return false;

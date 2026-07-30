@@ -22,13 +22,13 @@ const LOCALE_LABELS: Record<string, string> = {
   nl: "Dutch",
   pl: "Polish",
   "pt-BR": "Brazilian Portuguese",
+  ru: "Russian",
   th: "Thai",
   tr: "Turkish",
   uk: "Ukrainian",
   vi: "Vietnamese",
   "zh-CN": "Simplified Chinese",
   "zh-TW": "Traditional Chinese",
-  ru: "Russian",
 };
 const REPORT_LOCALES = new Set(Object.keys(LOCALE_LABELS));
 const PATH_LABELS: Record<string, string> = {
@@ -82,13 +82,13 @@ type ReportArgs = {
   top: number;
 };
 
-export type RawCopySummary = {
+type RawCopySummary = {
   entries: number;
   occurrences: number;
   topPaths: Array<{ count: number; path: string }>;
 };
 
-export type LocaleSummary = {
+type LocaleSummary = {
   fallbackKeysInScope: string[];
   meta: LocaleMeta;
 };

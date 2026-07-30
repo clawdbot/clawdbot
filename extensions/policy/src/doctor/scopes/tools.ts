@@ -1,6 +1,7 @@
 // Policy doctor health-check factories for one policy scope.
 import type { HealthCheck } from "openclaw/plugin-sdk/health";
-import { CHECK_IDS } from "../metadata.js";
+import { repairPolicyAutomaticNarrower } from "../automatic-repairs.js";
+import { CHECK_IDS } from "../check-ids.js";
 import type { PolicyDoctorCheckDeps } from "../types.js";
 
 export function createPolicyAgentToolChecks(deps: PolicyDoctorCheckDeps): readonly HealthCheck[] {
@@ -25,6 +26,9 @@ export function createPolicyAgentToolChecks(deps: PolicyDoctorCheckDeps): readon
     source: "policy",
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyAgentsToolNotDenied);
+    },
+    repair(ctx, findings) {
+      return repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyAgentsToolNotDenied);
     },
   };
   const policyToolsProfileUnapprovedCheck: HealthCheck = {
@@ -86,6 +90,9 @@ export function createPolicyAgentToolChecks(deps: PolicyDoctorCheckDeps): readon
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyToolsElevatedEnabled);
     },
+    repair(ctx, findings) {
+      return repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyToolsElevatedEnabled);
+    },
   };
   const policyToolsAlsoAllowMissingCheck: HealthCheck = {
     id: CHECK_IDS.policyToolsAlsoAllowMissing,
@@ -113,6 +120,9 @@ export function createPolicyAgentToolChecks(deps: PolicyDoctorCheckDeps): readon
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyToolsRequiredDenyMissing);
     },
+    repair(ctx, findings) {
+      return repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyToolsRequiredDenyMissing);
+    },
   };
 
   return [
@@ -135,10 +145,19 @@ export function createPolicyToolMetadataChecks(
 ): readonly HealthCheck[] {
   const { evaluatePolicy, findingsForCheck } = deps;
 
+  const policyUnmigratedToolsFileCheck: HealthCheck = {
+    id: CHECK_IDS.policyUnmigratedToolsFile,
+    kind: "plugin",
+    description: "Governed tool declarations have been migrated from TOOLS.md into AGENTS.md.",
+    source: "policy",
+    async detect(ctx) {
+      return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyUnmigratedToolsFile);
+    },
+  };
   const policyToolsMissingRiskCheck: HealthCheck = {
     id: CHECK_IDS.policyMissingToolRisk,
     kind: "plugin",
-    description: "TOOLS.md policy entries declare explicit risk levels.",
+    description: "AGENTS.md tool policy entries declare explicit risk levels.",
     source: "policy",
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyMissingToolRisk);
@@ -147,7 +166,7 @@ export function createPolicyToolMetadataChecks(
   const policyToolsUnknownRiskCheck: HealthCheck = {
     id: CHECK_IDS.policyUnknownToolRisk,
     kind: "plugin",
-    description: "TOOLS.md policy entries use known risk levels.",
+    description: "AGENTS.md tool policy entries use known risk levels.",
     source: "policy",
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyUnknownToolRisk);
@@ -156,7 +175,7 @@ export function createPolicyToolMetadataChecks(
   const policyToolsMissingSensitivityCheck: HealthCheck = {
     id: CHECK_IDS.policyMissingToolSensitivity,
     kind: "plugin",
-    description: "TOOLS.md policy entries declare default artifact sensitivity.",
+    description: "AGENTS.md tool policy entries declare default artifact sensitivity.",
     source: "policy",
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyMissingToolSensitivity);
@@ -165,7 +184,7 @@ export function createPolicyToolMetadataChecks(
   const policyToolsUnknownSensitivityCheck: HealthCheck = {
     id: CHECK_IDS.policyUnknownToolSensitivity,
     kind: "plugin",
-    description: "TOOLS.md policy entries use known sensitivity levels.",
+    description: "AGENTS.md tool policy entries use known sensitivity levels.",
     source: "policy",
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyUnknownToolSensitivity);
@@ -174,7 +193,7 @@ export function createPolicyToolMetadataChecks(
   const policyToolsMissingOwnerCheck: HealthCheck = {
     id: CHECK_IDS.policyMissingToolOwner,
     kind: "plugin",
-    description: "TOOLS.md policy entries declare an accountable owner.",
+    description: "AGENTS.md tool policy entries declare an accountable owner.",
     source: "policy",
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyMissingToolOwner);
@@ -182,6 +201,7 @@ export function createPolicyToolMetadataChecks(
   };
 
   return [
+    policyUnmigratedToolsFileCheck,
     policyToolsMissingRiskCheck,
     policyToolsUnknownRiskCheck,
     policyToolsMissingSensitivityCheck,

@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /**
  * Plugin-defined text replacement transforms for stream boundaries.
  *
@@ -39,10 +40,6 @@ export function applyPluginTextReplacements(
     next = next.replace(replacement.from, replacement.to);
   }
   return next;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function transformContentText(content: unknown, replacements?: PluginTextReplacement[]): unknown {

@@ -6,71 +6,66 @@ read_when:
   - Running agent-runtime lint, typecheck, and live test flows
 ---
 
-A sane workflow for working on the OpenClaw agent runtime in OpenClaw.
+Developer workflow for the agent runtime (`src/agents/`) in the OpenClaw repo.
 
 ## Type checking and linting
 
-- Default local gate: `pnpm check`
+- Default local gate: `pnpm check` (typecheck, lint, policy guards)
 - Build gate: `pnpm build` when the change can affect build output, packaging, or lazy-loading/module boundaries
-- Full landing gate for agent-runtime changes: `pnpm check && pnpm test`
+- Full pre-push gate: `pnpm build && pnpm check && pnpm check:test-types && pnpm test`
 
 ## Running Agent Runtime Tests
 
-Run the agent-runtime test set directly with Vitest:
+Run the agent runtime unit suites:
 
 ```bash
 pnpm test \
   "src/agents/agent-*.test.ts" \
   "src/agents/embedded-agent-*.test.ts" \
-  "src/agents/agent-tools*.test.ts" \
-  "src/agents/agent-settings.test.ts" \
-  "src/agents/agent-tool-definition-adapter*.test.ts" \
   "src/agents/agent-hooks/**/*.test.ts"
 ```
 
-To include the live provider exercise:
+The first glob also covers the `agent-tools*`, `agent-settings`, and
+`agent-tool-definition-adapter*` suites.
+
+Live tests are excluded from the unit config; run them through the live
+wrapper (sets `OPENCLAW_LIVE_TEST=1` and needs provider credentials):
 
 ```bash
-OPENCLAW_LIVE_TEST=1 pnpm test src/agents/embedded-agent-runner-extraparams.live.test.ts
+pnpm test:live src/agents/embedded-agent-runner-extraparams.live.test.ts
 ```
-
-This covers the main agent runtime unit suites:
-
-- `src/agents/agent-*.test.ts`
-- `src/agents/embedded-agent-*.test.ts`
-- `src/agents/agent-tools*.test.ts`
-- `src/agents/agent-settings.test.ts`
-- `src/agents/agent-tool-definition-adapter.test.ts`
-- `src/agents/agent-hooks/*.test.ts`
 
 ## Manual testing
 
-Recommended flow:
+- Run the Gateway in dev mode (skips channel connections via `OPENCLAW_SKIP_CHANNELS=1`): `pnpm gateway:dev`
+- Trigger one agent turn through the Gateway: `pnpm openclaw agent --message "Hello" --thinking low`
+- Use the TUI for interactive debugging: `pnpm tui`
 
-- Run the gateway in dev mode:
-  - `pnpm gateway:dev`
-- Trigger the agent directly:
-  - `pnpm openclaw agent --message "Hello" --thinking low`
-- Use the TUI for interactive debugging:
-  - `pnpm tui`
-
-For tool call behavior, prompt for a `read` or `exec` action so you can see tool streaming and payload handling.
+For tool call behavior, prompt for a `read` or `exec` action so you can watch
+tool streaming and payload handling.
 
 ## Clean slate reset
 
-State lives under the OpenClaw state directory. Default is `~/.openclaw`. If `OPENCLAW_STATE_DIR` is set, use that directory instead.
+State lives in the OpenClaw state directory: `~/.openclaw` by default, or
+`$OPENCLAW_STATE_DIR` when set. Paths relative to that directory:
 
-To reset everything:
+| Path                                           | Holds                                                              |
+| ---------------------------------------------- | ------------------------------------------------------------------ |
+| `openclaw.json`                                | Config                                                             |
+| `state/openclaw.sqlite`                        | Shared runtime state database                                      |
+| `agents/<agentId>/agent/openclaw-agent.sqlite` | Per-agent model auth profiles (API keys + OAuth) and runtime state |
+| `credentials/`                                 | Provider/channel credentials outside the auth profile store        |
+| `agents/<agentId>/sessions/`                   | Transcript history and legacy session migration sources            |
+| `sessions/`                                    | Legacy single-agent session store (old installs only)              |
+| `workspace/`                                   | Default agent workspace (extra agents use `workspace-<agentId>`)   |
 
-- `openclaw.json` for config
-- `agents/<agentId>/agent/auth-profiles.json` for model auth profiles (API keys + OAuth)
-- `credentials/` for provider/channel state that still lives outside the auth profile store
-- `agents/<agentId>/sessions/` for agent session history
-- `agents/<agentId>/sessions/sessions.json` for the session index
-- `sessions/` if legacy paths exist
-- `workspace/` if you want a blank workspace
+Delete those paths for a full reset. Narrower resets:
 
-If you only want to reset sessions, delete `agents/<agentId>/sessions/` for that agent. If you want to keep auth, leave `agents/<agentId>/agent/auth-profiles.json` and any provider state under `credentials/` in place.
+- Sessions only: do not delete `agents/<agentId>/agent/openclaw-agent.sqlite`; session rows live there alongside other per-agent state. Use `/new` or `/reset` to start a fresh session for one chat, and `openclaw sessions cleanup` for session maintenance.
+- Keep auth: leave `agents/<agentId>/agent/openclaw-agent.sqlite` and `credentials/` in place.
+
+Legacy `auth-profiles.json` files are no longer read at runtime;
+`openclaw doctor --fix` imports them into the SQLite store.
 
 ## References
 

@@ -1,5 +1,6 @@
 // Gateway logs CLI with RPC tailing, local file fallback, and systemd journal fallback.
 import { setTimeout as delay } from "node:timers/promises";
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import {
@@ -24,6 +25,7 @@ import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { redactSensitiveLines, resolveRedactOptions } from "../logging/redact.js";
 import { formatTimestamp } from "../logging/timestamps.js";
+import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 
@@ -290,8 +292,8 @@ async function readSystemdJournalFallback(params: {
   if (service.status !== "running" || typeof service.pid !== "number") {
     return null;
   }
-  const limit = clampPositiveInt(params.limit, 1, JOURNAL_MAX_LIMIT);
-  const maxBytes = clampPositiveInt(params.maxBytes, 1, JOURNAL_MAX_BYTES);
+  const limit = resolveIntegerOption(params.limit, 1, { min: 1, max: JOURNAL_MAX_LIMIT });
+  const maxBytes = resolveIntegerOption(params.maxBytes, 1, { min: 1, max: JOURNAL_MAX_BYTES });
   const unitName = resolveLogsSystemdUnitName(runtime, process.env);
   const source = `journalctl --user --boot --user-unit=${unitName} _PID=${service.pid}`;
   const args = [
@@ -333,13 +335,6 @@ async function readSystemdJournalFallback(params: {
     truncated: boundedOutput.truncated || parsed.lines.length > limit,
     localFallback: true,
   };
-}
-
-function clampPositiveInt(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) {
-    return min;
-  }
-  return Math.max(min, Math.min(max, Math.floor(value)));
 }
 
 function normalizeTailText(text: string, truncated: boolean): { text: string; truncated: boolean } {
@@ -688,7 +683,11 @@ export function registerLogsCli(program: Command) {
           emitJsonLine,
           errorLine,
         );
-        process.exit(1);
+        // Route terminal reset to stderr in JSON mode so structured
+        // stdout stays parseable. Text mode resets to stdout by default.
+        defaultRuntime.exit(1, {
+          resetStream: jsonMode ? process.stderr : undefined,
+        });
         return;
       }
       if (followRetryAttempt > 0) {
@@ -833,3 +832,4 @@ export function registerLogsCli(program: Command) {
     }
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

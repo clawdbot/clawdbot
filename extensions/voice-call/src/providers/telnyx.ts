@@ -28,7 +28,7 @@ import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
  * Uses Telnyx Call Control API v2 for managing calls.
  * @see https://developers.telnyx.com/docs/api/v2/call-control
  */
-export interface TelnyxProviderOptions {
+interface TelnyxProviderOptions {
   /** Skip webhook signature verification (development only, NOT for production) */
   skipVerification?: boolean;
 }

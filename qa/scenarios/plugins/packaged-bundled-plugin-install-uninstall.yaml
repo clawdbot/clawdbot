@@ -2,12 +2,11 @@ title: Packaged bundled plugin install uninstall
 
 scenario:
   id: packaged-bundled-plugin-install-uninstall
-  surface: plugin-sdk-and-bundled-plugin-architecture
-  category: plugin-sdk-and-bundled-plugin-architecture.bundled-plugins
+  surface: plugins
+  category: plugins.bundled-plugins
   coverage:
-    primary:
-      - plugins.packaged-bundled-plugins
     secondary:
+      - plugins.packaged-bundled-plugins
       - plugins.bundled-plugin-listing
       - clawhub.managed-install-records-that-preserve-source
   objective: Verify packaged distributions discover bundled plugins from packaged roots and can install, smoke, and uninstall them.
@@ -21,9 +20,17 @@ scenario:
     - docs/cli/plugins.md
     - docs/help/testing.md
   codeRefs:
+    - scripts/e2e/bundled-plugin-install-uninstall-docker.sh
+    - scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh
     - scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs
+    - scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs
+    - test/e2e/qa-lab/runtime/docker-e2e-lane.ts
     - test/scripts/bundled-plugin-install-uninstall-probe.test.ts
   execution:
-    kind: vitest
-    path: test/scripts/bundled-plugin-install-uninstall-probe.test.ts
-    summary: Vitest coverage for packaged bundled plugin root discovery and install/uninstall record assertions.
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    summary: Runs the packaged bundled-plugin Docker sweep and asserts install, runtime load, and uninstall evidence for each selected plugin.
+    timeoutMs: 7200000
+    args:
+      - --lane
+      - bundled-plugin-install-uninstall

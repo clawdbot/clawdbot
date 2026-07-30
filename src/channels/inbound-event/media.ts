@@ -1,57 +1,100 @@
-/**
- * Channel inbound media normalization.
- *
- * Converts plugin attachment metadata into aligned prompt/context media payload fields.
- */
-import { normalizeOptionalString as normalizeString } from "@openclaw/normalization-core/string-coerce";
+import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+/** Channel inbound media normalization and compatibility projection. */
 import type { HistoryMediaEntry } from "../../auto-reply/reply/history.types.js";
+import { resolveLocalMediaPath } from "../../media/local-media-path.js";
+import {
+  normalizeMediaFacts,
+  projectMediaFacts,
+  type MediaFactLegacyProjection,
+} from "../../media/media-facts.js";
+import { probeMediaFilesWithinBudget, type MediaProbeKind } from "../../media/media-probe.js";
 import type { InboundMediaFacts } from "../turn/types.js";
 
-/**
- * Attachment metadata accepted from channel plugins before core normalization.
- */
+const MAX_INBOUND_MEDIA_PROBES = 8;
+const INBOUND_MEDIA_PROBE_CONCURRENCY = 2;
+const INBOUND_MEDIA_PROBE_BUDGET_MS = 3000;
+
+/** Attachment metadata accepted from channel plugins before core normalization. */
 export type ChannelInboundMediaInput = {
   path?: string | null;
   url?: string | null;
   contentType?: string | null;
   kind?: InboundMediaFacts["kind"] | null;
+  durationMs?: number | null;
+  width?: number | null;
+  height?: number | null;
   transcribed?: boolean | null;
   messageId?: string | null;
 };
 
-/**
- * Environment payload fields consumed by prompt/context builders for inbound media attachments.
- */
-export type ChannelInboundMediaPayload = {
-  MediaPath?: string;
-  MediaUrl?: string;
-  MediaType?: string;
-  MediaPaths?: string[];
-  MediaUrls?: string[];
-  MediaTypes?: string[];
-  MediaTranscribedIndexes?: number[];
+export type MediaPlaceholderTextFact = Readonly<
+  Pick<ChannelInboundMediaInput, "contentType" | "kind" | "path" | "url">
+>;
+
+type MediaPlaceholderKind =
+  | Exclude<NonNullable<InboundMediaFacts["kind"]>, "unknown">
+  | "attachment";
+
+function resolveMediaPlaceholderKind(media: MediaPlaceholderTextFact): MediaPlaceholderKind {
+  if (media.kind && media.kind !== "unknown") {
+    return media.kind;
+  }
+  const inferredKind =
+    kindFromMime(media.contentType) ??
+    kindFromMime(mimeTypeFromFilePath(media.url)) ??
+    kindFromMime(mimeTypeFromFilePath(media.path));
+  return inferredKind && inferredKind !== "unknown" ? inferredKind : "attachment";
+}
+
+const PLURAL_MEDIA_PLACEHOLDER_LABELS: Readonly<Record<MediaPlaceholderKind, string>> = {
+  image: "images",
+  video: "videos",
+  audio: "audio attachments",
+  document: "files",
+  sticker: "stickers",
+  attachment: "attachments",
 };
 
-function alignedStrings(values: Array<string | undefined>): string[] | undefined {
-  if (!values.some(Boolean)) {
-    return undefined;
+/** Renders structured media facts for channel surfaces that can carry text only. */
+export function formatMediaPlaceholderText(media: readonly MediaPlaceholderTextFact[]): string {
+  if (media.length === 0) {
+    return "";
   }
-  // Preserve indexes across parallel Media* arrays so transcribed indexes and
-  // media metadata continue to refer to the same attachment.
-  return values.map((value) => value ?? "");
-}
-
-function normalizeKind(value: InboundMediaFacts["kind"] | null | undefined) {
-  return value ?? undefined;
-}
-
-function mediaType(media: InboundMediaFacts): string | undefined {
-  return media.contentType ?? media.kind;
+  const kinds = media.map(resolveMediaPlaceholderKind);
+  const firstKind = kinds[0] ?? "attachment";
+  const kind = kinds.every((candidate) => candidate === firstKind)
+    ? firstKind
+    : kinds.includes("attachment")
+      ? "attachment"
+      : "document";
+  const tag = `<media:${kind}>`;
+  return media.length === 1
+    ? tag
+    : `${tag} (${media.length} ${PLURAL_MEDIA_PLACEHOLDER_LABELS[kind]})`;
 }
 
 /**
- * Normalizes plugin-provided attachment facts into the channel turn media shape.
+ * Legacy environment fields consumed by prompt/context builders.
+ * @deprecated Pass ordered `InboundMediaFacts[]` as the context's `media` field.
  */
+export type ChannelInboundMediaPayload = {
+  [Key in keyof MediaFactLegacyProjection]: MediaFactLegacyProjection[Key];
+};
+
+/** Appends an unavailable-media notice to real caption text, or returns the notice alone. */
+export function formatInboundMediaUnavailableText(params: {
+  body?: string | null;
+  notice: string;
+}): string {
+  const body = params.body?.trim() ?? "";
+  const notice = params.notice.trim();
+  if (!body) {
+    return notice;
+  }
+  return `${body}\n\n${notice}`;
+}
+
+/** Normalizes plugin-provided attachments into ordered runtime facts. */
 export function toInboundMediaFacts(
   media: readonly ChannelInboundMediaInput[] | null | undefined,
   defaults: {
@@ -60,22 +103,56 @@ export function toInboundMediaFacts(
     transcribed?: (media: ChannelInboundMediaInput, index: number) => boolean;
   } = {},
 ): InboundMediaFacts[] {
-  if (!Array.isArray(media)) {
-    return [];
-  }
-  return media.map((entry, index) => ({
-    path: normalizeString(entry.path),
-    url: normalizeString(entry.url),
-    contentType: normalizeString(entry.contentType),
-    kind: normalizeKind(entry.kind) ?? defaults.kind,
-    transcribed: entry.transcribed === true || defaults.transcribed?.(entry, index) === true,
-    messageId: normalizeString(entry.messageId) ?? defaults.messageId,
-  }));
+  return normalizeMediaFacts(media, defaults);
 }
 
-/**
- * Projects inbound attachment facts into transcript history without transient turn-only flags.
- */
+function resolveProbeKind(media: InboundMediaFacts): MediaProbeKind | undefined {
+  const kind =
+    media.kind ?? kindFromMime(media.contentType) ?? kindFromMime(mimeTypeFromFilePath(media.path));
+  return kind === "audio" || kind === "video" ? kind : undefined;
+}
+
+type InboundMediaProbeCandidate = {
+  fact: InboundMediaFacts;
+  index: number;
+  kind: MediaProbeKind;
+  localPath: string;
+};
+
+/** Adds best-effort audio/video metadata without probing URL-only media. */
+export async function toInboundMediaFactsWithMetadata(
+  media: readonly ChannelInboundMediaInput[] | null | undefined,
+  defaults: {
+    kind?: InboundMediaFacts["kind"];
+    messageId?: string;
+    transcribed?: (media: ChannelInboundMediaInput, index: number) => boolean;
+  } = {},
+): Promise<InboundMediaFacts[]> {
+  const facts = toInboundMediaFacts(media, defaults);
+  const enriched = [...facts];
+  const candidates: InboundMediaProbeCandidate[] = [];
+  for (const [index, fact] of facts.entries()) {
+    const kind = resolveProbeKind(fact);
+    const localPath = fact.path ? resolveLocalMediaPath(fact.path) : undefined;
+    if (kind && localPath) {
+      candidates.push({ fact, index, kind, localPath });
+    }
+  }
+  const metadata = await probeMediaFilesWithinBudget(
+    candidates.map((candidate) => ({ filePath: candidate.localPath, kind: candidate.kind })),
+    {
+      budgetMs: INBOUND_MEDIA_PROBE_BUDGET_MS,
+      concurrency: INBOUND_MEDIA_PROBE_CONCURRENCY,
+      maxProbes: MAX_INBOUND_MEDIA_PROBES,
+    },
+  );
+  for (const [candidateIndex, candidate] of candidates.entries()) {
+    enriched[candidate.index] = { ...candidate.fact, ...metadata[candidateIndex] };
+  }
+  return enriched;
+}
+
+/** Projects facts into history without transient turn-only fields. */
 export function toHistoryMediaEntries(
   media: readonly ChannelInboundMediaInput[] | null | undefined,
   defaults: {
@@ -83,32 +160,33 @@ export function toHistoryMediaEntries(
     messageId?: string;
   } = {},
 ): HistoryMediaEntry[] {
-  return toInboundMediaFacts(media, defaults).map((entry) => ({
-    path: entry.path,
-    url: entry.url,
-    contentType: entry.contentType,
-    kind: entry.kind,
-    messageId: entry.messageId,
-  }));
+  return toInboundMediaFacts(media, defaults).map((entry) => {
+    const historyEntry: HistoryMediaEntry = {
+      path: entry.path,
+      url: entry.url,
+      contentType: entry.contentType,
+      kind: entry.kind,
+      messageId: entry.messageId,
+    };
+    if (entry.durationMs) {
+      historyEntry.durationMs = entry.durationMs;
+    }
+    if (entry.width) {
+      historyEntry.width = entry.width;
+    }
+    if (entry.height) {
+      historyEntry.height = entry.height;
+    }
+    return historyEntry;
+  });
 }
 
 /**
- * Builds prompt environment media fields while keeping single-item legacy fields populated.
+ * Builds the legacy singular/plural environment projection.
+ * @deprecated Pass ordered facts as `media`; use `toInboundMediaFacts` to normalize inputs.
  */
 export function buildChannelInboundMediaPayload(
   media: readonly InboundMediaFacts[] | null | undefined,
 ): ChannelInboundMediaPayload {
-  const entries = Array.isArray(media) ? media : [];
-  const transcribedIndexes = entries
-    .map((item, index) => (item.transcribed ? index : undefined))
-    .filter((index): index is number => index !== undefined);
-  return {
-    MediaPath: entries[0]?.path,
-    MediaUrl: entries[0]?.url ?? entries[0]?.path,
-    MediaType: entries[0] ? mediaType(entries[0]) : undefined,
-    MediaPaths: alignedStrings(entries.map((item) => item.path)),
-    MediaUrls: alignedStrings(entries.map((item) => item.url ?? item.path)),
-    MediaTypes: alignedStrings(entries.map(mediaType)),
-    MediaTranscribedIndexes: transcribedIndexes.length > 0 ? transcribedIndexes : undefined,
-  };
+  return projectMediaFacts(media);
 }

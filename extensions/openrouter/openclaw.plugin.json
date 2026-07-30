@@ -6,6 +6,11 @@
   },
   "enabledByDefault": true,
   "providers": ["openrouter"],
+  "modelCatalog": {
+    "discovery": {
+      "openrouter": "runtime"
+    }
+  },
   "modelIdNormalization": {
     "providers": {
       "openrouter": {
@@ -49,6 +54,7 @@
       "provider": "openrouter",
       "method": "api-key",
       "choiceId": "openrouter-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "OpenRouter API key",
       "groupId": "openrouter",
       "groupLabel": "OpenRouter",
@@ -63,6 +69,7 @@
       "provider": "openrouter",
       "method": "oauth",
       "choiceId": "openrouter-oauth",
+      "appGuidedAuth": "oauth",
       "choiceLabel": "OpenRouter OAuth",
       "choiceHint": "Browser sign-in",
       "groupId": "openrouter",
@@ -77,7 +84,8 @@
     "imageGenerationProviders": ["openrouter"],
     "musicGenerationProviders": ["openrouter"],
     "videoGenerationProviders": ["openrouter"],
-    "speechProviders": ["openrouter"]
+    "speechProviders": ["openrouter"],
+    "usageProviders": ["openrouter"]
   },
   "mediaUnderstandingProviderMetadata": {
     "openrouter": {

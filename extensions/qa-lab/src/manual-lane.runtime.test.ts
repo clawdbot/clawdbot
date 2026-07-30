@@ -2,7 +2,17 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { startQaLabServer, startQaGatewayChild, startQaProviderServer } = vi.hoisted(() => ({
+const {
+  cleanupTransportAfterGatewayStop,
+  cleanupTransportBeforeGatewayStop,
+  createQaTransportAdapter,
+  startQaGatewayChild,
+  startQaLabServer,
+  startQaProviderServer,
+} = vi.hoisted(() => ({
+  cleanupTransportAfterGatewayStop: vi.fn(),
+  cleanupTransportBeforeGatewayStop: vi.fn(),
+  createQaTransportAdapter: vi.fn(),
   startQaLabServer: vi.fn(),
   startQaGatewayChild: vi.fn(),
   startQaProviderServer: vi.fn(),
@@ -20,6 +30,10 @@ vi.mock("./providers/server-runtime.js", () => ({
   startQaProviderServer,
 }));
 
+vi.mock("./qa-transport-registry.js", () => ({
+  createQaTransportAdapter,
+}));
+
 import { runQaManualLane } from "./manual-lane.runtime.js";
 
 describe("runQaManualLane", () => {
@@ -33,9 +47,25 @@ describe("runQaManualLane", () => {
     gatewayStop.mockReset();
     mockStop.mockReset();
     labStop.mockReset();
+    cleanupTransportAfterGatewayStop.mockReset();
+    cleanupTransportBeforeGatewayStop.mockReset();
+    cleanupTransportAfterGatewayStop.mockResolvedValue(undefined);
+    cleanupTransportBeforeGatewayStop.mockResolvedValue(undefined);
+    createQaTransportAdapter.mockReset();
     startQaLabServer.mockReset();
     startQaGatewayChild.mockReset();
     startQaProviderServer.mockReset();
+
+    createQaTransportAdapter.mockResolvedValue({
+      adapter: {
+        buildAgentDelivery: () => ({
+          channel: "qa-channel",
+          to: "dm:qa-operator",
+        }),
+      },
+      cleanupBeforeGatewayStop: cleanupTransportBeforeGatewayStop,
+      cleanupAfterGatewayStop: cleanupTransportAfterGatewayStop,
+    });
 
     startQaLabServer.mockResolvedValue({
       listenUrl: "http://127.0.0.1:43124",
@@ -92,7 +122,9 @@ describe("runQaManualLane", () => {
       replySettleMs: 0,
     });
 
-    expect(startQaProviderServer).toHaveBeenCalledWith("mock-openai");
+    expect(startQaProviderServer).toHaveBeenCalledWith("mock-openai", {
+      modelRefs: ["mock-openai/gpt-5.5", "mock-openai/gpt-5.5-alt"],
+    });
     const [gatewayOptions] = startQaGatewayChild.mock.calls[0] ?? [];
     expect(gatewayOptions?.repoRoot).toBe("/tmp/openclaw-repo");
     expect(gatewayOptions?.providerMode).toBe("mock-openai");
@@ -103,6 +135,14 @@ describe("runQaManualLane", () => {
     });
     expect(result.reply).toBe("Protocol note: mock reply.");
     expect(gatewayStop).toHaveBeenCalledTimes(1);
+    expect(cleanupTransportBeforeGatewayStop).toHaveBeenCalledTimes(1);
+    expect(cleanupTransportAfterGatewayStop).toHaveBeenCalledTimes(1);
+    expect(cleanupTransportBeforeGatewayStop.mock.invocationCallOrder[0]).toBeLessThan(
+      gatewayStop.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(gatewayStop.mock.invocationCallOrder[0]).toBeLessThan(
+      cleanupTransportAfterGatewayStop.mock.invocationCallOrder[0] ?? 0,
+    );
     expect(mockStop).toHaveBeenCalledTimes(1);
     expect(labStop).toHaveBeenCalledTimes(1);
   });
@@ -111,14 +151,16 @@ describe("runQaManualLane", () => {
     const result = await runQaManualLane({
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-luna",
       message: "check the kickoff file",
       timeoutMs: 5_000,
       replySettleMs: 0,
     });
 
-    expect(startQaProviderServer).toHaveBeenCalledWith("live-frontier");
+    expect(startQaProviderServer).toHaveBeenCalledWith("live-frontier", {
+      modelRefs: ["openai/gpt-5.6-luna", "openai/gpt-5.6-luna"],
+    });
     expect(startQaLabServer).toHaveBeenCalledWith({
       repoRoot: "/tmp/openclaw-repo",
       embeddedGateway: "disabled",
@@ -136,8 +178,8 @@ describe("runQaManualLane", () => {
       runQaManualLane({
         repoRoot: "/tmp/openclaw-repo",
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
-        alternateModel: "mock-openai/gpt-5.5-alt",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        alternateModel: "mock-openai/gpt-5.6-luna-alt",
         message: "check the kickoff file",
         timeoutMs: 5_000,
         replySettleMs: 0,
@@ -145,6 +187,7 @@ describe("runQaManualLane", () => {
     ).rejects.toThrow("gateway startup failed");
 
     expect(gatewayStop).not.toHaveBeenCalled();
+    expect(cleanupTransportAfterGatewayStop).toHaveBeenCalledTimes(1);
     expect(mockStop).toHaveBeenCalledTimes(1);
     expect(labStop).toHaveBeenCalledTimes(1);
   });
@@ -156,8 +199,8 @@ describe("runQaManualLane", () => {
       runQaManualLane({
         repoRoot: "/tmp/openclaw-repo",
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
-        alternateModel: "mock-openai/gpt-5.5-alt",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        alternateModel: "mock-openai/gpt-5.6-luna-alt",
         message: "check the kickoff file",
         timeoutMs: 5_000,
         replySettleMs: 0,
@@ -165,6 +208,8 @@ describe("runQaManualLane", () => {
     ).rejects.toThrow("gateway stop failed");
 
     expect(gatewayStop).toHaveBeenCalledTimes(1);
+    expect(cleanupTransportBeforeGatewayStop).toHaveBeenCalledTimes(1);
+    expect(cleanupTransportAfterGatewayStop).not.toHaveBeenCalled();
     expect(mockStop).toHaveBeenCalledTimes(1);
     expect(labStop).toHaveBeenCalledTimes(1);
   });
@@ -173,8 +218,8 @@ describe("runQaManualLane", () => {
     const result = await runQaManualLane({
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
-      alternateModel: "mock-openai/gpt-5.5-alt",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      alternateModel: "mock-openai/gpt-5.6-luna-alt",
       message: "check the kickoff file",
       timeoutMs: 9e15,
       replySettleMs: 0,

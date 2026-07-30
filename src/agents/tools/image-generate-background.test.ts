@@ -109,7 +109,7 @@ describe("image generate background helpers", () => {
     });
   });
 
-  it("delivers failure completion notices directly", async () => {
+  it("keeps failed completion notices in the durable agent-loop handoff", async () => {
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
       delivered: false,
       path: "direct",
@@ -122,18 +122,15 @@ describe("image generate background helpers", () => {
       result: "provider failed",
     });
 
-    await imageGenerationTaskLifecycle.wakeTaskCompletion({
-      ...completion,
-      status: "error",
-      statusLabel: "failed",
-    });
-
-    expect(taskDeliveryRuntimeMocks.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: "Image generation failed: provider failed",
-        idempotencyKey: "image_generate:task-123:error:direct",
+    await expect(
+      imageGenerationTaskLifecycle.wakeTaskCompletion({
+        ...completion,
+        status: "error",
+        statusLabel: "failed",
       }),
-    );
+    ).resolves.toEqual({ status: "permanent_failure" });
+
+    expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
     expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
   });
 });

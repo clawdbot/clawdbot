@@ -16,7 +16,7 @@ import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
 import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
-import { maskApiKey } from "../utils/mask-api-key.js";
+import { maskApiKey } from "../security/secret-mask.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary } from "./onboard-helpers.js";
@@ -36,7 +36,7 @@ function ensureWsUrl(value: string): string {
   return trimmed;
 }
 
-function validateGatewayWebSocketUrl(value: string): string | undefined {
+export function validateGatewayWebSocketUrl(value: string): string | undefined {
   const trimmed = value.trim();
   if (!trimmed.startsWith("ws://") && !trimmed.startsWith("wss://")) {
     return t("wizard.remote.validWebSocketUrl");

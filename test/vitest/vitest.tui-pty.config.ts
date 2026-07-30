@@ -14,7 +14,7 @@ function toTuiPtyIncludePatterns(patterns: string[] | null) {
   return patterns?.map((pattern) => pattern.replace(/^src\//u, "")) ?? null;
 }
 
-export function createTuiPtyVitestConfig(env?: Record<string, string | undefined>) {
+function createTuiPtyVitestConfig(env?: Record<string, string | undefined>) {
   const baseTest = sharedVitestConfig.test ?? {};
   const exclude = (baseTest.exclude ?? []).filter((pattern) => pattern !== "**/*.e2e.test.ts");
   const configEnv = env ?? process.env;
@@ -27,6 +27,7 @@ export function createTuiPtyVitestConfig(env?: Record<string, string | undefined
     loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", configEnv),
   );
   const includeFromArgv = toTuiPtyIncludePatterns(narrowIncludePatternsForCli(targetableIncludes));
+  const baseSequence = (baseTest as { sequence?: { groupOrder?: number } }).sequence;
 
   return defineConfig({
     ...sharedVitestConfig,
@@ -47,7 +48,7 @@ export function createTuiPtyVitestConfig(env?: Record<string, string | undefined
         ),
       ],
       sequence: {
-        ...baseTest.sequence,
+        ...baseSequence,
         groupOrder: 95,
       },
     },

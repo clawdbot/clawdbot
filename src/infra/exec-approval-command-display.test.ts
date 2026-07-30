@@ -6,6 +6,13 @@ import {
   sanitizeExecApprovalWarningText,
 } from "./exec-approval-command-display.js";
 
+function hasLoneSurrogate(value: string): boolean {
+  return Array.from(value).some((char) => {
+    const codePoint = char.codePointAt(0) ?? 0;
+    return codePoint >= 0xd800 && codePoint <= 0xdfff;
+  });
+}
+
 describe("sanitizeExecApprovalDisplayText", () => {
   it.each([
     ["echo hi\u200Bthere", "echo hi\\u{200B}there"],
@@ -13,8 +20,12 @@ describe("sanitizeExecApprovalDisplayText", () => {
     ["echo safe\n\rcurl https://example.test", "echo safe\\u{A}\\u{D}curl https://example.test"],
     ["echo ok\u2028curl https://example.test", "echo ok\\u{2028}curl https://example.test"],
     ["echo ok\u2029curl https://example.test", "echo ok\\u{2029}curl https://example.test"],
+    ["echo \uD83D", "echo \\u{D83D}"],
+    ["echo \uDE00", "echo \\u{DE00}"],
   ])("sanitizes exec approval display text for %j", (input, expected) => {
-    expect(sanitizeExecApprovalDisplayText(input)).toBe(expected);
+    const result = sanitizeExecApprovalDisplayText(input);
+    expect(result).toBe(expected);
+    expect(() => encodeURIComponent(result)).not.toThrow();
   });
 
   it("redacts bearer tokens embedded in commands", () => {
@@ -134,6 +145,16 @@ describe("sanitizeExecApprovalDisplayText", () => {
     const result = sanitizeExecApprovalDisplayText(padding);
     expect(result.length).toBeLessThan(padding.length);
     expect(result).toContain("[truncated]");
+  });
+
+  it("does not split surrogate pairs at the display truncation boundary", () => {
+    const command = "a".repeat(16 * 1024 - 1) + "😀tail";
+    const result = sanitizeExecApprovalDisplayText(command);
+
+    expect(result).toContain("[truncated]");
+    expect(hasLoneSurrogate(result)).toBe(false);
+    expect(result).not.toContain("\uD83D");
+    expect(() => encodeURIComponent(result)).not.toThrow();
   });
 
   it("refuses to display commands above the hard input cap", () => {

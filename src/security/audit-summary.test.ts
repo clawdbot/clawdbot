@@ -34,8 +34,68 @@ describe("security audit attack surface summary", () => {
         "hooks.webhooks: enabled",
         "hooks.internal: disabled",
         "browser control: enabled",
-        "trust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway",
+        "trust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway. For multiple users or organizations, run one isolated Gateway cell per tenant: https://docs.openclaw.ai/gateway/multi-tenant-hosting",
       ].join("\n"),
     );
+  });
+
+  it.each([
+    {
+      name: "restrictive plugin allowlist excludes browser and no browser config is present",
+      cfg: {
+        plugins: { allow: ["openai"] },
+      } satisfies OpenClawConfig,
+      expected: "browser control: disabled",
+    },
+    {
+      name: "explicit browser config does not bypass a restrictive plugin allowlist",
+      cfg: {
+        browser: { enabled: true },
+        plugins: { allow: ["openai"] },
+      } satisfies OpenClawConfig,
+      expected: "browser control: disabled",
+    },
+    {
+      name: "plugin ids use the same case-insensitive canonical form as startup",
+      cfg: {
+        plugins: { allow: ["Browser"] },
+      } satisfies OpenClawConfig,
+      expected: "browser control: enabled",
+    },
+    {
+      name: "plugin deny policy wins over explicit browser config",
+      cfg: {
+        browser: { enabled: true },
+        plugins: { allow: ["browser"], deny: ["browser"] },
+      } satisfies OpenClawConfig,
+      expected: "browser control: disabled",
+    },
+    {
+      name: "disabled browser plugin entry wins over explicit browser config",
+      cfg: {
+        browser: { enabled: true },
+        plugins: { allow: ["browser"], entries: { browser: { enabled: false } } },
+      } satisfies OpenClawConfig,
+      expected: "browser control: disabled",
+    },
+    {
+      name: "browser.enabled=false disables browser control",
+      cfg: {
+        browser: { enabled: false },
+        plugins: { allow: ["browser"] },
+      } satisfies OpenClawConfig,
+      expected: "browser control: disabled",
+    },
+    {
+      name: "case-normalized plugin deny policy disables browser control",
+      cfg: {
+        plugins: { deny: ["BROWSER"] },
+      } satisfies OpenClawConfig,
+      expected: "browser control: disabled",
+    },
+  ])("reports browser control from effective plugin policy: $name", ({ cfg, expected }) => {
+    const summary = requireAttackSurfaceSummary(collectAttackSurfaceSummaryFindings(cfg));
+
+    expect(summary.detail).toContain(expected);
   });
 });

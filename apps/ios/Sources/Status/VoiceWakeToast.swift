@@ -6,11 +6,11 @@ struct VoiceWakeToast: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "mic.fill")
-                .font(.subheadline.weight(.semibold))
+                .font(OpenClawType.subheadSemiBold)
                 .foregroundStyle(.primary)
 
             Text(self.command)
-                .font(.subheadline.weight(.semibold))
+                .font(OpenClawType.subheadSemiBold)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .truncationMode(.tail)

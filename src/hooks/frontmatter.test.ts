@@ -1,4 +1,5 @@
 // Hook frontmatter tests cover hook metadata parsing from hook files.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   parseFrontmatter,
@@ -223,9 +224,15 @@ describe("resolveOpenClawMetadata", () => {
 
     const result = resolveOpenClawMetadata(frontmatter);
     expect(result?.install).toHaveLength(2);
-    expect(result?.install?.[0].kind).toBe("bundled");
-    expect(result?.install?.[1].kind).toBe("npm");
-    expect(result?.install?.[1].package).toBe("@openclaw/hook");
+    expect(expectDefined(result?.install?.[0], "result?.install?.[0] test invariant").kind).toBe(
+      "bundled",
+    );
+    expect(expectDefined(result?.install?.[1], "result?.install?.[1] test invariant").kind).toBe(
+      "npm",
+    );
+    expect(expectDefined(result?.install?.[1], "result?.install?.[1] test invariant").package).toBe(
+      "@openclaw/hook",
+    );
   });
 
   it("handles os restrictions", () => {
@@ -246,14 +253,14 @@ describe("resolveOpenClawMetadata", () => {
     // This is the actual format used in the bundled hooks
     const content = `---
 name: session-memory
-description: "Save session context to memory when /new or /reset command is issued"
+description: "Save session context to memory when a session is reset"
 homepage: https://docs.openclaw.ai/automation/hooks#session-memory
 metadata:
   {
     "openclaw":
       {
         "emoji": "💾",
-        "events": ["command:new", "command:reset"],
+        "events": ["command:new", "command:reset", "session:auto-reset"],
         "requires": { "config": ["workspace.dir"] },
         "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with OpenClaw" }],
       },
@@ -271,9 +278,11 @@ metadata:
 
     const openclaw = requireOpenClawMetadata(resolveOpenClawMetadata(frontmatter));
     expect(openclaw.emoji).toBe("💾");
-    expect(openclaw.events).toEqual(["command:new", "command:reset"]);
+    expect(openclaw.events).toEqual(["command:new", "command:reset", "session:auto-reset"]);
     expect(openclaw.requires?.config).toEqual(["workspace.dir"]);
-    expect(openclaw.install?.[0].kind).toBe("bundled");
+    expect(expectDefined(openclaw.install?.[0], "openclaw.install?.[0] test invariant").kind).toBe(
+      "bundled",
+    );
   });
 
   it("parses YAML metadata map", () => {

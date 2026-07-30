@@ -11,7 +11,8 @@ import {
 } from "./pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
-const mod = await import("./pw-tools-core.js");
+const mod = await import("./pw-tools-core.downloads.js");
+const interactions = await import("./pw-tools-core.interactions.js");
 
 describe("pw-tools-core", () => {
   it("last file-chooser arm wins", async () => {
@@ -117,10 +118,14 @@ describe("pw-tools-core", () => {
     const waitForSelector = vi.fn(async () => {});
     const waitForURL = vi.fn(async () => {});
     const waitForLoadState = vi.fn(async () => {});
-    const waitForFunction = vi.fn(async () => {});
+    const waitForFunction = vi.fn(
+      async (_predicate: unknown, _state: unknown, _options: unknown) => {},
+    );
     const waitForTimeout = vi.fn(async () => {});
+    const documentHandle = { dispose: vi.fn(async () => {}) };
 
     const page = {
+      evaluateHandle: vi.fn(async () => documentHandle),
       locator: vi.fn(() => ({
         first: () => ({ waitFor: waitForSelector }),
       })),
@@ -132,7 +137,7 @@ describe("pw-tools-core", () => {
     };
     setPwToolsCoreCurrentPage(page);
 
-    await mod.waitForViaPlaywright({
+    await interactions.waitForViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       selector: "#main",
       url: "**/dash",
@@ -152,9 +157,13 @@ describe("pw-tools-core", () => {
     expect(waitForLoadState).toHaveBeenCalledWith("networkidle", {
       timeout: 1234,
     });
-    expect(waitForFunction).toHaveBeenCalledWith("window.ready===true", {
-      timeout: 1234,
-    });
+    expect(waitForFunction).toHaveBeenCalledWith(
+      expect.any(Function),
+      { document: documentHandle },
+      { timeout: 1234 },
+    );
+    expect(String(waitForFunction.mock.calls[0]?.[0])).toContain("window.ready===true");
+    expect(documentHandle.dispose).toHaveBeenCalledOnce();
   });
 
   it("clamps wait timeoutMs to 120000 for wait steps", async () => {
@@ -171,7 +180,7 @@ describe("pw-tools-core", () => {
     };
     setPwToolsCoreCurrentPage(page);
 
-    await mod.waitForViaPlaywright({
+    await interactions.waitForViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       selector: "#main",
       timeoutMs: 999_999,
@@ -191,7 +200,7 @@ describe("pw-tools-core", () => {
     };
     setPwToolsCoreCurrentPage(page);
 
-    await mod.clickViaPlaywright({
+    await interactions.clickViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       selector: "#main",
       timeoutMs: 999_999,

@@ -2,9 +2,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  resolveAgentContextLimits,
-  resolveAgentWorkspaceDir,
-  resolveMemorySearchConfig,
+  resolveMemoryHostAgentContextLimits,
+  resolveMemoryHostAgentWorkspaceDir,
+  resolveMemoryHostSearchPathConfig,
   type OpenClawConfig,
 } from "./config-utils.js";
 import {
@@ -165,18 +165,17 @@ export async function readAgentMemoryFile(params: {
   from?: number;
   lines?: number;
 }): Promise<MemoryReadResult> {
-  const settings = resolveMemorySearchConfig(params.cfg, params.agentId);
+  const settings = resolveMemoryHostSearchPathConfig(params.cfg, params.agentId);
   if (!settings) {
     throw new Error("memory search disabled");
   }
-  const contextLimits = resolveAgentContextLimits(params.cfg, params.agentId);
+  const contextLimits = resolveMemoryHostAgentContextLimits(params.cfg, params.agentId);
   return await readMemoryFile({
-    workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.agentId),
+    workspaceDir: resolveMemoryHostAgentWorkspaceDir(params.cfg, params.agentId),
     extraPaths: settings.extraPaths,
     relPath: params.relPath,
     from: params.from,
     lines: params.lines,
-    defaultLines: contextLimits?.memoryGetDefaultLines,
     maxChars: contextLimits?.memoryGetMaxChars,
   });
 }

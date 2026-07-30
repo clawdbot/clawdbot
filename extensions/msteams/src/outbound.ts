@@ -12,6 +12,7 @@ import {
   resolveTextChunksWithFallback,
   sendPayloadMediaSequence,
 } from "openclaw/plugin-sdk/reply-payload";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   chunkTextForOutbound,
   normalizeStringEntries,
@@ -21,13 +22,13 @@ import { createMSTeamsPollStoreState } from "./polls.js";
 import { buildMSTeamsPresentationCard, MSTEAMS_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import { sendAdaptiveCardMSTeams, sendMessageMSTeams, sendPollMSTeams } from "./send.js";
 
-function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 const MSTEAMS_TEXT_CHUNK_LIMIT = 4000;
+
+function resolveMSTeamsEffectiveTextChunkLimit(configuredLimit?: number): number {
+  return typeof configuredLimit === "number" && configuredLimit > 0
+    ? Math.min(configuredLimit, MSTEAMS_TEXT_CHUNK_LIMIT)
+    : MSTEAMS_TEXT_CHUNK_LIMIT;
+}
 
 type MSTeamsSendConfig = Parameters<typeof sendMessageMSTeams>[0]["cfg"];
 type MSTeamsSendResult = { messageId: string; conversationId: string };
@@ -76,6 +77,8 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: MSTEAMS_TEXT_CHUNK_LIMIT,
+  resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
+    resolveMSTeamsEffectiveTextChunkLimit(fallbackLimit),
   pollMaxOptions: 12,
   deliveryCapabilities: {
     durableFinal: {
@@ -94,7 +97,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       presentation,
       text: payload.text,
     });
-    const msteamsData = asObjectRecord(payload.channelData?.msteams) ?? {};
+    const msteamsData = asOptionalRecord(payload.channelData?.msteams) ?? {};
     return {
       ...payload,
       channelData: {
@@ -115,8 +118,9 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     mediaReadFile,
     payload,
     deps,
+    onDeliveryResult,
   }) => {
-    const msteamsData = asObjectRecord(payload.channelData?.msteams);
+    const msteamsData = asOptionalRecord(payload.channelData?.msteams);
     const presentationCard = msteamsData?.presentationCard;
     if (
       presentationCard &&
@@ -138,9 +142,12 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     );
     if (mediaUrls.length > 0) {
       const send = resolveMSTeamsMediaSend({ cfg, deps });
-      const result = await sendPayloadMediaSequence({
+      const result = await sendPayloadMediaSequence<MSTeamsSendResult>({
         text,
         mediaUrls,
+        onResult: async (deliveryResult) => {
+          await onDeliveryResult?.(attachChannelToResult("msteams", deliveryResult));
+        },
         send: async ({ text: textLocal, mediaUrl: mediaUrlLocal }) =>
           await send(to, textLocal, { mediaUrl: mediaUrlLocal, mediaLocalRoots, mediaReadFile }),
       });
@@ -152,11 +159,15 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       const send = resolveMSTeamsTextSend({ cfg, deps });
       const chunks = resolveTextChunksWithFallback(
         text,
-        chunkTextForOutbound(text, MSTEAMS_TEXT_CHUNK_LIMIT),
+        chunkTextForOutbound(
+          text,
+          resolveMSTeamsEffectiveTextChunkLimit(cfg.channels?.msteams?.textChunkLimit),
+        ),
       );
       let result: Awaited<ReturnType<MSTeamsTextSendFn>>;
       for (const chunk of chunks) {
         result = await send(to, chunk);
+        await onDeliveryResult?.(attachChannelToResult("msteams", result));
       }
       return attachChannelToResult("msteams", result!);
     }

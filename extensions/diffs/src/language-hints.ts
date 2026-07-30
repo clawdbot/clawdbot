@@ -8,7 +8,7 @@ import {
 } from "./shiki-curated-languages.js";
 import type { DiffViewerPayload } from "./types.js";
 
-export const BASE_DIFF_VIEWER_LANGUAGE_HINTS = [
+const BASE_DIFF_VIEWER_LANGUAGE_HINTS = [
   ...Object.keys(bundledLanguagesBase),
   "text",
   "ansi",
@@ -26,8 +26,8 @@ function normalizeOptionalString(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+  const normalized = value.trim().toLowerCase();
+  return normalized ? normalized : undefined;
 }
 
 export async function normalizeSupportedLanguageHint(

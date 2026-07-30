@@ -1,32 +1,24 @@
 // Ios Version script supports OpenClaw repository automation.
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
-import { parseReleaseVersion } from "./npm-publish-plan.mjs";
+import { parseReleaseVersion } from "./release-version.mjs";
 
-const IOS_VERSION_FILE = "apps/ios/version.json";
 const IOS_CHANGELOG_FILE = "apps/ios/CHANGELOG.md";
-const IOS_VERSION_XCCONFIG_FILE = "apps/ios/Config/Version.xcconfig";
-const IOS_RELEASE_NOTES_FILE = "apps/ios/fastlane/metadata/en-US/release_notes.txt";
-
-type IosVersionManifest = {
-  version: string;
-};
+export const MAX_IOS_APP_STORE_REVISION = 9;
 
 type ResolvedIosVersion = {
+  appStoreRevision: number | null;
+  appStoreVersion: string | null;
   canonicalVersion: string;
+  gatewayVersion: string;
   marketingVersion: string;
   buildVersion: string;
-  versionFilePath: string;
   changelogPath: string;
-  versionXcconfigPath: string;
-  releaseNotesPath: string;
+  versionSource: "explicit" | "package";
+  versionSourcePath: string | null;
 };
 
 type SyncIosVersioningMode = "check" | "write";
-
-function normalizeTrailingNewline(value: string): string {
-  return value.endsWith("\n") ? value : `${value}\n`;
-}
 
 function parsePinnedReleaseVersion(rawVersion: string): string | null {
   const parsed = parseReleaseVersion(rawVersion.trim());
@@ -39,17 +31,52 @@ function parsePinnedReleaseVersion(rawVersion: string): string | null {
 export function normalizePinnedIosVersion(rawVersion: string): string {
   const trimmed = rawVersion.trim();
   if (!trimmed) {
-    throw new Error(`Missing iOS version in ${IOS_VERSION_FILE}.`);
+    throw new Error("Missing iOS release version.");
   }
 
   const pinnedVersion = parsePinnedReleaseVersion(trimmed);
   if (!pinnedVersion) {
-    throw new Error(
-      `Invalid iOS version '${rawVersion}'. Expected pinned release version like 2026.6.5.`,
-    );
+    throw new Error(`Invalid iOS version '${rawVersion}'. Expected release version like 2026.6.5.`);
   }
 
   return pinnedVersion;
+}
+
+export function normalizeIosAppStoreRevision(rawRevision: string | number): number {
+  const normalized = String(rawRevision).trim();
+  if (!/^(?:0|[1-9]\d*)$/u.test(normalized)) {
+    throw new Error(
+      `Invalid iOS App Store revision '${rawRevision}'. Expected an integer from 0 to ${MAX_IOS_APP_STORE_REVISION}.`,
+    );
+  }
+
+  const revision = Number(normalized);
+  if (!Number.isSafeInteger(revision) || revision > MAX_IOS_APP_STORE_REVISION) {
+    throw new Error(
+      `Invalid iOS App Store revision '${rawRevision}'. Expected an integer from 0 to ${MAX_IOS_APP_STORE_REVISION}.`,
+    );
+  }
+  return revision;
+}
+
+export function encodeIosAppStoreVersion(
+  gatewayVersion: string,
+  appStoreRevision: string | number,
+): string {
+  const canonicalVersion = normalizePinnedIosVersion(gatewayVersion);
+  const parsed = parseReleaseVersion(canonicalVersion);
+  if (!parsed) {
+    throw new Error(`Unable to encode invalid gateway version '${gatewayVersion}'.`);
+  }
+
+  const revision = normalizeIosAppStoreRevision(appStoreRevision);
+  // Append one revision digit without padding. Keeping the revision to one
+  // digit preserves App Store ordering when the gateway patch increments.
+  const encodedPatch = Number(`${parsed.patch}${revision}`);
+  if (!Number.isSafeInteger(encodedPatch)) {
+    throw new Error(`Encoded iOS App Store version is too large for '${gatewayVersion}'.`);
+  }
+  return `${parsed.year}.${parsed.month}.${encodedPatch}`;
 }
 
 export function normalizeGatewayVersionToPinnedIosVersion(rawVersion: string): string {
@@ -68,8 +95,12 @@ export function normalizeGatewayVersionToPinnedIosVersion(rawVersion: string): s
   return parsed.baseVersion;
 }
 
+function rootPackageJsonPath(rootDir = path.resolve(".")): string {
+  return path.join(rootDir, "package.json");
+}
+
 function readRootPackageVersion(rootDir = path.resolve(".")): string {
-  const packageJsonPath = path.join(rootDir, "package.json");
+  const packageJsonPath = rootPackageJsonPath(rootDir);
   const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as { version?: unknown };
   const version = typeof parsed.version === "string" ? parsed.version.trim() : "";
   if (!version) {
@@ -89,40 +120,34 @@ export function resolveGatewayVersionForIosRelease(rootDir = path.resolve(".")):
   };
 }
 
-function readIosVersionManifest(rootDir = path.resolve(".")): IosVersionManifest {
-  const versionFilePath = path.join(rootDir, IOS_VERSION_FILE);
-  return JSON.parse(readFileSync(versionFilePath, "utf8")) as IosVersionManifest;
-}
-
-export function writeIosVersionManifest(version: string, rootDir = path.resolve(".")): string {
-  const versionFilePath = path.join(rootDir, IOS_VERSION_FILE);
-  const normalizedVersion = normalizePinnedIosVersion(version);
-  const nextContent = `${JSON.stringify({ version: normalizedVersion }, null, 2)}\n`;
-  writeFileSync(versionFilePath, nextContent, "utf8");
-  return versionFilePath;
-}
-
-export function resolveIosVersion(rootDir = path.resolve(".")): ResolvedIosVersion {
-  const versionFilePath = path.join(rootDir, IOS_VERSION_FILE);
+export function resolveIosVersion(
+  rootDir = path.resolve("."),
+  options?: { appStoreRevision?: string | number | null; releaseVersion?: string | null },
+): ResolvedIosVersion {
   const changelogPath = path.join(rootDir, IOS_CHANGELOG_FILE);
-  const versionXcconfigPath = path.join(rootDir, IOS_VERSION_XCCONFIG_FILE);
-  const releaseNotesPath = path.join(rootDir, IOS_RELEASE_NOTES_FILE);
-  const manifest = readIosVersionManifest(rootDir);
-  const canonicalVersion = normalizePinnedIosVersion(manifest.version ?? "");
+  const explicitReleaseVersion = options?.releaseVersion?.trim() ?? "";
+  const canonicalVersion = explicitReleaseVersion
+    ? normalizePinnedIosVersion(explicitReleaseVersion)
+    : resolveGatewayVersionForIosRelease(rootDir).pinnedIosVersion;
+  const rawAppStoreRevision = options?.appStoreRevision;
+  const appStoreRevision =
+    rawAppStoreRevision === null || rawAppStoreRevision === undefined
+      ? null
+      : normalizeIosAppStoreRevision(rawAppStoreRevision);
+  const appStoreVersion =
+    appStoreRevision === null ? null : encodeIosAppStoreVersion(canonicalVersion, appStoreRevision);
 
   return {
+    appStoreRevision,
+    appStoreVersion,
     canonicalVersion,
-    marketingVersion: canonicalVersion,
+    gatewayVersion: canonicalVersion,
+    marketingVersion: appStoreVersion ?? canonicalVersion,
     buildVersion: "1",
-    versionFilePath,
     changelogPath,
-    versionXcconfigPath,
-    releaseNotesPath,
+    versionSource: explicitReleaseVersion ? "explicit" : "package",
+    versionSourcePath: explicitReleaseVersion ? null : rootPackageJsonPath(rootDir),
   };
-}
-
-export function renderIosVersionXcconfig(version: ResolvedIosVersion): string {
-  return `// Shared iOS version defaults.\n// Source of truth: apps/ios/version.json\n// Generated by scripts/ios-sync-versioning.ts.\n\nOPENCLAW_IOS_VERSION = ${version.canonicalVersion}\nOPENCLAW_MARKETING_VERSION = ${version.marketingVersion}\nOPENCLAW_BUILD_VERSION = ${version.buildVersion}\n\n#include? "../build/Version.xcconfig"\n`;
 }
 
 function matchChangelogHeading(line: string, heading: string): boolean {
@@ -156,72 +181,55 @@ export function renderIosReleaseNotes(
   version: ResolvedIosVersion,
   changelogContent: string,
 ): string {
-  const candidateHeadings = [version.canonicalVersion, "Unreleased"];
+  const candidateHeadings =
+    version.appStoreRevision === null
+      ? [version.canonicalVersion, "Unreleased"]
+      : [version.marketingVersion];
 
   for (const heading of candidateHeadings) {
     const body = extractChangelogSection(changelogContent, heading);
     if (body) {
-      return `${body}\n`;
+      const gatewayPrefix =
+        version.appStoreRevision === null ? "" : `Gateway version: ${version.gatewayVersion}\n\n`;
+      return `${gatewayPrefix}${body}\n`;
     }
   }
 
   throw new Error(
-    `Unable to find iOS changelog notes for ${version.canonicalVersion}. Add a matching section to ${IOS_CHANGELOG_FILE}.`,
+    `Unable to find iOS changelog notes for ${version.marketingVersion}. Add a matching section to ${IOS_CHANGELOG_FILE}.`,
   );
 }
 
-function syncFile(params: {
-  mode: SyncIosVersioningMode;
-  path: string;
-  nextContent: string;
-  label: string;
-}): boolean {
-  const nextContent = normalizeTrailingNewline(params.nextContent);
-  const currentContent = readFileSync(params.path, "utf8");
-  if (currentContent === nextContent) {
-    return false;
-  }
-
-  if (params.mode === "check") {
-    throw new Error(`${params.label} is stale: ${path.relative(process.cwd(), params.path)}`);
-  }
-
-  writeFileSync(params.path, nextContent, "utf8");
-  return true;
-}
-
-export function syncIosVersioning(params?: { mode?: SyncIosVersioningMode; rootDir?: string }): {
+export function syncIosVersioning(params?: {
+  appStoreRevision?: string | number | null;
+  mode?: SyncIosVersioningMode;
+  releaseVersion?: string | null;
+  rootDir?: string;
+}): {
   updatedPaths: string[];
 } {
-  const mode = params?.mode ?? "write";
   const rootDir = path.resolve(params?.rootDir ?? ".");
-  const version = resolveIosVersion(rootDir);
+  const releaseVersion = params?.releaseVersion;
+  const version = resolveIosVersion(rootDir, {
+    appStoreRevision: params?.appStoreRevision,
+    releaseVersion,
+  });
   const changelogContent = readFileSync(version.changelogPath, "utf8");
-  const nextVersionXcconfig = renderIosVersionXcconfig(version);
-  const nextReleaseNotes = renderIosReleaseNotes(version, changelogContent);
-  const updatedPaths: string[] = [];
+  renderIosReleaseNotes(version, changelogContent);
 
-  if (
-    syncFile({
-      mode,
-      path: version.versionXcconfigPath,
-      nextContent: nextVersionXcconfig,
-      label: "iOS version xcconfig",
-    })
-  ) {
-    updatedPaths.push(version.versionXcconfigPath);
-  }
+  return { updatedPaths: [] };
+}
 
-  if (
-    syncFile({
-      mode,
-      path: version.releaseNotesPath,
-      nextContent: nextReleaseNotes,
-      label: "iOS release notes",
-    })
-  ) {
-    updatedPaths.push(version.releaseNotesPath);
-  }
-
-  return { updatedPaths };
+export function renderIosReleaseNotesForVersion(params?: {
+  appStoreRevision?: string | number | null;
+  releaseVersion?: string | null;
+  rootDir?: string;
+}): string {
+  const rootDir = path.resolve(params?.rootDir ?? ".");
+  const version = resolveIosVersion(rootDir, {
+    appStoreRevision: params?.appStoreRevision,
+    releaseVersion: params?.releaseVersion,
+  });
+  const changelogContent = readFileSync(version.changelogPath, "utf8");
+  return renderIosReleaseNotes(version, changelogContent);
 }

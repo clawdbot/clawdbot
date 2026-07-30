@@ -1,7 +1,6 @@
 // Shared runtime probes used by status text and JSON commands.
 // Heavy modules stay lazily loaded so fast status output avoids security/provider/gateway costs.
 
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
@@ -14,6 +13,7 @@ import {
   buildCodexSyntheticUsageAuth,
   mergeUsageSummaries,
   shouldUseCodexSyntheticUsageForRuntime,
+  resolveUsageCredentialType,
 } from "../status/codex-synthetic-usage.js";
 import type { HealthSummary } from "./health.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
@@ -41,23 +41,6 @@ function loadReadOnlyChannelPluginsModule() {
 
 function loadGatewayCallModule() {
   return gatewayCallModuleLoader.load();
-}
-
-function resolveUsageCredentialType(authLabel?: string): "oauth" | "token" | "api_key" | undefined {
-  const auth = normalizeOptionalLowercaseString(authLabel);
-  if (!auth) {
-    return undefined;
-  }
-  if (auth.startsWith("oauth")) {
-    return "oauth";
-  }
-  if (auth.startsWith("token")) {
-    return "token";
-  }
-  if (auth.startsWith("api-key") || auth.startsWith("api key")) {
-    return "api_key";
-  }
-  return undefined;
 }
 
 function shouldUseConfiguredCodexSyntheticUsage(params: {
@@ -220,7 +203,7 @@ export async function resolveStatusGatewayDiagnosticsSafe(params: {
 }
 
 /** Reads the most recent gateway heartbeat only when the gateway probe succeeded. */
-export async function resolveStatusLastHeartbeat(params: {
+async function resolveStatusLastHeartbeat(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
   gatewayReachable: boolean;
@@ -258,7 +241,7 @@ type StatusNodeServiceSummary = Awaited<ReturnType<typeof getNodeDaemonStatusSum
 type StatusSecurityAudit = Awaited<ReturnType<typeof resolveStatusSecurityAudit>>;
 
 /** Resolves optional usage/deep runtime details plus service summaries for status output. */
-export async function resolveStatusRuntimeDetails(params: {
+async function resolveStatusRuntimeDetails(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
   usage?: boolean;

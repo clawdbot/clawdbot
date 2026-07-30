@@ -1,7 +1,6 @@
 // Session target tests cover target resolution for cron-created sessions.
 import { describe, expect, it } from "vitest";
 import {
-  isDetachedCronSessionTarget,
   resolveCronCurrentSessionTarget,
   resolveCronDeliverySessionKey,
   resolveCronNotificationSessionKey,
@@ -30,24 +29,13 @@ describe("cron session target helpers", () => {
     );
   });
 
-  it.each(["isolated", "current", "session:agent:main:telegram:direct:123"] as const)(
-    "classifies %s as detached cron output",
-    (sessionTarget) => {
-      expect(isDetachedCronSessionTarget(sessionTarget)).toBe(true);
-    },
-  );
-
-  it("does not classify main as detached cron output", () => {
-    expect(isDetachedCronSessionTarget("main")).toBe(false);
-  });
-
-  it("resolves current targets to the creator session key", () => {
+  it("preserves current targets when a creator session key exists", () => {
     expect(
       resolveCronCurrentSessionTarget({
         sessionTarget: "current",
         sessionKey: " agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a== ",
       }),
-    ).toBe("session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==");
+    ).toBe("current");
   });
 
   it("falls back current targets to isolated without a creator session key", () => {

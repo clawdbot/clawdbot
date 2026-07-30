@@ -7,13 +7,13 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 
-export type IMessageRpcError = {
+type IMessageRpcError = {
   code?: number;
   message?: string;
   data?: unknown;
 };
 
-export type IMessageRpcResponse<T> = {
+type IMessageRpcResponse<T> = {
   jsonrpc?: string;
   id?: string | number | null;
   result?: T;
@@ -22,12 +22,12 @@ export type IMessageRpcResponse<T> = {
   params?: unknown;
 };
 
-export type IMessageRpcNotification = {
+type IMessageRpcNotification = {
   method: string;
   params?: unknown;
 };
 
-export type IMessageRpcClientOptions = {
+type IMessageRpcClientOptions = {
   cliPath?: string;
   dbPath?: string;
   runtime?: RuntimeEnv;
@@ -40,7 +40,7 @@ type PendingRequest = {
   timer?: NodeJS.Timeout;
 };
 
-export const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
+const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
   "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.";
 
 function isTestEnv(): boolean {
@@ -51,7 +51,7 @@ function isTestEnv(): boolean {
   return Boolean(vitest);
 }
 
-export function normalizeIMessageFullDiskAccessError(message: string): string | undefined {
+function normalizeIMessageFullDiskAccessError(message: string): string | undefined {
   const normalized = normalizeLowercaseStringOrEmpty(message);
   if (!normalized.includes("full disk access") || !normalized.includes("chat.db")) {
     return undefined;
@@ -70,6 +70,8 @@ export class IMessageRpcClient {
   private child: ChildProcessWithoutNullStreams | null = null;
   private stdoutBuffer = "";
   private readonly stdoutDecoder = new StringDecoder("utf8");
+  private stderrBuffer = "";
+  private readonly stderrDecoder = new StringDecoder("utf8");
   private nextId = 1;
   private publicProcessError: string | null = null;
 
@@ -107,34 +109,38 @@ export class IMessageRpcClient {
     });
 
     child.stderr?.on("data", (chunk) => {
-      const lines = chunk.toString().split(/\r?\n/);
-      for (const line of lines) {
-        if (!line.trim()) {
-          continue;
-        }
-        const trimmed = line.trim();
-        this.recordProcessDiagnostic(trimmed);
-        this.runtime?.error?.(`imsg rpc: ${trimmed}`);
+      if (this.child !== child) {
+        return;
       }
+      this.handleStderrChunk(chunk);
     });
 
-    child.on("error", (err) => {
-      this.failAll(err instanceof Error ? err : new Error(String(err)));
-      this.closedResolve?.();
-    });
-
-    // Without this listener, async EPIPE from a dead child crashes the
-    // gateway via uncaughtException. (#75438)
-    child.stdin.on("error", (err) => {
-      this.failAll(err instanceof Error ? err : new Error(String(err)));
-    });
+    // Every process/stdio error is terminal for this RPC transport. Settle the
+    // client once and terminate a helper whose pipe failed; otherwise the
+    // monitor can wait forever on an unusable child. #75438 covered stdin only.
+    const failFromProcessError = (err: unknown) => {
+      if (!this.finish(err instanceof Error ? err : new Error(String(err)))) {
+        return;
+      }
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // The helper may already be gone.
+      }
+    };
+    child.on("error", failFromProcessError);
+    child.stdin.on("error", failFromProcessError);
+    child.stdout.on("error", failFromProcessError);
+    child.stderr.on("error", failFromProcessError);
 
     child.on("close", (code, signal) => {
       if (this.child === child) {
+        // Complete both byte streams before selecting the terminal error so a
+        // final split diagnostic can still provide its public recovery guidance.
         this.flushStdoutBuffer();
+        this.flushStderrBuffer();
       }
-      this.failAll(this.buildCloseError(code, signal));
-      this.closedResolve?.();
+      this.finish(this.buildCloseError(code, signal));
     });
   }
 
@@ -144,21 +150,32 @@ export class IMessageRpcClient {
     }
     this.stdoutBuffer = "";
     this.stdoutDecoder.end();
+    this.stderrBuffer = "";
+    this.stderrDecoder.end();
     this.child.stdin?.end();
     const child = this.child;
     this.child = null;
 
-    await Promise.race([
-      this.closed,
-      new Promise<void>((resolve) => {
-        setTimeout(() => {
-          if (!child.killed) {
-            child.kill("SIGTERM");
-          }
-          resolve();
-        }, 500);
-      }),
-    ]);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        this.closed,
+        new Promise<void>((resolve) => {
+          timeout = setTimeout(() => {
+            if (!child.killed) {
+              child.kill("SIGTERM");
+            }
+            resolve();
+          }, 500);
+        }),
+      ]);
+    } finally {
+      // A losing fallback still holds Node's event loop open; clear it when
+      // the child closes first so short-lived RPC clients can exit promptly.
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
   }
 
   async waitForClose(): Promise<void> {
@@ -251,6 +268,38 @@ export class IMessageRpcClient {
     this.handleLine(trimmed);
   }
 
+  private handleStderrChunk(chunk: Buffer | string) {
+    const text = typeof chunk === "string" ? chunk : this.stderrDecoder.write(chunk);
+    this.stderrBuffer += text;
+
+    let newlineIndex = this.stderrBuffer.indexOf("\n");
+    while (newlineIndex !== -1) {
+      const line = this.stderrBuffer.slice(0, newlineIndex);
+      this.stderrBuffer = this.stderrBuffer.slice(newlineIndex + 1);
+      this.handleStderrLine(line);
+      newlineIndex = this.stderrBuffer.indexOf("\n");
+    }
+  }
+
+  private flushStderrBuffer() {
+    this.stderrBuffer += this.stderrDecoder.end();
+    if (!this.stderrBuffer) {
+      return;
+    }
+    const line = this.stderrBuffer;
+    this.stderrBuffer = "";
+    this.handleStderrLine(line);
+  }
+
+  private handleStderrLine(line: string) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return;
+    }
+    this.recordProcessDiagnostic(trimmed);
+    this.runtime?.error?.(`imsg rpc: ${trimmed}`);
+  }
+
   private handleLine(line: string) {
     let parsed: IMessageRpcResponse<unknown>;
     try {
@@ -327,6 +376,17 @@ export class IMessageRpcClient {
       pending.reject(err);
       this.pending.delete(key);
     }
+  }
+
+  private finish(err: Error): boolean {
+    const resolve = this.closedResolve;
+    if (!resolve) {
+      return false;
+    }
+    this.closedResolve = null;
+    this.failAll(err);
+    resolve();
+    return true;
   }
 }
 

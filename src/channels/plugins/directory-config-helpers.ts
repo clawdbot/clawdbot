@@ -53,20 +53,6 @@ export function toDirectoryEntries(kind: "user" | "group", ids: string[]): Chann
   return entries;
 }
 
-function collectDirectoryIdsFromEntries(params: {
-  entries?: readonly unknown[];
-  normalizeId?: (entry: string) => string | null | undefined;
-}): string[] {
-  return collectDirectoryIds(params.entries ?? [], params.normalizeId);
-}
-
-function collectDirectoryIdsFromMapKeys(params: {
-  groups?: Record<string, unknown>;
-  normalizeId?: (entry: string) => string | null | undefined;
-}): string[] {
-  return collectDirectoryIds(Object.keys(params.groups ?? {}), params.normalizeId);
-}
-
 function collectDirectoryIds(
   values: Iterable<unknown>,
   normalizeId?: (entry: string) => string | null | undefined,
@@ -86,10 +72,6 @@ function collectDirectoryIds(
   return ids;
 }
 
-function dedupeDirectoryIds(ids: string[]): string[] {
-  return uniqueStrings(ids);
-}
-
 /**
  * Collects unique normalized ids from multiple raw config sources.
  */
@@ -97,7 +79,7 @@ export function collectNormalizedDirectoryIds(params: {
   sources: Iterable<unknown>[];
   normalizeId: (entry: string) => string | null | undefined;
 }): string[] {
-  const ids = new Set<string>();
+  const ids: string[] = [];
   for (const source of params.sources) {
     for (const value of source) {
       const raw = normalizeOptionalString(value) ?? "";
@@ -107,11 +89,11 @@ export function collectNormalizedDirectoryIds(params: {
       const normalized = params.normalizeId(raw);
       const trimmed = normalizeOptionalString(normalized) ?? "";
       if (trimmed) {
-        ids.add(trimmed);
+        ids.push(trimmed);
       }
     }
   }
-  return Array.from(ids);
+  return uniqueStrings(ids);
 }
 
 /**
@@ -229,12 +211,7 @@ export function listDirectoryUserEntriesFromAllowFrom(params: {
   limit?: number | null;
   normalizeId?: (entry: string) => string | null | undefined;
 }): ChannelDirectoryEntry[] {
-  const ids = dedupeDirectoryIds(
-    collectDirectoryIdsFromEntries({
-      entries: params.allowFrom,
-      normalizeId: params.normalizeId,
-    }),
-  );
+  const ids = uniqueStrings(collectDirectoryIds(params.allowFrom ?? [], params.normalizeId));
   return toDirectoryEntries("user", applyDirectoryQueryAndLimit(ids, params));
 }
 
@@ -249,15 +226,9 @@ export function listDirectoryUserEntriesFromAllowFromAndMapKeys(params: {
   normalizeAllowFromId?: (entry: string) => string | null | undefined;
   normalizeMapKeyId?: (entry: string) => string | null | undefined;
 }): ChannelDirectoryEntry[] {
-  const ids = dedupeDirectoryIds([
-    ...collectDirectoryIdsFromEntries({
-      entries: params.allowFrom,
-      normalizeId: params.normalizeAllowFromId,
-    }),
-    ...collectDirectoryIdsFromMapKeys({
-      groups: params.map,
-      normalizeId: params.normalizeMapKeyId,
-    }),
+  const ids = uniqueStrings([
+    ...collectDirectoryIds(params.allowFrom ?? [], params.normalizeAllowFromId),
+    ...collectDirectoryIds(Object.keys(params.map ?? {}), params.normalizeMapKeyId),
   ]);
   return toDirectoryEntries("user", applyDirectoryQueryAndLimit(ids, params));
 }
@@ -271,11 +242,8 @@ export function listDirectoryGroupEntriesFromMapKeys(params: {
   limit?: number | null;
   normalizeId?: (entry: string) => string | null | undefined;
 }): ChannelDirectoryEntry[] {
-  const ids = dedupeDirectoryIds(
-    collectDirectoryIdsFromMapKeys({
-      groups: params.groups,
-      normalizeId: params.normalizeId,
-    }),
+  const ids = uniqueStrings(
+    collectDirectoryIds(Object.keys(params.groups ?? {}), params.normalizeId),
   );
   return toDirectoryEntries("group", applyDirectoryQueryAndLimit(ids, params));
 }
@@ -291,15 +259,9 @@ export function listDirectoryGroupEntriesFromMapKeysAndAllowFrom(params: {
   normalizeMapKeyId?: (entry: string) => string | null | undefined;
   normalizeAllowFromId?: (entry: string) => string | null | undefined;
 }): ChannelDirectoryEntry[] {
-  const ids = dedupeDirectoryIds([
-    ...collectDirectoryIdsFromMapKeys({
-      groups: params.groups,
-      normalizeId: params.normalizeMapKeyId,
-    }),
-    ...collectDirectoryIdsFromEntries({
-      entries: params.allowFrom,
-      normalizeId: params.normalizeAllowFromId,
-    }),
+  const ids = uniqueStrings([
+    ...collectDirectoryIds(Object.keys(params.groups ?? {}), params.normalizeMapKeyId),
+    ...collectDirectoryIds(params.allowFrom ?? [], params.normalizeAllowFromId),
   ]);
   return toDirectoryEntries("group", applyDirectoryQueryAndLimit(ids, params));
 }

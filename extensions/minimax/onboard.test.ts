@@ -77,6 +77,57 @@ describe("minimax onboard", () => {
     expect(provider?.models.map((m) => m.id)).toEqual(["old-model", "MiniMax-M3"]);
   });
 
+  it("drops placeholder apiKey while preserving provider timeout", () => {
+    const cfg = applyMinimaxApiConfig({
+      models: {
+        providers: {
+          minimax: {
+            baseUrl: "https://api.minimax.io/anthropic",
+            apiKey: "minimax",
+            api: "anthropic-messages",
+            timeoutSeconds: 900,
+            models: [buildMinimaxApiModelDefinition("MiniMax-M2.7")],
+          },
+        },
+      },
+    });
+
+    expect(cfg.models?.providers?.minimax?.apiKey).toBeUndefined();
+    expect(cfg.models?.providers?.minimax?.timeoutSeconds).toBe(900);
+    expect(cfg.models?.providers?.minimax?.models.map((m) => m.id)).toEqual([
+      "MiniMax-M2.7",
+      "MiniMax-M3",
+    ]);
+  });
+
+  it("preserves models from a non-canonical provider key", () => {
+    const cfg = applyMinimaxApiConfig({
+      models: {
+        providers: {
+          MiniMax: {
+            baseUrl: "https://api.minimax.io/anthropic",
+            api: "anthropic-messages",
+            apiKey: { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
+            timeoutSeconds: 900,
+            models: [buildMinimaxApiModelDefinition("MiniMax-M2.7")],
+          },
+        },
+      },
+    });
+
+    expect(Object.keys(cfg.models?.providers ?? {})).toEqual(["minimax"]);
+    expect(cfg.models?.providers?.minimax?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MINIMAX_API_KEY",
+    });
+    expect(cfg.models?.providers?.minimax?.timeoutSeconds).toBe(900);
+    expect(cfg.models?.providers?.minimax?.models.map((model) => model.id)).toEqual([
+      "MiniMax-M2.7",
+      "MiniMax-M3",
+    ]);
+  });
+
   it("preserves other providers when adding minimax", () => {
     const cfg = applyMinimaxApiConfig({
       models: {

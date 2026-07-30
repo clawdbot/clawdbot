@@ -1,12 +1,79 @@
 // Coverage for queued steering message commit and cancellation behavior.
 import { describe, expect, it, vi } from "vitest";
-import {
-  cancelQueuedSteeringMessage,
-  steerAndWaitForTranscriptCommit,
-  type EmbeddedAgentActiveSessionSteerTarget,
-} from "./attempt.queue-message.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../../sessions/user-turn-transcript.test-support.js";
+import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt.queue-message.js";
+
+type EmbeddedAgentActiveSessionSteerTarget = Parameters<
+  typeof steerActiveSessionWithOptionalDeliveryWait
+>[0];
+
+function steerWithDeliveryWait(
+  activeSession: EmbeddedAgentActiveSessionSteerTarget,
+  text: string,
+  deliveryTimeoutMs = 10_000,
+): Promise<void> {
+  return steerActiveSessionWithOptionalDeliveryWait(activeSession, text, {
+    deliveryTimeoutMs,
+    waitForTranscriptCommit: true,
+  });
+}
 
 describe("embedded OpenClaw queued steering cancellation", () => {
+  it("forwards prepared transcript context with a queued steering message", async () => {
+    const steer = vi.fn(async () => undefined);
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "visible prompt", sender: { id: "user-42" } },
+      target: createTestUserTurnTranscriptTarget(),
+    });
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      steer,
+      subscribe: () => () => {},
+    };
+
+    await steerActiveSessionWithOptionalDeliveryWait(activeSession, "runtime prompt", {
+      userTurnTranscriptRecorder: recorder,
+    });
+
+    expect(steer).toHaveBeenCalledWith("runtime prompt", undefined, recorder);
+  });
+
+  it("forwards ordered images with a queued steering message", async () => {
+    const steer = vi.fn(async () => undefined);
+    const images = [
+      { type: "image" as const, data: "first", mimeType: "image/jpeg" },
+      { type: "image" as const, data: "second", mimeType: "image/png" },
+    ];
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      steer,
+      subscribe: () => () => {},
+    };
+
+    await steerActiveSessionWithOptionalDeliveryWait(activeSession, "compare these", { images });
+
+    expect(steer).toHaveBeenCalledWith("compare these", images);
+  });
+
+  it("forwards ordered prompt facts with a queued steering message", async () => {
+    const steer = vi.fn(async () => undefined);
+    const media = [
+      { path: "/tmp/a.png", contentType: "image/png" },
+      { path: "/tmp/b.pdf", contentType: "application/pdf" },
+    ];
+    const imageOrder = ["offloaded", "inline"] as const;
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      steer,
+      subscribe: () => () => {},
+    };
+
+    await steerActiveSessionWithOptionalDeliveryWait(activeSession, "inspect both", {
+      media,
+      imageOrder: [...imageOrder],
+    });
+
+    expect(steer).toHaveBeenCalledWith("inspect both", undefined, undefined, media, imageOrder);
+  });
+
   it("waits for the queued user message_end transcript boundary", async () => {
     // A queued steer is only durable once the user message_end event lands in
     // the active transcript.
@@ -19,7 +86,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
         return () => {};
       },
     };
-    const wait = steerAndWaitForTranscriptCommit(activeSession, "queued completion", 10_000);
+    const wait = steerWithDeliveryWait(activeSession, "queued completion");
     let settled = false;
     void wait.then(() => {
       settled = true;
@@ -83,15 +150,23 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       subscribe: () => () => {},
     };
 
-    await expect(
-      cancelQueuedSteeringMessage(activeSession, "timed-out completion announce"),
-    ).resolves.toBe(true);
+    vi.useFakeTimers();
+    try {
+      const wait = steerWithDeliveryWait(activeSession, "timed-out completion announce", 1);
+      const rejection = expect(wait).rejects.toThrow(
+        "queued steering message was not committed to the transcript before timeout",
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      await rejection;
 
-    expect(queueMessages).toEqual([unrelatedMessage, trailingMessage]);
-    expect(queueMessages[0]).toBe(unrelatedMessage);
-    expect(queueMessages[0]?.content[1]).toBe(unrelatedImage);
-    expect(queueMessages[1]).toBe(trailingMessage);
-    expect(steeringUiMessages).toEqual(["keep this rich payload"]);
+      expect(queueMessages).toEqual([unrelatedMessage, trailingMessage]);
+      expect(queueMessages[0]).toBe(unrelatedMessage);
+      expect(queueMessages[0]?.content[1]).toBe(unrelatedImage);
+      expect(queueMessages[1]).toBe(trailingMessage);
+      expect(steeringUiMessages).toEqual(["keep this rich payload"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rejects and removes the queued steering message when the session ends first", async () => {
@@ -126,11 +201,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       },
     };
 
-    const wait = steerAndWaitForTranscriptCommit(
-      activeSession,
-      "completion after parent stopped",
-      10_000,
-    );
+    const wait = steerWithDeliveryWait(activeSession, "completion after parent stopped");
     const rejection = expect(wait).rejects.toThrow(
       "active session ended before queued steering message was committed to the transcript",
     );
@@ -175,11 +246,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
         },
       };
 
-      const wait = steerAndWaitForTranscriptCommit(
-        activeSession,
-        "completion survives retry",
-        10_000,
-      );
+      const wait = steerWithDeliveryWait(activeSession, "completion survives retry");
 
       emit({ type: "agent_end", messages: [] });
       emit({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 1_000 });
@@ -227,11 +294,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
         },
       };
 
-      const wait = steerAndWaitForTranscriptCommit(
-        activeSession,
-        "completion survives compaction",
-        10_000,
-      );
+      const wait = steerWithDeliveryWait(activeSession, "completion survives compaction");
 
       emit({ type: "agent_end", messages: [] });
       emit({ type: "compaction_start", reason: "threshold" });

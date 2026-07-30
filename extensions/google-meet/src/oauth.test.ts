@@ -3,7 +3,6 @@ import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildGoogleMeetAuthUrl,
-  refreshGoogleMeetAccessToken,
   resolveGoogleMeetAccessToken,
   waitForGoogleMeetAuthCode,
 } from "./oauth.js";
@@ -84,15 +83,13 @@ describe("Google Meet OAuth", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const tokens = await refreshGoogleMeetAccessToken({
+    const tokens = await resolveGoogleMeetAccessToken({
       clientId: "client-id",
       clientSecret: "client-secret",
       refreshToken: "refresh-token",
     });
     expect(tokens.accessToken).toBe("new-access-token");
-    expect(tokens.refreshToken).toBeUndefined();
-    expect(tokens.scope).toBeUndefined();
-    expect(tokens.tokenType).toBe("Bearer");
+    expect(tokens.refreshed).toBe(true);
     expect(Number.isFinite(tokens.expiresAt)).toBe(true);
     expect(tokens.expiresAt).toBeGreaterThan(Date.now());
     const body = fetchMock.mock.calls[0]?.[1]?.body;
@@ -100,6 +97,26 @@ describe("Google Meet OAuth", () => {
     const params = body as URLSearchParams;
     expect(params.get("grant_type")).toBe("refresh_token");
     expect(params.get("refresh_token")).toBe("refresh-token");
+  });
+
+  it("rejects oversized OAuth token responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(new Uint8Array(300 * 1024), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      ),
+    );
+
+    await expect(
+      resolveGoogleMeetAccessToken({
+        clientId: "client-id",
+        refreshToken: "refresh-token",
+      }),
+    ).rejects.toThrow("Google OAuth token: JSON response exceeds 262144 bytes");
   });
 
   it("refreshes cached access tokens with Date-invalid expiries", async () => {
@@ -139,7 +156,7 @@ describe("Google Meet OAuth", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const tokens = await refreshGoogleMeetAccessToken({
+    const tokens = await resolveGoogleMeetAccessToken({
       clientId: "client-id",
       refreshToken: "refresh-token",
     });
@@ -160,7 +177,7 @@ describe("Google Meet OAuth", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const tokens = await refreshGoogleMeetAccessToken({
+    const tokens = await resolveGoogleMeetAccessToken({
       clientId: "client-id",
       refreshToken: "refresh-token",
     });
@@ -182,7 +199,7 @@ describe("Google Meet OAuth", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const tokens = await refreshGoogleMeetAccessToken({
+    const tokens = await resolveGoogleMeetAccessToken({
       clientId: "client-id",
       refreshToken: "refresh-token",
     });

@@ -136,6 +136,7 @@ describe("vercel ai gateway provider catalog", () => {
       fetchWithSsrFGuardMock.mockResolvedValueOnce({
         response: jsonResponse(payload),
         release: async () => {},
+        finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
       });
 
       await withLiveDiscovery(async () => {
@@ -167,6 +168,7 @@ describe("vercel ai gateway provider catalog", () => {
         ],
       }),
       release: async () => {},
+      finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
     });
 
     await withLiveDiscovery(async () => {
@@ -183,5 +185,27 @@ describe("vercel ai gateway provider catalog", () => {
         maxTokens: VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS,
       });
     });
+  });
+
+  it("uses the trusted environment proxy for the official live catalog", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: jsonResponse({ data: [{ id: "custom/live-model" }] }),
+      release,
+      finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
+    });
+
+    await withLiveDiscovery(async () => {
+      const models = await discoverVercelAiGatewayModels();
+
+      expect(models.map((model) => model.id)).toStrictEqual(["custom/live-model"]);
+    });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "trusted_env_proxy",
+        url: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
+      }),
+    );
+    expect(release).toHaveBeenCalledOnce();
   });
 });

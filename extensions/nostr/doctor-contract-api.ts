@@ -2,7 +2,10 @@
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  archiveLegacyStateSource,
+  type PluginDoctorStateMigration,
+} from "openclaw/plugin-sdk/runtime-doctor";
 import { normalizeNostrStateAccountId } from "./src/state-account-id.js";
 
 type NostrBusState = {
@@ -75,15 +78,6 @@ function parseProfileState(value: unknown): NostrProfileState | null {
   };
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(filePath);
-    return stat.isFile();
-  } catch {
-    return false;
-  }
-}
-
 async function readJsonFile(filePath: string): Promise<unknown> {
   return JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
 }
@@ -119,27 +113,6 @@ async function listLegacyFiles(params: {
     }
   }
   return files;
-}
-
-async function archiveLegacySource(params: {
-  filePath: string;
-  label: string;
-  changes: string[];
-  warnings: string[];
-}): Promise<void> {
-  const archivedPath = `${params.filePath}.migrated`;
-  if (await fileExists(archivedPath)) {
-    params.warnings.push(
-      `Left migrated ${params.label} source in place because ${archivedPath} already exists`,
-    );
-    return;
-  }
-  try {
-    await fs.rename(params.filePath, archivedPath);
-    params.changes.push(`Archived ${params.label} legacy source -> ${archivedPath}`);
-  } catch (err) {
-    params.warnings.push(`Failed archiving ${params.label} legacy source: ${String(err)}`);
-  }
 }
 
 async function ensureStoreCapacity(params: {
@@ -210,7 +183,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           existingKeys.add(file.accountId);
           imported++;
         }
-        await archiveLegacySource({
+        await archiveLegacyStateSource({
           filePath: file.filePath,
           label: "Nostr bus state",
           changes,
@@ -272,7 +245,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           existingKeys.add(file.accountId);
           imported++;
         }
-        await archiveLegacySource({
+        await archiveLegacyStateSource({
           filePath: file.filePath,
           label: "Nostr profile state",
           changes,

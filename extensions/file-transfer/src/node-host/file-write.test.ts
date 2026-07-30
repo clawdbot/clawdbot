@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleFileWrite } from "./file-write.js";
 
 let tmpRoot: string;
@@ -360,6 +360,19 @@ describe("handleFileWrite — base64 round-trip validation", () => {
     // Buffer.from([0xfb, 0xff]) -> "+/8=" standard, "-_8=" url
     const r = await handleFileWrite({ path: target, contentBase64: "-_8=" });
     expect(r.ok).toBe(true);
+  });
+
+  it("rejects whitespace and control characters before decoding", async () => {
+    const bufferFrom = vi.spyOn(Buffer, "from");
+    const target = path.join(tmpRoot, "whitespace.bin");
+    const r = await handleFileWrite({
+      path: target,
+      contentBase64: " \n\t".repeat(1024 * 1024),
+    });
+
+    expectFailure(r, "INVALID_BASE64");
+    expect(bufferFrom).not.toHaveBeenCalled();
+    await expectAccessMissing(target);
   });
 });
 

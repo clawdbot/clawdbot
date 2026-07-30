@@ -1,7 +1,7 @@
 // Xai helper module supports code execution config behavior.
 import { isXaiToolEnabled, type XaiToolAuthContext } from "./tool-auth-shared.js";
 
-export type CodeExecutionConfig = {
+type CodeExecutionConfig = {
   enabled?: boolean;
   model?: string;
   maxTurns?: number;

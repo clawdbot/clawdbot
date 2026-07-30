@@ -591,6 +591,13 @@ describe("hardenApprovedExecutionPaths", () => {
       expectedArgvIndex: 5,
     },
     {
+      name: "pnpm cwd exec tsx file",
+      argv: ["pnpm", "-C", "./package", "exec", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 5,
+    },
+    {
       name: "pnpm js shim exec tsx file",
       argv: ["./pnpm.js", "exec", "tsx", "./run.ts"],
       scriptName: "run.ts",
@@ -626,6 +633,27 @@ describe("hardenApprovedExecutionPaths", () => {
       scriptName: "run.ts",
       initialBody: 'console.log("SAFE");\n',
       expectedArgvIndex: 4,
+    },
+    {
+      name: "npm x tsx file",
+      argv: ["npm", "x", "--", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 4,
+    },
+    {
+      name: "npm loglevel exec tsx file",
+      argv: ["npm", "--loglevel=silent", "exec", "--", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 5,
+    },
+    {
+      name: "npm cwd exec tsx file",
+      argv: ["npm", "-C", "./package", "exec", "--", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 6,
     },
   ];
 
@@ -684,6 +712,47 @@ describe("hardenApprovedExecutionPaths", () => {
       throw new Error("unreachable");
     }
     expect(prepared.plan.mutableFileOperand).toBeUndefined();
+  });
+
+  it("recognizes native binary headers across short positional reads", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const binaryPath = resolveNativeBinaryFixturePath();
+    if (canMutateNativeBinaryFixturePath(binaryPath)) {
+      return;
+    }
+    const realReadSync = fs.readSync.bind(fs);
+    let shortReadCalls = 0;
+    const readSpy = vi.spyOn(fs, "readSync").mockImplementation(((
+      fd: number,
+      buffer: NodeJS.ArrayBufferView,
+      offset: number,
+      length: number,
+      position: fs.ReadPosition | null,
+    ) => {
+      const cappedLength = typeof position === "number" ? Math.min(length, 1) : length;
+      if (cappedLength < length) {
+        shortReadCalls += 1;
+      }
+      return realReadSync(fd, buffer, offset, cappedLength, position);
+    }) as typeof fs.readSync);
+    try {
+      const prepared = buildSystemRunApprovalPlan({
+        command: ["/bin/sh", "-lc", binaryPath],
+        rawCommand: binaryPath,
+        cwd: process.cwd(),
+      });
+
+      expect(shortReadCalls).toBeGreaterThan(1);
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error("unreachable");
+      }
+      expect(prepared.plan.mutableFileOperand).toBeUndefined();
+    } finally {
+      readSpy.mockRestore();
+    }
   });
 
   it("keeps fail-closed behavior for relative native-binary shell payloads", () => {
@@ -1011,6 +1080,18 @@ describe("hardenApprovedExecutionPaths", () => {
         decoyName: "pipefail",
         expectedArgvIndex: 3,
       },
+      {
+        name: "mksh plus set option",
+        argv: ["mksh", "+o", "errexit", "./run.sh"],
+        decoyName: "errexit",
+        expectedArgvIndex: 3,
+      },
+      {
+        name: "yash plus interactive option",
+        argv: ["yash", "+i", "./run.sh"],
+        decoyName: "+i",
+        expectedArgvIndex: 2,
+      },
     ];
 
     for (const testCase of casesValue) {
@@ -1045,6 +1126,58 @@ describe("hardenApprovedExecutionPaths", () => {
         ).toBe(false);
       });
     }
+  });
+
+  it("does not bind opaque shell command operands as mutable script files", () => {
+    const tmp = createFixtureDir("openclaw-opaque-shell-operand-");
+    const scriptPath = path.join(tmp, "run.sh");
+    fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
+    fs.chmodSync(scriptPath, 0o755);
+    const snapshot = resolveMutableFileOperandSnapshotSync({
+      argv: ["nu", "--commands", "./run.sh"],
+      cwd: tmp,
+      shellCommand: null,
+    });
+    expect(snapshot).toEqual({ ok: true, snapshot: null });
+  });
+
+  it("denies opaque shell inline payloads hidden by startup options", () => {
+    const tmp = createFixtureDir("openclaw-opaque-shell-hidden-inline-");
+    const configPath = path.join(tmp, "config.nu");
+    const scriptPath = path.join(tmp, "run.sh");
+    fs.writeFileSync(configPath, "print hidden\n");
+    fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
+    fs.chmodSync(scriptPath, 0o755);
+
+    const prepared = buildSystemRunApprovalPlan({
+      command: ["nu", `--config=${configPath}`, "--commands", "./run.sh"],
+      cwd: tmp,
+    });
+
+    expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+  });
+
+  it("denies nushell execute payloads hidden by startup modes", () => {
+    const tmp = createFixtureDir("openclaw-nu-startup-execute-");
+    const scriptPath = path.join(tmp, "run.sh");
+    fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
+    fs.chmodSync(scriptPath, 0o755);
+
+    const prepared = buildSystemRunApprovalPlan({
+      command: ["nu", "--interactive", "--execute", "./run.sh"],
+      cwd: tmp,
+    });
+
+    expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+  });
+
+  it("denies startup-file shell wrappers with inline commands", () => {
+    expect(buildSystemRunApprovalPlan({ command: ["tcsh", "-c", "echo SAFE"] })).toEqual(
+      DENIED_RUNTIME_APPROVAL,
+    );
+    expect(
+      buildSystemRunApprovalPlan({ command: ["osh", "--rcfile", "/tmp/evil", "-c", "echo SAFE"] }),
+    ).toEqual(DENIED_RUNTIME_APPROVAL);
   });
 
   it("captures fish script operands with plus-prefixed filenames", () => {
@@ -1092,3 +1225,4 @@ describe("hardenApprovedExecutionPaths", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

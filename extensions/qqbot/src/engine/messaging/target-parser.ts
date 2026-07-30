@@ -15,6 +15,19 @@ interface ParsedTarget {
   id: string;
 }
 
+const TYPED_TARGET_RE = /^(c2c|group|channel):/i;
+
+function parseTypedTarget(value: string): ParsedTarget | undefined {
+  const match = TYPED_TARGET_RE.exec(value);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  return {
+    type: match[1].toLowerCase() as TargetType,
+    id: value.slice(match[0].length),
+  };
+}
+
 /**
  * Parse a qqbot target string into a structured delivery target.
  *
@@ -33,29 +46,13 @@ interface ParsedTarget {
  */
 export function parseTarget(to: string): ParsedTarget {
   const id = to.replace(/^qqbot:/i, "");
-
-  if (id.startsWith("c2c:")) {
-    const userId = id.slice(4);
-    if (!userId) {
-      throw new Error(`Invalid c2c target format: ${to} - missing user ID`);
+  const typedTarget = parseTypedTarget(id);
+  if (typedTarget) {
+    if (!typedTarget.id) {
+      const idKind = typedTarget.type === "c2c" ? "user" : typedTarget.type;
+      throw new Error(`Invalid ${typedTarget.type} target format: ${to} - missing ${idKind} ID`);
     }
-    return { type: "c2c", id: userId };
-  }
-
-  if (id.startsWith("group:")) {
-    const groupId = id.slice(6);
-    if (!groupId) {
-      throw new Error(`Invalid group target format: ${to} - missing group ID`);
-    }
-    return { type: "group", id: groupId };
-  }
-
-  if (id.startsWith("channel:")) {
-    const channelId = id.slice(8);
-    if (!channelId) {
-      throw new Error(`Invalid channel target format: ${to} - missing channel ID`);
-    }
-    return { type: "channel", id: channelId };
+    return typedTarget;
   }
 
   if (!id) {
@@ -73,8 +70,9 @@ export function parseTarget(to: string): ParsedTarget {
  */
 export function normalizeTarget(target: string): string | undefined {
   const id = target.replace(/^qqbot:/i, "");
-  if (id.startsWith("c2c:") || id.startsWith("group:") || id.startsWith("channel:")) {
-    return `qqbot:${id}`;
+  const typedTarget = parseTypedTarget(id);
+  if (typedTarget) {
+    return `qqbot:${typedTarget.type}:${typedTarget.id}`;
   }
   // 32-char hex openid
   if (/^[0-9a-fA-F]{32}$/.test(id)) {
@@ -91,10 +89,8 @@ export function normalizeTarget(target: string): string | undefined {
  * Return true when the string looks like a QQ Bot target ID.
  */
 export function looksLikeQQBotTarget(id: string): boolean {
-  if (/^qqbot:(c2c|group|channel):/i.test(id)) {
-    return true;
-  }
-  if (/^(c2c|group|channel):/i.test(id)) {
+  const unqualifiedId = id.replace(/^qqbot:/i, "");
+  if (parseTypedTarget(unqualifiedId)) {
     return true;
   }
   if (/^[0-9a-fA-F]{32}$/.test(id)) {

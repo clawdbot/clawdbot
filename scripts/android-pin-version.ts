@@ -18,7 +18,7 @@ type CliOptions = {
   sync: boolean;
 };
 
-export type PinAndroidVersionResult = {
+type PinAndroidVersionResult = {
   previousVersion: string | null;
   previousVersionCode: number | null;
   nextVersion: string;

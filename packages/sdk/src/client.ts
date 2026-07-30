@@ -13,6 +13,7 @@ import type {
   ArtifactsDownloadResult,
   ArtifactsGetResult,
   ArtifactsListResult,
+  EnvironmentCreateParams,
   EnvironmentSummary,
   EnvironmentsListResult,
   GatewayEvent,
@@ -723,7 +724,12 @@ export class Session {
   }
 
   async compact(params?: { maxLines?: number }): Promise<unknown> {
-    return await this.client.request("sessions.compact", { key: this.key, ...params });
+    return await this.client.request(
+      "sessions.compact",
+      { key: this.key, ...params },
+      // The server owns the configurable terminal compaction deadline.
+      { timeoutMs: null },
+    );
   }
 }
 
@@ -890,6 +896,7 @@ export class ToolsNamespace extends RpcNamespace {
   async invoke(name: string, params?: ToolInvokeParams): Promise<ToolInvokeResult> {
     return await this.call("invoke", {
       name,
+      conversationReadOrigin: "direct-operator",
       ...(params?.args ? { args: params.args } : {}),
       ...(params?.sessionKey ? { sessionKey: params.sessionKey } : {}),
       ...(params?.agentId ? { agentId: params.agentId } : {}),
@@ -950,13 +957,16 @@ export class EnvironmentsNamespace extends RpcNamespace {
     return await this.call("list", params === undefined ? {} : params);
   }
 
-  async create(params?: unknown): Promise<unknown> {
-    void params;
-    return unsupportedGatewayApi("oc.environments.create");
+  async create(params: EnvironmentCreateParams): Promise<EnvironmentSummary> {
+    return await this.call("create", params);
   }
 
   async status(environmentId: string): Promise<EnvironmentSummary> {
     return await this.call("status", { environmentId });
+  }
+
+  async destroy(environmentId: string): Promise<EnvironmentSummary> {
+    return await this.call("destroy", { environmentId });
   }
 
   async delete(environmentId: string): Promise<unknown> {
@@ -964,3 +974,4 @@ export class EnvironmentsNamespace extends RpcNamespace {
     return unsupportedGatewayApi("oc.environments.delete");
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -23,7 +23,7 @@ vi.mock(
   async () =>
     await createSanitizeSessionHistoryProviderHookRuntimeMock({
       resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>
-        provider === "openai"
+        provider === "openai" || provider === "openrouter"
           ? {
               buildReplayPolicy: (context?: { modelApi?: string }) => ({
                 // Completions APIs need strict ids; Responses can preserve richer
@@ -193,5 +193,64 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
 
     const toolResult = result[1] as { toolCallId?: string };
     expect(toolResult.toolCallId).toBe(toolCall?.id);
+  });
+
+  it("keeps repeated Kimi calls distinct while repairing an incomplete later turn", async () => {
+    const firstRawId = "functions.gateway:0|fc_tmp_first";
+    const secondRawId = "functions.gateway:0|fc_tmp_second";
+    const result = await sanitizeSessionHistory({
+      messages: [
+        castAgentMessage({
+          role: "assistant",
+          content: [{ type: "toolCall", id: firstRawId, name: "gateway", arguments: {} }],
+        }),
+        castAgentMessage({
+          role: "toolResult",
+          toolCallId: firstRawId,
+          toolName: "gateway",
+          content: [{ type: "text", text: "first result" }],
+          isError: false,
+        }),
+        castAgentMessage({ role: "user", content: "check again" }),
+        castAgentMessage({
+          role: "assistant",
+          content: [{ type: "toolCall", id: secondRawId, name: "gateway", arguments: {} }],
+        }),
+        castAgentMessage({ role: "user", content: "continue" }),
+      ],
+      modelApi: "openai-responses",
+      provider: "openrouter",
+      modelId: "moonshotai/kimi-k2.5",
+      sessionManager: makeSessionManager(),
+      sessionId: "test-session",
+    });
+
+    const firstAssistant = result[0] as { content?: Array<{ type?: string; id?: string }> };
+    const secondAssistant = result[3] as { content?: Array<{ type?: string; id?: string }> };
+    const firstCallId = firstAssistant.content?.find((block) => block.type === "toolCall")?.id;
+    const secondCallId = secondAssistant.content?.find((block) => block.type === "toolCall")?.id;
+    expect(firstCallId).toMatch(/^call_[A-Za-z0-9_-]+$/);
+    expect(secondCallId).toMatch(/^call_[A-Za-z0-9_-]+$/);
+    expect(secondCallId).not.toBe(firstCallId);
+    expect(result[1]).toMatchObject({
+      role: "toolResult",
+      toolCallId: firstCallId,
+      isError: false,
+      content: [{ type: "text", text: "first result" }],
+    });
+    expect(result[4]).toMatchObject({
+      role: "toolResult",
+      toolCallId: secondCallId,
+      isError: true,
+      content: [{ type: "text", text: "aborted" }],
+    });
+    expect(result.map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "user",
+      "assistant",
+      "toolResult",
+      "user",
+    ]);
   });
 });

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   ensurePortAvailable: vi.fn<(port: number, host?: string) => Promise<void>>(),
+  resolveSshClient: vi.fn<() => string | null>(() => "/usr/bin/ssh"),
   spawn: vi.fn(),
 }));
 
@@ -16,6 +17,10 @@ vi.mock("./ports.js", async (importOriginal) => ({
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: mocks.spawn,
+}));
+
+vi.mock("./ssh-client.js", () => ({
+  resolveSshClient: mocks.resolveSshClient,
 }));
 
 import { PortInUseError } from "./ports.js";
@@ -38,6 +43,19 @@ describe("parseSshTarget", () => {
     });
   });
 
+  it("preserves OpenSSH alias and username tokens", () => {
+    expect(parseSshTarget("me+prod@prod+gpu:2222")).toEqual({
+      user: "me+prod",
+      host: "prod+gpu",
+      port: 2222,
+    });
+    expect(parseSshTarget(String.raw`DOMAIN\alice@jump+gpu`)).toEqual({
+      user: String.raw`DOMAIN\alice`,
+      host: "jump+gpu",
+      port: 22,
+    });
+  });
+
   it("rejects invalid hosts and ports", () => {
     expect(parseSshTarget("")).toBeNull();
     expect(parseSshTarget("me@example.com:0")).toBeNull();
@@ -46,7 +64,17 @@ describe("parseSshTarget", () => {
     expect(parseSshTarget("me@example.com:not-a-port")).toBeNull();
     expect(parseSshTarget("-V")).toBeNull();
     expect(parseSshTarget("me@-badhost")).toBeNull();
+    expect(parseSshTarget("-oProxyCommand=touch@example.com")).toBeNull();
     expect(parseSshTarget("-oProxyCommand=echo")).toBeNull();
+  });
+
+  it("rejects targets that cannot be embedded in ssh config directives", () => {
+    expect(parseSshTarget("example.com\n  ProxyCommand touch marker")).toBeNull();
+    expect(parseSshTarget("example.com\r  ProxyCommand touch marker")).toBeNull();
+    expect(parseSshTarget("example.com\n  ProxyCommand touch marker:2222")).toBeNull();
+    expect(parseSshTarget("me\nProxyCommand=touch@example.com")).toBeNull();
+    expect(parseSshTarget("bad host")).toBeNull();
+    expect(parseSshTarget("me name@example.com")).toBeNull();
   });
 
   it("rejects hostnames with stray leading or trailing colons", () => {
@@ -65,6 +93,7 @@ describe("startSshPortForward", () => {
   const openServers: net.Server[] = [];
 
   afterEach(async () => {
+    vi.useRealTimers();
     while (openServers.length > 0) {
       const server = openServers.pop();
       await new Promise<void>((resolve) => {
@@ -72,6 +101,8 @@ describe("startSshPortForward", () => {
       });
     }
     mocks.ensurePortAvailable.mockReset();
+    mocks.resolveSshClient.mockReset();
+    mocks.resolveSshClient.mockReturnValue("/usr/bin/ssh");
     mocks.spawn.mockReset();
   });
 
@@ -106,6 +137,22 @@ describe("startSshPortForward", () => {
       return child;
     });
   }
+
+  it("fails before port probing when no trusted SSH client is installed", async () => {
+    mocks.resolveSshClient.mockReturnValueOnce(null);
+
+    await expect(
+      startSshPortForward({
+        target: "me@example.com",
+        localPortPreferred: 43210,
+        remotePort: 18789,
+        timeoutMs: 250,
+      }),
+    ).rejects.toThrow("trusted SSH client not found in system directories");
+
+    expect(mocks.ensurePortAvailable).not.toHaveBeenCalled();
+    expect(mocks.spawn).not.toHaveBeenCalled();
+  });
 
   it("scopes the preferred-port preflight to the IPv4 loopback interface", async () => {
     const sentinel = new Error("stop before spawning ssh");
@@ -163,4 +210,70 @@ describe("startSshPortForward", () => {
 
     await tunnel.stop();
   });
+
+  it("rejects with the spawn error when ssh binary is missing", async () => {
+    vi.useFakeTimers();
+    const spawnError = new Error("ENOENT: no such file or directory, spawn /usr/bin/ssh");
+    (spawnError as NodeJS.ErrnoException).code = "ENOENT";
+    const kill = vi.fn(() => false);
+    mocks.spawn.mockImplementation(() => {
+      const child = new EventEmitter() as EventEmitter & {
+        killed: boolean;
+        pid?: number;
+        stderr: EventEmitter & { setEncoding: (enc: string) => void };
+        kill: (signal?: string) => boolean;
+      };
+      child.killed = false;
+      const stderr = new EventEmitter() as EventEmitter & { setEncoding: (enc: string) => void };
+      stderr.setEncoding = () => {};
+      child.stderr = stderr;
+      child.kill = kill;
+      queueMicrotask(() => {
+        child.emit("error", spawnError);
+        child.emit("close", -2, null);
+      });
+      return child;
+    });
+
+    const forwarding = startSshPortForward({
+      target: "me@example.com:2222",
+      localPortPreferred: 43210,
+      remotePort: 18789,
+      timeoutMs: 500,
+    });
+    const rejection = expect(forwarding).rejects.toMatchObject({
+      message: expect.stringContaining("ENOENT"),
+      cause: spawnError,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
+    await rejection;
+    expect(kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it.each(["active", "teardown"] as const)(
+    "does not crash when stderr errors while the tunnel is %s",
+    async (phase) => {
+      vi.useFakeTimers();
+      spawnFakeSshListening();
+
+      const tunnel = await startSshPortForward({
+        target: "me@example.com:2222",
+        localPortPreferred: 43210,
+        remotePort: 18789,
+        timeoutMs: 1000,
+      });
+
+      const child = mocks.spawn.mock.results[0]?.value as EventEmitter & {
+        killed: boolean;
+        stderr: EventEmitter;
+      };
+      const stopping = phase === "teardown" ? tunnel.stop() : undefined;
+      expect(child.killed).toBe(phase === "teardown");
+      expect(() => child.stderr.emit("error", new Error("stderr EPIPE"))).not.toThrow();
+
+      await expect(stopping ?? tunnel.stop()).resolves.toBeUndefined();
+    },
+  );
 });

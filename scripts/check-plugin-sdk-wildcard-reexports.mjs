@@ -48,7 +48,7 @@ export function findPluginSdkWildcardReexports(source) {
 /**
  * Collects extension API barrels that wildcard re-export plugin SDK subpaths.
  */
-export async function collectPluginSdkWildcardReexports(rootDir = repoRoot) {
+async function collectPluginSdkWildcardReexports(rootDir = repoRoot) {
   const files = await listExtensionApiFiles(path.join(rootDir, "extensions"));
   const violations = [];
   for (const filePath of files) {

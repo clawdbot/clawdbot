@@ -14,8 +14,8 @@ const emptySnapshot: StatusPluginHealthSnapshot = {
 };
 
 describe("plugin health status formatting", () => {
-  it("shows a tiny OK line when there are no plugin health problems", () => {
-    expect(formatCompactPluginHealthLine(emptySnapshot)).toBe("🔌 Plugins: OK");
+  it("omits the compact line when there are no plugin health problems", () => {
+    expect(formatCompactPluginHealthLine(emptySnapshot)).toBeUndefined();
   });
 
   it("summarizes plugin errors and context engine quarantines in the compact line", () => {
@@ -119,7 +119,7 @@ describe("plugin health status formatting", () => {
           },
         ],
       }),
-    ).toBe("🔌 Plugins: OK");
+    ).toBeUndefined();
   });
 
   it("merges runtime health into installed plugin snapshots for detailed status", () => {
@@ -132,8 +132,8 @@ describe("plugin health status formatting", () => {
           {
             pluginId: "compat-only",
             severity: "warn",
-            code: "legacy-before-agent-start",
-            message: "still uses legacy before_agent_start",
+            code: "hook-only",
+            message: "is hook-only",
           },
         ],
       },
@@ -192,8 +192,8 @@ describe("plugin health status formatting", () => {
     expect(snapshot.compatibilityNotices).toContainEqual({
       pluginId: "compat-only",
       severity: "warn",
-      code: "legacy-before-agent-start",
-      message: "still uses legacy before_agent_start",
+      code: "hook-only",
+      message: "is hook-only",
     });
   });
 
@@ -243,12 +243,75 @@ describe("plugin health status formatting", () => {
     );
     expect(text).toContain("Loaded: 1 (ok-plugin)");
     expect(text).toContain("Disabled: 1");
+    expect(text).toContain("- disabled: 1 (disabled-plugin)");
     expect(text).toContain("- bad-plugin [load]: module failed");
     expect(text).toContain("- bad_tool owner=plugin:bad-tools: unsupported anyOf");
     expect(text).toContain("- sms plugin=sms-plugin [setup]: setup failed");
     expect(text).toContain("Diagnostics: 0 errors · 1 warnings");
     expect(text).toContain("- WARN legacy-plugin [hook-only]: uses a compatibility shim");
     expect(text).toContain("Full inventory: /plugins list");
+  });
+
+  it("groups disabled plugins by their recorded disable reason", () => {
+    const text = formatDetailedPluginHealth({
+      plugins: [
+        { id: "zeta", status: "disabled", enabled: false, error: "not in allowlist" },
+        {
+          id: "alpha",
+          status: "disabled",
+          enabled: false,
+          error: "overridden by better-alpha plugin",
+        },
+        { id: "beta", status: "disabled", enabled: false, error: "not in allowlist" },
+        // No recorded reason (hand-built snapshot): falls back to a plain "disabled".
+        { id: "mid", status: "disabled", enabled: false },
+      ],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+    });
+
+    const lines = text.split("\n");
+    const disabledAt = lines.indexOf("Disabled: 4");
+    expect(disabledAt).toBeGreaterThan(-1);
+    // One line per distinct reason, right under the count, in deterministic
+    // reason order with alphabetical plugin ids.
+    expect(lines.slice(disabledAt + 1, disabledAt + 4)).toEqual([
+      "- disabled: 1 (mid)",
+      "- not in allowlist: 2 (beta, zeta)",
+      "- overridden by better-alpha plugin: 1 (alpha)",
+    ]);
+  });
+
+  it("caps disabled reason lines and per-reason id lists", () => {
+    const distinctReasons = formatDetailedPluginHealth({
+      plugins: Array.from({ length: 9 }, (_, index) => ({
+        id: `plugin-${index}`,
+        status: "disabled" as const,
+        enabled: false,
+        error: `reason ${index}`,
+      })),
+      diagnostics: [],
+      contextEngineQuarantines: [],
+    });
+    expect(distinctReasons).toContain("Disabled: 9");
+    expect(distinctReasons).toContain("- reason 7: 1 (plugin-7)");
+    expect(distinctReasons).not.toContain("reason 8");
+    expect(distinctReasons).toContain("- +1 more reasons");
+
+    const sharedReason = formatDetailedPluginHealth({
+      plugins: Array.from({ length: 10 }, (_, index) => ({
+        id: `plugin-${index}`,
+        status: "disabled" as const,
+        enabled: false,
+        error: "not in allowlist",
+      })),
+      diagnostics: [],
+      contextEngineQuarantines: [],
+    });
+    expect(sharedReason).toContain("Disabled: 10");
+    expect(sharedReason).toContain(
+      "- not in allowlist: 10 (plugin-0, plugin-1, plugin-2, plugin-3, plugin-4, plugin-5, plugin-6, plugin-7, +2 more)",
+    );
   });
 
   it("separates runtime-loaded plugins from installed-but-not-active inventory", () => {

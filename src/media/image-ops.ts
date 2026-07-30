@@ -2,7 +2,6 @@
 import {
   createRastermill,
   isRastermillUnavailableError,
-  RastermillError,
   RastermillUnavailableError,
   readImageProbeFromHeader as readRastermillImageProbeFromHeader,
   readImageMetadataFromHeader as readRastermillImageMetadataFromHeader,
@@ -11,11 +10,12 @@ import {
 } from "rastermill";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
 export type { ImageMetadata, ImageProbe };
 
 /** OpenClaw-facing image backend availability error, preserving the failed operation and causes. */
-export class ImageProcessorUnavailableError extends Error {
+class ImageProcessorUnavailableError extends Error {
   readonly code = "IMAGE_PROCESSOR_UNAVAILABLE";
   readonly operation: string;
   readonly causes: unknown[];
@@ -31,18 +31,10 @@ export class ImageProcessorUnavailableError extends Error {
 }
 
 /** JPEG resize request passed through the media-runtime/plugin SDK surface. */
-export type ResizeToJpegParams = {
+type ResizeToJpegParams = {
   buffer: Buffer;
   maxSide: number;
   quality: number;
-  withoutEnlargement?: boolean;
-};
-
-/** PNG resize request passed through the media-runtime/plugin SDK surface. */
-export type ResizeToPngParams = {
-  buffer: Buffer;
-  maxSide: number;
-  compressionLevel?: number;
   withoutEnlargement?: boolean;
 };
 
@@ -50,6 +42,8 @@ export type ResizeToPngParams = {
 export const IMAGE_REDUCE_QUALITY_STEPS = [85, 75, 65, 55, 45, 35] as const;
 /** Shared input/output pixel cap for Rastermill-backed image operations. */
 export const MAX_IMAGE_INPUT_PIXELS = 25_000_000;
+
+const loadPhotonRuntime = createLazyRuntimeModule(() => import("./photon.runtime.js"));
 
 /** Creates a Rastermill processor with OpenClaw temp-dir, pixel-limit, and command trust policy. */
 export function createImageProcessor() {
@@ -104,26 +98,6 @@ export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | 
   return info ? { width: info.width, height: info.height } : null;
 }
 
-/** Normalizes EXIF orientation when possible while leaving bytes unchanged if the backend is unavailable. */
-export async function normalizeExifOrientation(buffer: Buffer): Promise<Buffer> {
-  try {
-    const rastermill = createImageProcessor();
-    const info = await rastermill.probe(buffer);
-    if (!info) {
-      return (await rastermill.encode(buffer, { format: "jpeg", autoOrient: true })).data;
-    }
-    if (!info?.orientation || info.orientation === 1) {
-      return buffer;
-    }
-    return (await rastermill.encode(buffer, { format: "jpeg", autoOrient: true })).data;
-  } catch (error) {
-    if (isImageProcessorUnavailableError(error)) {
-      return buffer;
-    }
-    throw error;
-  }
-}
-
 /** Resizes or encodes image bytes as JPEG through the shared image processor. */
 export async function resizeToJpeg(params: ResizeToJpegParams): Promise<Buffer> {
   try {
@@ -142,53 +116,45 @@ export async function resizeToJpeg(params: ResizeToJpegParams): Promise<Buffer> 
   }
 }
 
-/** Converts HEIC/HEIF-like image bytes into JPEG through the shared image processor. */
-export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
+async function encodeImageToJpeg(buffer: Buffer, operation: string): Promise<Buffer> {
   try {
     return (await createImageProcessor().encode(buffer, { format: "jpeg" })).data;
   } catch (error) {
-    return wrapRastermillUnavailable("convertHeicToJpeg", error);
+    return wrapRastermillUnavailable(operation, error);
   }
 }
 
-/** Detects alpha support using a full transparency probe, falling back to trusted header metadata. */
-export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
-  try {
-    return (await createImageProcessor().transparency(buffer)).hasAlphaChannel;
-  } catch (error) {
-    // Some callers only need the header-declared alpha bit; keep that usable when decode fails.
-    const headerHasAlpha = readRastermillImageProbeFromHeader(buffer)?.hasAlpha === true;
-    if (isRastermillUnavailableError(error)) {
-      return headerHasAlpha;
-    }
-    if (
-      error instanceof RastermillError &&
-      error.code === "RASTERMILL_UNDECODABLE" &&
-      readRastermillImageProbeFromHeader(buffer)
-    ) {
-      return headerHasAlpha;
-    }
-    throw error;
-  }
+/** Converts image bytes into JPEG through the shared image processor. */
+export async function convertImageToJpeg(buffer: Buffer): Promise<Buffer> {
+  return await encodeImageToJpeg(buffer, "convertImageToJpeg");
 }
 
-/** Resizes or encodes image bytes as PNG through the shared image processor. */
-export async function resizeToPng(params: ResizeToPngParams): Promise<Buffer> {
+/** Converts HEIC/HEIF-like image bytes into JPEG through the shared image processor. */
+export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
+  return await encodeImageToJpeg(buffer, "convertHeicToJpeg");
+}
+
+/** Converts image bytes to PNG, including BMP fallback unsupported by Rastermill's Photon gate. */
+export async function convertImageToPng(buffer: Buffer): Promise<Buffer> {
   try {
-    return (
-      await createImageProcessor().encode(params.buffer, {
-        format: "png",
-        resize: {
-          maxSide: params.maxSide,
-          enlarge: params.withoutEnlargement === false,
-        },
-        ...(params.compressionLevel === undefined
-          ? {}
-          : { compressionLevel: params.compressionLevel }),
-      })
-    ).data;
+    return (await createImageProcessor().encode(buffer, { format: "png" })).data;
   } catch (error) {
-    return wrapRastermillUnavailable("resizeToPng", error);
+    const probe = readRastermillImageProbeFromHeader(buffer);
+    const withinPixelLimit =
+      probe &&
+      probe.format === "bmp" &&
+      probe.width > 0 &&
+      probe.height > 0 &&
+      probe.width <= MAX_IMAGE_INPUT_PIXELS / probe.height;
+    if (!withinPixelLimit) {
+      throw error;
+    }
+
+    try {
+      return (await loadPhotonRuntime()).convertBmpToPngWithPhoton(buffer);
+    } catch {
+      throw error;
+    }
   }
 }
 

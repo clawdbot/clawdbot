@@ -5,11 +5,8 @@
  * message routing, queue settings, hooks, and embedded-run state.
  */
 export { getRuntimeConfig } from "../config/config.js";
-export {
-  loadSessionStore,
-  resolveAgentIdFromSessionKey,
-  resolveStorePath,
-} from "../config/sessions.js";
+export { resolveAgentIdFromSessionKey, resolveStorePath } from "../config/sessions.js";
+export { loadSessionEntryReadOnly as loadSessionEntry } from "../config/sessions/session-accessor.js";
 export { callGateway } from "../gateway/call.js";
 export { dispatchGatewayMethodInProcess } from "../gateway/server-plugins.js";
 export { resolveQueueSettings } from "../auto-reply/reply/queue.js";

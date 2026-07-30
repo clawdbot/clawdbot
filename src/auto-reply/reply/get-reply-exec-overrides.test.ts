@@ -81,4 +81,41 @@ describe("reply exec overrides", () => {
       ask: "always",
     });
   });
+
+  it("carries the node cwd separately from the Gateway workspace", () => {
+    expect(
+      resolveReplyExecOverrides({
+        directives: parseInlineDirectives("run a command"),
+        sessionEntry: createSessionEntry({
+          execHost: "node",
+          execNode: "macbook",
+          execCwd: "/Users/peter/Projects/openclaw",
+        }),
+      }),
+    ).toEqual({
+      host: "node",
+      security: undefined,
+      ask: undefined,
+      node: "macbook",
+      nodeCwd: "/Users/peter/Projects/openclaw",
+    });
+  });
+
+  it("does not carry a stored cwd across an inline node override", () => {
+    expect(
+      resolveReplyExecOverrides({
+        directives: parseInlineDirectives("/exec node=other-node"),
+        sessionEntry: createSessionEntry({
+          execHost: "node",
+          execNode: "macbook",
+          execCwd: "/Users/peter/Projects/openclaw",
+        }),
+      }),
+    ).toEqual({
+      host: "node",
+      security: undefined,
+      ask: undefined,
+      node: "other-node",
+    });
+  });
 });

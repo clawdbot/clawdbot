@@ -35,6 +35,7 @@ type InteractiveDispatchParams =
       data: string;
       dedupeId: string;
       onMatched?: () => Promise<void> | void;
+      afterInvoke?: (result: { handled?: boolean } | void) => Promise<void> | void;
       ctx: Omit<
         TelegramInteractiveHandlerContext,
         | "callback"
@@ -57,6 +58,7 @@ type InteractiveDispatchParams =
       data: string;
       dedupeId: string;
       onMatched?: () => Promise<void> | void;
+      afterInvoke?: (result: { handled?: boolean } | void) => Promise<void> | void;
       ctx: Omit<
         DiscordInteractiveHandlerContext,
         | "interaction"
@@ -78,6 +80,7 @@ type InteractiveDispatchParams =
       data: string;
       dedupeId: string;
       onMatched?: () => Promise<void> | void;
+      afterInvoke?: (result: { handled?: boolean } | void) => Promise<void> | void;
       ctx: Omit<
         SlackInteractiveHandlerContext,
         | "interaction"
@@ -247,6 +250,7 @@ async function dispatchInteractiveWith(
         data: params.data,
         dedupeId: params.dedupeId,
         onMatched: params.onMatched,
+        afterInvoke: params.afterInvoke,
         invoke: ({ registration, namespace, payload }) => {
           const { callbackMessage, ...handlerContext } = params.ctx;
           return registration.handler({
@@ -284,6 +288,7 @@ async function dispatchInteractiveWith(
         data: params.data,
         dedupeId: params.dedupeId,
         onMatched: params.onMatched,
+        afterInvoke: params.afterInvoke,
         invoke: ({ registration, namespace, payload }) =>
           registration.handler({
             ...params.ctx,
@@ -315,6 +320,7 @@ async function dispatchInteractiveWith(
       data: params.data,
       dedupeId: params.dedupeId,
       onMatched: params.onMatched,
+      afterInvoke: params.afterInvoke,
       invoke: ({ registration, namespace, payload }) =>
         registration.handler({
           ...params.ctx,
@@ -899,6 +905,39 @@ describe("plugin interactive handlers", () => {
       duplicate: false,
     });
     expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not consume dedupe keys when post-handler processing throws", async () => {
+    const handler = vi.fn(async () => ({ handled: true }));
+    const afterInvoke = vi
+      .fn(async () => {})
+      .mockRejectedValueOnce(new Error("post-handler failure"))
+      .mockResolvedValueOnce(undefined);
+    expect(
+      registerPluginInteractiveHandler("codex-plugin", {
+        channel: "telegram",
+        namespace: "codex",
+        handler,
+      }),
+    ).toEqual({ ok: true });
+
+    const baseParams = {
+      ...createTelegramDispatchParams({
+        data: "codex:resume:thread-1",
+        callbackId: "cb-post-handler-failure",
+      }),
+      afterInvoke,
+    };
+
+    await expect(dispatchInteractive(baseParams)).rejects.toThrow("post-handler failure");
+    await expect(dispatchInteractive(baseParams)).resolves.toEqual({
+      matched: true,
+      handled: true,
+      duplicate: false,
+    });
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(afterInvoke).toHaveBeenCalledTimes(2);
+    expect(afterInvoke).toHaveBeenLastCalledWith({ handled: true });
   });
 
   it("dedupes concurrent interactive dispatches while a handler is still running", async () => {

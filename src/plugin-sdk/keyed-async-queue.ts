@@ -38,6 +38,10 @@ export function enqueueKeyedTask<T>(params: {
 export class KeyedAsyncQueue {
   private readonly tails = new Map<string, Promise<void>>();
 
+  /**
+   * @deprecated Retained for shipped Plugin SDK compatibility. New callers must
+   * not depend on queue storage; remove in a declared Plugin SDK breaking window.
+   */
   getTailMapForTesting(): Map<string, Promise<void>> {
     return this.tails;
   }

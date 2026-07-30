@@ -225,14 +225,8 @@ describe("gateway-smoke", () => {
 
   it("rejects duplicate CLI args before connecting", () => {
     for (const [flag, args] of [
-      [
-        "--url",
-        ["--url", "ws://127.0.0.1:9", "--url", "ws://127.0.0.1:10", "--token", "token"],
-      ],
-      [
-        "--token",
-        ["--url", "ws://127.0.0.1:9", "--token", "one", "--token", "two"],
-      ],
+      ["--url", ["--url", "ws://127.0.0.1:9", "--url", "ws://127.0.0.1:10", "--token", "token"]],
+      ["--token", ["--url", "ws://127.0.0.1:9", "--token", "one", "--token", "two"]],
       ["--help", ["--help", "--help"]],
     ] as const) {
       const result = spawnSync(

@@ -78,6 +78,7 @@ export function logRuntimeToolSchemaQuarantine(params: {
   diagnostics: readonly RuntimeToolSchemaDiagnostic[];
   tools: readonly AnyAgentTool[];
   runId: string;
+  agentId: string;
   sessionKey?: string;
   sessionId?: string;
 }): void {
@@ -96,6 +97,7 @@ export function logRuntimeToolSchemaQuarantine(params: {
       emitTrustedDiagnosticEvent({
         type: "tool.execution.blocked",
         runId: params.runId,
+        agentId: params.agentId,
         ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
         ...(params.sessionId ? { sessionId: params.sessionId } : {}),
         toolName: diagnostic.toolName,

@@ -2,15 +2,19 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import dotenv from "dotenv";
+import { parse as parseDotEnv } from "dotenv";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveConfigDir } from "../utils.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
 import { normalizeEnvVarKey } from "./host-env-security.js";
+import { readRegularFileSync } from "./regular-file.js";
 
 // Global dotenv loading imports operator-level gateway env files without
 // overriding variables already present in the process environment.
 const logger = createSubsystemLogger("infra:dotenv");
+
+/** Maximum bytes to read from any dotenv file. */
+const MAX_DOTENV_FILE_BYTES = 1024 * 1024;
 
 type DotEnvEntry = {
   key: string;
@@ -34,9 +38,16 @@ export function readDotEnvFile(params: {
   filePath: string;
   quiet?: boolean;
 }): LoadedDotEnvFile | null {
-  let content: string;
+  let content: Buffer;
   try {
-    content = fs.readFileSync(params.filePath, "utf8");
+    // Resolve symlinks so a symlinked .env file works while the bounded
+    // read still rejects oversized targets.
+    const resolved = fs.realpathSync(params.filePath);
+    const { buffer } = readRegularFileSync({
+      filePath: resolved,
+      maxBytes: MAX_DOTENV_FILE_BYTES,
+    });
+    content = buffer;
   } catch (error) {
     if (!params.quiet) {
       const code =
@@ -44,21 +55,19 @@ export function readDotEnvFile(params: {
       if (code !== "ENOENT") {
         logger.warn(`Failed to read ${params.filePath}: ${String(error)}`, { error });
       }
+      // Surface oversized files so operators know a configured file was
+      // skipped rather than leaving them silently ignored.
+      if (error instanceof Error && error.message?.startsWith("File exceeds")) {
+        logger.warn(
+          `skipping oversized .env file (max ${MAX_DOTENV_FILE_BYTES} bytes): ${params.filePath}`,
+        );
+      }
     }
     return null;
   }
 
-  let parsed: Record<string, string>;
-  try {
-    parsed = dotenv.parse(content);
-  } catch (error) {
-    if (!params.quiet) {
-      logger.warn(`Failed to parse ${params.filePath}: ${String(error)}`, { error });
-    }
-    return null;
-  }
   const entries: DotEnvEntry[] = [];
-  for (const [rawKey, value] of Object.entries(parsed)) {
+  for (const [rawKey, value] of Object.entries(parseDotEnv(content))) {
     const key = normalizeEnvVarKey(rawKey, { portable: true });
     if (key && (params.entryFilter?.(key, value) ?? true)) {
       entries.push({ key, value });

@@ -15,6 +15,7 @@ import {
   extractStatesFromUpserts,
   hoisted,
   installAcpSessionManagerTestLifecycle,
+  mockParentedAcpSessionEntries,
   mockCallArg,
   readySessionMeta,
   resetAcpSessionManagerForTests,
@@ -83,6 +84,7 @@ describe("AcpSessionManager turn results", () => {
       const manager = new AcpSessionManager();
       await expect(
         manager.runTurn({
+          provenance: "system",
           cfg: baseCfg,
           sessionKey: "agent:codex:acp:child-1",
           text: "Investigate and report back",
@@ -168,6 +170,7 @@ describe("AcpSessionManager turn results", () => {
       const events: string[] = [];
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Print the current directory",
@@ -251,6 +254,7 @@ describe("AcpSessionManager turn results", () => {
 
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Inspect and report back",
@@ -326,6 +330,7 @@ describe("AcpSessionManager turn results", () => {
 
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Inspect and report back",
@@ -401,6 +406,7 @@ describe("AcpSessionManager turn results", () => {
 
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Inspect and report back",
@@ -476,6 +482,7 @@ describe("AcpSessionManager turn results", () => {
       const events: string[] = [];
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Inspect and report back",
@@ -549,6 +556,7 @@ describe("AcpSessionManager turn results", () => {
       const events: string[] = [];
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Produce a final result",
@@ -642,6 +650,7 @@ describe("AcpSessionManager turn results", () => {
       const events: string[] = [];
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Investigate and report back",
@@ -662,50 +671,57 @@ describe("AcpSessionManager turn results", () => {
   });
 
   it("keeps startTurn cancelled results as non-error terminal turns", async () => {
-    const runtimeState = createRuntime();
-    const closeStream = vi.fn(async () => {});
-    runtimeState.runtime.startTurn = vi.fn((input) => ({
-      requestId: input.requestId,
-      events: (async function* () {
-        yield { type: "text_delta" as const, stream: "output" as const, text: "stopping" };
-      })(),
-      result: Promise.resolve({
-        status: "cancelled" as const,
-        stopReason: "manual-cancel",
-      }),
-      cancel: vi.fn(async () => {}),
-      closeStream,
-    }));
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey: "agent:codex:acp:session-1",
-      storeSessionKey: "agent:codex:acp:session-1",
-      acp: readySessionMeta(),
-    });
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      const closeStream = vi.fn(async () => {});
+      runtimeState.runtime.startTurn = vi.fn((input) => ({
+        requestId: input.requestId,
+        events: (async function* () {
+          yield { type: "text_delta" as const, stream: "output" as const, text: "stopping" };
+        })(),
+        result: Promise.resolve({
+          status: "cancelled" as const,
+        }),
+        cancel: vi.fn(async () => {}),
+        closeStream,
+      }));
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:main:main",
+      });
 
-    const events: string[] = [];
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-1",
-      text: "long task",
-      mode: "prompt",
-      requestId: "run-1",
-      onEvent: (event) => {
-        events.push(event.type);
-      },
-    });
+      const events: AcpRuntimeEvent[] = [];
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        text: "long task",
+        mode: "prompt",
+        requestId: "run-1",
+        onEvent: (event) => {
+          events.push(event);
+        },
+      });
 
-    expect(runtimeState.runTurn).not.toHaveBeenCalled();
-    expect(closeStream).toHaveBeenCalledWith({ reason: "turn-result-cancelled" });
-    expect(events).toEqual(["text_delta", "done"]);
-    const states = extractStatesFromUpserts();
-    expect(states).toContain("running");
-    expect(states).toContain("idle");
-    expect(states).not.toContain("error");
+      expect(runtimeState.runTurn).not.toHaveBeenCalled();
+      expect(closeStream).toHaveBeenCalledWith({ reason: "turn-result-cancelled" });
+      expect(events.map((event) => event.type)).toEqual(["text_delta", "done"]);
+      expect(events.at(-1)).toEqual({ type: "done", status: "cancelled" });
+      expectRecordFields(requireTaskByRunId("run-1"), {
+        ownerKey: "agent:main:main",
+        childSessionKey: "agent:codex:acp:child-1",
+        status: "cancelled",
+      });
+      const states = extractStatesFromUpserts();
+      expect(states).toContain("running");
+      expect(states).toContain("idle");
+      expect(states).not.toContain("error");
+    });
   });
 
   it("fails immediately when startTurn events fail before terminal result settles", async () => {
@@ -734,6 +750,7 @@ describe("AcpSessionManager turn results", () => {
     const manager = new AcpSessionManager();
     await expect(
       manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:session-1",
         text: "do work",
@@ -820,6 +837,7 @@ describe("AcpSessionManager turn results", () => {
       const manager = new AcpSessionManager();
       await expect(
         manager.runTurn({
+          provenance: "system",
           cfg: baseCfg,
           sessionKey: "agent:codex:acp:child-1",
           text: "Investigate and report back",
@@ -857,6 +875,7 @@ describe("AcpSessionManager turn results", () => {
     const manager = new AcpSessionManager();
     await expect(
       manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:session-1",
         text: "do work",
@@ -893,6 +912,7 @@ describe("AcpSessionManager turn results", () => {
     const manager = new AcpSessionManager();
     await expectRejectedRecord(
       manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:session-1",
         text: "do work",
@@ -937,6 +957,7 @@ describe("AcpSessionManager turn results", () => {
       const manager = new AcpSessionManager();
       await expect(
         manager.runTurn({
+          provenance: "system",
           cfg: baseCfg,
           sessionKey: "agent:codex:acp:session-1",
           text: "do work",
@@ -1020,6 +1041,7 @@ describe("AcpSessionManager turn results", () => {
     const manager = new AcpSessionManager();
     const runTurn = () =>
       manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey,
         text: "do work",
@@ -1100,3 +1122,4 @@ describe("AcpSessionManager turn results", () => {
     expect(scenario.runtimeState.ensureSession).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

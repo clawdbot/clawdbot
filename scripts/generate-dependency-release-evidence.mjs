@@ -292,7 +292,7 @@ function runEvidenceReports({ rootDir, outputDir, baseRef, execFileSyncImpl }) {
 /**
  * Generates dependency evidence reports, manifest, and summaries for a release.
  */
-export async function generateDependencyReleaseEvidence({
+async function generateDependencyReleaseEvidence({
   rootDir = process.cwd(),
   outputDir,
   releaseRef,

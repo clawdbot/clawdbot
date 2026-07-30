@@ -367,7 +367,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
-    .option("--timeout <ms>", "RPC timeout in milliseconds (summarization can be slow)", "180000")
+    .option("--timeout <ms>", "RPC timeout in milliseconds (defaults to no client deadline)")
     .option("--json", "Output JSON", false)
     .addHelpText(
       "after",
@@ -763,3 +763,4 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       });
     });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

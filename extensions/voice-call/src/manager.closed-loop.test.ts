@@ -130,7 +130,7 @@ describe("CallManager closed-loop turns", () => {
 
     const expectedTurnToken = requireTurnToken(provider);
 
-    manager.processEvent({
+    const staleResult = manager.processEvent({
       id: "evt-turn-token-bad",
       type: "call.speech",
       callId: started.callId,
@@ -140,10 +140,11 @@ describe("CallManager closed-loop turns", () => {
       isFinal: true,
       turnToken: "wrong-token",
     });
+    expect(staleResult).toEqual({ kind: "ignored" });
 
     expectTranscriptWaiter(manager, started.callId);
 
-    manager.processEvent({
+    const finalResult = manager.processEvent({
       id: "evt-turn-token-good",
       type: "call.speech",
       callId: started.callId,
@@ -152,6 +153,11 @@ describe("CallManager closed-loop turns", () => {
       transcript: "final answer",
       isFinal: true,
       turnToken: expectedTurnToken,
+    });
+    expect(finalResult).toMatchObject({
+      kind: "final-speech",
+      transcript: "final answer",
+      waiterResolved: true,
     });
 
     const turnResult = await turnPromise;

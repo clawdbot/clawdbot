@@ -1,14 +1,10 @@
 /** Per-session async queue wrapper used by ACP manager operations. */
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 
 /** Per-session async queue that serializes ACP runtime operations and exposes queue depth. */
 export class SessionActorQueue {
   private readonly queue = new KeyedAsyncQueue();
   private readonly pendingBySession = new Map<string, number>();
-
-  getTailMapForTesting(): Map<string, Promise<void>> {
-    return this.queue.getTailMapForTesting();
-  }
 
   getTotalPendingCount(): number {
     let total = 0;

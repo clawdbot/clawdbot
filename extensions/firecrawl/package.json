@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/firecrawl-plugin",
-  "version": "2026.6.11",
+  "version": "2026.7.2",
   "description": "OpenClaw Firecrawl plugin.",
   "repository": {
     "type": "git",
@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "typebox": "1.1.39"
+    "typebox": "1.3.6"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -24,10 +24,10 @@
       "minHostVersion": ">=2026.6.8"
     },
     "compat": {
-      "pluginApi": ">=2026.6.11"
+      "pluginApi": ">=2026.7.2"
     },
     "build": {
-      "openclawVersion": "2026.6.11",
+      "openclawVersion": "2026.7.2",
       "bundledDist": false
     },
     "release": {

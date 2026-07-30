@@ -2,33 +2,21 @@
  * Static provider discovery entries for BytePlus manifest-backed catalogs.
  */
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildBytePlusCodingProvider, buildBytePlusProvider } from "./provider-catalog.js";
+import { BYTEPLUS_PROVIDER_CATALOG_ENTRIES } from "./provider-catalog.js";
 
-const bytePlusProviderDiscovery: ProviderPlugin[] = [
-  {
-    id: "byteplus",
-    label: "BytePlus",
+const bytePlusProviderDiscovery: ProviderPlugin[] = BYTEPLUS_PROVIDER_CATALOG_ENTRIES.map(
+  ({ id, label, buildProvider }) => ({
+    id,
+    label,
     docsPath: "/providers/models",
     auth: [],
     staticCatalog: {
       order: "simple",
       run: async () => ({
-        provider: buildBytePlusProvider(),
+        provider: buildProvider(),
       }),
     },
-  },
-  {
-    id: "byteplus-plan",
-    label: "BytePlus Plan",
-    docsPath: "/providers/models",
-    auth: [],
-    staticCatalog: {
-      order: "simple",
-      run: async () => ({
-        provider: buildBytePlusCodingProvider(),
-      }),
-    },
-  },
-];
+  }),
+);
 
 export default bytePlusProviderDiscovery;

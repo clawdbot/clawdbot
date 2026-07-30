@@ -1,6 +1,6 @@
 // Covers CLI execution paths where the process supervisor keeps stdout capture
 // disabled and the runner must parse streamed chunks without relying on tails.
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   markMcpLoopbackRequestFinished,
   markMcpLoopbackRequestStarted,
@@ -10,14 +10,53 @@ import {
   resolveMcpLoopbackYieldContext,
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
+import {
+  onTrustedToolExecutionEvent,
+  resetDiagnosticEventsForTest,
+  type TrustedToolExecutionEvent,
+} from "../../infra/diagnostic-events.js";
+import type { CliBackendParseJsonlEvent } from "../../plugins/cli-backend.types.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
-import { createManagedRun, supervisorSpawnMock } from "../cli-runner.test-support.js";
+import { findCliMaxTurnsError } from "../failover-error.js";
 import { getCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import { executePreparedCliRun } from "./execute.js";
+import { createManagedRun, supervisorSpawnMock } from "./execute.test-support.js";
 import type { PreparedCliRunContext } from "./types.js";
+
+// Gateway unit coverage owns quiet-admission timing. These integration cases only
+// need to drain calls already in flight, so skip the repeated 250 ms quiet window.
+vi.mock("../../gateway/mcp-http.loopback-runtime.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../gateway/mcp-http.loopback-runtime.js")>();
+  return {
+    ...actual,
+    waitForMcpLoopbackToolCallCaptureIdle: (
+      captureKey: string,
+      options: Parameters<typeof actual.waitForMcpLoopbackToolCallCaptureIdle>[1],
+    ) =>
+      actual.waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
+        ...options,
+        admissionGraceMs: 0,
+      }),
+  };
+});
 
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnInput = Parameters<ProcessSupervisor["spawn"]>[0];
+
+function createDeferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve: (value: T | PromiseLike<T>) => void = () => {};
+  let reject: (reason?: unknown) => void = () => {};
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
 
 function recordMcpLoopbackToolCallResult(params: {
   captureKey: string;
@@ -25,24 +64,36 @@ function recordMcpLoopbackToolCallResult(params: {
   args: Record<string, unknown>;
   result?: unknown;
   isError: boolean;
+  outcome?: "blocked" | "cancelled" | "completed" | "failed" | "timed_out" | "unknown";
+  deniedReason?: string;
 }): void {
   const captureHandle = markMcpLoopbackToolCallStarted(params);
   if (!captureHandle) {
     return;
   }
+  const outcome = params.outcome ?? (params.isError ? "failed" : "completed");
+  const result =
+    outcome === "blocked"
+      ? {
+          outcome,
+          deniedReason: params.deniedReason ?? "plugin-before-tool-call",
+        }
+      : { outcome, result: params.result };
   recordMcpLoopbackToolCallResultForHandle({
     captureHandle,
     toolName: params.toolName,
     args: params.args,
-    result: params.result,
-    isError: params.isError,
+    ...result,
   });
   markMcpLoopbackToolCallFinished(captureHandle);
 }
 
 function buildPreparedCliRunContext(params: {
-  output: "jsonl" | "text";
+  output: "json" | "jsonl" | "text";
   provider?: string;
+  runId?: string;
+  beforeExecution?: () => Promise<void>;
+  parseJsonlEvent?: CliBackendParseJsonlEvent;
 }): PreparedCliRunContext {
   const provider = params.provider ?? "codex-cli";
   const backend = {
@@ -55,14 +106,16 @@ function buildPreparedCliRunContext(params: {
 
   return {
     params: {
+      agentId: "main",
       sessionId: "session-1",
+      sessionKey: "agent:main:main",
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
       prompt: "hi",
       provider,
       model: "model",
       timeoutMs: 1_000,
-      runId: `run-${params.output}`,
+      runId: params.runId ?? `run-${params.output}`,
     },
     started: Date.now(),
     workspaceDir: "/tmp",
@@ -70,12 +123,14 @@ function buildPreparedCliRunContext(params: {
       id: provider,
       config: backend,
       bundleMcp: false,
+      parseJsonlEvent: params.parseJsonlEvent,
     },
     preparedBackend: {
       backend,
       env: {},
+      ...(params.beforeExecution ? { beforeExecution: params.beforeExecution } : {}),
     },
-    reusableCliSession: {},
+    reusableCliSession: { mode: "none" },
     hadSessionFile: false,
     contextEngineConfig: {},
     modelId: "model",
@@ -96,11 +151,72 @@ function requireSupervisorSpawnInput(): SupervisorSpawnInput {
 }
 
 beforeEach(() => {
+  vi.unstubAllEnvs();
   resetAgentEventsForTest();
+  resetDiagnosticEventsForTest();
   supervisorSpawnMock.mockReset();
 });
 
 describe("executePreparedCliRun supervisor output capture", () => {
+  it("runs prepared backend staging inside the serialized execution queue", async () => {
+    const firstSpawnEntered = createDeferred();
+    const releaseFirstSpawn = createDeferred();
+    const events: string[] = [];
+    let spawnCount = 0;
+
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      spawnCount += 1;
+      const input = args[0] as SupervisorSpawnInput;
+      const label = spawnCount === 1 ? "first" : "second";
+      events.push(`spawn:${label}`);
+      input.onStdout?.(`answer ${label}`);
+      if (label === "first") {
+        firstSpawnEntered.resolve();
+        await releaseFirstSpawn.promise;
+      }
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    const first = executePreparedCliRun(
+      buildPreparedCliRunContext({
+        output: "text",
+        runId: "run-first",
+        beforeExecution: async () => {
+          events.push("stage:first");
+        },
+      }),
+    );
+    await firstSpawnEntered.promise;
+    const second = executePreparedCliRun(
+      buildPreparedCliRunContext({
+        output: "text",
+        runId: "run-second",
+        beforeExecution: async () => {
+          events.push("stage:second");
+        },
+      }),
+    );
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(events).toEqual(["stage:first", "spawn:first"]);
+
+    releaseFirstSpawn.resolve();
+    await Promise.all([first, second]);
+
+    expect(events).toEqual(["stage:first", "spawn:first", "stage:second", "spawn:second"]);
+  });
+
   it("disables supervisor capture without parsing from the diagnostic stdout tail", async () => {
     const fullText = `start-${"x".repeat(80 * 1024)}-end`;
 
@@ -124,6 +240,34 @@ describe("executePreparedCliRun supervisor output capture", () => {
 
     expect(spawnInput.captureOutput).toBe(false);
     expect(result.rawText).toBe(fullText);
+  });
+
+  it("passes prepared secret input to a one-shot child", async () => {
+    const context = buildPreparedCliRunContext({ output: "text", provider: "claude-cli" });
+    const secretInput = {
+      fd: 3,
+      fingerprint: "credential-a",
+      createData: () => Buffer.from("secret"),
+    };
+    context.preparedBackend.secretInput = secretInput;
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.("done");
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    await executePreparedCliRun(context);
+
+    expect(requireSupervisorSpawnInput()).toEqual(expect.objectContaining({ secretInput }));
   });
 
   it("rejects oversized successful stdout instead of parsing a truncated tail", async () => {
@@ -279,6 +423,375 @@ describe("executePreparedCliRun supervisor output capture", () => {
     throw new Error("Expected CLI run to reject with a rate limit error");
   });
 
+  it("fails one-shot Claude is_error results even when the process exits successfully", async () => {
+    const stdout = `${JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      result: "Credit balance is too low",
+      session_id: "session-jsonl-error",
+    })}\n`;
+
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(stdout);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: input.captureOutput === false ? "" : stdout,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" }),
+      ),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      message: "Credit balance is too low",
+    });
+  });
+
+  it("surfaces Claude max-turn results with run and session recovery context", async () => {
+    const stdout = `${JSON.stringify({
+      type: "result",
+      subtype: "error_max_turns",
+      session_id: "claude-session-max-turns",
+      num_turns: 2,
+      stop_reason: "tool_use",
+      terminal_reason: "max_turns",
+      errors: ["Reached maximum number of turns (1)"],
+    })}\n`;
+
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(stdout);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: input.captureOutput === false ? "" : stdout,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          output: "jsonl",
+          provider: "claude-cli",
+          runId: "run-max-turns",
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      message:
+        "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
+        "OpenClaw run: run-max-turns. OpenClaw session: session-1. " +
+        "Claude session: claude-session-max-turns. Tool actions may already have run; verify their effects before retrying. " +
+        "Retry with a higher --max-turns value or a narrower task.",
+      sessionId: "session-1",
+      reason: "unknown",
+      code: "cli_max_turns",
+      rawError: "Reached maximum number of turns (1)",
+    });
+  });
+
+  it("surfaces Claude max-turn results from JSON output", async () => {
+    const stdout = JSON.stringify({
+      type: "result",
+      subtype: "error_max_turns",
+      session_id: "claude-json-max-turns",
+      terminal_reason: "max_turns",
+      errors: ["Reached maximum number of turns (2)"],
+    });
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(stdout);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: input.captureOutput === false ? "" : stdout,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          output: "json",
+          provider: "claude-cli",
+          runId: "run-json-max-turns",
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      code: "cli_max_turns",
+      rawError: "Reached maximum number of turns (2)",
+    });
+  });
+
+  it.each([
+    ["no-output-timeout", true],
+    ["overall-timeout", false],
+  ] as const)(
+    "keeps a terminal max-turn result ahead of a later %s",
+    async (reason, noOutputTimedOut) => {
+      const stdout = `${JSON.stringify({
+        type: "result",
+        subtype: "error_max_turns",
+        session_id: `claude-${reason}`,
+        terminal_reason: "max_turns",
+        errors: ["Reached maximum number of turns (1)"],
+      })}\n`;
+      supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const input = args[0] as SupervisorSpawnInput;
+        input.onStdout?.(stdout);
+        return createManagedRun({
+          reason,
+          exitCode: null,
+          exitSignal: "SIGTERM",
+          durationMs: 1_000,
+          stdout: input.captureOutput === false ? "" : stdout,
+          stderr: "",
+          timedOut: true,
+          noOutputTimedOut,
+        });
+      });
+
+      await expect(
+        executePreparedCliRun(
+          buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" }),
+        ),
+      ).rejects.toMatchObject({
+        name: "FailoverError",
+        code: "cli_max_turns",
+        rawError: "Reached maximum number of turns (1)",
+      });
+    },
+  );
+
+  it("preserves max-turn failure through fork successor persistence errors", async () => {
+    const stdout = `${JSON.stringify({
+      type: "result",
+      subtype: "error_max_turns",
+      session_id: "fork-successor",
+      terminal_reason: "max_turns",
+      errors: ["Reached maximum number of turns (1)"],
+    })}\n`;
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(stdout);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: input.captureOutput === false ? "" : stdout,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const persistenceError = new Error("fork successor persistence failed");
+    const persistCliSessionForkSuccessor = vi.fn().mockRejectedValue(persistenceError);
+    const restoreCliSessionFork = vi.fn().mockResolvedValue(undefined);
+    const context = buildPreparedCliRunContext({
+      output: "jsonl",
+      provider: "claude-cli",
+      runId: "run-fork-max-turns",
+    });
+    context.preparedBackend.backend.resumeArgs = ["--resume", "{sessionId}"];
+    context.preparedBackend.backend.forkArg = "--fork-session";
+    context.params.forkCliSessionOnResume = true;
+    context.params.claimCliSessionFork = vi.fn().mockResolvedValue(true);
+    context.params.persistCliSessionForkSuccessor = persistCliSessionForkSuccessor;
+    context.params.restoreCliSessionFork = restoreCliSessionFork;
+
+    let failure: unknown;
+    try {
+      await executePreparedCliRun(context, "fork-source");
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([
+      expect.objectContaining({ code: "cli_max_turns" }),
+      persistenceError,
+    ]);
+    expect(findCliMaxTurnsError(failure)).toMatchObject({ code: "cli_max_turns" });
+    expect(persistCliSessionForkSuccessor).toHaveBeenCalledWith("fork-successor");
+    expect(restoreCliSessionFork).toHaveBeenCalledTimes(1);
+  });
+
+  it("composes plugin-owned JSONL parsing into the production executor", async () => {
+    const agentEvents: Array<{ stream: string; phase?: string; text?: string }> = [];
+    const trustedEvents: TrustedToolExecutionEvent[] = [];
+    const stopAgentEvents = onAgentEvent((event) => {
+      agentEvents.push({
+        stream: event.stream,
+        phase: typeof event.data.phase === "string" ? event.data.phase : undefined,
+        text: typeof event.data.text === "string" ? event.data.text : undefined,
+      });
+    });
+    const stopTrustedEvents = onTrustedToolExecutionEvent((event) => trustedEvents.push(event));
+    const parseJsonlEvent: CliBackendParseJsonlEvent = (line) => {
+      const event = JSON.parse(line) as {
+        type: string;
+        text?: string;
+        session?: string;
+        id?: string;
+        name?: string;
+        result?: unknown;
+      };
+      switch (event.type) {
+        case "session":
+          return { kind: "sessionId", sessionId: event.session ?? "" };
+        case "thinking":
+          return { kind: "thinking", text: event.text ?? "" };
+        case "text":
+          return { kind: "text", text: event.text ?? "" };
+        case "tool-start":
+          return {
+            kind: "toolStart",
+            toolCallId: event.id ?? "",
+            name: event.name ?? "",
+            args: { query: "weather" },
+          };
+        case "tool-result":
+          return {
+            kind: "toolResult",
+            toolCallId: event.id ?? "",
+            name: event.name,
+            result: event.result,
+          };
+        default:
+          return {
+            kind: "result",
+            text: event.text,
+            sessionId: event.session,
+            usage: { input: 4, output: 2, total: 6 },
+          };
+      }
+    };
+    const chunks = [
+      `${JSON.stringify({ type: "session", session: "custom-session" })}\n`,
+      `${JSON.stringify({ type: "thinking", text: "Checking facts." })}\n`,
+      `${JSON.stringify({ type: "text", text: "Hello world" })}\n`,
+      `${JSON.stringify({ type: "tool-start", id: "call-1", name: "search" })}\n`,
+      `${JSON.stringify({
+        type: "tool-result",
+        id: "call-1",
+        name: "search",
+        result: "sunny",
+      })}\n`,
+      `${JSON.stringify({ type: "result", text: "Hello world", session: "custom-successor" })}\n`,
+    ];
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      for (const chunk of chunks) {
+        input.onStdout?.(chunk);
+      }
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    try {
+      const context = buildPreparedCliRunContext({
+        output: "jsonl",
+        provider: "acme-cli",
+        parseJsonlEvent,
+      });
+      const result = await executePreparedCliRun(context);
+
+      expect(result).toMatchObject({
+        text: "Hello world",
+        sessionId: "custom-successor",
+        usage: { input: 4, output: 2, total: 6 },
+        toolSummary: { calls: 1, tools: ["search"], failures: 0 },
+      });
+      expect(getCliMessagingDeliveryEvidence(context.params.runId)).toBeUndefined();
+      expect(agentEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ stream: "thinking", text: "Checking facts." }),
+          expect.objectContaining({ stream: "assistant", text: "Hello world" }),
+          expect.objectContaining({ stream: "tool", phase: "start" }),
+          expect.objectContaining({ stream: "tool", phase: "result" }),
+        ]),
+      );
+      expect(trustedEvents).toEqual([]);
+    } finally {
+      stopAgentEvents();
+      stopTrustedEvents();
+    }
+  });
+
+  it("persists plugin-owned successor session ids for forked resumes", async () => {
+    const parseJsonlEvent: CliBackendParseJsonlEvent = (line) => {
+      const event = JSON.parse(line) as { type: string; session?: string; text?: string };
+      return event.type === "session"
+        ? { kind: "sessionId", sessionId: event.session ?? "" }
+        : { kind: "result", text: event.text };
+    };
+    const chunks = [
+      `${JSON.stringify({ type: "session", session: "fork-successor" })}\n`,
+      `${JSON.stringify({ type: "result", text: "done" })}\n`,
+    ];
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      for (const chunk of chunks) {
+        input.onStdout?.(chunk);
+      }
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const persistCliSessionForkSuccessor = vi.fn().mockResolvedValue(undefined);
+    const context = buildPreparedCliRunContext({
+      output: "jsonl",
+      provider: "acme-cli",
+      parseJsonlEvent,
+    });
+    context.preparedBackend.backend.resumeArgs = ["--resume", "{sessionId}"];
+    context.preparedBackend.backend.forkArg = "--fork-session";
+    context.params.forkCliSessionOnResume = true;
+    context.params.claimCliSessionFork = vi.fn().mockResolvedValue(true);
+    context.params.persistCliSessionForkSuccessor = persistCliSessionForkSuccessor;
+
+    const result = await executePreparedCliRun(context, "fork-source");
+
+    expect(result).toMatchObject({ text: "done", sessionId: "fork-successor" });
+    expect(persistCliSessionForkSuccessor).toHaveBeenCalledWith("fork-successor");
+  });
+
   it("still streams every JSONL stdout chunk with supervisor capture disabled", async () => {
     // Streaming events are emitted from live chunks, not from the final captured
     // stdout string, so users still see deltas when captureOutput is false.
@@ -328,19 +841,794 @@ describe("executePreparedCliRun supervisor output capture", () => {
     });
 
     try {
-      const result = await executePreparedCliRun(
-        buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" }),
-      );
+      const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+      context.params.onExecutionPhase = vi.fn();
+      const result = await executePreparedCliRun(context);
       const spawnInput = requireSupervisorSpawnInput();
 
       expect(spawnInput.captureOutput).toBe(false);
       expect(result.text).toBe("Hello world");
+      expect(result.toolSummary).toEqual({ calls: 0, tools: [], failures: 0 });
       expect(agentEvents).toEqual([
         { text: "Hello", delta: "Hello" },
         { text: "Hello world", delta: " world" },
       ]);
+      expect(context.params.onExecutionPhase).toHaveBeenCalledTimes(2);
+      expect(context.params.onExecutionPhase).toHaveBeenNthCalledWith(2, {
+        phase: "assistant_output_started",
+        provider: "claude-cli",
+        model: "model",
+        backend: "claude-cli",
+      });
     } finally {
       stop();
+    }
+  });
+
+  it("emits metadata-only lifecycle records for parsed CLI tools", async () => {
+    const secret = "secret tool input and result";
+    const toolEvents: TrustedToolExecutionEvent[] = [];
+    const stop = onTrustedToolExecutionEvent((event) => toolEvents.push(event));
+    const chunks = [
+      `${JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "mcp_tool_use",
+              id: "call-1",
+              name: "mcp__team__lookup",
+              input: { query: secret },
+            },
+            {
+              type: "mcp_tool_result",
+              tool_use_id: "call-1",
+              content: [{ type: "text", text: secret }],
+            },
+          ],
+        },
+      })}\n`,
+      `${JSON.stringify({ type: "result", session_id: "session-jsonl", result: "done" })}\n`,
+    ];
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      for (const chunk of chunks) {
+        input.onStdout?.(chunk);
+      }
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+    context.params.sessionKey = "agent:coder:main";
+    context.params.agentId = "coder";
+
+    try {
+      const result = await executePreparedCliRun(context);
+      expect(result.toolSummary).toEqual({
+        calls: 1,
+        tools: ["mcp__team__lookup"],
+        failures: 0,
+      });
+    } finally {
+      stop();
+    }
+
+    expect(toolEvents).toEqual([
+      expect.objectContaining({
+        type: "tool.execution.started",
+        runId: "run-jsonl",
+        sessionKey: "agent:coder:main",
+        sessionId: "session-1",
+        agentId: "coder",
+        toolName: "mcp__team__lookup",
+        toolSource: "mcp",
+        toolOwner: "cli-runner",
+        toolCallId: "call-1",
+      }),
+      expect.objectContaining({
+        type: "tool.execution.completed",
+        runId: "run-jsonl",
+        toolCallId: "call-1",
+      }),
+    ]);
+    expect(JSON.stringify(toolEvents)).not.toContain(secret);
+  });
+
+  it.each([
+    {
+      name: "policy block",
+      outcome: "blocked",
+      deniedReason: "plugin-approval",
+      expected: { type: "tool.execution.blocked", deniedReason: "plugin-approval" },
+    },
+    {
+      name: "resolved failure",
+      outcome: "failed",
+      deniedReason: undefined,
+      expected: { type: "tool.execution.error", terminalReason: "failed" },
+    },
+    {
+      name: "resolved timeout",
+      outcome: "timed_out",
+      deniedReason: undefined,
+      expected: { type: "tool.execution.error", terminalReason: "timed_out" },
+    },
+  ] as const)("preserves loopback $name for parsed CLI tools", async (testCase) => {
+    const toolCallId = `call-${testCase.outcome}`;
+    const toolEvents: TrustedToolExecutionEvent[] = [];
+    const stop = onTrustedToolExecutionEvent((event) => toolEvents.push(event));
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(
+        `${JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "mcp_tool_use",
+                id: toolCallId,
+                name: "mcp__openclaw__message",
+                input: { action: "react" },
+              },
+            ],
+          },
+        })}\n`,
+      );
+      recordMcpLoopbackToolCallResult({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "message",
+        args: { action: "react" },
+        isError: true,
+        outcome: testCase.outcome,
+        ...(testCase.deniedReason ? { deniedReason: testCase.deniedReason } : {}),
+      });
+      input.onStdout?.(
+        `${JSON.stringify({
+          type: "user",
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: toolCallId,
+                content: "blocked",
+                is_error: true,
+              },
+            ],
+          },
+        })}\n${JSON.stringify({ type: "result", session_id: "session-jsonl", result: "done" })}\n`,
+      );
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+    context.mcpDeliveryCapture = true;
+
+    try {
+      const result = await executePreparedCliRun(context);
+      expect(result.toolSummary).toEqual({
+        calls: 1,
+        tools: ["mcp__openclaw__message"],
+        failures: 1,
+      });
+    } finally {
+      stop();
+    }
+
+    expect(toolEvents).toMatchObject([
+      { type: "tool.execution.started", toolCallId },
+      { ...testCase.expected, toolCallId },
+    ]);
+  });
+
+  it("binds a loopback call admitted before its parsed CLI identity", async () => {
+    const toolEvents: TrustedToolExecutionEvent[] = [];
+    const stop = onTrustedToolExecutionEvent((event) => toolEvents.push(event));
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      const captureHandle = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY,
+        toolName: "message",
+        args: { action: "react", emoji: "early" },
+      });
+      if (!captureHandle) {
+        throw new Error("Expected early loopback capture handle");
+      }
+      input.onStdout?.(
+        `${JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "mcp_tool_use",
+                id: "call-early",
+                name: "mcp__openclaw__message",
+                input: { action: "react", emoji: "early" },
+              },
+            ],
+          },
+        })}\n`,
+      );
+      recordMcpLoopbackToolCallResultForHandle({
+        captureHandle,
+        toolName: "message",
+        args: { action: "react", emoji: "early" },
+        outcome: "blocked",
+        deniedReason: "plugin-approval",
+      });
+      markMcpLoopbackToolCallFinished(captureHandle);
+      input.onStdout?.(
+        `${JSON.stringify({
+          type: "user",
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "call-early",
+                content: "blocked",
+                is_error: true,
+              },
+            ],
+          },
+        })}\n${JSON.stringify({ type: "result", session_id: "session-jsonl", result: "done" })}\n`,
+      );
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+    context.mcpDeliveryCapture = true;
+
+    try {
+      const result = await executePreparedCliRun(context);
+      expect(result.toolSummary).toEqual({
+        calls: 1,
+        tools: ["mcp__openclaw__message"],
+        failures: 1,
+      });
+    } finally {
+      stop();
+    }
+
+    expect(toolEvents).toMatchObject([
+      { type: "tool.execution.started", toolCallId: "call-early" },
+      {
+        type: "tool.execution.blocked",
+        toolCallId: "call-early",
+        deniedReason: "plugin-approval",
+      },
+    ]);
+  });
+
+  it("correlates parallel same-name loopback calls by arguments instead of admission order", async () => {
+    const toolEvents: TrustedToolExecutionEvent[] = [];
+    const stop = onTrustedToolExecutionEvent((event) => toolEvents.push(event));
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(
+        `${JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "mcp_tool_use",
+                id: "call-a",
+                name: "mcp__openclaw__message",
+                input: { action: "react", emoji: "A" },
+              },
+              {
+                type: "mcp_tool_use",
+                id: "call-b",
+                name: "mcp__openclaw__message",
+                input: { action: "react", emoji: "B" },
+              },
+            ],
+          },
+        })}\n`,
+      );
+      recordMcpLoopbackToolCallResult({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "message",
+        args: { action: "react", emoji: "B" },
+        isError: true,
+        outcome: "failed",
+      });
+      recordMcpLoopbackToolCallResult({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "message",
+        args: { action: "react", emoji: "A" },
+        isError: false,
+        outcome: "completed",
+      });
+      input.onStdout?.(
+        `${JSON.stringify({
+          type: "user",
+          message: {
+            role: "user",
+            content: [
+              { type: "tool_result", tool_use_id: "call-a", content: "ok" },
+              { type: "tool_result", tool_use_id: "call-b", content: "failed", is_error: true },
+            ],
+          },
+        })}\n${JSON.stringify({ type: "result", session_id: "session-jsonl", result: "done" })}\n`,
+      );
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+    context.mcpDeliveryCapture = true;
+
+    try {
+      const result = await executePreparedCliRun(context);
+      expect(result.toolSummary).toEqual({
+        calls: 2,
+        tools: ["mcp__openclaw__message"],
+        failures: 1,
+      });
+    } finally {
+      stop();
+    }
+
+    expect(toolEvents).toMatchObject([
+      { type: "tool.execution.started", toolCallId: "call-a" },
+      { type: "tool.execution.started", toolCallId: "call-b" },
+      { type: "tool.execution.completed", toolCallId: "call-a" },
+      { type: "tool.execution.error", toolCallId: "call-b", terminalReason: "failed" },
+    ]);
+  });
+
+  it.each([
+    "request before both CLI identities",
+    "request between CLI identities",
+    "first tool finishes before second CLI identity",
+  ])("keeps identical parallel outcomes unknown with %s", async (ordering) => {
+    const toolEvents: TrustedToolExecutionEvent[] = [];
+    const stop = onTrustedToolExecutionEvent((event) => toolEvents.push(event));
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      const toolArgs = { action: "react", emoji: "same" };
+      const emitToolStarts = (toolCallIds: string[]) => {
+        input.onStdout?.(
+          `${JSON.stringify({
+            type: "assistant",
+            message: {
+              role: "assistant",
+              content: toolCallIds.map((id) => ({
+                type: "mcp_tool_use",
+                id,
+                name: "mcp__openclaw__message",
+                input: toolArgs,
+              })),
+            },
+          })}\n`,
+        );
+      };
+      const recordOutcome = (outcome: "completed" | "failed") =>
+        recordMcpLoopbackToolCallResult({
+          captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+          toolName: "message",
+          args: toolArgs,
+          isError: outcome === "failed",
+          outcome,
+        });
+      const emitToolResults = (toolCallIds: string[]) => {
+        input.onStdout?.(
+          `${JSON.stringify({
+            type: "user",
+            message: {
+              role: "user",
+              content: toolCallIds.map((toolCallId) => ({
+                type: "tool_result",
+                tool_use_id: toolCallId,
+                content: "ok",
+              })),
+            },
+          })}\n`,
+        );
+      };
+      if (ordering === "request before both CLI identities") {
+        recordOutcome("failed");
+        emitToolStarts(["call-identical-a", "call-identical-b"]);
+        recordOutcome("completed");
+      } else if (ordering === "request between CLI identities") {
+        emitToolStarts(["call-identical-a"]);
+        recordOutcome("failed");
+        recordOutcome("completed");
+        emitToolStarts(["call-identical-b"]);
+      } else {
+        emitToolStarts(["call-identical-a"]);
+        recordOutcome("failed");
+        recordOutcome("completed");
+        emitToolResults(["call-identical-a"]);
+        emitToolStarts(["call-identical-b"]);
+      }
+      emitToolResults(
+        ordering === "first tool finishes before second CLI identity"
+          ? ["call-identical-b"]
+          : ["call-identical-a", "call-identical-b"],
+      );
+      emitToolStarts(["call-identical-later"]);
+      recordOutcome("completed");
+      input.onStdout?.(
+        `${JSON.stringify({
+          type: "user",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "call-identical-later", content: "ok" }],
+          },
+        })}\n${JSON.stringify({ type: "result", session_id: "session-jsonl", result: "done" })}\n`,
+      );
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+    context.mcpDeliveryCapture = true;
+
+    try {
+      await executePreparedCliRun(context);
+    } finally {
+      stop();
+    }
+
+    expect(toolEvents).toHaveLength(6);
+    expect(toolEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool.execution.started",
+          toolCallId: "call-identical-a",
+        }),
+        expect.objectContaining({
+          type: "tool.execution.started",
+          toolCallId: "call-identical-b",
+        }),
+        expect.objectContaining({
+          type: "tool.execution.error",
+          toolCallId: "call-identical-a",
+          errorCode: "tool_outcome_unknown",
+        }),
+        expect.objectContaining({
+          type: "tool.execution.error",
+          toolCallId: "call-identical-b",
+          errorCode: "tool_outcome_unknown",
+        }),
+        expect.objectContaining({
+          type: "tool.execution.started",
+          toolCallId: "call-identical-later",
+        }),
+        expect.objectContaining({
+          type: "tool.execution.completed",
+          toolCallId: "call-identical-later",
+        }),
+      ]),
+    );
+  });
+
+  it("uses a loopback outcome that settles during the post-process drain", async () => {
+    const toolEvents: TrustedToolExecutionEvent[] = [];
+    const stop = onTrustedToolExecutionEvent((event) => toolEvents.push(event));
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      const toolArgs = { action: "react", emoji: "A" };
+      input.onStdout?.(
+        `${JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "mcp_tool_use",
+                id: "call-draining",
+                name: "mcp__openclaw__message",
+                input: toolArgs,
+              },
+            ],
+          },
+        })}\n${JSON.stringify({ type: "result", session_id: "session-jsonl", result: "done" })}\n`,
+      );
+      const captureHandle = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY,
+        toolName: "message",
+        args: toolArgs,
+      });
+      if (!captureHandle) {
+        throw new Error("Expected loopback capture handle");
+      }
+      setTimeout(() => {
+        recordMcpLoopbackToolCallResultForHandle({
+          captureHandle,
+          toolName: "message",
+          args: toolArgs,
+          outcome: "completed",
+          result: { ok: true },
+        });
+        markMcpLoopbackToolCallFinished(captureHandle);
+      }, 10);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+    context.mcpDeliveryCapture = true;
+
+    try {
+      await executePreparedCliRun(context);
+    } finally {
+      stop();
+    }
+
+    expect(toolEvents).toMatchObject([
+      { type: "tool.execution.started", toolCallId: "call-draining" },
+      { type: "tool.execution.completed", toolCallId: "call-draining" },
+    ]);
+  });
+
+  it("finishes parsed CLI tools when the process exits before a tool result", async () => {
+    const toolEvents: TrustedToolExecutionEvent[] = [];
+    const stop = onTrustedToolExecutionEvent((event) => toolEvents.push(event));
+    const toolStart = `${JSON.stringify({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "mcp_tool_use",
+            id: "call-incomplete",
+            name: "mcp__team__lookup",
+            input: {},
+          },
+        ],
+      },
+    })}\n`;
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(toolStart);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "failed",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    try {
+      await expect(
+        executePreparedCliRun(
+          buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" }),
+        ),
+      ).rejects.toThrow();
+    } finally {
+      stop();
+    }
+
+    expect(toolEvents).toMatchObject([
+      {
+        type: "tool.execution.started",
+        toolCallId: "call-incomplete",
+      },
+      {
+        type: "tool.execution.error",
+        toolCallId: "call-incomplete",
+        errorCategory: "cli_tool_incomplete",
+      },
+    ]);
+  });
+
+  it("cancels an outstanding parsed CLI tool when the enclosing run is aborted", async () => {
+    const toolEvents: TrustedToolExecutionEvent[] = [];
+    const stop = onTrustedToolExecutionEvent((event) => toolEvents.push(event));
+    const abortController = new AbortController();
+    const toolStart = `${JSON.stringify({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "mcp_tool_use",
+            id: "call-cancelled",
+            name: "mcp__openclaw__cron",
+            input: {},
+          },
+        ],
+      },
+    })}\n`;
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(toolStart);
+      recordMcpLoopbackToolCallResult({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "cron",
+        args: {},
+        isError: true,
+        outcome: "unknown",
+      });
+      abortController.abort();
+      return createManagedRun({
+        reason: "manual-cancel",
+        exitCode: null,
+        exitSignal: "SIGTERM",
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+    context.params.abortSignal = abortController.signal;
+    context.mcpDeliveryCapture = true;
+
+    try {
+      await expect(executePreparedCliRun(context)).rejects.toThrow("aborted");
+    } finally {
+      stop();
+    }
+
+    expect(toolEvents).toMatchObject([
+      { type: "tool.execution.started", toolCallId: "call-cancelled" },
+      {
+        type: "tool.execution.error",
+        toolCallId: "call-cancelled",
+        errorCategory: "aborted",
+        terminalReason: "cancelled",
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      label: "MCP tool",
+      type: "mcp_tool_use",
+      toolCallId: "call-timeout",
+      name: "mcp__openclaw__cron",
+      expected: { terminalReason: "timed_out" },
+    },
+    {
+      label: "server-native tool",
+      type: "server_tool_use",
+      toolCallId: "call-native-unknown",
+      name: "web_search",
+      expected: { errorCode: "tool_outcome_unknown" },
+    },
+  ] as const)("classifies an outstanding parsed $label when the run times out", async (fixture) => {
+    const toolEvents: TrustedToolExecutionEvent[] = [];
+    const stop = onTrustedToolExecutionEvent((event) => toolEvents.push(event));
+    const toolStart = `${JSON.stringify({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: fixture.type,
+            id: fixture.toolCallId,
+            name: fixture.name,
+            input: {},
+          },
+        ],
+      },
+    })}\n`;
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(toolStart);
+      if (fixture.type === "mcp_tool_use") {
+        recordMcpLoopbackToolCallResult({
+          captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+          toolName: "cron",
+          args: {},
+          isError: true,
+          outcome: "unknown",
+        });
+      }
+      if (fixture.type === "server_tool_use") {
+        recordMcpLoopbackToolCallResult({
+          captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+          toolName: "web_search",
+          args: {},
+          isError: false,
+          outcome: "completed",
+        });
+      }
+      return createManagedRun({
+        reason: "overall-timeout",
+        exitCode: null,
+        exitSignal: "SIGTERM",
+        durationMs: 1_000,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: false,
+      });
+    });
+
+    try {
+      const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+      context.mcpDeliveryCapture = true;
+      context.params.onExecutionPhase = vi.fn();
+      await expect(executePreparedCliRun(context)).rejects.toMatchObject({
+        message: expect.stringMatching(/exceeded timeout/i),
+        code: "cli_overall_timeout",
+        cliTimeout: {
+          mode: "overall",
+          timeoutSeconds: 1,
+          observedActivity: true,
+          activeToolCount: 1,
+          backgroundTaskCount: 0,
+        },
+      });
+      expect(context.params.onExecutionPhase).toHaveBeenCalledWith({
+        phase: "tool_execution_started",
+        provider: "claude-cli",
+        model: "model",
+        backend: "claude-cli",
+      });
+    } finally {
+      stop();
+    }
+
+    expect(toolEvents).toMatchObject([
+      { type: "tool.execution.started", toolCallId: fixture.toolCallId },
+      {
+        type: "tool.execution.error",
+        toolCallId: fixture.toolCallId,
+        ...fixture.expected,
+      },
+    ]);
+    if (fixture.type === "server_tool_use") {
+      expect(toolEvents[1]).not.toHaveProperty("terminalReason");
     }
   });
 
@@ -819,7 +2107,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     ]);
   });
 
-  it("preserves partial delivery evidence from failed MCP message calls", async () => {
+  it("preserves partial delivery evidence from unknown MCP message outcomes", async () => {
     const context = buildPreparedCliRunContext({ output: "text", provider: "google-gemini-cli" });
     context.mcpDeliveryCapture = true;
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
@@ -836,6 +2124,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         },
         result: Object.assign(new Error("second chunk failed"), { sentBeforeError: true }),
         isError: true,
+        outcome: "unknown",
       });
       input.onStdout?.("done");
       return createManagedRun({
@@ -1210,9 +2499,43 @@ describe("executePreparedCliRun supervisor output capture", () => {
     ]);
   });
 
-  it("captures non-Claude JSONL sends and gives every attempt a unique token", async () => {
+  it("deactivates a Claude live capture when process startup fails", async () => {
+    const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+    context.mcpDeliveryCapture = true;
+    context.preparedBackend.backend.liveSession = "claude-stdio";
+    const secretInput = {
+      fd: 3,
+      fingerprint: "credential-a",
+      createData: () => Buffer.from("secret"),
+    };
+    context.preparedBackend.secretInput = secretInput;
+    const activateCapture = vi.fn<(captureKey: string) => void>();
+    const deactivateCapture = vi.fn<(captureKey: string) => void>();
+    context.preparedBackend.mcpClientGrantCapture = {
+      activate: activateCapture,
+      deactivate: deactivateCapture,
+    };
+    supervisorSpawnMock.mockRejectedValueOnce(new Error("spawn failed"));
+
+    await expect(executePreparedCliRun(context)).rejects.toThrow("spawn failed");
+
+    expect(activateCapture).toHaveBeenCalledOnce();
+    expect(requireSupervisorSpawnInput()).toEqual(expect.objectContaining({ secretInput }));
+    expect(deactivateCapture).toHaveBeenCalledExactlyOnceWith(activateCapture.mock.calls[0]?.[0]);
+    expect(activateCapture.mock.invocationCallOrder[0]).toBeLessThan(
+      supervisorSpawnMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("captures non-Claude JSONL sends and fences every attempt with a unique key", async () => {
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "local-cli" });
     context.mcpDeliveryCapture = true;
+    const activateCapture = vi.fn<(captureKey: string) => void>();
+    const deactivateCapture = vi.fn<(captureKey: string) => void>();
+    context.preparedBackend.mcpClientGrantCapture = {
+      activate: activateCapture,
+      deactivate: deactivateCapture,
+    };
     const captureKeys: string[] = [];
     supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
       const input = args[0] as SupervisorSpawnInput;
@@ -1250,5 +2573,11 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(second.didSendViaMessagingTool).toBe(true);
     expect(captureKeys).toHaveLength(2);
     expect(captureKeys[0]).not.toBe(captureKeys[1]);
+    expect(activateCapture.mock.calls.map(([captureKey]) => captureKey)).toEqual(captureKeys);
+    expect(deactivateCapture.mock.calls.map(([captureKey]) => captureKey)).toEqual(captureKeys);
+    expect(deactivateCapture.mock.invocationCallOrder[0]).toBeLessThan(
+      activateCapture.mock.invocationCallOrder[1] ?? Number.POSITIVE_INFINITY,
+    );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

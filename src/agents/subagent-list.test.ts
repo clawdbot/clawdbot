@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { updateSessionStore } from "../config/sessions/store.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { buildSubagentList } from "./subagent-list.js";
 import {
   addSubagentRunForTests,
@@ -74,10 +74,8 @@ describe("buildSubagentList", () => {
       recentMinutes: 30,
       taskMaxChars: 110,
     });
-    expect(list.active[0]?.line).toContain(
-      "This is a deliberately long task description used to verify that subagent list output keeps the full task text",
-    );
-    expect(list.active[0]?.line).toContain("...");
+    expect(list.active[0]?.task).toHaveLength(110);
+    expect(list.active[0]?.task).toMatch(/\.\.\.$/);
     expect(list.active[0]?.line).not.toContain("after a short hard cutoff.");
   });
 
@@ -208,16 +206,20 @@ describe("buildSubagentList", () => {
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
     const storePath = path.join(testWorkspaceDir, "sessions-subagent-list-usage.json");
-    await updateSessionStore(storePath, (store) => {
-      store["agent:main:subagent:usage"] = {
+    await replaceSessionEntry(
+      {
+        storePath,
+        sessionKey: "agent:main:subagent:usage",
+      },
+      {
         sessionId: "child-session-usage",
         updatedAt: Date.now(),
         inputTokens: 12,
         outputTokens: 1000,
         totalTokens: 197000,
         model: "opencode/claude-opus-4-6",
-      };
-    });
+      },
+    );
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },

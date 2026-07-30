@@ -1,6 +1,7 @@
 // Setup gateway config helpers build gateway config from onboarding answers.
-import { validateIPv4AddressInput } from "@openclaw/net-policy/ipv4";
+import { validateDottedDecimalIPv4Input } from "@openclaw/net-policy/ipv4";
 import { formatPortRangeHint } from "../cli/error-format.js";
+import { parsePort } from "../cli/shared/parse-port.js";
 import {
   normalizeGatewayTokenInput,
   randomToken,
@@ -18,12 +19,11 @@ import {
   maybeAddTailnetOriginToControlUiAllowedOrigins,
   TAILSCALE_EXPOSURE_OPTIONS,
 } from "../gateway/gateway-config-prompts.shared.js";
-import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
 import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { maskApiKey } from "../utils/mask-api-key.js";
+import { maskApiKey } from "../security/secret-mask.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
@@ -62,8 +62,7 @@ function normalizeWizardTextInput(value: unknown): string {
 }
 
 function validateGatewayPortInput(value: unknown): string | undefined {
-  const port = Number(normalizeWizardTextInput(value));
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+  if (parsePort(value) === null) {
     return formatPortRangeHint();
   }
   return undefined;
@@ -78,16 +77,16 @@ export async function configureGatewayForSetup(
   const port =
     flow === "quickstart"
       ? quickstartGateway.port
-      : Number.parseInt(
-          normalizeWizardTextInput(
-            await prompter.text({
-              message: t("wizard.gateway.port"),
-              initialValue: String(localPort),
-              validate: validateGatewayPortInput,
-            }),
-          ),
-          10,
+      : parsePort(
+          await prompter.text({
+            message: t("wizard.gateway.port"),
+            initialValue: String(localPort),
+            validate: validateGatewayPortInput,
+          }),
         );
+  if (port === null) {
+    throw new Error(formatPortRangeHint());
+  }
 
   let bind: GatewayWizardSettings["bind"] =
     flow === "quickstart"
@@ -131,7 +130,7 @@ export async function configureGatewayForSetup(
         message: t("wizard.gateway.bindCustomIp"),
         placeholder: "192.168.1.100",
         initialValue: customBindHost ?? "",
-        validate: validateIPv4AddressInput,
+        validate: validateDottedDecimalIPv4Input,
       });
       customBindHost = typeof input === "string" ? input.trim() : undefined;
     }
@@ -355,23 +354,6 @@ export async function configureGatewayForSetup(
     },
   };
 
-  if (
-    flow === "quickstart" &&
-    bind === "loopback" &&
-    nextConfig.gateway?.controlUi?.allowInsecureAuth === undefined
-  ) {
-    nextConfig = {
-      ...nextConfig,
-      gateway: {
-        ...nextConfig.gateway,
-        controlUi: {
-          ...nextConfig.gateway?.controlUi,
-          allowInsecureAuth: true,
-        },
-      },
-    };
-  }
-
   nextConfig = ensureControlUiAllowedOriginsForNonLoopbackBind(nextConfig, {
     requireControlUiEnabled: true,
   }).config;
@@ -380,27 +362,6 @@ export async function configureGatewayForSetup(
     tailscaleMode,
     tailscaleBin,
   });
-
-  // If this is a new gateway setup (no existing gateway settings), start with a
-  // denylist for high-risk node commands. Users can arm these temporarily via
-  // /phone arm ... (phone-control plugin).
-  if (
-    !quickstartGateway.hasExisting &&
-    nextConfig.gateway?.nodes?.denyCommands === undefined &&
-    nextConfig.gateway?.nodes?.allowCommands === undefined &&
-    nextConfig.gateway?.nodes?.browser === undefined
-  ) {
-    nextConfig = {
-      ...nextConfig,
-      gateway: {
-        ...nextConfig.gateway,
-        nodes: {
-          ...nextConfig.gateway?.nodes,
-          denyCommands: [...DEFAULT_DANGEROUS_NODE_COMMANDS],
-        },
-      },
-    };
-  }
 
   return {
     nextConfig,

@@ -136,6 +136,25 @@ function normalizeWhitespace(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
 
+function isMissingConversationPageError(error: unknown): boolean {
+  return asRecord(error)?.code === "ENOENT";
+}
+
+async function readExistingConversationPage(absolutePath: string): Promise<string> {
+  try {
+    return await fs.readFile(absolutePath, "utf8");
+  } catch {
+    try {
+      return await fs.readFile(absolutePath, "utf8");
+    } catch (retryError) {
+      if (isMissingConversationPageError(retryError)) {
+        return "";
+      }
+      throw retryError;
+    }
+  }
+}
+
 function resolveConversationSourcePath(exportInputPath: string): {
   exportPath: string;
   conversationsPath: string;
@@ -564,7 +583,7 @@ function replaceSimpleManagedBlock(params: {
   const escapedStart = params.startMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const escapedEnd = params.endMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const blockPattern = new RegExp(`${escapedStart}[\\s\\S]*?${escapedEnd}`);
-  return params.original.replace(blockPattern, params.replacement);
+  return params.original.replace(blockPattern, () => params.replacement);
 }
 
 function extractSimpleManagedBlock(params: {
@@ -737,7 +756,7 @@ export async function importChatGptConversations(params: {
   for (const record of records) {
     const rendered = renderConversationPage(record);
     const absolutePath = path.join(params.config.vault.path, record.pagePath);
-    const existing = await fs.readFile(absolutePath, "utf8").catch(() => "");
+    const existing = await readExistingConversationPage(absolutePath);
     const stabilized = preserveExistingPageBlocks(rendered, existing);
     const operation: ChatGptImportOperation =
       existing === stabilized ? "skip" : existing ? "update" : "create";
@@ -906,3 +925,4 @@ export async function rollbackChatGptImportRun(params: {
     alreadyRolledBack: false,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -11,6 +11,7 @@ type GatewayRuntimeStateParams = Parameters<typeof createGatewayRuntimeState>[0]
 /** Creates a minimal gateway runtime state with optional plugin registry fixture. */
 export async function createGatewayRuntimeStateForTest(
   pluginRegistry: GatewayRuntimeStateParams["pluginRegistry"] = createEmptyPluginRegistry(),
+  overrides: Partial<GatewayRuntimeStateParams> = {},
 ) {
   return await createGatewayRuntimeState({
     cfg: {},
@@ -22,6 +23,7 @@ export async function createGatewayRuntimeStateForTest(
     openResponsesEnabled: false,
     resolvedAuth: {} as never,
     getResolvedAuth: () => ({}) as never,
+    isTerminalEnabled: () => false,
     hooksConfig: () => null,
     getHookClientIpConfig: () => ({}) as never,
     pluginRegistry,
@@ -29,5 +31,6 @@ export async function createGatewayRuntimeStateForTest(
     log: { info: () => {}, warn: () => {} },
     logHooks: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never,
     logPlugins: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never,
+    ...overrides,
   });
 }

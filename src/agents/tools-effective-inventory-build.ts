@@ -41,7 +41,7 @@ function resolveEffectiveToolSource(
   const pluginMeta =
     getPluginToolMeta(tool) ?? (fallbackTool ? getPluginToolMeta(fallbackTool) : undefined);
   if (pluginMeta) {
-    if (pluginMeta.pluginId === "bundle-mcp") {
+    if (pluginMeta.mcp || pluginMeta.pluginId === "bundle-mcp") {
       return { source: "mcp", pluginId: pluginMeta.pluginId };
     }
     return { source: "plugin", pluginId: pluginMeta.pluginId };
@@ -107,7 +107,7 @@ function readMatchingTool(
 
 // Raw tool arrays can contain getters/proxies from plugin boundaries. Read
 // defensively; projection diagnostics handle the exact unreadable entry later.
-function buildReadableRawToolsByName(
+export function buildReadableToolsByName(
   tools: readonly AnyAgentTool[],
 ): ReadonlyMap<string, AnyAgentTool> {
   const toolsByName = new Map<string, AnyAgentTool>();
@@ -119,8 +119,10 @@ function buildReadableRawToolsByName(
   }
   for (let index = 0; index < toolCount; index += 1) {
     try {
-      const tool = tools[index];
-      toolsByName.set(tool.name, tool);
+      const tool = tools.at(index);
+      if (tool) {
+        toolsByName.set(tool.name, tool);
+      }
     } catch {
       // Unreadable entries are reported by the schema projection diagnostics.
     }
@@ -129,7 +131,7 @@ function buildReadableRawToolsByName(
 }
 
 /** Builds effective inventory entries from already runtime-compatible tools. */
-export function buildEffectiveToolInventoryEntries(
+function buildEffectiveToolInventoryEntries(
   tools: readonly AnyAgentTool[],
   rawToolsByName: ReadonlyMap<string, AnyAgentTool> = new Map(),
 ): EffectiveToolInventoryEntry[] {
@@ -185,7 +187,7 @@ export function buildRuntimeCompatibleToolInventory(params: {
   entries: EffectiveToolInventoryEntry[];
   notices: EffectiveToolInventoryNotice[];
 } {
-  const rawToolsByName = buildReadableRawToolsByName(params.tools);
+  const rawToolsByName = buildReadableToolsByName(params.tools);
   const preNormalizationProjection = filterProviderNormalizableTools(params.tools);
   const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [
     ...preNormalizationProjection.diagnostics,

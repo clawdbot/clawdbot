@@ -9,9 +9,9 @@ title: "Install"
 
 ## System requirements
 
-- **Node 24** (recommended) or Node 22.19+ - the installer script handles this automatically
+- **Node 22.22.3+, 24.15+, or 25.9+** - Node 26 is the recommended default; the installer script provisions it automatically when Node is missing.
 - **macOS, Linux, or Windows** - Windows users can start with the native Windows Hub app, the PowerShell CLI installer, or a WSL2 Gateway. See [Windows](/platforms/windows).
-- `pnpm` is only needed if you build from source
+- `pnpm` is only needed if you build from source.
 
 ## Recommended: installer script
 
@@ -81,6 +81,23 @@ If you already manage Node yourself:
     ```
 
     <Note>
+    npm 12 blocks package lifecycle scripts by default, so the command above
+    skips OpenClaw's `preinstall` and `postinstall` steps — npm reports them
+    as `blocked because they are not covered by allowScripts`. Allow them
+    explicitly:
+
+    ```bash
+    npm install -g openclaw@latest --allow-scripts openclaw
+    ```
+
+    npm 11.16.x only warns that the scripts are `not yet covered by
+    allowScripts` and still runs them. If you want to clear that warning, be
+    aware that the `npm approve-scripts openclaw` command it suggests does not
+    work for a global install — it fails with `ENOMATCH  No installed packages
+    match: openclaw`. npm 11.12 and earlier have no such policy.
+    </Note>
+
+    <Note>
     The hosted installer clears npm freshness filters such as `min-release-age`
     for the OpenClaw package install. If you install manually with npm, your own
     npm policy still applies.
@@ -89,13 +106,12 @@ If you already manage Node yourself:
   </Tab>
   <Tab title="pnpm">
     ```bash
-    pnpm add -g openclaw@latest
-    pnpm approve-builds -g
+    pnpm add -g --allow-build=openclaw openclaw@latest
     openclaw onboard --install-daemon
     ```
 
     <Note>
-    pnpm requires explicit approval for packages with build scripts. Run `pnpm approve-builds -g` after the first install.
+    pnpm requires explicit approval for packages with build scripts. `approve-builds -g` is not supported for global installs, so pass `--allow-build=openclaw` on the `pnpm add -g` command instead.
     </Note>
 
   </Tab>
@@ -106,7 +122,7 @@ If you already manage Node yourself:
     ```
 
     <Note>
-    Bun is supported for the global CLI install path. For the Gateway runtime, Node remains the recommended daemon runtime.
+    Bun can install the global package, but the resulting `openclaw` executable requires a supported Node runtime because OpenClaw state uses `node:sqlite`.
     </Note>
 
   </Tab>
@@ -148,7 +164,7 @@ curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -
     Automated fleet provisioning.
   </Card>
   <Card title="Bun" href="/install/bun" icon="zap">
-    CLI-only usage via the Bun runtime.
+    Optional dependency installer and package-script runner.
   </Card>
 </CardGroup>
 
@@ -168,38 +184,20 @@ If you want managed startup after install:
 
 ## Hosting and deployment
 
-Deploy OpenClaw on a cloud server or VPS:
+Deploy OpenClaw on a cloud server or VPS. See [Linux server](/vps) for the full
+provider picker (DigitalOcean, Hetzner, Hostinger, Fly.io, GCP, Azure, Railway,
+Northflank, Oracle Cloud, Raspberry Pi, and more), or deploy declaratively on
+[Render](/install/render).
 
 <CardGroup cols={3}>
   <Card title="VPS" href="/vps">
-    Any Linux VPS.
+    Pick a provider.
   </Card>
   <Card title="Docker VM" href="/install/docker-vm-runtime">
     Shared Docker steps.
   </Card>
   <Card title="Kubernetes" href="/install/kubernetes">
     K8s deployment.
-  </Card>
-  <Card title="Fly.io" href="/install/fly">
-    Deploy on Fly.io.
-  </Card>
-  <Card title="Hetzner" href="/install/hetzner">
-    Hetzner deployment.
-  </Card>
-  <Card title="GCP" href="/install/gcp">
-    Google Cloud deployment.
-  </Card>
-  <Card title="Azure" href="/install/azure">
-    Azure deployment.
-  </Card>
-  <Card title="Railway" href="/install/railway">
-    Railway deployment.
-  </Card>
-  <Card title="Render" href="/install/render">
-    Render deployment.
-  </Card>
-  <Card title="Northflank" href="/install/northflank">
-    Northflank deployment.
   </Card>
 </CardGroup>
 
@@ -219,18 +217,10 @@ Deploy OpenClaw on a cloud server or VPS:
 
 ## Troubleshooting: `openclaw` not found
 
-If the install succeeded but `openclaw` is not found in your terminal:
+Almost always a PATH issue: npm's global bin directory isn't on your shell's `PATH`. See [Node.js troubleshooting](/install/node#troubleshooting) for the full fix, including the Windows path.
 
 ```bash
 node -v           # Node installed?
 npm prefix -g     # Where are global packages?
 echo "$PATH"      # Is the global bin dir in PATH?
 ```
-
-If `$(npm prefix -g)/bin` is not in your `$PATH`, add it to your shell startup file (`~/.zshrc` or `~/.bashrc`):
-
-```bash
-export PATH="$(npm prefix -g)/bin:$PATH"
-```
-
-Then open a new terminal. See [Node setup](/install/node) for more details.

@@ -128,22 +128,25 @@ async function runFastModeCase(params: {
     params.expectedCleanupBundleMcpOnRunEnd ?? true,
   );
   expect(embeddedRunParams.allowGatewaySubagentBinding).toBe(true);
-  const isDetached =
-    (params.sessionTarget ?? "isolated") === "isolated" ||
-    params.sessionTarget === "current" ||
-    params.sessionTarget?.startsWith("session:");
+  const isIsolated = (params.sessionTarget ?? "isolated") === "isolated";
   if (params.expectedRetiredSessionId) {
-    const retireParams = retireSessionMcpRuntimeMock.mock.calls[0]?.[0];
+    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledOnce();
+    const [retireParams] = requireFirstMockCall(
+      retireSessionMcpRuntimeMock,
+      "retire session mcp runtime",
+    );
     expect(retireParams.sessionId).toBe(params.expectedRetiredSessionId);
     expect(retireParams.reason).toBe("cron-session-rollover");
+    return;
   }
-  if (isDetached) {
-    // disposeCronRunContext retires MCP for detached cron sessions.
-    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledTimes(
-      params.expectedRetiredSessionId ? 2 : 1,
+  if (isIsolated) {
+    // disposeCronRunContext now retires MCP for isolated sessions
+    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledOnce();
+    const [disposeRetireParams] = requireFirstMockCall(
+      retireSessionMcpRuntimeMock,
+      "dispose retire session mcp runtime",
     );
-    const disposeRetireParams = retireSessionMcpRuntimeMock.mock.calls.at(-1)?.[0];
-    expect(disposeRetireParams.reason).toBe("detached-cron-dispose");
+    expect(disposeRetireParams.reason).toBe("isolated-cron-dispose");
   } else {
     expect(retireSessionMcpRuntimeMock).not.toHaveBeenCalled();
   }
@@ -170,6 +173,9 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
         key: "agent:default:cron:test",
         deleteTranscript: true,
         emitLifecycleHooks: false,
+        expectedSessionId: "test-session-id",
+        expectedLifecycleRevision: "test-lifecycle-revision",
+        expectedSessionUpdatedAt: 0,
       },
       timeoutMs: 10_000,
     });
@@ -245,21 +251,23 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
     });
   });
 
-  it("cleans up bundled MCP runtime state for explicit session cron targets", async () => {
+  it("preserves bundled MCP runtime state for persistent cron session targets", async () => {
     await runFastModeCase({
       configFastMode: true,
       expectedFastMode: true,
-      message: "test explicit session cron target",
+      expectedCleanupBundleMcpOnRunEnd: false,
+      message: "test persistent cron session",
       sessionTarget: "session:agent:main:main:thread:9999",
     });
   });
 
-  it("cleans up bundled MCP runtime state when a detached cron session rolls over", async () => {
+  it("retires the previous bundled MCP runtime when a persistent cron session rolls over", async () => {
     await runFastModeCase({
       configFastMode: true,
       expectedFastMode: true,
+      expectedCleanupBundleMcpOnRunEnd: false,
       expectedRetiredSessionId: "stale-session-id",
-      message: "test detached cron session rollover",
+      message: "test persistent cron session rollover",
       previousSessionId: "stale-session-id",
       sessionId: "rotated-session-id",
       sessionTarget: "session:agent:main:main:thread:9999",

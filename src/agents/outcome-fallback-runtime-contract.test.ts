@@ -1,4 +1,6 @@
 // Verifies embedded runtime outcome classifications drive model fallback correctly.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createContractRunResult,
   OUTCOME_FALLBACK_RUNTIME_CONTRACT,
@@ -8,7 +10,7 @@ import {
   classifyEmbeddedAgentRunResultForModelFallback,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
 } from "./embedded-agent-runner/result-fallback-classifier.js";
-import { runWithModelFallback } from "./model-fallback.js";
+import { runWithModelFallback } from "./model-fallback-runner.js";
 
 vi.mock("./auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSource: () => false,
@@ -403,7 +405,7 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
   });
 
   it("keeps running on the primary when terminal output is not classified as fallback", async () => {
-    const contractCase = nonFallbackCases[0];
+    const contractCase = expectDefined(nonFallbackCases[0], "nonFallbackCases[0] test invariant");
     const run = vi.fn().mockResolvedValue(contractCase.result);
     const result = await runWithModelFallback({
       cfg: undefined,

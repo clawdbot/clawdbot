@@ -5,22 +5,24 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ImageContent } from "../../llm/types.js";
+import { normalizeAttachments } from "../../media-understanding/attachments.normalize.js";
 import {
   stripExtractedFileImageMetadata,
   type ExtractedFileImage,
 } from "../../media-understanding/extracted-file-images.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import type { MsgContext } from "../templating.js";
+import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { resolveAgentTurnAttachments } from "./agent-turn-attachments.js";
 
 type CurrentImageAttachment = {
   index: number;
   path: string;
   mediaType: string;
+  workspaceDir?: string;
 };
 
 type OrderedTurnImage = {
-  image: ImageContent;
+  image?: ImageContent;
   imageOrder: PromptImageOrderEntry;
   sourceIndex?: number;
   sequence: number;
@@ -52,29 +54,21 @@ function resolveCurrentImageMediaType(pathValue: unknown, mediaType?: unknown): 
 }
 
 function collectCurrentImageAttachments(ctx: MsgContext): CurrentImageAttachment[] {
-  const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;
-  const paths =
-    pathsFromArray && pathsFromArray.length > 0
-      ? pathsFromArray
-      : normalizeOptionalString(ctx.MediaPath)
-        ? [ctx.MediaPath]
-        : [];
-  if (paths.length === 0) {
-    return [];
-  }
-  const types =
-    Array.isArray(ctx.MediaTypes) && ctx.MediaTypes.length === paths.length
-      ? ctx.MediaTypes
-      : undefined;
-  const attachments: CurrentImageAttachment[] = [];
-  for (const [index, pathValue] of paths.entries()) {
-    const mediaPath = normalizeOptionalString(pathValue);
-    const mediaType = resolveCurrentImageMediaType(pathValue, types?.[index] ?? ctx.MediaType);
+  return normalizeAttachments(ctx).flatMap((attachment) => {
+    const mediaPath = normalizeOptionalString(attachment.path);
+    const mediaType = resolveCurrentImageMediaType(attachment.path, attachment.mime);
     if (mediaPath && mediaType) {
-      attachments.push({ index, path: mediaPath, mediaType });
+      return [
+        {
+          index: attachment.index,
+          path: mediaPath,
+          mediaType,
+          workspaceDir: attachment.workspaceDir,
+        },
+      ];
     }
-  }
-  return attachments;
+    return [];
+  });
 }
 
 function collectDescribedImageAttachmentIndexes(ctx: MsgContext): Set<number> {
@@ -89,13 +83,14 @@ function createUndescribedImageContext(
   ctx: MsgContext,
   undescribedAttachments: CurrentImageAttachment[],
 ): MsgContext {
-  const first = undescribedAttachments[0];
+  const media = undescribedAttachments.map((attachment) => ({
+    path: attachment.path,
+    contentType: attachment.mediaType,
+    workspaceDir: attachment.workspaceDir,
+  }));
   return {
     ...ctx,
-    MediaPath: first?.path,
-    MediaType: first?.mediaType,
-    MediaPaths: undescribedAttachments.map((attachment) => attachment.path),
-    MediaTypes: undescribedAttachments.map((attachment) => attachment.mediaType),
+    media,
   };
 }
 
@@ -105,13 +100,32 @@ function appendOrderedImages(params: {
   imageOrder?: PromptImageOrderEntry[];
   sourceIndex?: number;
 }) {
-  if (!params.images || params.images.length === 0) {
+  const images = params.images ?? [];
+  if (!params.imageOrder || params.imageOrder.length === 0) {
+    for (const image of images) {
+      params.entries.push({
+        image,
+        imageOrder: "inline",
+        sourceIndex: params.sourceIndex,
+        sequence: params.entries.length,
+      });
+    }
     return;
   }
-  for (const [index, image] of params.images.entries()) {
+
+  let inlineIndex = 0;
+  for (const imageOrder of params.imageOrder) {
     params.entries.push({
-      image,
-      imageOrder: params.imageOrder?.[index] ?? "inline",
+      image: imageOrder === "inline" ? images[inlineIndex++] : undefined,
+      imageOrder,
+      sourceIndex: params.sourceIndex,
+      sequence: params.entries.length,
+    });
+  }
+  while (inlineIndex < images.length) {
+    params.entries.push({
+      image: images[inlineIndex++],
+      imageOrder: "inline",
       sourceIndex: params.sourceIndex,
       sequence: params.entries.length,
     });
@@ -121,6 +135,7 @@ function appendOrderedImages(params: {
 function resolveMergedTurnImages(entries: OrderedTurnImage[]): {
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  imageSourceIndexes?: Array<number | undefined>;
 } {
   if (entries.length === 0) {
     return {};
@@ -134,10 +149,15 @@ function resolveMergedTurnImages(entries: OrderedTurnImage[]): {
     }
     return left.sequence - right.sequence;
   });
-  return {
-    images: merged.map((entry) => entry.image),
+  const images = merged.flatMap((entry) => (entry.image ? [entry.image] : []));
+  const result = {
+    ...(images.length > 0 ? { images } : {}),
     imageOrder: merged.map((entry) => entry.imageOrder),
   };
+  Object.defineProperty(result, "imageSourceIndexes", {
+    value: merged.map((entry) => entry.sourceIndex),
+  });
+  return result;
 }
 
 /** Resolves current-turn image attachments that were not already described by media understanding. */
@@ -150,6 +170,7 @@ export async function resolveCurrentTurnImages(params: {
 }): Promise<{
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  imageSourceIndexes?: Array<number | undefined>;
 }> {
   const entries: OrderedTurnImage[] = [];
   appendOrderedImages({

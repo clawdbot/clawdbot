@@ -68,6 +68,11 @@ export interface StreamOptions {
   temperature?: number;
   maxTokens?: number;
   /**
+   * Optional JSON Schema for the generated response. Providers that support
+   * constrained decoding map it to their native request shape; others ignore it.
+   */
+  responseFormat?: Record<string, unknown>;
+  /**
    * Stop sequences forwarded to providers that support them. Providers map this
    * to their native request field, such as OpenAI `stop` or Anthropic
    * `stop_sequences`.
@@ -91,6 +96,11 @@ export interface StreamOptions {
    * session-aware features. Ignored by providers that don't support it.
    */
   sessionId?: string;
+  /**
+   * Opaque per-model-call identifier for provider transport correlation.
+   * Providers that do not expose request correlation ignore it.
+   */
+  requestId?: string;
   /**
    * Optional provider prompt-cache affinity key, distinct from transcript/session identity.
    * Providers that do not support separate cache affinity ignore it.
@@ -185,7 +195,7 @@ export type ProviderImagesOptions = ImagesOptions & Record<string, unknown>;
 
 /** Unified text options used by simple completion helpers. */
 export interface SimpleStreamOptions extends StreamOptions {
-  reasoning?: ThinkingLevel;
+  reasoning?: ModelThinkingLevel;
   /** Custom token budgets for thinking levels (token-based providers only) */
   thinkingBudgets?: ThinkingBudgets;
 }
@@ -263,6 +273,14 @@ export interface Usage {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Whether the provider reported a cache-read/write token split. */
+  cacheTelemetry?: { state: "available" | "unavailable" };
+  /** Subset of `cacheWrite` written with 1-hour retention when reported. */
+  cacheWrite1h?: number;
+  /** Exact context snapshot for the final provider iteration. */
+  contextUsage?:
+    | { state: "available"; promptTokens: number; totalTokens: number }
+    | { state: "unavailable" };
   totalTokens: number;
   cost: {
     input: number;
@@ -270,6 +288,8 @@ export interface Usage {
     cacheRead: number;
     cacheWrite: number;
     total: number;
+    /** Provenance for the recorded total cost; provider-billed totals are authoritative. */
+    totalOrigin?: "provider-billed";
   };
 }
 
@@ -281,6 +301,15 @@ export interface UserMessage {
   role: "user";
   content: string | (TextContent | ImageContent)[];
   timestamp: number; // Unix timestamp in milliseconds
+  /**
+   * Marks a user message that carries transient current-turn runtime context
+   * (e.g. an OpenClaw runtime-context carrier appended after the active user
+   * turn). Such messages are volatile — present only on the turn they belong to
+   * and stripped on replay — so providers must NOT anchor a prompt-cache
+   * breakpoint on them, or the breakpoint would land on bytes that change every
+   * turn. Anchoring stays on the last stable (non-carrier) user message.
+   */
+  runtimeContextCarrier?: boolean;
 }
 
 /** Assistant turn, including provider identity and final stop state. */
@@ -292,6 +321,7 @@ export interface AssistantMessage {
   model: string;
   responseModel?: string; // Concrete `chunk.model` when different from the requested `model` (e.g. OpenRouter `auto` -> `anthropic/...`)
   responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
+  turnId?: string; // Runtime-assigned stable turn identity when the provider does not expose one
   diagnostics?: AssistantMessageDiagnostic[]; // Redacted provider/runtime diagnostics for failures and recoveries.
   usage: Usage;
   stopReason: StopReason;
@@ -443,6 +473,8 @@ export interface OpenAICompletionsCompat {
   zaiToolStream?: boolean;
   /** Whether the provider supports the `strict` field in tool definitions. Default: true. */
   supportsStrictMode?: boolean;
+  /** Whether the provider supports JSON Schema through `response_format`. Default: false for unknown compatible endpoints. */
+  supportsJsonSchemaResponseFormat?: boolean;
   /** Cache control convention for prompt caching. "anthropic" applies Anthropic-style `cache_control` markers to the system prompt, last tool definition, and last user/assistant text content. */
   cacheControlFormat?: "anthropic";
   /** Whether to send known session-affinity headers (`session_id`, `x-client-request-id`, `x-session-affinity`) from `options.sessionId` when caching is enabled. Default: false. */
@@ -455,6 +487,10 @@ export interface OpenAICompletionsCompat {
 
 /** Compatibility settings for OpenAI Responses APIs. */
 export interface OpenAIResponsesCompat {
+  /** Whether the provider supports the `developer` role (vs `system`). Default: true. */
+  supportsDeveloperRole?: boolean;
+  /** Whether the model accepts the `temperature` parameter. Default: true. */
+  supportsTemperature?: boolean;
   /** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
   sendSessionIdHeader?: boolean;
   /** Whether the provider supports `prompt_cache_retention: "24h"`. Default: true. */
@@ -489,6 +525,8 @@ export interface AnthropicMessagesCompat {
    * Default: true.
    */
   supportsCacheControlOnTools?: boolean;
+  /** Whether empty thinking signatures can be replayed as native thinking blocks. Default: false. */
+  allowEmptySignature?: boolean;
 }
 
 /**

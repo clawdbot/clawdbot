@@ -2,7 +2,7 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 
-export type IMessageReactionSystemEventDecision = {
+type IMessageReactionSystemEventDecision = {
   text: string;
   contextKey: string;
   route: {

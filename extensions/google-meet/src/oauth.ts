@@ -10,6 +10,7 @@ import {
   parseOAuthCallbackInput,
   waitForLocalOAuthCallback,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { readGoogleApiErrorDetail } from "./google-api-errors.js";
 
@@ -18,6 +19,8 @@ const GOOGLE_MEET_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_MEET_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_MEET_TOKEN_HOST = "oauth2.googleapis.com";
 const GOOGLE_MEET_DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
+const GOOGLE_OAUTH_TOKEN_JSON_MAX_BYTES = 256 * 1024;
+const GOOGLE_OAUTH_REQUEST_TIMEOUT_MS = 30_000;
 const GOOGLE_MEET_SCOPES = [
   "https://www.googleapis.com/auth/meetings.space.created",
   "https://www.googleapis.com/auth/meetings.space.readonly",
@@ -41,7 +44,7 @@ function resolveGoogleMeetTokenExpiresAt(value: unknown, nowMs = Date.now()): nu
   );
 }
 
-export type GoogleMeetOAuthTokens = {
+type GoogleMeetOAuthTokens = {
   accessToken: string;
   expiresAt: number;
   refreshToken?: string;
@@ -83,19 +86,20 @@ async function executeGoogleTokenRequest(body: URLSearchParams): Promise<GoogleM
     },
     policy: { allowedHostnames: [GOOGLE_MEET_TOKEN_HOST] },
     auditContext: "google-meet.oauth.token",
+    timeoutMs: GOOGLE_OAUTH_REQUEST_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {
       const detail = await readGoogleApiErrorDetail(response);
       throw new Error(`Google OAuth token request failed (${response.status}): ${detail}`);
     }
-    const payload = (await response.json()) as {
+    const payload = await readProviderJsonResponse<{
       access_token?: string;
       expires_in?: number;
       refresh_token?: string;
       scope?: string;
       token_type?: string;
-    };
+    }>(response, "Google OAuth token", { maxBytes: GOOGLE_OAUTH_TOKEN_JSON_MAX_BYTES });
     const accessToken = payload.access_token?.trim();
     if (!accessToken) {
       throw new Error("Google OAuth token response was missing access_token");
@@ -141,7 +145,7 @@ export async function exchangeGoogleMeetAuthCode(params: {
   );
 }
 
-export async function refreshGoogleMeetAccessToken(params: {
+async function refreshGoogleMeetAccessToken(params: {
   clientId: string;
   clientSecret?: string;
   refreshToken: string;

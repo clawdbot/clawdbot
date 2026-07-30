@@ -28,10 +28,12 @@ import {
   loadSessionEntryByKey,
   runAnnounceDeliveryWithRetry,
   resolveSubagentAnnounceTimeoutMs,
-  resolveSubagentCompletionOrigin,
 } from "./subagent-announce-delivery.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
-import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
+import {
+  resolveAnnounceOrigin,
+  resolveSubagentCompletionOrigin,
+} from "./subagent-announce-origin.js";
 import {
   applySubagentWaitOutcome,
   buildChildCompletionFindings,
@@ -106,7 +108,7 @@ function buildAnnounceSteerMessage(events: AgentInternalEvent[]): string {
   );
 }
 
-function hasUsableSessionEntry(entry: unknown): boolean {
+export function hasUsableSessionEntry(entry: unknown): boolean {
   if (!entry || typeof entry !== "object") {
     return false;
   }
@@ -261,6 +263,7 @@ export async function runSubagentAnnounceFlow(params: {
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
+  onBeforeDeleteChildSession?: () => boolean;
 }): Promise<boolean> {
   let didAnnounce = false;
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
@@ -607,19 +610,9 @@ export async function runSubagentAnnounceFlow(params: {
     defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
     // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
   } finally {
-    // Patch label after all writes complete
-    if (params.label) {
-      try {
-        await subagentAnnounceDeps.callGateway({
-          method: "sessions.patch",
-          params: { key: params.childSessionKey, label: params.label },
-          timeoutMs: 10_000,
-        });
-      } catch {
-        // Best-effort
-      }
-    }
-    if (shouldDeleteChildSession) {
+    // The spawn label is persisted at run start (agent request `label` →
+    // buildAgentSessionPatch), so no post-run label patch is needed here.
+    if (shouldDeleteChildSession && (params.onBeforeDeleteChildSession?.() ?? true)) {
       await deleteSubagentSessionForCleanup({
         callGateway: subagentAnnounceDeps.callGateway,
         childSessionKey: params.childSessionKey,
@@ -659,4 +652,3 @@ export const testing = {
       : defaultSubagentAnnounceDeps;
   },
 };
-export { testing as __testing };

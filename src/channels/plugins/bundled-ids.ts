@@ -8,26 +8,9 @@ import type { PluginDiscoveryResult } from "../../plugins/discovery.js";
 import { resolveBundledChannelRootScope } from "./bundled-root.js";
 
 /**
- * Lists bundled channel plugin ids for a package root/cache scope.
- */
-export function listBundledChannelPluginIdsForRoot(
-  _packageRoot: string,
-  env: NodeJS.ProcessEnv = process.env,
-  discovery?: PluginDiscoveryResult,
-): string[] {
-  return listChannelCatalogEntries({
-    origin: "bundled",
-    env,
-    discovery,
-  })
-    .map((entry) => entry.pluginId)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-/**
  * Lists bundled channel ids for a package root/cache scope.
  */
-export function listBundledChannelIdsForRoot(
+function listBundledChannelIdsForRoot(
   _packageRoot: string,
   env: NodeJS.ProcessEnv = process.env,
   discovery?: PluginDiscoveryResult,
@@ -40,20 +23,6 @@ export function listBundledChannelIdsForRoot(
     .map((entry) => entry.channel.id)
     .filter((channelId): channelId is string => Boolean(channelId))
     .toSorted((left, right) => left.localeCompare(right));
-}
-
-/**
- * Lists bundled channel plugin ids for the current runtime root scope.
- */
-export function listBundledChannelPluginIds(
-  env: NodeJS.ProcessEnv = process.env,
-  discovery?: PluginDiscoveryResult,
-): string[] {
-  return listBundledChannelPluginIdsForRoot(
-    resolveBundledChannelRootScope(env).cacheKey,
-    env,
-    discovery,
-  );
 }
 
 /**

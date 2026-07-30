@@ -1,6 +1,8 @@
 // Native PDF provider tests cover direct Anthropic and Gemini request shapes,
 // base URL handling, and bounded API error reporting.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
@@ -112,6 +114,29 @@ describe("native PDF provider API calls", () => {
     expect(body.messages[0].content[1].type).toBe("text");
   });
 
+  it("unwraps sentinel-backed native PDF headers only at the request handoff", async () => {
+    const apiKey = mintSecretSentinel("native-pdf-api-secret", {
+      label: "model-auth:anthropic",
+    });
+    const managedHeader = mintSecretSentinel("native-pdf-managed-secret", {
+      label: "model-auth:anthropic",
+    });
+    const fetchMock = mockFetchResponse(
+      jsonResponse({ content: [{ type: "text", text: "Analysis" }] }),
+    );
+
+    await pdfNativeProviders.anthropicAnalyzePdf(
+      makeAnthropicAnalyzeParams({
+        apiKey,
+        requestConfig: { headers: { "X-Managed": `Bearer ${managedHeader}` } },
+      }),
+    );
+
+    const [, opts] = firstFetchCall(fetchMock) as [string, { headers: Headers }];
+    expect(opts.headers.get("x-api-key")).toBe("native-pdf-api-secret");
+    expect(opts.headers.get("X-Managed")).toBe("Bearer native-pdf-managed-secret");
+  });
+
   it("anthropicAnalyzePdf honors ANTHROPIC_BASE_URL when no base URL is configured", async () => {
     vi.stubEnv("ANTHROPIC_BASE_URL", "https://anthropic-pdf-proxy.example/v1");
     const fetchMock = mockFetchResponse(
@@ -183,14 +208,13 @@ describe("native PDF provider API calls", () => {
       }),
     );
 
-    const error = await Promise.race([
+    const error = await withTestTimeout(
       pdfNativeProviders
         .anthropicAnalyzePdf(makeAnthropicAnalyzeParams())
         .catch((caught: unknown) => caught),
-      new Promise<Error>((_resolve, reject) => {
-        setTimeout(() => reject(new Error("timed out waiting for bounded error body")), 500);
-      }),
-    ]);
+      500,
+      "timed out waiting for bounded error body",
+    );
 
     if (!(error instanceof Error)) {
       throw new Error("expected Anthropic PDF request to throw an Error");

@@ -23,7 +23,7 @@ const enforcedFiles = new Set([
 /**
  * Finds legacy `agentCommand(...)` call lines in ingress-owned source.
  */
-export function findLegacyAgentCommandCallLines(content, fileName = "source.ts") {
+function findLegacyAgentCommandCallLines(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   return collectCallExpressionLines(ts, sourceFile, (node) => {
     const callee = unwrapExpression(node.expression);

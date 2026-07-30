@@ -127,6 +127,73 @@ describe("config io paths", () => {
     });
   });
 
+  it("logs each warning payload once until warnings clear", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const logger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+      };
+      const load = () =>
+        createConfigIO({
+          configPath,
+          env: { HOME: home } as NodeJS.ProcessEnv,
+          homedir: () => home,
+          logger,
+        }).loadConfig();
+      const writeRemovedPlugin = async (pluginId: string) => {
+        await fs.writeFile(
+          configPath,
+          JSON.stringify({ plugins: { entries: { [pluginId]: { enabled: false } } } }),
+        );
+      };
+
+      await writeRemovedPlugin("google-antigravity-auth");
+      load();
+      load();
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+
+      createConfigIO({
+        configPath,
+        env: { HOME: home } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger,
+        pluginValidation: "skip",
+      }).loadConfig();
+      load();
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          gateway: { port: "invalid" },
+          plugins: { entries: { "google-antigravity-auth": { enabled: false } } },
+        }),
+      );
+      expect(load).toThrow();
+      await writeRemovedPlugin("google-antigravity-auth");
+      load();
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+
+      await writeRemovedPlugin("google-gemini-cli-auth");
+      load();
+      expect(logger.warn).toHaveBeenCalledTimes(2);
+
+      await fs.writeFile(configPath, JSON.stringify({}));
+      load();
+      await writeRemovedPlugin("google-gemini-cli-auth");
+      load();
+      expect(logger.warn).toHaveBeenCalledTimes(3);
+
+      await fs.writeFile(configPath, "null");
+      load();
+      await writeRemovedPlugin("google-gemini-cli-auth");
+      load();
+      expect(logger.warn).toHaveBeenCalledTimes(4);
+    });
+  });
+
   it("explains what to check when config was written by a newer OpenClaw", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");

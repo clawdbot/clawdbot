@@ -87,17 +87,13 @@ export async function removeOwnReactionsDiscord(
   if (identifiers.size === 0) {
     return { ok: true, removed: [] };
   }
-  const removed: string[] = [];
-  await Promise.allSettled(
-    Array.from(identifiers, (identifier) => {
-      removed.push(identifier);
-      return deleteOwnMessageReaction(
-        rest,
-        channelId,
-        messageId,
-        normalizeReactionEmoji(identifier),
-      );
-    }),
+  const removed = Array.from(identifiers);
+  // Promise.all so a rejected delete propagates: allSettled would swallow the
+  // failure and falsely report every identifier as removed.
+  await Promise.all(
+    removed.map((identifier) =>
+      deleteOwnMessageReaction(rest, channelId, messageId, normalizeReactionEmoji(identifier)),
+    ),
   );
   return { ok: true, removed };
 }

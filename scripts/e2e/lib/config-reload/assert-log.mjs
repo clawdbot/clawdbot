@@ -1,4 +1,5 @@
 // Log assertions for config reload E2E scenarios.
+import { sleep } from "../../../lib/sleep.mjs";
 import { readPositiveIntEnv } from "../env-limits.mjs";
 import { createConfigReloadLogScanner } from "./log-scanner.mjs";
 
@@ -6,10 +7,6 @@ const logPath = process.env.OPENCLAW_CONFIG_RELOAD_LOG_PATH ?? "/tmp/config-relo
 const deadlineMs = Date.now() + readPositiveIntEnv("OPENCLAW_CONFIG_RELOAD_LOG_TIMEOUT_MS", 30_000);
 const maxReadBytes = readPositiveIntEnv("OPENCLAW_CONFIG_RELOAD_LOG_MAX_READ_BYTES", 256 * 1024);
 
-const sleep = (ms) =>
-  new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 const scanner = createConfigReloadLogScanner(logPath, {
   maxReadBytes,
   tailLineLimit: 160,

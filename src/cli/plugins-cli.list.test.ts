@@ -1,6 +1,7 @@
 // Plugins CLI list tests cover plugin listing output and installed-state formatting.
-import { beforeEach, describe, expect, it } from "vitest";
-import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import {
   buildPluginDiagnosticsReport,
   buildPluginInspectReport,
@@ -17,9 +18,18 @@ import {
   setInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
 
+const workshopMocks = vi.hoisted(() => ({
+  detectToolPolicyDiagnostic: vi.fn(),
+}));
+
+vi.mock("../skills/workshop/tool-policy-diagnostic.js", () => ({
+  detectSkillWorkshopToolPolicyDiagnostic: workshopMocks.detectToolPolicyDiagnostic,
+}));
+
 describe("plugins cli list", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
+    workshopMocks.detectToolPolicyDiagnostic.mockReset();
   });
 
   it("includes imported state in JSON output", async () => {
@@ -123,9 +133,8 @@ describe("plugins cli list", () => {
 
     const output = runtimeLogs.join("\n");
     expect(output).toContain("Plugin configuration:");
-    expect(output).toContain('plugins.allow: stale plugin reference "lossless-claw" was found.');
     expect(output).toContain(
-      'plugins.entries.lossless-claw: stale plugin reference "lossless-claw" was found.',
+      "Stale plugin references (plugins.allow/deny/entries): lossless-claw.",
     );
     expect(output).toContain(
       'plugins.slots.contextEngine: slot references missing plugin "lossless-claw".',
@@ -619,5 +628,40 @@ describe("plugins cli list", () => {
     expect(buildPluginSnapshotReport).toHaveBeenCalledWith({ config: {} });
     expect(buildPluginDiagnosticsReport).not.toHaveBeenCalled();
     expect(runtimeErrors.at(-1)).toContain("Plugin not found: missing-plugin");
+  });
+
+  it("explains a policy-hidden built-in Skill Workshop at the legacy inspect surface", async () => {
+    const config: OpenClawConfig = {
+      tools: { profile: "messaging" },
+    };
+    loadConfig.mockReturnValue(config);
+    workshopMocks.detectToolPolicyDiagnostic.mockReturnValue({
+      agentId: "main",
+      source: "tools.profile",
+      detail: 'tools.profile: "messaging" does not include "skill_workshop".',
+      fix: 'Add tools.alsoAllow: ["skill_workshop"].',
+      message:
+        'Skill Workshop is active, but "skill_workshop" is hidden for agent "main": tools.profile: "messaging" does not include "skill_workshop". Add tools.alsoAllow: ["skill_workshop"].',
+    });
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+
+    await expect(runPluginsCommand(["plugins", "inspect", "skill-workshop"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors.at(-1)).toContain(
+      "Skill Workshop is built into OpenClaw, not a plugin; configure it under skills.workshop.",
+    );
+    expect(workshopMocks.detectToolPolicyDiagnostic).toHaveBeenCalledWith({
+      config,
+      workshopEnabled: true,
+    });
+    expect(runtimeErrors.at(-1)).toContain(
+      'tools.profile: "messaging" does not include "skill_workshop".',
+    );
+    expect(runtimeErrors.at(-1)).toContain('Add tools.alsoAllow: ["skill_workshop"].');
   });
 });

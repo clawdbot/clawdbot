@@ -9,11 +9,6 @@ permissions:
   pull-requests: write
   issues: write
 
-env:
-  # Temporary rollout bridge for PRs opened before this workflow's script landed.
-  # Remove once the pre-rollout PR set has drained.
-  OPENCLAW_SECURITY_SENSITIVE_GUARD_ROLLOUT_SHA: 5d9c010628ea4de3492a12e32f9be5b8c5dfa9ed
-
 concurrency:
   group: security-sensitive-guard-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -24,40 +19,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Check security-sensitive guard rollout eligibility
-        id: rollout
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          status="$(
-            gh api \
-              "repos/${GITHUB_REPOSITORY}/compare/${OPENCLAW_SECURITY_SENSITIVE_GUARD_ROLLOUT_SHA}...${PR_BASE_SHA}" \
-              --jq '.status'
-          )"
-          case "$status" in
-            ahead|identical)
-              echo "ready=true" >> "$GITHUB_OUTPUT"
-              ;;
-            behind|diverged)
-              echo "ready=false" >> "$GITHUB_OUTPUT"
-              echo "::notice::Skipping security-sensitive guard for a PR base that predates rollout commit ${OPENCLAW_SECURITY_SENSITIVE_GUARD_ROLLOUT_SHA}."
-              ;;
-            *)
-              echo "Unexpected compare status for security-sensitive guard rollout: $status" >&2
-              exit 1
-              ;;
-          esac
-
       - name: Check out trusted base workflow scripts
-        if: steps.rollout.outputs.ready == 'true'
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
 
       - name: Detect security-sensitive changes
-        if: steps.rollout.outputs.ready == 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           OPENCLAW_SECURITY_APPROVERS: vincentkoc,steipete,joshavant
@@ -72,40 +40,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Check security-sensitive guard rollout eligibility
-        id: rollout
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          status="$(
-            gh api \
-              "repos/${GITHUB_REPOSITORY}/compare/${OPENCLAW_SECURITY_SENSITIVE_GUARD_ROLLOUT_SHA}...${PR_BASE_SHA}" \
-              --jq '.status'
-          )"
-          case "$status" in
-            ahead|identical)
-              echo "ready=true" >> "$GITHUB_OUTPUT"
-              ;;
-            behind|diverged)
-              echo "ready=false" >> "$GITHUB_OUTPUT"
-              echo "::notice::Skipping security-sensitive guard for a PR base that predates rollout commit ${OPENCLAW_SECURITY_SENSITIVE_GUARD_ROLLOUT_SHA}."
-              ;;
-            *)
-              echo "Unexpected compare status for security-sensitive guard rollout: $status" >&2
-              exit 1
-              ;;
-          esac
-
       - name: Check out trusted base workflow scripts
-        if: steps.rollout.outputs.ready == 'true'
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
 
       - name: Enforce security-sensitive guard
-        if: steps.rollout.outputs.ready == 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           OPENCLAW_SECURITY_APPROVERS: vincentkoc,steipete,joshavant

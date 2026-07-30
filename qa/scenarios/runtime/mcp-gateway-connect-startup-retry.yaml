@@ -18,11 +18,15 @@ scenario:
     - docs/cli/mcp.md
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
-    - src/gateway/client.test.ts
-    - test/e2e/qa-lab/runtime/mcp-channels.fixture.ts
-    - test/e2e/qa-lab/runtime/mcp-client-temp-state.fixture.ts
-    - test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts
+    - test/e2e/qa-lab/runtime/gateway-mcp-real-transports.ts
+    - extensions/qa-lab/src/gateway-child.ts
+    - src/mcp/channel-bridge.ts
   execution:
-    kind: vitest
-    path: src/gateway/client.test.ts
-    summary: Vitest coverage for Gateway connect request, protocol negotiation, and startup retry behavior used by MCP bridge clients.
+    kind: script
+    path: test/e2e/qa-lab/runtime/gateway-mcp-real-transports.ts
+    summary: Starts the real MCP client before a delayed real Gateway becomes ready and captures retry, connect-frame, and negotiated-protocol evidence.
+    args:
+      - --scenario
+      - mcp-gateway-connect-startup-retry
+      - --artifact-base
+      - ${outputDir}

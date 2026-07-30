@@ -21,6 +21,7 @@ type SandboxHashInput = {
   workspaceDir: string;
   agentWorkspaceDir: string;
   mountFormatVersion: number;
+  createArgsEpoch: string;
   readOnlyWorkspaceSkillMounts?: readonly string[];
 };
 
@@ -34,7 +35,7 @@ type SandboxBrowserHashInput = {
     | "vncPort"
     | "noVncPort"
     | "headless"
-    | "enableNoVnc"
+    | "noVncEnabled"
     | "autoStartTimeoutMs"
   >;
   securityEpoch: string;
@@ -42,6 +43,7 @@ type SandboxBrowserHashInput = {
   workspaceDir: string;
   agentWorkspaceDir: string;
   mountFormatVersion: number;
+  createArgsEpoch: string;
   readOnlyWorkspaceSkillMounts?: readonly string[];
 };
 

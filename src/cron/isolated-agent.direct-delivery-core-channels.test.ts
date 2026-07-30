@@ -1,8 +1,11 @@
 // Direct delivery tests cover isolated agent delivery through core channel targets.
 import "./isolated-agent.mocks.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
-import type { ChannelOutboundAdapter, ChannelOutboundContext } from "../channels/plugins/types.js";
+import type {
+  ChannelOutboundAdapter,
+  ChannelOutboundContext,
+} from "../channels/plugins/types.adapters.js";
 import type { CliDeps } from "../cli/deps.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
@@ -251,53 +254,69 @@ async function expectTelegramAnnounceDelivery({
   });
 }
 
+function setupCoreChannelMocks(): void {
+  setupIsolatedAgentTurnMocks({ fast: true });
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "slack",
+        plugin: createOutboundTestPlugin({
+          id: "slack",
+          outbound: createCliDelegatingOutbound({ channel: "slack" }),
+        }),
+        source: "test",
+      },
+      {
+        pluginId: "discord",
+        plugin: createOutboundTestPlugin({
+          id: "discord",
+          outbound: createCliDelegatingOutbound({
+            channel: "discord",
+            preferFinalAssistantVisibleText: true,
+          }),
+        }),
+        source: "test",
+      },
+      {
+        pluginId: "whatsapp",
+        plugin: createOutboundTestPlugin({
+          id: "whatsapp",
+          outbound: createCliDelegatingOutbound({
+            channel: "whatsapp",
+            deliveryMode: "gateway",
+            resolveTarget: identityResolveTarget,
+          }),
+        }),
+        source: "test",
+      },
+      {
+        pluginId: "imessage",
+        plugin: createOutboundTestPlugin({
+          id: "imessage",
+          outbound: createCliDelegatingOutbound({ channel: "imessage" }),
+        }),
+        source: "test",
+      },
+    ]),
+  );
+}
+
 describe("runCronIsolatedAgentTurn core-channel direct delivery", () => {
-  beforeEach(() => {
-    setupIsolatedAgentTurnMocks({ fast: true });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "slack",
-          plugin: createOutboundTestPlugin({
-            id: "slack",
-            outbound: createCliDelegatingOutbound({ channel: "slack" }),
-          }),
-          source: "test",
-        },
-        {
-          pluginId: "discord",
-          plugin: createOutboundTestPlugin({
-            id: "discord",
-            outbound: createCliDelegatingOutbound({
-              channel: "discord",
-              preferFinalAssistantVisibleText: true,
-            }),
-          }),
-          source: "test",
-        },
-        {
-          pluginId: "whatsapp",
-          plugin: createOutboundTestPlugin({
-            id: "whatsapp",
-            outbound: createCliDelegatingOutbound({
-              channel: "whatsapp",
-              deliveryMode: "gateway",
-              resolveTarget: identityResolveTarget,
-            }),
-          }),
-          source: "test",
-        },
-        {
-          pluginId: "imessage",
-          plugin: createOutboundTestPlugin({
-            id: "imessage",
-            outbound: createCliDelegatingOutbound({ channel: "imessage" }),
-          }),
-          source: "test",
-        },
-      ]),
-    );
+  beforeAll(async () => {
+    setupCoreChannelMocks();
+    const slack = CASES[0];
+    if (!slack) {
+      throw new Error("expected Slack channel case");
+    }
+    await expectCoreChannelAnnounceDelivery({
+      testCase: slack,
+      payloads: [{ text: "warm runtime" }],
+      assertSend: () => {},
+    });
+    clearRuntimeConfigSnapshot();
   });
+
+  beforeEach(setupCoreChannelMocks);
 
   afterEach(() => {
     clearRuntimeConfigSnapshot();

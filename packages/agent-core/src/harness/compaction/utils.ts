@@ -1,16 +1,10 @@
+import type { Message } from "@openclaw/llm-core";
 // Agent Core helper module supports utils behavior.
-import type { Message } from "../../../../llm-core/src/index.js";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../types.js";
+import type { FileOperations } from "../types.js";
 
-/** File paths touched by a session branch or compaction range. */
-export interface FileOperations {
-  /** Files read but not necessarily modified. */
-  read: Set<string>;
-  /** Files written by full-file write operations. */
-  written: Set<string>;
-  /** Files modified by edit operations. */
-  edited: Set<string>;
-}
+export type { FileOperations } from "../types.js";
 
 /** Create an empty file-operation accumulator. */
 export function createFileOps(): FileOperations {
@@ -105,8 +99,27 @@ function truncateForSummary(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
   }
-  const truncatedChars = text.length - maxChars;
-  return `${text.slice(0, maxChars)}\n\n[... ${truncatedChars} more characters truncated]`;
+  const sliced = truncateUtf16Safe(text, maxChars);
+  const truncatedChars = text.length - sliced.length;
+  return `${sliced}\n\n[... ${truncatedChars} more characters truncated]`;
+}
+
+/** Extract text that compaction both estimates and includes in summary prompts. */
+export function getCompactionContentBlockText(block: {
+  type: string;
+  content?: unknown;
+  text?: string;
+}): string {
+  if (block.type === "text" && block.text) {
+    return block.text;
+  }
+  if (block.type !== "toolResult" && block.type !== "tool_result") {
+    return "";
+  }
+  if (block.text) {
+    return block.text;
+  }
+  return typeof block.content === "string" ? block.content : "";
 }
 
 /** Serialize LLM messages to plain text for summarization prompts. */
@@ -154,10 +167,7 @@ export function serializeConversation(messages: Message[]): string {
         parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
       }
     } else if (msg.role === "toolResult") {
-      const content = msg.content
-        .filter((c): c is { type: "text"; text: string } => c.type === "text")
-        .map((c) => c.text)
-        .join("");
+      const content = msg.content.map(getCompactionContentBlockText).join("");
       if (content) {
         parts.push(`[Tool result]: ${truncateForSummary(content, TOOL_RESULT_MAX_CHARS)}`);
       }

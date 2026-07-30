@@ -5,6 +5,7 @@ import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../../daemon/constants.js";
+import { formatGatewayHeapLimitReport } from "../../daemon/gateway-heap.js";
 import { renderGatewayServiceCleanupHints } from "../../daemon/inspect.js";
 import {
   resolveGatewayRestartLogPath,
@@ -127,6 +128,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   const daemonEnvLines = safeDaemonEnv(service.command?.environment);
   if (daemonEnvLines.length > 0) {
     defaultRuntime.log(`${label("Service env:")} ${daemonEnvLines.join(" ")}`);
+  }
+  if (service.gatewayHeap) {
+    defaultRuntime.log(
+      `${label("Gateway heap:")} ${infoText(formatGatewayHeapLimitReport(service.gatewayHeap))}`,
+    );
   }
   spacer();
 
@@ -304,6 +310,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       const lines = (rpc.error ?? "unknown").split(/\r?\n/).filter(Boolean);
       for (const line of lines.slice(0, 12)) {
         defaultRuntime.error(`  ${errorText(line)}`);
+      }
+      if (status.port?.status === "busy" && status.lastError) {
+        defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
       }
     }
     const capability = formatCapabilityLabel(rpc.capability);
@@ -499,7 +508,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     for (const svc of extraServices) {
       defaultRuntime.log(`- ${warnText(svc.label)} (${svc.scope}, ${svc.detail})`);
     }
-    for (const hint of renderGatewayServiceCleanupHints()) {
+    for (const hint of renderGatewayServiceCleanupHints(extraServices)) {
       defaultRuntime.log(`${infoText("Cleanup hint:")} ${hint}`);
     }
     spacer();

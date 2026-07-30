@@ -2,9 +2,9 @@
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildQwenModelCatalogForBaseUrl,
-  buildQwenOAuthModelCatalog,
   QWEN_BASE_URL,
-  QWEN_OAUTH_BASE_URL,
+  QWEN_TOKEN_PLAN_GLOBAL_BASE_URL,
+  QWEN_TOKEN_PLAN_MODEL_CATALOG,
 } from "./models.js";
 
 export function buildQwenProvider(params?: { baseUrl?: string }): ModelProviderConfig {
@@ -16,11 +16,12 @@ export function buildQwenProvider(params?: { baseUrl?: string }): ModelProviderC
   };
 }
 
-export function buildQwenOAuthProvider(): ModelProviderConfig {
+export function buildQwenTokenPlanProvider(params?: { baseUrl?: string }): ModelProviderConfig {
+  const baseUrl = params?.baseUrl ?? QWEN_TOKEN_PLAN_GLOBAL_BASE_URL;
   return {
-    baseUrl: QWEN_OAUTH_BASE_URL,
+    baseUrl,
     api: "openai-completions",
-    models: buildQwenOAuthModelCatalog().map((model) => Object.assign({}, model)),
+    models: QWEN_TOKEN_PLAN_MODEL_CATALOG.map((model) => Object.assign({}, model)),
   };
 }
 

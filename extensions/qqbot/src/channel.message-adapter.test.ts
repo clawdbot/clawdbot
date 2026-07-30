@@ -4,6 +4,12 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import { qqbotPlugin } from "./channel.js";
 
+describe("qqbotPlugin metadata", () => {
+  it("opts announce delivery into persisted session lookup", () => {
+    expect(qqbotPlugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
+  });
+});
+
 describe("qqbot outbound sanitizeText", () => {
   it("strips reasoning/thinking tags before delivery", () => {
     const sanitize = qqbotPlugin.outbound?.sanitizeText;
@@ -23,6 +29,39 @@ describe("qqbot outbound sanitizeText", () => {
   });
 });
 
+describe("qqbot outbound session routing", () => {
+  it.each([
+    {
+      target: "qqbot:c2c:user-openid",
+      peerKind: "direct",
+      chatType: "direct",
+    },
+    {
+      target: "qqbot:group:group-openid",
+      peerKind: "group",
+      chatType: "group",
+    },
+    {
+      target: "qqbot:channel:channel-id",
+      peerKind: "group",
+      chatType: "group",
+    },
+  ] as const)("routes $target as $chatType", async ({ target, peerKind, chatType }) => {
+    const route = await qqbotPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {},
+      agentId: "main",
+      target,
+    });
+
+    expect(route).toMatchObject({
+      peer: { kind: peerKind },
+      chatType,
+      from: target,
+      to: target,
+    });
+  });
+});
+
 const sendTextMock = vi.hoisted(() => vi.fn());
 const sendMediaMock = vi.hoisted(() => vi.fn());
 
@@ -30,12 +69,26 @@ type SentTextParams = {
   to?: string;
   text?: string;
   replyToId?: string | null;
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    workspaceDir?: string;
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
 
 type SentMediaParams = {
   to?: string;
   text?: string;
   mediaUrl?: string;
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    workspaceDir?: string;
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
 
 function latestMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
@@ -82,16 +135,24 @@ describe("qqbot message adapter", () => {
           expect(result?.receipt.platformMessageIds).toEqual(["qq-text-1"]);
         },
         media: async () => {
+          const mediaAccess = {
+            localRoots: ["/tmp/openclaw-sandbox"],
+            workspaceDir: "/tmp/workspace",
+          };
           const result = await qqbotPlugin.message?.send?.media?.({
             cfg,
             to: "qqbot:c2c:user-1",
             text: "image",
             mediaUrl: "https://example.com/image.png",
+            mediaAccess,
+            mediaLocalRoots: ["/tmp/openclaw-sandbox"],
           });
           const sent = latestMockArg(sendMediaMock, "sendMedia") as SentMediaParams;
           expect(sent.to).toBe("qqbot:c2c:user-1");
           expect(sent.text).toBe("image");
           expect(sent.mediaUrl).toBe("https://example.com/image.png");
+          expect(sent.mediaAccess).toBe(mediaAccess);
+          expect(sent.mediaLocalRoots).toEqual(["/tmp/openclaw-sandbox"]);
           expect(result?.receipt.platformMessageIds).toEqual(["qq-media-1"]);
         },
         replyTo: async () => {
@@ -163,5 +224,45 @@ describe("qqbot message adapter", () => {
         text: "hello",
       }),
     ).rejects.toThrow("QQBot message adapter send did not return a platform message id");
+  });
+
+  it("forwards scoped media access through outbound text and media sends", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("report"));
+    const mediaAccess = {
+      localRoots: ["/tmp/openclaw-sandbox"],
+      workspaceDir: "/tmp/workspace",
+      readFile: mediaReadFile,
+    };
+    const mediaLocalRoots = ["/tmp/openclaw-sandbox"];
+
+    sendTextMock.mockResolvedValueOnce({ messageId: "qq-text-media-1" });
+    await qqbotPlugin.outbound?.sendText?.({
+      cfg,
+      to: "qqbot:c2c:user-1",
+      text: "<qqmedia>/tmp/openclaw-sandbox/report.docx</qqmedia>",
+      mediaAccess,
+      mediaLocalRoots,
+      mediaReadFile,
+    });
+    const sentText = latestMockArg(sendTextMock, "sendText") as SentTextParams;
+    expect(sentText.mediaAccess).toBe(mediaAccess);
+    expect(sentText.mediaLocalRoots).toBe(mediaLocalRoots);
+    expect(sentText.mediaReadFile).toBe(mediaReadFile);
+
+    sendMediaMock.mockResolvedValueOnce({ messageId: "qq-media-local-1" });
+    await qqbotPlugin.outbound?.sendMedia?.({
+      cfg,
+      to: "qqbot:c2c:user-1",
+      text: "report",
+      mediaUrl: "/tmp/openclaw-sandbox/report.docx",
+      mediaAccess,
+      mediaLocalRoots,
+      mediaReadFile,
+    });
+    const sentMedia = latestMockArg(sendMediaMock, "sendMedia") as SentMediaParams;
+    expect(sentMedia.mediaUrl).toBe("/tmp/openclaw-sandbox/report.docx");
+    expect(sentMedia.mediaAccess).toBe(mediaAccess);
+    expect(sentMedia.mediaLocalRoots).toBe(mediaLocalRoots);
+    expect(sentMedia.mediaReadFile).toBe(mediaReadFile);
   });
 });

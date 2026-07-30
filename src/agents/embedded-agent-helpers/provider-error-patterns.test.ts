@@ -134,6 +134,14 @@ describe("isContextOverflowError with provider patterns", () => {
     ).toBe(true);
   });
 
+  it("detects DS4 configured context size overflow", () => {
+    expect(
+      isContextOverflowError(
+        "400 Prompt has 256468 tokens, but the configured context size is 256000 tokens",
+      ),
+    ).toBe(true);
+  });
+
   it("still detects standard context overflow patterns", () => {
     expect(isContextOverflowError("context length exceeded")).toBe(true);
     expect(isContextOverflowError("prompt is too long: 150000 tokens > 128000 maximum")).toBe(true);

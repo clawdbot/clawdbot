@@ -1,7 +1,8 @@
 // ClawHub Fixture Server tests cover the local package fixture HTTP contract.
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessByStdio } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import type { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
@@ -11,7 +12,8 @@ const PACKAGE_NAME = "@openclaw/kitchen-sink";
 const PACKAGE_PATH = `/api/v1/packages/${encodeURIComponent(PACKAGE_NAME)}`;
 const KITCHEN_SINK_VERSION = "0.2.5";
 const tempDirs: string[] = [];
-const servers: ChildProcessWithoutNullStreams[] = [];
+type FixtureServerChild = ChildProcessByStdio<null, Readable, Readable>;
+const servers: FixtureServerChild[] = [];
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map(stopServer));
@@ -27,7 +29,7 @@ function collectStream(stream: NodeJS.ReadableStream) {
   return () => text;
 }
 
-async function stopServer(child: ChildProcessWithoutNullStreams) {
+async function stopServer(child: FixtureServerChild) {
   if (child.exitCode !== null || child.signalCode !== null) {
     return;
   }
@@ -35,7 +37,7 @@ async function stopServer(child: ChildProcessWithoutNullStreams) {
     child.once("exit", () => resolve());
   });
   child.kill("SIGTERM");
-  await Promise.race([exited, delay(1_000)]);
+  await Promise.race([exited, delay(1_000, undefined, { ref: false })]);
   if (child.exitCode === null && child.signalCode === null) {
     child.kill("SIGKILL");
     await exited;
@@ -54,7 +56,8 @@ async function startFixtureServer(profile: string) {
   const readStderr = collectStream(child.stderr);
   servers.push(child);
 
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  // Preserve the 2.5-second startup budget while detecting the port file sooner.
+  for (let attempt = 0; attempt < 500; attempt += 1) {
     if (existsSync(portFile)) {
       const port = Number(readFileSync(portFile, "utf8"));
       if (Number.isInteger(port) && port > 0) {
@@ -64,7 +67,7 @@ async function startFixtureServer(profile: string) {
     if (child.exitCode !== null) {
       throw new Error(`fixture server exited early: stdout=${readStdout()} stderr=${readStderr()}`);
     }
-    await delay(25);
+    await delay(5);
   }
 
   throw new Error(`fixture server did not write a port: stderr=${readStderr()}`);

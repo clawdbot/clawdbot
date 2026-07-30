@@ -1,11 +1,7 @@
 /**
  * Predicates and readers for Codex app-server notification envelopes.
  */
-import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  describeCodexNotificationCorrelation,
-  isCodexNotificationForTurn,
-} from "./notification-correlation.js";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   isJsonObject,
   type CodexServerNotification,
@@ -16,10 +12,6 @@ import {
 
 const CODEX_TURN_ABORT_MARKER_START = "<turn_aborted>";
 const CODEX_TURN_ABORT_MARKER_END = "</turn_aborted>";
-const CODEX_INTERRUPTED_USER_GUIDANCE =
-  "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
-const CODEX_INTERRUPTED_DEVELOPER_GUIDANCE =
-  "The previous turn was interrupted on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
 
 /** Builds compact activity metadata for watchdog and diagnostic updates. */
 export function describeNotificationActivity(
@@ -271,13 +263,6 @@ export function isNativeToolProgressNotification(notification: CodexServerNotifi
   }
 }
 
-/** Returns true for raw native response stream delta events. */
-export function isNativeResponseStreamDeltaNotification(
-  notification: CodexServerNotification,
-): boolean {
-  return notification.method.startsWith("response.") && notification.method.endsWith(".delta");
-}
-
 /** Returns true for file-change patch update notifications. */
 export function isFileChangePatchUpdatedNotification(
   notification: CodexServerNotification,
@@ -302,9 +287,7 @@ export function isRawAssistantProgressNotification(notification: CodexServerNoti
 }
 
 /** Returns true for raw assistant completion outside commentary phase. */
-export function isRawAssistantCompletionNotification(
-  notification: CodexServerNotification,
-): boolean {
+function isRawAssistantCompletionNotification(notification: CodexServerNotification): boolean {
   if (!isRawAssistantProgressNotification(notification) || !isJsonObject(notification.params)) {
     return false;
   }
@@ -329,77 +312,12 @@ function readRawAssistantTextPreview(item: JsonObject): string | undefined {
   if (!text) {
     return undefined;
   }
-  return text.length > 240 ? `${text.slice(0, 237)}...` : text;
-}
-
-/** Returns true when notification params correlate to a specific thread/turn. */
-export function isTurnNotification(
-  value: JsonValue | undefined,
-  threadId: string,
-  turnId: string,
-): boolean {
-  return isCodexNotificationForTurn(value, threadId, turnId);
-}
-
-/** Returns true when a correlated notification belongs to another active run. */
-export function isCodexNotificationOutsideActiveRun(
-  correlation: ReturnType<typeof describeCodexNotificationCorrelation>,
-): boolean {
-  const hasThreadScope = Boolean(correlation.threadId || correlation.nestedTurnThreadId);
-  if (!hasThreadScope) {
-    return false;
-  }
-  if (!correlation.matchesActiveThread) {
-    return true;
-  }
-  const hasTurnScope = Boolean(correlation.turnId || correlation.nestedTurnId);
-  return hasTurnScope && correlation.matchesActiveTurn === false;
-}
-
-/** Checks request params that must contain the current thread and turn ids. */
-export function isCurrentThreadTurnRequestParams(
-  value: JsonValue | undefined,
-  threadId: string,
-  turnId: string,
-): boolean {
-  if (!isJsonObject(value)) {
-    return false;
-  }
-  return readString(value, "threadId") === threadId && readString(value, "turnId") === turnId;
-}
-
-/** Checks approval request params, accepting `conversationId` as thread id. */
-export function isCurrentApprovalTurnRequestParams(
-  value: JsonValue | undefined,
-  threadId: string,
-  turnId: string,
-): boolean {
-  if (!isJsonObject(value)) {
-    return false;
-  }
-  const requestThreadId = readString(value, "threadId") ?? readString(value, "conversationId");
-  return requestThreadId === threadId && readString(value, "turnId") === turnId;
-}
-
-/** Checks request params where `turnId` may be omitted or null for the thread. */
-export function isCurrentThreadOptionalTurnRequestParams(
-  value: JsonValue | undefined,
-  threadId: string,
-  turnId: string,
-): boolean {
-  if (!isJsonObject(value) || readString(value, "threadId") !== threadId) {
-    return false;
-  }
-  const requestTurnId = value.turnId;
-  return requestTurnId === null || requestTurnId === undefined || requestTurnId === turnId;
+  return text.length > 240 ? `${truncateUtf16Safe(text, 237)}...` : text;
 }
 
 /** Returns true for app-server error notifications that will retry. */
 export function isRetryableErrorNotification(value: JsonValue | undefined): boolean {
-  if (!isJsonObject(value)) {
-    return false;
-  }
-  return readBoolean(value, "willRetry") === true || readBoolean(value, "will_retry") === true;
+  return isJsonObject(value) && value.willRetry === true;
 }
 
 /** Returns true for terminal app-server thread status strings. */
@@ -413,14 +331,21 @@ export function isTerminalTurnStatus(status: string | undefined): boolean {
  */
 export function isCodexTurnAbortMarkerNotification(
   notification: CodexServerNotification,
-  options: { currentPromptText?: string; currentPromptTexts?: readonly string[] } = {},
+  options: {
+    currentPromptText?: string;
+    currentPromptTexts?: readonly string[];
+  } = {},
 ): boolean {
   if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
     return false;
   }
   const item = notification.params.item;
   const role = isJsonObject(item) ? readString(item, "role") : undefined;
-  if (!isJsonObject(item) || (role !== "user" && role !== "developer")) {
+  if (
+    !isJsonObject(item) ||
+    readString(item, "type") !== "message" ||
+    (role !== "user" && role !== "developer")
+  ) {
     return false;
   }
   const text = extractRawResponseItemText(item).trim();
@@ -430,11 +355,7 @@ export function isCodexTurnAbortMarkerNotification(
   if (role === "user" && currentPromptTexts.includes(text)) {
     return false;
   }
-  const markerBody = readCodexTurnAbortMarkerBody(text);
-  return (
-    markerBody === CODEX_INTERRUPTED_USER_GUIDANCE ||
-    markerBody === CODEX_INTERRUPTED_DEVELOPER_GUIDANCE
-  );
+  return readCodexTurnAbortMarkerBody(text) !== undefined;
 }
 
 function readCodexTurnAbortMarkerBody(text: string): string | undefined {
@@ -472,10 +393,6 @@ function extractRawResponseItemText(item: JsonObject): string {
 function readString(record: JsonObject, key: string): string | undefined {
   const value = record[key];
   return typeof value === "string" ? value : undefined;
-}
-
-function readBoolean(record: JsonObject, key: string): boolean | undefined {
-  return asBoolean(record[key]);
 }
 
 /** Reads a typed Codex item from notification params when id/type are present. */

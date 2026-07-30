@@ -88,6 +88,20 @@ describe("sendTranscriptEcho", () => {
     });
   });
 
+  it("keeps dollar sequences in the transcript literal", async () => {
+    await sendTranscriptEcho({
+      ctx: createCtx(),
+      cfg: EMPTY_CONFIG,
+      transcript: "tickets cost $$40, wait for the deal & confirm with $&",
+    });
+
+    expect(mockDeliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: '📝 "tickets cost $$40, wait for the deal & confirm with $&"' }],
+      }),
+    );
+  });
+
   it("skips non-deliverable channels", async () => {
     await sendTranscriptEcho({
       ctx: createCtx({ Provider: "internal-system", From: "some-source" }),

@@ -29,3 +29,36 @@ export {
 } from "../channels/plugins/directory-config-helpers.js";
 export { createRuntimeDirectoryLiveAdapter } from "../channels/plugins/runtime-forwarders.js";
 export { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
+
+// Resolves id and provider-specific allowlist entries against one directory snapshot.
+export function resolveDirectoryAllowlistEntries<
+  TParsed extends { id?: string },
+  TLookup,
+  TResult,
+>(params: {
+  entries: readonly string[];
+  lookup: readonly TLookup[];
+  parseInput: (input: string) => TParsed;
+  findById: (lookup: readonly TLookup[], id: string) => TLookup | undefined;
+  buildIdResolved: (params: { input: string; parsed: TParsed; match?: TLookup }) => TResult;
+  resolveNonId: (params: {
+    input: string;
+    parsed: TParsed;
+    lookup: readonly TLookup[];
+  }) => TResult | undefined;
+  buildUnresolved: (input: string) => TResult;
+}): TResult[] {
+  return params.entries.map((input) => {
+    const parsed = params.parseInput(input);
+    if (parsed.id) {
+      return params.buildIdResolved({
+        input,
+        parsed,
+        match: params.findById(params.lookup, parsed.id),
+      });
+    }
+    return (
+      params.resolveNonId({ input, parsed, lookup: params.lookup }) ?? params.buildUnresolved(input)
+    );
+  });
+}

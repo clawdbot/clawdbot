@@ -1,13 +1,12 @@
 {
   "name": "@openclaw/oc-path",
-  "version": "2026.6.11",
+  "version": "2026.7.2",
   "private": true,
   "description": "OpenClaw oc:// workspace path plugin",
   "type": "module",
   "dependencies": {
-    "commander": "14.0.3",
     "jsonc-parser": "3.3.1",
-    "markdown-it": "14.2.0",
+    "markdown-it": "14.3.0",
     "yaml": "2.9.0"
   },
   "devDependencies": {
@@ -15,7 +14,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.6.11"
+    "openclaw": ">=2026.7.2"
   },
   "peerDependenciesMeta": {
     "openclaw": {

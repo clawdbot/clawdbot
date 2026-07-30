@@ -1,5 +1,7 @@
 import { migrateOrphanedSessionKeys } from "../../infra/state-migrations.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import { sweepOrphanSessionStoreTemps } from "./store-temp-cleanup.js";
+import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
 
 export type SessionStartupMigrationLogger = {
   info: (message: string) => void;
@@ -7,11 +9,10 @@ export type SessionStartupMigrationLogger = {
 };
 
 /**
- * Run orphan-key session migration before runtime session store reads.
+ * Run session migration and orphan-temp cleanup before runtime store reads.
  *
- * The migration is idempotent and best-effort: startup continues if the repair
- * fails, but warnings stay visible so exact-key runtime access does not hide
- * legacy store states that still need operator attention.
+ * Both passes are idempotent and failure-isolated: startup continues if either
+ * fails, but warnings stay visible for operator follow-up.
  */
 export async function runSessionStartupMigration(params: {
   cfg: OpenClawConfig;
@@ -19,6 +20,8 @@ export async function runSessionStartupMigration(params: {
   log: SessionStartupMigrationLogger;
   deps?: {
     migrateOrphanedSessionKeys?: typeof migrateOrphanedSessionKeys;
+    resolveAllAgentSessionStoreTargetsSync?: typeof resolveAllAgentSessionStoreTargetsSync;
+    sweepOrphanSessionStoreTemps?: typeof sweepOrphanSessionStoreTemps;
   };
 }): Promise<void> {
   const migrate = params.deps?.migrateOrphanedSessionKeys ?? migrateOrphanedSessionKeys;
@@ -40,6 +43,25 @@ export async function runSessionStartupMigration(params: {
   } catch (err) {
     params.log.warn(
       `session: orphaned session key migration failed during startup; continuing: ${String(err)}`,
+    );
+  }
+
+  const resolveTargets =
+    params.deps?.resolveAllAgentSessionStoreTargetsSync ?? resolveAllAgentSessionStoreTargetsSync;
+  const sweepTemps = params.deps?.sweepOrphanSessionStoreTemps ?? sweepOrphanSessionStoreTemps;
+  try {
+    let removedFiles = 0;
+    for (const target of resolveTargets(params.cfg, {
+      env: params.env ?? process.env,
+    })) {
+      removedFiles += await sweepTemps({ storePath: target.storePath });
+    }
+    if (removedFiles > 0) {
+      params.log.info(`session: removed ${removedFiles} stale session store temp file(s)`);
+    }
+  } catch (err) {
+    params.log.warn(
+      `session: stale session store temp cleanup failed during startup; continuing: ${String(err)}`,
     );
   }
 }

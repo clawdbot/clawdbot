@@ -40,6 +40,40 @@ describe("resolveSlackThreadStarter cache", () => {
     expect(replies).toHaveBeenCalledTimes(1);
   });
 
+  it("isolates the same channel and thread across enterprise workspaces", async () => {
+    const teamOne = createThreadStarterRepliesClient({
+      messages: [{ text: "team one root", user: "U1", ts: "1000.1" }],
+    });
+    const teamTwo = createThreadStarterRepliesClient({
+      messages: [{ text: "team two root", user: "U2", ts: "1000.1" }],
+    });
+
+    const first = await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1000.1",
+      client: teamOne.client,
+      workspaceScope: { accountId: "enterprise", teamId: "T1" },
+    });
+    const second = await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1000.1",
+      client: teamTwo.client,
+      workspaceScope: { accountId: "enterprise", teamId: "T2" },
+    });
+    const cachedFirst = await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1000.1",
+      client: teamOne.client,
+      workspaceScope: { accountId: "enterprise", teamId: "T1" },
+    });
+
+    expect(first?.text).toBe("team one root");
+    expect(second?.text).toBe("team two root");
+    expect(cachedFirst?.text).toBe("team one root");
+    expect(teamOne.replies).toHaveBeenCalledTimes(1);
+    expect(teamTwo.replies).toHaveBeenCalledTimes(1);
+  });
+
   it("expires stale cache entries and refetches after ttl", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));

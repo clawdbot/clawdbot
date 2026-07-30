@@ -4,11 +4,10 @@ scenario:
   id: openwebui-openai-compatible
   surface: runtime
   coverage:
-    primary:
-      - gateway.openai-compatible-apis
-      - runtime.hosted-provider-turns
     secondary:
-      - runtime.provider-specific-model-options
+      - gateway.openai-compatible-apis
+      - agent-runtime.hosted-provider-turns
+      - agent-runtime.provider-specific-model-options
   objective: Verify the OpenWebUI E2E probe exercises OpenClaw through OpenWebUI's OpenAI-compatible model and chat APIs.
   successCriteria:
     - Probe environment limits are parsed strictly and control-plane requests time out quickly.
@@ -21,8 +20,12 @@ scenario:
   codeRefs:
     - scripts/e2e/openwebui-probe.mjs
     - scripts/e2e/openwebui-docker.sh
+    - test/e2e/qa-lab/runtime/docker-e2e-lane.ts
     - test/e2e/qa-lab/runtime/openwebui-probe.e2e.test.ts
   execution:
-    kind: vitest
-    path: test/e2e/qa-lab/runtime/openwebui-probe.e2e.test.ts
-    summary: Vitest coverage for OpenWebUI model and chat-completions probe behavior.
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    summary: Runs the OpenWebUI Docker topology and probes its OpenAI-compatible model and chat APIs against OpenClaw.
+    args:
+      - --lane
+      - openwebui

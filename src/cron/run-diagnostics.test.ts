@@ -5,11 +5,13 @@ import {
   createCronRunDiagnosticsFromMissingWebSearchProvider,
   createCronRunDiagnosticsFromAgentResult,
   createCronRunDiagnosticsFromError,
-  MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
   mergeCronRunDiagnostics,
   normalizeCronRunDiagnostics,
   summarizeCronRunDiagnostics,
 } from "./run-diagnostics.js";
+
+const MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE =
+  "web_search tool requested in toolsAllow but no web search provider is selected. Configure one with: openclaw configure --section web, or set tools.web.search.provider.";
 
 describe("cron run diagnostics", () => {
   it("normalizes and bounds diagnostic entries", () => {
@@ -29,6 +31,29 @@ describe("cron run diagnostics", () => {
     expect(diagnostics?.entries.at(-1)?.message).not.toContain("sk-1234567890abcdef");
     expect(diagnostics?.entries.at(-1)?.truncated).toBe(true);
     expect(diagnostics?.summary).toHaveLength(2_000);
+  });
+
+  it("keeps bounded diagnostic text valid at UTF-16 boundaries", () => {
+    const diagnostics = normalizeCronRunDiagnostics({
+      summary: `${"s".repeat(1_998)}😀tail`,
+      entries: [
+        {
+          ts: 1,
+          source: "exec",
+          severity: "error",
+          message: `${"m".repeat(998)}😀tail`,
+        },
+      ],
+    });
+
+    expect(diagnostics?.summary).toBe(`${"s".repeat(1_998)}…`);
+    expect(diagnostics?.entries[0]).toEqual({
+      ts: 1,
+      source: "exec",
+      severity: "error",
+      message: `${"m".repeat(998)}…`,
+      truncated: true,
+    });
   });
 
   it("preserves later terminal diagnostics when capping entries", () => {
@@ -63,6 +88,21 @@ describe("cron run diagnostics", () => {
     expect(normalizeCronRunDiagnostics({ entries: [] })).toBeUndefined();
     expect(normalizeCronRunDiagnostics({ entries: [{ source: "exec" }] })).toBeUndefined();
     expect(summarizeCronRunDiagnostics(undefined)).toBeUndefined();
+  });
+
+  it("bounds fallback summaries at valid UTF-16 boundaries", () => {
+    expect(
+      summarizeCronRunDiagnostics({
+        entries: [
+          {
+            ts: 1,
+            source: "exec",
+            severity: "error",
+            message: `${"s".repeat(1_998)}😀tail`,
+          },
+        ],
+      }),
+    ).toBe(`${"s".repeat(1_998)}…`);
   });
 
   it("creates diagnostics from errors and prefers the latest error summary", () => {
@@ -167,6 +207,27 @@ describe("cron run diagnostics", () => {
       toolName: "exec",
       exitCode: 2,
     });
+  });
+
+  it("keeps failed exec output tails valid at UTF-16 boundaries", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        payloads: [
+          {
+            toolName: "exec",
+            details: {
+              status: "completed",
+              exitCode: 2,
+              aggregated: `x😀${"y".repeat(1_999)}`,
+            },
+          },
+        ],
+      },
+      { nowMs: () => 123 },
+    );
+
+    expect(diagnostics?.summary).toBe("y".repeat(1_999));
+    expect(diagnostics?.entries[0]?.message).toBe(`${"y".repeat(999)}…`);
   });
 
   it("does not capture harmless successful exec output", () => {

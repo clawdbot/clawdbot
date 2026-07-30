@@ -139,6 +139,19 @@ func TestLocalizeBodyLinks(t *testing.T) {
 	}
 }
 
+func TestUnmaskMarkdownRestoresNestedPlaceholders(t *testing.T) {
+	placeholders := []string{"__OC_I18N_900000__", "__OC_I18N_900001__"}
+	mapping := map[string]string{
+		"__OC_I18N_900000__": "```ts\nconst value = true;\n```",
+		"__OC_I18N_900001__": "Before\n__OC_I18N_900000__\nAfter",
+	}
+	got := unmaskMarkdown("__OC_I18N_900001__", placeholders, mapping)
+	want := "Before\n```ts\nconst value = true;\n```\nAfter"
+	if got != want {
+		t.Fatalf("nested placeholders not fully restored\nwant: %q\ngot:  %q", want, got)
+	}
+}
+
 func setupDocsTree(t *testing.T) string {
 	t.Helper()
 

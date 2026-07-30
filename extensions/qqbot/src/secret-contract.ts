@@ -1,39 +1,20 @@
 // Qqbot plugin module implements secret contract behavior.
 import {
   collectConditionalChannelFieldAssignments,
+  createChannelSecretTargetRegistryEntries,
   getChannelSurface,
   hasConfiguredSecretInputValue,
   type ResolverContext,
   type SecretDefaults,
-  type SecretTargetRegistryEntry,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 
 const DEFAULT_ACCOUNT_ID = "default";
 
-export const secretTargetRegistryEntries = [
-  {
-    id: "channels.qqbot.accounts.*.clientSecret",
-    targetType: "channels.qqbot.accounts.*.clientSecret",
-    configFile: "openclaw.json",
-    pathPattern: "channels.qqbot.accounts.*.clientSecret",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.qqbot.clientSecret",
-    targetType: "channels.qqbot.clientSecret",
-    configFile: "openclaw.json",
-    pathPattern: "channels.qqbot.clientSecret",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-] satisfies SecretTargetRegistryEntry[];
+export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
+  channelKey: "qqbot",
+  account: ["clientSecret"],
+  channel: ["clientSecret"],
+});
 
 function hasTopLevelAppId(qqbot: Record<string, unknown>): boolean {
   if (typeof qqbot.appId === "string") {

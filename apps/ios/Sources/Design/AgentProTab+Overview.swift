@@ -6,14 +6,14 @@ extension AgentProTab {
     var rosterHeader: some View {
         VStack(alignment: .leading, spacing: 10) {
             OpenClawAdaptiveHeaderRow(
-                title: self.headerTitle,
-                subtitle: "\(self.sortedAgents.count) total",
-                titleFont: .system(size: 28, weight: .bold),
-                subtitleFont: .subheadline,
+                title: .localized(self.headerTitle),
+                subtitle: .verbatim(self.agentTotalText),
+                titleFont: OpenClawType.title2SemiBold,
+                subtitleFont: OpenClawType.subheadMedium,
                 subtitleLineLimit: 1)
             {
-                if let headerLeadingAction {
-                    OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                if let headerSidebarAction {
+                    OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
                 }
             } accessory: {
                 OpenClawGlassControlGroup {
@@ -36,7 +36,7 @@ extension AgentProTab {
                 TextField("Search agents", text: self.$agentSearchText)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                    .font(.subheadline)
+                    .font(OpenClawType.subhead)
                     .textFieldStyle(.roundedBorder)
                     .frame(height: 38)
                     .transition(.move(edge: .top).combined(with: .opacity))
@@ -62,10 +62,15 @@ extension AgentProTab {
 
     var agentFilters: some View {
         HStack(spacing: 10) {
-            Picker("Agent status", selection: self.$agentRosterFilter) {
+            Picker(selection: self.$agentRosterFilter) {
                 ForEach(AgentRosterFilter.allCases) { filter in
-                    Text(filter.title).tag(filter)
+                    Text(filter.title)
+                        .font(OpenClawType.captionSemiBold)
+                        .tag(filter)
                 }
+            } label: {
+                Text("Agent status")
+                    .font(OpenClawType.captionSemiBold)
             }
             .pickerStyle(.segmented)
 
@@ -77,7 +82,7 @@ extension AgentProTab {
                     }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.title3)
+                        .font(OpenClawType.title3)
                         .foregroundStyle(.secondary)
                         .frame(width: 44, height: 44)
                         .contentShape(Circle())
@@ -89,9 +94,54 @@ extension AgentProTab {
         .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
+    var agentFilterMenu: some View {
+        Menu {
+            Picker(selection: self.$agentRosterFilter) {
+                ForEach(AgentRosterFilter.allCases) { filter in
+                    Label(filter.title, systemImage: filter.systemImage)
+                        .font(OpenClawType.subhead)
+                        .tag(filter)
+                }
+            } label: {
+                Text("Agent status")
+                    .font(OpenClawType.subhead)
+            }
+            if self.agentFiltersActive {
+                Divider()
+                Button {
+                    self.agentRosterFilter = .all
+                    self.agentSearchText = ""
+                } label: {
+                    Label("Clear Filters", systemImage: "xmark.circle")
+                        .font(OpenClawType.subhead)
+                }
+            }
+        } label: {
+            Label("Filter agents", systemImage: "line.3.horizontal.decrease")
+                .font(OpenClawType.subheadSemiBold)
+                .labelStyle(.iconOnly)
+        }
+        .accessibilityIdentifier("agent-status-filter-menu")
+        .accessibilityValue(agentRosterFilter.title)
+    }
+
+    @ViewBuilder
+    var gatewayToolbarButton: some View {
+        if let openSettings {
+            Button(action: openSettings) {
+                Image(systemName: self.gatewayConnected ? "antenna.radiowaves.left.and.right" : "wifi.slash")
+            }
+            .tint(self.gatewayConnected ? OpenClawBrand.ok : .secondary)
+            .accessibilityLabel(self.gatewayConnected
+                ? String(localized: "Gateway online")
+                : String(localized: "Gateway offline"))
+            .accessibilityHint("Opens Settings / Gateway")
+        }
+    }
+
     var agentFiltersActive: Bool {
-        self.agentRosterFilter != .all
-            || !self.agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        agentRosterFilter != .all
+            || !agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var agentsSection: some View {
@@ -121,36 +171,43 @@ extension AgentProTab {
                     icon: "sparkles",
                     title: "Skills",
                     value: self.skillsValue,
-                    detail: self.skillsDetail,
+                    detail: .verbatim(self.skillsDetail),
                     color: self.gatewayConnected ? OpenClawBrand.accent : .secondary,
                     route: .skills)
                 self.metricTile(
                     icon: "externaldrive.connected.to.line.below",
                     title: "Instances",
                     value: self.instancesValue,
-                    detail: self.instancesDetail,
+                    detail: .verbatim(self.instancesDetail),
                     color: self.instancesColor,
                     route: .instances)
                 self.metricTile(
                     icon: "clock.arrow.circlepath",
                     title: "Cron",
                     value: self.cronValue,
-                    detail: self.cronDetail,
+                    detail: .verbatim(self.cronDetail),
                     color: self.cronColor,
                     route: .cron)
                 self.metricTile(
                     icon: "chart.line.uptrend.xyaxis",
                     title: "Usage",
                     value: self.usageValue,
-                    detail: self.usageDetail,
+                    detail: .verbatim(self.usageDetail),
                     color: self.gatewayConnected ? OpenClawBrand.accent : .secondary,
                     route: .usage)
+                self.metricTile(
+                    icon: "folder",
+                    title: "Files",
+                    value: self.activeAgentID,
+                    detail: "Workspace files",
+                    color: self.gatewayConnected ? OpenClawBrand.accent : .secondary,
+                    route: .files)
             }
             .padding(.horizontal, OpenClawProMetric.pagePadding)
 
             if let overviewErrorText {
                 Text(overviewErrorText)
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(OpenClawBrand.warn)
                     .padding(.horizontal, OpenClawProMetric.pagePadding)
             }
@@ -165,7 +222,7 @@ extension AgentProTab {
                     self.agentMenuRow(
                         icon: "moon",
                         title: "Dreaming",
-                        detail: self.dreamingDetail,
+                        detail: .verbatim(self.dreamingDetail),
                         value: self.dreamingValue,
                         color: self.dreamingColor,
                         showsChevron: true)
@@ -178,7 +235,7 @@ extension AgentProTab {
 
     var cronSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ProSectionHeader(title: "Scheduled Work")
+            ProSectionHeader(title: "Automations")
             ProCard(padding: 0, radius: AgentLayout.cardRadius) {
                 let jobs = self.recentCronJobs
                 if jobs.isEmpty {
@@ -210,9 +267,9 @@ extension AgentProTab {
             ProIconBadge(systemName: "person.2.slash", color: .secondary)
             VStack(alignment: .leading, spacing: 3) {
                 Text(self.emptyAgentsTitle)
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                 Text(self.emptyAgentsDetail)
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -221,7 +278,7 @@ extension AgentProTab {
 
     func agentRow(_ agent: AgentSummary) -> some View {
         let isActive = agent.id == self.activeAgentID
-        let state = self.agentRosterState(for: agent)
+        let state = agentRosterState(for: agent)
         return Button {
             guard !isActive else { return }
             self.appModel.setSelectedAgentId(agent.id)
@@ -231,12 +288,12 @@ extension AgentProTab {
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(self.agentName(for: agent))
-                        .font(.subheadline.weight(.semibold))
+                        .font(OpenClawType.subheadSemiBold)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
 
                     Text(self.agentDetail(for: agent))
-                        .font(.footnote)
+                        .font(OpenClawType.footnote)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -246,20 +303,20 @@ extension AgentProTab {
 
                 if isActive {
                     Image(systemName: "checkmark")
-                        .font(.subheadline.weight(.semibold))
+                        .font(OpenClawType.subheadSemiBold)
                         .foregroundStyle(OpenClawBrand.accent)
                         .frame(width: 24, height: 44)
                         .accessibilityHidden(true)
                 }
             }
-            .padding(.vertical, 10)
-            .padding(.horizontal, 13)
-            .frame(maxWidth: .infinity, minHeight: AgentLayout.rowMinHeight, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(self.agentAccessibilityLabel(agent, isActive: isActive, state: state))
-        .accessibilityHint(isActive ? "Selected agent" : "Selects this agent")
+        .accessibilityLabel(agentAccessibilityLabel(agent, isActive: isActive, state: state))
+        .accessibilityHint(isActive
+            ? String(localized: "Selected agent")
+            : String(localized: "Selects this agent"))
     }
 
     func headerIconButton(
@@ -269,7 +326,7 @@ extension AgentProTab {
     {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.subheadline.weight(.semibold))
+                .font(OpenClawType.subheadSemiBold)
                 .frame(width: AgentLayout.filterHeight, height: AgentLayout.filterHeight)
         }
         .buttonBorderShape(.circle)
@@ -280,11 +337,11 @@ extension AgentProTab {
     func agentAvatar(_ agent: AgentSummary, state: AgentRosterState) -> some View {
         ZStack(alignment: .bottomTrailing) {
             Text(self.agentBadge(for: agent))
-                .font(.system(size: self.agentBadge(for: agent).count > 2 ? 14 : 18, weight: .bold, design: .rounded))
+                .font(OpenClawType.avatar(size: self.agentBadge(for: agent).count > 2 ? 14 : 18))
                 .foregroundStyle(.white)
                 .minimumScaleFactor(0.62)
                 .lineLimit(1)
-                .frame(width: 42, height: 42)
+                .frame(width: 36, height: 36)
                 .background(
                     Circle()
                         .fill(self.agentTint(for: agent, state: state).gradient))
@@ -292,15 +349,15 @@ extension AgentProTab {
 
             Circle()
                 .fill(state.color)
-                .frame(width: 9, height: 9)
+                .frame(width: 8, height: 8)
                 .overlay(Circle().strokeBorder(Color(uiColor: .systemBackground), lineWidth: 2))
         }
     }
 
     func agentMenuRow(
         icon: String,
-        title: String,
-        detail: String,
+        title: OpenClawTextValue,
+        detail: OpenClawTextValue,
         value: String,
         color: Color,
         showsChevron: Bool = false) -> some View
@@ -308,21 +365,21 @@ extension AgentProTab {
         HStack(spacing: 12) {
             ProIconBadge(systemName: icon, color: color)
             VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                Text(detail)
-                    .font(.caption)
+                title.text
+                    .font(OpenClawType.subheadSemiBold)
+                detail.text
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
             Text(value)
-                .font(.caption2.weight(.semibold))
+                .font(OpenClawType.caption2SemiBold)
                 .foregroundStyle(color)
                 .lineLimit(1)
             if showsChevron {
                 Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
+                    .font(OpenClawType.captionSemiBold)
                     .foregroundStyle(.secondary)
             }
         }
@@ -331,9 +388,9 @@ extension AgentProTab {
 
     func metricTile(
         icon: String,
-        title: String,
+        title: OpenClawTextValue,
         value: String,
-        detail: String,
+        detail: OpenClawTextValue,
         color: Color,
         route: AgentRoute? = nil) -> some View
     {
@@ -363,9 +420,9 @@ extension AgentProTab {
 
     func metricTileContent(
         icon: String,
-        title: String,
+        title: OpenClawTextValue,
         value: String,
-        detail: String,
+        detail: OpenClawTextValue,
         color: Color,
         showsChevron: Bool) -> some View
     {
@@ -377,15 +434,15 @@ extension AgentProTab {
                     ProValuePill(value: value, color: color)
                     if showsChevron {
                         Image(systemName: "chevron.right")
-                            .font(.caption.weight(.semibold))
+                            .font(OpenClawType.captionSemiBold)
                             .foregroundStyle(.secondary)
                     }
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.caption.weight(.semibold))
-                    Text(detail)
-                        .font(.caption2)
+                    title.text
+                        .font(OpenClawType.captionSemiBold)
+                    detail.text
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
@@ -400,12 +457,14 @@ extension AgentProTab {
         HStack(spacing: 12) {
             ProIconBadge(systemName: "clock.badge.questionmark", color: .secondary)
             VStack(alignment: .leading, spacing: 3) {
-                Text(self.gatewayConnected ? "No scheduled jobs" : "Cron unavailable")
-                    .font(.subheadline.weight(.semibold))
                 Text(self.gatewayConnected
-                    ? "The gateway has no visible cron jobs."
+                    ? LocalizedStringKey("No automations yet")
+                    : LocalizedStringKey("Automations unavailable"))
+                    .font(OpenClawType.subheadSemiBold)
+                Text(self.gatewayConnected
+                    ? "Scheduled work created on the gateway will appear here."
                     : "Connect a gateway to load scheduled work.")
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -419,16 +478,16 @@ extension AgentProTab {
                 color: job.enabled ? OpenClawBrand.accent : .secondary)
             VStack(alignment: .leading, spacing: 3) {
                 Text(job.name)
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                     .lineLimit(1)
                 Text(self.cronJobDetail(job))
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
             Text(self.cronJobState(job))
-                .font(.caption2.weight(.semibold))
+                .font(OpenClawType.caption2SemiBold)
                 .foregroundStyle(job.enabled ? OpenClawBrand.accent : .secondary)
                 .lineLimit(1)
         }
@@ -437,7 +496,7 @@ extension AgentProTab {
     }
 
     var sortedAgents: [AgentSummary] {
-        self.appModel.gatewayAgents.sorted { lhs, rhs in
+        appModel.gatewayAgents.filter(\.isSelectableAgent).sorted { lhs, rhs in
             if lhs.id == self.activeAgentID { return true }
             if rhs.id == self.activeAgentID { return false }
             return self.agentName(for: lhs)
@@ -446,7 +505,7 @@ extension AgentProTab {
     }
 
     var filteredAgents: [AgentSummary] {
-        let query = self.agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         return self.sortedAgents.filter { agent in
             let matchesFilter: Bool = switch self.agentRosterFilter {
             case .all:
@@ -472,121 +531,165 @@ extension AgentProTab {
     }
 
     var activeAgentID: String {
-        self.normalized(self.appModel.selectedAgentId)
-            ?? self.normalized(self.appModel.gatewayDefaultAgentId)
+        normalized(appModel.selectedAgentId)
+            ?? normalized(appModel.gatewayDefaultAgentId)
             ?? "main"
     }
 
     var gatewayConnected: Bool {
-        GatewayStatusBuilder.build(appModel: self.appModel) == .connected
+        GatewayStatusBuilder.build(appModel: appModel) == .connected
     }
 
     var liveGatewayConnected: Bool {
-        !self.appModel.isLocalGatewayFixtureEnabled &&
+        !appModel.isLocalGatewayFixtureEnabled &&
             self.gatewayConnected &&
-            self.appModel.isOperatorGatewayConnected
+            appModel.isOperatorGatewayConnected
     }
 
     var emptyAgentsTitle: String {
-        if !self.gatewayConnected { return "Agents unavailable" }
-        if !self.agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "No matches" }
-        if self.agentRosterFilter != .all { return "No \(self.agentRosterFilter.title.lowercased()) agents" }
-        return "No agents reported"
+        if !self.gatewayConnected { return String(localized: "Agents unavailable") }
+        if !agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return String(localized: "No matches")
+        }
+        switch agentRosterFilter {
+        case .online:
+            return String(localized: "No online agents")
+        case .ready:
+            return String(localized: "No ready agents")
+        case .all:
+            return String(localized: "No agents reported")
+        }
     }
 
     var emptyAgentsDetail: String {
-        if !self.gatewayConnected { return "Connect a gateway to load the live agent roster." }
-        if !self.agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "Try another search or clear the agent filters."
+        if !self.gatewayConnected {
+            return String(localized: "Connect a gateway to load the live agent roster.")
         }
-        if self.agentRosterFilter != .all { return "Clear the filter to view the full roster." }
-        return "The connected gateway did not return an agent list."
+        if !agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return String(localized: "Try another search or clear the agent filters.")
+        }
+        if agentRosterFilter != .all {
+            return String(localized: "Clear the filter to view the full roster.")
+        }
+        return String(localized: "The connected gateway did not return an agent list.")
     }
 
     var overviewTaskID: String {
         [
             self.gatewayConnected ? "connected" : "offline",
-            self.appModel.isOperatorGatewayConnected ? "operator" : "no-operator",
+            appModel.isOperatorGatewayConnected ? "operator" : "no-operator",
+            appModel.connectedGatewayID ?? "no-gateway",
             self.activeAgentID,
-            self.scenePhase == .active ? "active" : "inactive",
+            scenePhase == .active ? "active" : "inactive",
         ].joined(separator: ":")
     }
 
     var skillsValue: String {
-        guard self.gatewayConnected else { return "offline" }
-        guard let skills = self.overview?.skills else {
-            return self.overviewLoading ? "..." : "live"
+        guard self.gatewayConnected else { return String(localized: "offline") }
+        guard let skills = overview?.skills else {
+            return overviewLoading ? "..." : String(localized: "live")
         }
         return "\(skills.enabledCount)/\(skills.totalCount)"
     }
 
     var skillsDetail: String {
-        guard self.gatewayConnected else { return "Connect a gateway to load skills." }
-        guard let skills = self.overview?.skills else {
-            return self.overviewLoading ? "Loading skill status." : "Skill status is available from the gateway."
+        guard self.gatewayConnected else {
+            return String(localized: "Connect a gateway to load skills.")
+        }
+        guard let skills = overview?.skills else {
+            return overviewLoading
+                ? String(localized: "Loading skill status.")
+                : String(localized: "Skill status is available from the gateway.")
         }
         if skills.blockedCount > 0 {
-            return "\(skills.enabledCount) enabled, \(skills.blockedCount) blocked"
+            return String(
+                format: String(localized: "%@ enabled, %@ blocked"),
+                skills.enabledCount.formatted(),
+                skills.blockedCount.formatted())
         }
         if skills.missingRequirementCount > 0 {
-            return "\(skills.enabledCount) enabled, \(skills.missingRequirementCount) need setup"
+            return String(
+                format: String(localized: "%@ enabled, %@ need setup"),
+                skills.enabledCount.formatted(),
+                skills.missingRequirementCount.formatted())
         }
-        return "\(skills.enabledCount) enabled, \(skills.totalCount) installed"
+        return String(
+            format: String(localized: "%@ enabled, %@ installed"),
+            skills.enabledCount.formatted(),
+            skills.totalCount.formatted())
     }
 
     var instancesValue: String {
-        guard self.gatewayConnected else { return "offline" }
-        guard let count = self.overview?.presence.count else {
-            return self.overviewLoading ? "..." : "live"
+        guard self.gatewayConnected else { return String(localized: "offline") }
+        guard let count = overview?.presence.count else {
+            return overviewLoading ? "..." : String(localized: "live")
         }
         return "\(count)"
     }
 
     var instancesDetail: String {
-        guard self.gatewayConnected else { return "Connect a gateway to load instances." }
-        guard let presence = self.overview?.presence else {
-            return self.overviewLoading ? "Loading instance presence." : "Instance presence is available."
+        guard self.gatewayConnected else {
+            return String(localized: "Connect a gateway to load instances.")
         }
-        let labels = presence.prefix(2).compactMap(self.presenceLabel)
+        guard let presence = overview?.presence else {
+            return overviewLoading
+                ? String(localized: "Loading instance presence.")
+                : String(localized: "Instance presence is available.")
+        }
+        let labels = presence.prefix(2).compactMap(presenceLabel)
         if labels.isEmpty {
-            return "No live instances reported."
+            return String(localized: "No live instances reported.")
         }
         return labels.joined(separator: ", ")
     }
 
+    private var agentTotalText: String {
+        let count = self.sortedAgents.count
+        return String(
+            AttributedString(localized: "^[\(count) agent](inflect: true) total").characters)
+    }
+
     var instancesColor: Color {
         guard self.gatewayConnected else { return .secondary }
-        return (self.overview?.presence.isEmpty == false) ? OpenClawBrand.accent : .secondary
+        return (overview?.presence.isEmpty == false) ? OpenClawBrand.accent : .secondary
     }
 
     var cronValue: String {
-        guard self.gatewayConnected else { return "offline" }
-        guard let cronStatus = self.overview?.cronStatus else {
-            return self.overviewLoading ? "..." : "live"
+        guard self.gatewayConnected else { return String(localized: "offline") }
+        guard let cronStatus = overview?.cronStatus else {
+            return overviewLoading ? "..." : String(localized: "live")
         }
-        return cronStatus.enabled ? "\(cronStatus.jobs)" : "off"
+        return cronStatus.enabled ? cronStatus.jobs.formatted() : String(localized: "off")
     }
 
     var cronDetail: String {
-        guard self.gatewayConnected else { return "Connect a gateway to load cron." }
-        guard let cronStatus = self.overview?.cronStatus else {
-            return self.overviewLoading ? "Loading cron status." : "Cron status is available."
+        guard self.gatewayConnected else {
+            return String(localized: "Connect a gateway to load cron.")
+        }
+        guard let cronStatus = overview?.cronStatus else {
+            return overviewLoading
+                ? String(localized: "Loading cron status.")
+                : String(localized: "Cron status is available.")
         }
         if let nextWakeAtMs = cronStatus.nextwakeatms {
-            return "Next wake \(Self.relativeTime(fromMilliseconds: nextWakeAtMs))"
+            return String(
+                format: String(localized: "Next wake %@"),
+                Self.relativeTime(fromMilliseconds: nextWakeAtMs))
         }
-        return cronStatus.enabled ? "Scheduler enabled" : "Scheduler disabled"
+        return cronStatus.enabled
+            ? String(localized: "Scheduler enabled")
+            : String(localized: "Scheduler disabled")
     }
 
     var cronColor: Color {
         guard self.gatewayConnected else { return .secondary }
-        return self.overview?.cronStatus?.enabled == true ? OpenClawBrand.accent : .secondary
+        return overview?.cronStatus?.enabled == true ? OpenClawBrand.accent : .secondary
     }
 
     var usageValue: String {
-        guard self.gatewayConnected else { return "offline" }
-        guard let usage = self.overview?.usage else {
-            return self.overviewLoading ? "..." : "7d"
+        guard self.gatewayConnected else { return String(localized: "offline") }
+        guard let usage = overview?.usage else {
+            return overviewLoading ? "..." : "7d"
         }
         if let cost = usage.totalCost {
             return Self.currency(cost)
@@ -598,42 +701,60 @@ extension AgentProTab {
     }
 
     var usageDetail: String {
-        guard self.gatewayConnected else { return "Connect a gateway to load usage." }
-        guard let usage = self.overview?.usage else {
-            return self.overviewLoading ? "Loading recent usage." : "Recent usage is available."
+        guard self.gatewayConnected else {
+            return String(localized: "Connect a gateway to load usage.")
+        }
+        guard let usage = overview?.usage else {
+            return overviewLoading
+                ? String(localized: "Loading recent usage.")
+                : String(localized: "Recent usage is available.")
         }
         if let tokens = usage.totalTokens, tokens > 0 {
-            return "\(Self.compactNumber(tokens)) tokens in \(usage.days ?? 7)d"
+            return String(
+                format: String(localized: "%@ tokens in %@d"),
+                Self.compactNumber(tokens),
+                (usage.days ?? 7).formatted())
         }
-        return "No token usage reported for \(usage.days ?? 7)d."
+        return String(
+            format: String(localized: "No token usage reported for %@d."),
+            (usage.days ?? 7).formatted())
     }
 
     var dreamingValue: String {
-        guard self.gatewayConnected else { return "offline" }
-        guard let dreaming = self.overview?.dreaming else {
-            return self.overviewLoading ? "..." : "live"
+        guard self.gatewayConnected else { return String(localized: "offline") }
+        guard let dreaming = overview?.dreaming else {
+            return overviewLoading ? "..." : String(localized: "live")
         }
-        return dreaming.enabled ? "on" : "off"
+        return dreaming.enabled ? String(localized: "on") : String(localized: "off")
     }
 
     var dreamingDetail: String {
-        guard self.gatewayConnected else { return "Connect a gateway to load dreaming." }
-        guard let dreaming = self.overview?.dreaming else {
-            return self.overviewLoading ? "Loading dreaming status." : "Background memory status is available."
+        guard self.gatewayConnected else {
+            return String(localized: "Connect a gateway to load dreaming.")
+        }
+        guard let dreaming = overview?.dreaming else {
+            return overviewLoading
+                ? String(localized: "Loading dreaming status.")
+                : String(localized: "Background memory status is available.")
         }
         if let nextRunAtMs = dreaming.nextRunAtMs {
-            return "Next cycle \(Self.relativeTime(fromMilliseconds: nextRunAtMs))"
+            return String(
+                format: String(localized: "Next cycle %@"),
+                Self.relativeTime(fromMilliseconds: nextRunAtMs))
         }
-        return "\(dreaming.totalSignalCount ?? 0) signals, \(dreaming.promotedToday ?? 0) promoted today"
+        return String(
+            format: String(localized: "%@ signals, %@ promoted today"),
+            (dreaming.totalSignalCount ?? 0).formatted(),
+            (dreaming.promotedToday ?? 0).formatted())
     }
 
     var dreamingColor: Color {
         guard self.gatewayConnected else { return .secondary }
-        return self.overview?.dreaming?.enabled == true ? OpenClawBrand.accent : .secondary
+        return overview?.dreaming?.enabled == true ? OpenClawBrand.accent : .secondary
     }
 
     var recentCronJobs: [CronJob] {
-        (self.overview?.cronJobs ?? [])
+        (overview?.cronJobs ?? [])
             .sorted { lhs, rhs in
                 let lhsNext = AgentProValueReader.intValue(lhs.state["nextRunAtMs"])
                 let rhsNext = AgentProValueReader.intValue(rhs.state["nextRunAtMs"])

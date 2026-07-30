@@ -112,18 +112,50 @@ function estimateContentBlockTokenPressure(
   return CONTENT_BLOCK_OVERHEAD_TOKENS + estimateJsonPayloadTokenPressure(block, charsPerToken);
 }
 
+function estimateToolResultStringTokenPressure(text: string): number {
+  const conservativeToolResultEstimate = Math.ceil(text.length / TOOL_RESULT_CHARS_PER_TOKEN);
+  const cjkAwareEstimate = estimateStringTokenPressure(text);
+  return Math.max(conservativeToolResultEstimate, cjkAwareEstimate);
+}
+
+function estimateToolResultJsonTokenPressure(value: unknown): number {
+  try {
+    const serialized = JSON.stringify(value);
+    return typeof serialized === "string" ? estimateToolResultStringTokenPressure(serialized) : 1;
+  } catch {
+    return 256;
+  }
+}
+
+function estimateToolResultBlockTokenPressure(block: unknown): number {
+  if (typeof block === "string") {
+    return estimateToolResultStringTokenPressure(block);
+  }
+  if (!isRecord(block)) {
+    return estimateToolResultJsonTokenPressure(block);
+  }
+
+  if (block.type === "text" && typeof block.text === "string") {
+    return CONTENT_BLOCK_OVERHEAD_TOKENS + estimateToolResultStringTokenPressure(block.text);
+  }
+  if (block.type === "thinking" && typeof block.thinking === "string") {
+    return CONTENT_BLOCK_OVERHEAD_TOKENS + estimateToolResultStringTokenPressure(block.thinking);
+  }
+  if (block.type === "image") {
+    return IMAGE_BLOCK_TOKENS;
+  }
+  return CONTENT_BLOCK_OVERHEAD_TOKENS + estimateToolResultJsonTokenPressure(block);
+}
+
 function estimateToolResultContentTokenPressure(content: unknown): number {
   if (typeof content === "string") {
-    return estimateStringTokenPressure(content, TOOL_RESULT_CHARS_PER_TOKEN);
+    return estimateToolResultStringTokenPressure(content);
   }
   if (Array.isArray(content)) {
-    return content.reduce(
-      (sum, block) => sum + estimateContentBlockTokenPressure(block, TOOL_RESULT_CHARS_PER_TOKEN),
-      0,
-    );
+    return content.reduce((sum, block) => sum + estimateToolResultBlockTokenPressure(block), 0);
   }
   if (content !== undefined) {
-    return estimateJsonPayloadTokenPressure(content, TOOL_RESULT_CHARS_PER_TOKEN);
+    return estimateToolResultJsonTokenPressure(content);
   }
   return 0;
 }

@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
@@ -29,10 +30,12 @@ function readGetReplyModuleImports() {
     if (
       ts.isCallExpression(node) &&
       node.expression.kind === ts.SyntaxKind.ImportKeyword &&
-      node.arguments.length === 1 &&
-      ts.isStringLiteral(node.arguments[0])
+      node.arguments.length === 1
     ) {
-      dynamicImports.add(node.arguments[0].text);
+      const importArgument = expectDefined(node.arguments[0], "dynamic import argument");
+      if (ts.isStringLiteral(importArgument)) {
+        dynamicImports.add(importArgument.text);
+      }
     }
 
     ts.forEachChild(node, visit);

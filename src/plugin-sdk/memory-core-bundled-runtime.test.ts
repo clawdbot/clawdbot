@@ -8,6 +8,10 @@ const configureMemoryCoreDreamingStateImpl = vi.hoisted(() => vi.fn());
 const createEmbeddingProviderImpl = vi.hoisted(() => vi.fn());
 const removeGroundedShortTermCandidatesImpl = vi.hoisted(() => vi.fn());
 const loadShortTermPromotionDreamingStatsImpl = vi.hoisted(() => vi.fn());
+const auditDreamingArtifactsImpl = vi.hoisted(() => vi.fn());
+const auditShortTermPromotionArtifactsImpl = vi.hoisted(() => vi.fn());
+const repairDreamingArtifactsImpl = vi.hoisted(() => vi.fn());
+const repairShortTermPromotionArtifactsImpl = vi.hoisted(() => vi.fn());
 const previewGroundedRemMarkdownImpl = vi.hoisted(() => vi.fn());
 const writeBackfillDiaryEntriesImpl = vi.hoisted(() => vi.fn());
 const removeBackfillDiaryEntriesImpl = vi.hoisted(() => vi.fn());
@@ -28,6 +32,10 @@ describe("plugin-sdk memory-core bundled runtime", () => {
     createEmbeddingProviderImpl.mockReset().mockResolvedValue({ provider: { id: "openai" } });
     removeGroundedShortTermCandidatesImpl.mockReset().mockResolvedValue({ removed: 1 });
     loadShortTermPromotionDreamingStatsImpl.mockReset().mockResolvedValue({ shortTermCount: 0 });
+    auditDreamingArtifactsImpl.mockReset().mockResolvedValue({ issues: [] });
+    auditShortTermPromotionArtifactsImpl.mockReset().mockResolvedValue({ issues: [] });
+    repairDreamingArtifactsImpl.mockReset().mockResolvedValue({ changed: false });
+    repairShortTermPromotionArtifactsImpl.mockReset().mockResolvedValue({ changed: false });
     previewGroundedRemMarkdownImpl.mockReset().mockResolvedValue({ files: [] });
     writeBackfillDiaryEntriesImpl.mockReset().mockResolvedValue({ writtenCount: 1 });
     removeBackfillDiaryEntriesImpl.mockReset().mockResolvedValue({ removedCount: 1 });
@@ -42,6 +50,10 @@ describe("plugin-sdk memory-core bundled runtime", () => {
             createEmbeddingProvider: createEmbeddingProviderImpl,
             removeGroundedShortTermCandidates: removeGroundedShortTermCandidatesImpl,
             loadShortTermPromotionDreamingStats: loadShortTermPromotionDreamingStatsImpl,
+            auditDreamingArtifacts: auditDreamingArtifactsImpl,
+            auditShortTermPromotionArtifacts: auditShortTermPromotionArtifactsImpl,
+            repairDreamingArtifacts: repairDreamingArtifactsImpl,
+            repairShortTermPromotionArtifacts: repairShortTermPromotionArtifactsImpl,
           };
         }
         if (artifactBasename === "api.js") {
@@ -68,6 +80,9 @@ describe("plugin-sdk memory-core bundled runtime", () => {
       artifactBasename: "runtime-api.js",
     });
     expect(configureMemoryCoreDreamingStateImpl).toHaveBeenCalledWith(expect.any(Function));
+    expect(createEmbeddingProviderImpl).toHaveBeenCalledWith({
+      acquireLocalService: expect.any(Function),
+    });
   });
 
   it("delegates doctor and embedding helpers through the bundled public surfaces", async () => {
@@ -76,10 +91,18 @@ describe("plugin-sdk memory-core bundled runtime", () => {
     await module.previewGroundedRemMarkdown({} as never);
     await module.removeGroundedShortTermCandidates({} as never);
     await module.loadShortTermPromotionDreamingStats({} as never);
+    await module.auditDreamingArtifacts({} as never);
+    await module.auditShortTermPromotionArtifacts({} as never);
+    await module.repairDreamingArtifacts({} as never);
+    await module.repairShortTermPromotionArtifacts({} as never);
 
     expect(previewGroundedRemMarkdownImpl).toHaveBeenCalledWith({} as never);
     expect(removeGroundedShortTermCandidatesImpl).toHaveBeenCalledWith({} as never);
     expect(loadShortTermPromotionDreamingStatsImpl).toHaveBeenCalledWith({} as never);
+    expect(auditDreamingArtifactsImpl).toHaveBeenCalledWith({} as never);
+    expect(auditShortTermPromotionArtifactsImpl).toHaveBeenCalledWith({} as never);
+    expect(repairDreamingArtifactsImpl).toHaveBeenCalledWith({} as never);
+    expect(repairShortTermPromotionArtifactsImpl).toHaveBeenCalledWith({} as never);
     expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
       dirName: "memory-core",
       artifactBasename: "api.js",

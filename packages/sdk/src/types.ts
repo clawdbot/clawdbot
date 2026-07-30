@@ -48,12 +48,43 @@ export type EnvironmentSelection =
   | { type: "managed"; provider: string; repo?: string; ref?: string }
   | { type: "ephemeral"; provider: string; repo?: string; ref?: string };
 
+export type WorkerEnvironmentState =
+  | "requested"
+  | "provisioning"
+  | "bootstrapping"
+  | "ready"
+  | "attached"
+  | "idle"
+  | "draining"
+  | "destroying"
+  | "destroyed"
+  | "failed"
+  | "orphaned";
+
+export type WorkerTunnelStatus = "stopped" | "connecting" | "connected" | "reconnecting";
+
+export type WorkerEnvironmentMetadata = {
+  providerId: string;
+  leaseId?: string;
+  state: WorkerEnvironmentState;
+  ageMs: number;
+  idleMs?: number;
+  attachedSessionIds: string[];
+  tunnelStatus: WorkerTunnelStatus;
+};
+
 export type EnvironmentSummary = {
   id: string;
   type: "local" | "gateway" | "node" | "managed" | "ephemeral" | (string & {});
   label?: string;
   status: "available" | "unavailable" | "starting" | "stopping" | "error";
   capabilities?: string[];
+  worker?: WorkerEnvironmentMetadata;
+};
+
+export type EnvironmentCreateParams = {
+  profileId: string;
+  idempotencyKey: string;
 };
 
 export type EnvironmentsListResult = {
@@ -310,9 +341,15 @@ export type SessionCreateParams = {
   agentId?: string;
   label?: string;
   model?: string;
+  thinkingLevel?: string;
   parentSessionKey?: string;
+  /** Emit command and lifecycle hooks for parent-linked creation. */
+  emitCommandHooks?: boolean;
+  /** Whether a distinct child terminates its parent; requires command hooks. */
+  succeedsParent?: boolean;
   task?: string;
   message?: string;
+  attachments?: unknown[];
 };
 
 /** Parameters for sending a message to an existing session. */
@@ -336,7 +373,7 @@ export type RunCreateParams = AgentRunParams;
 
 export type AgentsCreateParams = {
   name: string;
-  workspace: string;
+  workspace?: string;
   model?: string;
   emoji?: string;
   avatar?: string;
@@ -346,7 +383,7 @@ export type AgentsUpdateParams = {
   agentId: string;
   name?: string;
   workspace?: string;
-  model?: string;
+  model?: string | null;
   emoji?: string;
   avatar?: string;
 };

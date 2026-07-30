@@ -1,4 +1,4 @@
-/**
+import { expectDefined } from "@openclaw/normalization-core"; /**
  * PCM resampling and G.711 mu-law conversion helpers for Talk audio bridges.
  *
  * Telephony providers generally expect 8 kHz mu-law frames, while local audio
@@ -189,8 +189,10 @@ export function resamplePcm(
         ? sampleBandlimitedWithCoefficients(
             inputView,
             Math.floor((i * inputSampleRate) / outputSampleRate),
-            kernel.coefficients[(i * kernel.inputStep) % kernel.phaseCount] ??
-              kernel.coefficients[0],
+            expectDefined(
+              kernel.coefficients[(i * kernel.inputStep) % kernel.phaseCount],
+              "coefficients entry at (i * kernel.input step) % kernel.phase count",
+            ) ?? kernel.coefficients[0],
           )
         : sampleBandlimited(inputView, i * ratio, cutoffCyclesPerSample),
     );

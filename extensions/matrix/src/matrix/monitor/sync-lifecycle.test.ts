@@ -74,6 +74,29 @@ describe("createMatrixMonitorSyncLifecycle", () => {
     });
   });
 
+  it("treats missing-key-shaped unexpected sync errors as fatal", async () => {
+    const { client, lifecycle, setStatus } = createSyncLifecycleHarness();
+
+    const waitPromise = lifecycle.waitForFatalStop();
+    const error = new Error(
+      "Error decrypting event (id=$event type=m.room.encrypted): DecryptionError[msg: The sender's device has not sent us the keys for this message.]",
+    );
+    try {
+      client.emit("sync.unexpected_error", error);
+      await Promise.resolve();
+
+      expectLastStatusFields(setStatus, {
+        accountId: "default",
+        healthState: "error",
+        lastError: error.message,
+      });
+      await expect(waitPromise).rejects.toThrow(error.message);
+    } finally {
+      lifecycle.dispose();
+      await waitPromise.catch(() => undefined);
+    }
+  });
+
   it("ignores STOPPED emitted during intentional shutdown", async () => {
     const { client, lifecycle, setStatus, setStopping } = createSyncLifecycleHarness({
       withStopping: true,

@@ -3,23 +3,26 @@
  * hot paths share. Keep this internal: it prepares existing config/state, not a
  * new public access-profile config surface.
  */
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../skills/types.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import {
   resolveEffectiveToolPolicy,
-  resolveGroupToolPolicy,
-  resolveInheritedToolPolicyForSession,
-  resolveSubagentToolPolicyForSession,
   resolveTrustedGroupId,
+  sessionKeyNamesGroupConversation,
 } from "./agent-tools.policy.js";
-import type { SandboxToolPolicy } from "./sandbox/types.js";
-import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
 import {
-  isSubagentEnvelopeSession,
-  resolveSubagentCapabilityStore,
-} from "./subagent-capabilities.js";
+  resolveRequesterToolPolicies,
+  type RequesterToolPolicySource,
+} from "./requester-tool-policy.js";
+import type { SandboxToolPolicy } from "./sandbox/types.js";
+import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import type { PromptMode } from "./system-prompt.types.js";
 import {
   collectExplicitAllowlist,
@@ -29,7 +32,7 @@ import {
 } from "./tool-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
-export type ConversationCapabilityScope = "direct" | "shared" | "unknown";
+type ConversationCapabilityScope = "direct" | "shared" | "unknown";
 
 export type ConversationCapabilityProfileParams = {
   config?: OpenClawConfig;
@@ -75,6 +78,14 @@ export type ConversationCapabilityProfileParams = {
   skillsSnapshot?: SkillSnapshot;
   sandboxToolPolicy?: SandboxToolPolicy;
   runtimeToolAllowlist?: string[];
+  /** Persist the runtime allowlist as real parent authority on spawned children. */
+  inheritRuntimeToolAllowlist?: boolean;
+  runtimePluginToolGrant?: RuntimePluginToolGrant;
+  inputProvenance?: InputProvenance;
+  /** Trusted in-process completion handoff; public callers cannot set this fact. */
+  trustedInternalHandoff?: boolean;
+  /** Trusted server-stamped authority for an explicitly capped scheduled run. */
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
 
 export type ResolvedConversationCapabilityProfile = {
@@ -163,9 +174,15 @@ export type ResolvedConversationCapabilityProfile = {
     sandboxPolicy?: SandboxToolPolicy;
     subagentPolicy?: SandboxToolPolicy;
     inheritedToolPolicy?: SandboxToolPolicy;
+    delegated: boolean;
+    requesterPolicySource: RequesterToolPolicySource;
+    runtimeToolPolicyForInheritance?: ToolPolicyLike;
     inheritancePolicies: Array<ToolPolicyLike | undefined>;
     explicitToolAllowlist: string[];
+    /** Explicit config/runtime grants only; excludes built-in profile expansion. */
+    explicitToolOverrideAllowlist: string[];
     explicitToolDenylist: string[];
+    runtimePluginToolGrant?: RuntimePluginToolGrant;
   };
 };
 
@@ -185,55 +202,41 @@ export function resolveConversationCapabilityProfile(
     spawnedBy: params.spawnedBy,
     groupId: params.groupId,
   });
-  const groupPolicy = resolveGroupToolPolicy({
+  // Group channel/space labels have no session-bound counterpart to verify
+  // against; mask them whenever the trust check dropped the caller group id.
+  const trustedGroupChannel = trustedGroup.dropped ? null : params.groupChannel;
+  const trustedGroupSpace = trustedGroup.dropped ? null : params.groupSpace;
+  // Owner WebChat intentionally has no external sender identity. Its trusted
+  // owner state must not fall through to the wildcard policy for guests.
+  const isOwnerInternalSession =
+    params.senderIsOwner === true &&
+    normalizeMessageChannel(messageProvider ?? params.messageChannel) === INTERNAL_MESSAGE_CHANNEL;
+  const subagentSessionKey = params.sandboxSessionKey ?? params.sessionKey;
+  const requesterPolicies = resolveRequesterToolPolicies({
     config: params.config,
     sessionKey: params.sessionKey,
-    spawnedBy: params.spawnedBy,
-    messageProvider: messageProvider ?? undefined,
-    groupId: trustedGroup.groupId,
-    groupChannel: trustedGroup.dropped ? null : params.groupChannel,
-    groupSpace: trustedGroup.dropped ? null : params.groupSpace,
-    accountId: params.agentAccountId,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
-  const senderPolicy = resolveSenderToolPolicy({
-    config: params.config,
+    subagentSessionKey,
     agentId: effective.agentId,
+    spawnedBy: params.spawnedBy,
     messageProvider,
+    groupId: trustedGroup.groupId,
+    groupChannel: trustedGroupChannel,
+    groupSpace: trustedGroupSpace,
+    accountId: params.scheduledToolPolicy?.ownerAccountId ?? params.agentAccountId,
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
+    inputProvenance: params.inputProvenance,
+    trustedInternalHandoff: params.trustedInternalHandoff,
+    senderPolicyMode: params.scheduledToolPolicy || isOwnerInternalSession ? "never" : "always",
+    groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
+    requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
   });
+  const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
   const profilePolicy = resolveToolProfilePolicy(effective.profile);
   const providerProfilePolicy = resolveToolProfilePolicy(effective.providerProfile);
-  const subagentSessionKey = params.sandboxSessionKey ?? params.sessionKey;
-  const subagentStore = resolveSubagentCapabilityStore(subagentSessionKey, {
-    cfg: params.config,
-  });
-  const subagentPolicy =
-    subagentSessionKey &&
-    isSubagentEnvelopeSession(subagentSessionKey, {
-      cfg: params.config,
-      store: subagentStore,
-    })
-      ? resolveSubagentToolPolicyForSession(params.config, subagentSessionKey, {
-          store: subagentStore,
-        })
-      : undefined;
-  const inheritedToolPolicy = resolveInheritedToolPolicyForSession(
-    params.config,
-    subagentSessionKey,
-    {
-      store: subagentStore,
-    },
-  );
-  const inheritancePolicies = [
-    profilePolicy,
-    providerProfilePolicy,
+  const configuredOverridePolicies = [
     effective.globalPolicy,
     effective.globalProviderPolicy,
     effective.agentPolicy,
@@ -242,8 +245,33 @@ export function resolveConversationCapabilityProfile(
     senderPolicy,
     params.sandboxToolPolicy,
     subagentPolicy,
+  ];
+  const runtimeToolPolicy = params.runtimeToolAllowlist
+    ? { allow: params.runtimeToolAllowlist }
+    : undefined;
+  const runtimeToolPolicyForInheritance =
+    params.inheritRuntimeToolAllowlist === true ? runtimeToolPolicy : undefined;
+  const runtimeToolAlsoAllowlist = uniqueStrings(
+    (params.runtimePluginToolGrant?.toolNames ?? []).map((entry) => entry.trim()).filter(Boolean),
+  );
+  const mergeRuntimeToolAlsoAllowlist = (configured?: string[]) => {
+    const merged = uniqueStrings([...(configured ?? []), ...runtimeToolAlsoAllowlist]);
+    return merged.length > 0 ? merged : undefined;
+  };
+  const explicitOverridePolicies = [...configuredOverridePolicies, runtimeToolPolicy];
+  const explicitToolAllowlistPolicies = [
+    profilePolicy,
+    providerProfilePolicy,
+    ...configuredOverridePolicies,
     inheritedToolPolicy,
-    params.runtimeToolAllowlist ? { allow: params.runtimeToolAllowlist } : undefined,
+    runtimeToolPolicy,
+  ];
+  const inheritancePolicies = [
+    profilePolicy,
+    providerProfilePolicy,
+    ...configuredOverridePolicies,
+    inheritedToolPolicy,
+    runtimeToolPolicyForInheritance,
   ];
 
   return {
@@ -263,7 +291,14 @@ export function resolveConversationCapabilityProfile(
       hasVision: params.modelHasVision,
     },
     conversation: {
-      scope: resolveConversationScope(params),
+      scope: resolveConversationScope({
+        chatType: params.chatType,
+        sessionKey: params.sessionKey,
+        runSessionKey: params.runSessionKey,
+        trustedGroup,
+        groupChannel: trustedGroupChannel,
+        groupSpace: trustedGroupSpace,
+      }),
       chatType: normalizeChatType(params.chatType),
       sessionKey: params.runSessionKey ?? params.sessionKey,
       policySessionKey: params.sessionKey,
@@ -278,8 +313,8 @@ export function resolveConversationCapabilityProfile(
       currentThreadTs: params.currentThreadTs,
       currentMessageId: params.currentMessageId,
       groupId: trustedGroup.groupId,
-      groupChannel: trustedGroup.dropped ? null : params.groupChannel,
-      groupSpace: trustedGroup.dropped ? null : params.groupSpace,
+      groupChannel: trustedGroupChannel,
+      groupSpace: trustedGroupSpace,
       memberRoleIds: params.memberRoleIds,
       spawnedBy: params.spawnedBy,
     },
@@ -320,8 +355,8 @@ export function resolveConversationCapabilityProfile(
       providerProfile: effective.providerProfile,
       profilePolicy,
       providerProfilePolicy,
-      profileAlsoAllow: effective.profileAlsoAllow,
-      providerProfileAlsoAllow: effective.providerProfileAlsoAllow,
+      profileAlsoAllow: mergeRuntimeToolAlsoAllowlist(effective.profileAlsoAllow),
+      providerProfileAlsoAllow: mergeRuntimeToolAlsoAllowlist(effective.providerProfileAlsoAllow),
       globalPolicy: effective.globalPolicy,
       globalProviderPolicy: effective.globalProviderPolicy,
       agentPolicy: effective.agentPolicy,
@@ -331,19 +366,26 @@ export function resolveConversationCapabilityProfile(
       sandboxPolicy: params.sandboxToolPolicy,
       subagentPolicy,
       inheritedToolPolicy,
+      delegated: requesterPolicies.delegated,
+      requesterPolicySource: requesterPolicies.requesterPolicySource,
+      runtimeToolPolicyForInheritance,
       inheritancePolicies,
-      explicitToolAllowlist: collectExplicitAllowlist(inheritancePolicies),
-      explicitToolDenylist: collectExplicitDenylist(inheritancePolicies),
+      explicitToolAllowlist: collectExplicitAllowlist(explicitToolAllowlistPolicies),
+      explicitToolOverrideAllowlist: collectExplicitAllowlist(explicitOverridePolicies),
+      explicitToolDenylist: collectExplicitDenylist(explicitToolAllowlistPolicies),
+      runtimePluginToolGrant: params.runtimePluginToolGrant,
     },
   };
 }
 
-function resolveConversationScope(
-  params: Pick<
-    ConversationCapabilityProfileParams,
-    "chatType" | "groupId" | "groupChannel" | "groupSpace"
-  >,
-): ConversationCapabilityScope {
+function resolveConversationScope(params: {
+  chatType?: string;
+  sessionKey?: string;
+  runSessionKey?: string;
+  trustedGroup: { groupId: string | null | undefined; dropped: boolean };
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+}): ConversationCapabilityScope {
   const chatType = normalizeChatType(params.chatType);
   if (chatType === "direct") {
     return "direct";
@@ -351,7 +393,23 @@ function resolveConversationScope(
   if (chatType === "group" || chatType === "channel") {
     return "shared";
   }
-  return params.groupId?.trim() || params.groupChannel?.trim() || params.groupSpace?.trim()
+  // Without a live chat type, classify only from server-derived session keys
+  // and trust-checked group facts. A caller-supplied group id that
+  // resolveTrustedGroupId dropped must not flip an unknown-audience
+  // conversation to "shared": downstream audience and credential decisions
+  // read this field, and the profile already publishes that group as null.
+  if (
+    sessionKeyNamesGroupConversation(params.runSessionKey) ||
+    sessionKeyNamesGroupConversation(params.sessionKey)
+  ) {
+    return "shared";
+  }
+  if (params.trustedGroup.dropped) {
+    return "unknown";
+  }
+  return params.trustedGroup.groupId?.trim() ||
+    params.groupChannel?.trim() ||
+    params.groupSpace?.trim()
     ? "shared"
     : "unknown";
 }

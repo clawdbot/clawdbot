@@ -5,7 +5,6 @@ import {
   getSessionEntry,
   patchSessionEntry,
   resolveStorePath,
-  type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveWhatsAppLegacyGroupSessionKey } from "../../group-session-key.js";
 import { resolveWhatsAppInboundPolicy } from "../../inbound-policy.js";
@@ -61,23 +60,24 @@ export async function resolveGroupActivationFor(params: {
     (ignoreScopedActivation ? undefined : scopedEntry?.groupActivation) ??
     legacyEntry?.groupActivation;
   if (activation !== undefined && scopedEntry?.groupActivation === undefined) {
-    // Activation-only backfills must not synthesize session ids or activity.
-    // replaceEntry preserves existing scoped metadata while keeping fallback writes sparse.
-    await patchSessionEntry({
-      ...sessionScope,
-      sessionKey: params.sessionKey,
-      fallbackEntry: {} as SessionEntry,
-      replaceEntry: true,
-      update: (entry) => {
-        if (entry.groupActivation !== undefined) {
-          return null;
-        }
-        return {
-          ...entry,
-          groupActivation: activation,
-        };
-      },
-    });
+    // SQLite session rows require a real session id; activation-only legacy metadata
+    // can be read, but must not synthesize a scoped session just to backfill metadata.
+    if (scopedEntry) {
+      await patchSessionEntry({
+        ...sessionScope,
+        sessionKey: params.sessionKey,
+        replaceEntry: true,
+        update: (entry) => {
+          if (entry.groupActivation !== undefined) {
+            return null;
+          }
+          return {
+            ...entry,
+            groupActivation: activation,
+          };
+        },
+      });
+    }
   }
   const requireMention = resolveWhatsAppInboundPolicy({
     cfg: params.cfg,

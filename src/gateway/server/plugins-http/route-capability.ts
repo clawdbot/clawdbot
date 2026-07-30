@@ -34,7 +34,7 @@ function resolvePluginNodeCapabilityRouteSurface(
 }
 
 /** Lists all node-capability routes matching the already canonicalized path context. */
-export function findMatchingPluginNodeCapabilityRoutes(
+function findMatchingPluginNodeCapabilityRoutes(
   registry: PluginRegistry,
   context: PluginRoutePathContext,
 ): PluginNodeCapabilityRoute[] {

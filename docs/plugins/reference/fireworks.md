@@ -16,8 +16,8 @@ Adds Fireworks model provider support to OpenClaw.
 
 ## Surface
 
-providers: fireworks
+providers: `fireworks`
 
 ## Related docs
 
-- [fireworks](/providers/fireworks)
+- [Fireworks](/providers/fireworks)

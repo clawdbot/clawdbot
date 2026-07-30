@@ -9,21 +9,21 @@ interface PrlctlVmListItem {
   status?: string;
 }
 
-export interface WaitForVmStatusOptions {
+interface WaitForVmStatusOptions {
   probeTimeoutMs?: () => number | undefined;
 }
 
-export interface EnsureVmRunningOptions extends WaitForVmStatusOptions {
+interface EnsureVmRunningOptions extends WaitForVmStatusOptions {
   transitionTimeoutMs?: () => number | undefined;
 }
 
-export function listVmNames(): string[] {
+function listVmNames(): string[] {
   return listVms()
     .map((item) => (item.name ?? "").trim())
     .filter(Boolean);
 }
 
-export function vmStatus(vmName: string, timeoutMs?: number): string {
+function vmStatus(vmName: string, timeoutMs?: number): string {
   return listVms(timeoutMs).find((vm) => vm.name === vmName)?.status || "missing";
 }
 
@@ -91,7 +91,7 @@ export function resolveUbuntuVmName(requested: string, explicit = false): string
     names
       .map((name) => ({ name, parts: parseUbuntuVersionParts(name) }))
       .filter((item): item is { name: string; parts: number[] } => Boolean(item.parts))
-      .filter((item) => item.parts[0] >= 24)
+      .filter((item) => item.parts[0] !== undefined && item.parts[0] >= 24)
       .toSorted((a, b) => compareVersions(b.parts, a.parts))[0]?.name ??
     names.find(isSafeUbuntuFallbackName);
   if (!fallback) {

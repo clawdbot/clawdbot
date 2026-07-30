@@ -58,7 +58,7 @@ function nanosecondsToMilliseconds(value: number): number {
   return roundMetric(value / 1_000_000, 1);
 }
 
-export function classifyGatewayEventLoopHealthReasons(
+function classifyGatewayEventLoopHealthReasons(
   metrics: GatewayEventLoopHealthMetrics,
 ): GatewayEventLoopHealthReason[] {
   const reasons: GatewayEventLoopHealthReason[] = [];

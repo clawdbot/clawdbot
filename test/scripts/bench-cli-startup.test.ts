@@ -60,15 +60,7 @@ describe("bench-cli-startup", () => {
   it("rejects duplicate benchmark cases before running benchmarks", () => {
     const result = spawnSync(
       process.execPath,
-      [
-        "--import",
-        "tsx",
-        "scripts/bench-cli-startup.ts",
-        "--case",
-        "version",
-        "--case",
-        "version",
-      ],
+      ["--import", "tsx", "scripts/bench-cli-startup.ts", "--case", "version", "--case", "version"],
       {
         cwd: join(__dirname, "../.."),
         encoding: "utf8",
@@ -83,9 +75,9 @@ describe("bench-cli-startup", () => {
   });
 
   it("rejects duplicate single-value controls before running benchmarks", () => {
-    expect(() =>
-      testing.validateCliArgs(["--output", "one.json", "--output", "two.json"]),
-    ).toThrow("--output was provided more than once");
+    expect(() => testing.validateCliArgs(["--output", "one.json", "--output", "two.json"])).toThrow(
+      "--output was provided more than once",
+    );
 
     const result = spawnSync(
       process.execPath,
@@ -158,6 +150,11 @@ describe("bench-cli-startup", () => {
           {
             cwd: join(__dirname, "../.."),
             encoding: "utf8",
+            env: {
+              ...process.env,
+              OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS: "50",
+              VITEST: "1",
+            },
             timeout: 8_000,
           },
         );

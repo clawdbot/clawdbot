@@ -1,5 +1,4 @@
 // Node-host daemon lifecycle commands for install, status, start, stop, and restart.
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize } from "../../../packages/terminal-core/src/theme.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
@@ -31,11 +30,12 @@ import {
   createCliStatusTextStyles,
   createDaemonInstallActionContext,
   failIfNixDaemonInstallMode,
+  filterDaemonEnv,
   formatRuntimeStatus,
-  parsePort,
   resolveRuntimeStatusColor,
 } from "../daemon-cli/shared.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
+import { resolveNodeGatewayOptions } from "./gateway-options.js";
 
 type NodeDaemonInstallOptions = {
   host?: string;
@@ -45,6 +45,7 @@ type NodeDaemonInstallOptions = {
   tlsFingerprint?: string;
   nodeId?: string;
   displayName?: string;
+  shareInstalledApps?: boolean;
   runtime?: string;
   force?: boolean;
   json?: boolean;
@@ -76,25 +77,6 @@ function buildNodeRuntimeHints(env: NodeJS.ProcessEnv = process.env): string[] {
   });
 }
 
-function resolveNodeDefaults(
-  opts: NodeDaemonInstallOptions,
-  config: Awaited<ReturnType<typeof loadNodeHostConfig>>,
-) {
-  // CLI flags override node-host config; missing values fall back to loopback Gateway defaults.
-  const host = normalizeOptionalString(opts.host) || config?.gateway?.host || "127.0.0.1";
-  const portOverride = parsePort(opts.port);
-  if (opts.port !== undefined && portOverride === null) {
-    return { host, port: null };
-  }
-  const port = portOverride ?? config?.gateway?.port ?? 18789;
-  const retargeted = opts.host !== undefined || opts.port !== undefined;
-  const explicitContextPath = opts.contextPath !== undefined;
-  const contextPath =
-    normalizeOptionalString(opts.contextPath) ||
-    (explicitContextPath || retargeted ? undefined : config?.gateway?.contextPath);
-  return { host, port, contextPath };
-}
-
 export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
   if (failIfNixDaemonInstallMode(fail)) {
@@ -102,7 +84,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   }
 
   const config = await loadNodeHostConfig();
-  const { host, port, contextPath } = resolveNodeDefaults(opts, config);
+  const { host, port, contextPath, tls, tlsFingerprint } = resolveNodeGatewayOptions(opts, config);
   if (!Number.isFinite(port ?? Number.NaN) || (port ?? 0) <= 0 || (port ?? 0) > 65_535) {
     fail(
       opts.port !== undefined
@@ -111,10 +93,14 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     );
     return;
   }
+  if (opts.tls === false && opts.tlsFingerprint !== undefined) {
+    fail("--no-tls cannot be combined with --tls-fingerprint");
+    return;
+  }
 
   const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_GATEWAY_DAEMON_RUNTIME;
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
-    fail('Invalid --runtime (use "node" or "bun")');
+    fail('Invalid --runtime (use "node"; Bun lacks the required node:sqlite API)');
     return;
   }
 
@@ -141,19 +127,17 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     return;
   }
 
-  const tlsFingerprint =
-    normalizeOptionalString(opts.tlsFingerprint) || config?.gateway?.tlsFingerprint;
-  const tls = Boolean(opts.tls) || Boolean(tlsFingerprint) || Boolean(config?.gateway?.tls);
   const { programArguments, workingDirectory, environment, environmentValueSources, description } =
     await buildNodeInstallPlan({
       env: process.env,
       host,
       port: port ?? 18789,
       contextPath,
-      tls,
-      tlsFingerprint: tlsFingerprint || undefined,
+      tls: Boolean(tls),
+      tlsFingerprint,
       nodeId: opts.nodeId,
       displayName: opts.displayName,
+      installedAppsSharing: opts.shareInstalledApps,
       runtime: runtimeRaw,
       warn: (message) => {
         if (json) {
@@ -231,8 +215,20 @@ export async function runNodeDaemonStop(opts: NodeDaemonLifecycleOptions = {}) {
 export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   const json = Boolean(opts.json);
   const service = resolveNodeService();
-  const [loaded, command, runtime] = await Promise.all([
-    service.isLoaded({ env: process.env }).catch(() => false),
+  let loaded: boolean;
+  try {
+    loaded = await service.isLoaded({ env: process.env });
+  } catch (error) {
+    const message = `Node service check failed: ${String(error)}`;
+    if (json) {
+      defaultRuntime.writeJson({ error: message });
+    } else {
+      defaultRuntime.error(message);
+    }
+    defaultRuntime.exit(1);
+    return;
+  }
+  const [command, runtime] = await Promise.all([
     service.readCommand(process.env).catch(() => null),
     service
       .readRuntime(process.env)
@@ -248,7 +244,18 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   };
 
   if (json) {
-    defaultRuntime.writeJson(payload);
+    const safeEnvironment = filterDaemonEnv(command?.environment);
+    defaultRuntime.writeJson({
+      service: {
+        ...payload.service,
+        command: command
+          ? {
+              ...command,
+              environment: Object.keys(safeEnvironment).length > 0 ? safeEnvironment : undefined,
+            }
+          : command,
+      },
+    });
     return;
   }
 

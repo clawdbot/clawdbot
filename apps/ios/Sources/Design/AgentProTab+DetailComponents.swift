@@ -2,29 +2,35 @@ import OpenClawKit
 import SwiftUI
 
 extension AgentProTab {
-    func detailMetric(label: String, value: String) -> some View {
+    func detailMetric(label: OpenClawTextValue, value: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(label)
-                .font(.caption2.weight(.medium))
+            label.text
+                .font(OpenClawType.caption2Medium)
                 .foregroundStyle(.secondary)
-            Text(value)
-                .font(.subheadline.weight(.semibold))
+            Text(verbatim: value)
+                .font(OpenClawType.subheadSemiBold)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
-        .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(
+            Color.primary.opacity(0.055),
+            in: RoundedRectangle(cornerRadius: OpenClawRadius.sm, style: .continuous))
     }
 
-    func emptyDetailRow(icon: String, title: String, detail: String) -> some View {
+    func emptyDetailRow(
+        icon: String,
+        title: OpenClawTextValue,
+        detail: OpenClawTextValue) -> some View
+    {
         HStack(spacing: 12) {
             ProIconBadge(systemName: icon, color: .secondary)
             VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                Text(detail)
-                    .font(.caption)
+                title.text
+                    .font(OpenClawType.subheadSemiBold)
+                detail.text
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }

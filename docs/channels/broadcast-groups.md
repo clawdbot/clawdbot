@@ -9,73 +9,25 @@ sidebarTitle: "Broadcast groups"
 ---
 
 <Note>
-**Status:** Experimental. Added in 2026.1.9.
+**Status:** Experimental. Added in 2026.1.9. WhatsApp (web channel) only.
 </Note>
 
 ## Overview
 
-Broadcast Groups enable multiple agents to process and respond to the same message simultaneously. This allows you to create specialized agent teams that work together in a single WhatsApp group or DM — all using one phone number.
+Broadcast groups run **multiple agents** on the same inbound message. Each agent processes the message in its own isolated session and posts its own reply, so one WhatsApp number can host a team of specialized agents in a single group chat or DM.
 
-Current scope: **WhatsApp only** (web channel).
-
-Broadcast groups are evaluated after channel allowlists and group activation rules. In WhatsApp groups, this means broadcasts happen when OpenClaw would normally reply (for example: on mention, depending on your group settings).
+Broadcast groups are evaluated after channel allowlists and group activation rules. In WhatsApp groups, broadcasts happen when OpenClaw would normally reply (for example: on mention, depending on your group settings). They only change **which agents run**, never whether a message is eligible for processing.
 
 The live WhatsApp QA lane includes `whatsapp-broadcast-group-fanout`, which verifies that one mentioned group message can produce distinct visible replies from two configured agents.
-
-## Use cases
-
-<AccordionGroup>
-  <Accordion title="1. Specialized agent teams">
-    Deploy multiple agents with atomic, focused responsibilities:
-
-    ```
-    Group: "Development Team"
-    Agents:
-      - CodeReviewer (reviews code snippets)
-      - DocumentationBot (generates docs)
-      - SecurityAuditor (checks for vulnerabilities)
-      - TestGenerator (suggests test cases)
-    ```
-
-    Each agent processes the same message and provides its specialized perspective.
-
-  </Accordion>
-  <Accordion title="2. Multi-language support">
-    ```
-    Group: "International Support"
-    Agents:
-      - Agent_EN (responds in English)
-      - Agent_DE (responds in German)
-      - Agent_ES (responds in Spanish)
-    ```
-  </Accordion>
-  <Accordion title="3. Quality assurance workflows">
-    ```
-    Group: "Customer Support"
-    Agents:
-      - SupportAgent (provides answer)
-      - QAAgent (reviews quality, only responds if issues found)
-    ```
-  </Accordion>
-  <Accordion title="4. Task automation">
-    ```
-    Group: "Project Management"
-    Agents:
-      - TaskTracker (updates task database)
-      - TimeLogger (logs time spent)
-      - ReportGenerator (creates summaries)
-    ```
-  </Accordion>
-</AccordionGroup>
 
 ## Configuration
 
 ### Basic setup
 
-Add a top-level `broadcast` section (next to `bindings`). Keys are WhatsApp peer ids:
+Add a top-level `broadcast` section (next to `bindings`). Keys are WhatsApp peer ids, values are arrays of agent ids:
 
 - group chats: group JID (e.g. `120363403215116621@g.us`)
-- DMs: E.164 phone number (e.g. `+15551234567`)
+- DMs: sender E.164 phone number (e.g. `+15551234567`)
 
 ```json
 {
@@ -85,40 +37,27 @@ Add a top-level `broadcast` section (next to `bindings`). Keys are WhatsApp peer
 }
 ```
 
-**Result:** When OpenClaw would reply in this chat, it will run all three agents.
+**Result:** when OpenClaw would reply in this chat, it runs all three agents.
+
+Every listed agent id must exist in `agents.entries`: config validation reports unknown ids, and the runtime skips them with a `Broadcast agent <id> not found in agents.entries; skipping` warning.
 
 ### Processing strategy
 
-Control how agents process messages:
+`broadcast.strategy` sets how agents process the message:
 
-<Tabs>
-  <Tab title="parallel (default)">
-    All agents process simultaneously:
+| Strategy             | Behavior                                                              |
+| -------------------- | --------------------------------------------------------------------- |
+| `parallel` (default) | All agents process simultaneously; replies arrive in any order.       |
+| `sequential`         | Agents process in array order; each waits for the previous to finish. |
 
-    ```json
-    {
-      "broadcast": {
-        "strategy": "parallel",
-        "120363403215116621@g.us": ["alfred", "baerbel"]
-      }
-    }
-    ```
-
-  </Tab>
-  <Tab title="sequential">
-    Agents process in order (one waits for previous to finish):
-
-    ```json
-    {
-      "broadcast": {
-        "strategy": "sequential",
-        "120363403215116621@g.us": ["alfred", "baerbel"]
-      }
-    }
-    ```
-
-  </Tab>
-</Tabs>
+```json
+{
+  "broadcast": {
+    "strategy": "sequential",
+    "120363403215116621@g.us": ["alfred", "baerbel"]
+  }
+}
+```
 
 ### Complete example
 
@@ -173,6 +112,7 @@ Control how agents process messages:
     - All listed agents process the message.
     - Each agent has its own session key and isolated context.
     - Agents process in parallel (default) or sequentially.
+    - Audio attachments are transcribed once before fan-out, so agents share one transcript instead of making separate STT calls.
 
   </Step>
   <Step title="If broadcast does not apply">
@@ -189,18 +129,14 @@ Broadcast groups do not bypass channel allowlists or group activation rules (men
 Each agent in a broadcast group maintains completely separate:
 
 - **Session keys** (`agent:alfred:whatsapp:group:120363...` vs `agent:baerbel:whatsapp:group:120363...`)
-- **Conversation history** (agent doesn't see other agents' messages)
+- **Conversation history** (an agent does not see other agents' replies)
 - **Workspace** (separate sandboxes if configured)
 - **Tool access** (different allow/deny lists)
-- **Memory/context** (separate IDENTITY.md, SOUL.md, etc.)
-- **Group context buffer** (recent group messages used for context) is shared per peer, so all broadcast agents see the same context when triggered
+- **Memory/context** (separate `IDENTITY.md`, `SOUL.md`, etc.)
 
-This allows each agent to have:
+One exception is shared on purpose: the **group context buffer** (recent group messages used for context) is shared per peer, so all broadcast agents see the same context when triggered. It is cleared once after the fan-out completes.
 
-- Different personalities
-- Different tool access (e.g., read-only vs. read-write)
-- Different models (e.g., opus vs. sonnet)
-- Different skills installed
+This allows each agent to have different personalities, models, skills, and tool access (for example read-only vs. read-write).
 
 ### Example: isolated sessions
 
@@ -208,66 +144,57 @@ In group `120363403215116621@g.us` with agents `["alfred", "baerbel"]`:
 
 <Tabs>
   <Tab title="Alfred's context">
-    ```
+    ```text
     Session: agent:alfred:whatsapp:group:120363403215116621@g.us
     History: [user message, alfred's previous responses]
-    Workspace: /Users/user/openclaw-alfred/
+    Workspace: ~/openclaw-alfred/
     Tools: read, write, exec
     ```
   </Tab>
-  <Tab title="Bärbel's context">
-    ```
+  <Tab title="Baerbel's context">
+    ```text
     Session: agent:baerbel:whatsapp:group:120363403215116621@g.us
     History: [user message, baerbel's previous responses]
-    Workspace: /Users/user/openclaw-baerbel/
+    Workspace: ~/openclaw-baerbel/
     Tools: read only
     ```
   </Tab>
 </Tabs>
 
+## Use cases
+
+- **Specialized agent teams**: a dev group where `code-reviewer`, `security-auditor`, `test-generator`, and `docs-checker` each answer the same message from their own angle.
+- **Multi-language support**: one support chat with `support-en`, `support-de`, `support-es` responding in their languages.
+- **Quality assurance**: `support-agent` answers while `qa-agent` reviews and only responds when it finds issues.
+- **Task automation**: `task-tracker`, `time-logger`, and `report-generator` all consume the same status update.
+
 ## Best practices
 
 <AccordionGroup>
   <Accordion title="1. Keep agents focused">
-    Design each agent with a single, clear responsibility:
-
-    ```json
-    {
-      "broadcast": {
-        "DEV_GROUP": ["formatter", "linter", "tester"]
-      }
-    }
-    ```
-
-    ✅ **Good:** Each agent has one job. ❌ **Bad:** One generic "dev-helper" agent.
-
+    Give each agent a single, clear responsibility (`formatter`, `linter`, `tester`) instead of one generic "dev-helper" agent.
   </Accordion>
-  <Accordion title="2. Use descriptive names">
-    Make it clear what each agent does:
-
+  <Accordion title="2. Use descriptive ids and names">
     ```json
     {
       "agents": {
-        "security-scanner": { "name": "Security Scanner" },
-        "code-formatter": { "name": "Code Formatter" },
-        "test-generator": { "name": "Test Generator" }
+        "list": [
+          { "id": "security-scanner", "name": "Security Scanner" },
+          { "id": "code-formatter", "name": "Code Formatter" },
+          { "id": "test-generator", "name": "Test Generator" }
+        ]
       }
     }
     ```
-
   </Accordion>
   <Accordion title="3. Configure different tool access">
-    Give agents only the tools they need:
-
     ```json
     {
       "agents": {
-        "reviewer": {
-          "tools": { "allow": ["read", "exec"] }
-        },
-        "fixer": {
-          "tools": { "allow": ["read", "write", "edit", "exec"] }
-        }
+        "list": [
+          { "id": "reviewer", "tools": { "allow": ["read", "exec"] } },
+          { "id": "fixer", "tools": { "allow": ["read", "write", "edit", "exec"] } }
+        ]
       }
     }
     ```
@@ -276,21 +203,10 @@ In group `120363403215116621@g.us` with agents `["alfred", "baerbel"]`:
 
   </Accordion>
   <Accordion title="4. Monitor performance">
-    With many agents, consider:
-
-    - Using `"strategy": "parallel"` (default) for speed
-    - Limiting broadcast groups to 5-10 agents
-    - Using faster models for simpler agents
-
+    With many agents, prefer `"strategy": "parallel"` (default), keep broadcast groups to a handful of agents, and use faster models for simpler agents.
   </Accordion>
-  <Accordion title="5. Handle failures gracefully">
-    Agents fail independently. One agent's error doesn't block others:
-
-    ```
-    Message → [Agent A ✓, Agent B ✗ error, Agent C ✓]
-    Result: Agent A and C respond, Agent B logs error
-    ```
-
+  <Accordion title="5. Failures stay isolated">
+    Agents fail independently. One agent's error is logged (`Broadcast agent <id> failed: ...`) and does not block the others.
   </Accordion>
 </AccordionGroup>
 
@@ -298,12 +214,7 @@ In group `120363403215116621@g.us` with agents `["alfred", "baerbel"]`:
 
 ### Providers
 
-Broadcast groups currently work with:
-
-- ✅ WhatsApp (implemented)
-- 🚧 Telegram (planned)
-- 🚧 Discord (planned)
-- 🚧 Slack (planned)
+Broadcast groups are currently implemented for WhatsApp (web channel) only. Other channels ignore the `broadcast` config.
 
 ### Routing
 
@@ -323,7 +234,7 @@ Broadcast groups work alongside existing routing:
 }
 ```
 
-- `GROUP_A`: Only alfred responds (normal routing).
+- `GROUP_A`: only alfred responds (normal routing).
 - `GROUP_B`: agent1 AND agent2 respond (broadcast).
 
 <Note>
@@ -336,30 +247,27 @@ Broadcast groups work alongside existing routing:
   <Accordion title="Agents not responding">
     **Check:**
 
-    1. Agent IDs exist in `agents.list`.
-    2. Peer ID format is correct (e.g., `120363403215116621@g.us`).
-    3. Agents are not in deny lists.
+    1. Agent IDs exist in `agents.entries` (config validation rejects unknown ids).
+    2. Peer ID format is correct (group JID like `120363403215116621@g.us`, or E.164 like `+15551234567` for DMs).
+    3. The message passed normal gating (mention/activation rules still apply).
 
     **Debug:**
 
     ```bash
-    tail -f ~/.openclaw/logs/gateway.log | grep broadcast
+    openclaw logs --follow | grep -i broadcast
     ```
+
+    A successful fan-out logs `Broadcasting message to <n> agents (<strategy>)`.
 
   </Accordion>
   <Accordion title="Only one agent responding">
-    **Cause:** Peer ID might be in ordinary route bindings but not `broadcast`, or it might match an exclusive configured ACP binding.
+    **Cause:** the peer ID might be in ordinary route bindings but not `broadcast`, or it might match an exclusive configured ACP binding.
 
-    **Fix:** Add ordinary route-bound peers to broadcast config, or remove/change the configured ACP binding if fan-out broadcast is desired.
+    **Fix:** add ordinary route-bound peers to the broadcast config, or remove/change the configured ACP binding if fan-out broadcast is desired.
 
   </Accordion>
   <Accordion title="Performance issues">
-    If slow with many agents:
-
-    - Reduce number of agents per group.
-    - Use lighter models (sonnet instead of opus).
-    - Check sandbox startup time.
-
+    If slow with many agents: reduce the number of agents per group, use lighter models, and check sandbox startup time.
   </Accordion>
 </AccordionGroup>
 
@@ -401,17 +309,10 @@ Broadcast groups work alongside existing routing:
     }
     ```
 
-    **User sends:** Code snippet.
-
-    **Responses:**
-
-    - code-formatter: "Fixed indentation and added type hints"
-    - security-scanner: "⚠️ SQL injection vulnerability in line 12"
-    - test-coverage: "Coverage is 45%, missing tests for error cases"
-    - docs-checker: "Missing docstring for function `process_data`"
+    One code snippet in the group produces four replies: formatting fixes, a security finding, a coverage gap, and a docs nit.
 
   </Accordion>
-  <Accordion title="Example 2: Multi-language support">
+  <Accordion title="Example 2: Multi-language pipeline">
     ```json
     {
       "broadcast": {
@@ -449,24 +350,15 @@ interface OpenClawConfig {
   How to process agents. `parallel` runs all agents simultaneously; `sequential` runs them in array order.
 </ParamField>
 <ParamField path="[peerId]" type="string[]">
-  WhatsApp group JID, E.164 number, or other peer ID. Value is the array of agent IDs that should process messages.
+  WhatsApp group JID or E.164 phone number. Value is the array of agent IDs that should all process messages from that peer.
 </ParamField>
 
 ## Limitations
 
-1. **Max agents:** No hard limit, but 10+ agents may be slow.
-2. **Shared context:** Agents don't see each other's responses (by design).
-3. **Message ordering:** Parallel responses may arrive in any order.
-4. **Rate limits:** All agents count toward WhatsApp rate limits.
-
-## Future enhancements
-
-Planned features:
-
-- [ ] Shared context mode (agents see each other's responses)
-- [ ] Agent coordination (agents can signal each other)
-- [ ] Dynamic agent selection (choose agents based on message content)
-- [ ] Agent priorities (some agents respond before others)
+1. **Max agents:** no hard limit, but many agents (10+) can be slow.
+2. **Shared context:** agents do not see each other's responses (by design).
+3. **Message ordering:** parallel responses may arrive in any order.
+4. **Rate limits:** all replies come from one WhatsApp account, so every agent's reply counts toward the same WhatsApp rate limits.
 
 ## Related
 

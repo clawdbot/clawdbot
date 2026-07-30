@@ -1,7 +1,11 @@
 // Verifies message-action target requirements and alias detection, including
 // plugin aliases only when non-standard params are present.
 import { describe, expect, it, vi } from "vitest";
-import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js";
+import {
+  actionHasResourceReference,
+  actionHasTarget,
+  actionRequiresTarget,
+} from "./message-action-spec.js";
 
 vi.mock("../../channels/plugins/bootstrap-registry.js", async () => ({
   getBootstrapChannelPlugin: (
@@ -60,6 +64,12 @@ describe("actionHasTarget", () => {
     { action: "react", params: { chatIdentifier: "chat-id" }, expected: true },
     { action: "react", params: { chatId: 42 }, expected: true },
     {
+      action: "react",
+      params: { messageId: "msg_123" },
+      ctx: { channel: "imessage" },
+      expected: true,
+    },
+    {
       action: "upload-file",
       params: { chatIdentifier: "chat-id" },
       ctx: { channel: "imessage" },
@@ -89,5 +99,42 @@ describe("actionHasTarget", () => {
     },
   ])("resolves target presence for %j", ({ action, params, ctx, expected }) => {
     expect(actionHasTarget(action as never, params, ctx)).toBe(expected);
+  });
+});
+
+describe("actionHasResourceReference", () => {
+  it.each([
+    {
+      action: "react" as const,
+      params: { messageId: "msg_123" },
+      channel: "imessage",
+      expected: true,
+    },
+    {
+      action: "poll-vote" as const,
+      params: { pollId: "poll_123" },
+      channel: "imessage",
+      expected: true,
+    },
+    {
+      action: "react" as const,
+      params: { chatGuid: "iMessage;+;chat0000" },
+      channel: "imessage",
+      expected: false,
+    },
+    {
+      action: "react" as const,
+      params: { messageId: "msg_123" },
+      channel: undefined,
+      expected: false,
+    },
+    {
+      action: "pin" as const,
+      params: { messageId: "msg_123" },
+      channel: "pinboard",
+      expected: false,
+    },
+  ])("$action resource classification is $expected", ({ action, params, channel, expected }) => {
+    expect(actionHasResourceReference(action, params, { channel })).toBe(expected);
   });
 });

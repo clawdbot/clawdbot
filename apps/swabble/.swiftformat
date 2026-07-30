@@ -1,8 +1,0 @@
---swiftversion 6.2
---indent 4
---maxwidth 120
---wraparguments before-first
---wrapcollections before-first
---stripunusedargs closure-only
---self remove
---header ""

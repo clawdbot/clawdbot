@@ -23,6 +23,7 @@ export {
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { parseRawSessionConversationRef } from "../../sessions/session-key-utils.js";
 import type { FastModeSource } from "../../shared/fast-mode.js";
 
 /** Coarse session category used by session list/status tools. */
@@ -39,8 +40,8 @@ type SessionListDeliveryContext = {
 /** Compact run status shown by session tools. */
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 
-/** Normalized session row returned by session list-style tools. */
-export type SessionListRow = {
+/** Full Gateway session row consumed by session orchestration internals. */
+export type GatewaySessionListRow = {
   key: string;
   agentId?: string;
   kind: SessionKind;
@@ -57,7 +58,12 @@ export type SessionListRow = {
   parentSessionKey?: string;
   deliveryContext?: SessionListDeliveryContext;
   updatedAt?: number | null;
+  archived?: boolean;
+  archivedAt?: number;
+  pinned?: boolean;
+  pinnedAt?: number;
   sessionId?: string;
+  stateVersion?: number;
   model?: string;
   contextTokens?: number | null;
   totalTokens?: number | null;
@@ -84,6 +90,30 @@ export type SessionListRow = {
   lastAccountId?: string;
   lastThreadId?: string | number;
   transcriptPath?: string;
+  messages?: unknown[];
+};
+
+/** Focused model-facing row returned by sessions_list. */
+export type SessionListRow = {
+  key: string;
+  agentId: string;
+  kind: SessionKind;
+  channel: string;
+  label?: string;
+  displayName?: string;
+  derivedTitle?: string;
+  lastMessagePreview?: string;
+  parentSessionKey?: string;
+  updatedAt?: number;
+  archived: boolean;
+  pinned: boolean;
+  stateVersion?: number;
+  model?: string;
+  contextTokens?: number;
+  totalTokens?: number;
+  status?: SessionRunStatus;
+  abortedLastRun?: boolean;
+  childSessions?: string[];
   messages?: unknown[];
 };
 
@@ -152,9 +182,5 @@ export function deriveChannel(params: {
   if (lastChannel) {
     return lastChannel;
   }
-  const parts = params.key.split(":").filter(Boolean);
-  if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
-    return parts[0];
-  }
-  return "unknown";
+  return parseRawSessionConversationRef(params.key)?.channel ?? "unknown";
 }

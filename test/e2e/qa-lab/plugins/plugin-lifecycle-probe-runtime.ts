@@ -1,18 +1,34 @@
 // Plugin Lifecycle Probe tests cover QA Lab plugin lifecycle evidence.
 import { spawn, spawnSync } from "node:child_process";
+/* oxlint-disable eslint/no-shadow, eslint/prefer-const, eslint/no-promise-executor-return, typescript/restrict-template-expressions, typescript/no-base-to-string -- QA probe intentionally validates loosely typed external JSON and mirrors child-process callback shapes. */
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readPluginInstallRecords } from "../../../../scripts/e2e/lib/plugin-index-sqlite.mjs";
 import { resolveWindowsTaskkillPath } from "../../../../scripts/lib/windows-taskkill.mjs";
-import { createTempDirTracker } from "../../../helpers/temp-dir.js";
 
-const tempDirs = createTempDirTracker();
+// The Docker entrypoint runs without Vitest installed, so keep cleanup local to this runtime probe.
+const tempDirs = (() => {
+  const dirs = new Set<string>();
+  return {
+    make(prefix: string): string {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+      dirs.add(dir);
+      return dir;
+    },
+    cleanup(): void {
+      for (const dir of dirs) {
+        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+      }
+      dirs.clear();
+    },
+  };
+})();
 
-type ProbeEnv = Pick<NodeJS.ProcessEnv, "HOME" | "OPENCLAW_CONFIG_PATH" | "OPENCLAW_STATE_DIR">;
+type ProbeEnv = NodeJS.ProcessEnv;
 
-type MatrixEnv = NodeJS.ProcessEnv & ProbeEnv;
+type MatrixEnv = NodeJS.ProcessEnv;
 
 interface CommandOptions {
   env?: NodeJS.ProcessEnv;
@@ -477,7 +493,7 @@ async function runMeasured(
   );
 }
 
-export async function runPluginLifecycleMatrix() {
+async function runPluginLifecycleMatrix() {
   const pluginId = "lifecycle-claw";
   const packageName = "@openclaw/lifecycle-claw";
   const resourceDir = tempDirs.make("openclaw-plugin-lifecycle-matrix-");
@@ -538,7 +554,7 @@ export async function runPluginLifecycleMatrix() {
       summaryTsv,
       "install-v1",
       "node",
-      [entry, "plugins", "install", `npm:${packageName}@1.0.0`],
+      [entry, "plugins", "install", `npm:${packageName}@1.0.0`, "--force"],
       runEnv,
     );
     assertVersion(pluginId, "1.0.0", runEnv);

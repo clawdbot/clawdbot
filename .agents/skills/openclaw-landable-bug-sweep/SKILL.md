@@ -88,7 +88,7 @@ Reject:
    - include PRs linked from issues and duplicates
 3. For each cluster:
    - read issue/PR body, comments, labels, linked refs, current source, adjacent tests
-   - suppress maintainer-owned queue noise unless it is the best fix path
+   - exclude PRs authored by wide-access maintainers until `created_at` is at least 14 days old; only a named PR or explicit maintainer-work request overrides
    - identify opener/author and preserve credit
    - decide: `repair-existing-pr`, `create-new-pr`, `close-fixed-on-main`, `close-duplicate`, or `reject`
 4. Prove before patching:

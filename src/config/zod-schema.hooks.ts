@@ -1,7 +1,6 @@
 // Defines hook-related Zod schema fragments for config parsing.
 import path from "node:path";
 import { z } from "zod";
-import { InstallRecordShape } from "./zod-schema.installs.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 function isSafeRelativeModulePath(raw: string): boolean {
@@ -46,6 +45,7 @@ export const HookMappingSchema = z
     name: z.string().optional(),
     agentId: z.string().optional(),
     sessionKey: z.string().optional().register(sensitive),
+    sessionMode: z.union([z.literal("isolated"), z.literal("persistent")]).optional(),
     messageTemplate: z.string().optional(),
     textTemplate: z.string().optional(),
     deliver: z.boolean().optional(),
@@ -87,13 +87,6 @@ const HookConfigSchema = z
   // whole config invalid (which triggers doctor/best-effort loads).
   .passthrough();
 
-const HookInstallRecordSchema = z
-  .object({
-    ...InstallRecordShape,
-    hooks: z.array(z.string()).optional(),
-  })
-  .strict();
-
 export const InternalHooksSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -105,7 +98,6 @@ export const InternalHooksSchema = z
       })
       .strict()
       .optional(),
-    installs: z.record(z.string(), HookInstallRecordSchema).optional(),
   })
   .strict()
   .optional();

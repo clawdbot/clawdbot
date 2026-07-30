@@ -49,6 +49,7 @@ export async function ensureChannelSetupPluginInstalled(params: {
   workspaceDir?: string;
   promptInstall?: boolean;
   autoConfirmSingleSource?: boolean;
+  beforePersistentEffect?: () => Promise<void>;
 }): Promise<InstallResult> {
   const result = await ensureOnboardingPluginInstalled({
     cfg: params.cfg,
@@ -59,6 +60,9 @@ export async function ensureChannelSetupPluginInstalled(params: {
     ...(params.promptInstall !== undefined ? { promptInstall: params.promptInstall } : {}),
     ...(params.autoConfirmSingleSource !== undefined
       ? { autoConfirmSingleSource: params.autoConfirmSingleSource }
+      : {}),
+    ...(params.beforePersistentEffect
+      ? { beforePersistentEffect: params.beforePersistentEffect }
       : {}),
   });
   return {

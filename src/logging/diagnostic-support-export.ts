@@ -6,7 +6,9 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseConfigJson5 } from "../config/io.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
+import { buildConfigSchema } from "../config/schema.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
+import { readRegularFileSync } from "../infra/regular-file.js";
 import { VERSION } from "../version.js";
 import {
   readDiagnosticStabilityBundleFileSync,
@@ -33,10 +35,13 @@ import {
 } from "./diagnostic-support-redaction.js";
 import { readConfiguredLogTail, type LogTailPayload } from "./log-tail.js";
 
-export const DIAGNOSTIC_SUPPORT_EXPORT_VERSION = 1;
+const DIAGNOSTIC_SUPPORT_EXPORT_VERSION = 1;
 
 const DEFAULT_LOG_LIMIT = 5000;
 const DEFAULT_LOG_MAX_BYTES = 1_000_000;
+// Support export must remain usable when the config is corrupt or unexpectedly
+// large. This defensive ceiling is not the product's general config-file limit.
+const SUPPORT_EXPORT_CONFIG_MAX_BYTES = 8 * 1024 * 1024;
 const SUPPORT_EXPORT_PREFIX = "openclaw-diagnostics-";
 const SUPPORT_EXPORT_SUFFIX = ".zip";
 type Awaitable<T> = T | Promise<T>;
@@ -291,7 +296,10 @@ function sanitizeConfigShape(
 }
 
 function sanitizeConfigDetails(parsed: unknown, redaction: SupportRedactionContext): unknown {
-  return sanitizeSupportConfigValue(redactConfigObject(parsed), redaction);
+  return sanitizeSupportConfigValue(
+    redactConfigObject(parsed, buildConfigSchema().uiHints),
+    redaction,
+  );
 }
 
 function configShapeReadFailure(params: {
@@ -339,7 +347,11 @@ function readConfigExport(options: {
   let stat: fs.Stats | undefined;
   try {
     stat = fs.statSync(options.configPath);
-    const parsed = parseConfigJson5(fs.readFileSync(options.configPath, "utf8"));
+    const { buffer } = readRegularFileSync({
+      filePath: options.configPath,
+      maxBytes: SUPPORT_EXPORT_CONFIG_MAX_BYTES,
+    });
+    const parsed = parseConfigJson5(buffer.toString("utf8"));
     if (!parsed.ok) {
       return {
         shape: configShapeReadFailure({
@@ -670,7 +682,7 @@ function resolveOutputPath(options: {
   return resolved;
 }
 
-export async function buildDiagnosticSupportExport(
+async function buildDiagnosticSupportExport(
   options: DiagnosticSupportExportOptions = {},
 ): Promise<DiagnosticSupportExportArtifact> {
   const env = options.env ?? process.env;
@@ -810,3 +822,4 @@ export async function writeDiagnosticSupportExport(
     manifest: artifact.manifest,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

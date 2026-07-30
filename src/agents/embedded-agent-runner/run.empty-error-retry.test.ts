@@ -9,6 +9,7 @@ import {
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -60,6 +61,7 @@ function successAttempt(provider: string, model: string): EmbeddedRunAttemptResu
 describe("runEmbeddedAgent silent-error retry", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
   });
 
   beforeEach(() => {
@@ -136,11 +138,8 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(result.payloads).toBeUndefined();
   });
 
-  it.each([
-    ["timeout", "LLM request timed out."],
-    ["server_error", "Internal server error"],
-  ] as const)("does not intercept recognized %s failover errors", async (reason, errorMessage) => {
-    mockedClassifyAssistantFailoverReason.mockReturnValue(reason);
+  it("does not intercept recognized timeout failover errors", async () => {
+    mockedClassifyAssistantFailoverReason.mockReturnValue("timeout");
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       emptyErrorAttempt(
         "anthropic",
@@ -153,7 +152,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
             thinkingSignature: JSON.stringify({ id: "rs_error", type: "reasoning" }),
           },
         ],
-        errorMessage,
+        "LLM request timed out.",
       ),
     );
 
@@ -161,10 +160,28 @@ describe("runEmbeddedAgent silent-error retry", () => {
       ...overflowBaseRunParams,
       provider: "anthropic",
       model: "claude-opus-4-8",
-      runId: `run-empty-error-retry-${reason}`,
+      runId: "run-empty-error-retry-timeout",
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries server_error when the attempt is otherwise silent and side-effect-free", async () => {
+    mockedClassifyAssistantFailoverReason.mockReturnValue("server_error");
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      emptyErrorAttempt("anthropic", "claude-opus-4-8", 0, [], "Internal server error"),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(successAttempt("anthropic", "claude-opus-4-8"));
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      runId: "run-empty-error-retry-server-error",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toBeUndefined();
   });
 
   it("does not intercept concrete non-transient failover errors", async () => {
@@ -275,8 +292,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
   });
 
   it("does not retry when the failed attempt recorded side effects", async () => {
-    // Resubmission would duplicate side effects when replay metadata cannot
-    // prove the failed turn is safe to replay.
+    // Without per-attempt metadata, cumulative side effects remain fail-closed.
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
@@ -288,10 +304,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
           content: [],
           usage: { input: 100, output: 0, totalTokens: 100 },
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-        replayMetadata: {
-          hadPotentialSideEffects: true,
-          replaySafe: false,
-        },
+        toolMetas: [{ toolName: "browser", replaySafe: false }],
       }),
     );
 
@@ -304,6 +317,49 @@ describe("runEmbeddedAgent silent-error retry", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(result.payloads?.[0]?.isError).toBe(true);
+  });
+
+  it("does not retry when currentAttemptReplayMetadata records same-attempt tool side effects", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        ...emptyErrorAttempt("ollama", "glm-5.1:cloud"),
+        currentAttemptReplayMetadata: {
+          hadPotentialSideEffects: true,
+          replaySafe: false,
+        },
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "ollama",
+      model: "glm-5.1:cloud",
+      runId: "run-empty-error-retry-skip-same-attempt-tools",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+  });
+
+  it("retries when prior turns had side effects but current 5xx attempt ran no tools", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        ...emptyErrorAttempt("ollama", "glm-5.1:cloud"),
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(successAttempt("ollama", "glm-5.1:cloud"));
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "ollama",
+      model: "glm-5.1:cloud",
+      runId: "run-empty-error-retry-prior-side-effects",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toBeUndefined();
   });
 
   it.each([

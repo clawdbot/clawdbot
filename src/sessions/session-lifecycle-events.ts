@@ -7,9 +7,28 @@ export type SessionLifecycleEvent = {
   displayName?: string;
 };
 
+export type SessionIdentityMutationTarget = {
+  sessionId?: string;
+  sessionKeys: readonly string[];
+};
+
+export type SessionIdentityMutation =
+  | {
+      kind: "create" | "move" | "replace" | "reset";
+      previous: SessionIdentityMutationTarget;
+      current: SessionIdentityMutationTarget;
+    }
+  | {
+      kind: "delete";
+      previous: SessionIdentityMutationTarget;
+    };
+
+export type SessionIdentityMutationListener = (mutation: SessionIdentityMutation) => void;
+
 type SessionLifecycleListener = (event: SessionLifecycleEvent) => void;
 
 const SESSION_LIFECYCLE_LISTENERS = new Set<SessionLifecycleListener>();
+const SESSION_IDENTITY_MUTATION_LISTENERS = new Set<SessionIdentityMutationListener>();
 
 /** Registers a session lifecycle listener. */
 export function onSessionLifecycleEvent(listener: SessionLifecycleListener): () => void {
@@ -26,6 +45,23 @@ export function emitSessionLifecycleEvent(event: SessionLifecycleEvent): void {
       listener(event);
     } catch {
       // Best-effort, do not propagate listener errors.
+    }
+  }
+}
+
+export function onSessionIdentityMutation(listener: SessionIdentityMutationListener): () => void {
+  SESSION_IDENTITY_MUTATION_LISTENERS.add(listener);
+  return () => {
+    SESSION_IDENTITY_MUTATION_LISTENERS.delete(listener);
+  };
+}
+
+export function emitSessionIdentityMutation(mutation: SessionIdentityMutation): void {
+  for (const listener of SESSION_IDENTITY_MUTATION_LISTENERS) {
+    try {
+      listener(mutation);
+    } catch {
+      // Session persistence already succeeded; one observer must not block the rest.
     }
   }
 }

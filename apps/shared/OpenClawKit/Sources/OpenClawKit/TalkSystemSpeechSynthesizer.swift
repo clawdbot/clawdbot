@@ -16,10 +16,6 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
     private var currentToken = UUID()
     private var watchdog: Task<Void, Never>?
 
-    public var isSpeaking: Bool {
-        self.synth.isSpeaking
-    }
-
     override private init() {
         super.init()
         self.synth.delegate = self

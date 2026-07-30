@@ -6,7 +6,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
-  listKnownProviderAuthEnvVarNames: () => ["OPENAI_API_KEY", "GITHUB_TOKEN", "HF_TOKEN"],
+  listKnownProviderAuthEnvVarNames: () => [
+    "OPENAI_API_KEY",
+    "OPENAI_ADMIN_KEY",
+    "ANTHROPIC_ADMIN_KEY",
+    "ANTHROPIC_ADMIN_API_KEY",
+    "GITHUB_TOKEN",
+    "HF_TOKEN",
+  ],
   resolveProviderAuthLookupMaps: () => ({
     aliasMap: {},
     envCandidateMap: {},
@@ -256,6 +263,9 @@ describe("buildAcpClientStripKeys", () => {
 
     expect(stripKeys.has("SKILL_SECRET")).toBe(true);
     expect(stripKeys.has("OPENAI_API_KEY")).toBe(true);
+    expect(stripKeys.has("OPENAI_ADMIN_KEY")).toBe(true);
+    expect(stripKeys.has("ANTHROPIC_ADMIN_KEY")).toBe(true);
+    expect(stripKeys.has("ANTHROPIC_ADMIN_API_KEY")).toBe(true);
     expect(stripKeys.has("GITHUB_TOKEN")).toBe(true);
     expect(stripKeys.has("HF_TOKEN")).toBe(true);
     expect(stripKeys.has("OPENCLAW_API_KEY")).toBe(false);
@@ -493,6 +503,104 @@ describe("resolvePermissionRequest", () => {
     );
     expect(res).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
     expect(prompt).not.toHaveBeenCalled();
+  });
+
+  it("auto-approves search when rawInput path resolves inside cwd", async () => {
+    await expectAutoAllowWithoutPrompt({
+      request: {
+        toolCall: {
+          toolCallId: "tool-search-inside-cwd",
+          title: "search: ignored-by-raw-input",
+          status: "pending",
+          rawInput: { name: "search", query: "TODO", path: "src" },
+        },
+      },
+      cwd: "/tmp/openclaw-acp-cwd",
+    });
+  });
+
+  it("prompts for search when rawInput path escapes cwd", async () => {
+    const prompt = vi.fn(async () => false);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-search-escape-cwd",
+          title: "search: ignored-by-raw-input",
+          status: "pending",
+          rawInput: { name: "search", query: "key", path: "../.ssh" },
+        },
+      }),
+      { prompt, log: () => {}, cwd: "/tmp/openclaw-acp-cwd/workspace" },
+    );
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith("search", "search: ignored-by-raw-input");
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
+  });
+
+  it("auto-approves search when query-like title text contains a path label", async () => {
+    await expectAutoAllowWithoutPrompt({
+      request: {
+        toolCall: {
+          toolCallId: "tool-search-title-query-path-label",
+          title: "search: query: literal text, path: ~/.ssh",
+          status: "pending",
+          rawInput: { name: "search", query: "literal text, path: ~/.ssh" },
+        },
+      },
+      cwd: "/tmp/openclaw-acp-cwd/workspace",
+    });
+  });
+
+  it("prompts for search when explicit title path escapes cwd", async () => {
+    const prompt = vi.fn(async () => false);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-search-title-escape-cwd",
+          title: "search: path: ~/.ssh",
+          status: "pending",
+          rawInput: { name: "search", query: "key" },
+        },
+      }),
+      { prompt, log: () => {}, cwd: "/tmp/openclaw-acp-cwd/workspace" },
+    );
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith("search", "search: path: ~/.ssh");
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
+  });
+
+  it("auto-approves search when only locations resolve inside cwd", async () => {
+    await expectAutoAllowWithoutPrompt({
+      request: {
+        toolCall: {
+          toolCallId: "tool-search-location-inside-cwd",
+          title: "search: TODO",
+          status: "pending",
+          rawInput: { name: "search", query: "TODO" },
+          locations: [{ path: "src/index.ts" }],
+        },
+      },
+      cwd: "/tmp/openclaw-acp-cwd",
+    });
+  });
+
+  it("prompts for search when only locations escape cwd", async () => {
+    const prompt = vi.fn(async () => false);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-search-location-escape-cwd",
+          title: "search: TODO",
+          status: "pending",
+          rawInput: { name: "search", query: "TODO" },
+          locations: [{ path: "/etc/passwd" }],
+        },
+      }),
+      { prompt, log: () => {}, cwd: "/tmp/openclaw-acp-cwd/workspace" },
+    );
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith("search", "search: TODO");
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
   });
 
   it("prompts when raw input spoofs a safe tool name for a dangerous title", async () => {

@@ -6,7 +6,7 @@
 import type { AuthProfileStore } from "./types.js";
 
 /** Deep-clones an auth profile store and rejects non-JSON values. */
-export function cloneAuthProfileStore(store: AuthProfileStore): AuthProfileStore {
+export function cloneAuthProfileStore<T extends AuthProfileStore>(store: T): T {
   return JSON.parse(
     JSON.stringify(store, (_key, value: unknown) => {
       if (typeof value === "bigint" || typeof value === "function" || typeof value === "symbol") {
@@ -14,5 +14,5 @@ export function cloneAuthProfileStore(store: AuthProfileStore): AuthProfileStore
       }
       return value;
     }),
-  ) as AuthProfileStore;
+  ) as T;
 }

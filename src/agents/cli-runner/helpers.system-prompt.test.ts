@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import { buildCliAgentSystemPrompt } from "./helpers.js";
 
-vi.mock("../../tts/tts.js", () => ({
+vi.mock("../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
 }));
 
@@ -51,6 +51,17 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).toContain("No OpenClaw tool list is injected");
   });
 
+  it("describes bundled exec as synchronous node execution", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [{ name: "exec" } as never],
+      modelDisplay: "test/model",
+    });
+
+    expect(prompt).toContain("- exec: Run shell on connected node; sync; host=node");
+    expect(prompt).not.toContain("pty available");
+  });
+
   it("uses cwd, not bootstrap workspace, for CLI workspace guidance", () => {
     const prompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw-agent",
@@ -59,8 +70,52 @@ describe("buildCliAgentSystemPrompt", () => {
       modelDisplay: "test/model",
     });
 
-    expect(prompt).toContain("Your working directory is: /tmp/task-repo");
-    expect(prompt).not.toContain("Your working directory is: /tmp/openclaw-agent");
+    expect(prompt).toContain("Working directory: /tmp/task-repo");
+    expect(prompt).not.toContain("Working directory: /tmp/openclaw-agent");
+  });
+
+  it("renders the Bootstrap Pending gate for full bootstrap mode", () => {
+    // CLI-backend runs must gate the first reply on a pending BOOTSTRAP.md the
+    // same way the embedded runner does, not just inject the file as context.
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [],
+      contextFiles: [
+        {
+          path: "/tmp/openclaw/BOOTSTRAP.md",
+          content: "Figure out who you are, then delete this file.",
+        },
+      ],
+      bootstrapMode: "full",
+      modelDisplay: "test/model",
+    });
+
+    expect(prompt).toContain("## Bootstrap Pending");
+    expect(prompt).toContain("BOOTSTRAP.md below; follow before normal reply.");
+    expect(prompt).toContain("Can finish BOOTSTRAP.md here: do it.");
+    expect(prompt).toContain("First visible reply must follow BOOTSTRAP.md; no generic greeting.");
+  });
+
+  it("renders limited bootstrap guidance when the run cannot complete bootstrap", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [],
+      bootstrapMode: "limited",
+      modelDisplay: "test/model",
+    });
+
+    expect(prompt).toContain("## Bootstrap Pending");
+    expect(prompt).toContain("this run cannot safely finish full BOOTSTRAP.md");
+  });
+
+  it("omits the bootstrap gate when bootstrap mode is not provided", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [],
+      modelDisplay: "test/model",
+    });
+
+    expect(prompt).not.toContain("## Bootstrap Pending");
   });
 
   it("includes CLI-scoped plugin command guidance", () => {
@@ -107,21 +162,18 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).toContain("sessionId=session-123");
   });
 
-  it("includes Telegram rich text guidance for CLI final replies", () => {
+  it("includes Telegram channel context for CLI final replies without core rich guidance", () => {
     const prompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       tools: [],
       modelDisplay: "anthropic/claude-opus-4-8",
       runtimeChannel: "telegram",
       runtimeChatType: "direct",
-      runtimeCapabilities: ["richText"],
     });
 
-    expect(prompt).toContain("Telegram rich text is available");
-    expect(prompt).toContain("headings, tables");
-    expect(prompt).toContain("Media tags are blocks, not inline prose");
-    expect(prompt).toContain("This is not legacy MarkdownV2/parse_mode");
     expect(prompt).toContain("channel=telegram");
+    expect(prompt).not.toContain("Telegram rich ON");
+    expect(prompt).not.toContain("Telegram rich OFF");
     expect(prompt).not.toContain("### message tool");
   });
 
@@ -134,7 +186,7 @@ describe("buildCliAgentSystemPrompt", () => {
       requireExplicitMessageTarget: true,
     });
 
-    expect(prompt).toContain("include `target` and `message`; `target` is required for this turn");
-    expect(prompt).not.toContain("The target defaults to the current source channel");
+    expect(prompt).toContain("`send`: `target` + `message`; target required this turn");
+    expect(prompt).not.toContain("current source is default target");
   });
 });

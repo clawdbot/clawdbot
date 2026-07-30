@@ -1,5 +1,5 @@
 // Verifies plugin loading needed before agent harness selection.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const mocks = vi.hoisted(() => ({
@@ -27,8 +27,15 @@ vi.mock("../../plugins/activation-planner.js", () => ({
 
 describe("ensureSelectedAgentHarnessPlugin", () => {
   let ensureSelectedAgentHarnessPlugin: typeof import("./runtime-plugin.js").ensureSelectedAgentHarnessPlugin;
+  let resolveAgentHarnessRuntimeAvailability: typeof import("./runtime-plugin.js").resolveAgentHarnessRuntimeAvailability;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ ensureSelectedAgentHarnessPlugin, resolveAgentHarnessRuntimeAvailability } =
+      await import("./runtime-plugin.js"));
+  });
+
+  beforeEach(() => {
     mocks.ensurePluginRegistryLoaded.mockReset();
     mocks.resolveActivatableProviderOwnerPluginIds.mockReset();
     mocks.resolveBundledProviderCompatPluginIds.mockReset();
@@ -67,8 +74,6 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       ({ pluginIds }: { pluginIds: readonly string[] }) =>
         pluginIds.filter((pluginId) => pluginId === "memory-core"),
     );
-    vi.resetModules();
-    ({ ensureSelectedAgentHarnessPlugin } = await import("./runtime-plugin.js"));
   });
 
   it("loads Codex and the provider owner when an explicit runtime override forces the Codex harness", async () => {
@@ -94,6 +99,137 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
         scope: "all",
         workspaceDir: "/tmp/workspace",
         onlyPluginIds: ["codex", "openai", "memory-core"],
+      }),
+    );
+  });
+
+  it("reports a manifest-owned harness as statically available", () => {
+    mocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce(undefined);
+
+    expect(
+      resolveAgentHarnessRuntimeAvailability({
+        runtime: "codex",
+        provider: "openai",
+        workspaceDir: "/tmp/workspace",
+        payloadFailures: [],
+        payloadCheckedPluginIds: ["codex"],
+        selectedPluginRootDirs: new Map([["codex", "/tmp/plugins/codex"]]),
+      }),
+    ).toEqual({
+      status: "available",
+      ownerPluginIds: ["codex"],
+    });
+  });
+
+  it("reports a harness unavailable when no enabled owner plugin can activate", () => {
+    mocks.resolveManifestActivationPlan.mockReturnValueOnce({ entries: [] });
+
+    expect(
+      resolveAgentHarnessRuntimeAvailability({
+        runtime: "codex",
+        provider: "openai",
+        workspaceDir: "/tmp/workspace",
+        payloadFailures: [],
+        payloadCheckedPluginIds: [],
+        selectedPluginRootDirs: new Map(),
+      }),
+    ).toEqual({
+      status: "unavailable",
+      ownerPluginIds: [],
+      reason: "owner-plugin-not-activatable",
+      detail: 'No enabled plugin owns agent harness "codex".',
+    });
+  });
+
+  it("reports a harness unavailable when startup quarantined an owner payload", () => {
+    mocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce(undefined);
+
+    expect(
+      resolveAgentHarnessRuntimeAvailability({
+        runtime: "codex",
+        provider: "openai",
+        workspaceDir: "/tmp/workspace",
+        payloadFailures: [
+          {
+            pluginId: "codex",
+            installPath: "/tmp/plugins/codex",
+            reason: "missing-package-dir",
+          },
+        ],
+        payloadCheckedPluginIds: ["codex"],
+        selectedPluginRootDirs: new Map([["codex", "/tmp/plugins/codex"]]),
+      }),
+    ).toEqual({
+      status: "unavailable",
+      ownerPluginIds: ["codex"],
+      reason: "owner-plugin-degraded",
+      detail: 'Agent harness "codex" owner plugin "codex" is unavailable (missing-package-dir).',
+    });
+  });
+
+  it("ignores a payload failure from a stale artifact with the same plugin id", () => {
+    mocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce(undefined);
+
+    expect(
+      resolveAgentHarnessRuntimeAvailability({
+        runtime: "codex",
+        provider: "openai",
+        workspaceDir: "/tmp/workspace",
+        payloadFailures: [
+          {
+            pluginId: "codex",
+            installPath: "/tmp/plugins/stale-codex",
+            reason: "missing-package-dir",
+          },
+        ],
+        payloadCheckedPluginIds: ["codex"],
+        selectedPluginRootDirs: new Map([["codex", "/tmp/plugins/active-codex"]]),
+      }),
+    ).toEqual({
+      status: "available",
+      ownerPluginIds: ["codex"],
+    });
+  });
+
+  it("reports a selected owner unavailable when its payload was not checked", () => {
+    mocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce(undefined);
+
+    expect(
+      resolveAgentHarnessRuntimeAvailability({
+        runtime: "codex",
+        provider: "openai",
+        workspaceDir: "/tmp/workspace",
+        payloadFailures: [],
+        payloadCheckedPluginIds: [],
+        selectedPluginRootDirs: new Map([["codex", "/tmp/plugins/codex"]]),
+      }),
+    ).toEqual({
+      status: "unavailable",
+      ownerPluginIds: ["codex"],
+      reason: "owner-plugin-unverified",
+      detail: 'Agent harness "codex" owner plugin "codex" payload was not verified.',
+    });
+  });
+
+  it("loads a session-pinned Codex harness for an unrelated outer provider", async () => {
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      agentHarnessId: "codex",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(mocks.resolveManifestActivationPlan).toHaveBeenCalledWith({
+      trigger: { kind: "agentHarness", runtime: "codex" },
+      config: undefined,
+      workspaceDir: "/tmp/workspace",
+      requireExplicitManifestOwnerTrust: true,
+    });
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "all",
+        workspaceDir: "/tmp/workspace",
+        onlyPluginIds: expect.arrayContaining(["codex"]),
       }),
     );
   });
@@ -439,6 +575,28 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
           providers: {
             openai: {
               baseUrl: "https://openai-compatible.example.test/v1",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(mocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
+  });
+
+  it("keeps official OpenAI providers on embedded OpenClaw when explicitly configured", async () => {
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "openai",
+      modelId: "gpt-5.2",
+      config: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "openclaw" },
               models: [],
             },
           },

@@ -7,16 +7,7 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct LowCoverageViewSmokeTests {
-    @Test func `context menu card builds body`() {
-        let loading = ContextMenuCardView(rows: [], statusText: "Loading…", isLoading: true)
-        _ = loading.body
-
-        let empty = ContextMenuCardView(rows: [], statusText: nil, isLoading: false)
-        _ = empty.body
-
-        let withRows = ContextMenuCardView(rows: SessionRow.previewRows, statusText: nil, isLoading: false)
-        _ = withRows.body
-
+    @Test func `context root menu label builds body`() {
         let longStatus = "Gateway connection dropped; gateway likely restarted and needs a few seconds to reconnect."
         _ = ContextRootMenuLabelView(subtitle: longStatus, width: 320).body
     }
@@ -61,12 +52,15 @@ struct LowCoverageViewSmokeTests {
         AgentEventStore.shared.clear()
     }
 
-    @Test func `notify overlay presents and dismisses`() async {
+    @Test func `notify overlay keeps replacement visible`() async {
         let controller = NotifyOverlayController()
-        controller.present(title: "Hello", body: "World", autoDismissAfter: 0)
+        controller.present(title: "Hello", body: "World", autoDismissAfter: 0.05)
         controller.present(title: "Updated", body: "Again", autoDismissAfter: 0)
-        controller.dismiss()
         try? await Task.sleep(nanoseconds: 250_000_000)
+        #expect(controller.model.isVisible)
+        #expect(controller.model.title == "Updated")
+
+        controller.dismiss()
     }
 
     @Test func `talk overlay presents twice and dismisses`() async {

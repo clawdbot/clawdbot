@@ -1,16 +1,19 @@
 // Covers package dist inventory collection and validation.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import {
+  isLegacyPluginDependencyInstallStagePath,
+  LOCAL_BUILD_METADATA_DIST_PATHS,
+  PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+  writePackageDistInventory,
+  writePackageDistInventoryForPublish,
+} from "../../scripts/lib/package-dist-inventory.ts";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
-  assertNoLegacyPluginDependencyStagingDebris,
-  collectLegacyPluginDependencyStagingDebrisPaths,
-  LOCAL_BUILD_METADATA_DIST_PATHS,
   collectPackageDistInventory,
-  isLegacyPluginDependencyInstallStagePath,
   readPackageDistInventoryIfPresent,
-  writePackageDistInventory,
 } from "./package-dist-inventory.js";
 
 describe("package dist inventory", () => {
@@ -40,6 +43,28 @@ describe("package dist inventory", () => {
     });
   });
 
+  it("keeps the pending install guard outside the expected inventory", async () => {
+    await withTempDir({ prefix: "openclaw-dist-install-guard-" }, async (packageRoot) => {
+      const currentFile = path.join(packageRoot, "dist", "current.js");
+      await fs.mkdir(path.dirname(currentFile), { recursive: true });
+      await fs.writeFile(currentFile, "export {};\n", "utf8");
+
+      await expect(writePackageDistInventoryForPublish(packageRoot)).resolves.toEqual([
+        "dist/current.js",
+      ]);
+      await expect(collectPackageDistInventory(packageRoot)).resolves.toEqual([
+        "dist/current.js",
+        PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+      ]);
+      await expect(readPackageDistInventoryIfPresent(packageRoot)).resolves.toEqual([
+        "dist/current.js",
+      ]);
+      await expect(
+        fs.readFile(path.join(packageRoot, PACKAGE_INSTALL_GUARD_RELATIVE_PATH), "utf8"),
+      ).resolves.toContain("preinstall has not completed");
+    });
+  });
+
   it("keeps npm-omitted dist artifacts out of the inventory", async () => {
     await withTempDir({ prefix: "openclaw-dist-inventory-pack-" }, async (packageRoot) => {
       const packagedQaChannelRuntime = path.join(
@@ -58,13 +83,6 @@ describe("package dist inventory", () => {
       );
       const omittedQaChunk = path.join(packageRoot, "dist", "extensions", "qa-channel", "cli.js");
       const omittedQaLabChunk = path.join(packageRoot, "dist", "extensions", "qa-lab", "cli.js");
-      const omittedQaMatrixChunk = path.join(
-        packageRoot,
-        "dist",
-        "extensions",
-        "qa-matrix",
-        "index.js",
-      );
       const omittedQaLabPluginSdk = path.join(packageRoot, "dist", "plugin-sdk", "qa-lab.js");
       const omittedQaChannelPluginSdk = path.join(
         packageRoot,
@@ -107,7 +125,6 @@ describe("package dist inventory", () => {
       const omittedMap = path.join(packageRoot, "dist", "feature.runtime.js.map");
       await fs.mkdir(path.dirname(packagedQaChannelRuntime), { recursive: true });
       await fs.mkdir(path.dirname(packagedQaLabRuntime), { recursive: true });
-      await fs.mkdir(path.dirname(omittedQaMatrixChunk), { recursive: true });
       await fs.mkdir(path.dirname(omittedQaLabTypes), { recursive: true });
       await fs.mkdir(path.join(packageRoot, "dist", "plugin-sdk"), { recursive: true });
       await fs.mkdir(path.dirname(omittedDeepPluginSdkDeclaration), { recursive: true });
@@ -115,7 +132,6 @@ describe("package dist inventory", () => {
       await fs.writeFile(packagedQaLabRuntime, "export {};\n", "utf8");
       await fs.writeFile(omittedQaChunk, "export {};\n", "utf8");
       await fs.writeFile(omittedQaLabChunk, "export {};\n", "utf8");
-      await fs.writeFile(omittedQaMatrixChunk, "export {};\n", "utf8");
       await fs.writeFile(omittedQaLabPluginSdk, "export {};\n", "utf8");
       await fs.writeFile(omittedQaChannelPluginSdk, "export {};\n", "utf8");
       await fs.writeFile(omittedQaChannelProtocolPluginSdk, "export {};\n", "utf8");
@@ -123,8 +139,16 @@ describe("package dist inventory", () => {
       await fs.writeFile(omittedDeepPluginSdkDeclaration, "export {};\n", "utf8");
       await fs.writeFile(flatPluginSdkDeclaration, "export {};\n", "utf8");
       await fs.writeFile(omittedQaRuntimeChunk, "export {};\n", "utf8");
-      await fs.writeFile(omittedBuildStamp, "{}\n", "utf8");
-      await fs.writeFile(omittedRuntimePostBuildStamp, "{}\n", "utf8");
+      await fs.writeFile(
+        expectDefined(omittedBuildStamp, "omittedBuildStamp test invariant"),
+        "{}\n",
+        "utf8",
+      );
+      await fs.writeFile(
+        expectDefined(omittedRuntimePostBuildStamp, "omittedRuntimePostBuildStamp test invariant"),
+        "{}\n",
+        "utf8",
+      );
       await fs.writeFile(omittedMap, "{}", "utf8");
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toStrictEqual([
@@ -160,14 +184,17 @@ describe("package dist inventory", () => {
       const omittedRuntimeChunk = path.join(packageRoot, "dist", "qa-runtime-AbC123.js");
       const omittedTopLevelMap = path.join(packageRoot, "dist", "runtime.js.map");
       const omittedMap = path.join(packageRoot, "dist", "plugin-sdk", "runtime.js.map");
+      const omittedAppBundle = path.join(packageRoot, "dist", "OpenClaw.app");
 
       await fs.mkdir(path.dirname(packagedRuntime), { recursive: true });
       await fs.mkdir(path.dirname(omittedNestedHelper), { recursive: true });
+      await fs.mkdir(omittedAppBundle, { recursive: true });
       await fs.writeFile(
         path.join(packageRoot, "package.json"),
         JSON.stringify({
           files: [
             "dist/",
+            "!dist/OpenClaw.app/**",
             "!dist/plugin-sdk/plugin-test-runtime.js",
             "!dist/plugin-sdk/plugin-test-runtime.d.ts",
             "!dist/plugin-sdk/src/test-utils/**",
@@ -186,6 +213,7 @@ describe("package dist inventory", () => {
       await fs.writeFile(omittedRuntimeChunk, "export {};\n", "utf8");
       await fs.writeFile(omittedTopLevelMap, "{}", "utf8");
       await fs.writeFile(omittedMap, "{}", "utf8");
+      await fs.symlink(packageRoot, path.join(omittedAppBundle, "Autoupdate"));
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/plugin-sdk/runtime.js",
@@ -366,47 +394,6 @@ describe("package dist inventory", () => {
     });
   });
 
-  it("reports runtime-created install staging dirs during installed dist verification", async () => {
-    await withTempDir({ prefix: "openclaw-dist-inventory-stage-" }, async (packageRoot) => {
-      const realFile = path.join(packageRoot, "dist", "real-AbC123.js");
-      await fs.mkdir(path.dirname(realFile), { recursive: true });
-      await fs.writeFile(realFile, "export {};\n", "utf8");
-      await writePackageDistInventory(packageRoot);
-
-      const bareStageFile = path.join(
-        packageRoot,
-        "dist",
-        "extensions",
-        "brave",
-        ".openclaw-install-stage",
-        "node_modules",
-        "typebox",
-        "build",
-        "compile",
-        "code.mjs",
-      );
-      const suffixedStageFile = path.join(
-        packageRoot,
-        "dist",
-        "extensions",
-        "browser",
-        ".openclaw-install-stage-AbC123",
-        "node_modules",
-        "playwright-core",
-        "package.json",
-      );
-      await fs.mkdir(path.dirname(bareStageFile), { recursive: true });
-      await fs.writeFile(bareStageFile, "// staged\n", "utf8");
-      await fs.mkdir(path.dirname(suffixedStageFile), { recursive: true });
-      await fs.writeFile(suffixedStageFile, "{}", "utf8");
-
-      await expect(collectLegacyPluginDependencyStagingDebrisPaths(packageRoot)).resolves.toEqual([
-        "dist/extensions/brave/.openclaw-install-stage",
-        "dist/extensions/browser/.openclaw-install-stage-AbC123",
-      ]);
-    });
-  });
-
   it("matches install-stage paths case-insensitively across path segments", () => {
     expect(
       isLegacyPluginDependencyInstallStagePath(
@@ -433,101 +420,39 @@ describe("package dist inventory", () => {
     ).toBe(false);
   });
 
-  it("rejects pre-populated install-stage debris at publish time", async () => {
-    await withTempDir({ prefix: "openclaw-dist-inventory-stage-publish-" }, async (packageRoot) => {
-      const seededStagePackageJson = path.join(
-        packageRoot,
-        "dist",
-        "extensions",
-        "evil",
-        ".openclaw-install-stage",
-        "package.json",
-      );
-      const suffixedSeed = path.join(
-        packageRoot,
-        "dist",
-        "extensions",
-        "browser",
-        ".openclaw-install-stage-AbC123",
-        "node_modules",
-        "playwright-core",
-        "package.json",
-      );
-      await fs.mkdir(path.dirname(seededStagePackageJson), { recursive: true });
-      await fs.writeFile(seededStagePackageJson, "{}", "utf8");
-      await fs.mkdir(path.dirname(suffixedSeed), { recursive: true });
-      await fs.writeFile(suffixedSeed, "{}", "utf8");
+  it("rejects pre-populated install-stage debris before writing an inventory", async () => {
+    await withTempDir({ prefix: "openclaw-dist-inventory-stage-" }, async (packageRoot) => {
+      for (const relativePath of [
+        "dist/extensions/brave/.openclaw-install-stage/package.json",
+        "dist/extensions/browser/.openclaw-install-stage-AbC123/node_modules/playwright-core/package.json",
+      ]) {
+        const filePath = path.join(packageRoot, relativePath);
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, "{}", "utf8");
+      }
 
-      await expect(collectLegacyPluginDependencyStagingDebrisPaths(packageRoot)).resolves.toEqual([
-        "dist/extensions/browser/.openclaw-install-stage-AbC123",
-        "dist/extensions/evil/.openclaw-install-stage",
-      ]);
-      await expect(assertNoLegacyPluginDependencyStagingDebris(packageRoot)).rejects.toThrow(
-        /unexpected legacy plugin dependency staging debris/,
-      );
       await expect(writePackageDistInventory(packageRoot)).rejects.toThrow(
-        /unexpected legacy plugin dependency staging debris/,
+        /unexpected legacy plugin dependency staging debris/u,
       );
     });
   });
 
-  it("rejects mixed-case install-stage debris on case-sensitive release builders", async () => {
-    await withTempDir(
-      { prefix: "openclaw-dist-inventory-stage-extensions-case-" },
-      async (packageRoot) => {
-        const mixedCaseStage = path.join(
-          packageRoot,
-          "dist",
-          "Extensions",
-          "evil",
-          ".OpenClaw-Install-Stage",
-          "package.json",
-        );
-        await fs.mkdir(path.dirname(mixedCaseStage), { recursive: true });
-        await fs.writeFile(mixedCaseStage, "{}", "utf8");
-
-        await expect(collectLegacyPluginDependencyStagingDebrisPaths(packageRoot)).resolves.toEqual(
-          ["dist/Extensions/evil/.OpenClaw-Install-Stage"],
-        );
-        await expect(writePackageDistInventory(packageRoot)).rejects.toThrow(
-          /unexpected legacy plugin dependency staging debris/,
-        );
-      },
-    );
-
-    await withTempDir(
-      { prefix: "openclaw-dist-inventory-stage-root-case-" },
-      async (packageRoot) => {
-        const mixedCaseStage = path.join(
-          packageRoot,
-          "Dist",
-          "Extensions",
-          "browser",
-          ".OPENCLAW-INSTALL-STAGE-AbC123",
-          "package.json",
-        );
-        await fs.mkdir(path.dirname(mixedCaseStage), { recursive: true });
-        await fs.writeFile(mixedCaseStage, "{}", "utf8");
-
-        await expect(collectLegacyPluginDependencyStagingDebrisPaths(packageRoot)).resolves.toEqual(
-          ["Dist/Extensions/browser/.OPENCLAW-INSTALL-STAGE-AbC123"],
-        );
-        await expect(writePackageDistInventory(packageRoot)).rejects.toThrow(
-          /unexpected legacy plugin dependency staging debris/,
-        );
-      },
-    );
-  });
-
-  it("treats a missing dist/extensions tree as no staging debris", async () => {
-    await withTempDir({ prefix: "openclaw-dist-inventory-no-extensions-" }, async (packageRoot) => {
-      await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-      await expect(collectLegacyPluginDependencyStagingDebrisPaths(packageRoot)).resolves.toEqual(
-        [],
+  it("rejects mixed-case install-stage debris on case-sensitive builders", async () => {
+    await withTempDir({ prefix: "openclaw-dist-inventory-stage-case-" }, async (packageRoot) => {
+      const stagedFile = path.join(
+        packageRoot,
+        "Dist",
+        "Extensions",
+        "browser",
+        ".OPENCLAW-INSTALL-STAGE-AbC123",
+        "package.json",
       );
-      await expect(
-        assertNoLegacyPluginDependencyStagingDebris(packageRoot),
-      ).resolves.toBeUndefined();
+      await fs.mkdir(path.dirname(stagedFile), { recursive: true });
+      await fs.writeFile(stagedFile, "{}", "utf8");
+
+      await expect(writePackageDistInventory(packageRoot)).rejects.toThrow(
+        /unexpected legacy plugin dependency staging debris/u,
+      );
     });
   });
 

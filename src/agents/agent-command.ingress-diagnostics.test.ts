@@ -63,6 +63,63 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+describe("resolveAgentRunLifecycleEndLogLevel", () => {
+  it("logs successful stop and tool-use metadata at info", () => {
+    expect(
+      testing.resolveAgentRunLifecycleEndLogLevel({
+        aborted: false,
+        stopReason: "stop",
+      }),
+    ).toBe("info");
+    expect(
+      testing.resolveAgentRunLifecycleEndLogLevel({
+        aborted: false,
+        stopReason: "toolUse",
+      }),
+    ).toBe("info");
+  });
+
+  it("does not log ordinary end-turn completions", () => {
+    expect(
+      testing.resolveAgentRunLifecycleEndLogLevel({
+        aborted: false,
+        stopReason: "end_turn",
+      }),
+    ).toBeUndefined();
+    expect(testing.resolveAgentRunLifecycleEndLogLevel({ aborted: false })).toBeUndefined();
+  });
+
+  it("keeps timeout metadata out of error severity", () => {
+    expect(
+      testing.resolveAgentRunLifecycleEndLogLevel({
+        aborted: true,
+        stopReason: "timeout",
+      }),
+    ).toBe("warn");
+    expect(
+      testing.resolveAgentRunLifecycleEndLogLevel({
+        stopReason: "stop",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      }),
+    ).toBe("warn");
+  });
+
+  it("logs cancelled and failed endings at error", () => {
+    expect(
+      testing.resolveAgentRunLifecycleEndLogLevel({
+        aborted: true,
+        stopReason: "stop",
+      }),
+    ).toBe("error");
+    expect(
+      testing.resolveAgentRunLifecycleEndLogLevel({
+        stopReason: "error",
+      }),
+    ).toBe("error");
+  });
+});
+
 function makeResult(overrides?: Record<string, unknown>) {
   return {
     payloads: [{ text: "hello", mediaUrl: "" }],

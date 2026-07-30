@@ -10,6 +10,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statfsSync,
   statSync,
@@ -18,10 +19,28 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, extname, isAbsolute, relative, resolve } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
+import {
+  canonicalProviderName,
+  isProviderAdvertised,
+  parseProvidersFromHelp,
+} from "./crabbox-wrapper-providers.mjs";
+import {
+  prepareTestboxLeaseFreshness,
+  recordTestboxLeaseFreshness,
+} from "./testbox-lease-freshness.mjs";
 import { resolvePathEnvKey, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const CRABBOX_METADATA_PROBE_TIMEOUT_MS = 5_000;
+const MAX_TIMING_JSON_LINE_CHARS = 1024 * 1024;
+const REMOTE_CHANGED_GATE_BUNDLE_FILE = ".openclaw-crabbox-changed-gate.bundle";
+// A cold Crabbox (first call after an upgrade, or one on a loaded machine) can
+// exceed the snappy default probe timeout while it renders `run --help` or does
+// first-run init. Retry the metadata probes once with this generous timeout so a
+// single slow probe does not hard-fail the wrapper and block all remote validation.
+const CRABBOX_METADATA_PROBE_RETRY_TIMEOUT_MS = 20_000;
 const ignoreRepoBinary = process.env.OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY === "1";
 const repoLocal = ignoreRepoBinary ? null : resolveCrabboxBinary(process.env, process.platform);
 const pathLocal = resolvePathBinary("crabbox", process.env, process.platform);
@@ -354,14 +373,18 @@ function buildBatchCommandLine(command, commandArgs) {
   return `"${[escapedCommand, ...escapedArgs].join(" ")}"`;
 }
 
-function checkedOutput(command, commandArgs) {
+function checkedOutput(
+  command,
+  commandArgs,
+  timeoutMs = resolveMetadataProbeTimeoutMs(process.env),
+) {
   const invocation = spawnInvocation(command, commandArgs, process.env, process.platform);
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: repoRoot,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-    timeout: 5_000,
+    timeout: timeoutMs,
     killSignal: "SIGKILL",
   });
   const timedOut = result.error?.name === "Error" && result.signal === "SIGKILL";
@@ -370,6 +393,19 @@ function checkedOutput(command, commandArgs) {
     text: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim(),
     stdout: (result.stdout ?? "").trim(),
   };
+}
+
+// Probe Crabbox metadata (`--version` / `run --help`) with one generous retry.
+// A cold Crabbox can be SIGKILLed by the snappy default timeout or emit nothing
+// on the first call, then be instant and clean on the next. Retrying keeps the
+// warm path fast (one ~instant probe) while stopping a single slow probe from
+// tripping the sanity/provider-list guards and blocking all remote validation.
+function probeCrabboxMetadata(command, commandArgs) {
+  const first = checkedOutput(command, commandArgs);
+  if (first.status === 0 && first.text.length > 0) {
+    return first;
+  }
+  return checkedOutput(command, commandArgs, CRABBOX_METADATA_PROBE_RETRY_TIMEOUT_MS);
 }
 
 function parseCrabboxVersion(value) {
@@ -427,10 +463,12 @@ function satisfiesMinimumCrabboxVersion(version, minimum) {
 
 function gitOutput(commandArgs) {
   const gitBinary = resolvePathBinary("git", process.env, process.platform) ?? "git";
-  const invocation = spawnInvocation(gitBinary, commandArgs, process.env, process.platform);
+  const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null" };
+  const invocation = spawnInvocation(gitBinary, commandArgs, gitEnv, process.platform);
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: repoRoot,
     encoding: "utf8",
+    env: gitEnv,
     stdio: ["ignore", "pipe", "pipe"],
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   });
@@ -659,7 +697,7 @@ function shouldRequireBrokeredAws(commandArgs, providerName) {
   if (process.env.OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS === "1") {
     return false;
   }
-  const canonicalProvider = providerAliases.get(providerName) ?? providerName;
+  const canonicalProvider = canonicalProviderName(providerName);
   if (canonicalProvider !== "aws") {
     return false;
   }
@@ -902,6 +940,29 @@ function blacksmithTestboxPrivateKeyPath(id) {
   return resolve(crabboxConfigDir(), "testboxes", id, "id_ed25519");
 }
 
+// Crabbox claims bind raw Testbox ids to one repo before remote execution.
+// Check the same sidecar so a dependency exit bug cannot make refusal green.
+function blacksmithTestboxClaimPath(id) {
+  return resolve(blacksmithTestboxClaimsDir(), `${id}.json`);
+}
+
+function blacksmithTestboxClaimsDir() {
+  const configuredStateRoot = process.env.XDG_STATE_HOME?.trim();
+  const stateDir = configuredStateRoot
+    ? resolve(configuredStateRoot, "crabbox")
+    : resolve(crabboxConfigDir(), "state");
+  return resolve(stateDir, "claims");
+}
+
+function blacksmithTestboxClaimRepoRoot(id) {
+  const claimPath = blacksmithTestboxClaimPath(id);
+  if (!pathExists(claimPath)) {
+    return "";
+  }
+  const claim = JSON.parse(readFileSync(claimPath, "utf8"));
+  return typeof claim.repoRoot === "string" ? claim.repoRoot : "";
+}
+
 function enforceCrabboxOwnedBlacksmithLease(commandArgs) {
   if (commandArgs[0] !== "run") {
     return;
@@ -915,18 +976,111 @@ function enforceCrabboxOwnedBlacksmithLease(commandArgs) {
   }
 
   const keyPath = blacksmithTestboxPrivateKeyPath(id);
-  if (pathExists(keyPath)) {
+  if (!pathExists(keyPath)) {
+    console.error(
+      [
+        `[crabbox] provider=blacksmith-testbox --id ${id} has no Crabbox SSH key at ${userDisplayPath(keyPath)}.`,
+        "[crabbox] create reusable Testboxes through Crabbox before reusing them: node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --idle-timeout 90m",
+        "[crabbox] direct `blacksmith testbox warmup` leases can be used with `blacksmith testbox run`, but Crabbox cannot sync or run them by id.",
+      ].join("\n"),
+    );
+    process.exit(2);
+  }
+
+  const claimRepoRoot = blacksmithTestboxClaimRepoRoot(id);
+  if (claimRepoRoot && claimRepoRoot !== repoRoot && !hasOption(commandArgs, "--reclaim")) {
+    console.error(
+      `[crabbox] lease ${id} is claimed by repo ${claimRepoRoot}; use --reclaim to claim it for ${repoRoot}`,
+    );
+    process.exit(2);
+  }
+}
+
+function restoreTemporaryBlacksmithTestboxClaimPath(claimPath) {
+  const original = readFileSync(claimPath, "utf8");
+  const claim = JSON.parse(original);
+  if (!claim || typeof claim !== "object" || claim.repoRoot !== childCwd) {
+    return;
+  }
+  claim.repoRoot = repoRoot;
+  const temporaryPath = `${claimPath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    writeFileSync(temporaryPath, `${JSON.stringify(claim)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    if (readFileSync(claimPath, "utf8") !== original) {
+      return;
+    }
+    renameSync(temporaryPath, claimPath);
+  } finally {
+    rmSync(temporaryPath, { force: true });
+  }
+}
+
+function restoreTemporaryBlacksmithTestboxClaim(commandArgs, capturedLeaseId) {
+  if (childCwd === repoRoot) {
     return;
   }
 
-  console.error(
-    [
-      `[crabbox] provider=blacksmith-testbox --id ${id} has no Crabbox SSH key at ${userDisplayPath(keyPath)}.`,
-      "[crabbox] create reusable Testboxes through Crabbox before reusing them: node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --idle-timeout 90m",
-      "[crabbox] direct `blacksmith testbox warmup` leases can be used with `blacksmith testbox run`, but Crabbox cannot sync or run them by id.",
-    ].join("\n"),
-  );
-  process.exit(2);
+  const explicitLeaseId = commandArgs[0] === "run" ? optionValue(commandArgs, "--id") : "";
+  const exactLeaseId = explicitLeaseId || capturedLeaseId;
+  const canCreateRetainedLease =
+    commandArgs[0] === "warmup" ||
+    (commandArgs[0] === "run" &&
+      (hasOption(commandArgs, "--keep") || hasOption(commandArgs, "--keep-on-failure")));
+  let claimPaths = [];
+  if (exactLeaseId) {
+    claimPaths = [blacksmithTestboxClaimPath(exactLeaseId)];
+  } else if (canCreateRetainedLease) {
+    try {
+      const claimsDir = blacksmithTestboxClaimsDir();
+      if (pathExists(claimsDir)) {
+        claimPaths = readdirSync(claimsDir)
+          .filter((entry) => entry.endsWith(".json"))
+          .map((entry) => resolve(claimsDir, entry));
+      }
+    } catch (error) {
+      console.error(
+        `[crabbox] warning: failed to inspect temporary Testbox claims: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return;
+    }
+  } else {
+    return;
+  }
+
+  for (const claimPath of claimPaths) {
+    if (!pathExists(claimPath)) {
+      continue;
+    }
+    try {
+      restoreTemporaryBlacksmithTestboxClaimPath(claimPath);
+    } catch (error) {
+      console.error(
+        `[crabbox] warning: failed to restore temporary Testbox claim: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+}
+
+function observeBlacksmithTimingJSONLine(line) {
+  const value = line.trim();
+  if (!value.startsWith("{") || !value.endsWith("}")) {
+    return;
+  }
+  try {
+    const report = JSON.parse(value);
+    if (
+      canonicalProviderName(report?.provider) === "blacksmith-testbox" &&
+      typeof report.leaseId === "string" &&
+      report.leaseId.startsWith("tbx_")
+    ) {
+      capturedBlacksmithLeaseId = report.leaseId;
+    }
+  } catch {
+    // Human stderr may contain brace-delimited non-JSON lines.
+  }
 }
 
 function preserveTemporaryCrabboxRuns() {
@@ -1238,6 +1392,48 @@ function isChangedGateCommand(commandArgs) {
   return isChangedGateCommandWords(words, {
     canShimIgnoreEnvironment: shellWordBasename(commandArgs[0]) === "env",
   });
+}
+
+function changedGateBases(commandArgs) {
+  const candidates =
+    commandArgs.length === 1
+      ? shellCommandWordCandidates(commandArgs[0])
+      : [normalizedCommandWords(commandArgs)];
+  const bases = [];
+  for (const words of candidates) {
+    bases.push(
+      ...changedGateBasesFromWords(words, {
+        canShimIgnoreEnvironment: shellWordBasename(commandArgs[0]) === "env",
+      }),
+    );
+  }
+  return bases;
+}
+
+function changedGateBasesFromWords(wordsInput, options = {}) {
+  const words = normalizeExecutableWords(wordsInput, options);
+  if (isChangedGateWords(words)) {
+    for (let index = 0; index < words.length; index += 1) {
+      const word = words[index] ?? "";
+      if (word === "--base") {
+        return [words[index + 1] || "origin/main"];
+      }
+      if (word.startsWith("--base=")) {
+        return [word.slice("--base=".length) || "origin/main"];
+      }
+    }
+    return ["origin/main"];
+  }
+
+  const inlineCommand = shellInlineCommand(words);
+  if (!inlineCommand) {
+    return [];
+  }
+  const bases = [];
+  for (const candidateWords of shellCommandWordCandidates(inlineCommand)) {
+    bases.push(...changedGateBasesFromWords(candidateWords));
+  }
+  return bases;
 }
 
 function isChangedGateCommandWords(wordsInput, options = {}) {
@@ -1940,26 +2136,70 @@ function skipUntilNewline(command, index) {
   return newlineIndex < 0 ? command.length - 1 : newlineIndex;
 }
 
-function mergeBaseForChangedGate() {
-  const base = gitOutput(["merge-base", "origin/main", "HEAD"]);
-  return base.status === 0 && base.stdout ? base.stdout : "origin/main";
+function changedGateBaseForCommand(commandArgs) {
+  const requestedBases = [...new Set(changedGateBases(commandArgs))];
+  if (requestedBases.length > 1) {
+    throw new Error(
+      `remote changed-gate sync requires one base; received: ${requestedBases.join(", ")}`,
+    );
+  }
+  const explicitBase = requestedBases[0] ?? "origin/main";
+  const remoteAlias = remoteAliasForChangedGateBase(explicitBase);
+  if (explicitBase !== "origin/main" && !remoteAlias) {
+    throw new Error(
+      `remote changed-gate sync requires an exact origin/<branch> base; received: ${explicitBase}`,
+    );
+  }
+  // Only exact remote-tracking refs can be recreated under their original name
+  // after the remote raw-sync checkout initializes fresh Git metadata.
+  const requestedBase = explicitBase;
+  const base = gitOutput(["merge-base", requestedBase, "HEAD"]);
+  if (base.status === 0 && base.stdout) {
+    return {
+      remoteAlias,
+      resolvedBase: base.stdout,
+    };
+  }
+  if (requestedBase !== "origin/main") {
+    throw new Error(`could not resolve explicit changed-gate base: ${requestedBase}`);
+  }
+  return { remoteAlias: "", resolvedBase: "origin/main" };
 }
 
-function remoteGitBootstrapForChangedGate(changedGateBase) {
+function remoteAliasForChangedGateBase(base) {
+  if (base === "origin/main" || !base.startsWith("origin/")) {
+    return "";
+  }
+  const alias = `refs/remotes/${base}`;
+  return gitOutput(["check-ref-format", alias]).status === 0 ? alias : "";
+}
+
+function remoteGitBootstrapForChangedGate(changedGateBase, changedGateAlias) {
   const quotedBase = shellQuote(changedGateBase);
+  const quotedAlias = shellQuote(changedGateAlias);
+  const quotedBundleFile = shellQuote(REMOTE_CHANGED_GATE_BUNDLE_FILE);
   return [
-    "openclaw_changed_gate_base=${OPENCLAW_CHANGED_GATE_BASE:-" + quotedBase + "};",
+    `openclaw_changed_gate_base=${quotedBase};`,
+    `openclaw_changed_gate_alias=${quotedAlias};`,
     'if ! command -v git >/dev/null 2>&1; then echo "git is required for OpenClaw remote changed-gate sync" >&2; exit 2; fi;',
-    'openclaw_changed_gate_remote_base="$(git rev-parse --verify refs/remotes/origin/main 2>/dev/null || true)";',
-    'if ! git status --short >/dev/null 2>&1 || [ "$openclaw_changed_gate_remote_base" != "$openclaw_changed_gate_base" ]; then',
-    "rm -rf .git;",
-    "git init -q;",
-    "git remote add origin https://github.com/openclaw/openclaw.git 2>/dev/null || git remote set-url origin https://github.com/openclaw/openclaw.git;",
-    'git fetch -q --depth=1 origin "$openclaw_changed_gate_base:refs/remotes/origin/main";',
-    "git reset --mixed --quiet refs/remotes/origin/main;",
-    "git add -A;",
-    "if ! git diff --cached --quiet; then git -c user.name=OpenClaw -c user.email=ci@openclaw.local commit -q --no-gpg-sign -m remote-changed-gate-tree; fi;",
-    "fi",
+    `openclaw_changed_gate_bundle=${quotedBundleFile};`,
+    'if [ ! -f "$openclaw_changed_gate_bundle" ]; then echo "missing changed-gate bundle: $openclaw_changed_gate_bundle" >&2; exit 2; fi;',
+    'openclaw_changed_gate_bundle_tmp="$(mktemp /tmp/openclaw-changed-gate.XXXXXX)" || exit 2;',
+    "trap 'rm -f \"$openclaw_changed_gate_bundle_tmp\"' EXIT HUP INT TERM;",
+    'cp "$openclaw_changed_gate_bundle" "$openclaw_changed_gate_bundle_tmp" || exit 2;',
+    'rm -rf -- "$openclaw_changed_gate_bundle" || exit 2;',
+    "rm -rf .git || exit 2;",
+    "git init -q || exit 2;",
+    "git remote add origin https://github.com/openclaw/openclaw.git 2>/dev/null || git remote set-url origin https://github.com/openclaw/openclaw.git || exit 2;",
+    'git fetch -q --depth=2 origin "$openclaw_changed_gate_base:refs/remotes/origin/main" || exit 2;',
+    'if [ -n "$openclaw_changed_gate_alias" ]; then git update-ref "$openclaw_changed_gate_alias" refs/remotes/origin/main || exit 2; fi;',
+    'if [ ! -f "$openclaw_changed_gate_bundle_tmp" ]; then echo "changed-gate bundle disappeared before import" >&2; exit 2; fi;',
+    "openclaw_changed_gate_target=refs/remotes/origin/main;",
+    'if [ -s "$openclaw_changed_gate_bundle_tmp" ]; then git fetch -q "$openclaw_changed_gate_bundle_tmp" HEAD:refs/heads/openclaw-changed-gate-tree || exit 2; openclaw_changed_gate_tree="$(git rev-parse refs/heads/openclaw-changed-gate-tree^{tree})" || exit 2; openclaw_changed_gate_head="$(git -c user.name=OpenClaw -c user.email=ci@openclaw.local commit-tree "$openclaw_changed_gate_tree" -p refs/remotes/origin/main -m remote-changed-gate-tree)" || exit 2; git update-ref refs/heads/openclaw-changed-gate-head "$openclaw_changed_gate_head" || exit 2; openclaw_changed_gate_target=refs/heads/openclaw-changed-gate-head; fi;',
+    'rm -f "$openclaw_changed_gate_bundle_tmp" || exit 2;',
+    "trap - EXIT HUP INT TERM;",
+    'git reset --hard --quiet "$openclaw_changed_gate_target" || exit 2;',
+    "git clean -fd -q || exit 2",
   ].join(" ");
 }
 
@@ -2056,7 +2296,7 @@ function isAwsMacosRemoteTarget(commandArgs, providerName) {
 }
 
 function isBrokeredWsl2RemoteTarget(commandArgs, providerName) {
-  const canonicalProvider = providerAliases.get(providerName) ?? providerName;
+  const canonicalProvider = canonicalProviderName(providerName);
   return (
     commandArgs[0] === "run" &&
     (canonicalProvider === "aws" || canonicalProvider === "azure") &&
@@ -2120,7 +2360,7 @@ function injectRemoteWindowsHydratedNodeModulesBootstrap(commandArgs, providerNa
   return normalizedArgs;
 }
 
-function injectRemoteChangedGateGitBootstrap(commandArgs, changedGateBase) {
+function injectRemoteChangedGateGitBootstrap(commandArgs, changedGateBase, changedGateAlias) {
   if (!changedGateBase || commandArgs[0] !== "run" || isWindowsRemoteTarget(commandArgs)) {
     return commandArgs;
   }
@@ -2136,7 +2376,7 @@ function injectRemoteChangedGateGitBootstrap(commandArgs, changedGateBase) {
     hasOption(normalizedArgs, "--shell") && remoteCommand.length === 1
       ? remoteCommand[0]
       : shellJoin(remoteCommand);
-  const shellCommand = `${remoteGitBootstrapForChangedGate(changedGateBase)} && ${originalShellCommand}`;
+  const shellCommand = `${remoteGitBootstrapForChangedGate(changedGateBase, changedGateAlias)} && ${originalShellCommand}`;
 
   if (!hasOption(normalizedArgs, "--shell")) {
     normalizedArgs.splice(optionEnd, 0, "--shell");
@@ -2905,7 +3145,8 @@ function isSparseCheckout() {
 }
 
 function isWorktreeClean() {
-  return gitOutput(["status", "--porcelain=v1"]).stdout === "";
+  const status = gitOutput(["status", "--porcelain=v1"]);
+  return status.status === 0 && status.stdout === "";
 }
 
 function shouldUseFullCheckoutForCleanRemoteSync(commandArgs, _providerName) {
@@ -2998,6 +3239,7 @@ function prepareFullCheckoutForSync(options = {}) {
   assertFullCheckoutSyncDisk(syncRoot);
   const dir = mkdtempSync(resolve(syncRoot, "openclaw-crabbox-sync-"));
   let active = false;
+  let resolvedChangedGateBase = options.changedGateBase ?? "";
 
   function create() {
     const add = gitOutput(["worktree", "add", "--detach", dir, "HEAD"]);
@@ -3015,11 +3257,82 @@ function prepareFullCheckoutForSync(options = {}) {
     }
 
     if (options.changedGateBase) {
+      const bundlePath = resolve(dir, REMOTE_CHANGED_GATE_BUNDLE_FILE);
+      let bundleTempDir;
+      try {
+        bundleTempDir = mkdtempSync(resolve(syncRoot, "openclaw-crabbox-bundle-"));
+        const bundleTempPath = resolve(bundleTempDir, "changed-gate.bundle");
+        const head = gitOutput(["-C", dir, "rev-parse", "HEAD"]);
+        const base = gitOutput(["-C", dir, "rev-parse", options.changedGateBase]);
+        if (head.status !== 0 || base.status !== 0 || !head.stdout || !base.stdout) {
+          throw new Error(`git rev-parse failed: ${head.text || base.text}`);
+        }
+        resolvedChangedGateBase = base.stdout;
+        if (head.stdout === base.stdout) {
+          writeFileSync(bundleTempPath, "", "utf8");
+        } else {
+          const headTree = gitOutput(["-C", dir, "rev-parse", "HEAD^{tree}"]);
+          if (headTree.status !== 0 || !headTree.stdout) {
+            throw new Error(headTree.text || "git rev-parse HEAD tree failed");
+          }
+          // A parentless carrier makes the bundle self-contained while sending
+          // only the final tree. The remote attaches the fetched base as parent.
+          const transportCommit = gitOutput([
+            "-C",
+            dir,
+            "-c",
+            "user.name=OpenClaw",
+            "-c",
+            "user.email=ci@openclaw.local",
+            "commit-tree",
+            headTree.stdout,
+            "-m",
+            "remote-changed-gate-tree",
+          ]);
+          if (transportCommit.status !== 0 || !transportCommit.stdout) {
+            throw new Error(transportCommit.text || "git commit-tree failed");
+          }
+          const updateHead = gitOutput(["-C", dir, "update-ref", "HEAD", transportCommit.stdout]);
+          if (updateHead.status !== 0) {
+            throw new Error(updateHead.text || "git update-ref HEAD failed");
+          }
+          const bundle = gitOutput(["-C", dir, "bundle", "create", bundleTempPath, "HEAD"]);
+          if (bundle.status !== 0) {
+            throw new Error(bundle.text || `git bundle exited with status ${bundle.status}`);
+          }
+        }
+        // HEAD controls this checkout path and may make it a symlink. Remove the
+        // entry, then atomically install the private temp file without following it.
+        rmSync(bundlePath, { recursive: true, force: true });
+        renameSync(bundleTempPath, bundlePath);
+      } catch (error) {
+        cleanupFullCheckout(dir, active);
+        active = false;
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`git bundle for changed-gate sync failed: ${message}`, { cause: error });
+      } finally {
+        if (bundleTempDir) {
+          rmSync(bundleTempDir, { recursive: true, force: true });
+        }
+      }
       const reset = gitOutput(["-C", dir, "reset", "--mixed", "--quiet", options.changedGateBase]);
       if (reset.status !== 0) {
         cleanupFullCheckout(dir, active);
         active = false;
         throw new Error(`git reset for changed-gate sync failed: ${reset.text}`);
+      }
+      const stageBundle = gitOutput([
+        "-C",
+        dir,
+        "add",
+        "-f",
+        "--",
+        REMOTE_CHANGED_GATE_BUNDLE_FILE,
+      ]);
+      if (stageBundle.status !== 0) {
+        cleanupFullCheckout(dir, active);
+        active = false;
+        throw new Error(`git add for changed-gate bundle failed: ${stageBundle.text}`);
       }
     }
   }
@@ -3028,7 +3341,7 @@ function prepareFullCheckoutForSync(options = {}) {
 
   return {
     dir,
-    changedGateBase: options.changedGateBase ?? "",
+    changedGateBase: resolvedChangedGateBase,
     restoreIfMissing() {
       try {
         if (statSync(dir).isDirectory()) {
@@ -3149,101 +3462,29 @@ function injectFullCheckoutLeaseReclaim(commandArgs) {
   return normalizedArgs;
 }
 
-const version = checkedOutput(binary, ["--version"]);
-const help = checkedOutput(binary, ["run", "--help"]);
-const providerAliases = new Map([
-  ["blacksmith", "blacksmith-testbox"],
-  ["cf", "cloudflare"],
-  ["container", "local-container"],
-  ["docker", "local-container"],
-  ["exe", "exe-dev"],
-  ["exedev", "exe-dev"],
-  ["google", "gcp"],
-  ["google-cloud", "gcp"],
-  ["local-docker", "local-container"],
-  ["namespace", "namespace-devbox"],
-  ["namespace-devboxes", "namespace-devbox"],
-  ["rail", "railway"],
-  ["railwayapp", "railway"],
-  ["run-pod", "runpod"],
-  ["runpodio", "runpod"],
-  ["sem", "semaphore"],
-  ["static", "ssh"],
-  ["static-ssh", "ssh"],
-  ["tensorlake-sbx", "tensorlake"],
-  ["tl", "tensorlake"],
-]);
-// Crabbox providerHelpAll can omit Tensorlake even when the binary accepts it.
-const providerHelpOmissions = new Set(["tensorlake"]);
-
-function addProviderNames(names, text) {
-  for (const name of text
-    .replace(/\s+\(default\b.*$/u, "")
-    .split(/\s*(?:,|\||\bor\b)\s*/u)
-    .map((s) => s.trim())
-    .filter(Boolean)) {
-    if (/^[a-z0-9][a-z0-9-]*$/u.test(name)) {
-      names.add(name);
-    }
+function injectRemoteTestboxCi(commandArgs, providerName) {
+  if (commandArgs[0] !== "run" || canonicalProviderName(providerName) !== "blacksmith-testbox") {
+    return commandArgs;
   }
+  const normalizedArgs = [...commandArgs];
+  const { start } = runCommandBounds(normalizedArgs);
+  if (start < 0) {
+    return normalizedArgs;
+  }
+  if (hasOption(normalizedArgs, "--shell")) {
+    normalizedArgs[start] = `export CI=true; ${normalizedArgs[start]}`;
+  } else {
+    normalizedArgs.splice(start, 0, "env", "CI=true");
+  }
+  return normalizedArgs;
 }
 
-function providerListContinuation(line, previousText) {
-  const match = line.match(
-    /^\s*((?:or\s+)?[a-z0-9][a-z0-9-]*(?:\s*(?:,|\||\bor\b)\s*(?:or\s+)?[a-z0-9][a-z0-9-]*)*\s*(?:,|\|)?)(?:\s+\(default\b.*)?\s*$/u,
-  );
-  if (!match) {
-    return "";
-  }
-  if (/[,|]\s*$/u.test(previousText) || /[,|]|\bor\b|\(default\b/u.test(line)) {
-    return match[1];
-  }
-  return "";
-}
-
-function parseProvidersFromHelp(text) {
-  const names = new Set();
-  const lines = text.split(/\r?\n/u);
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    const providerMatch = line.match(/provider:\s*([a-z0-9][a-z0-9, -]*)(?:\s*\(default\b|$)/u);
-    if (providerMatch) {
-      let providerText = providerMatch[1];
-      while (!/\(default\b/u.test(lines[index]) && index + 1 < lines.length) {
-        const continuation = providerListContinuation(lines[index + 1], providerText);
-        if (!continuation) {
-          break;
-        }
-        index += 1;
-        providerText = `${providerText} ${continuation}`;
-      }
-      addProviderNames(names, providerText);
-      continue;
-    }
-
-    const flagMatch = line.match(
-      /^\s+-{1,2}provider(?:[=\s]+)([a-z0-9][a-z0-9|, -]*)(?:\s{2,}|\s+\(|$)/u,
-    );
-    if (flagMatch && /[,|]|\bor\b/u.test(flagMatch[1])) {
-      addProviderNames(names, flagMatch[1]);
-    }
-  }
-  return [...names];
-}
-
-function isProviderAdvertised(provider, advertisedProviders) {
-  const canonicalProvider = providerAliases.get(provider) ?? provider;
-  return (
-    advertisedProviders.includes(provider) ||
-    advertisedProviders.includes(canonicalProvider) ||
-    providerHelpOmissions.has(canonicalProvider)
-  );
-}
-
+const version = probeCrabboxMetadata(binary, ["--version"]);
+const help = probeCrabboxMetadata(binary, ["run", "--help"]);
 const providers = parseProvidersFromHelp(help.text);
 const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
 const provider = selectedProvider(args, providers);
-const canonicalProvider = providerAliases.get(provider) ?? provider;
+const canonicalProvider = canonicalProviderName(provider);
 const commandProviderValue = commandProvider(args);
 let normalizedArgs = ensureAwsMacOnDemandMarket(
   ensureNativeWindowsHydrateJob(ensureAzureWindowsProvider(args, provider, providers)),
@@ -3318,12 +3559,27 @@ if (canonicalProvider === "blacksmith-testbox") {
   enforceCrabboxOwnedBlacksmithLease(normalizedArgs);
 }
 
+let testboxLeaseFreshness;
+try {
+  testboxLeaseFreshness = prepareTestboxLeaseFreshness({
+    args: normalizedArgs,
+    env: { ...process.env, CI: process.env.CI || "true" },
+    provider: canonicalProvider,
+    repoRoot,
+  });
+} catch (error) {
+  console.error(`[crabbox] ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(2);
+}
+
 let childCwd = repoRoot;
 let cleanupChildCwd = () => {};
 let fullCheckout = null;
 let stopFullCheckoutKeepalive = () => {};
 let cleanupDone = false;
 let remoteChangedGateBase = "";
+let remoteChangedGateAlias = "";
+let capturedBlacksmithLeaseId = "";
 const scriptBootstrap = prepareAwsMacosScriptStdinBootstrap(normalizedArgs, provider);
 normalizedArgs = scriptBootstrap.args;
 const scriptStdinPrepared = scriptBootstrap.prepared;
@@ -3331,13 +3587,15 @@ let wsl2ScriptBootstrap = { args: normalizedArgs, cleanup: () => {}, prepared: f
 try {
   if (shouldUseFullCheckoutForCleanRemoteSync(normalizedArgs, provider)) {
     const runWords = runCommandArgs(normalizedArgs);
-    const changedGateBase = isChangedGateCommand(runWords) ? mergeBaseForChangedGate() : "";
+    const changedGate = isChangedGateCommand(runWords) ? changedGateBaseForCommand(runWords) : null;
+    const changedGateBase = changedGate?.resolvedBase ?? "";
     const checkout = prepareFullCheckoutForSync({ changedGateBase });
     fullCheckout = checkout;
     normalizedArgs = injectFullCheckoutLeaseReclaim(normalizedArgs);
     childCwd = checkout.dir;
     cleanupChildCwd = () => checkout.cleanup();
     remoteChangedGateBase = checkout.changedGateBase;
+    remoteChangedGateAlias = changedGate?.remoteAlias ?? "";
     console.error(
       `[crabbox] sparse clean checkout detected; syncing from temporary full checkout ${checkout.dir}`,
     );
@@ -3360,6 +3618,11 @@ function cleanupOnce() {
   stopFullCheckoutKeepalive();
   wsl2ScriptBootstrap.cleanup();
   scriptBootstrap.cleanup();
+  if (canonicalProvider === "blacksmith-testbox") {
+    // Crabbox stamps claims with its cwd. Delegated runs use a throwaway sync checkout,
+    // so restore the real repo or every later reuse needs --reclaim.
+    restoreTemporaryBlacksmithTestboxClaim(normalizedArgs, capturedBlacksmithLeaseId);
+  }
   preserveTemporaryCrabboxRuns();
   cleanupChildCwd();
 }
@@ -3394,6 +3657,9 @@ if (normalizedArgs[0] === "run" && isBrokeredWsl2RemoteTarget(normalizedArgs, pr
 }
 
 const childEnv = { ...process.env };
+if (canonicalProvider === "blacksmith-testbox" && !childEnv.CI) {
+  childEnv.CI = "true";
+}
 if (
   isLocalContainerProvider(provider) &&
   !childEnv.CRABBOX_LOCAL_CONTAINER_DOCKER_SOCKET &&
@@ -3429,7 +3695,7 @@ try {
   cleanupOnce();
   throw error;
 }
-const childArgs =
+const childArgs = injectRemoteTestboxCi(
   childCwd === repoRoot
     ? injectRemoteWindowsHydratedNodeModulesBootstrap(
         injectRemoteAwsMacosSwiftBootstrap(
@@ -3449,7 +3715,10 @@ const childArgs =
           provider,
         ),
         remoteChangedGateBase,
-      );
+        remoteChangedGateAlias,
+      ),
+  provider,
+);
 let fullCheckoutKeepaliveIntervalMsValue = 0;
 if (fullCheckout) {
   try {
@@ -3460,14 +3729,63 @@ if (fullCheckout) {
   }
 }
 const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.platform);
+const captureBlacksmithTimingJSON =
+  canonicalProvider === "blacksmith-testbox" && hasOption(normalizedArgs, "--timing-json");
+// Fast-fail hint context: run --id reuse dies in under a second when the
+// lease hit its idle timeout, with only a bare nonzero exit from the binary.
+const reusedRunLeaseId = normalizedArgs[0] === "run" ? optionValue(normalizedArgs, "--id") : "";
+const childStartedAtMs = Date.now();
+const FAST_FAIL_HINT_WINDOW_MS = 15_000;
 const child = spawn(childInvocation.command, childInvocation.args, {
   cwd: childCwd,
-  stdio: "inherit",
+  stdio: ["inherit", "inherit", captureBlacksmithTimingJSON ? "pipe" : "inherit"],
   detached: process.platform !== "win32",
   env: childEnv,
   windowsVerbatimArguments: childInvocation.windowsVerbatimArguments,
 });
-const childKillGraceMs = 5_000;
+if (child.stderr) {
+  const decoder = new StringDecoder("utf8");
+  let pending = "";
+  let discardingOversizedLine = false;
+  const observeText = (text) => {
+    let remaining = text;
+    while (remaining) {
+      const newline = remaining.indexOf("\n");
+      const fragment = newline >= 0 ? remaining.slice(0, newline) : remaining;
+      if (!discardingOversizedLine) {
+        pending += fragment;
+        if (pending.length > MAX_TIMING_JSON_LINE_CHARS) {
+          pending = "";
+          discardingOversizedLine = true;
+        }
+      }
+      if (newline < 0) {
+        return;
+      }
+      if (!discardingOversizedLine) {
+        observeBlacksmithTimingJSONLine(pending);
+      }
+      pending = "";
+      discardingOversizedLine = false;
+      remaining = remaining.slice(newline + 1);
+    }
+  };
+  child.stderr.on("data", (chunk) => {
+    const canContinue = process.stderr.write(chunk);
+    observeText(decoder.write(chunk));
+    if (!canContinue) {
+      child.stderr.pause();
+      process.stderr.once("drain", () => child.stderr?.resume());
+    }
+  });
+  child.stderr.on("end", () => {
+    observeText(decoder.end());
+    if (pending && !discardingOversizedLine) {
+      observeBlacksmithTimingJSONLine(pending);
+    }
+  });
+}
+const childKillGraceMs = resolveChildKillGraceMs(process.env);
 let childForceKillTimer;
 let childTreeShutdownStarted = false;
 if (fullCheckout) {
@@ -3502,16 +3820,37 @@ child.on("exit", (code, signal) => {
   if (childTreeShutdownStarted) {
     return;
   }
+  let exitCode = code;
   let fullCheckoutAvailable = true;
   if (fullCheckout) {
     fullCheckoutAvailable = assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
+  }
+  if (!signal && code === 0) {
+    try {
+      recordTestboxLeaseFreshness(testboxLeaseFreshness);
+    } catch (error) {
+      console.error(
+        `[crabbox] failed to record Testbox lease freshness: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      exitCode = 2;
+    }
   }
   cleanupOnce();
   if (signal) {
     process.exit(signalExitCodes.get(signal) ?? 1);
     return;
   }
-  process.exit(fullCheckoutAvailable ? (code ?? 1) : 1);
+  const finalExitCode = fullCheckoutAvailable ? (exitCode ?? 1) : 1;
+  if (
+    finalExitCode !== 0 &&
+    reusedRunLeaseId &&
+    Date.now() - childStartedAtMs < FAST_FAIL_HINT_WINDOW_MS
+  ) {
+    console.error(
+      `[crabbox] run --id ${reusedRunLeaseId} failed fast; reusable leases expire after their idle timeout and rejected flags also exit immediately. Check the first error line above, verify the lease with \`node scripts/crabbox-wrapper.mjs list\`, or warm a fresh one with \`node scripts/crabbox-wrapper.mjs warmup\`.`,
+    );
+  }
+  process.exit(finalExitCode);
 });
 
 child.on("error", (error) => {
@@ -3603,4 +3942,20 @@ async function waitForChildTreeExit(childProcess, timeoutMs) {
     });
   }
   return !childProcessTreeIsAlive(childProcess);
+}
+
+function resolveChildKillGraceMs(env) {
+  if (!env.VITEST || !env.OPENCLAW_TEST_CRABBOX_CHILD_KILL_GRACE_MS) {
+    return 5_000;
+  }
+  const value = Number.parseInt(env.OPENCLAW_TEST_CRABBOX_CHILD_KILL_GRACE_MS, 10);
+  return Number.isFinite(value) && value >= 0 ? value : 5_000;
+}
+
+function resolveMetadataProbeTimeoutMs(env) {
+  if (!env.VITEST || !env.OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS) {
+    return CRABBOX_METADATA_PROBE_TIMEOUT_MS;
+  }
+  const value = Number.parseInt(env.OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS, 10);
+  return Number.isFinite(value) && value > 0 ? value : CRABBOX_METADATA_PROBE_TIMEOUT_MS;
 }

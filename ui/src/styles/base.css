@@ -20,7 +20,9 @@
   --chrome: rgba(14, 16, 21, 0.96);
   --chrome-strong: rgba(14, 16, 21, 0.98);
 
-  /* Text - Clean contrast */
+  /* Text - Clean contrast
+   * Keep --muted AA on dark surfaces; do not dim muted body text with opacity. */
+
   --text: #d4d4d8;
   --text-strong: #f4f4f5;
   --chat-text: #d4d4d8;
@@ -35,7 +37,18 @@
   --input: #1e2028;
   --ring: #ff5c5c;
 
-  /* Accent - Punchy signature red */
+  /*
+   * Accent - Punchy signature red
+   *
+   * WCAG 2.1 AA audit (bg = #0e1015, relative luminance ≈ 0.005):
+   *   --accent #ff5c5c on bg: 6.3:1 AA text ✓
+   *   --primary-foreground #ffffff on #d13c3c button: 4.75:1 AA ✓
+   *   --primary-foreground #ffffff on #c22e2e hover: 5.64:1 AA ✓
+   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
+   *   --destructive-foreground #fafafa on #bc2a2a hover: 5.74:1 AA ✓
+   *   --card/--popover/--secondary foreground pairs: 15.4:1 / 14.9:1 / 15.4:1 ✓
+   *   --selection-fg #ffffff on --selection-bg #005fcc: 6.0:1 AA ✓
+   */
   --accent: #ff5c5c;
   --accent-hover: #ff7070;
   --accent-muted: #ff5c5c;
@@ -44,7 +57,8 @@
   --accent-glow: rgba(255, 92, 92, 0.2);
   --selection-bg: #005fcc;
   --selection-fg: #ffffff;
-  --primary: #ff5c5c;
+  --primary: #d13c3c;
+  --primary-hover: #c22e2e;
   --primary-foreground: #ffffff;
 
   /* Secondary */
@@ -54,7 +68,26 @@
   --accent-2-muted: rgba(20, 184, 166, 0.7);
   --accent-2-subtle: rgba(20, 184, 166, 0.1);
 
-  /* Semantic */
+  /*
+   * Semantic status
+   *
+   * Each `--x` doubles as label text on its own `--x-subtle` tint, so the pair
+   * is one contrast decision: the 8% tint composites onto the surface and the
+   * label must still clear WCAG AA 4.5:1 on the lightest dark surface
+   * (dash `--card` #221a16, worse than claw `--card` #161920). Keep every
+   * `-subtle`/`-muted` rgba in sync with its base hex — they are the same
+   * color at 8%/75%, and re-tinting one without the other silently drops the
+   * pair below AA. Bases stay literal hex: `widget-theme.ts` publishes them to
+   * MCP app guest documents, where a `color-mix(... var(--x) ...)` string
+   * would not resolve.
+   *
+   * WCAG 2.1 AA audit (label on own subtle tint, worst of --card / --bg):
+   *   --ok     #22c55e  6.66:1 ✓    --warn  #f59e0b  6.93:1 ✓
+   *   --danger #f87171  5.52:1 ✓    --info  #60a5fa  5.97:1 ✓
+   *
+   * Bounded to --card and --bg. A status label can also land on --bg-hover,
+   * --bg-muted, --panel-hover or --input, which this audit does not cover.
+   */
   --ok: #22c55e;
   --ok-muted: rgba(34, 197, 94, 0.75);
   --ok-subtle: rgba(34, 197, 94, 0.08);
@@ -63,10 +96,16 @@
   --warn: #f59e0b;
   --warn-muted: rgba(245, 158, 11, 0.75);
   --warn-subtle: rgba(245, 158, 11, 0.08);
-  --danger: #ef4444;
-  --danger-muted: rgba(239, 68, 68, 0.75);
-  --danger-subtle: rgba(239, 68, 68, 0.08);
-  --info: #3b82f6;
+  --danger: #f87171;
+  --danger-muted: rgba(248, 113, 113, 0.75);
+  --danger-subtle: rgba(248, 113, 113, 0.08);
+  --info: #60a5fa;
+  --info-subtle: rgba(96, 165, 250, 0.08);
+  /* Run state needs its own token: --accent is red in every shipped theme and
+     sits on top of --danger, so a spinning ring reads as a failed session.
+     Graphical indicator, judged against WCAG 1.4.11 (3:1), not the label audit
+     above: #14b8a6 is 7.7:1 on --bg. */
+  --run: #14b8a6;
 
   /* Focus */
   --focus: rgba(255, 92, 92, 0.2);
@@ -100,6 +139,23 @@
   --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.5);
   --shadow-glow: 0 0 24px var(--accent-glow);
 
+  /* Spacing scale. Settings surfaces use these (see
+     ui/docs/design-system/settings-design.md); elsewhere raw px padding/gap is
+     grandfathered — adopt the scale when rewriting a rule, don't mass-migrate. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+
+  /* One inset shared by every widget frame (chat preview panel, board card)
+     so agent-authored widget documents meet identical breathing room on all
+     surfaces. Board layout math mirrors this value numerically. */
+  --widget-frame-inset: var(--space-3);
+
   /* Radii - Slightly larger for modern feel */
   --radius-sm: 6px;
   --radius-md: 10px;
@@ -123,82 +179,122 @@
   /* Layering */
   --z-dropdown: 100;
 
+  /* Custom select chevron. Data URIs cannot read var(--muted), so the stroke
+     color is baked per theme mode; light mode overrides the whole image. */
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+
   color-scheme: dark;
+}
+
+/* The claw family deepens only the text-bearing destructive fill. */
+:root[data-theme="dark"] {
+  --destructive: #d32f2f;
+  --destructive-hover: #bc2a2a;
 }
 
 /* Light theme tokens apply to every light-mode family. */
 :root[data-theme-mode="light"] {
-  --bg: #f8f9fa;
-  --bg-accent: #f1f3f5;
+  /*
+   * Warm paper light mode - terracotta accent on ivory
+   *
+   * WCAG 2.1 AA audit (bg = #faf9f7, relative luminance ≈ 0.941):
+   *   --accent #bd4531  contrast ≈ 4.9:1  AA text ✓
+   *   --primary-foreground #ffffff on #bd4531 button: 5.2:1 AA ✓
+   *   --text #403c35 ≈ 10.4:1 AAA ✓, --muted #6e6960 ≈ 5.2:1 AA ✓
+   */
+  --bg: #faf9f7;
+  --bg-accent: #f4f1ec;
   --bg-elevated: #ffffff;
-  --bg-hover: #eceef0;
-  --bg-muted: #eceef0;
-  --bg-content: #f1f3f5;
+  --bg-hover: #efebe4;
+  --bg-muted: #efebe4;
+  --bg-content: #f4f1ec;
 
   --card: #ffffff;
-  --card-foreground: #1a1a1e;
-  --card-highlight: rgba(0, 0, 0, 0.02);
+  --card-foreground: #211e1a;
+  --card-highlight: rgba(60, 42, 24, 0.03);
   --popover: #ffffff;
-  --popover-foreground: #1a1a1e;
+  --popover-foreground: #211e1a;
 
-  --panel: #f8f9fa;
-  --panel-strong: #f1f3f5;
-  --panel-hover: #e6e8eb;
-  --chrome: rgba(248, 249, 250, 0.96);
-  --chrome-strong: rgba(248, 249, 250, 0.98);
+  --panel: #faf9f7;
+  --panel-strong: #f4f1ec;
+  --panel-hover: #e9e4dc;
+  --chrome: rgba(250, 249, 247, 0.96);
+  --chrome-strong: rgba(250, 249, 247, 0.98);
 
-  --text: #3c3c43;
-  --text-strong: #1a1a1e;
-  --chat-text: #3c3c43;
-  --muted: #6a6a6f;
-  --muted-strong: #545458;
-  --muted-foreground: #6a6a6f;
+  --text: #403c35;
+  --text-strong: #211e1a;
+  --chat-text: #403c35;
+  --muted: #6e6960;
+  --muted-strong: #56524a;
+  --muted-foreground: #6e6960;
 
-  --border: #e5e5ea;
-  --border-strong: #d1d1d6;
-  --border-hover: #aeaeb2;
-  --input: #e5e5ea;
+  --border: #e8e4dc;
+  --border-strong: #d6d0c5;
+  --border-hover: #b4ac9e;
+  --input: #e8e4dc;
+  --ring: #bd4531;
 
-  --accent: #dc2626;
-  --accent-hover: #ef4444;
-  --accent-muted: #dc2626;
-  --accent-subtle: rgba(220, 38, 38, 0.08);
+  --accent: #bd4531;
+  --accent-hover: #a83c29;
+  --accent-muted: #bd4531;
+  --accent-subtle: rgba(189, 69, 49, 0.08);
   --accent-foreground: #ffffff;
-  --accent-glow: rgba(220, 38, 38, 0.1);
-  --primary: #dc2626;
+  --accent-glow: rgba(189, 69, 49, 0.12);
+  --primary: #bd4531;
   --primary-foreground: #ffffff;
 
-  --secondary: #f1f3f5;
-  --secondary-foreground: #3c3c43;
+  --secondary: #f4f1ec;
+  --secondary-foreground: #403c35;
   --accent-2: #0d9488;
   --accent-2-muted: rgba(13, 148, 136, 0.75);
   --accent-2-subtle: rgba(13, 148, 136, 0.08);
 
-  --ok: #15803d;
-  --ok-muted: rgba(21, 128, 61, 0.75);
-  --ok-subtle: rgba(21, 128, 61, 0.08);
+  /*
+   * Semantic status — see the `:root` block for the pairing rule. Light mode
+   * is bounded by `--bg` (#faf9f7, and the darker dash-light #f7f2ec) rather
+   * than the white `--card`, so a token that passes on a card can still fail
+   * on the page behind it.
+   *
+   * WCAG 2.1 AA audit (label on own subtle tint, worst of --card / --bg):
+   *   --ok     #166534  5.70:1 ✓    --warn  #92400e  5.66:1 ✓
+   *   --danger #b91c1c  5.10:1 ✓    --info  #1d4ed8  5.34:1 ✓
+   *
+   * Bounded to --card and --bg. Hover and input surfaces are not covered, and
+   * one gap is reachable: .plugins-row-message--error sits on --danger-subtle
+   * over a hovered row, which is 4.28:1 under dash-light. That is an
+   * improvement on the 3.23:1 it replaced, not a regression, but it is not AA.
+   */
+  --ok: #166534;
+  --ok-muted: rgba(22, 101, 52, 0.75);
+  --ok-subtle: rgba(22, 101, 52, 0.08);
   --destructive: #dc2626;
   --destructive-foreground: #fafafa;
-  --warn: #b45309;
-  --warn-muted: rgba(180, 83, 9, 0.75);
-  --warn-subtle: rgba(180, 83, 9, 0.08);
-  --danger: #dc2626;
-  --danger-muted: rgba(220, 38, 38, 0.75);
-  --danger-subtle: rgba(220, 38, 38, 0.08);
-  --info: #2563eb;
+  --warn: #92400e;
+  --warn-muted: rgba(146, 64, 14, 0.75);
+  --warn-subtle: rgba(146, 64, 14, 0.08);
+  --danger: #b91c1c;
+  --danger-muted: rgba(185, 28, 28, 0.75);
+  --danger-subtle: rgba(185, 28, 28, 0.08);
+  --info: #1d4ed8;
+  --info-subtle: rgba(29, 78, 216, 0.08);
+  /* See the dark-theme note: run state stays off --accent. #0d9488 is 3.6:1 on
+     --bg, above the 3:1 WCAG 1.4.11 bar for a non-text indicator. */
+  --run: #0d9488;
 
-  --focus: rgba(220, 38, 38, 0.15);
+  --focus: rgba(189, 69, 49, 0.15);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 12px var(--accent-glow);
 
-  --grid-line: rgba(0, 0, 0, 0.04);
+  --grid-line: rgba(60, 42, 24, 0.05);
 
-  /* Light shadows - Subtle, clean */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
-  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.08);
-  --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.1);
+  /* Light shadows - Subtle, warm-tinted */
+  --shadow-sm: 0 1px 2px rgba(60, 42, 24, 0.05);
+  --shadow-md: 0 4px 12px rgba(60, 42, 24, 0.07);
+  --shadow-lg: 0 12px 28px rgba(60, 42, 24, 0.09);
+  --shadow-xl: 0 24px 48px rgba(60, 42, 24, 0.11);
   --shadow-glow: 0 0 20px var(--accent-glow);
+
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23444' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
 
   color-scheme: light;
 }
@@ -222,7 +318,10 @@
    * WCAG 2.1 AA audit (bg = #080808, relative luminance ≈ 0.003):
    *   --accent #e5243b  L ≈ 0.118  contrast ≈ 5.8:1  AA text ✓
    *   --accent-hover #f03e52  L ≈ 0.163  contrast ≈ 7.2:1  ✓
-   *   --primary-foreground #fafafa on #e5243b button: 4.6:1 AA ✓
+   *   --primary-foreground #fafafa on #d92a3f button: 4.62:1 AA ✓
+   *   --primary-foreground #fafafa on #c22537 hover: 5.57:1 AA ✓
+   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
+   *   --destructive-foreground #fafafa on #bc2a2a hover: 5.74:1 AA ✓
    *   focus-ring at 70% opacity: ≈ 3.4:1 against bg ✓ (non-text 3:1 required)
    */
   --ring: #e5243b;
@@ -231,8 +330,13 @@
   --accent-muted: #e5243b;
   --accent-subtle: rgba(229, 36, 59, 0.12);
   --accent-glow: rgba(229, 36, 59, 0.24);
-  --primary: #e5243b;
+  --primary: #d92a3f;
+  --primary-hover: #c22537;
   --primary-foreground: #fafafa;
+
+  /* Deepen only the text-bearing destructive fill; keep danger accents vivid. */
+  --destructive: #d32f2f;
+  --destructive-hover: #bc2a2a;
 
   /* Focus — crimson ring */
   --focus: rgba(229, 36, 59, 0.2);
@@ -328,9 +432,9 @@
   --text: #3a3a42;
   --text-strong: #18181b;
   --chat-text: #3a3a42;
-  --muted: #6a6a72;
+  --muted: #68676f;
   --muted-strong: #52525a;
-  --muted-foreground: #6a6a72;
+  --muted-foreground: #68676f;
 
   /* Borders — clean, minimal */
   --border: #e2e2e8;
@@ -359,6 +463,9 @@
    *   --accent #b47840  L ≈ 0.235  contrast ≈ 5.0:1  AA text ✓  (floor: #a8703c → 4.4:1, fails)
    *   --accent-hover #c8885a  L ≈ 0.306  contrast ≈ 6.3:1  ✓
    *   --primary-foreground #1a1210 on #b47840 button: 5.0:1 AA ✓
+   *   --primary-foreground #1a1210 on #c8885a hover: 6.26:1 AA ✓
+   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
+   *   --destructive-foreground #fafafa on #bc2a2a hover: 5.74:1 AA ✓
    *   focus-ring at 80% opacity: ≈ 3.5:1 against bg ✓ (non-text 3:1 required)
    */
   --ring: #b47840;
@@ -369,6 +476,10 @@
   --accent-glow: rgba(180, 120, 64, 0.24);
   --primary: #b47840;
   --primary-foreground: #1a1210;
+
+  /* Deepen only the text-bearing destructive fill; keep danger accents vivid. */
+  --destructive: #d32f2f;
+  --destructive-hover: #bc2a2a;
 
   /* Focus — match chocolate accent, slightly higher ring opacity for dark bg visibility */
   --focus: rgba(180, 120, 64, 0.2);
@@ -397,9 +508,9 @@
   --text: #d8c8b8;
   --text-strong: #f0e4da;
   --chat-text: #d8c8b8;
-  --muted: #9a8878;
-  --muted-strong: #8a7868;
-  --muted-foreground: #9a8878;
+  --muted: #a18f80;
+  --muted-strong: #a08f7f;
+  --muted-foreground: #a18f80;
 
   --border: #302418;
   --border-strong: #443828;
@@ -461,9 +572,9 @@
   --text: #4a3828;
   --text-strong: #2c2118;
   --chat-text: #4a3828;
-  --muted: #756050;
+  --muted: #725d4d;
   --muted-strong: #604838;
-  --muted-foreground: #756050;
+  --muted-foreground: #725d4d;
 
   --border: #ddd0c2;
   --border-strong: #c8b8a6;
@@ -490,6 +601,18 @@
 html,
 body {
   height: 100%;
+  /* App shell: inner panes scroll, the root never does — in every host
+     (browser tab, PWA, Mac app WKWebView). WKWebView drag/rubber-band scrolls
+     the document even when nothing overflows, dragging the whole shell with
+     it; `clip` also blocks programmatic root scrolls (focus/scrollIntoView)
+     that `hidden` would let strand the shell off-screen. */
+  overflow: clip;
+  overscroll-behavior: none;
+  /* iOS WKWebView font boosting inflates rendered text without re-running
+     layout, so labels spill out of fixed-size chrome (welcome chips, badges).
+     Locking text-size-adjust keeps rendered metrics equal to layout metrics. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
@@ -498,6 +621,10 @@ body {
   letter-spacing: -0.01em;
   background: var(--bg);
   color: var(--text);
+  /* App chrome behaves like native controls: dragging across labels, tiles,
+     and navigation must not create accidental text selections. Text-entry
+     surfaces and document-like content opt back in below or in route CSS. */
+  user-select: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -545,18 +672,10 @@ openclaw-app {
   display: block;
   position: relative;
   z-index: 1;
-  min-height: 100vh;
+  height: 100%;
 }
 
 @media (display-mode: standalone) {
-  html,
-  body {
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
-    overscroll-behavior: none;
-  }
-
   @supports (height: 100dvh) {
     html,
     body {
@@ -572,16 +691,12 @@ openclaw-app {
     padding-bottom: var(--safe-area-bottom);
     padding-left: var(--safe-area-left);
   }
-
-  openclaw-app {
-    width: 100%;
-    height: 100%;
-    min-width: 0;
-    min-height: 0;
-    overflow: hidden;
-  }
 }
 
+/* Cursor convention: app chrome (buttons, menus, tabs, rails, controls) uses
+   the default arrow cursor; the pointer hand is reserved for real hyperlinks
+   (UA default on a[href]). Do not add `cursor: pointer` to controls; anchors
+   that act as chrome override to `cursor: default` instead. */
 a {
   color: var(--accent);
   text-decoration: underline;
@@ -592,6 +707,17 @@ a:hover {
   text-decoration-thickness: 2px;
 }
 
+/* Web Awesome dropdown items ship `cursor: pointer` on their shadow host.
+   Document rules beat `:host`, so restore the chrome arrow here — and re-add
+   the disabled cue this override would otherwise clobber. */
+wa-dropdown-item {
+  cursor: default;
+}
+
+wa-dropdown-item[disabled] {
+  cursor: not-allowed;
+}
+
 button,
 input,
 textarea,
@@ -600,15 +726,29 @@ select {
   color: inherit;
 }
 
+/* One accent for every native check control; without this, surfaces that
+   forget a local override render the browser's stock blue. */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--accent);
+}
+
+input,
+textarea,
+[contenteditable]:not([contenteditable="false"]) {
+  user-select: text;
+}
+
 ::selection {
   background: var(--selection-bg);
   color: var(--selection-fg);
 }
 
-/* Scrollbar styling - Minimal, barely visible */
+/* Main/document surfaces keep a normal scrollbar hit target. Dense sidebars
+   override this inherited size locally so their row actions retain room. */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: var(--scrollbar-size, 12px);
+  height: var(--scrollbar-size, 12px);
 }
 
 ::-webkit-scrollbar-track {

@@ -18,10 +18,10 @@ import {
 } from "./guard-shared.mjs";
 
 /** Marker used to identify dependency guard comments. */
-export const dependencyChangeMarker = "<!-- openclaw:dependency-guard -->";
-export const dependencyGraphGuardMarker = "<!-- openclaw:dependency-graph-guard -->";
+const dependencyChangeMarker = "<!-- openclaw:dependency-guard -->";
+const dependencyGraphGuardMarker = "<!-- openclaw:dependency-graph-guard -->";
 export const dependencyChangedLabel = "dependencies-changed";
-export const allowDependenciesCommand = "/allow-dependencies-change";
+const allowDependenciesCommand = "/allow-dependencies-change";
 export {
   GITHUB_API_REQUEST_TIMEOUT_MS,
   GITHUB_ERROR_BODY_MAX_BYTES,
@@ -58,7 +58,6 @@ const dependencyManifestFields = [
 export function isDependencyFile(filename) {
   return (
     filename.endsWith("package-lock.json") ||
-    filename.endsWith("npm-shrinkwrap.json") ||
     filename.endsWith("pnpm-lock.yaml") ||
     filename === "pnpm-workspace.yaml" ||
     filename.startsWith("patches/")
@@ -70,11 +69,7 @@ export function isDependencyManifest(filename) {
 }
 
 export function isPackageLockfile(filename) {
-  return (
-    filename.endsWith("pnpm-lock.yaml") ||
-    filename.endsWith("package-lock.json") ||
-    filename.endsWith("npm-shrinkwrap.json")
-  );
+  return filename.endsWith("pnpm-lock.yaml") || filename.endsWith("package-lock.json");
 }
 
 export function dependencyFieldChanges(baseManifest, headManifest) {
@@ -253,7 +248,7 @@ export function isDependencyGuardMarkerComment(comment, marker, trustedAuthors) 
   return Boolean(login && trustedAuthors.has(login) && comment.body?.includes(marker));
 }
 
-export function renderDependencyAwarenessComment(dependencyFiles) {
+function renderDependencyAwarenessComment(dependencyFiles) {
   const listedFiles = dependencyFiles.slice(0, maxListedFiles);
   const omittedCount = dependencyFiles.length - listedFiles.length;
   const fileLines = listedFiles.map((filename) => `- ${markdownCode(filename)}`);
@@ -273,8 +268,8 @@ export function renderDependencyAwarenessComment(dependencyFiles) {
     "",
     "Maintainer follow-up:",
     "- Review whether the dependency changes are intentional.",
-    "- Inspect resolved package deltas when lockfile, shrinkwrap, or workspace dependency policy changes are present.",
-    "- Treat `package-lock.json` and `npm-shrinkwrap.json` diffs as security-review surfaces.",
+    "- Inspect resolved package deltas when lockfiles or workspace dependency policy changes are present.",
+    "- Treat `pnpm-lock.yaml` and `package-lock.json` diffs as dependency security-review surfaces.",
     "- Run `pnpm deps:changes:report -- --base-ref origin/main --markdown /tmp/dependency-changes.md --json /tmp/dependency-changes.json` locally for detailed release-style evidence.",
   ].join("\n");
 }

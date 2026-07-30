@@ -135,10 +135,4 @@ async function handleQaAction(params: {
   return extractQaToolPayload(result as Parameters<typeof extractQaToolPayload>[0]);
 }
 
-export {
-  callPluginToolsMcp,
-  findSkill,
-  handleQaAction,
-  resolveWorkspaceSkillPath,
-  writeWorkspaceSkill,
-};
+export { callPluginToolsMcp, findSkill, handleQaAction, writeWorkspaceSkill };

@@ -77,6 +77,9 @@ func processFileDoc(ctx context.Context, translator docsTranslator, docsRoot, fi
 	}
 
 	output := updatedFront + translatedBody
+	if !sameI18NProtocolMarkers(string(content), output) {
+		return false, "", fmt.Errorf("protocol token leaked in final output: __OC_I18N_")
+	}
 	return false, outputPath, os.WriteFile(outputPath, []byte(output), 0o644)
 }
 
@@ -171,12 +174,27 @@ func classifyDocOutput(outputPath string, sourceHash string, targetLang string) 
 	if strings.EqualFold(strings.TrimSpace(targetLang), "en") {
 		return docOutputReady, nil
 	}
+	if extractPromptVersion(frontData) != promptVersion {
+		return docOutputNeedsTranslation, nil
+	}
 
 	postprocessVersion := extractPostprocessVersion(frontData)
 	if strings.EqualFold(postprocessVersion, localizedLinkPostprocessVersion) {
 		return docOutputReady, nil
 	}
 	return docOutputNeedsPostprocess, nil
+}
+
+func extractPromptVersion(frontData map[string]any) int {
+	xi, ok := extractXI18N(frontData)
+	if !ok {
+		return 0
+	}
+	value, ok := xi["prompt_version"].(int)
+	if !ok {
+		return 0
+	}
+	return value
 }
 
 func extractSourceHash(frontData map[string]any) string {

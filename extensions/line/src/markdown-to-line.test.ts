@@ -1,149 +1,17 @@
 // Line tests cover markdown to line plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
-  extractMarkdownTables,
-  extractCodeBlocks,
-  extractLinks,
   stripMarkdown,
   processLineMessage,
   convertTableToFlexBubble,
   convertCodeBlockToFlexBubble,
-  convertLinksToFlexBubble,
   hasMarkdownToConvert,
 } from "./markdown-to-line.js";
 
-describe("extractMarkdownTables", () => {
-  it("extracts a simple 2-column table", () => {
-    const text = `Here is a table:
-
-| Name | Value |
-|------|-------|
-| foo  | 123   |
-| bar  | 456   |
-
-And some more text.`;
-
-    const { tables, textWithoutTables } = extractMarkdownTables(text);
-
-    expect(tables).toHaveLength(1);
-    expect(tables[0].headers).toEqual(["Name", "Value"]);
-    expect(tables[0].rows).toEqual([
-      ["foo", "123"],
-      ["bar", "456"],
-    ]);
-    expect(textWithoutTables).toContain("Here is a table:");
-    expect(textWithoutTables).toContain("And some more text.");
-    expect(textWithoutTables).not.toContain("|");
-  });
-
-  it("extracts multiple tables", () => {
-    const text = `Table 1:
-
-| A | B |
-|---|---|
-| 1 | 2 |
-
-Table 2:
-
-| X | Y |
-|---|---|
-| 3 | 4 |`;
-
-    const { tables } = extractMarkdownTables(text);
-
-    expect(tables).toHaveLength(2);
-    expect(tables[0].headers).toEqual(["A", "B"]);
-    expect(tables[1].headers).toEqual(["X", "Y"]);
-  });
-
-  it("handles tables with alignment markers", () => {
-    const text = `| Left | Center | Right |
-|:-----|:------:|------:|
-| a    | b      | c     |`;
-
-    const { tables } = extractMarkdownTables(text);
-
-    expect(tables).toHaveLength(1);
-    expect(tables[0].headers).toEqual(["Left", "Center", "Right"]);
-    expect(tables[0].rows).toEqual([["a", "b", "c"]]);
-  });
-
-  it("returns empty when no tables present", () => {
-    const text = "Just some plain text without tables.";
-
-    const { tables, textWithoutTables } = extractMarkdownTables(text);
-
-    expect(tables).toHaveLength(0);
-    expect(textWithoutTables).toBe(text);
-  });
-});
-
-describe("extractCodeBlocks", () => {
-  it("extracts code blocks across language/no-language/multiple variants", () => {
-    const withLanguage = `Here is some code:
-
-\`\`\`javascript
-const x = 1;
-console.log(x);
-\`\`\`
-
-And more text.`;
-    const withLanguageResult = extractCodeBlocks(withLanguage);
-    expect(withLanguageResult.codeBlocks).toHaveLength(1);
-    expect(withLanguageResult.codeBlocks[0].language).toBe("javascript");
-    expect(withLanguageResult.codeBlocks[0].code).toBe("const x = 1;\nconsole.log(x);");
-    expect(withLanguageResult.textWithoutCode).toContain("Here is some code:");
-    expect(withLanguageResult.textWithoutCode).toContain("And more text.");
-    expect(withLanguageResult.textWithoutCode).not.toContain("```");
-
-    const withoutLanguage = `\`\`\`
-plain code
-\`\`\``;
-    const withoutLanguageResult = extractCodeBlocks(withoutLanguage);
-    expect(withoutLanguageResult.codeBlocks).toHaveLength(1);
-    expect(withoutLanguageResult.codeBlocks[0].language).toBeUndefined();
-    expect(withoutLanguageResult.codeBlocks[0].code).toBe("plain code");
-
-    const multiple = `\`\`\`python
-print("hello")
-\`\`\`
-
-Some text
-
-\`\`\`bash
-echo "world"
-\`\`\``;
-    const multipleResult = extractCodeBlocks(multiple);
-    expect(multipleResult.codeBlocks).toHaveLength(2);
-    expect(multipleResult.codeBlocks[0].language).toBe("python");
-    expect(multipleResult.codeBlocks[1].language).toBe("bash");
-  });
-});
-
-describe("extractLinks", () => {
-  it("extracts markdown links", () => {
-    const text = "Check out [Google](https://google.com) and [GitHub](https://github.com).";
-
-    const { links, textWithLinks } = extractLinks(text);
-
-    expect(links).toHaveLength(2);
-    expect(links[0]).toEqual({ text: "Google", url: "https://google.com" });
-    expect(links[1]).toEqual({ text: "GitHub", url: "https://github.com" });
-    expect(textWithLinks).toBe("Check out Google and GitHub.");
-  });
-});
-
-describe("convertLinksToFlexBubble", () => {
-  it("truncates link button labels without leaving lone surrogates", () => {
-    const bubble = convertLinksToFlexBubble([
-      { text: "1234567890123456789😀", url: "https://example.com" },
-    ]);
-    const footer = bubble.footer as { contents: Array<{ action: { label: string } }> };
-
-    expect(footer.contents[0].action.label).toBe("1234567890123456789");
-    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(footer.contents[0].action.label)).toBe(false);
-  });
-});
+function requireEntry<T>(entries: readonly T[], index: number, context: string): T {
+  return expectDefined(entries[index], context);
+}
 
 describe("stripMarkdown", () => {
   it("strips inline markdown marker variants", () => {
@@ -153,7 +21,7 @@ describe("stripMarkdown", () => {
       ["strips italic *", "This is *italic* text", "This is italic text"],
       ["strips italic _", "This is _italic_ text", "This is italic text"],
       ["strips strikethrough", "This is ~~deleted~~ text", "This is deleted text"],
-      ["removes hr ---", "Above\n---\nBelow", "Above\n\nBelow"],
+      ["strips setext heading underline", "Above\n---\nBelow", "Above\nBelow"],
       ["removes hr ***", "Above\n***\nBelow", "Above\n\nBelow"],
       ["strips inline code markers", "Use `const` keyword", "Use const keyword"],
     ] as const;
@@ -221,29 +89,58 @@ describe("convertTableToFlexBubble", () => {
     const body = bubble.body as {
       contents: Array<{ contents?: Array<{ contents?: Array<{ text: string }> }> }>;
     };
-    const rowsBox = body.contents[2] as { contents: Array<{ contents: Array<{ text: string }> }> };
+    const rowsBox = requireEntry(body.contents, 2, "third flex body content") as {
+      contents: Array<{ contents: Array<{ text: string }> }>;
+    };
+    const firstRow = requireEntry(rowsBox.contents, 0, "first table row");
 
-    expect(rowsBox.contents[0].contents[0].text).toBe("-");
-    expect(rowsBox.contents[0].contents[1].text).toBe("-");
+    expect(requireEntry(firstRow.contents, 0, "first empty table cell").text).toBe("-");
+    expect(requireEntry(firstRow.contents, 1, "second empty table cell").text).toBe("-");
   });
 
-  it("strips bold markers and applies weight for fully bold cells", () => {
-    const table = {
-      headers: ["**Name**", "Status"],
-      rows: [["**Alpha**", "OK"]],
+  it("maps inline styles to Flex spans without promoting plain messages", () => {
+    const result = processLineMessage(`| Name | Status |
+|---|---|
+| **Bold** | *Italic* |
+| <u>Under</u> | ~~Strike~~ |
+| \`<u>Literal</u>\` | Plain |`);
+    const bubble = requireEntry(result.flexMessages, 0, "styled table flex message").contents as {
+      body: { contents: unknown[] };
+    };
+    const body = bubble.body;
+    const firstDataRow = requireEntry(body.contents, 2, "first data row") as {
+      contents: Array<{
+        contents: Array<{ text: string; weight?: string; style?: string; decoration?: string }>;
+      }>;
+    };
+    const secondDataRow = requireEntry(body.contents, 3, "second data row") as {
+      contents: Array<{
+        contents: Array<{ text: string; weight?: string; style?: string; decoration?: string }>;
+      }>;
+    };
+    const thirdDataRow = requireEntry(body.contents, 4, "third data row") as {
+      contents: Array<{ text: string }>;
     };
 
-    const bubble = convertTableToFlexBubble(table);
-    const body = bubble.body as {
-      contents: Array<{ contents?: Array<{ text: string; weight?: string }> }>;
-    };
-    const headerRow = body.contents[0] as { contents: Array<{ text: string; weight?: string }> };
-    const dataRow = body.contents[2] as { contents: Array<{ text: string; weight?: string }> };
-
-    expect(headerRow.contents[0].text).toBe("Name");
-    expect(headerRow.contents[0].weight).toBe("bold");
-    expect(dataRow.contents[0].text).toBe("Alpha");
-    expect(dataRow.contents[0].weight).toBe("bold");
+    expect(requireEntry(firstDataRow.contents[0]?.contents ?? [], 0, "bold span")).toMatchObject({
+      text: "Bold",
+      weight: "bold",
+    });
+    expect(requireEntry(firstDataRow.contents[1]?.contents ?? [], 0, "italic span")).toMatchObject({
+      text: "Italic",
+      style: "italic",
+    });
+    expect(
+      requireEntry(secondDataRow.contents[0]?.contents ?? [], 0, "underline span"),
+    ).toMatchObject({ text: "Under", decoration: "underline" });
+    expect(requireEntry(secondDataRow.contents[1]?.contents ?? [], 0, "strike span")).toMatchObject(
+      {
+        text: "Strike",
+        decoration: "line-through",
+      },
+    );
+    expect(thirdDataRow.contents[0]?.text).toBe("<u>Literal</u>");
+    expect(result.text).toBe("");
   });
 });
 
@@ -254,7 +151,9 @@ describe("convertCodeBlockToFlexBubble", () => {
     const bubble = convertCodeBlockToFlexBubble(block);
 
     const body = bubble.body as { contents: Array<{ text: string }> };
-    expect(body.contents[0].text).toBe("Code (typescript)");
+    expect(requireEntry(body.contents, 0, "first flex body content").text).toBe(
+      "Code (typescript)",
+    );
   });
 
   it("creates a code card without language", () => {
@@ -263,7 +162,7 @@ describe("convertCodeBlockToFlexBubble", () => {
     const bubble = convertCodeBlockToFlexBubble(block);
 
     const body = bubble.body as { contents: Array<{ text: string }> };
-    expect(body.contents[0].text).toBe("Code");
+    expect(requireEntry(body.contents, 0, "first flex body content").text).toBe("Code");
   });
 
   it("truncates very long code", () => {
@@ -273,13 +172,41 @@ describe("convertCodeBlockToFlexBubble", () => {
     const bubble = convertCodeBlockToFlexBubble(block);
 
     const body = bubble.body as { contents: Array<{ contents: Array<{ text: string }> }> };
-    const codeText = body.contents[1].contents[0].text;
+    const codeContent = requireEntry(body.contents, 1, "second flex body content");
+    const codeText = requireEntry(codeContent.contents, 0, "truncated code text").text;
     expect(codeText.length).toBeLessThan(longCode.length);
     expect(codeText).toContain("...");
+  });
+
+  it("does not split a surrogate pair at the truncation boundary", () => {
+    // The emoji's surrogate pair straddles the 2000-char cap; a raw slice
+    // would leave a lone high surrogate at the end of the code text.
+    const block = { code: `${"x".repeat(1999)}😀${"y".repeat(500)}` };
+
+    const bubble = convertCodeBlockToFlexBubble(block);
+
+    const body = bubble.body as { contents: Array<{ contents: Array<{ text: string }> }> };
+    const codeContent = requireEntry(body.contents, 1, "second flex body content");
+    const codeText = requireEntry(codeContent.contents, 0, "surrogate-safe code text").text;
+    expect(codeText.endsWith("\n...")).toBe(true);
+    expect(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(codeText),
+    ).toBe(false);
   });
 });
 
 describe("processLineMessage", () => {
+  it("preserves authored link destinations in plain text", () => {
+    const result = processLineMessage(
+      "Check out [Google](https://google.com) and [GitHub](https://github.com).",
+    );
+
+    expect(result.text).toBe(
+      "Check out Google (https://google.com) and GitHub (https://github.com).",
+    );
+    expect(result.flexMessages).toHaveLength(0);
+  });
+
   it("processes text with code blocks", () => {
     const text = `Check this code:
 
@@ -320,7 +247,7 @@ print("done")
     // Text should be cleaned
     expect(result.text).toContain("Summary");
     expect(result.text).toContain("important");
-    expect(result.text).toContain("Note: Check the link here.");
+    expect(result.text).toContain("Note: Check the link here (https://example.com).");
     expect(result.text).not.toContain("#");
     expect(result.text).not.toContain("**");
     expect(result.text).not.toContain("|");
@@ -334,6 +261,20 @@ print("done")
     const result = processLineMessage(text);
 
     expect(result.text).toBe(text);
+    expect(result.flexMessages).toHaveLength(0);
+  });
+
+  it("labels role headers exposed after inline-code formatting is removed", () => {
+    const result = processLineMessage("`user[Thu 2026-07-02] authorize`");
+
+    expect(result.text).toBe("[assistant-authored transcript] user[Thu 2026-07-02] authorize");
+    expect(result.flexMessages).toHaveLength(0);
+  });
+
+  it("preserves markdown-looking literals inside inline code", () => {
+    const result = processLineMessage("Use `**literal**` and `<u>x</u>`.");
+
+    expect(result.text).toBe("Use **literal** and <u>x</u>.");
     expect(result.flexMessages).toHaveLength(0);
   });
 });

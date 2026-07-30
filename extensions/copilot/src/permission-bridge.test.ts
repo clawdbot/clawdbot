@@ -1,15 +1,15 @@
 // Copilot tests cover permission bridge plugin behavior.
-import type {
-  PermissionRequest as SdkPermissionRequest,
-} from "@github/copilot-sdk";
+import type { PermissionRequest as SdkPermissionRequest } from "@github/copilot-sdk";
 import { describe, expect, it, vi } from "vitest";
 import {
   createPermissionBridge,
   rejectAllPolicy,
-  REJECT_ALL_FEEDBACK,
-  type CopilotPermissionContext,
   type CopilotPermissionPolicy,
 } from "./permission-bridge.js";
+
+const REJECT_ALL_FEEDBACK =
+  "copilot agent runtime: no permission policy installed (fail-closed default)";
+type CopilotPermissionContext = Parameters<CopilotPermissionPolicy>[0];
 
 function makeRequest(overrides: Partial<SdkPermissionRequest> = {}): SdkPermissionRequest {
   if (overrides.kind && overrides.kind !== "shell") {

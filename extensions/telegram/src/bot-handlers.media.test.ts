@@ -22,8 +22,8 @@ describe("isDurablyRetryableInboundMediaError", () => {
     ).toBe(true);
   });
 
-  it("retries 408 and 5xx HTTP fetch failures", () => {
-    for (const status of [408, 500, 502, 503, 504]) {
+  it("retries 408, 429, and 5xx HTTP fetch failures", () => {
+    for (const status of [408, 429, 500, 502, 503, 504]) {
       expect(
         isDurablyRetryableInboundMediaError(new MediaFetchError("http_error", "x", { status })),
       ).toBe(true);
@@ -38,7 +38,7 @@ describe("isDurablyRetryableInboundMediaError", () => {
         }),
       ),
     ).toBe(false);
-    for (const status of [400, 401, 403, 404, 429]) {
+    for (const status of [400, 401, 403, 404]) {
       expect(
         isDurablyRetryableInboundMediaError(new MediaFetchError("http_error", "x", { status })),
       ).toBe(false);

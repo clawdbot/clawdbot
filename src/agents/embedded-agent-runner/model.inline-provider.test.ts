@@ -1,9 +1,25 @@
 // Coverage for inline provider model normalization and inheritance.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { buildInlineProviderModels, resolveProviderModelInput } from "./model.inline-provider.js";
 import { makeModel } from "./model.test-harness.js";
 
 describe("buildInlineProviderModels", () => {
+  it("reflects in-place changes for callers without a prepared snapshot", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      alpha: { baseUrl: "http://alpha.local", models: [makeModel("first-model")] },
+    };
+
+    expect(expectDefined(buildInlineProviderModels(providers)[0], "first model").id).toBe(
+      "first-model",
+    );
+    expectDefined(providers.alpha, "alpha provider").models = [makeModel("second-model")];
+    expect(expectDefined(buildInlineProviderModels(providers)[0], "second model").id).toBe(
+      "second-model",
+    );
+  });
+
   it("attaches provider ids to inline models", () => {
     // Provider object keys are the source of truth for inline model provider ids;
     // trim them before runtime lookup stores the model.
@@ -83,10 +99,12 @@ describe("buildInlineProviderModels", () => {
     const result = buildInlineProviderModels(providers);
 
     expect(result).toHaveLength(1);
-    expect(result[0].provider).toBe("google");
-    expect(result[0].baseUrl).toBe("https://us-central1-aiplatform.googleapis.com/v1");
-    expect(result[0].api).toBe("google-vertex");
-    expect(result[0].id).toBe("gemini-2.5-pro");
+    expect(expectDefined(result[0], "result[0] test invariant").provider).toBe("google");
+    expect(expectDefined(result[0], "result[0] test invariant").baseUrl).toBe(
+      "https://us-central1-aiplatform.googleapis.com/v1",
+    );
+    expect(expectDefined(result[0], "result[0] test invariant").api).toBe("google-vertex");
+    expect(expectDefined(result[0], "result[0] test invariant").id).toBe("gemini-2.5-pro");
   });
 
   it("model-level api takes precedence over provider-level api", () => {
@@ -124,10 +142,12 @@ describe("buildInlineProviderModels", () => {
     const result = buildInlineProviderModels(providers);
 
     expect(result).toHaveLength(1);
-    expect(result[0].provider).toBe("custom");
-    expect(result[0].baseUrl).toBe("http://localhost:10000");
-    expect(result[0].api).toBe("anthropic-messages");
-    expect(result[0].name).toBe("claude-opus-4.5");
+    expect(expectDefined(result[0], "result[0] test invariant").provider).toBe("custom");
+    expect(expectDefined(result[0], "result[0] test invariant").baseUrl).toBe(
+      "http://localhost:10000",
+    );
+    expect(expectDefined(result[0], "result[0] test invariant").api).toBe("anthropic-messages");
+    expect(expectDefined(result[0], "result[0] test invariant").name).toBe("claude-opus-4.5");
   });
 
   it("normalizes bare Google API hosts for custom Google Generative AI providers", () => {
@@ -144,9 +164,11 @@ describe("buildInlineProviderModels", () => {
     const result = buildInlineProviderModels(providers);
 
     expect(result).toHaveLength(1);
-    expect(result[0].provider).toBe("google-paid");
-    expect(result[0].api).toBe("google-generative-ai");
-    expect(result[0].baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
+    expect(expectDefined(result[0], "result[0] test invariant").provider).toBe("google-paid");
+    expect(expectDefined(result[0], "result[0] test invariant").api).toBe("google-generative-ai");
+    expect(expectDefined(result[0], "result[0] test invariant").baseUrl).toBe(
+      "https://generativelanguage.googleapis.com/v1beta",
+    );
   });
 
   it("merges provider-level headers into inline models", () => {
@@ -187,21 +209,19 @@ describe("buildInlineProviderModels", () => {
     };
 
     const result = buildInlineProviderModels(providers);
-    const [
-      {
-        id,
-        name,
-        reasoning,
-        input,
-        cost,
-        contextWindow,
-        maxTokens,
-        provider,
-        baseUrl,
-        api,
-        headers,
-      },
-    ] = result;
+    const {
+      id,
+      name,
+      reasoning,
+      input,
+      cost,
+      contextWindow,
+      maxTokens,
+      provider,
+      baseUrl,
+      api,
+      headers,
+    } = expectDefined(result[0], "inline proxy model");
 
     expect(result).toHaveLength(1);
     expect({
@@ -247,9 +267,11 @@ describe("buildInlineProviderModels", () => {
     } as unknown as Parameters<typeof buildInlineProviderModels>[0]);
 
     expect(result).toHaveLength(1);
-    expect(result[0].provider).toBe("proxy");
-    expect(result[0].api).toBe("openai-completions");
-    expect(result[0].baseUrl).toBe("https://proxy.example.com/v1");
+    expect(expectDefined(result[0], "result[0] test invariant").provider).toBe("proxy");
+    expect(expectDefined(result[0], "result[0] test invariant").api).toBe("openai-completions");
+    expect(expectDefined(result[0], "result[0] test invariant").baseUrl).toBe(
+      "https://proxy.example.com/v1",
+    );
   });
 
   it("omits headers when neither provider nor model specifies them", () => {
@@ -263,7 +285,7 @@ describe("buildInlineProviderModels", () => {
     const result = buildInlineProviderModels(providers);
 
     expect(result).toHaveLength(1);
-    expect(result[0].headers).toBeUndefined();
+    expect(expectDefined(result[0], "result[0] test invariant").headers).toBeUndefined();
   });
 
   it("drops SecretRef marker headers in inline provider models", () => {
@@ -281,7 +303,7 @@ describe("buildInlineProviderModels", () => {
     const result = buildInlineProviderModels(providers);
 
     expect(result).toHaveLength(1);
-    expect(result[0].headers).toEqual({
+    expect(expectDefined(result[0], "result[0] test invariant").headers).toEqual({
       "X-Static": "tenant-a",
     });
   });

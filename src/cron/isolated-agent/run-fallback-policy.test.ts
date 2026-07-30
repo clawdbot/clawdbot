@@ -401,9 +401,24 @@ describe("resolveCronFallbacksOverride", () => {
         }),
       }),
     ).toEqual([
-      { provider: "ollama", model: "qwen3:32b" },
-      { provider: "openrouter", model: "nvidia/nemotron-3-super-120b-a12b:free" },
-      { provider: "openai", model: "gpt-5.4" },
+      {
+        provider: "ollama",
+        model: "qwen3:32b",
+        routeOrigin: "requested",
+        routeResolution: "resolved",
+      },
+      {
+        provider: "openrouter",
+        model: "nvidia/nemotron-3-super-120b-a12b:free",
+        routeOrigin: "configured-fallback",
+        routeResolution: "resolved",
+      },
+      {
+        provider: "openai",
+        model: "gpt-5.4",
+        routeOrigin: "configured-fallback",
+        routeResolution: "resolved",
+      },
     ]);
   });
 
@@ -420,7 +435,14 @@ describe("resolveCronFallbacksOverride", () => {
           fallbacks: [],
         }),
       }),
-    ).toStrictEqual([{ provider: "ollama", model: "qwen3:32b" }]);
+    ).toStrictEqual([
+      {
+        provider: "ollama",
+        model: "qwen3:32b",
+        routeOrigin: "requested",
+        routeResolution: "resolved",
+      },
+    ]);
   });
 
   it("documents that cron preflight walks fallbacks before skipping", () => {
@@ -428,6 +450,6 @@ describe("resolveCronFallbacksOverride", () => {
     const automationDocs = readFileSync("docs/automation/cron-jobs.md", "utf8");
 
     expect(cliDocs).toContain("Local-provider preflight checks walk configured fallbacks");
-    expect(automationDocs).toContain("Local-provider preflight checks walk configured fallbacks");
+    expect(automationDocs).toContain("This preflight walks the job's configured fallback chain");
   });
 });

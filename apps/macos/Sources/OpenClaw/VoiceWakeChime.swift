@@ -35,16 +35,11 @@ enum VoiceWakeChimeCatalog {
     static func displayName(for raw: String) -> String {
         SoundEffectCatalog.displayName(for: raw)
     }
-
-    static func url(for name: String) -> URL? {
-        SoundEffectCatalog.url(for: name)
-    }
 }
 
 @MainActor
 enum VoiceWakeChimePlayer {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.chime")
-    private static var lastSound: NSSound?
 
     static func play(_ chime: VoiceWakeChime, reason: String? = nil) {
         guard let sound = self.sound(for: chime) else { return }

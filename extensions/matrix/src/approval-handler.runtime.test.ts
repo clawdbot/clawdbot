@@ -6,9 +6,23 @@ import type {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixApprovalNativeRuntime } from "./approval-handler.runtime.js";
 import {
-  clearMatrixApprovalReactionTargetsForTest,
-  resolveMatrixApprovalReactionTarget,
+  resolveMatrixApprovalReactionTargetWithPersistence as resolveMatrixApprovalReactionTargetWithPersistenceRaw,
+  unregisterMatrixApprovalReactionTargetsForApproval,
 } from "./approval-reactions.js";
+
+type ResolveTargetParams = Parameters<
+  typeof resolveMatrixApprovalReactionTargetWithPersistenceRaw
+>[0];
+
+function resolveMatrixApprovalReactionTargetWithPersistence(
+  params: Omit<ResolveTargetParams, "accountId"> & { accountId?: string },
+) {
+  const { accountId = "default", ...target } = params;
+  return resolveMatrixApprovalReactionTargetWithPersistenceRaw({
+    ...target,
+    accountId,
+  });
+}
 
 type MatrixDeliverPendingParams = Parameters<
   typeof matrixApprovalNativeRuntime.transport.deliverPending
@@ -72,6 +86,11 @@ function buildMatrixApprovalRoomTarget(
   };
 }
 
+// Pending approvals expire in the future; the reaction target store TTLs its
+// memory layer from `view.expiresAtMs - now`, so epoch-past fixtures would
+// evict the mapping before assertions run.
+const TEST_APPROVAL_EXPIRES_AT_MS = Date.now() + 5 * 60_000;
+
 function buildExecApprovalView(
   overrides: Partial<MatrixPendingExecApprovalView> = {},
 ): MatrixPendingExecApprovalView {
@@ -102,7 +121,7 @@ function buildExecApprovalView(
         command: "/approve req-1 deny",
       },
     ],
-    expiresAtMs: 1_000,
+    expiresAtMs: TEST_APPROVAL_EXPIRES_AT_MS,
     ...overrides,
   };
 }
@@ -129,7 +148,7 @@ function buildPluginApprovalView(
         command: "/approve plugin:req-1 allow-once",
       },
     ],
-    expiresAtMs: 1_000,
+    expiresAtMs: TEST_APPROVAL_EXPIRES_AT_MS,
     ...overrides,
   };
 }
@@ -173,8 +192,17 @@ async function buildPendingPayload(view: MatrixPendingApprovalView) {
 }
 
 describe("matrixApprovalNativeRuntime", () => {
-  beforeEach(() => {
-    clearMatrixApprovalReactionTargetsForTest();
+  beforeEach(async () => {
+    await unregisterMatrixApprovalReactionTargetsForApproval({
+      accountId: "default",
+      approvalId: "req-1",
+      approvalKind: "exec",
+    });
+    await unregisterMatrixApprovalReactionTargetsForApproval({
+      accountId: "default",
+      approvalId: "plugin:req-1",
+      approvalKind: "plugin",
+    });
   });
 
   it("sends versioned Matrix approval content with pending exec approvals", async () => {
@@ -273,7 +301,7 @@ describe("matrixApprovalNativeRuntime", () => {
       kind: "plugin",
       title: "Plugin Approval Required",
       description: "Approve the tool call.",
-      expiresAtMs: 1_000,
+      expiresAtMs: TEST_APPROVAL_EXPIRES_AT_MS,
       metadata: [],
       allowedDecisions: ["allow-once"],
       actions: [
@@ -304,13 +332,14 @@ describe("matrixApprovalNativeRuntime", () => {
     });
     const reactMessage = vi.fn().mockImplementation(async () => {
       expect(
-        resolveMatrixApprovalReactionTarget({
+        await resolveMatrixApprovalReactionTargetWithPersistence({
           roomId: "!room:example.org",
           eventId: "$approval",
           reactionKey: "✅",
         }),
       ).toEqual({
         approvalId: "req-1",
+        approvalKind: "exec",
         decision: "allow-once",
       });
     });
@@ -506,21 +535,23 @@ describe("matrixApprovalNativeRuntime", () => {
     });
 
     expect(binding).toEqual({
+      accountId: "default",
       roomId: "!room:example.org",
       eventId: "$primary",
     });
     expect(
-      resolveMatrixApprovalReactionTarget({
+      await resolveMatrixApprovalReactionTargetWithPersistence({
         roomId: "!room:example.org",
         eventId: "$primary",
         reactionKey: "✅",
       }),
     ).toEqual({
       approvalId: "req-1",
+      approvalKind: "exec",
       decision: "allow-once",
     });
     expect(
-      resolveMatrixApprovalReactionTarget({
+      await resolveMatrixApprovalReactionTargetWithPersistence({
         roomId: "!room:example.org",
         eventId: "$last",
         reactionKey: "✅",

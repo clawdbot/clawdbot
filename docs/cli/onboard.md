@@ -1,15 +1,18 @@
 ---
 summary: "CLI reference for `openclaw onboard` (interactive onboarding)"
 read_when:
-  - You want guided setup for gateway, workspace, auth, channels, and skills
+  - You want to establish inference, then finish setup with OpenClaw
 title: "Onboard"
 ---
 
 # `openclaw onboard`
 
-Full guided onboarding for local or remote Gateway setup. Use this when you want OpenClaw to walk through model auth, workspace, gateway, channels, skills, and health in one flow.
-
-## Related guides
+Guided setup that establishes inference first: it detects existing AI access,
+requires a live completion, persists only the working route, and then starts
+OpenClaw to configure the rest. `openclaw setup` reaches this flow on fresh
+systems or whenever an onboarding option is present; configured systems use
+bare `openclaw setup` for system-agent chat. `openclaw setup --baseline` only
+writes the baseline config/workspace.
 
 <CardGroup cols={2}>
   <Card title="CLI onboarding hub" href="/start/wizard" icon="rocket">
@@ -33,33 +36,169 @@ Full guided onboarding for local or remote Gateway setup. Use this when you want
 
 ```bash
 openclaw onboard
+openclaw onboard --tui
+openclaw onboard --classic
 openclaw onboard --modern
 openclaw onboard --flow quickstart
 openclaw onboard --flow manual
 openclaw onboard --flow import
 openclaw onboard --import-from hermes --import-source ~/.hermes
 openclaw onboard --skip-bootstrap
+openclaw onboard recommendations --json
+openclaw onboard recommendations acknowledge
+openclaw onboard recommendations acknowledge --retry "<failed-id>"
+openclaw onboard recommendations refresh
 openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 ```
 
-`--flow import` uses plugin-owned migration providers such as Hermes. It only runs against a fresh OpenClaw setup; if existing config, credentials, sessions, or workspace memory/identity files are present, reset or choose a fresh setup before importing.
+`openclaw onboard recommendations` reads pending app-recommendation matches
+stored during onboarding. Add `--json` for the machine-readable list used by
+the first-run bootstrap. The command does not rescan installed apps or call a
+model. Its output contains only validated install IDs, source, and tier; it
+intentionally omits untrusted marketplace prose, model reasons, and local app
+labels. After the recommendation offer has been answered, the command returns
+an empty list and future onboarding runs skip the step entirely.
+`openclaw onboard recommendations refresh` clears the stored offer so the next
+onboarding run rescans installed apps and creates a new offer.
 
-`--modern` starts the Crestodian conversational onboarding preview. Without
-`--modern`, `openclaw onboard` keeps the classic onboarding flow.
+Fresh workspaces defer the recommendation choice to the bootstrap conversation.
+After that conversation handles the user's choices,
+`openclaw onboard recommendations acknowledge` marks the stored offer answered.
+The acknowledgement is idempotent. If a chosen install fails, pass each failed
+opaque ID with `--retry <id...>`; successful and declined matches are consumed,
+while failed matches remain pending for a later onboarding run. Unknown IDs
+fail without changing the stored offer. After an interrupted ClawHub skill
+install, an existing target counts as successful only when
+`openclaw skills verify "@owner/slug"` succeeds for the same
+publisher-qualified recommendation ID and its JSON output reports
+`openclaw.resolution.source: "installed"`. Registry verification alone is not
+proof of a local install. Otherwise keep that ID pending with `--retry` and do
+not overwrite the existing skill.
 
-On a fresh install where the active config file is missing or has no authored
-settings (empty or metadata-only), bare `openclaw` also starts the classic
-onboarding flow. Once a config file has authored settings, bare `openclaw`
-opens Crestodian instead.
+- `--classic`: opens the full step-by-step wizard. It cannot be combined with
+  `--non-interactive`; omit `--classic` for automated setup.
+- `--flow quickstart`: opens the classic wizard with minimal prompts, uses
+  token auth by default, and generates a token when no stored or explicit
+  credential applies. Explicit local Gateway flags such as
+  `--gateway-port`, `--gateway-bind`, `--gateway-auth`, and `--tailscale`
+  override the corresponding stored or default quickstart values; omitted
+  options keep their current values.
+- `--flow manual` (alias `advanced`): opens the classic wizard with full prompts
+  for port, bind, and auth.
+- `--flow import`: runs a detected migration provider (for example Hermes via `--import-from hermes`) against a fresh setup. After confirmation, onboarding stages config, credentials, workspace files, memory, and skills under private temporary targets; imported inference must pass a live completion before workspace and agent state are promoted and configuration is committed. Failure or cancellation before promotion leaves the live target untouched. External activation steps that cannot be rolled back, such as Codex plugin installation, run afterward and remain retryable from the migration report. Reset config, credentials, sessions, and workspace state first if any exist. Use [`openclaw migrate`](/cli/migrate) for dry-run plans, overwrite mode, verified backups, reports, and exact mappings.
+- `--remote-url` and `--remote-token`: prefill the classic remote Gateway step and override stored remote values for this run. Changing the URL does not reuse stored credentials unless you also pass a token. The token stays masked in prompts and follows the wizard's existing plaintext or SecretRef storage choice.
+- `--tailscale-reset-on-exit` and `--no-tailscale-reset-on-exit`: explicitly control whether Tailscale Serve or Funnel configuration is reset when the Gateway exits. Omitting both preserves the current setting during non-interactive reruns.
+- `--modern` is a compatibility alias for the OpenClaw conversational setup
+  assistant. It uses the same live-inference gate as `openclaw setup` and
+  accepts only `--workspace`, `--accept-risk`,
+  `--non-interactive`, and `--json`. Other setup flags are rejected instead of
+  being silently ignored.
 
-Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and
-Tailnet `*.ts.net` gateway URLs. For other trusted private-DNS names, set
-`OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` in the onboarding process environment.
+## Guided flow
+
+Plain `openclaw onboard` starts the guided flow. It shows the security notice,
+then asks one question up front: **full access** (recommended — setup looks for
+AI apps, keys, and local runtimes automatically) or **ask first** (setup asks
+once before looking around, or lets you configure manually). The
+choice persists as `wizard.accessMode`. With discovery allowed, onboarding
+detects AI access already available through configured models, API-key
+environment variables, and supported local CLIs, then tests the recommended
+candidate with a real completion. If a candidate fails, onboarding quietly
+tries the next usable one and summarizes anything that did not respond in a
+single line; the working route is announced with a one-keystroke option to see
+everything else instead.
+
+If automatic detection is exhausted, the provider picker shows OpenAI,
+Anthropic, xAI (Grok), Google, and OpenRouter first. Choose **More…** for every
+other supported provider, grouped by provider; regions, plans, and auth methods
+then appear in a second menu. Supported browser or device sign-in and masked
+API-key or token methods use the same live completion path. OpenClaw persists
+only the verified model route and its credential after the test succeeds; a
+failed candidate does not replace the configured model or save the attempted
+credential. Choose **Skip for now** to exit without starting OpenClaw and
+rerun `openclaw onboard` when you are ready. Workspace and Gateway setup remain
+unchanged until OpenClaw starts.
+
+In guided mode, `--workspace <dir>` supplies OpenClaw's proposed workspace
+and the isolated inference context. It is not persisted until you approve the
+OpenClaw setup proposal. Classic and noninteractive onboarding persist their
+workspace through their normal setup flow. On a rerun with an existing agent
+roster, onboarding preserves the configured fleet workspace: the classic
+wizard shows both paths and requires explicit confirmation before moving it,
+while non-interactive setup warns and keeps the current value.
+
+After inference passes, onboarding checks for memories from supported local AI
+tools: Claude Code auto-memory, Codex consolidated memories, and Hermes memory
+files. When it finds any, one page offers to copy them into the agent workspace
+under `memory/imports/` for indexed recall. Nothing is imported without
+confirmation, previously imported files are skipped, and you can always import
+later from the Control UI [Memory import page](/web/control-ui), which offers
+the same memory-only scope. (A full [`openclaw migrate`](/cli/migrate) run is
+broader: it can also import config, skills, and credentials.) The classic
+wizard shows the same page after it prepares the workspace.
+
+After inference passes (and the memory-import offer), guided onboarding
+applies the standard setup automatically — workspace, Gateway, and sessions,
+the same plan the conversational `openclaw setup` chat would apply on "yes" —
+then offers plugin and skill recommendations from installed apps; app names
+are matched through your configured model and ClawHub search, and the step can
+be disabled with [`wizard.appRecommendations`](/gateway/configuration-reference#wizard).
+In a macOS, Linux, or Windows desktop session, it then opens the authenticated
+Control UI dashboard and waits up to 60 seconds for the browser client to
+connect. On headless Linux or over SSH, it prints a prominent copy-pasteable
+dashboard URL, including an SSH port-forward command for a loopback Gateway,
+and waits up to five minutes. A successful connection continues in the browser;
+an unreachable Gateway or a timeout falls back to the same terminal hatch as
+before. Pass `--tui` to skip the browser handoff and force that terminal hatch.
+If applying setup fails, onboarding falls back to the conversational OpenClaw
+chat to finish interactively. Channels, agents,
+plugins, and other optional features remain OpenClaw chat territory: run
+`openclaw` and use `open channel wizard for <channel>` to hand channel
+credential collection to a masked terminal wizard. To change the model
+provider or its authentication, exit OpenClaw and run `openclaw onboard`;
+OpenClaw does not open the guided or classic provider flows.
+
+On a configured install, running `openclaw onboard` again verifies the current
+default model first, so the same flow acts as a verification and repair pass —
+it does not re-apply setup, reinstall, or restart the Gateway service.
+If that check fails, the configured model is never replaced automatically —
+onboarding stops and asks how to continue. The check runs outside your
+workspace, so a model provided by a workspace plugin can fail here while still
+working in the agent.
+Use `openclaw onboard --classic` for provider-specific auth, channels, skills,
+remote Gateway setup, imports, or full Gateway controls. For conversational
+non-inference setup and repair, run `openclaw setup`; `openclaw onboard
+--modern` is a compatibility alias through the same inference gate. The classic
+wizard can optionally verify the default model with a live completion, but
+OpenClaw will not start until its own live inference check passes.
+
+In an interactive terminal, bare `openclaw` (no subcommand) routes by config
+state:
+
+- If the active config file is missing or has no authored settings (empty or
+  metadata-only), it starts guided onboarding.
+- If the config file exists but fails validation, it starts the classic
+  onboarding path with `openclaw doctor` guidance. OpenClaw needs working
+  inference and is not used to repair this pre-inference state.
+- If the config file is valid, it opens the normal agent TUI. A reachable
+  configured Gateway with an agent and model goes directly to that UI without
+  onboarding or OpenClaw. On a configured install, reach OpenClaw with
+  `/openclaw` inside the TUI or `openclaw setup`.
+
+Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and Tailnet `*.ts.net` gateway URLs. For other trusted private-DNS names, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` in the onboarding process environment.
+
+## Reset
+
+```bash
+openclaw onboard --reset
+openclaw onboard --reset --reset-scope full
+```
+
+`--reset` wipes state before running setup. `--reset-scope` controls how much: `config` (config only), `config+creds+sessions` (default when `--reset` is passed without a scope), or `full` (also resets the workspace). Workspace reset only happens with `--reset-scope full`.
 
 ## Locale
 
-Interactive onboarding uses the CLI wizard locale for fixed setup copy. Resolve
-order is:
+Interactive onboarding uses the CLI wizard locale for fixed setup copy. It uses the first nonblank value in this order:
 
 1. `OPENCLAW_LOCALE`
 2. `LC_ALL`
@@ -67,18 +206,16 @@ order is:
 4. `LANG`
 5. English fallback
 
-Supported wizard locales are `en`, `zh-CN`, and `zh-TW`. Locale values may use
-underscore or POSIX suffix forms such as `zh_CN.UTF-8`. Product names, command
-names, config keys, URLs, provider IDs, model IDs, and plugin/channel labels
-remain literal.
-
-Example:
+Supported wizard locales are `en`, `zh-CN`, and `zh-TW`. Locale values may use underscore or POSIX suffix forms such as `zh_CN.UTF-8`. Product names, command names, config keys, URLs, provider IDs, model IDs, and plugin/channel labels remain literal.
 
 ```bash
 OPENCLAW_LOCALE=zh-CN openclaw onboard
+OPENCLAW_LOCALE=en openclaw onboard # Explicit English override
 ```
 
-Non-interactive custom provider:
+## Non-interactive setup
+
+`--non-interactive` requires `--accept-risk` (acknowledges that agents are powerful and full system access is risky). `--mode` defaults to `local`.
 
 ```bash
 openclaw onboard --non-interactive \
@@ -91,11 +228,9 @@ openclaw onboard --non-interactive \
   --custom-image-input
 ```
 
-`--custom-api-key` is optional in non-interactive mode. If omitted, onboarding checks `CUSTOM_API_KEY`.
-OpenClaw marks common vision model IDs as image-capable automatically. Pass `--custom-image-input` for unknown custom vision IDs, or `--custom-text-input` to force text-only metadata.
-Use `--custom-compatibility openai-responses` for OpenAI-compatible endpoints that support `/v1/responses` but not `/v1/chat/completions`.
+`--custom-api-key` is optional; if omitted, onboarding checks `CUSTOM_API_KEY` in env. OpenClaw marks common vision model IDs (GPT-4o/4.1/5.x, Claude 3/4, Gemini, Qwen-VL, LLaVA, Pixtral, and similar) as image-capable automatically. Pass `--custom-image-input` for unknown custom vision IDs, or `--custom-text-input` to force text-only metadata. Use `--custom-compatibility openai-responses` for OpenAI-compatible endpoints that support `/v1/responses` but not `/v1/chat/completions`; valid values are `openai` (default), `openai-responses`, `anthropic`.
 
-LM Studio also supports a provider-specific key flag in non-interactive mode:
+LM Studio also has a provider-specific key flag:
 
 ```bash
 openclaw onboard --non-interactive \
@@ -127,65 +262,47 @@ openclaw onboard --non-interactive \
   --accept-risk
 ```
 
-With `--secret-input-mode ref`, onboarding writes env-backed refs instead of plaintext key values.
-For auth-profile backed providers this writes `keyRef` entries; for custom providers this writes `models.providers.<id>.apiKey` as an env ref (for example `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`).
+With `--secret-input-mode ref`, onboarding writes env-backed refs instead of plaintext key values: for auth-profile-backed providers this writes `keyRef: { source: "env", provider: "default", id: <envVar> }`; for custom providers it writes `models.providers.<id>.apiKey` the same way (for example `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`). Contract: set the provider env var in the onboarding process environment (for example `OPENAI_API_KEY`) and do not also pass an inline key flag unless that env var is set - a flag value without the matching env var fails fast with guidance.
 
-Non-interactive `ref` mode contract:
+### Gateway auth (non-interactive)
 
-- Set the provider env var in the onboarding process environment (for example `OPENAI_API_KEY`).
-- Do not pass inline key flags (for example `--openai-api-key`) unless that env var is also set.
-- If an inline key flag is passed without the required env var, onboarding fails fast with guidance.
-
-Gateway token options in non-interactive mode:
-
-- `--gateway-auth token --gateway-token <token>` stores a plaintext token.
-- `--gateway-auth token --gateway-token-ref-env <name>` stores `gateway.auth.token` as an env SecretRef.
+- `--gateway-auth token --gateway-token <token>` stores a plaintext token. `token` is the default auth mode.
+- `--gateway-auth token --gateway-token-ref-env <name>` stores `gateway.auth.token` as an env SecretRef. Requires a non-empty env var of that name in the onboarding process environment.
 - `--gateway-token` and `--gateway-token-ref-env` are mutually exclusive.
-- `--gateway-token-ref-env` requires a non-empty env var in the onboarding process environment.
-- With `--install-daemon`, when token auth requires a token, SecretRef-managed gateway tokens are validated but not persisted as resolved plaintext in supervisor service environment metadata.
-- With `--install-daemon`, if token mode requires a token and the configured token SecretRef is unresolved, onboarding fails closed with remediation guidance.
-- With `--install-daemon`, if both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, onboarding blocks install until mode is set explicitly.
-- Local onboarding writes `gateway.mode="local"` into the config. If a later config file is missing `gateway.mode`, treat that as config damage or an incomplete manual edit, not as a valid local-mode shortcut.
-- Local onboarding installs selected downloadable plugins when the chosen setup path requires them.
-- Remote onboarding only writes connection info for the remote Gateway and does not install local plugin packages.
-- `--allow-unconfigured` is a separate gateway runtime escape hatch. It does not mean onboarding may omit `gateway.mode`.
-
-Example:
+- With `--install-daemon`: a SecretRef-managed `gateway.auth.token` is validated but not persisted as resolved plaintext in supervisor service environment metadata; if the ref is unresolved, install fails closed with remediation guidance. If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, install blocks until mode is set explicitly.
+- Local onboarding writes `gateway.mode="local"` into the config. A later config file missing `gateway.mode` indicates config damage or an incomplete manual edit, not a valid local-mode shortcut.
+- Local onboarding installs downloadable plugins the chosen setup path requires (for example a Codex or Copilot runtime plugin for those auth choices). Remote onboarding only writes connection info for the remote Gateway - it never installs local plugin packages.
+- `--allow-unconfigured` is a separate `openclaw gateway run` escape hatch; it does not let onboarding skip `gateway.mode`.
 
 ```bash
+export OPENAI_API_KEY="your-provider-key"
 export OPENCLAW_GATEWAY_TOKEN="your-token"
 openclaw onboard --non-interactive \
   --mode local \
-  --auth-choice skip \
+  --auth-choice openai-api-key \
+  --secret-input-mode ref \
   --gateway-auth token \
   --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN \
   --accept-risk
 ```
 
-Non-interactive local gateway health:
+### Local gateway health
 
-- Unless you pass `--skip-health`, onboarding waits for a reachable local gateway before it exits successfully.
-- `--install-daemon` starts the managed gateway install path first. Without it, you must already have a local gateway running, for example `openclaw gateway run`.
-- If you only want config/workspace/bootstrap writes in automation, use `--skip-health`.
-- If you manage workspace files yourself, pass `--skip-bootstrap` to set `agents.defaults.skipBootstrap: true` and skip creating `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, and `BOOTSTRAP.md`.
+- Unless you pass `--skip-health`, onboarding waits for a reachable local gateway before exiting successfully.
+- `--install-daemon` starts the managed gateway install path first. Without it, a local gateway must already be running (for example `openclaw gateway run`).
+- `--skip-health` skips the wait if you only want config/workspace/bootstrap writes in automation.
+- `--skip-bootstrap` sets `agents.defaults.skipBootstrap: true` and skips creating `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, and `BOOTSTRAP.md`.
 - On native Windows, `--install-daemon` tries Scheduled Tasks first and falls back to a per-user Startup-folder login item if task creation is denied.
 
-Interactive onboarding behavior with reference mode:
+### Interactive ref mode
 
-- Choose **Use secret reference** when prompted.
-- Then choose either:
-  - Environment variable
-  - Configured secret provider (`file` or `exec`)
-- Onboarding performs a fast preflight validation before saving the ref.
-  - If validation fails, onboarding shows the error and lets you retry.
+- Choose **Use secret reference** when prompted, then either **Environment variable** or a configured secret provider (`file` or `exec`).
+- Onboarding runs a fast preflight validation before saving the ref and lets you retry on failure.
 
-### Non-interactive Z.AI endpoint choices
+### Z.AI endpoint choices
 
 <Note>
-`--auth-choice zai-api-key` auto-detects the best Z.AI endpoint and model for
-your key. Coding Plan endpoints prefer `zai/glm-5.2`; general API endpoints use
-`zai/glm-5.1`. To force a Coding Plan endpoint, pick `zai-coding-global` or
-`zai-coding-cn`.
+`--auth-choice zai-api-key` auto-detects the best Z.AI endpoint and model for your key: Coding Plan endpoints prefer `zai/glm-5.2` (falling back to `glm-5.1` if unavailable); general API endpoints default to `zai/glm-5.1`. To force a Coding Plan endpoint, pick `zai-coding-global` or `zai-coding-cn` directly.
 </Note>
 
 ```bash
@@ -194,13 +311,10 @@ openclaw onboard --non-interactive \
   --auth-choice zai-coding-global \
   --zai-api-key "$ZAI_API_KEY"
 
-# Other Z.AI endpoint choices:
-# --auth-choice zai-coding-cn
-# --auth-choice zai-global
-# --auth-choice zai-cn
+# Other Z.AI endpoint choices: zai-coding-cn, zai-global, zai-cn
 ```
 
-Non-interactive Mistral example:
+Mistral:
 
 ```bash
 openclaw onboard --non-interactive \
@@ -210,73 +324,57 @@ openclaw onboard --non-interactive \
 
 ## Additional non-interactive flags
 
-Token-based model auth (non-interactive; used with `--auth-choice token`):
+Token-based model auth (used with `--auth-choice token`):
 
-- `--token-provider <id>` — Token provider id. Identifies which provider issues the token.
-- `--token <token>` — Token value for model authentication.
-- `--token-profile-id <id>` — Auth profile id. Generic token storage defaults to `<provider>:manual`; provider-owned setup flows may use their own default, such as `anthropic:default`.
-- `--token-expires-in <duration>` — Optional token expiry duration (e.g. `365d`, `12h`).
+| Flag                            | Description                                                                                                                 |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `--token-provider <id>`         | Token provider id issuing the token                                                                                         |
+| `--token <token>`               | Token value for model authentication                                                                                        |
+| `--token-profile-id <id>`       | Auth profile id (default `<provider>:manual`; some provider-owned flows use their own default, such as `anthropic:default`) |
+| `--token-expires-in <duration>` | Optional token expiry duration (e.g. `365d`, `12h`)                                                                         |
 
-Cloudflare AI Gateway (non-interactive):
+Cloudflare AI Gateway: `--cloudflare-ai-gateway-account-id <id>`, `--cloudflare-ai-gateway-gateway-id <id>`.
 
-- `--cloudflare-ai-gateway-account-id <id>` — Cloudflare Account ID for routing through Cloudflare AI Gateway.
-- `--cloudflare-ai-gateway-gateway-id <id>` — Cloudflare AI Gateway ID.
+Daemon install control: `--no-install-daemon` / `--skip-daemon` (aliases; skip gateway service install), `--daemon-runtime <node>`.
 
-Daemon install control:
+Skills: `--node-manager <npm|pnpm|bun>` (default `npm`), `--skip-skills`.
 
-- `--no-install-daemon` — Explicitly skip gateway service installation.
-- `--skip-daemon` — Alias for `--no-install-daemon`.
+UI and hook setup: `--skip-ui` (skip Control UI/TUI prompts), `--skip-hooks` (skip webhook/hook setup), `--skip-channels`, `--skip-search`.
 
-UI and hook setup control:
+Output: `--suppress-gateway-token-output` suppresses token-bearing Gateway/UI output (token hints, auto-login URL with embedded token, and automatic Control UI launch) - useful in shared terminals and CI.
 
-- `--skip-ui` — Skip Control UI / TUI prompts during onboarding.
-- `--skip-hooks` — Skip webhook / hook setup prompts during onboarding.
+<Note>
+`--json` does not imply non-interactive mode in guided or classic onboarding.
+With `--modern`, JSON is a one-shot OpenClaw overview and exits after that
+single result. Use `--non-interactive` for other scripts.
+</Note>
 
-Output suppression:
+## Provider prefiltering
 
-- `--suppress-gateway-token-output` — Suppress token-bearing Gateway/UI output (token hints, auto-login URL with embedded token, and automatic Control UI launch). Useful in shared terminal and CI environments.
+When an auth choice implies a preferred provider, onboarding prefilters the default-model and allowlist pickers to that provider's models. The filter also matches other providers owned by the same plugin, which covers coding-plan variants such as `volcengine`/`volcengine-plan` and `byteplus`/`byteplus-plan`. If the preferred-provider filter yields no loaded models, onboarding falls back to the unfiltered catalog instead of leaving the picker empty.
 
-## Flow notes
+## Web-search follow-ups
 
-<AccordionGroup>
-  <Accordion title="Flow types">
-    - `quickstart`: minimal prompts, auto-generates a gateway token.
-    - `manual`: full prompts for port, bind, and auth (alias of `advanced`).
-    - `import`: runs a detected migration provider, previews the plan, then applies after confirmation.
+Some web-search providers trigger provider-specific follow-up prompts during onboarding:
 
-  </Accordion>
-  <Accordion title="Provider prefiltering">
-    When an auth choice implies a preferred provider, onboarding prefilters the default-model and allowlist pickers to that provider. For Volcengine and BytePlus, this also matches the coding-plan variants (`volcengine-plan/*`, `byteplus-plan/*`).
+- **Grok** can offer optional `x_search` setup with the same xAI auth and an `x_search` model choice.
+- **Kimi** can ask for the Moonshot API region (`api.moonshot.ai` vs `api.moonshot.cn`) and the default Kimi web-search model.
 
-    If the preferred-provider filter yields no loaded models yet, onboarding falls back to the unfiltered catalog instead of leaving the picker empty.
+## Other behaviors
 
-  </Accordion>
-  <Accordion title="Web-search follow-ups">
-    Some web-search providers trigger provider-specific follow-up prompts:
-
-    - **Grok** can offer optional `x_search` setup with the same xAI OAuth profile or API key and an `x_search` model choice.
-    - **Kimi** can ask for the Moonshot API region (`api.moonshot.ai` vs `api.moonshot.cn`) and the default Kimi web-search model.
-
-  </Accordion>
-  <Accordion title="Other behaviors">
-    - Local onboarding DM scope behavior: [CLI setup reference](/start/wizard-cli-reference#outputs-and-internals).
-    - Fastest first chat: `openclaw dashboard` (Control UI, no channel setup).
-    - Custom provider: connect any OpenAI or Anthropic compatible endpoint, including hosted providers not listed. Use Unknown to auto-detect.
-    - If Hermes state is detected, onboarding offers a migration flow. Use [Migrate](/cli/migrate) for dry-run plans, overwrite mode, reports, and exact mappings.
-
-  </Accordion>
-</AccordionGroup>
+- Local onboarding DM scope behavior: [CLI setup reference](/start/wizard-cli-reference#outputs-and-internals).
+- Fastest first chat: `openclaw dashboard` (Control UI, no channel setup).
+- Custom provider: connect any OpenAI- or Anthropic-compatible endpoint, including hosted providers not listed. Use **Unknown** compatibility to auto-detect via a live probe.
+- If Hermes state is detected, onboarding offers a migration flow (see `--flow import` above).
 
 ## Common follow-up commands
+
+Use `openclaw configure` later for targeted non-inference changes and `openclaw
+channels add` for channel-only setup. For model provider or auth route changes,
+run `openclaw onboard` instead.
 
 ```bash
 openclaw channels add
 openclaw configure
 openclaw agents add <name>
 ```
-
-Use `openclaw setup` as the same guided onboarding entry point. Use `openclaw setup --baseline` when you only need the baseline config/workspace, `openclaw configure` later for targeted changes, and `openclaw channels add` for channel-only setup.
-
-<Note>
-`--json` does not imply non-interactive mode. Use `--non-interactive` for scripts.
-</Note>

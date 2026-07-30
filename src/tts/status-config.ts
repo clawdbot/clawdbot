@@ -1,32 +1,12 @@
 // TTS status config helpers resolve status output paths for speech generation.
-import path from "node:path";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.js";
 import type { TtsAutoMode, TtsConfig, TtsProvider } from "../config/types.tts.js";
-import { tryReadJsonSync } from "../infra/json-files.js";
-import { resolveConfigDir, resolveUserPath } from "../utils.js";
-import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
-import { resolveEffectiveTtsConfig, type TtsConfigResolutionContext } from "./tts-config.js";
+import { resolveTtsSettingsSnapshot } from "./tts-settings.js";
 
-const DEFAULT_TTS_MAX_LENGTH = 1500;
-const DEFAULT_TTS_SUMMARIZE = true;
 const DEFAULT_OPENAI_TTS_BASE_URL = "https://api.openai.com/v1";
 const MAX_STATUS_DETAIL_LENGTH = 96;
-
-type TtsUserPrefs = {
-  tts?: {
-    auto?: TtsAutoMode;
-    enabled?: boolean;
-    provider?: TtsProvider;
-    persona?: string | null;
-    maxLength?: number;
-    summarize?: boolean;
-  };
-};
 
 type TtsStatusSnapshot = {
   autoMode: TtsAutoMode;
@@ -41,68 +21,6 @@ type TtsStatusSnapshot = {
   summarize: boolean;
 };
 
-function resolveConfiguredTtsAutoMode(raw: TtsConfig): TtsAutoMode {
-  return normalizeTtsAutoMode(raw.auto) ?? (raw.enabled ? "always" : "off");
-}
-
-function normalizeConfiguredSpeechProviderId(
-  providerId: string | undefined,
-): TtsProvider | undefined {
-  const normalized = normalizeOptionalLowercaseString(providerId);
-  if (!normalized) {
-    return undefined;
-  }
-  return normalized === "edge" ? "microsoft" : normalized;
-}
-
-function normalizeTtsPersonaId(personaId: string | null | undefined): string | undefined {
-  return normalizeOptionalLowercaseString(personaId ?? undefined);
-}
-
-function resolvePersonaPreferredProvider(
-  raw: TtsConfig,
-  personaId: string | undefined,
-): TtsProvider | undefined {
-  if (!personaId || !raw.personas) {
-    return undefined;
-  }
-  for (const [id, persona] of Object.entries(raw.personas)) {
-    if (normalizeTtsPersonaId(id) !== personaId) {
-      continue;
-    }
-    const provider = normalizeConfiguredSpeechProviderId(persona.provider) ?? persona.provider;
-    return normalizeOptionalString(provider);
-  }
-  return undefined;
-}
-
-function resolveTtsPrefsPathValue(prefsPath: string | undefined): string {
-  const configuredPath = normalizeOptionalString(prefsPath);
-  if (configuredPath) {
-    return resolveUserPath(configuredPath);
-  }
-  const envPath = normalizeOptionalString(process.env.OPENCLAW_TTS_PREFS);
-  if (envPath) {
-    return resolveUserPath(envPath);
-  }
-  return path.join(resolveConfigDir(process.env), "settings", "tts.json");
-}
-
-function readPrefs(prefsPath: string): TtsUserPrefs {
-  return tryReadJsonSync<TtsUserPrefs>(prefsPath) ?? {};
-}
-
-function resolveTtsAutoModeFromPrefs(prefs: TtsUserPrefs): TtsAutoMode | undefined {
-  const auto = normalizeTtsAutoMode(prefs.tts?.auto);
-  if (auto) {
-    return auto;
-  }
-  if (typeof prefs.tts?.enabled === "boolean") {
-    return prefs.tts.enabled ? "always" : "off";
-  }
-  return undefined;
-}
-
 function normalizeStatusDetail(
   value: unknown,
   maxLength = MAX_STATUS_DETAIL_LENGTH,
@@ -114,7 +32,9 @@ function normalizeStatusDetail(
   if (!normalized) {
     return undefined;
   }
-  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized;
+  return normalized.length > maxLength
+    ? `${truncateUtf16Safe(normalized, maxLength - 3)}...`
+    : normalized;
 }
 
 function sanitizeBaseUrlForStatus(value: unknown): string | undefined {
@@ -222,39 +142,18 @@ export function resolveStatusTtsSnapshot(params: {
   channelId?: string;
   accountId?: string;
 }): TtsStatusSnapshot | null {
-  const context: TtsConfigResolutionContext = {
-    agentId: params.agentId,
-    channelId: params.channelId,
-    accountId: params.accountId,
-  };
-  const raw: TtsConfig = resolveEffectiveTtsConfig(params.cfg, context);
-  const prefsPath = resolveTtsPrefsPathValue(raw.prefsPath);
-  const prefs = readPrefs(prefsPath);
-  const autoMode =
-    normalizeTtsAutoMode(params.sessionAuto) ??
-    resolveTtsAutoModeFromPrefs(prefs) ??
-    resolveConfiguredTtsAutoMode(raw);
-
-  if (autoMode === "off") {
+  const settings = resolveTtsSettingsSnapshot(params);
+  if (settings.autoMode === "off") {
     return null;
   }
-
-  const persona =
-    prefs.tts && Object.hasOwn(prefs.tts, "persona")
-      ? normalizeTtsPersonaId(prefs.tts.persona)
-      : normalizeTtsPersonaId(raw.persona);
-  const provider =
-    normalizeConfiguredSpeechProviderId(prefs.tts?.provider) ??
-    resolvePersonaPreferredProvider(raw, persona) ??
-    normalizeConfiguredSpeechProviderId(raw.provider) ??
-    "auto";
+  const provider = settings.preferredProvider ?? "auto";
 
   return {
-    autoMode,
+    autoMode: settings.autoMode,
     provider,
-    ...resolveStatusProviderDetails(raw, provider),
-    ...(persona ? { persona } : {}),
-    maxLength: prefs.tts?.maxLength ?? DEFAULT_TTS_MAX_LENGTH,
-    summarize: prefs.tts?.summarize ?? DEFAULT_TTS_SUMMARIZE,
+    ...resolveStatusProviderDetails(settings.config.rawConfig ?? {}, provider),
+    ...(settings.personaId ? { persona: settings.personaId } : {}),
+    maxLength: settings.maxLength,
+    summarize: settings.summarize,
   };
 }

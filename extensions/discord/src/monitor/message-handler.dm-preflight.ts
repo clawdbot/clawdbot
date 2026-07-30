@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Discord plugin module implements message handlerm preflight behavior.
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
@@ -10,20 +11,11 @@ import type {
   DiscordSenderIdentity,
 } from "./message-handler.preflight.types.js";
 
-let conversationRuntimePromise:
-  | Promise<typeof import("openclaw/plugin-sdk/conversation-binding-runtime")>
-  | undefined;
-let discordSendRuntimePromise: Promise<typeof import("../send.js")> | undefined;
+const loadConversationRuntime = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/conversation-binding-runtime"),
+);
 
-async function loadConversationRuntime() {
-  conversationRuntimePromise ??= import("openclaw/plugin-sdk/conversation-binding-runtime");
-  return await conversationRuntimePromise;
-}
-
-async function loadDiscordSendRuntime() {
-  discordSendRuntimePromise ??= import("../send.js");
-  return await discordSendRuntimePromise;
-}
+const loadDiscordSendRuntime = createLazyRuntimeModule(() => import("../send.js"));
 
 function resolveDiscordDmPairingSenderId(sender: DiscordSenderIdentity): string {
   return sender.isPluralKit ? `pk:${sender.id}` : sender.id;

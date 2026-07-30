@@ -7,7 +7,9 @@ import {
   acquireLocalHeavyCheckLockSync,
   applyLocalOxlintPolicy,
   applyLocalTsgoPolicy,
+  ensureRepoToolNodeModulesLink,
   resolveLocalHeavyCheckEnv,
+  resolveRepoToolBinPath,
   shouldAcquireLocalHeavyCheckLockForOxlint,
   shouldAcquireLocalHeavyCheckLockForTsgo,
 } from "../../scripts/lib/local-heavy-check-runtime.mjs";
@@ -25,7 +27,7 @@ const ROOMY_HOST = {
 };
 
 function makeEnv(overrides: Record<string, string | undefined> = {}) {
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     OPENCLAW_LOCAL_CHECK: "1",
     ...overrides,
@@ -33,10 +35,81 @@ function makeEnv(overrides: Record<string, string | undefined> = {}) {
   if (!Object.hasOwn(overrides, "OPENCLAW_LOCAL_CHECK_MODE")) {
     delete env.OPENCLAW_LOCAL_CHECK_MODE;
   }
+  if (!Object.hasOwn(overrides, "GITHUB_ACTIONS")) {
+    delete env.GITHUB_ACTIONS;
+  }
   return env;
 }
 
 describe("local-heavy-check-runtime", () => {
+  it("resolves repo tools from the primary checkout for dependency-less worktrees", () => {
+    const primaryRoot = createTempDir("openclaw-primary-checkout-");
+    const cwd = path.join(primaryRoot, ".codex", "worktrees", "task", "openclaw");
+    const commonDir = path.join(primaryRoot, ".git");
+    const localPath = path.resolve(cwd, "node_modules", ".bin", "oxlint");
+    const primaryPath = path.join(primaryRoot, "node_modules", ".bin", "oxlint");
+
+    expect(
+      resolveRepoToolBinPath("oxlint", {
+        cwd,
+        fileExists: (candidate) => candidate === primaryPath,
+        resolveCommonDir: () => commonDir,
+      }),
+    ).toBe(primaryPath);
+    expect(
+      resolveRepoToolBinPath("oxlint", {
+        cwd,
+        fileExists: (candidate) => candidate === localPath || candidate === primaryPath,
+        resolveCommonDir: () => commonDir,
+      }),
+    ).toBe(localPath);
+  });
+
+  it("links dependency-less worktrees to the selected checkout's modules", () => {
+    const primaryRoot = createTempDir("openclaw-primary-toolchain-");
+    const cwd = path.join(primaryRoot, ".codex", "worktrees", "task", "openclaw");
+    const commonDir = path.join(primaryRoot, ".git");
+    const primaryTsgo = path.join(primaryRoot, "node_modules", ".bin", "tsgo");
+    const primaryNodeModules = path.join(primaryRoot, "node_modules");
+    const localNodeModules = path.join(cwd, "node_modules");
+    fs.mkdirSync(path.dirname(primaryTsgo), { recursive: true });
+    fs.mkdirSync(cwd, { recursive: true });
+
+    expect(
+      ensureRepoToolNodeModulesLink(primaryTsgo, {
+        cwd,
+        resolveCommonDir: () => commonDir,
+      }),
+    ).toBe(localNodeModules);
+    expect(fs.realpathSync(localNodeModules)).toBe(fs.realpathSync(primaryNodeModules));
+
+    // The stable link is idempotent for concurrent and later local runners.
+    expect(
+      ensureRepoToolNodeModulesLink(primaryTsgo, {
+        cwd,
+        resolveCommonDir: () => commonDir,
+      }),
+    ).toBe(localNodeModules);
+  });
+
+  it("leaves existing worktree node_modules directories locally owned", () => {
+    const primaryRoot = createTempDir("openclaw-primary-toolchain-");
+    const commonDir = path.join(primaryRoot, ".git");
+    const primaryTsgo = path.join(primaryRoot, "node_modules", ".bin", "tsgo");
+    const cwd = path.join(primaryRoot, "worktree");
+    const localNodeModules = path.join(cwd, "node_modules");
+    fs.mkdirSync(path.dirname(primaryTsgo), { recursive: true });
+    fs.mkdirSync(localNodeModules, { recursive: true });
+
+    ensureRepoToolNodeModulesLink(primaryTsgo, {
+      cwd,
+      resolveCommonDir: () => commonDir,
+    });
+
+    expect(fs.lstatSync(localNodeModules).isDirectory()).toBe(true);
+    expect(fs.lstatSync(localNodeModules).isSymbolicLink()).toBe(false);
+  });
+
   it("reenables local heavy-check policy for local wrapper entrypoints", () => {
     expect(resolveLocalHeavyCheckEnv({ OPENCLAW_LOCAL_CHECK: "0", PATH: "/usr/bin" })).toEqual({
       OPENCLAW_LOCAL_CHECK: "1",
@@ -295,6 +368,35 @@ describe("local-heavy-check-runtime", () => {
     expect(env.GOGC).toBeUndefined();
     expect(env.GOMEMLIMIT).toBeUndefined();
   });
+
+  it("uses stylish oxlint output in GitHub Actions before the command separator", () => {
+    const { args } = applyLocalOxlintPolicy(
+      ["--", "src/example.ts"],
+      makeEnv({
+        GITHUB_ACTIONS: "true",
+        OPENCLAW_LOCAL_CHECK_MODE: "full",
+      }),
+      ROOMY_HOST,
+    );
+
+    expect(args.slice(-4)).toEqual(["--format", "stylish", "--", "src/example.ts"]);
+  });
+
+  it.each(["--format", "--format=json", "-f", "-f=json", "-fjson"])(
+    "preserves an explicit oxlint format argument: %s",
+    (formatArg) => {
+      const { args } = applyLocalOxlintPolicy(
+        [formatArg],
+        makeEnv({
+          GITHUB_ACTIONS: "true",
+          OPENCLAW_LOCAL_CHECK_MODE: "full",
+        }),
+        ROOMY_HOST,
+      );
+
+      expect(args).not.toContain("stylish");
+    },
+  );
 
   it("skips the heavy-check lock for explicit oxlint file targets", () => {
     const cwd = createTempDir("openclaw-oxlint-lock-skip-");

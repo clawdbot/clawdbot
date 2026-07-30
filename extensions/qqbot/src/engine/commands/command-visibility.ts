@@ -1,7 +1,7 @@
 // Qqbot plugin module classifies slash-command visibility for QQ group chats.
 import type { QQBotGroupCommandLevel } from "../config/group.js";
 
-export type GroupCommandVisibility = "group" | "hidden" | "private" | "unknown";
+type GroupCommandVisibility = "group" | "hidden" | "private" | "unknown";
 
 export const PRIVATE_CHAT_ONLY_TEXT = "该命令仅限私聊使用，请在私聊中发送。";
 
@@ -32,7 +32,7 @@ const PRIVATE_ONLY_CORE_COMMANDS = new Set([
   "tools",
   "skill",
   "diagnostics",
-  "crestodian",
+  "openclaw",
   "tasks",
   "allowlist",
   "approve",
@@ -70,7 +70,7 @@ const PRIVATE_ONLY_CORE_COMMANDS = new Set([
   "bash",
 ]);
 
-export function parseSlashCommandName(content: string | undefined | null): string | undefined {
+function parseSlashCommandName(content: string | undefined | null): string | undefined {
   const trimmed = (content ?? "").trim();
   if (!trimmed.startsWith("/")) {
     return undefined;

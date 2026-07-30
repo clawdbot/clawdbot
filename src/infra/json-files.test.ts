@@ -7,9 +7,7 @@ import {
   JsonFileReadError,
   createAsyncLock,
   readDurableJsonFile,
-  readJson,
   readJsonFile,
-  tryReadJson,
   writeJsonAtomic,
   writeTextAtomic,
 } from "./json-files.js";
@@ -210,78 +208,5 @@ describe("json file helpers", () => {
     await expect(first).rejects.toThrow(expectedFirstError);
     await expect(second).resolves.toBe("ok");
     expect(events).toEqual(expectedEvents);
-  });
-
-  describe("retry behaviors on 'File changed during read'", () => {
-    /**
-     * Helper: spy on fsPromises.lstat for our target file path.
-     * Returns a real Stats object with a modified ino to trigger
-     * verifyStableReadTarget in @openclaw/fs-safe.
-     * Object.assign + Object.create preserves the Stats prototype.
-     */
-    function setupLstatSpy(targetPath: string, targetCallCount: number): () => number {
-      const origLstat = fsPromises.lstat.bind(fsPromises);
-      let callCount = 0;
-
-      vi.spyOn(fsPromises, "lstat").mockImplementation(async (p, ...args) => {
-        const stat = await origLstat(p, ...args);
-        const pathStr = typeof p === "string" ? p : String(p);
-        if (pathStr === targetPath) {
-          callCount++;
-          if (callCount <= targetCallCount) {
-            // Modify ino: for BigInt ino add 100n, for number ino add 100
-            const modifiedIno = typeof stat.ino === "bigint" ? stat.ino + 100n : stat.ino + 100;
-
-            // Clone stat preserving prototype, override ino
-            return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
-              ino: modifiedIno,
-            });
-          }
-        }
-        return stat;
-      });
-
-      return () => callCount;
-    }
-
-    it("retries on transient File changed during read and succeeds", async () => {
-      await withTempDir({ prefix: "openclaw-json-files-retry-" }, async (base) => {
-        const filePath = path.join(base, "config.json");
-        await fsPromises.writeFile(filePath, '{"ok":true}', "utf8");
-
-        // Only fail lstat once (first call) — retry should succeed on 2nd attempt
-        const getCalls = setupLstatSpy(filePath, 1);
-
-        const result = await readJson<{ ok: boolean }>(filePath);
-        expect(result).toEqual({ ok: true });
-        // Should have at least 2 lstat calls: one failed, one successful
-        expect(getCalls()).toBeGreaterThanOrEqual(2);
-      });
-    });
-
-    it("throws JsonFileReadError after exhausting retries on persistent race", async () => {
-      await withTempDir({ prefix: "openclaw-json-files-exhaust-" }, async (base) => {
-        const filePath = path.join(base, "config.json");
-        await fsPromises.writeFile(filePath, '{"ok":true}', "utf8");
-
-        // Always fail lstat — all 3 retries should exhaust
-        setupLstatSpy(filePath, Infinity);
-
-        await expect(readJson(filePath)).rejects.toThrow(JsonFileReadError);
-      });
-    });
-
-    it("tryReadJson returns null after exhausting retries", async () => {
-      await withTempDir({ prefix: "openclaw-json-files-try-" }, async (base) => {
-        const filePath = path.join(base, "config.json");
-        await fsPromises.writeFile(filePath, '{"ok":true}', "utf8");
-
-        // Always fail lstat — tryReadJson catches and returns null
-        setupLstatSpy(filePath, Infinity);
-
-        const result = await tryReadJson(filePath);
-        expect(result).toBeNull();
-      });
-    });
   });
 });

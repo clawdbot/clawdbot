@@ -1,5 +1,9 @@
 // Openrouter tests cover music generation provider plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import {
+  getProviderHttpMocks,
+  installProviderHttpMockCleanup,
+} from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
@@ -9,46 +13,31 @@ const {
   postJsonRequestMock,
   resolveApiKeyForProviderMock,
   resolveProviderHttpRequestConfigMock,
-} = vi.hoisted(() => ({
-  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-  postJsonRequestMock: vi.fn(),
-  resolveApiKeyForProviderMock: vi.fn(async () => ({
-    apiKey: "openrouter-key",
-    source: "env",
-    mode: "api-key",
-  })),
-  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-    allowPrivateNetwork: false,
-    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-    dispatcherPolicy: undefined,
-  })),
-}));
+} = getProviderHttpMocks();
 
-vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-}));
+installProviderHttpMockCleanup();
 
-vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
-  const original = await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>();
-  return {
-    ...original,
-    assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-    postJsonRequest: postJsonRequestMock,
-    resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-  };
-});
-
-function sseResponse(lines: string[], options?: { releaseLock?: () => void }): Response {
+function sseResponse(
+  lines: Array<string | Uint8Array>,
+  options?: { cancel?: () => void | Promise<void>; releaseLock?: () => void },
+): Response {
   const encoder = new TextEncoder();
-  if (!options?.releaseLock) {
+  const encodeLine = (line: string | Uint8Array) =>
+    typeof line === "string" ? encoder.encode(line) : line;
+  if (!options?.releaseLock && !options?.cancel) {
+    let index = 0;
     return new Response(
       new ReadableStream({
-        start(controller) {
-          for (const line of lines) {
-            controller.enqueue(encoder.encode(line));
+        pull(controller) {
+          const line = lines[index++];
+          if (line === undefined) {
+            controller.close();
+            return;
           }
-          controller.close();
+          controller.enqueue(encodeLine(line));
+        },
+        cancel() {
+          return options?.cancel?.();
         },
       }),
       { status: 200, headers: { "content-type": "text/event-stream" } },
@@ -57,13 +46,13 @@ function sseResponse(lines: string[], options?: { releaseLock?: () => void }): R
 
   const chunks: Array<ReadableStreamReadResult<Uint8Array>> = lines.map((line) => ({
     done: false,
-    value: encoder.encode(line),
+    value: encodeLine(line),
   }));
   chunks.push({ done: true, value: undefined });
   const reader = {
     read: async () => chunks.shift() ?? { done: true, value: undefined },
-    cancel: async () => undefined,
-    releaseLock: options.releaseLock,
+    cancel: async () => options?.cancel?.(),
+    releaseLock: options?.releaseLock ?? (() => {}),
   } as ReadableStreamDefaultReader<Uint8Array>;
 
   return {
@@ -128,12 +117,8 @@ function postRequest(): Record<string, unknown> {
 function resetOpenRouterMusicMocks() {
   assertOkOrThrowHttpErrorMock.mockResolvedValue(undefined);
   postJsonRequestMock.mockReset();
-  resolveApiKeyForProviderMock.mockResolvedValue({
-    apiKey: "openrouter-key",
-    source: "env",
-    mode: "api-key",
-  });
-  resolveProviderHttpRequestConfigMock.mockImplementation((params: Record<string, unknown>) => ({
+  resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "openrouter-key" });
+  resolveProviderHttpRequestConfigMock.mockImplementation((params) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl,
     allowPrivateNetwork: false,
     headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
@@ -164,8 +149,8 @@ describe("openrouter music generation provider", () => {
     postJsonRequestMock.mockResolvedValue({
       response: sseResponse([
         `data: ${JSON.stringify({ choices: [{ delta: { audio: { transcript: "line " } } }] })}\n`,
-        `data: ${JSON.stringify({ choices: [{ delta: { audio: { data: audioBase64.slice(0, 4) } } }] })}\n`,
-        `data: ${JSON.stringify({ choices: [{ delta: { audio: { data: audioBase64.slice(4), transcript: "two" } } }] })}\n`,
+        `data: ${JSON.stringify({ choices: [{ delta: { audio: { data: audioBase64.slice(0, 5) } } }] })}\n`,
+        `data: ${JSON.stringify({ choices: [{ delta: { audio: { data: audioBase64.slice(5), transcript: "two" } } }] })}\n`,
         "data: [DONE]\n",
       ]),
       release,
@@ -200,7 +185,10 @@ describe("openrouter music generation provider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("releases OpenRouter audio stream readers after completion", async () => {
+  it("preserves completed OpenRouter audio when reader cleanup fails", async () => {
+    const cancel = vi.fn(async () => {
+      throw new Error("cancel failed");
+    });
     const releaseLock = vi.fn();
     postJsonRequestMock.mockResolvedValue({
       response: sseResponse(
@@ -208,7 +196,7 @@ describe("openrouter music generation provider", () => {
           audio: Buffer.from("wav-bytes").toString("base64"),
           done: true,
         }),
-        { releaseLock },
+        { cancel, releaseLock },
       ),
       release: vi.fn(async () => {}),
     });
@@ -223,7 +211,24 @@ describe("openrouter music generation provider", () => {
     ).resolves.toMatchObject({
       tracks: [{ mimeType: "audio/wav" }],
     });
+    expect(cancel).toHaveBeenCalledTimes(1);
     expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects streamed audio with non-canonical base64 pad bits", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: sseResponse(sseResponseLines({ audio: "ZE==", done: true })),
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      buildOpenRouterMusicGenerationProvider().generateMusic({
+        provider: "openrouter",
+        model: "",
+        prompt: "short track",
+        cfg: {},
+      }),
+    ).rejects.toThrow("OpenRouter music generation returned malformed base64 audio data");
   });
 
   it("decodes independently padded OpenRouter audio chunks", async () => {
@@ -282,6 +287,45 @@ describe("openrouter music generation provider", () => {
             ],
           },
         ],
+      }),
+    );
+  });
+
+  it("applies configured OpenRouter request policy without allowing private networks", async () => {
+    const requestPolicy = {
+      allowPrivateNetwork: true,
+      headers: { "X-OpenRouter-Trace": "trace-1" },
+      proxy: { mode: "env-proxy" as const },
+    };
+    postJsonRequestMock.mockResolvedValue({
+      response: sseResponse([
+        `data: ${JSON.stringify({ choices: [{ delta: { audio: { data: Buffer.from("wav").toString("base64") } } }] })}\n`,
+        "data: [DONE]\n",
+      ]),
+      release: vi.fn(async () => {}),
+    });
+
+    await buildOpenRouterMusicGenerationProvider().generateMusic({
+      provider: "openrouter",
+      model: "google/lyria-3-pro-preview",
+      prompt: "policy soundtrack",
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              request: requestPolicy,
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openrouter",
+        capability: "audio",
+        allowPrivateNetwork: false,
+        request: requestPolicy,
       }),
     );
   });
@@ -351,5 +395,103 @@ describe("openrouter music generation provider", () => {
         cfg: {},
       }),
     ).rejects.toThrow("OpenRouter music generation stream ended before completion");
+  });
+
+  it("preserves OpenRouter mid-stream errors when reader cleanup fails", async () => {
+    const cancel = vi.fn(async () => {
+      throw new Error("cancel failed");
+    });
+    postJsonRequestMock.mockResolvedValue({
+      response: sseResponse(
+        [
+          `data: ${JSON.stringify({
+            error: { code: "provider_error", message: "provider disconnected" },
+            choices: [{ delta: {}, finish_reason: "error" }],
+          })}\n`,
+        ],
+        { cancel },
+      ),
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      buildOpenRouterMusicGenerationProvider().generateMusic({
+        provider: "openrouter",
+        model: "google/lyria-3-clip-preview",
+        prompt: "surface provider failure",
+        cfg: {},
+      }),
+    ).rejects.toThrow("OpenRouter music generation failed: provider disconnected");
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("accepts valid SSE events above the old fixed two-megabyte cap", async () => {
+    const audio = Buffer.alloc(1_600_000, 0x61);
+    postJsonRequestMock.mockResolvedValue({
+      response: sseResponse([
+        `data: ${JSON.stringify({ choices: [{ delta: { audio: { data: audio.toString("base64") } } }] })}\n`,
+        "data: [DONE]\n",
+      ]),
+      release: vi.fn(async () => {}),
+    });
+
+    const result = await buildOpenRouterMusicGenerationProvider().generateMusic({
+      provider: "openrouter",
+      model: "google/lyria-3-clip-preview",
+      prompt: "large valid audio event",
+      cfg: { agents: { defaults: { mediaMaxMb: 2 } } },
+    });
+
+    expect(result.tracks[0]?.buffer).toEqual(audio);
+  });
+
+  it("rejects OpenRouter music SSE events outside the configured media envelope", async () => {
+    const maxBytes = 8;
+    const maxEventBytes = Math.ceil(maxBytes / 3) * 4 + maxBytes + 64 * 1024;
+    const cancel = vi.fn();
+    postJsonRequestMock.mockResolvedValue({
+      response: sseResponse([new Uint8Array(maxEventBytes + 1)], { cancel }),
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      buildOpenRouterMusicGenerationProvider().generateMusic({
+        provider: "openrouter",
+        model: "google/lyria-3-clip-preview",
+        prompt: "unterminated event",
+        cfg: { agents: { defaults: { mediaMaxMb: maxBytes / (1024 * 1024) } } },
+      }),
+    ).rejects.toThrow(
+      `OpenRouter music generation SSE event exceeded ${maxEventBytes} bytes for a ${maxBytes}-byte media limit`,
+    );
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      label: "audio",
+      delta: { audio: { data: Buffer.from("123456789").toString("base64") } },
+    },
+    {
+      label: "transcript",
+      delta: { audio: { transcript: "123456789" } },
+    },
+  ])("rejects $label beyond agents.defaults.mediaMaxMb", async ({ label, delta }) => {
+    postJsonRequestMock.mockResolvedValue({
+      response: sseResponse([
+        `data: ${JSON.stringify({ choices: [{ delta }] })}\n`,
+        "data: [DONE]\n",
+      ]),
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      buildOpenRouterMusicGenerationProvider().generateMusic({
+        provider: "openrouter",
+        model: "google/lyria-3-clip-preview",
+        prompt: `oversized ${label}`,
+        cfg: { agents: { defaults: { mediaMaxMb: 8 / (1024 * 1024) } } },
+      }),
+    ).rejects.toThrow(`OpenRouter music generation ${label} exceeded 8 bytes`);
   });
 });

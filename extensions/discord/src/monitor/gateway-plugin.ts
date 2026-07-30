@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/proxy-capture";
 import { danger, warn } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import * as ws from "ws";
 import * as discordGateway from "../internal/gateway.js";
 import { createDiscordDnsLookup } from "../network-config.js";
@@ -26,21 +27,13 @@ import {
   type DiscordGatewayFetchInit,
 } from "./gateway-metadata.js";
 
-export {
-  parseDiscordGatewayInfoBody,
-  resolveDiscordGatewayInfoTimeoutMs,
-} from "./gateway-metadata.js";
-
 const DISCORD_GATEWAY_HANDSHAKE_TIMEOUT_MS = 30_000;
 const DISCORD_GATEWAY_POLICY_VIOLATION_CLOSE_CODE = 1008;
 const DISCORD_GATEWAY_WS_RECEIVER_LIMIT_CODE = "WS_ERR_TOO_MANY_BUFFERED_PARTS";
 const DISCORD_GATEWAY_CLOSE_REASON_LOG_MAX_CHARS = 240;
 const discordDnsLookup = createDiscordDnsLookup();
 
-type DiscordGatewayWebSocketCtor = new (
-  url: string,
-  options?: { agent?: unknown; handshakeTimeout?: number },
-) => ws.WebSocket;
+type DiscordGatewayWebSocketCtor = typeof ws.WebSocket;
 type DiscordGatewayWebSocketAgent = InstanceType<typeof HttpsAgent> | HttpAgent;
 const registrationPromises = new WeakMap<discordGateway.GatewayPlugin, Promise<void>>();
 type DiscordGatewayClient = Parameters<discordGateway.GatewayPlugin["registerClient"]>[0];
@@ -113,7 +106,7 @@ function formatDiscordGatewayCloseReason(reason: Buffer): string {
   if (text.length <= DISCORD_GATEWAY_CLOSE_REASON_LOG_MAX_CHARS) {
     return text;
   }
-  return `${text.slice(0, DISCORD_GATEWAY_CLOSE_REASON_LOG_MAX_CHARS)}...`;
+  return `${truncateUtf16Safe(text, DISCORD_GATEWAY_CLOSE_REASON_LOG_MAX_CHARS)}...`;
 }
 
 function formatDiscordGatewayTransportErrorLog(params: {
@@ -268,6 +261,7 @@ function createGatewayPlugin(params: {
       // already our proxy path and behaves predictably for lifecycle cleanup.
       const WebSocketCtor = params.testing?.webSocketCtor ?? ws.default;
       const socket = new WebSocketCtor(url, {
+        ...discordGateway.DISCORD_GATEWAY_WS_CLIENT_OPTIONS,
         handshakeTimeout: DISCORD_GATEWAY_HANDSHAKE_TIMEOUT_MS,
         ...(params.wsAgent ? { agent: params.wsAgent } : {}),
       });
@@ -395,7 +389,6 @@ export function createDiscordGatewayPlugin(params: {
   const proxy = resolveEffectiveDebugProxyUrl(params.discordConfig?.proxy);
   const debugProxySettings = resolveDebugProxySettings();
   const gatewayInfoTimeoutMs = resolveDiscordGatewayInfoTimeoutMs({
-    configuredTimeoutMs: params.discordConfig?.gatewayInfoTimeoutMs,
     env: process.env,
   });
   let fetchImpl = createDiscordGatewayMetadataFetch(debugProxySettings.enabled);
