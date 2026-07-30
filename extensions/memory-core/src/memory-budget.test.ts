@@ -187,10 +187,30 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
     ).toBeLessThanOrEqual(budget);
   });
 
-  it("preserves a user `###` section written under a promotion section", () => {
+  it.each([0, 1, 2, 3])(
+    "preserves a user `###` section with %i leading spaces under a promotion section",
+    (leadingSpaces) => {
+      const heading = `${" ".repeat(leadingSpaces)}### Correction (added by me)`;
+      const existing =
+        `${promotionSection("2026-04-10", 400)}\n` +
+        `${heading}\nThe prod DB is db-2.corp.example, NOT db-1.\n\n` +
+        promotionSection("2026-04-20", 400);
+      const newSection = `\n${promotionSection("2026-04-29", 400)}`;
+      const result = compactMemoryForBudget({
+        existingMemory: existing,
+        newSection,
+        budgetChars: 900,
+      });
+      expect(result.droppedDates).toContain("2026-04-10");
+      expect(result.compacted).toContain(heading);
+      expect(result.compacted).toContain("The prod DB is db-2.corp.example, NOT db-1.");
+    },
+  );
+
+  it("does not treat a four-space-indented hash line as an ATX heading", () => {
     const existing =
       `${promotionSection("2026-04-10", 400)}\n` +
-      "### Correction (added by me)\nThe prod DB is db-2.corp.example, NOT db-1.\n\n" +
+      "    ### Indented code\n    keep this inside the generated block\n\n" +
       promotionSection("2026-04-20", 400);
     const newSection = `\n${promotionSection("2026-04-29", 400)}`;
     const result = compactMemoryForBudget({
@@ -199,8 +219,8 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
       budgetChars: 900,
     });
     expect(result.droppedDates).toContain("2026-04-10");
-    expect(result.compacted).toContain("### Correction (added by me)");
-    expect(result.compacted).toContain("The prod DB is db-2.corp.example, NOT db-1.");
+    expect(result.compacted).not.toContain("### Indented code");
+    expect(result.compacted).not.toContain("keep this inside the generated block");
   });
 
   it("preserves a user `#` section written after the only promotion section", () => {
