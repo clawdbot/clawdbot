@@ -392,6 +392,41 @@ describe("guarded input file URL fetches", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("passes the caller abort signal through guarded image and file fetches", async () => {
+    const controller = new AbortController();
+    const imageSource = { type: "url", url: "https://example.com/photo.png" } as const;
+    mockUrlFetchResponse({
+      source: imageSource,
+      fetchedContentType: "image/png",
+      fetchedBody: Buffer.from("png-bytes"),
+    });
+    detectMimeMock.mockResolvedValueOnce("image/png");
+
+    await extractImageContentFromSource(
+      imageSource,
+      createImageSourceLimits(["image/png"], true),
+      controller.signal,
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
+
+    mockUrlFetchResponse({
+      source: { type: "url", url: "https://example.com/note.txt" },
+      fetchedContentType: "text/plain",
+      fetchedBody: Buffer.from("hello"),
+    });
+    detectMimeMock.mockResolvedValueOnce("text/plain");
+    await extractFileContentFromSource({
+      source: { type: "url", url: "https://example.com/note.txt" },
+      limits: createFileSourceLimits(["text/plain"], true),
+      signal: controller.signal,
+    });
+    expect(fetchWithSsrFGuardMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+
   it("cancels ignored HTTP error bodies", async () => {
     let canceled = false;
     const stream = new ReadableStream<Uint8Array>({
@@ -661,6 +696,26 @@ describe("input file MIME sniffing", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("passes the caller abort signal through PDF extraction", async () => {
+    const controller = new AbortController();
+    detectMimeMock.mockResolvedValueOnce("application/pdf");
+
+    await extractFileContentFromSource({
+      source: {
+        type: "base64",
+        data: Buffer.from("%PDF-1.4\n").toString("base64"),
+        mediaType: "application/pdf",
+        filename: "scan.pdf",
+      },
+      limits: createFileSourceLimits(["application/pdf"]),
+      signal: controller.signal,
+    });
+
+    expect(extractPdfContentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
   });
 });
 

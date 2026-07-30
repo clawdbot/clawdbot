@@ -14,6 +14,7 @@ export type DocumentExtractionRequest = {
   minTextChars: number;
   password?: string;
   pageNumbers?: number[];
+  signal?: AbortSignal;
   onImageExtractionError?: (error: unknown) => void;
 };
 

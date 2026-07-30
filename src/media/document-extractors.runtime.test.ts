@@ -119,4 +119,30 @@ describe("extractDocumentContent", () => {
     expect(oldExtract).toHaveBeenCalledOnce();
     expect(newExtract).toHaveBeenCalledOnce();
   });
+
+  it("passes caller cancellation to the selected extractor", async () => {
+    const controller = new AbortController();
+    const extract = vi.fn().mockResolvedValue({ text: "pdf text", images: [] });
+    resolvePluginDocumentExtractorsMock.mockReturnValue([
+      {
+        id: "pdf",
+        pluginId: "document-extract",
+        label: "PDF",
+        mimeTypes: ["application/pdf"],
+        extract,
+      },
+    ]);
+
+    await extractDocumentContent({
+      buffer: Buffer.from("pdf"),
+      mimeType: "application/pdf",
+      maxPages: 1,
+      maxPixels: 100,
+      minTextChars: 10,
+      signal: controller.signal,
+      config: {},
+    });
+
+    expect(extract).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }));
+  });
 });

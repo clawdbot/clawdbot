@@ -58,13 +58,16 @@ async function openPdfDocument(params: {
 async function extractPdfContent(
   request: DocumentExtractionRequest,
 ): Promise<DocumentExtractionResult> {
+  request.signal?.throwIfAborted();
   const engine = await loadPdfEngine();
+  request.signal?.throwIfAborted();
   const pdf = await openPdfDocument({
     engine,
     input: new Uint8Array(request.buffer),
     ...(request.password ? { password: request.password } : {}),
   });
   try {
+    request.signal?.throwIfAborted();
     const pages = request.pageNumbers
       ? request.pageNumbers
           .filter((p) => Number.isInteger(p) && p >= 1 && p <= pdf.pageCount)
@@ -80,6 +83,7 @@ async function extractPdfContent(
       ...pageSelection,
       maxTextChars: MAX_EXTRACTED_TEXT_CHARS,
     });
+    request.signal?.throwIfAborted();
     const text = textResult.text;
 
     if (text.trim().length >= request.minTextChars) {
@@ -97,6 +101,7 @@ async function extractPdfContent(
       const images: DocumentExtractedImage[] = [];
       let remainingPixels = request.maxPixels;
       for (const [index, pageNumber] of imagePages.entries()) {
+        request.signal?.throwIfAborted();
         if (remainingPixels <= 0) {
           break;
         }
@@ -111,6 +116,7 @@ async function extractPdfContent(
             forms: true,
           },
         });
+        request.signal?.throwIfAborted();
         for (const image of imageResult.images) {
           images.push(toDocumentImage(image));
           remainingPixels -= image.width * image.height;
@@ -118,6 +124,7 @@ async function extractPdfContent(
       }
       return { text, images };
     } catch (err) {
+      request.signal?.throwIfAborted();
       request.onImageExtractionError?.(err);
       if (!text.trim()) {
         throw new Error("PDF image extraction failed with no extractable text.", { cause: err });

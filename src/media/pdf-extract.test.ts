@@ -65,6 +65,27 @@ describe("extractPdfContent", () => {
     });
   });
 
+  it("passes caller cancellation through to document extractors", async () => {
+    const controller = new AbortController();
+    extractDocumentContentMock.mockResolvedValue({
+      text: "pdf",
+      images: [],
+      extractor: "pdf",
+    });
+
+    await extractPdfContent({
+      buffer: Buffer.from("%PDF-1.4"),
+      maxPages: 2,
+      maxPixels: 100,
+      minTextChars: 10,
+      signal: controller.signal,
+    });
+
+    expect(extractDocumentContentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+
   it("throws a clear disabled error when no document extractor is available", async () => {
     extractDocumentContentMock.mockResolvedValue(null);
 

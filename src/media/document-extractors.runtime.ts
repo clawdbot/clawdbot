@@ -18,8 +18,10 @@ export async function extractDocumentContent(
     config?: OpenClawConfig;
   },
 ): Promise<(DocumentExtractionResult & { extractor: string }) | null> {
+  params.signal?.throwIfAborted();
   const mimeType = normalizeLowercaseStringOrEmpty(params.mimeType);
   const extractors = await documentExtractorLoader.load(params.config);
+  params.signal?.throwIfAborted();
   // Keep config and loader-only fields out of plugin calls; extractors receive the SDK request shape.
   const request: DocumentExtractionRequest = {
     buffer: params.buffer,
@@ -29,6 +31,7 @@ export async function extractDocumentContent(
     minTextChars: params.minTextChars,
     ...(params.password ? { password: params.password } : {}),
     ...(params.pageNumbers ? { pageNumbers: params.pageNumbers } : {}),
+    ...(params.signal ? { signal: params.signal } : {}),
     ...(params.onImageExtractionError
       ? { onImageExtractionError: params.onImageExtractionError }
       : {}),
@@ -36,6 +39,7 @@ export async function extractDocumentContent(
   const errors: unknown[] = [];
 
   for (const extractor of extractors) {
+    params.signal?.throwIfAborted();
     if (
       !extractor.mimeTypes.map((entry) => normalizeLowercaseStringOrEmpty(entry)).includes(mimeType)
     ) {
@@ -43,6 +47,7 @@ export async function extractDocumentContent(
     }
     try {
       const result = await extractor.extract(request);
+      params.signal?.throwIfAborted();
       if (result) {
         return {
           ...result,
@@ -50,6 +55,7 @@ export async function extractDocumentContent(
         };
       }
     } catch (error) {
+      params.signal?.throwIfAborted();
       errors.push(error);
     }
   }
