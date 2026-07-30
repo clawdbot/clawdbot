@@ -2071,7 +2071,7 @@ describe("image tool implicit imageModel config", () => {
             items: { type: "string" },
           },
           model: { type: "string" },
-          maxBytesMb: { type: "number", exclusiveMinimum: 0, maximum: 100 },
+          maxBytesMb: { type: "number", exclusiveMinimum: 0 },
           maxImages: { type: "integer", minimum: 1 },
         },
       });

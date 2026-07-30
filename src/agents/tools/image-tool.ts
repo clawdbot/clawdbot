@@ -924,7 +924,7 @@ export function createImageTool(options?: {
         }),
       ),
       ...(modelHasVision ? {} : { model: Type.Optional(Type.String()) }),
-      maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0, maximum: MAX_IMAGE_MB_CAP }),
+      maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
       maxImages: optionalPositiveIntegerSchema(),
     }),
     execute: async (_toolCallId, args, signal) => {
