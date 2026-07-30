@@ -215,6 +215,9 @@ describe("derived mention matching with decorated identity names", () => {
     expect(matchesMentionPatterns("clawd🦋bot status", regexes)).toBe(true);
     expect(matchesMentionPatterns("clawd 🦋 bot status", regexes)).toBe(true);
     expect(matchesMentionPatterns("clawdbot status", regexes)).toBe(false);
+    // The @ alternative skips the word-boundary lookbehind; the separator
+    // floor must still hold behind it.
+    expect(matchesMentionPatterns("@clawdbot status", regexes)).toBe(false);
   });
 
   it("only accepts the name's own decoration, not arbitrary punctuation", () => {
