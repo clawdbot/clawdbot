@@ -1000,12 +1000,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("can rebuild the Windows PATH with or without current-process entries", () => {
-    expect(buildWindowsPathBootstrapScript()).toContain("@($userPath, $machinePath, $env:Path)");
+    expect(buildWindowsPathBootstrapScript()).toContain("@($env:Path, $userPath, $machinePath)");
     const persistedOnlyScript = buildWindowsPathBootstrapScript({
       includeCurrentProcessPath: false,
     });
     expect(persistedOnlyScript).toContain("@($userPath, $machinePath)");
-    expect(persistedOnlyScript).not.toContain("@($userPath, $machinePath, $env:Path)");
+    expect(persistedOnlyScript).not.toContain("@($env:Path, $userPath, $machinePath)");
   });
 
   it("prefers the freshly installed Windows CLI under npm's prefix before PATH lookup", () => {
