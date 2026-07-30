@@ -134,8 +134,8 @@ export function isAuthRateLimitClientExempt(
 // ---------------------------------------------------------------------------
 
 export const DEFAULT_MAX_ATTEMPTS = 10;
-const DEFAULT_WINDOW_MS = 60_000; // 1 minute
-const DEFAULT_LOCKOUT_MS = 300_000; // 5 minutes
+export const DEFAULT_WINDOW_MS = 60_000; // 1 minute
+export const DEFAULT_LOCKOUT_MS = 300_000; // 5 minutes
 const PRUNE_INTERVAL_MS = 60_000; // prune stale entries every minute
 const DEFAULT_MAX_ENTRIES = 10_000;
 const LOOPBACK_FAILURE_DELAY_BASE_MS = 250;
@@ -179,8 +179,8 @@ function resolvePruneIntervalMs(value: number | undefined): number {
 
 export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter {
   const maxAttempts = resolveIntegerOption(config?.maxAttempts, DEFAULT_MAX_ATTEMPTS, { min: 1 });
-  const windowMs = resolveTimerTimeoutMs(config?.windowMs, DEFAULT_WINDOW_MS, 0);
-  const lockoutMs = resolveTimerTimeoutMs(config?.lockoutMs, DEFAULT_LOCKOUT_MS, 0);
+  const windowMs = resolveTimerTimeoutMs(config?.windowMs, DEFAULT_WINDOW_MS);
+  const lockoutMs = resolveTimerTimeoutMs(config?.lockoutMs, DEFAULT_LOCKOUT_MS);
   const exemptLoopback = config?.exemptLoopback ?? true;
   const pruneIntervalMs = resolvePruneIntervalMs(config?.pruneIntervalMs);
   const maxEntries = resolveIntegerOption(config?.maxEntries, DEFAULT_MAX_ENTRIES, { min: 1 });

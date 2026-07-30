@@ -129,8 +129,8 @@ export const GatewayConfigSchema = z
         rateLimit: z
           .strictObject({
             maxAttempts: z.number().int().positive().optional(),
-            windowMs: z.number().optional(),
-            lockoutMs: z.number().optional(),
+            windowMs: z.number().int().positive().optional(),
+            lockoutMs: z.number().int().positive().optional(),
             exemptLoopback: z.boolean().optional(),
           })
           .optional(),

@@ -270,6 +270,23 @@ describe("auth rate limiter", () => {
     },
   );
 
+  it("does not disable the sliding window when windowMs is 0", () => {
+    // windowMs: 0 made slideWindow's cutoff equal `now`, wiping every recorded
+    // attempt on the very next check before maxAttempts could ever be reached.
+    limiter = createAuthRateLimiter({ maxAttempts: 2, windowMs: 0, lockoutMs: 60_000 });
+    limiter.recordFailure("10.0.6.1");
+    limiter.recordFailure("10.0.6.1");
+    expect(limiter.check("10.0.6.1").allowed).toBe(false);
+  });
+
+  it("does not disable the lockout duration when lockoutMs is 0", () => {
+    limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 0 });
+    limiter.recordFailure("10.0.6.2");
+    const result = limiter.check("10.0.6.2");
+    expect(result.allowed).toBe(false);
+    expect(result.retryAfterMs).toBeGreaterThan(0);
+  });
+
   it("treats ipv4 and ipv4-mapped ipv6 forms as the same client", () => {
     limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
     limiter.recordFailure("1.2.3.4");

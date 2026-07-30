@@ -431,3 +431,26 @@ describe("config validation ambient heartbeat ownership", () => {
     expect(heartbeatOwnerWarnings(cfg)).toEqual([]);
   });
 });
+
+describe("config validation gateway.auth.rateLimit policy", () => {
+  it("rejects non-positive-integer maxAttempts/windowMs/lockoutMs", () => {
+    for (const field of ["maxAttempts", "windowMs", "lockoutMs"] as const) {
+      // 0 previously slipped through and silently disabled auth throttling.
+      const zero = validateConfigObjectRaw({ gateway: { auth: { rateLimit: { [field]: 0 } } } });
+      expect(zero.ok).toBe(false);
+      if (!zero.ok) {
+        const issue = requireIssue(zero.issues, `gateway.auth.rateLimit.${field}`);
+        expect(issue.message).toContain("expected number to be >0");
+      }
+
+      // NaN/fractional values previously bypassed the maxAttempts comparison entirely.
+      const fractional = validateConfigObjectRaw({
+        gateway: { auth: { rateLimit: { [field]: 1.5 } } },
+      });
+      expect(fractional.ok).toBe(false);
+
+      const valid = validateConfigObjectRaw({ gateway: { auth: { rateLimit: { [field]: 5 } } } });
+      expect(valid.ok).toBe(true);
+    }
+  });
+});

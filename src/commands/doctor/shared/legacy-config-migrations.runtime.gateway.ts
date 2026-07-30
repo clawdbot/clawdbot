@@ -13,13 +13,35 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { DEFAULT_GATEWAY_PORT } from "../../../config/paths.js";
-import { DEFAULT_MAX_ATTEMPTS } from "../../../gateway/auth-rate-limit.js";
+import {
+  DEFAULT_LOCKOUT_MS,
+  DEFAULT_MAX_ATTEMPTS,
+  DEFAULT_WINDOW_MS,
+} from "../../../gateway/auth-rate-limit.js";
+
+function isNonPositiveIntegerConfigValue(value: unknown): boolean {
+  return typeof value === "number" && (!Number.isInteger(value) || value <= 0);
+}
 
 const GATEWAY_AUTH_RATE_LIMIT_MAX_ATTEMPTS_OOB_RULE: LegacyConfigRule = {
   path: ["gateway", "auth", "rateLimit", "maxAttempts"],
   message:
     'gateway.auth.rateLimit.maxAttempts must be a positive integer and will be removed to avoid startup failure. Run "openclaw doctor --fix".',
-  match: (value) => typeof value === "number" && (!Number.isInteger(value) || value <= 0),
+  match: isNonPositiveIntegerConfigValue,
+};
+
+const GATEWAY_AUTH_RATE_LIMIT_WINDOW_MS_OOB_RULE: LegacyConfigRule = {
+  path: ["gateway", "auth", "rateLimit", "windowMs"],
+  message:
+    'gateway.auth.rateLimit.windowMs must be a positive integer and will be removed to avoid startup failure. Run "openclaw doctor --fix".',
+  match: isNonPositiveIntegerConfigValue,
+};
+
+const GATEWAY_AUTH_RATE_LIMIT_LOCKOUT_MS_OOB_RULE: LegacyConfigRule = {
+  path: ["gateway", "auth", "rateLimit", "lockoutMs"],
+  message:
+    'gateway.auth.rateLimit.lockoutMs must be a positive integer and will be removed to avoid startup failure. Run "openclaw doctor --fix".',
+  match: isNonPositiveIntegerConfigValue,
 };
 
 const GATEWAY_PORT_OOB_RULE: LegacyConfigRule = {
@@ -192,26 +214,52 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
     },
   }),
   defineLegacyConfigMigration({
-    id: "gateway.auth.rateLimit.max-attempts-oob-repair",
+    id: "gateway.auth.rateLimit-oob-repair",
     describe:
-      "Remove non-positive-integer gateway.auth.rateLimit.maxAttempts to avoid post-schema-tightening startup failures",
-    legacyRules: [GATEWAY_AUTH_RATE_LIMIT_MAX_ATTEMPTS_OOB_RULE],
+      "Remove non-positive-integer gateway.auth.rateLimit fields to avoid post-schema-tightening startup failures",
+    legacyRules: [
+      GATEWAY_AUTH_RATE_LIMIT_MAX_ATTEMPTS_OOB_RULE,
+      GATEWAY_AUTH_RATE_LIMIT_WINDOW_MS_OOB_RULE,
+      GATEWAY_AUTH_RATE_LIMIT_LOCKOUT_MS_OOB_RULE,
+    ],
     apply: (raw, changes) => {
       const gateway = getRecord(raw.gateway);
       const auth = getRecord(gateway?.auth);
       const rateLimit = getRecord(auth?.rateLimit);
-      if (!rateLimit || !Object.hasOwn(rateLimit, "maxAttempts")) {
+      if (!gateway || !auth || !rateLimit) {
         return;
       }
-      const maxAttempts = rateLimit.maxAttempts;
-      if (typeof maxAttempts !== "number" || (Number.isInteger(maxAttempts) && maxAttempts > 0)) {
-        return;
+      const repairs: Array<{ key: "maxAttempts" | "windowMs" | "lockoutMs"; fallback: number }> = [
+        { key: "maxAttempts", fallback: DEFAULT_MAX_ATTEMPTS },
+        { key: "windowMs", fallback: DEFAULT_WINDOW_MS },
+        { key: "lockoutMs", fallback: DEFAULT_LOCKOUT_MS },
+      ];
+      for (const { key, fallback } of repairs) {
+        const value = rateLimit[key];
+        if (!isNonPositiveIntegerConfigValue(value)) {
+          continue;
+        }
+        delete rateLimit[key];
+        changes.push(
+          `Removed invalid gateway.auth.rateLimit.${key} (${String(value)}). ` +
+            `It must be a positive integer; the gateway will use the default of ${fallback}.`,
+        );
       }
-      delete rateLimit.maxAttempts;
-      changes.push(
-        `Removed invalid gateway.auth.rateLimit.maxAttempts (${String(maxAttempts)}). ` +
-          `It must be a positive integer; the gateway will use the default of ${DEFAULT_MAX_ATTEMPTS} attempts.`,
-      );
+      if (Object.keys(rateLimit).length > 0) {
+        auth.rateLimit = rateLimit;
+      } else {
+        delete auth.rateLimit;
+      }
+      if (Object.keys(auth).length > 0) {
+        gateway.auth = auth;
+      } else {
+        delete gateway.auth;
+      }
+      if (Object.keys(gateway).length > 0) {
+        raw.gateway = gateway;
+      } else {
+        delete raw.gateway;
+      }
     },
   }),
   defineLegacyConfigMigration({
