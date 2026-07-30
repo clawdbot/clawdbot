@@ -8,18 +8,18 @@ import {
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
 
-type GeeCompactionOwner = "openclaw" | "gee" | "provider" | "disabled";
+type hostCompactionOwner = "openclaw" | "external-host" | "provider" | "disabled";
 
-function createGeeRuntimePreparedFacts(owner: GeeCompactionOwner) {
+function createHostRuntimePreparedFacts(owner: hostCompactionOwner) {
   return {
     "telegram:geeclaw": {
-      kind: "gee-runtime-prepared-facts",
+      kind: "host-runtime-prepared-facts",
       version: 1,
-      hostMode: "gee-hosted",
+      hostMode: "external-hosted",
       envelope: {
         compaction: {
           owner,
-          ...(owner === "gee" ? { hostCompactionId: "gee-compaction-1" } : {}),
+          ...(owner === "external-host" ? { hostCompactionId: "gee-compaction-1" } : {}),
         },
       },
     },
@@ -104,7 +104,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.model).toBeUndefined();
   });
 
-  it("does not apply standalone compaction provider or auth state when Gee owns compaction", () => {
+  it("does not apply standalone compaction provider or auth state when host owns compaction", () => {
     const result = buildEmbeddedCompactionRuntimeContext({
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
@@ -114,16 +114,16 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       provider: "ollama",
       modelId: "minimax-m2.7:cloud",
       authProfileId: "ollama:default",
-      geeRuntimePreparedFacts: createGeeRuntimePreparedFacts("gee"),
+      hostRuntimePreparedFacts: createHostRuntimePreparedFacts("external-host"),
     });
     expect(result.provider).toBeUndefined();
     expect(result.model).toBeUndefined();
     expect(result.authProfileId).toBeUndefined();
-    expect(result.geeRuntimeCompactionOwner).toBe("gee");
-    expect(result.geeRuntimeHostCompactionId).toBe("gee-compaction-1");
+    expect(result.hostRuntimeCompactionOwner).toBe("external-host");
+    expect(result.hostRuntimeHostCompactionId).toBe("gee-compaction-1");
   });
 
-  it("keeps standalone compaction targeting when Gee explicitly delegates to OpenClaw", () => {
+  it("keeps standalone compaction targeting when host explicitly delegates to OpenClaw", () => {
     const result = buildEmbeddedCompactionRuntimeContext({
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
@@ -133,12 +133,12 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       provider: "ollama",
       modelId: "minimax-m2.7:cloud",
       authProfileId: "ollama:default",
-      geeRuntimePreparedFacts: createGeeRuntimePreparedFacts("openclaw"),
+      hostRuntimePreparedFacts: createHostRuntimePreparedFacts("openclaw"),
     });
     expect(result.provider).toBe("anthropic");
     expect(result.model).toBe("claude-opus-4-6");
     expect(result.authProfileId).toBeUndefined();
-    expect(result.geeRuntimeCompactionOwner).toBe("openclaw");
+    expect(result.hostRuntimeCompactionOwner).toBe("openclaw");
   });
 
   it("applies compaction.model override with provider/model format", () => {

@@ -1,30 +1,30 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildGeeRuntimePreparedFacts,
-  GeeRuntimeEnvelopeValidationError,
-  type GeeRuntimeEnvelope,
-} from "./gee-runtime-envelope.js";
+  buildHostRuntimePreparedFacts,
+  HostRuntimeEnvelopeValidationError,
+  type HostRuntimeEnvelope,
+} from "./host-runtime-envelope.js";
 import type { TurnOwnerDecision } from "./mcp-thread-config.js";
 
 const GEE_ENDPOINT_ID = "telegram:geeclaw";
 
-function createGeeDecision(): TurnOwnerDecision {
+function createhostDecision(): TurnOwnerDecision {
   return {
-    owner: "gee",
+    owner: "external-host",
     reason: "endpoint-owner",
     endpointId: GEE_ENDPOINT_ID,
     threadOwnerId: "geeclaw",
-    geeId: "geeclaw",
+    hostId: "geeclaw",
     auditId: "audit-geeclaw-telegram",
   };
 }
 
-function createGeeRuntimeEnvelope(): GeeRuntimeEnvelope {
+function createHostRuntimeEnvelope(): HostRuntimeEnvelope {
   return {
-    kind: "gee-runtime-envelope",
+    kind: "host-runtime-envelope",
     version: 1,
-    owner: "gee",
-    geeId: "geeclaw",
+    owner: "external-host",
+    hostId: "geeclaw",
     requestId: "request-123",
     auditId: "audit-geeclaw-telegram",
     endpoint: {
@@ -36,7 +36,7 @@ function createGeeRuntimeEnvelope(): GeeRuntimeEnvelope {
     conversation: {
       sessionKey: "telegram:geeclaw:user-42",
       threadId: "thread-123",
-      threadOwner: "gee",
+      threadOwner: "external-host",
     },
     provider: {
       modelRef: "codex:gpt-5.4",
@@ -51,7 +51,7 @@ function createGeeRuntimeEnvelope(): GeeRuntimeEnvelope {
     tools: {
       capabilityPlanId: "gee-tools-default",
       allowedToolIds: ["message.send", "memory.search"],
-      policy: "gee-authorized",
+      policy: "host-authorized",
     },
     delivery: {
       policyId: "gee-native-outbox",
@@ -60,33 +60,33 @@ function createGeeRuntimeEnvelope(): GeeRuntimeEnvelope {
       confirmationPolicy: "native-outbox-only",
     },
     compaction: {
-      owner: "gee",
+      owner: "external-host",
       hostCompactionId: "gee-compaction-default",
     },
   };
 }
 
-describe("Gee runtime envelope prepared facts", () => {
-  it("builds stable prepared facts for Gee-hosted OpenClaw turns", () => {
-    const result = buildGeeRuntimePreparedFacts({
-      ownershipDecisions: { [GEE_ENDPOINT_ID]: createGeeDecision() },
-      envelopeSources: { [GEE_ENDPOINT_ID]: createGeeRuntimeEnvelope() },
+describe("Host runtime envelope prepared facts", () => {
+  it("builds stable prepared facts for Externally hosted OpenClaw turns", () => {
+    const result = buildHostRuntimePreparedFacts({
+      ownershipDecisions: { [GEE_ENDPOINT_ID]: createhostDecision() },
+      envelopeSources: { [GEE_ENDPOINT_ID]: createHostRuntimeEnvelope() },
     });
 
     expect(result.fingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(result.preparedFacts).toEqual({
       [GEE_ENDPOINT_ID]: {
-        kind: "gee-runtime-prepared-facts",
+        kind: "host-runtime-prepared-facts",
         version: 1,
-        hostMode: "gee-hosted",
-        envelope: createGeeRuntimeEnvelope(),
+        hostMode: "external-hosted",
+        envelope: createHostRuntimeEnvelope(),
       },
     });
     expect(result.serialized).toMatchObject({
       [GEE_ENDPOINT_ID]: {
-        hostMode: "gee-hosted",
+        hostMode: "external-hosted",
         envelope: {
-          owner: "gee",
+          owner: "external-host",
           endpoint: { endpointId: GEE_ENDPOINT_ID },
           auth: { credentialRef: "gee://credentials/openai/work" },
         },
@@ -95,25 +95,25 @@ describe("Gee runtime envelope prepared facts", () => {
   });
 
   it.each(["provider", "auth", "tools", "delivery", "compaction"] as const)(
-    "fails closed when Gee-hosted turns are missing %s facts",
+    "fails closed when Externally hosted turns are missing %s facts",
     (fieldName) => {
-      const envelope = createGeeRuntimeEnvelope() as Record<string, unknown>;
+      const envelope = createHostRuntimeEnvelope() as Record<string, unknown>;
       delete envelope[fieldName];
 
       expect(() =>
-        buildGeeRuntimePreparedFacts({
-          ownershipDecisions: { [GEE_ENDPOINT_ID]: createGeeDecision() },
+        buildHostRuntimePreparedFacts({
+          ownershipDecisions: { [GEE_ENDPOINT_ID]: createhostDecision() },
           envelopeSources: { [GEE_ENDPOINT_ID]: envelope },
         }),
-      ).toThrow(GeeRuntimeEnvelopeValidationError);
+      ).toThrow(HostRuntimeEnvelopeValidationError);
       try {
-        buildGeeRuntimePreparedFacts({
-          ownershipDecisions: { [GEE_ENDPOINT_ID]: createGeeDecision() },
+        buildHostRuntimePreparedFacts({
+          ownershipDecisions: { [GEE_ENDPOINT_ID]: createhostDecision() },
           envelopeSources: { [GEE_ENDPOINT_ID]: envelope },
         });
       } catch (error) {
         expect(error).toMatchObject({
-          code: "openclaw_gee_runtime_missing_fact",
+          code: "openclaw_host_runtime_missing_fact",
           endpointId: GEE_ENDPOINT_ID,
           fieldName,
         });
@@ -122,22 +122,22 @@ describe("Gee runtime envelope prepared facts", () => {
   );
 
   it("rejects raw credential material in hosted auth facts", () => {
-    const envelope = createGeeRuntimeEnvelope();
+    const envelope = createHostRuntimeEnvelope();
     const rawEnvelope = {
       ...envelope,
       auth: { ...envelope.auth, apiKey: "sk-raw-secret" },
     };
 
     expect(() =>
-      buildGeeRuntimePreparedFacts({
-        ownershipDecisions: { [GEE_ENDPOINT_ID]: createGeeDecision() },
+      buildHostRuntimePreparedFacts({
+        ownershipDecisions: { [GEE_ENDPOINT_ID]: createhostDecision() },
         envelopeSources: { [GEE_ENDPOINT_ID]: rawEnvelope },
       }),
-    ).toThrow(GeeRuntimeEnvelopeValidationError);
+    ).toThrow(HostRuntimeEnvelopeValidationError);
   });
 
-  it("does not require Gee state for standalone OpenClaw ownership decisions", () => {
-    const result = buildGeeRuntimePreparedFacts({
+  it("does not require host state for standalone OpenClaw ownership decisions", () => {
+    const result = buildHostRuntimePreparedFacts({
       ownershipDecisions: {
         "local-acp": {
           owner: "openclaw",

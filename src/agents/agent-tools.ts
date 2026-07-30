@@ -64,6 +64,7 @@ import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import { execSchema, processSchema } from "./bash-tools.schemas.js";
 import { listChannelAgentTools } from "./channel-tools.js";
 import { shouldSuppressManagedWebSearchTool } from "./codex-native-web-search.js";
+import type { EmbeddedRunHostRuntimePreparedFacts } from "./embedded-agent-runner/run/types.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import {
   filterLocalModelLeanTools,
@@ -72,7 +73,6 @@ import {
 import type { ModelAuthMode } from "./model-auth.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import type { EmbeddedRunGeeRuntimePreparedFacts } from "./embedded-agent-runner/run/types.js";
 import type { SandboxContext } from "./sandbox.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
@@ -501,8 +501,8 @@ export function createOpenClawCodingTools(options?: {
   allowGatewaySubagentBinding?: boolean;
   /** Runtime-scoped explicit allowlist used to materialize matching plugin tools. */
   runtimeToolAllowlist?: string[];
-  /** Gee-owned prepared facts for a Gee-hosted OpenClaw turn. */
-  geeRuntimePreparedFacts?: EmbeddedRunGeeRuntimePreparedFacts;
+  /** Host-owned prepared facts for a Externally hosted OpenClaw turn. */
+  hostRuntimePreparedFacts?: EmbeddedRunHostRuntimePreparedFacts;
   /** Mutable cron creator cap ref for callers that append final runtime tools later. */
   cronCreatorToolAllowlistRef?: CronCreatorToolAllowlistEntry[];
   /** If true, the model has native vision capability */
@@ -952,7 +952,7 @@ export function createOpenClawCodingTools(options?: {
             agentDir: options?.agentDir,
             workspaceDir: workspaceRoot,
             config: options?.config,
-            geeRuntimePreparedFacts: options?.geeRuntimePreparedFacts,
+            hostRuntimePreparedFacts: options?.hostRuntimePreparedFacts,
             fsPolicy,
             requesterSenderId: options?.senderId,
             sessionId: options?.sessionId,
@@ -1047,7 +1047,7 @@ export function createOpenClawCodingTools(options?: {
             : undefined,
           sandboxed: Boolean(sandbox),
           config: options?.config,
-          geeRuntimePreparedFacts: options?.geeRuntimePreparedFacts,
+          hostRuntimePreparedFacts: options?.hostRuntimePreparedFacts,
           pluginToolAllowlist,
           pluginToolDenylist,
           cronCreatorToolAllowlist: shouldCaptureCronCreatorToolAllowlist

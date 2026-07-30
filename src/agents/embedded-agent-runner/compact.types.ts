@@ -1,3 +1,4 @@
+import type { Model } from "openclaw/plugin-sdk/llm";
 /**
  * Shared parameter and metric types for embedded-agent compaction.
  */
@@ -6,13 +7,12 @@ import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
-import type { Model } from "openclaw/plugin-sdk/llm";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
-import type { EmbeddedRunGeeRuntimePreparedFacts } from "./run/types.js";
+import type { EmbeddedRunHostRuntimePreparedFacts } from "./run/types.js";
 
 export type CompactEmbeddedAgentSessionParams = {
   sessionId: string;
@@ -73,8 +73,8 @@ export type CompactEmbeddedAgentSessionParams = {
   agentHarnessId?: string;
   /** OpenClaw-owned runtime policy prepared for this compaction path. */
   runtimePlan?: AgentRuntimePlan;
-  /** Gee-owned prepared facts for a Gee-hosted OpenClaw turn. */
-  geeRuntimePreparedFacts?: EmbeddedRunGeeRuntimePreparedFacts;
+  /** Host-owned prepared facts for a Externally hosted OpenClaw turn. */
+  hostRuntimePreparedFacts?: EmbeddedRunHostRuntimePreparedFacts;
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
   execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;

@@ -65,7 +65,6 @@ import {
   resolveStoredSessionKeyForSessionId,
 } from "../command/session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
-import { resolveGeeRuntimeProviderAuthPolicy } from "../gee-runtime-prepared-facts.js";
 import {
   classifyAssistantFailoverReason,
   classifyFailoverReason,
@@ -99,6 +98,7 @@ import {
 } from "../fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { selectAgentHarness } from "../harness/selection.js";
+import { resolveHostRuntimeProviderAuthPolicy } from "../host-runtime-prepared-facts.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../live-model-switch.js";
 import {
@@ -232,7 +232,7 @@ import {
   resolveHookModelSelection,
 } from "./run/setup.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
-import type { EmbeddedRunFastModeParam, EmbeddedRunGeeRuntimePreparedFacts } from "./run/types.js";
+import type { EmbeddedRunFastModeParam, EmbeddedRunHostRuntimePreparedFacts } from "./run/types.js";
 import {
   resolveLiveToolResultMaxChars,
   sessionLikelyHasOversizedToolResults,
@@ -984,22 +984,22 @@ async function runEmbeddedAgentInternal(
       const agentDir =
         params.agentDir ?? resolveAgentDir(params.config ?? {}, workspaceResolution.agentId);
       const normalizedSessionKey = params.sessionKey?.trim();
-      const geeRuntimePreparedFacts = params.geeRuntimePreparedFacts as
-        | EmbeddedRunGeeRuntimePreparedFacts
+      const hostRuntimePreparedFacts = params.hostRuntimePreparedFacts as
+        | EmbeddedRunHostRuntimePreparedFacts
         | undefined;
-      const geeRuntimeProviderAuthPolicy =
-        resolveGeeRuntimeProviderAuthPolicy(geeRuntimePreparedFacts);
-      const geeRuntimeFailoverObservation = geeRuntimeProviderAuthPolicy
+      const hostRuntimeProviderAuthPolicy =
+        resolveHostRuntimeProviderAuthPolicy(hostRuntimePreparedFacts);
+      const hostRuntimeFailoverObservation = hostRuntimeProviderAuthPolicy
         ? {
-            runtimePolicyOwner: "gee" as const,
-            runtimePolicyEndpointIds: geeRuntimeProviderAuthPolicy.endpointIds,
-            runtimeRoutingPolicyIds: geeRuntimeProviderAuthPolicy.routingPolicyIds,
-            runtimeFallbackPolicyIds: geeRuntimeProviderAuthPolicy.fallbackPolicyIds,
-            runtimeCooldownPolicyIds: geeRuntimeProviderAuthPolicy.cooldownPolicyIds,
-            runtimeAuthEligibility: geeRuntimeProviderAuthPolicy.authEligibility,
+            runtimePolicyOwner: "external-host" as const,
+            runtimePolicyEndpointIds: hostRuntimeProviderAuthPolicy.endpointIds,
+            runtimeRoutingPolicyIds: hostRuntimeProviderAuthPolicy.routingPolicyIds,
+            runtimeFallbackPolicyIds: hostRuntimeProviderAuthPolicy.fallbackPolicyIds,
+            runtimeCooldownPolicyIds: hostRuntimeProviderAuthPolicy.cooldownPolicyIds,
+            runtimeAuthEligibility: hostRuntimeProviderAuthPolicy.authEligibility,
           }
         : undefined;
-      const fallbackConfigured = geeRuntimeProviderAuthPolicy
+      const fallbackConfigured = hostRuntimeProviderAuthPolicy
         ? false
         : hasEmbeddedRunConfiguredModelFallbacks({
             cfg: params.config,
@@ -1189,7 +1189,7 @@ async function runEmbeddedAgentInternal(
         !pluginHarnessOwnsTransport &&
         provider === OPENAI_PROVIDER_ID &&
         effectiveModel.api === "openai-chatgpt-responses";
-      let piExternalCliAuthScope = geeRuntimeProviderAuthPolicy
+      let piExternalCliAuthScope = hostRuntimeProviderAuthPolicy
         ? { ignoreAutoPreferredProfile: true }
         : pluginHarnessOwnsTransport
           ? { ignoreAutoPreferredProfile: false }
@@ -1205,13 +1205,13 @@ async function runEmbeddedAgentInternal(
                 modelId,
                 workspaceDir: resolvedWorkspace,
                 userLockedAuthProfileId:
-                  !geeRuntimeProviderAuthPolicy && params.authProfileIdSource === "user"
+                  !hostRuntimeProviderAuthPolicy && params.authProfileIdSource === "user"
                     ? params.authProfileId
                     : undefined,
               });
       let noExternalAuthStore: AuthProfileStore | undefined;
       if (
-        !geeRuntimeProviderAuthPolicy &&
+        !hostRuntimeProviderAuthPolicy &&
         !pluginHarnessOwnsTransport &&
         !pluginHarnessNeedsOpenClawAuthBootstrap &&
         !piExternalCliAuthScope.providerIds
@@ -1230,7 +1230,7 @@ async function runEmbeddedAgentInternal(
             params.authProfileIdSource === "user" ? params.authProfileId : undefined,
         });
       }
-      const authStore = geeRuntimeProviderAuthPolicy
+      const authStore = hostRuntimeProviderAuthPolicy
         ? createEmptyAuthProfileStore()
         : pluginHarnessOwnsTransport && !pluginHarnessNeedsOpenClawAuthBootstrap
           ? createEmptyAuthProfileStore()
@@ -1248,18 +1248,18 @@ async function runEmbeddedAgentInternal(
                 ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
                   allowKeychainPrompt: false,
                 }));
-      const attemptAuthProfileStore = geeRuntimeProviderAuthPolicy
+      const attemptAuthProfileStore = hostRuntimeProviderAuthPolicy
         ? authStore
         : pluginHarnessOwnsTransport && !pluginHarnessNeedsOpenClawAuthBootstrap
           ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
               allowKeychainPrompt: false,
             })
           : authStore;
-      const requestedProfileId = geeRuntimeProviderAuthPolicy
+      const requestedProfileId = hostRuntimeProviderAuthPolicy
         ? undefined
         : params.authProfileId?.trim();
       const requestedProfileIsUserLocked =
-        !geeRuntimeProviderAuthPolicy && params.authProfileIdSource === "user";
+        !hostRuntimeProviderAuthPolicy && params.authProfileIdSource === "user";
       const isForwardablePluginHarnessAuthProfile = (
         profileId: string | undefined,
       ): profileId is string => {
@@ -1315,12 +1315,12 @@ async function runEmbeddedAgentInternal(
         return [];
       };
       const pluginHarnessProfileOrder =
-        pluginHarnessOwnsTransport && !geeRuntimeProviderAuthPolicy
+        pluginHarnessOwnsTransport && !hostRuntimeProviderAuthPolicy
           ? resolvePluginHarnessProfileOrder()
           : [];
       const resolvePluginHarnessPreferredProfileId = (): string | undefined =>
         pluginHarnessProfileOrder[0];
-      const preferredProfileId = geeRuntimeProviderAuthPolicy
+      const preferredProfileId = hostRuntimeProviderAuthPolicy
         ? undefined
         : pluginHarnessOwnsTransport
           ? resolvePluginHarnessPreferredProfileId()
@@ -1328,7 +1328,7 @@ async function runEmbeddedAgentInternal(
             ? undefined
             : requestedProfileId;
       let lockedProfileId =
-        !geeRuntimeProviderAuthPolicy && requestedProfileIsUserLocked
+        !hostRuntimeProviderAuthPolicy && requestedProfileIsUserLocked
           ? preferredProfileId
           : undefined;
       if (lockedProfileId) {
@@ -1371,7 +1371,8 @@ async function runEmbeddedAgentInternal(
         }
       }
       const profileOrder =
-        geeRuntimeProviderAuthPolicy || shouldPreferExplicitConfigApiKeyAuth(params.config, provider)
+        hostRuntimeProviderAuthPolicy ||
+        shouldPreferExplicitConfigApiKeyAuth(params.config, provider)
           ? []
           : [
               ...new Set(
@@ -1391,7 +1392,7 @@ async function runEmbeddedAgentInternal(
               ),
             ];
       const providerPreferredProfileId =
-        lockedProfileId || geeRuntimeProviderAuthPolicy
+        lockedProfileId || hostRuntimeProviderAuthPolicy
           ? undefined
           : resolveProviderAuthProfileId({
               provider,
@@ -1416,7 +1417,7 @@ async function runEmbeddedAgentInternal(
               ...profileOrder.filter((profileId) => profileId !== providerPreferredProfileId),
             ]
           : profileOrder;
-      const profileCandidates = geeRuntimeProviderAuthPolicy
+      const profileCandidates = hostRuntimeProviderAuthPolicy
         ? [undefined]
         : pluginHarnessOwnsTransport
           ? lockedProfileId
@@ -1494,8 +1495,8 @@ async function runEmbeddedAgentInternal(
         attemptedThinking,
         fallbackConfigured,
         allowTransientCooldownProbe:
-          !geeRuntimeProviderAuthPolicy && params.allowTransientCooldownProbe === true,
-        geeRuntimeProviderAuthPolicy,
+          !hostRuntimeProviderAuthPolicy && params.allowTransientCooldownProbe === true,
+        hostRuntimeProviderAuthPolicy,
         getProvider: () => provider,
         getModelId: () => modelId,
         getRuntimeModel: () => runtimeModel,
@@ -2161,7 +2162,7 @@ async function runEmbeddedAgentInternal(
             ),
             resolvedApiKey: resolvedStreamApiKey,
             authProfileId: lastProfileId,
-            geeRuntimePreparedFacts: params.geeRuntimePreparedFacts,
+            hostRuntimePreparedFacts: params.hostRuntimePreparedFacts,
             authProfileIdSource: lockedProfileId ? "user" : "auto",
             initialReplayState: accumulatedReplayState,
             authStorage,
@@ -2498,7 +2499,7 @@ async function runEmbeddedAgentInternal(
                     currentThreadTs: params.currentThreadTs,
                     currentMessageId: params.currentMessageId,
                     authProfileId: lastProfileId,
-                    geeRuntimePreparedFacts,
+                    hostRuntimePreparedFacts,
                     workspaceDir: resolvedWorkspace,
                     agentDir,
                     config: params.config,
@@ -2695,7 +2696,7 @@ async function runEmbeddedAgentInternal(
                     currentThreadTs: params.currentThreadTs,
                     currentMessageId: params.currentMessageId,
                     authProfileId: lastProfileId,
-                    geeRuntimePreparedFacts,
+                    hostRuntimePreparedFacts,
                     workspaceDir: resolvedWorkspace,
                     agentDir,
                     config: params.config,
@@ -3179,7 +3180,7 @@ async function runEmbeddedAgentInternal(
               sourceModel: modelId,
               profileId: failedPromptProfileId,
               fallbackConfigured,
-              ...geeRuntimeFailoverObservation,
+              ...hostRuntimeFailoverObservation,
               aborted,
             });
             if (promptFailoverReason === "rate_limit") {
@@ -3395,7 +3396,7 @@ async function runEmbeddedAgentInternal(
             sourceModel: assistantForFailover?.model ?? modelId,
             profileId: failedAssistantProfileId,
             fallbackConfigured,
-            ...geeRuntimeFailoverObservation,
+            ...hostRuntimeFailoverObservation,
             timedOut,
             aborted,
           });

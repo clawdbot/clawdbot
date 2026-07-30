@@ -1,44 +1,44 @@
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 
-export type GeeRuntimeToolPolicy = {
+export type HostRuntimeToolPolicy = {
   allowedToolIds: string[];
   endpointIds: string[];
 };
 
-export type GeeRuntimeCompactionOwner = "openclaw" | "gee" | "provider" | "disabled";
+export type HostRuntimeCompactionOwner = "openclaw" | "external-host" | "provider" | "disabled";
 
-export type GeeRuntimeCompactionPolicy = {
-  owner: GeeRuntimeCompactionOwner;
+export type HostRuntimeCompactionPolicy = {
+  owner: HostRuntimeCompactionOwner;
   endpointIds: string[];
   hostCompactionIds: string[];
 };
 
-export type GeeRuntimeAuthEligibility = "ok" | "expired" | "missing" | "unresolved";
+export type HostRuntimeAuthEligibility = "ok" | "expired" | "missing" | "unresolved";
 
-export type GeeRuntimeProviderAuthPolicy = {
+export type HostRuntimeProviderAuthPolicy = {
   endpointIds: string[];
   modelRefs: string[];
   routingPolicyIds: string[];
   fallbackPolicyIds: string[];
   cooldownPolicyIds: string[];
   credentialRefs: string[];
-  authEligibility: GeeRuntimeAuthEligibility;
+  authEligibility: HostRuntimeAuthEligibility;
 };
 
-export function resolveGeeRuntimeToolPolicy(
+export function resolveHostRuntimeToolPolicy(
   preparedFacts?: Record<string, unknown>,
-): GeeRuntimeToolPolicy | undefined {
+): HostRuntimeToolPolicy | undefined {
   if (!preparedFacts || Object.keys(preparedFacts).length === 0) {
     return undefined;
   }
 
   const entries = Object.entries(preparedFacts);
   if (entries.length > 1) {
-    const endpointIds = entries.map(([endpointId]) => endpointId).toSorted((left, right) =>
-      left.localeCompare(right),
-    );
+    const endpointIds = entries
+      .map(([endpointId]) => endpointId)
+      .toSorted((left, right) => left.localeCompare(right));
     throw new Error(
-      `Gee-hosted OpenClaw tool policy requires exactly one active endpoint; received endpoints "${endpointIds.join(
+      `Externally hosted OpenClaw tool policy requires exactly one active endpoint; received endpoints "${endpointIds.join(
         '", "',
       )}".`,
     );
@@ -47,10 +47,10 @@ export function resolveGeeRuntimeToolPolicy(
   const endpointIds: string[] = [];
   const allowedToolIds = new Set<string>();
   for (const [endpointId, rawFact] of entries) {
-    const fact = readGeeRuntimePreparedFact(rawFact, endpointId);
+    const fact = readHostRuntimePreparedFact(rawFact, endpointId);
     const envelope = readRequiredRecord(fact.envelope, endpointId, "envelope");
     const tools = readRequiredRecord(envelope.tools, endpointId, "envelope.tools");
-    readLiteral(tools.policy, "gee-authorized", endpointId, "envelope.tools.policy");
+    readLiteral(tools.policy, "host-authorized", endpointId, "envelope.tools.policy");
     for (const toolId of readStringArray(
       tools.allowedToolIds,
       endpointId,
@@ -67,23 +67,23 @@ export function resolveGeeRuntimeToolPolicy(
   };
 }
 
-export function resolveGeeRuntimeCompactionPolicy(
+export function resolveHostRuntimeCompactionPolicy(
   preparedFacts?: Record<string, unknown>,
-): GeeRuntimeCompactionPolicy | undefined {
+): HostRuntimeCompactionPolicy | undefined {
   if (!preparedFacts || Object.keys(preparedFacts).length === 0) {
     return undefined;
   }
 
   const endpointIds: string[] = [];
   const hostCompactionIds = new Set<string>();
-  const owners = new Set<GeeRuntimeCompactionOwner>();
+  const owners = new Set<HostRuntimeCompactionOwner>();
   for (const [endpointId, rawFact] of Object.entries(preparedFacts)) {
-    const fact = readGeeRuntimePreparedFact(rawFact, endpointId);
+    const fact = readHostRuntimePreparedFact(rawFact, endpointId);
     const envelope = readRequiredRecord(fact.envelope, endpointId, "envelope");
     const compaction = readRequiredRecord(envelope.compaction, endpointId, "envelope.compaction");
     const owner = readEnum(
       compaction.owner,
-      ["openclaw", "gee", "provider", "disabled"],
+      ["openclaw", "external-host", "provider", "disabled"],
       endpointId,
       "envelope.compaction.owner",
     );
@@ -119,9 +119,9 @@ export function resolveGeeRuntimeCompactionPolicy(
   };
 }
 
-export function resolveGeeRuntimeProviderAuthPolicy(
+export function resolveHostRuntimeProviderAuthPolicy(
   preparedFacts?: Record<string, unknown>,
-): GeeRuntimeProviderAuthPolicy | undefined {
+): HostRuntimeProviderAuthPolicy | undefined {
   if (!preparedFacts || Object.keys(preparedFacts).length === 0) {
     return undefined;
   }
@@ -132,9 +132,9 @@ export function resolveGeeRuntimeProviderAuthPolicy(
   const fallbackPolicyIds = new Set<string>();
   const cooldownPolicyIds = new Set<string>();
   const credentialRefs = new Set<string>();
-  const authEligibilities = new Set<GeeRuntimeAuthEligibility>();
+  const authEligibilities = new Set<HostRuntimeAuthEligibility>();
   for (const [endpointId, rawFact] of Object.entries(preparedFacts)) {
-    const fact = readGeeRuntimePreparedFact(rawFact, endpointId);
+    const fact = readHostRuntimePreparedFact(rawFact, endpointId);
     const envelope = readRequiredRecord(fact.envelope, endpointId, "envelope");
     const provider = readRequiredRecord(envelope.provider, endpointId, "envelope.provider");
     const auth = readRequiredRecord(envelope.auth, endpointId, "envelope.auth");
@@ -196,15 +196,15 @@ export function resolveGeeRuntimeProviderAuthPolicy(
   };
 }
 
-export function resolveGeeRuntimeToolAllowlist(
-  policy: GeeRuntimeToolPolicy | undefined,
+export function resolveHostRuntimeToolAllowlist(
+  policy: HostRuntimeToolPolicy | undefined,
   fallbackAllowlist?: string[],
 ): string[] | undefined {
   return policy ? policy.allowedToolIds : fallbackAllowlist;
 }
 
-export function isGeeRuntimeToolAllowed(
-  policy: GeeRuntimeToolPolicy | undefined,
+export function isHostRuntimeToolAllowed(
+  policy: HostRuntimeToolPolicy | undefined,
   toolName: string,
 ): boolean {
   if (!policy) {
@@ -216,11 +216,11 @@ export function isGeeRuntimeToolAllowed(
   return isToolAllowedByPolicyName(toolName, { allow: policy.allowedToolIds });
 }
 
-function readGeeRuntimePreparedFact(value: unknown, endpointId: string): Record<string, unknown> {
+function readHostRuntimePreparedFact(value: unknown, endpointId: string): Record<string, unknown> {
   const fact = readRequiredRecord(value, endpointId, "preparedFacts");
-  readLiteral(fact.kind, "gee-runtime-prepared-facts", endpointId, "kind");
+  readLiteral(fact.kind, "host-runtime-prepared-facts", endpointId, "kind");
   readLiteral(fact.version, 1, endpointId, "version");
-  readLiteral(fact.hostMode, "gee-hosted", endpointId, "hostMode");
+  readLiteral(fact.hostMode, "external-hosted", endpointId, "hostMode");
   return fact;
 }
 
@@ -290,6 +290,6 @@ function readEnum<T extends string>(
 
 function throwInvalidPreparedFact(endpointId: string, fieldName: string): never {
   throw new Error(
-    `Gee-hosted OpenClaw endpoint "${endpointId}" has invalid prepared runtime fact "${fieldName}".`,
+    `Externally hosted OpenClaw endpoint "${endpointId}" has invalid prepared runtime fact "${fieldName}".`,
   );
 }

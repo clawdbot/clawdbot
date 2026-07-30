@@ -1,20 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
-  GeeRuntimeEnvelopeValidationError,
-  type GeeRuntimeEnvelope,
-} from "./gee-runtime-envelope.js";
+  HostRuntimeEnvelopeValidationError,
+  type HostRuntimeEnvelope,
+} from "./host-runtime-envelope.js";
 import {
   buildCodexMcpThreadConfig,
   buildDispatcherRouteDecision,
   CodexMcpOwnershipConfigError,
 } from "./mcp-thread-config.js";
 
-function createGeeRuntimeEnvelope(): GeeRuntimeEnvelope {
+function createHostRuntimeEnvelope(): HostRuntimeEnvelope {
   return {
-    kind: "gee-runtime-envelope",
+    kind: "host-runtime-envelope",
     version: 1,
-    owner: "gee",
-    geeId: "geeclaw",
+    owner: "external-host",
+    hostId: "geeclaw",
     requestId: "request-123",
     auditId: "audit-geeclaw-telegram",
     endpoint: {
@@ -25,7 +25,7 @@ function createGeeRuntimeEnvelope(): GeeRuntimeEnvelope {
     },
     conversation: {
       sessionKey: "telegram:geeclaw:user-42",
-      threadOwner: "gee",
+      threadOwner: "external-host",
     },
     provider: {
       modelRef: "codex:gpt-5.4",
@@ -38,14 +38,14 @@ function createGeeRuntimeEnvelope(): GeeRuntimeEnvelope {
     tools: {
       capabilityPlanId: "gee-tools-default",
       allowedToolIds: ["message.send"],
-      policy: "gee-authorized",
+      policy: "host-authorized",
     },
     delivery: {
       policyId: "gee-native-outbox",
       outboundTarget: "telegram:chat:42",
     },
     compaction: {
-      owner: "gee",
+      owner: "external-host",
     },
   };
 }
@@ -122,7 +122,7 @@ describe("buildCodexMcpThreadConfig", () => {
     expect(result.fingerprint).toBeUndefined();
   });
 
-  it("records Gee-owned endpoint decisions before starting a thread", () => {
+  it("records Host-owned endpoint decisions before starting a thread", () => {
     const result = buildCodexMcpThreadConfig({
       mcp: {
         servers: {
@@ -130,10 +130,10 @@ describe("buildCodexMcpThreadConfig", () => {
             url: "http://127.0.0.1:8811/mcp",
             openclawOwnership: {
               endpointId: "telegram:geeclaw",
-              endpointOwner: { kind: "gee", geeId: "geeclaw" },
+              endpointOwner: { kind: "external-host", hostId: "geeclaw" },
               auditId: "audit-geeclaw-telegram",
             },
-            openclawRuntimeEnvelope: createGeeRuntimeEnvelope(),
+            openclawRuntimeEnvelope: createHostRuntimeEnvelope(),
           },
         },
       },
@@ -142,28 +142,28 @@ describe("buildCodexMcpThreadConfig", () => {
     expect(result.fingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(result.ownershipDecisions).toEqual({
       "telegram:geeclaw": {
-        owner: "gee",
+        owner: "external-host",
         reason: "endpoint-owner",
         endpointId: "telegram:geeclaw",
         threadOwnerId: "geeclaw",
-        geeId: "geeclaw",
+        hostId: "geeclaw",
         auditId: "audit-geeclaw-telegram",
       },
     });
-    expect(result.geeRuntimePreparedFacts).toMatchObject({
+    expect(result.hostRuntimePreparedFacts).toMatchObject({
       "telegram:geeclaw": {
-        hostMode: "gee-hosted",
+        hostMode: "external-hosted",
         envelope: {
-          owner: "gee",
+          owner: "external-host",
           endpoint: { endpointId: "telegram:geeclaw" },
           auth: { credentialRef: "gee://credentials/openai/work" },
         },
       },
     });
-    expect(result.configPatch).not.toHaveProperty("openclaw_gee_runtime");
+    expect(result.configPatch).not.toHaveProperty("openclaw_host_runtime");
   });
 
-  it("fails closed when a Gee-owned endpoint is missing prepared runtime facts", () => {
+  it("fails closed when a Host-owned endpoint is missing prepared runtime facts", () => {
     expect(() =>
       buildCodexMcpThreadConfig({
         mcp: {
@@ -172,14 +172,14 @@ describe("buildCodexMcpThreadConfig", () => {
               url: "http://127.0.0.1:8811/mcp",
               openclawOwnership: {
                 endpointId: "telegram:geeclaw",
-                endpointOwner: { kind: "gee", geeId: "geeclaw" },
+                endpointOwner: { kind: "external-host", hostId: "geeclaw" },
                 auditId: "audit-geeclaw-telegram",
               },
             },
           },
         },
       }),
-    ).toThrow(GeeRuntimeEnvelopeValidationError);
+    ).toThrow(HostRuntimeEnvelopeValidationError);
   });
 
   it("records dispatcher decisions with an explicit runtime-envelope owner", () => {
@@ -220,7 +220,7 @@ describe("buildCodexMcpThreadConfig", () => {
         idempotencyKey: "slack:evt:1",
       },
       decision: {
-        owner: "gee",
+        owner: "external-host",
         reason: "dispatcher-decision",
         endpointId: "slack:shared",
         dispatcherId: "slack-dispatcher",
@@ -237,14 +237,14 @@ describe("buildCodexMcpThreadConfig", () => {
         idempotencyKey: "slack:evt:1",
       },
       decision: {
-        owner: "gee",
+        owner: "external-host",
         reason: "dispatcher-decision",
         endpointId: "slack:shared",
         dispatcherId: "slack-dispatcher",
         auditId: "audit-shared-slack",
       },
       persistedRouteKey: "dispatcher-route:slack:evt:1",
-      invokedRuntime: "gee",
+      invokedRuntime: "external-host",
     });
   });
 
@@ -258,7 +258,7 @@ describe("buildCodexMcpThreadConfig", () => {
           idempotencyKey: "slack:evt:1",
         },
         decision: {
-          owner: "gee",
+          owner: "external-host",
           reason: "dispatcher-decision",
           endpointId: "slack:shared",
           dispatcherId: "slack-dispatcher",
@@ -292,8 +292,8 @@ describe("buildCodexMcpThreadConfig", () => {
         auditId: "mcp:local-acp",
       },
     });
-    expect(result.geeRuntimePreparedFacts).toBeUndefined();
-    expect(result.configPatch).not.toHaveProperty("openclaw_gee_runtime");
+    expect(result.hostRuntimePreparedFacts).toBeUndefined();
+    expect(result.configPatch).not.toHaveProperty("openclaw_host_runtime");
   });
 
   it("fails closed when a shared endpoint has no owner decision", () => {
@@ -323,7 +323,7 @@ describe("buildCodexMcpThreadConfig", () => {
               url: "http://127.0.0.1:8811/mcp",
               openclawOwnership: {
                 endpointId: "telegram:shared",
-                endpointOwner: { kind: "gee", geeId: "geeclaw" },
+                endpointOwner: { kind: "external-host", hostId: "geeclaw" },
               },
             },
             secondary: {

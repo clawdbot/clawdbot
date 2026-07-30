@@ -1,15 +1,15 @@
 import crypto from "node:crypto";
 import {
-  buildGeeRuntimePreparedFacts,
-  type GeeRuntimePreparedFacts,
-} from "./gee-runtime-envelope.js";
+  buildHostRuntimePreparedFacts,
+  type HostRuntimePreparedFacts,
+} from "./host-runtime-envelope.js";
 import type { JsonObject, JsonValue } from "./protocol.js";
 
-export type RuntimeEnvelopeOwner = "openclaw" | "gee";
+export type RuntimeEnvelopeOwner = "openclaw" | "external-host";
 
 export type EndpointOwner =
   | { kind: "openclaw" }
-  | { kind: "gee"; geeId: string }
+  | { kind: "external-host"; hostId: string }
   | { kind: "dispatcher"; dispatcherId: string };
 
 export type TurnOwnerDecisionReason =
@@ -24,7 +24,7 @@ export type TurnOwnerDecision = {
   endpointId: string;
   threadOwnerId?: string;
   dispatcherId?: string;
-  geeId?: string;
+  hostId?: string;
   auditId: string;
 };
 
@@ -74,7 +74,7 @@ export type CodexMcpThreadConfig = {
   fingerprint?: string;
   configPatch?: JsonObject;
   ownershipDecisions?: Record<string, TurnOwnerDecision>;
-  geeRuntimePreparedFacts?: Record<string, GeeRuntimePreparedFacts>;
+  hostRuntimePreparedFacts?: Record<string, HostRuntimePreparedFacts>;
 };
 
 const OPENCLAW_TRANSPORT_TO_CODEX_TYPE: Record<string, string> = {
@@ -87,7 +87,7 @@ const OPENCLAW_TRANSPORT_TO_CODEX_TYPE: Record<string, string> = {
 export function buildCodexMcpThreadConfig(config: unknown): CodexMcpThreadConfig {
   const mcpServers: Record<string, JsonValue> = {};
   const ownershipDecisions: Record<string, TurnOwnerDecision> = {};
-  const geeRuntimeEnvelopeSources: Record<string, unknown> = {};
+  const hostRuntimeEnvelopeSources: Record<string, unknown> = {};
   for (const [serverName, server] of Object.entries(readConfiguredMcpServers(config)).toSorted(
     ([left], [right]) => left.localeCompare(right),
   )) {
@@ -105,8 +105,8 @@ export function buildCodexMcpThreadConfig(config: unknown): CodexMcpThreadConfig
     const ownershipDecision = resolveMcpEndpointOwnershipDecision(serverName, server);
     if (ownershipDecision) {
       addOwnershipDecision(ownershipDecisions, serverName, ownershipDecision);
-      addGeeRuntimeEnvelopeSource(
-        geeRuntimeEnvelopeSources,
+      addHostRuntimeEnvelopeSource(
+        hostRuntimeEnvelopeSources,
         ownershipDecision.endpointId,
         server.openclawRuntimeEnvelope,
       );
@@ -114,9 +114,9 @@ export function buildCodexMcpThreadConfig(config: unknown): CodexMcpThreadConfig
     mcpServers[serverName] = normalized;
   }
 
-  const geeRuntimePreparedFacts = buildGeeRuntimePreparedFacts({
+  const hostRuntimePreparedFacts = buildHostRuntimePreparedFacts({
     ownershipDecisions,
-    envelopeSources: geeRuntimeEnvelopeSources,
+    envelopeSources: hostRuntimeEnvelopeSources,
   });
   const configPatch: JsonObject = {};
   const fingerprintSource: JsonObject = {};
@@ -127,8 +127,8 @@ export function buildCodexMcpThreadConfig(config: unknown): CodexMcpThreadConfig
   if (Object.keys(ownershipDecisions).length > 0) {
     fingerprintSource.openclaw_ownership = serializeOwnershipDecisions(ownershipDecisions);
   }
-  if (geeRuntimePreparedFacts.serialized) {
-    fingerprintSource.openclaw_gee_runtime = geeRuntimePreparedFacts.serialized;
+  if (hostRuntimePreparedFacts.serialized) {
+    fingerprintSource.openclaw_host_runtime = hostRuntimePreparedFacts.serialized;
   }
   if (Object.keys(fingerprintSource).length === 0) {
     return { evaluated: true };
@@ -138,8 +138,8 @@ export function buildCodexMcpThreadConfig(config: unknown): CodexMcpThreadConfig
     fingerprint: fingerprintJson(fingerprintSource),
     ...(Object.keys(configPatch).length > 0 ? { configPatch } : {}),
     ...(Object.keys(ownershipDecisions).length > 0 ? { ownershipDecisions } : {}),
-    ...(geeRuntimePreparedFacts.preparedFacts
-      ? { geeRuntimePreparedFacts: geeRuntimePreparedFacts.preparedFacts }
+    ...(hostRuntimePreparedFacts.preparedFacts
+      ? { hostRuntimePreparedFacts: hostRuntimePreparedFacts.preparedFacts }
       : {}),
   };
 }
@@ -180,12 +180,12 @@ function resolveMcpEndpointOwnershipDecision(
         message: `OpenClaw MCP endpoint "${endpointId}" is shared but has no endpoint owner or dispatcher decision.`,
       });
     }
-    if (runtimeEnvelopeOwner === "gee" && !threadOwnerId) {
+    if (runtimeEnvelopeOwner === "external-host" && !threadOwnerId) {
       throw new CodexMcpOwnershipConfigError({
         code: "openclaw_ownership_missing_fact",
         serverName,
         endpointId,
-        message: `OpenClaw MCP endpoint "${endpointId}" cannot assign a Gee runtime envelope without a thread owner id.`,
+        message: `OpenClaw MCP endpoint "${endpointId}" cannot assign a Host runtime envelope without a thread owner id.`,
       });
     }
     return cleanTurnOwnerDecision({
@@ -213,19 +213,19 @@ function resolveMcpEndpointOwnershipDecision(
     });
   }
 
-  if (endpointOwner.kind === "gee") {
+  if (endpointOwner.kind === "external-host") {
     ensureCompatibleRuntimeOwner({
-      expected: "gee",
+      expected: "external-host",
       actual: runtimeEnvelopeOwner,
       serverName,
       endpointId,
     });
     return cleanTurnOwnerDecision({
-      owner: "gee",
+      owner: "external-host",
       reason: "endpoint-owner",
       endpointId,
-      threadOwnerId: threadOwnerId ?? endpointOwner.geeId,
-      geeId: endpointOwner.geeId,
+      threadOwnerId: threadOwnerId ?? endpointOwner.hostId,
+      hostId: endpointOwner.hostId,
       auditId,
     });
   }
@@ -301,7 +301,7 @@ export function buildDispatcherRouteDecision(params: {
   };
 }
 
-function addGeeRuntimeEnvelopeSource(
+function addHostRuntimeEnvelopeSource(
   sources: Record<string, unknown>,
   endpointId: string,
   source: unknown,
@@ -357,10 +357,10 @@ function readEndpointOwner(value: unknown, serverName: string): EndpointOwner | 
   if (value.kind === "openclaw") {
     return { kind: "openclaw" };
   }
-  if (value.kind === "gee") {
+  if (value.kind === "external-host") {
     return {
-      kind: "gee",
-      geeId: readRequiredString(value.geeId, "endpointOwner.geeId", serverName),
+      kind: "external-host",
+      hostId: readRequiredString(value.hostId, "endpointOwner.hostId", serverName),
     };
   }
   if (value.kind === "dispatcher") {
@@ -383,7 +383,7 @@ function readRuntimeEnvelopeOwner(
   if (value === undefined) {
     return undefined;
   }
-  if (value === "openclaw" || value === "gee") {
+  if (value === "openclaw" || value === "external-host") {
     return value;
   }
   throwInvalidOwnership(serverName, "runtimeEnvelopeOwner");

@@ -25,7 +25,7 @@ type FailoverDecisionLoggerInput = {
   sourceModel?: string;
   profileId?: string;
   fallbackConfigured: boolean;
-  runtimePolicyOwner?: "openclaw" | "gee";
+  runtimePolicyOwner?: "openclaw" | "external-host";
   runtimePolicyEndpointIds?: string[];
   runtimeRoutingPolicyIds?: string[];
   runtimeFallbackPolicyIds?: string[];

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  resolveGeeRuntimeProviderAuthPolicy,
-  resolveGeeRuntimeToolPolicy,
-} from "./gee-runtime-prepared-facts.js";
+  resolveHostRuntimeProviderAuthPolicy,
+  resolveHostRuntimeToolPolicy,
+} from "./host-runtime-prepared-facts.js";
 
 function createPreparedFact(params: {
   endpointId?: string;
@@ -13,9 +13,9 @@ function createPreparedFact(params: {
   const endpointId = params.endpointId ?? "telegram:geeclaw";
   return {
     [endpointId]: {
-      kind: "gee-runtime-prepared-facts",
+      kind: "host-runtime-prepared-facts",
       version: 1,
-      hostMode: "gee-hosted",
+      hostMode: "external-hosted",
       envelope: {
         provider: {
           modelRef: params.modelRef ?? "custom-openai/test-model",
@@ -30,16 +30,16 @@ function createPreparedFact(params: {
         tools: {
           capabilityPlanId: "gee-capability-main",
           allowedToolIds: ["video_generate"],
-          policy: "gee-authorized",
+          policy: "host-authorized",
         },
       },
     },
   };
 }
 
-describe("resolveGeeRuntimeProviderAuthPolicy", () => {
-  it("extracts Gee-owned provider, auth, fallback, and cooldown facts", () => {
-    expect(resolveGeeRuntimeProviderAuthPolicy(createPreparedFact({}))).toEqual({
+describe("resolveHostRuntimeProviderAuthPolicy", () => {
+  it("extracts Host-owned provider, auth, fallback, and cooldown facts", () => {
+    expect(resolveHostRuntimeProviderAuthPolicy(createPreparedFact({}))).toEqual({
       endpointIds: ["telegram:geeclaw"],
       modelRefs: ["custom-openai/test-model"],
       routingPolicyIds: ["gee-routing-main"],
@@ -50,19 +50,19 @@ describe("resolveGeeRuntimeProviderAuthPolicy", () => {
     });
   });
 
-  it("fails closed when a Gee-hosted auth fact is missing", () => {
+  it("fails closed when a Externally hosted auth fact is missing", () => {
     const preparedFacts = createPreparedFact({});
     delete (preparedFacts["telegram:geeclaw"].envelope.auth as { credentialRef?: string })
       .credentialRef;
 
-    expect(() => resolveGeeRuntimeProviderAuthPolicy(preparedFacts)).toThrow(
-      'Gee-hosted OpenClaw endpoint "telegram:geeclaw" has invalid prepared runtime fact "envelope.auth.credentialRef".',
+    expect(() => resolveHostRuntimeProviderAuthPolicy(preparedFacts)).toThrow(
+      'Externally hosted OpenClaw endpoint "telegram:geeclaw" has invalid prepared runtime fact "envelope.auth.credentialRef".',
     );
   });
 
-  it("rejects conflicting auth eligibility across Gee-hosted endpoints", () => {
+  it("rejects conflicting auth eligibility across Externally hosted endpoints", () => {
     expect(() =>
-      resolveGeeRuntimeProviderAuthPolicy({
+      resolveHostRuntimeProviderAuthPolicy({
         ...createPreparedFact({ endpointId: "telegram:geeclaw", eligibility: "ok" }),
         ...createPreparedFact({ endpointId: "slack:geeclaw", eligibility: "expired" }),
       }),
@@ -70,9 +70,9 @@ describe("resolveGeeRuntimeProviderAuthPolicy", () => {
   });
 });
 
-describe("resolveGeeRuntimeToolPolicy", () => {
+describe("resolveHostRuntimeToolPolicy", () => {
   it("extracts tool policy for exactly one active endpoint", () => {
-    expect(resolveGeeRuntimeToolPolicy(createPreparedFact({}))).toEqual({
+    expect(resolveHostRuntimeToolPolicy(createPreparedFact({}))).toEqual({
       allowedToolIds: ["video_generate"],
       endpointIds: ["telegram:geeclaw"],
     });
@@ -80,12 +80,12 @@ describe("resolveGeeRuntimeToolPolicy", () => {
 
   it("fails closed instead of unioning tool policies across endpoints", () => {
     expect(() =>
-      resolveGeeRuntimeToolPolicy({
+      resolveHostRuntimeToolPolicy({
         ...createPreparedFact({ endpointId: "telegram:geeclaw" }),
         ...createPreparedFact({ endpointId: "slack:geeclaw" }),
       }),
     ).toThrow(
-      'Gee-hosted OpenClaw tool policy requires exactly one active endpoint; received endpoints "slack:geeclaw", "telegram:geeclaw".',
+      'Externally hosted OpenClaw tool policy requires exactly one active endpoint; received endpoints "slack:geeclaw", "telegram:geeclaw".',
     );
   });
 });

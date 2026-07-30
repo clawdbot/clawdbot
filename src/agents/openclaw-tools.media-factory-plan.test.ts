@@ -47,23 +47,23 @@ function createAuthStore(providers: string[] = []): AuthProfileStore {
   };
 }
 
-function createGeeRuntimePreparedFacts(
+function createHostRuntimePreparedFacts(
   allowedToolIds: string[],
-): NonNullable<CreateOpenClawToolsOptions>["geeRuntimePreparedFacts"] {
+): NonNullable<CreateOpenClawToolsOptions>["hostRuntimePreparedFacts"] {
   return {
     "telegram:geeclaw": {
-      kind: "gee-runtime-prepared-facts",
+      kind: "host-runtime-prepared-facts",
       version: 1,
-      hostMode: "gee-hosted",
+      hostMode: "external-hosted",
       envelope: {
         tools: {
           capabilityPlanId: "gee-capability-plan",
           allowedToolIds,
-          policy: "gee-authorized",
+          policy: "host-authorized",
         },
       },
     },
-  } as NonNullable<CreateOpenClawToolsOptions>["geeRuntimePreparedFacts"];
+  } as NonNullable<CreateOpenClawToolsOptions>["hostRuntimePreparedFacts"];
 }
 
 function createPlugin(params: {
@@ -388,7 +388,7 @@ describe("optional media tool factory planning", () => {
     });
   });
 
-  it("uses Gee prepared tool facts instead of standalone media tool allowlists", async () => {
+  it("uses host prepared tool facts instead of standalone media tool allowlists", async () => {
     const config: OpenClawConfig = {
       agents: {
         defaults: {
@@ -412,7 +412,7 @@ describe("optional media tool factory planning", () => {
         config,
         authProfileStore: createAuthStore(),
         pluginToolAllowlist: ["image_generate"],
-        geeRuntimePreparedFacts: createGeeRuntimePreparedFacts(["message"]),
+        hostRuntimePreparedFacts: createHostRuntimePreparedFacts(["message"]),
       })
     ).map((tool) => tool.name);
     expect(deniedToolNames).not.toContain("image_generate");
@@ -421,7 +421,7 @@ describe("optional media tool factory planning", () => {
       await createOpenClawToolsForTest({
         config,
         authProfileStore: createAuthStore(),
-        geeRuntimePreparedFacts: createGeeRuntimePreparedFacts(["image_generate"]),
+        hostRuntimePreparedFacts: createHostRuntimePreparedFacts(["image_generate"]),
       })
     ).map((tool) => tool.name);
     expect(allowedToolNames).toContain("image_generate");

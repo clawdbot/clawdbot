@@ -175,7 +175,7 @@ describe("createFailoverDecisionLogger", () => {
     expect(observation.consoleMessage).not.toContain("<html>");
   });
 
-  it("records Gee-owned runtime policy context for surfaced hosted errors", () => {
+  it("records Host-owned runtime policy context for surfaced hosted errors", () => {
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
     const logDecision = createFailoverDecisionLogger({
       stage: "assistant",
@@ -186,7 +186,7 @@ describe("createFailoverDecisionLogger", () => {
       provider: "openai",
       model: "gpt-5.4",
       fallbackConfigured: false,
-      runtimePolicyOwner: "gee",
+      runtimePolicyOwner: "external-host",
       runtimePolicyEndpointIds: ["telegram:geeclaw"],
       runtimeRoutingPolicyIds: ["gee-routing-main"],
       runtimeFallbackPolicyIds: ["gee-fallback-main"],
@@ -209,7 +209,7 @@ describe("createFailoverDecisionLogger", () => {
           consoleMessage?: string;
         }
       | undefined;
-    expect(observation?.runtimePolicyOwner).toBe("gee");
+    expect(observation?.runtimePolicyOwner).toBe("external-host");
     expect(observation?.runtimePolicyEndpointIds).toHaveLength(1);
     expect(observation?.runtimeRoutingPolicyIds).toEqual(["gee-routing-main"]);
     expect(observation?.runtimeFallbackPolicyIds).toEqual(["gee-fallback-main"]);

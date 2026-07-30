@@ -3,7 +3,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { FailoverError, describeFailoverError, isFailoverError } from "../../failover-error.js";
-import type { GeeRuntimeProviderAuthPolicy } from "../../gee-runtime-prepared-facts.js";
+import type { HostRuntimeProviderAuthPolicy } from "../../host-runtime-prepared-facts.js";
 import type { RuntimeAuthState } from "./helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -69,9 +69,9 @@ function getRuntimeAuthSnapshot(
   return state ? { profileId: state.profileId, refreshInFlight: state.refreshInFlight } : null;
 }
 
-function createGeeRuntimeProviderAuthPolicy(
-  overrides: Partial<GeeRuntimeProviderAuthPolicy> = {},
-): GeeRuntimeProviderAuthPolicy {
+function createHostRuntimeProviderAuthPolicy(
+  overrides: Partial<HostRuntimeProviderAuthPolicy> = {},
+): HostRuntimeProviderAuthPolicy {
   return {
     endpointIds: ["telegram:geeclaw"],
     modelRefs: ["custom-openai/test-model"],
@@ -115,7 +115,7 @@ function createMutableEmbeddedRunAuthController(params: {
   authStore?: AuthProfileStore;
   fallbackConfigured?: boolean;
   warn?: (message: string) => void;
-  geeRuntimeProviderAuthPolicy?: GeeRuntimeProviderAuthPolicy;
+  hostRuntimeProviderAuthPolicy?: HostRuntimeProviderAuthPolicy;
 }) {
   return createEmbeddedRunAuthController({
     config: undefined,
@@ -133,7 +133,7 @@ function createMutableEmbeddedRunAuthController(params: {
     attemptedThinking: new Set(),
     fallbackConfigured: params.fallbackConfigured ?? false,
     allowTransientCooldownProbe: false,
-    geeRuntimeProviderAuthPolicy: params.geeRuntimeProviderAuthPolicy,
+    hostRuntimeProviderAuthPolicy: params.hostRuntimeProviderAuthPolicy,
     getProvider: () => "custom-openai",
     getModelId: () => "test-model",
     getRuntimeModel: () => params.harness.runtimeModel,
@@ -177,7 +177,7 @@ describe("createEmbeddedRunAuthController", () => {
     mocks.getApiKeyForModel.mockReset();
   });
 
-  it("resolves Gee-owned auth through provider runtime hooks without standalone fallback", async () => {
+  it("resolves Host-owned auth through provider runtime hooks without standalone fallback", async () => {
     const harness = createMutableAuthControllerHarness();
     const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
 
@@ -192,7 +192,7 @@ describe("createEmbeddedRunAuthController", () => {
       harness,
       setRuntimeApiKey,
       profileCandidates: ["custom-openai:stale-profile"],
-      geeRuntimeProviderAuthPolicy: createGeeRuntimeProviderAuthPolicy(),
+      hostRuntimeProviderAuthPolicy: createHostRuntimeProviderAuthPolicy(),
     });
 
     await controller.initializeAuthProfile();
@@ -203,30 +203,30 @@ describe("createEmbeddedRunAuthController", () => {
       expect.objectContaining({
         provider: "custom-openai",
         context: expect.objectContaining({
-          apiKey: "gee-credential-ref",
-          authMode: "gee-hosted",
-          profileId: "gee:telegram:geeclaw",
+          apiKey: "host-credential-ref",
+          authMode: "external-hosted",
+          profileId: "host:telegram:geeclaw",
         }),
       }),
     );
     expect(setRuntimeApiKey).toHaveBeenCalledWith("custom-openai", "ephemeral-host-provider-key");
     expect(harness.runtimeAuthState).toMatchObject({
-      sourceApiKey: "gee-credential-ref",
-      authMode: "gee-hosted",
-      profileId: "gee:telegram:geeclaw",
+      sourceApiKey: "host-credential-ref",
+      authMode: "external-hosted",
+      profileId: "host:telegram:geeclaw",
     });
     expect(harness.runtimeModel.baseUrl).toBe("https://hosted.example/v1");
     expect(harness.apiKeyInfo).toBeNull();
   });
 
-  it("fails closed when Gee-owned auth policy is not eligible", async () => {
+  it("fails closed when Host-owned auth policy is not eligible", async () => {
     const harness = createMutableAuthControllerHarness();
     const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
 
     const controller = createMutableEmbeddedRunAuthController({
       harness,
       setRuntimeApiKey,
-      geeRuntimeProviderAuthPolicy: createGeeRuntimeProviderAuthPolicy({
+      hostRuntimeProviderAuthPolicy: createHostRuntimeProviderAuthPolicy({
         authEligibility: "expired",
       }),
     });
@@ -241,11 +241,11 @@ describe("createEmbeddedRunAuthController", () => {
     expect(isFailoverError(thrown)).toBe(true);
     expect(describeFailoverError(thrown)).toMatchObject({
       message: expect.stringContaining(
-        'Gee-owned runtime auth for endpoints "telegram:geeclaw" is expired',
+        'Host-owned runtime auth for endpoints "telegram:geeclaw" is expired',
       ),
       reason: "auth",
       status: 401,
-      code: "gee_runtime_auth_policy_ineligible",
+      code: "host_runtime_auth_policy_ineligible",
       provider: "custom-openai",
       model: "test-model",
       rawError: expect.stringContaining("OpenClaw will not fall back to standalone auth profiles"),
@@ -254,7 +254,7 @@ describe("createEmbeddedRunAuthController", () => {
     expect(setRuntimeApiKey).not.toHaveBeenCalled();
   });
 
-  it("does not rotate standalone profiles under Gee-owned auth policy", async () => {
+  it("does not rotate standalone profiles under Host-owned auth policy", async () => {
     const harness = createMutableAuthControllerHarness();
     const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
 
@@ -262,7 +262,7 @@ describe("createEmbeddedRunAuthController", () => {
       harness,
       setRuntimeApiKey,
       profileCandidates: ["custom-openai:default", "custom-openai:backup"],
-      geeRuntimeProviderAuthPolicy: createGeeRuntimeProviderAuthPolicy(),
+      hostRuntimeProviderAuthPolicy: createHostRuntimeProviderAuthPolicy(),
     });
 
     mocks.prepareProviderRuntimeAuth.mockResolvedValue({ apiKey: "ephemeral-host-provider-key" });

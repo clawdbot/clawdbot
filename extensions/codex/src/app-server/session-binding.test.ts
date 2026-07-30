@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GeeRuntimePreparedFacts } from "./gee-runtime-envelope.js";
+import type { HostRuntimePreparedFacts } from "./host-runtime-envelope.js";
 import {
   clearCodexAppServerBinding,
   clearCodexAppServerBindingForThread,
@@ -58,24 +58,24 @@ describe("codex app-server session binding", () => {
     const sessionFile = path.join(tempDir, "session.json");
     const mcpOwnershipDecisions = {
       "telegram:geeclaw": {
-        owner: "gee" as const,
+        owner: "external-host" as const,
         reason: "endpoint-owner" as const,
         endpointId: "telegram:geeclaw",
         threadOwnerId: "geeclaw",
-        geeId: "geeclaw",
+        hostId: "geeclaw",
         auditId: "audit-geeclaw-telegram",
       },
     };
-    const geeRuntimePreparedFacts: Record<string, GeeRuntimePreparedFacts> = {
+    const hostRuntimePreparedFacts: Record<string, HostRuntimePreparedFacts> = {
       "telegram:geeclaw": {
-        kind: "gee-runtime-prepared-facts",
+        kind: "host-runtime-prepared-facts",
         version: 1,
-        hostMode: "gee-hosted",
+        hostMode: "external-hosted",
         envelope: {
-          kind: "gee-runtime-envelope",
+          kind: "host-runtime-envelope",
           version: 1,
-          owner: "gee",
-          geeId: "geeclaw",
+          owner: "external-host",
+          hostId: "geeclaw",
           requestId: "request-123",
           auditId: "audit-geeclaw-telegram",
           endpoint: {
@@ -85,7 +85,7 @@ describe("codex app-server session binding", () => {
           },
           conversation: {
             sessionKey: "telegram:geeclaw:user-42",
-            threadOwner: "gee",
+            threadOwner: "external-host",
           },
           provider: {
             modelRef: "codex:gpt-5.4",
@@ -98,14 +98,14 @@ describe("codex app-server session binding", () => {
           tools: {
             capabilityPlanId: "gee-tools-default",
             allowedToolIds: ["message.send"],
-            policy: "gee-authorized",
+            policy: "host-authorized",
           },
           delivery: {
             policyId: "gee-native-outbox",
             outboundTarget: "telegram:chat:42",
           },
           compaction: {
-            owner: "gee",
+            owner: "external-host",
           },
         },
       },
@@ -123,7 +123,7 @@ describe("codex app-server session binding", () => {
       nativeHookRelayGeneration: "generation-v1",
       appServerRuntimeFingerprint: "remote-runtime-v1",
       mcpOwnershipDecisions,
-      geeRuntimePreparedFacts,
+      hostRuntimePreparedFacts,
     });
 
     const binding = await readCodexAppServerBinding(sessionFile);
@@ -142,7 +142,7 @@ describe("codex app-server session binding", () => {
     expect(binding?.nativeHookRelayGeneration).toBe("generation-v1");
     expect(binding?.appServerRuntimeFingerprint).toBe("remote-runtime-v1");
     expect(binding?.mcpOwnershipDecisions).toEqual(mcpOwnershipDecisions);
-    expect(binding?.geeRuntimePreparedFacts).toEqual(geeRuntimePreparedFacts);
+    expect(binding?.hostRuntimePreparedFacts).toEqual(hostRuntimePreparedFacts);
     const bindingStat = await fs.stat(resolveCodexAppServerBindingPath(sessionFile));
     expect(bindingStat.isFile()).toBe(true);
   });

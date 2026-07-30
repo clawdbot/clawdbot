@@ -17,8 +17,6 @@ import {
   type CodexAppServerClient,
 } from "./client.js";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
-import type { GeeRuntimePreparedFacts } from "./gee-runtime-envelope.js";
-import type { TurnOwnerDecision } from "./mcp-thread-config.js";
 import {
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
@@ -27,7 +25,9 @@ import {
   normalizeCodexDynamicToolName,
   shouldDisableCodexToolSearchForModel,
 } from "./dynamic-tool-profile.js";
+import type { HostRuntimePreparedFacts } from "./host-runtime-envelope.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
+import type { TurnOwnerDecision } from "./mcp-thread-config.js";
 import {
   isCodexPluginThreadBindingStale,
   mergeCodexThreadConfigs,
@@ -309,7 +309,7 @@ export async function startOrResumeThread(params: {
   mcpServersFingerprint?: string;
   mcpServersFingerprintEvaluated?: boolean;
   mcpOwnershipDecisions?: Record<string, TurnOwnerDecision>;
-  geeRuntimePreparedFacts?: Record<string, GeeRuntimePreparedFacts>;
+  hostRuntimePreparedFacts?: Record<string, HostRuntimePreparedFacts>;
   environmentSelection?: CodexTurnEnvironmentParams[];
   appServerRuntimeFingerprint?: string;
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
@@ -674,10 +674,10 @@ export async function startOrResumeThread(params: {
           params.mcpServersFingerprintEvaluated === true
             ? params.mcpOwnershipDecisions
             : resumeBinding.mcpOwnershipDecisions;
-        const nextGeeRuntimePreparedFacts =
+        const nextHostRuntimePreparedFacts =
           params.mcpServersFingerprintEvaluated === true
-            ? params.geeRuntimePreparedFacts
-            : resumeBinding.geeRuntimePreparedFacts;
+            ? params.hostRuntimePreparedFacts
+            : resumeBinding.hostRuntimePreparedFacts;
         await lifecycleTiming.measure("thread-resume-write-binding", () =>
           writeCodexAppServerBinding(
             params.params.sessionFile,
@@ -693,7 +693,7 @@ export async function startOrResumeThread(params: {
               userMcpServersFingerprint,
               mcpServersFingerprint: nextMcpServersFingerprint,
               mcpOwnershipDecisions: nextMcpOwnershipDecisions,
-              geeRuntimePreparedFacts: nextGeeRuntimePreparedFacts,
+              hostRuntimePreparedFacts: nextHostRuntimePreparedFacts,
               networkProxyProfileName: params.appServer.networkProxy?.profileName,
               networkProxyConfigFingerprint,
               nativeHookRelayGeneration:
@@ -747,7 +747,7 @@ export async function startOrResumeThread(params: {
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
           mcpOwnershipDecisions: nextMcpOwnershipDecisions,
-          geeRuntimePreparedFacts: nextGeeRuntimePreparedFacts,
+          hostRuntimePreparedFacts: nextHostRuntimePreparedFacts,
           networkProxyProfileName: params.appServer.networkProxy?.profileName,
           networkProxyConfigFingerprint,
           nativeHookRelayGeneration:
@@ -837,8 +837,8 @@ export async function startOrResumeThread(params: {
     params.mcpServersFingerprintEvaluated === true ? params.mcpServersFingerprint : undefined;
   const nextMcpOwnershipDecisions =
     params.mcpServersFingerprintEvaluated === true ? params.mcpOwnershipDecisions : undefined;
-  const nextGeeRuntimePreparedFacts =
-    params.mcpServersFingerprintEvaluated === true ? params.geeRuntimePreparedFacts : undefined;
+  const nextHostRuntimePreparedFacts =
+    params.mcpServersFingerprintEvaluated === true ? params.hostRuntimePreparedFacts : undefined;
   if (!preserveExistingBinding) {
     await lifecycleTiming.measure("thread-start-write-binding", () =>
       writeCodexAppServerBinding(
@@ -856,7 +856,7 @@ export async function startOrResumeThread(params: {
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
           mcpOwnershipDecisions: nextMcpOwnershipDecisions,
-          geeRuntimePreparedFacts: nextGeeRuntimePreparedFacts,
+          hostRuntimePreparedFacts: nextHostRuntimePreparedFacts,
           networkProxyProfileName: params.appServer.networkProxy?.profileName,
           networkProxyConfigFingerprint,
           nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
@@ -909,7 +909,7 @@ export async function startOrResumeThread(params: {
     userMcpServersFingerprint,
     mcpServersFingerprint: nextMcpServersFingerprint,
     mcpOwnershipDecisions: nextMcpOwnershipDecisions,
-    geeRuntimePreparedFacts: nextGeeRuntimePreparedFacts,
+    hostRuntimePreparedFacts: nextHostRuntimePreparedFacts,
     networkProxyProfileName: params.appServer.networkProxy?.profileName,
     networkProxyConfigFingerprint,
     nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,

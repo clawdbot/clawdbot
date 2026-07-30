@@ -42,7 +42,7 @@ import { asCompactionHookRunner, runPostCompactionSideEffects } from "./compacti
 import {
   buildEmbeddedCompactionRuntimeContext,
   resolveEmbeddedCompactionTarget,
-  resolveGeeRuntimeHostOwnedCompactionPolicy,
+  resolveHostRuntimeHostOwnedCompactionPolicy,
 } from "./compaction-runtime-context.js";
 import {
   compactWithSafetyTimeout,
@@ -192,8 +192,8 @@ function mergeSecondaryNativeHarnessCompactionDetails(params: {
 export async function compactEmbeddedAgentSession(
   params: CompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult> {
-  const hostOwnedCompactionPolicy = resolveGeeRuntimeHostOwnedCompactionPolicy(
-    params.geeRuntimePreparedFacts,
+  const hostOwnedCompactionPolicy = resolveHostRuntimeHostOwnedCompactionPolicy(
+    params.hostRuntimePreparedFacts,
   );
   if (hostOwnedCompactionPolicy) {
     log.info(
@@ -203,7 +203,7 @@ export async function compactEmbeddedAgentSession(
     return {
       ok: true,
       compacted: false,
-      reason: `gee-runtime-compaction-${hostOwnedCompactionPolicy.owner}`,
+      reason: `host-runtime-compaction-${hostOwnedCompactionPolicy.owner}`,
     };
   }
 
@@ -234,7 +234,7 @@ export async function compactEmbeddedAgentSession(
     provider: params.provider,
     modelId: params.model,
     authProfileId: params.authProfileId,
-    geeRuntimePreparedFacts: params.geeRuntimePreparedFacts,
+    hostRuntimePreparedFacts: params.hostRuntimePreparedFacts,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
@@ -260,7 +260,7 @@ export async function compactEmbeddedAgentSession(
     modelId: params.model,
     authProfileId: params.authProfileId,
     harnessRuntime: selectedHarnessRuntime,
-    geeRuntimePreparedFacts: params.geeRuntimePreparedFacts,
+    hostRuntimePreparedFacts: params.hostRuntimePreparedFacts,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });

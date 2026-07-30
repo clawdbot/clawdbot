@@ -1002,7 +1002,7 @@ describe("runCodexAppServerAttempt", () => {
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
     });
-    expect(startConfig).not.toHaveProperty("openclaw_gee_runtime");
+    expect(startConfig).not.toHaveProperty("openclaw_host_runtime");
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.mcpServersFingerprint).toBe("mcp-v1");
   });

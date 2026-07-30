@@ -14,9 +14,9 @@ import {
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { DEFAULT_PROVIDER } from "../defaults.js";
 import {
-  resolveGeeRuntimeCompactionPolicy,
-  type GeeRuntimeCompactionPolicy,
-} from "../gee-runtime-prepared-facts.js";
+  resolveHostRuntimeCompactionPolicy,
+  type HostRuntimeCompactionPolicy,
+} from "../host-runtime-prepared-facts.js";
 import {
   buildModelAliasIndex,
   inferUniqueProviderFromConfiguredModels,
@@ -26,7 +26,7 @@ import {
   openAIProviderUsesCodexRuntimeByDefault,
   resolveSelectedOpenAIRuntimeProvider,
 } from "../openai-routing.js";
-import type { EmbeddedRunGeeRuntimePreparedFacts } from "./run/types.js";
+import type { EmbeddedRunHostRuntimePreparedFacts } from "./run/types.js";
 
 type EmbeddedCompactionRuntimeContext = {
   sessionKey?: string;
@@ -39,9 +39,9 @@ type EmbeddedCompactionRuntimeContext = {
   currentMessageId?: string | number;
   authProfileId?: string;
   agentHarnessId?: string;
-  geeRuntimePreparedFacts?: EmbeddedRunGeeRuntimePreparedFacts;
-  geeRuntimeCompactionOwner?: GeeRuntimeCompactionPolicy["owner"];
-  geeRuntimeHostCompactionId?: string;
+  hostRuntimePreparedFacts?: EmbeddedRunHostRuntimePreparedFacts;
+  hostRuntimeCompactionOwner?: HostRuntimeCompactionPolicy["owner"];
+  hostRuntimeHostCompactionId?: string;
   workspaceDir: string;
   cwd?: string;
   agentDir: string;
@@ -66,10 +66,10 @@ type EmbeddedCompactionRuntimeContext = {
  * Resolve the effective compaction target from config, falling back to the
  * caller-supplied provider/model and optionally applying runtime defaults.
  */
-export function resolveGeeRuntimeHostOwnedCompactionPolicy(
-  preparedFacts?: EmbeddedRunGeeRuntimePreparedFacts,
-): GeeRuntimeCompactionPolicy | undefined {
-  const policy = resolveGeeRuntimeCompactionPolicy(preparedFacts);
+export function resolveHostRuntimeHostOwnedCompactionPolicy(
+  preparedFacts?: EmbeddedRunHostRuntimePreparedFacts,
+): HostRuntimeCompactionPolicy | undefined {
+  const policy = resolveHostRuntimeCompactionPolicy(preparedFacts);
   return policy && policy.owner !== "openclaw" ? policy : undefined;
 }
 
@@ -79,7 +79,7 @@ export function resolveEmbeddedCompactionTarget(params: {
   modelId?: string | null;
   authProfileId?: string | null;
   harnessRuntime?: string | null;
-  geeRuntimePreparedFacts?: EmbeddedRunGeeRuntimePreparedFacts;
+  hostRuntimePreparedFacts?: EmbeddedRunHostRuntimePreparedFacts;
   defaultProvider?: string;
   defaultModel?: string;
 }): {
@@ -90,10 +90,10 @@ export function resolveEmbeddedCompactionTarget(params: {
   model: string | undefined;
   authProfileId: string | undefined;
 } {
-  const geeCompactionPolicy = resolveGeeRuntimeHostOwnedCompactionPolicy(
-    params.geeRuntimePreparedFacts,
+  const hostCompactionPolicy = resolveHostRuntimeHostOwnedCompactionPolicy(
+    params.hostRuntimePreparedFacts,
   );
-  if (geeCompactionPolicy) {
+  if (hostCompactionPolicy) {
     return { provider: undefined, model: undefined, authProfileId: undefined };
   }
 
@@ -272,7 +272,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   currentThreadTs?: string | null;
   currentMessageId?: string | number | null;
   authProfileId?: string | null;
-  geeRuntimePreparedFacts?: EmbeddedRunGeeRuntimePreparedFacts;
+  hostRuntimePreparedFacts?: EmbeddedRunHostRuntimePreparedFacts;
   workspaceDir: string;
   cwd?: string | null;
   agentDir: string;
@@ -292,14 +292,14 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   ownerNumbers?: string[];
   activeProcessSessions?: ActiveProcessSessionReference[];
 }): EmbeddedCompactionRuntimeContext {
-  const geeCompactionPolicy = resolveGeeRuntimeCompactionPolicy(params.geeRuntimePreparedFacts);
+  const hostCompactionPolicy = resolveHostRuntimeCompactionPolicy(params.hostRuntimePreparedFacts);
   const resolved = resolveEmbeddedCompactionTarget({
     config: params.config,
     provider: params.provider,
     modelId: params.modelId,
     authProfileId: params.authProfileId,
     harnessRuntime: params.harnessRuntime,
-    geeRuntimePreparedFacts: params.geeRuntimePreparedFacts,
+    hostRuntimePreparedFacts: params.hostRuntimePreparedFacts,
   });
   const agentHarnessId = params.harnessRuntime?.trim() || undefined;
   const processScopeKey = params.sessionKey?.trim();
@@ -319,9 +319,9 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     currentMessageId: params.currentMessageId ?? undefined,
     authProfileId: resolved.authProfileId,
     agentHarnessId,
-    geeRuntimePreparedFacts: params.geeRuntimePreparedFacts,
-    geeRuntimeCompactionOwner: geeCompactionPolicy?.owner,
-    geeRuntimeHostCompactionId: geeCompactionPolicy?.hostCompactionIds[0],
+    hostRuntimePreparedFacts: params.hostRuntimePreparedFacts,
+    hostRuntimeCompactionOwner: hostCompactionPolicy?.owner,
+    hostRuntimeHostCompactionId: hostCompactionPolicy?.hostCompactionIds[0],
     workspaceDir: params.workspaceDir,
     cwd: params.cwd ?? undefined,
     agentDir: params.agentDir,

@@ -19,9 +19,9 @@ import {
   type CodexAppServerSandboxMode,
 } from "./config.js";
 import {
-  readGeeRuntimePreparedFactsRecord,
-  type GeeRuntimePreparedFacts,
-} from "./gee-runtime-envelope.js";
+  readHostRuntimePreparedFactsRecord,
+  type HostRuntimePreparedFacts,
+} from "./host-runtime-envelope.js";
 import type { TurnOwnerDecision } from "./mcp-thread-config.js";
 import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
 import type { CodexServiceTier } from "./protocol.js";
@@ -79,7 +79,7 @@ export type CodexAppServerThreadBinding = {
   userMcpServersFingerprint?: string;
   mcpServersFingerprint?: string;
   mcpOwnershipDecisions?: Record<string, TurnOwnerDecision>;
-  geeRuntimePreparedFacts?: Record<string, GeeRuntimePreparedFacts>;
+  hostRuntimePreparedFacts?: Record<string, HostRuntimePreparedFacts>;
   nativeHookRelayGeneration?: string;
   appServerRuntimeFingerprint?: string;
   pluginAppsFingerprint?: string;
@@ -218,7 +218,7 @@ export async function readCodexAppServerBinding(
       mcpServersFingerprint:
         typeof parsed.mcpServersFingerprint === "string" ? parsed.mcpServersFingerprint : undefined,
       mcpOwnershipDecisions: readMcpOwnershipDecisions(parsed.mcpOwnershipDecisions),
-      geeRuntimePreparedFacts: readGeeRuntimePreparedFactsRecord(parsed.geeRuntimePreparedFacts),
+      hostRuntimePreparedFacts: readHostRuntimePreparedFactsRecord(parsed.hostRuntimePreparedFacts),
       nativeHookRelayGeneration:
         typeof parsed.nativeHookRelayGeneration === "string" &&
         parsed.nativeHookRelayGeneration.trim()
@@ -289,7 +289,7 @@ export async function writeCodexAppServerBinding(
       userMcpServersFingerprint: binding.userMcpServersFingerprint,
       mcpServersFingerprint: binding.mcpServersFingerprint,
       mcpOwnershipDecisions: binding.mcpOwnershipDecisions,
-      geeRuntimePreparedFacts: binding.geeRuntimePreparedFacts,
+      hostRuntimePreparedFacts: binding.hostRuntimePreparedFacts,
       nativeHookRelayGeneration: binding.nativeHookRelayGeneration,
       appServerRuntimeFingerprint: binding.appServerRuntimeFingerprint,
       pluginAppsFingerprint: binding.pluginAppsFingerprint,
@@ -387,14 +387,14 @@ function readTurnOwnerDecision(endpointId: string, value: unknown): TurnOwnerDec
   if (typeof record.dispatcherId === "string") {
     decision.dispatcherId = record.dispatcherId;
   }
-  if (typeof record.geeId === "string") {
-    decision.geeId = record.geeId;
+  if (typeof record.hostId === "string") {
+    decision.hostId = record.hostId;
   }
   return decision;
 }
 
 function readRuntimeEnvelopeOwner(value: unknown): TurnOwnerDecision["owner"] | undefined {
-  return value === "openclaw" || value === "gee" ? value : undefined;
+  return value === "openclaw" || value === "external-host" ? value : undefined;
 }
 
 function readTurnOwnerDecisionReason(value: unknown): TurnOwnerDecision["reason"] | undefined {

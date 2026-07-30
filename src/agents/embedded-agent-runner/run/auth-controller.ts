@@ -12,7 +12,6 @@ import {
   resolveSubscriptionAuthModeForProfiles,
 } from "../../auth-profiles.js";
 import { formatAuthProfileFailureMessage } from "../../auth-profiles/failure-copy.js";
-import type { GeeRuntimeProviderAuthPolicy } from "../../gee-runtime-prepared-facts.js";
 import {
   classifyFailoverReason,
   isFailoverErrorMessage,
@@ -20,6 +19,7 @@ import {
 } from "../../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { shouldAllowCooldownProbeForReason } from "../../failover-policy.js";
+import type { HostRuntimeProviderAuthPolicy } from "../../host-runtime-prepared-facts.js";
 import {
   getApiKeyForModel,
   MissingProviderAuthError,
@@ -67,7 +67,7 @@ export function createEmbeddedRunAuthController(params: {
   attemptedThinking: Set<ThinkLevel>;
   fallbackConfigured: boolean;
   allowTransientCooldownProbe: boolean;
-  geeRuntimeProviderAuthPolicy?: GeeRuntimeProviderAuthPolicy;
+  hostRuntimeProviderAuthPolicy?: HostRuntimeProviderAuthPolicy;
   getProvider(): string;
   getModelId(): string;
   getRuntimeModel(): Model;
@@ -156,51 +156,51 @@ export function createEmbeddedRunAuthController(params: {
     clearRuntimeAuthRefreshTimer();
   };
 
-  const applyGeeRuntimeProviderAuthPolicy = async (): Promise<boolean> => {
-    const policy = params.geeRuntimeProviderAuthPolicy;
+  const applyHostRuntimeProviderAuthPolicy = async (): Promise<boolean> => {
+    const policy = params.hostRuntimeProviderAuthPolicy;
     if (!policy) {
       return false;
     }
     const endpoints = policy.endpointIds.join('", "');
     if (policy.authEligibility !== "ok") {
-      const message = `Gee-owned runtime auth for endpoints "${endpoints}" is ${policy.authEligibility}; OpenClaw will not fall back to standalone auth profiles.`;
+      const message = `Host-owned runtime auth for endpoints "${endpoints}" is ${policy.authEligibility}; OpenClaw will not fall back to standalone auth profiles.`;
       throw new FailoverError(message, {
         reason: "auth",
         provider: params.getProvider(),
         model: params.getModelId(),
         status: resolveFailoverStatus("auth"),
-        code: "gee_runtime_auth_policy_ineligible",
+        code: "host_runtime_auth_policy_ineligible",
         rawError: message,
       });
     }
     const runtimeModel = params.getRuntimeModel();
     const sourceCredentialRef = policy.credentialRefs[0]?.trim();
     if (!sourceCredentialRef || policy.credentialRefs.length !== 1) {
-      const message = `Gee-owned runtime auth for endpoints "${endpoints}" requires exactly one host credential reference before provider egress.`;
+      const message = `Host-owned runtime auth for endpoints "${endpoints}" requires exactly one host credential reference before provider egress.`;
       throw new FailoverError(message, {
         reason: "auth",
         provider: params.getProvider(),
         model: params.getModelId(),
         status: resolveFailoverStatus("auth"),
-        code: "gee_runtime_auth_resolution_required",
+        code: "host_runtime_auth_resolution_required",
         rawError: message,
       });
     }
     const preparedAuth = await prepareRuntimeAuthForModel({
       runtimeModel,
       apiKey: sourceCredentialRef,
-      authMode: "gee-hosted",
-      profileId: `gee:${policy.endpointIds.join(",")}`,
+      authMode: "external-hosted",
+      profileId: `host:${policy.endpointIds.join(",")}`,
     });
     applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth: preparedAuth ?? {} });
     if (!preparedAuth?.apiKey) {
-      const message = `Gee-owned runtime auth for endpoints "${endpoints}" did not resolve an ephemeral provider credential.`;
+      const message = `Host-owned runtime auth for endpoints "${endpoints}" did not resolve an ephemeral provider credential.`;
       throw new FailoverError(message, {
         reason: "auth",
         provider: params.getProvider(),
         model: params.getModelId(),
         status: resolveFailoverStatus("auth"),
-        code: "gee_runtime_auth_resolution_required",
+        code: "host_runtime_auth_resolution_required",
         rawError: message,
       });
     }
@@ -209,14 +209,14 @@ export function createEmbeddedRunAuthController(params: {
     params.setRuntimeAuthState({
       generation: nextRuntimeAuthGeneration(),
       sourceApiKey: sourceCredentialRef,
-      authMode: "gee-hosted",
-      profileId: `gee:${policy.endpointIds.join(",")}`,
+      authMode: "external-hosted",
+      profileId: `host:${policy.endpointIds.join(",")}`,
       expiresAt: preparedAuth.expiresAt,
     });
     if (preparedAuth.expiresAt) {
       scheduleRuntimeAuthRefresh();
     }
-    params.setLastProfileId(`gee:${policy.endpointIds.join(",")}`);
+    params.setLastProfileId(`host:${policy.endpointIds.join(",")}`);
     return true;
   };
 
@@ -531,7 +531,7 @@ export function createEmbeddedRunAuthController(params: {
   };
 
   const advanceAuthProfile = async (): Promise<boolean> => {
-    if (params.geeRuntimeProviderAuthPolicy || params.lockedProfileId) {
+    if (params.hostRuntimeProviderAuthPolicy || params.lockedProfileId) {
       return false;
     }
     let nextIndex = params.getProfileIndex() + 1;
@@ -561,7 +561,7 @@ export function createEmbeddedRunAuthController(params: {
   };
 
   const initializeAuthProfile = async () => {
-    if (await applyGeeRuntimeProviderAuthPolicy()) {
+    if (await applyHostRuntimeProviderAuthPolicy()) {
       return;
     }
     try {
@@ -630,7 +630,7 @@ export function createEmbeddedRunAuthController(params: {
     errorText: string,
     retried: boolean,
   ): Promise<boolean> => {
-    if (params.geeRuntimeProviderAuthPolicy || !params.getRuntimeAuthState() || retried) {
+    if (params.hostRuntimeProviderAuthPolicy || !params.getRuntimeAuthState() || retried) {
       return false;
     }
     if (!isFailoverErrorMessage(errorText, { provider: params.getProvider() })) {

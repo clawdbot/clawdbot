@@ -6,7 +6,7 @@ import {
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import type { EmbeddedRunTrigger } from "./params.js";
-import type { EmbeddedRunGeeRuntimePreparedFacts } from "./types.js";
+import type { EmbeddedRunHostRuntimePreparedFacts } from "./types.js";
 
 /**
  * Builds the stable tool-run context forwarded into an embedded-attempt execution.
@@ -17,14 +17,14 @@ export function buildEmbeddedAttemptToolRunContext(params: {
   memoryFlushWritePath?: string;
   toolsAllow?: string[];
   trace?: DiagnosticTraceContext;
-  geeRuntimePreparedFacts?: EmbeddedRunGeeRuntimePreparedFacts;
+  hostRuntimePreparedFacts?: EmbeddedRunHostRuntimePreparedFacts;
 }): {
   trigger?: EmbeddedRunTrigger;
   jobId?: string;
   memoryFlushWritePath?: string;
   runtimeToolAllowlist?: string[];
   trace?: DiagnosticTraceContext;
-  geeRuntimePreparedFacts?: EmbeddedRunGeeRuntimePreparedFacts;
+  hostRuntimePreparedFacts?: EmbeddedRunHostRuntimePreparedFacts;
 } {
   return {
     trigger: params.trigger,
@@ -34,8 +34,8 @@ export function buildEmbeddedAttemptToolRunContext(params: {
     // Freeze trace metadata at the attempt boundary so later mutable diagnostic updates do not
     // rewrite the facts attached to tool calls already in flight.
     ...(params.trace ? { trace: freezeDiagnosticTraceContext(params.trace) } : {}),
-    ...(params.geeRuntimePreparedFacts
-      ? { geeRuntimePreparedFacts: params.geeRuntimePreparedFacts }
+    ...(params.hostRuntimePreparedFacts
+      ? { hostRuntimePreparedFacts: params.hostRuntimePreparedFacts }
       : {}),
   };
 }

@@ -14,11 +14,11 @@ import { resolvePluginTools } from "../plugins/tools.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveApiKeyForProfile, resolveAuthProfileOrder } from "./auth-profiles.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import type { EmbeddedRunGeeRuntimePreparedFacts } from "./embedded-agent-runner/run/types.js";
+import type { EmbeddedRunHostRuntimePreparedFacts } from "./embedded-agent-runner/run/types.js";
 import {
-  resolveGeeRuntimeToolAllowlist,
-  resolveGeeRuntimeToolPolicy,
-} from "./gee-runtime-prepared-facts.js";
+  resolveHostRuntimeToolAllowlist,
+  resolveHostRuntimeToolPolicy,
+} from "./host-runtime-prepared-facts.js";
 import {
   resolveOpenClawPluginToolInputs,
   type OpenClawPluginToolOptions,
@@ -27,7 +27,7 @@ import { applyPluginToolDeliveryDefaults } from "./plugin-tool-delivery-defaults
 import type { AnyAgentTool } from "./tools/common.js";
 
 type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
-  geeRuntimePreparedFacts?: EmbeddedRunGeeRuntimePreparedFacts;
+  hostRuntimePreparedFacts?: EmbeddedRunHostRuntimePreparedFacts;
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
   currentChannelId?: string;
@@ -83,12 +83,14 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     accountId: params.options?.agentAccountId,
     threadId: params.options?.agentThreadId,
   });
-  const geeRuntimeToolPolicy = resolveGeeRuntimeToolPolicy(params.options?.geeRuntimePreparedFacts);
-  const pluginToolAllowlist = resolveGeeRuntimeToolAllowlist(
-    geeRuntimeToolPolicy,
+  const hostRuntimeToolPolicy = resolveHostRuntimeToolPolicy(
+    params.options?.hostRuntimePreparedFacts,
+  );
+  const pluginToolAllowlist = resolveHostRuntimeToolAllowlist(
+    hostRuntimeToolPolicy,
     params.options?.pluginToolAllowlist,
   );
-  if (geeRuntimeToolPolicy && pluginToolAllowlist?.length === 0) {
+  if (hostRuntimeToolPolicy && pluginToolAllowlist?.length === 0) {
     return [];
   }
 

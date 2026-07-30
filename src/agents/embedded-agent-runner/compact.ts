@@ -151,7 +151,7 @@ import {
 } from "./compaction-hooks.js";
 import {
   resolveEmbeddedCompactionTarget,
-  resolveGeeRuntimeHostOwnedCompactionPolicy,
+  resolveHostRuntimeHostOwnedCompactionPolicy,
 } from "./compaction-runtime-context.js";
 import {
   compactWithSafetyTimeout,
@@ -482,7 +482,7 @@ function hostOwnedCompactionSkipResult(params: {
   return {
     ok: true,
     compacted: false,
-    reason: `gee-runtime-compaction-${params.owner}`,
+    reason: `host-runtime-compaction-${params.owner}`,
   };
 }
 
@@ -502,8 +502,8 @@ export async function compactEmbeddedAgentSessionDirect(
     sessionKey: paramsBase.sessionKey ?? runSessionTarget.sessionKey,
     sessionFile: runSessionTarget.sessionFile,
   };
-  const hostOwnedCompactionPolicy = resolveGeeRuntimeHostOwnedCompactionPolicy(
-    params.geeRuntimePreparedFacts,
+  const hostOwnedCompactionPolicy = resolveHostRuntimeHostOwnedCompactionPolicy(
+    params.hostRuntimePreparedFacts,
   );
   if (hostOwnedCompactionPolicy) {
     return hostOwnedCompactionSkipResult({
@@ -520,7 +520,7 @@ export async function compactEmbeddedAgentSessionDirect(
     provider: params.provider,
     modelId: params.model,
     authProfileId: params.authProfileId,
-    geeRuntimePreparedFacts: params.geeRuntimePreparedFacts,
+    hostRuntimePreparedFacts: params.hostRuntimePreparedFacts,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
@@ -618,7 +618,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
     provider: params.provider,
     modelId: params.model,
     authProfileId: params.authProfileId,
-    geeRuntimePreparedFacts: params.geeRuntimePreparedFacts,
+    hostRuntimePreparedFacts: params.hostRuntimePreparedFacts,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });

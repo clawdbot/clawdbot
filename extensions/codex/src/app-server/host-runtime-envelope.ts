@@ -2,11 +2,11 @@ import crypto from "node:crypto";
 import type { TurnOwnerDecision } from "./mcp-thread-config.js";
 import type { JsonObject, JsonValue } from "./protocol.js";
 
-export type GeeRuntimeEnvelope = {
-  kind: "gee-runtime-envelope";
+export type HostRuntimeEnvelope = {
+  kind: "host-runtime-envelope";
   version: 1;
-  owner: "gee";
-  geeId: string;
+  owner: "external-host";
+  hostId: string;
   requestId: string;
   auditId: string;
   endpoint: {
@@ -18,7 +18,7 @@ export type GeeRuntimeEnvelope = {
   conversation: {
     sessionKey: string;
     threadId?: string;
-    threadOwner: "gee";
+    threadOwner: "external-host";
   };
   provider: {
     modelRef: string;
@@ -33,7 +33,7 @@ export type GeeRuntimeEnvelope = {
   tools: {
     capabilityPlanId: string;
     allowedToolIds: string[];
-    policy: "gee-authorized";
+    policy: "host-authorized";
   };
   delivery: {
     policyId: string;
@@ -42,67 +42,67 @@ export type GeeRuntimeEnvelope = {
     confirmationPolicy?: string;
   };
   compaction: {
-    owner: "openclaw" | "gee" | "provider" | "disabled";
+    owner: "openclaw" | "external-host" | "provider" | "disabled";
     hostCompactionId?: string;
   };
 };
 
-export type GeeRuntimePreparedFacts = {
-  kind: "gee-runtime-prepared-facts";
+export type HostRuntimePreparedFacts = {
+  kind: "host-runtime-prepared-facts";
   version: 1;
-  hostMode: "gee-hosted";
-  envelope: GeeRuntimeEnvelope;
+  hostMode: "external-hosted";
+  envelope: HostRuntimeEnvelope;
 };
 
-export type GeeRuntimePreparedFactsBuild = {
-  preparedFacts?: Record<string, GeeRuntimePreparedFacts>;
+export type HostRuntimePreparedFactsBuild = {
+  preparedFacts?: Record<string, HostRuntimePreparedFacts>;
   fingerprint?: string;
   serialized?: JsonObject;
 };
 
-export type GeeRuntimeEnvelopeValidationErrorCode =
-  | "openclaw_gee_runtime_conflict"
-  | "openclaw_gee_runtime_invalid"
-  | "openclaw_gee_runtime_missing_fact";
+export type HostRuntimeEnvelopeValidationErrorCode =
+  | "openclaw_host_runtime_conflict"
+  | "openclaw_host_runtime_invalid"
+  | "openclaw_host_runtime_missing_fact";
 
-export class GeeRuntimeEnvelopeValidationError extends Error {
-  readonly code: GeeRuntimeEnvelopeValidationErrorCode;
+export class HostRuntimeEnvelopeValidationError extends Error {
+  readonly code: HostRuntimeEnvelopeValidationErrorCode;
   readonly endpointId?: string;
   readonly fieldName?: string;
 
   constructor(params: {
-    code: GeeRuntimeEnvelopeValidationErrorCode;
+    code: HostRuntimeEnvelopeValidationErrorCode;
     message: string;
     endpointId?: string;
     fieldName?: string;
   }) {
     super(params.message);
-    this.name = "GeeRuntimeEnvelopeValidationError";
+    this.name = "HostRuntimeEnvelopeValidationError";
     this.code = params.code;
     this.endpointId = params.endpointId;
     this.fieldName = params.fieldName;
   }
 }
 
-export function buildGeeRuntimePreparedFacts(params: {
+export function buildHostRuntimePreparedFacts(params: {
   ownershipDecisions?: Record<string, TurnOwnerDecision>;
   envelopeSources?: Record<string, unknown>;
-}): GeeRuntimePreparedFactsBuild {
-  const preparedFacts: Record<string, GeeRuntimePreparedFacts> = {};
+}): HostRuntimePreparedFactsBuild {
+  const preparedFacts: Record<string, HostRuntimePreparedFacts> = {};
   const decisions = params.ownershipDecisions ?? {};
   const sources = params.envelopeSources ?? {};
 
   for (const [endpointId, decision] of Object.entries(decisions).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
-    if (decision.owner !== "gee") {
+    if (decision.owner !== "external-host") {
       continue;
     }
-    const envelope = readGeeRuntimeEnvelope(sources[endpointId], decision);
+    const envelope = readHostRuntimeEnvelope(sources[endpointId], decision);
     preparedFacts[endpointId] = {
-      kind: "gee-runtime-prepared-facts",
+      kind: "host-runtime-prepared-facts",
       version: 1,
-      hostMode: "gee-hosted",
+      hostMode: "external-hosted",
       envelope,
     };
   }
@@ -111,7 +111,7 @@ export function buildGeeRuntimePreparedFacts(params: {
     return {};
   }
 
-  const serialized = serializeGeeRuntimePreparedFacts(preparedFacts);
+  const serialized = serializeHostRuntimePreparedFacts(preparedFacts);
   return {
     preparedFacts,
     fingerprint: fingerprintJson(serialized),
@@ -119,8 +119,8 @@ export function buildGeeRuntimePreparedFacts(params: {
   };
 }
 
-export function serializeGeeRuntimePreparedFacts(
-  preparedFacts: Record<string, GeeRuntimePreparedFacts>,
+export function serializeHostRuntimePreparedFacts(
+  preparedFacts: Record<string, HostRuntimePreparedFacts>,
 ): JsonObject {
   const serialized: JsonObject = {};
   for (const [endpointId, facts] of Object.entries(preparedFacts).toSorted(([left], [right]) =>
@@ -131,15 +131,15 @@ export function serializeGeeRuntimePreparedFacts(
   return serialized;
 }
 
-export function readGeeRuntimePreparedFactsRecord(
+export function readHostRuntimePreparedFactsRecord(
   value: unknown,
-): Record<string, GeeRuntimePreparedFacts> | undefined {
+): Record<string, HostRuntimePreparedFacts> | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
-  const preparedFacts: Record<string, GeeRuntimePreparedFacts> = {};
+  const preparedFacts: Record<string, HostRuntimePreparedFacts> = {};
   for (const [endpointId, rawFacts] of Object.entries(value)) {
-    const facts = readGeeRuntimePreparedFacts(endpointId, rawFacts);
+    const facts = readHostRuntimePreparedFacts(endpointId, rawFacts);
     if (!facts) {
       return undefined;
     }
@@ -148,52 +148,52 @@ export function readGeeRuntimePreparedFactsRecord(
   return preparedFacts;
 }
 
-function readGeeRuntimePreparedFacts(
+function readHostRuntimePreparedFacts(
   endpointId: string,
   value: unknown,
-): GeeRuntimePreparedFacts | undefined {
+): HostRuntimePreparedFacts | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
   if (
-    value.kind !== "gee-runtime-prepared-facts" ||
+    value.kind !== "host-runtime-prepared-facts" ||
     value.version !== 1 ||
-    value.hostMode !== "gee-hosted"
+    value.hostMode !== "external-hosted"
   ) {
     return undefined;
   }
   const decision: TurnOwnerDecision = {
-    owner: "gee",
+    owner: "external-host",
     reason: "endpoint-owner",
     endpointId,
     auditId: "binding-readback",
   };
   try {
     return {
-      kind: "gee-runtime-prepared-facts",
+      kind: "host-runtime-prepared-facts",
       version: 1,
-      hostMode: "gee-hosted",
-      envelope: readGeeRuntimeEnvelope(value.envelope, decision, { skipAuditMatch: true }),
+      hostMode: "external-hosted",
+      envelope: readHostRuntimeEnvelope(value.envelope, decision, { skipAuditMatch: true }),
     };
   } catch {
     return undefined;
   }
 }
 
-function readGeeRuntimeEnvelope(
+function readHostRuntimeEnvelope(
   value: unknown,
   decision: TurnOwnerDecision,
   options: { skipAuditMatch?: boolean } = {},
-): GeeRuntimeEnvelope {
+): HostRuntimeEnvelope {
   if (!isRecord(value)) {
     throwMissingFact(decision.endpointId, "openclawRuntimeEnvelope");
   }
   const endpointId = decision.endpointId;
   const envelope = {
-    kind: readLiteral(value.kind, "gee-runtime-envelope", endpointId, "kind"),
+    kind: readLiteral(value.kind, "host-runtime-envelope", endpointId, "kind"),
     version: readLiteral(value.version, 1, endpointId, "version"),
-    owner: readLiteral(value.owner, "gee", endpointId, "owner"),
-    geeId: readRequiredString(value.geeId, endpointId, "geeId"),
+    owner: readLiteral(value.owner, "external-host", endpointId, "owner"),
+    hostId: readRequiredString(value.hostId, endpointId, "hostId"),
     requestId: readRequiredString(value.requestId, endpointId, "requestId"),
     auditId: readRequiredString(value.auditId, endpointId, "auditId"),
     endpoint: readEndpointFacts(value.endpoint, endpointId),
@@ -203,40 +203,40 @@ function readGeeRuntimeEnvelope(
     tools: readToolsFacts(value.tools, endpointId),
     delivery: readDeliveryFacts(value.delivery, endpointId),
     compaction: readCompactionFacts(value.compaction, endpointId),
-  } satisfies GeeRuntimeEnvelope;
+  } satisfies HostRuntimeEnvelope;
 
-  if (decision.geeId && envelope.geeId !== decision.geeId) {
+  if (decision.hostId && envelope.hostId !== decision.hostId) {
     throwConflict(
       endpointId,
-      "geeId",
-      `Gee runtime envelope geeId "${envelope.geeId}" does not match ownership geeId "${decision.geeId}".`,
+      "hostId",
+      `Host runtime envelope hostId "${envelope.hostId}" does not match ownership hostId "${decision.hostId}".`,
     );
   }
-  if (decision.threadOwnerId && envelope.conversation.threadOwner !== "gee") {
+  if (decision.threadOwnerId && envelope.conversation.threadOwner !== "external-host") {
     throwConflict(
       endpointId,
       "conversation.threadOwner",
-      "Gee runtime envelope must keep the conversation thread owner on Gee.",
+      "Host runtime envelope must keep the conversation thread owner on host.",
     );
   }
   if (!options.skipAuditMatch && envelope.auditId !== decision.auditId) {
     throwConflict(
       endpointId,
       "auditId",
-      `Gee runtime envelope auditId "${envelope.auditId}" does not match ownership auditId "${decision.auditId}".`,
+      `Host runtime envelope auditId "${envelope.auditId}" does not match ownership auditId "${decision.auditId}".`,
     );
   }
   if (envelope.endpoint.endpointId !== decision.endpointId) {
     throwConflict(
       endpointId,
       "endpoint.endpointId",
-      `Gee runtime envelope endpointId "${envelope.endpoint.endpointId}" does not match ownership endpointId "${decision.endpointId}".`,
+      `Host runtime envelope endpointId "${envelope.endpoint.endpointId}" does not match ownership endpointId "${decision.endpointId}".`,
     );
   }
   return envelope;
 }
 
-function readEndpointFacts(value: unknown, endpointId: string): GeeRuntimeEnvelope["endpoint"] {
+function readEndpointFacts(value: unknown, endpointId: string): HostRuntimeEnvelope["endpoint"] {
   const record = readRequiredRecord(value, endpointId, "endpoint");
   return cleanObject({
     channel: readRequiredString(record.channel, endpointId, "endpoint.channel"),
@@ -253,16 +253,21 @@ function readEndpointFacts(value: unknown, endpointId: string): GeeRuntimeEnvelo
 function readConversationFacts(
   value: unknown,
   endpointId: string,
-): GeeRuntimeEnvelope["conversation"] {
+): HostRuntimeEnvelope["conversation"] {
   const record = readRequiredRecord(value, endpointId, "conversation");
   return cleanObject({
     sessionKey: readRequiredString(record.sessionKey, endpointId, "conversation.sessionKey"),
     threadId: readOptionalString(record.threadId, endpointId, "conversation.threadId"),
-    threadOwner: readLiteral(record.threadOwner, "gee", endpointId, "conversation.threadOwner"),
+    threadOwner: readLiteral(
+      record.threadOwner,
+      "external-host",
+      endpointId,
+      "conversation.threadOwner",
+    ),
   });
 }
 
-function readProviderFacts(value: unknown, endpointId: string): GeeRuntimeEnvelope["provider"] {
+function readProviderFacts(value: unknown, endpointId: string): HostRuntimeEnvelope["provider"] {
   const record = readRequiredRecord(value, endpointId, "provider");
   return cleanObject({
     modelRef: readRequiredString(record.modelRef, endpointId, "provider.modelRef"),
@@ -284,7 +289,7 @@ function readProviderFacts(value: unknown, endpointId: string): GeeRuntimeEnvelo
   });
 }
 
-function readAuthFacts(value: unknown, endpointId: string): GeeRuntimeEnvelope["auth"] {
+function readAuthFacts(value: unknown, endpointId: string): HostRuntimeEnvelope["auth"] {
   const record = readRequiredRecord(value, endpointId, "auth");
   rejectRawCredentialMaterial(record, endpointId);
   return {
@@ -298,7 +303,7 @@ function readAuthFacts(value: unknown, endpointId: string): GeeRuntimeEnvelope["
   };
 }
 
-function readToolsFacts(value: unknown, endpointId: string): GeeRuntimeEnvelope["tools"] {
+function readToolsFacts(value: unknown, endpointId: string): HostRuntimeEnvelope["tools"] {
   const record = readRequiredRecord(value, endpointId, "tools");
   return {
     capabilityPlanId: readRequiredString(
@@ -307,11 +312,11 @@ function readToolsFacts(value: unknown, endpointId: string): GeeRuntimeEnvelope[
       "tools.capabilityPlanId",
     ),
     allowedToolIds: readStringArray(record.allowedToolIds, endpointId, "tools.allowedToolIds"),
-    policy: readLiteral(record.policy, "gee-authorized", endpointId, "tools.policy"),
+    policy: readLiteral(record.policy, "host-authorized", endpointId, "tools.policy"),
   };
 }
 
-function readDeliveryFacts(value: unknown, endpointId: string): GeeRuntimeEnvelope["delivery"] {
+function readDeliveryFacts(value: unknown, endpointId: string): HostRuntimeEnvelope["delivery"] {
   const record = readRequiredRecord(value, endpointId, "delivery");
   return cleanObject({
     policyId: readRequiredString(record.policyId, endpointId, "delivery.policyId"),
@@ -329,12 +334,15 @@ function readDeliveryFacts(value: unknown, endpointId: string): GeeRuntimeEnvelo
   });
 }
 
-function readCompactionFacts(value: unknown, endpointId: string): GeeRuntimeEnvelope["compaction"] {
+function readCompactionFacts(
+  value: unknown,
+  endpointId: string,
+): HostRuntimeEnvelope["compaction"] {
   const record = readRequiredRecord(value, endpointId, "compaction");
   return cleanObject({
     owner: readEnum(
       record.owner,
-      ["openclaw", "gee", "provider", "disabled"],
+      ["openclaw", "external-host", "provider", "disabled"],
       endpointId,
       "compaction.owner",
     ),
@@ -425,26 +433,26 @@ function readEnum<T extends string>(
 }
 
 function throwMissingFact(endpointId: string, fieldName: string): never {
-  throw new GeeRuntimeEnvelopeValidationError({
-    code: "openclaw_gee_runtime_missing_fact",
+  throw new HostRuntimeEnvelopeValidationError({
+    code: "openclaw_host_runtime_missing_fact",
     endpointId,
     fieldName,
-    message: `Gee-hosted OpenClaw endpoint "${endpointId}" is missing required runtime fact "${fieldName}".`,
+    message: `Externally hosted OpenClaw endpoint "${endpointId}" is missing required runtime fact "${fieldName}".`,
   });
 }
 
 function throwInvalidFact(endpointId: string, fieldName: string): never {
-  throw new GeeRuntimeEnvelopeValidationError({
-    code: "openclaw_gee_runtime_invalid",
+  throw new HostRuntimeEnvelopeValidationError({
+    code: "openclaw_host_runtime_invalid",
     endpointId,
     fieldName,
-    message: `Gee-hosted OpenClaw endpoint "${endpointId}" has invalid runtime fact "${fieldName}".`,
+    message: `Externally hosted OpenClaw endpoint "${endpointId}" has invalid runtime fact "${fieldName}".`,
   });
 }
 
 function throwConflict(endpointId: string, fieldName: string, message: string): never {
-  throw new GeeRuntimeEnvelopeValidationError({
-    code: "openclaw_gee_runtime_conflict",
+  throw new HostRuntimeEnvelopeValidationError({
+    code: "openclaw_host_runtime_conflict",
     endpointId,
     fieldName,
     message,

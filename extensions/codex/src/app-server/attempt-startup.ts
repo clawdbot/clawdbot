@@ -340,7 +340,7 @@ export async function startCodexAttemptThread(params: {
                 mcpServersFingerprint,
                 mcpServersFingerprintEvaluated,
                 mcpOwnershipDecisions: params.mcpThreadConfig?.ownershipDecisions,
-                geeRuntimePreparedFacts: params.mcpThreadConfig?.geeRuntimePreparedFacts,
+                hostRuntimePreparedFacts: params.mcpThreadConfig?.hostRuntimePreparedFacts,
                 environmentSelection: startupEnvironmentSelection,
                 appServerRuntimeFingerprint,
                 contextEngineProjection: params.contextEngineProjection,
@@ -500,11 +500,11 @@ export async function startCodexAttemptThread(params: {
 
 function mergeMcpThreadFingerprints(
   bundleFingerprint: string | undefined,
-  geeFingerprint: string | undefined,
+  hostRuntimeFingerprint: string | undefined,
 ): string | undefined {
   const parts = [
     bundleFingerprint ? `bundle:${bundleFingerprint}` : undefined,
-    geeFingerprint ? `gee:${geeFingerprint}` : undefined,
+    hostRuntimeFingerprint ? `host:${hostRuntimeFingerprint}` : undefined,
   ].filter((part): part is string => Boolean(part));
   return parts.length > 0 ? parts.join("\n") : undefined;
 }

@@ -194,6 +194,7 @@ import {
   CodexAppServerEventProjector,
   shouldEmitTranscriptToolProgress,
 } from "./event-projector.js";
+import { buildCodexMcpThreadConfig } from "./mcp-thread-config.js";
 import {
   buildCodexNativeHookRelayDisabledConfig,
   buildCodexNativeHookRelayConfig,
@@ -207,7 +208,6 @@ import {
   resolveCodexNativeHookRelayUnregisterGraceMs,
   scheduleCodexNativeHookRelayUnregister,
 } from "./native-hook-relay.js";
-import { buildCodexMcpThreadConfig } from "./mcp-thread-config.js";
 import { registerCodexNativeSubagentMonitor } from "./native-subagent-monitor.js";
 import { describeCodexNotificationCorrelation } from "./notification-correlation.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
@@ -648,8 +648,8 @@ export async function runCodexAppServerAttempt(
     ...params,
     sessionKey: contextSessionKey,
     ...(startupAuthProfileId ? { authProfileId: startupAuthProfileId } : {}),
-    ...(mcpThreadConfig.geeRuntimePreparedFacts
-      ? { geeRuntimePreparedFacts: mcpThreadConfig.geeRuntimePreparedFacts }
+    ...(mcpThreadConfig.hostRuntimePreparedFacts
+      ? { hostRuntimePreparedFacts: mcpThreadConfig.hostRuntimePreparedFacts }
       : {}),
   };
   const activeSessionId = params.sessionId;

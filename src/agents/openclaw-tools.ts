@@ -23,11 +23,12 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import type { EmbeddedRunHostRuntimePreparedFacts } from "./embedded-agent-runner/run/types.js";
 import {
-  isGeeRuntimeToolAllowed,
-  resolveGeeRuntimeToolAllowlist,
-  resolveGeeRuntimeToolPolicy,
-} from "./gee-runtime-prepared-facts.js";
+  isHostRuntimeToolAllowed,
+  resolveHostRuntimeToolAllowlist,
+  resolveHostRuntimeToolPolicy,
+} from "./host-runtime-prepared-facts.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import {
   isToolExplicitlyAllowedByFactoryPolicy,
@@ -40,7 +41,6 @@ import {
   collectPresentOpenClawTools,
   shouldIncludeUpdatePlanToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
-import type { EmbeddedRunGeeRuntimePreparedFacts } from "./embedded-agent-runner/run/types.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
@@ -113,7 +113,7 @@ export function createOpenClawTools(
     fsPolicy?: ToolFsPolicy;
     sandboxed?: boolean;
     config?: OpenClawConfig;
-    geeRuntimePreparedFacts?: EmbeddedRunGeeRuntimePreparedFacts;
+    hostRuntimePreparedFacts?: EmbeddedRunHostRuntimePreparedFacts;
     pluginToolAllowlist?: string[];
     pluginToolDenylist?: string[];
     /** Effective caller tool surface to persist on isolated cron agentTurn jobs. */
@@ -222,9 +222,9 @@ export function createOpenClawTools(
     accountId: options?.agentAccountId,
     threadId: options?.agentThreadId,
   });
-  const geeRuntimeToolPolicy = resolveGeeRuntimeToolPolicy(options?.geeRuntimePreparedFacts);
-  const runtimeToolAllowlist = resolveGeeRuntimeToolAllowlist(
-    geeRuntimeToolPolicy,
+  const hostRuntimeToolPolicy = resolveHostRuntimeToolPolicy(options?.hostRuntimePreparedFacts);
+  const runtimeToolAllowlist = resolveHostRuntimeToolAllowlist(
+    hostRuntimeToolPolicy,
     options?.pluginToolAllowlist,
   );
   const runtimeWebTools = getActiveRuntimeWebToolsMetadata();
@@ -233,7 +233,7 @@ export function createOpenClawTools(
       ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
       : undefined;
   const optionalMediaTools = ["image_generate", "video_generate", "music_generate", "pdf"].some(
-    (toolName) => isGeeRuntimeToolAllowed(geeRuntimeToolPolicy, toolName),
+    (toolName) => isHostRuntimeToolAllowed(hostRuntimeToolPolicy, toolName),
   )
     ? resolveOptionalMediaToolFactoryPlan({
         config: availabilityConfig ?? resolvedConfig,
@@ -267,7 +267,7 @@ export function createOpenClawTools(
   );
   const imageToolAgentDir = options?.agentDir;
   const imageTool =
-    isGeeRuntimeToolAllowed(geeRuntimeToolPolicy, "image") &&
+    isHostRuntimeToolAllowed(hostRuntimeToolPolicy, "image") &&
     resolveImageToolFactoryAvailable({
       config: availabilityConfig ?? resolvedConfig,
       agentDir: imageToolAgentDir,
@@ -428,7 +428,7 @@ export function createOpenClawTools(
   const effectiveCallGateway = embedded
     ? createEmbeddedCallGateway()
     : openClawToolsDeps.callGateway;
-  const includeUpdatePlanTool = geeRuntimeToolPolicy
+  const includeUpdatePlanTool = hostRuntimeToolPolicy
     ? isToolExplicitlyAllowedByFactoryPolicy({
         toolName: "update_plan",
         allowlist: runtimeToolAllowlist,
