@@ -9,14 +9,14 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../src/config/config.js";
-import type { OpenClawConfig } from "../../src/config/types.js";
 import { createBrowserTool } from "../../extensions/browser/src/browser-tool.js";
 import { getFreePort } from "../../extensions/browser/src/browser/test-port.js";
 import {
   startBrowserControlServiceFromConfig,
   stopBrowserControlService,
 } from "../../extensions/browser/src/control-service.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../src/config/config.js";
+import type { OpenClawConfig } from "../../src/config/types.js";
 
 type ToolResult = { content?: readonly unknown[]; details?: unknown } | undefined;
 
@@ -50,9 +50,7 @@ function resultText(result: ToolResult): string {
 }
 
 function redactPaths(text: string): string {
-  return text
-    .replaceAll(os.homedir(), "[redacted-home]")
-    .replaceAll(os.tmpdir(), "[redacted-tmp]");
+  return text.replaceAll(os.homedir(), "[redacted-home]").replaceAll(os.tmpdir(), "[redacted-tmp]");
 }
 
 function renderResult(label: string, result: ToolResult): string {
