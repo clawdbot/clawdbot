@@ -92,6 +92,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
       warn: bootstrapWarn,
       contextMode: attempt.bootstrapContextMode,
       runKind: attempt.bootstrapContextRunKind,
+      sessionChatType: attempt.chatType,
     });
     bootstrapRouting = await resolveBootstrapRouting(preloadedBootstrapFiles);
   }
@@ -122,6 +123,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
           warn: bootstrapWarn,
           contextMode: attempt.bootstrapContextMode,
           runKind: attempt.bootstrapContextRunKind,
+          sessionChatType: attempt.chatType,
         }));
       return {
         bootstrapFiles,

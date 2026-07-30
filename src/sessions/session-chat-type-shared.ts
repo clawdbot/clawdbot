@@ -116,6 +116,62 @@ function deriveSessionChatTypeFromScopedKey(
   return "unknown";
 }
 
+export type SessionChatTypeHint = "direct" | "group" | "channel";
+
+function resolveEffectiveChatType(
+  sessionKey: string | undefined | null,
+  sessionChatType?: SessionChatTypeHint | null,
+): SessionKeyChatType {
+  const keyDerived = deriveSessionChatTypeFromKey(sessionKey);
+  if (keyDerived !== "unknown") {
+    return keyDerived;
+  }
+  if (sessionChatType) {
+    return sessionChatType;
+  }
+  return "unknown";
+}
+
+export function isSharedChannelSessionKey(
+  sessionKey: string | undefined | null,
+  sessionChatType?: SessionChatTypeHint | null,
+): boolean {
+  const chatType = resolveEffectiveChatType(sessionKey, sessionChatType);
+  return chatType === "group" || chatType === "channel";
+}
+
+export function isPrivateMemorySessionKey(
+  sessionKey: string | undefined | null,
+  sessionChatType?: SessionChatTypeHint | null,
+): boolean {
+  if (!sessionKey) {
+    return true;
+  }
+  const chatType = resolveEffectiveChatType(sessionKey, sessionChatType);
+  if (chatType === "group" || chatType === "channel") {
+    return false;
+  }
+  if (chatType === "direct") {
+    return true;
+  }
+  // When routing supplies a chat type the pure parser cannot determine, the
+  // routing-owned fact is authoritative: unclassified keys that routing marks
+  // as private retain bootstrap memory; those without a routing fact default
+  // to fail-closed (non-private) for the privacy boundary.
+  if (sessionChatType) {
+    return false;
+  }
+  const raw = normalizeLowercaseStringOrEmpty(sessionKey);
+  if (!raw) {
+    return true;
+  }
+  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
+  if (scoped === "main" || scoped === "chat:main") {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Best-effort chat-type extraction from session keys across canonical and legacy formats.
  */

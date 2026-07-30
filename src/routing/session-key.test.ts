@@ -18,6 +18,8 @@ import {
   buildAgentPeerSessionKey,
   buildGroupHistoryKey,
   classifySessionKeyShape,
+  isSharedChannelSessionKey,
+  isPrivateMemorySessionKey,
   isValidAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -163,6 +165,153 @@ describe("isCronSessionKey", () => {
     { key: undefined, expected: false },
   ] as const)("matches cron key %j => $expected", ({ key, expected }) => {
     expect(isCronSessionKey(key)).toBe(expected);
+  });
+});
+
+describe("isSharedChannelSessionKey", () => {
+  it.each([
+    { key: "agent:main:telegram:group:g1", expected: true },
+    { key: "agent:main:discord:group:dev", expected: true },
+    { key: "agent:main:discord:channel:c1", expected: true },
+    { key: "agent:main:discord:guild-123:channel-456", expected: true },
+    { key: "agent:main:slack:group:general", expected: true },
+    { key: "agent:main:feishu:group:oc-group", expected: true },
+    { key: "agent:main:matrix:channel:!Room:example.org", expected: true },
+    { key: "agent:main:whatsapp:123@g.us", expected: true },
+    { key: "agent:main:signal:group:AbC123", expected: true },
+    { key: "agent:main:channel:legacy-room", expected: true },
+    { key: "agent:main:group:room:part", expected: true },
+    { key: "agent:main:telegram:group:-100123:thread:456", expected: true },
+    { key: "agent:main:feishu:group:oc_chat:topic:om_root:sender:ou_user", expected: true },
+    { key: "agent:main:main", expected: false },
+    { key: "agent:main:chat:main", expected: false },
+    { key: "agent:main:direct:user1", expected: false },
+    { key: "agent:main:discord:direct:user1", expected: false },
+    { key: "agent:main:telegram:dm:123456", expected: false },
+    { key: "agent:main:subagent:task-1", expected: false },
+    { key: "agent:main:cron:job-1", expected: false },
+    { key: undefined, expected: false },
+  ] as const)("returns $expected for %j", ({ key, expected }) => {
+    expect(isSharedChannelSessionKey(key)).toBe(expected);
+  });
+});
+
+describe("isPrivateMemorySessionKey", () => {
+  it.each([
+    { key: "agent:main:main", expected: true, label: "main session" },
+    { key: "agent:main:chat:main", expected: true, label: "chat main" },
+    { key: "agent:main:direct:user1", expected: true, label: "direct session" },
+    { key: "agent:main:dm:123456", expected: true, label: "dm session" },
+    { key: "agent:main:telegram:dm:123456", expected: true, label: "telegram dm" },
+    { key: "agent:main:discord:direct:user1", expected: true, label: "discord direct" },
+    {
+      key: "agent:main:discord:acct1:direct:user1",
+      expected: true,
+      label: "discord direct with account",
+    },
+    { key: undefined, expected: true, label: "undefined (CLI/local)" },
+    { key: "", expected: true, label: "empty string" },
+    { key: "agent:main:telegram:group:-100123", expected: false, label: "telegram group" },
+    { key: "agent:main:discord:group:dev", expected: false, label: "discord group" },
+    { key: "agent:main:discord:channel:c1", expected: false, label: "discord channel" },
+    { key: "agent:main:slack:group:general", expected: false, label: "slack group" },
+    { key: "agent:main:feishu:group:oc-group", expected: false, label: "feishu group" },
+    {
+      key: "agent:main:matrix:channel:!Room:example.org",
+      expected: false,
+      label: "matrix channel",
+    },
+    { key: "agent:main:whatsapp:123@g.us", expected: false, label: "whatsapp group" },
+    { key: "agent:main:signal:group:AbC123", expected: false, label: "signal group" },
+    { key: "agent:main:subagent:task-1", expected: false, label: "subagent" },
+    { key: "agent:main:cron:job-1", expected: false, label: "cron" },
+    {
+      key: "agent:main:msteams:team:abc123",
+      expected: false,
+      label: "unknown channel peerKind (msteams team)",
+    },
+    {
+      key: "agent:main:webex:space:room1",
+      expected: false,
+      label: "unknown channel peerKind (webex space)",
+    },
+    { key: "agent:main:channel:legacy-room", expected: false, label: "legacy channel shape" },
+    { key: "agent:main:group:room:part", expected: false, label: "legacy group shape" },
+    {
+      key: "agent:main:discord:guild-123:channel-456",
+      expected: false,
+      label: "discord guild/channel",
+    },
+  ] as const)("returns $expected for $label (%j)", ({ key, expected }) => {
+    expect(isPrivateMemorySessionKey(key)).toBe(expected);
+  });
+});
+
+// Regression: isSharedChannelSessionKey and isPrivateMemorySessionKey must not
+// reach getBootstrapChannelPlugin on the agent bootstrap hot path.
+vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
+  getBootstrapChannelPlugin: vi.fn(() => {
+    throw new Error("bootstrap path must not call getBootstrapChannelPlugin");
+  }),
+}));
+
+describe("isPrivateMemorySessionKey no-plugin-discovery", () => {
+  it("does not call getBootstrapChannelPlugin for known group keys", () => {
+    expect(isPrivateMemorySessionKey("agent:main:telegram:group:-100123")).toBe(false);
+  });
+
+  it("does not call getBootstrapChannelPlugin for known direct keys", () => {
+    expect(isPrivateMemorySessionKey("agent:main:telegram:dm:123456")).toBe(true);
+  });
+
+  it("does not call getBootstrapChannelPlugin for unknown keys", () => {
+    expect(isPrivateMemorySessionKey("agent:main:webex:space:room1")).toBe(false);
+  });
+
+  it("uses routing-owned chatType override for unknown keys marked direct", () => {
+    expect(isPrivateMemorySessionKey("agent:main:webex:space:room1", "direct")).toBe(true);
+  });
+
+  it("uses routing-owned chatType override for unknown keys marked group", () => {
+    expect(isPrivateMemorySessionKey("agent:main:webex:space:room1", "group")).toBe(false);
+  });
+
+  it("uses routing-owned chatType override for unknown keys marked channel", () => {
+    expect(isPrivateMemorySessionKey("agent:main:webex:space:room1", "channel")).toBe(false);
+  });
+
+  it("ignores routing-owned chatType when key parses to a known type", () => {
+    expect(isPrivateMemorySessionKey("agent:main:telegram:group:-100123", "direct")).toBe(false);
+  });
+});
+
+describe("isSharedChannelSessionKey no-plugin-discovery", () => {
+  it("does not call getBootstrapChannelPlugin for known group keys", () => {
+    expect(isSharedChannelSessionKey("agent:main:telegram:group:-100123")).toBe(true);
+  });
+
+  it("does not call getBootstrapChannelPlugin for known direct keys", () => {
+    expect(isSharedChannelSessionKey("agent:main:telegram:dm:123456")).toBe(false);
+  });
+
+  it("does not call getBootstrapChannelPlugin for unknown keys", () => {
+    expect(isSharedChannelSessionKey("agent:main:webex:space:room1")).toBe(false);
+  });
+
+  it("uses routing-owned chatType override for unknown keys marked group", () => {
+    expect(isSharedChannelSessionKey("agent:main:webex:space:room1", "group")).toBe(true);
+  });
+
+  it("uses routing-owned chatType override for unknown keys marked channel", () => {
+    expect(isSharedChannelSessionKey("agent:main:webex:space:room1", "channel")).toBe(true);
+  });
+
+  it("uses routing-owned chatType override for unknown keys marked direct", () => {
+    expect(isSharedChannelSessionKey("agent:main:webex:space:room1", "direct")).toBe(false);
+  });
+
+  it("ignores routing-owned chatType when key parses to a known type", () => {
+    expect(isSharedChannelSessionKey("agent:main:telegram:group:-100123", "direct")).toBe(true);
   });
 });
 

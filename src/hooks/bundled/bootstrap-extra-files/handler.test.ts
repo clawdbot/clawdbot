@@ -94,4 +94,33 @@ describe("bootstrap-extra-files hook", () => {
     await handler(event);
     expect(context.bootstrapFiles.map((f) => f.name).toSorted()).toEqual(["AGENTS.md"]);
   });
+
+  it("re-applies group channel bootstrap allowlist after extras are added", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-group-");
+    const extraDir = path.join(tempDir, "packages", "core");
+    await fs.mkdir(extraDir, { recursive: true });
+    await fs.writeFile(path.join(extraDir, "AGENTS.md"), "extra agents", "utf-8");
+
+    const cfg = createBootstrapExtraConfig(["packages/*/AGENTS.md"]);
+    const context = await createBootstrapContext({
+      workspaceDir: tempDir,
+      cfg,
+      sessionKey: "agent:main:telegram:group:-100123",
+      rootFiles: [
+        { name: "AGENTS.md", content: "root agents" },
+        { name: "MEMORY.md", content: "private memory" },
+      ],
+    });
+
+    const event = createHookEvent(
+      "agent",
+      "bootstrap",
+      "agent:main:telegram:group:-100123",
+      context,
+    );
+    await handler(event);
+    const names = context.bootstrapFiles.map((f) => f.name);
+    expect(names).not.toContain("MEMORY.md");
+    expect(names).toContain("AGENTS.md");
+  });
 });

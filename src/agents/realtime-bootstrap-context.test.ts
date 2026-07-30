@@ -110,4 +110,21 @@ describe("resolveRealtimeBootstrapContextInstructions", () => {
       }),
     ).resolves.toBeUndefined();
   });
+
+  it("never includes MEMORY.md regardless of sessionChatType", async () => {
+    const workspaceDir = await makeWorkspace();
+    await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), "Name: Wilfred\n", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "private memory\n", "utf8");
+
+    const instructions = await resolveRealtimeBootstrapContextInstructions({
+      config: makeConfig(workspaceDir),
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionChatType: "direct",
+    });
+
+    expect(instructions).toContain("### IDENTITY.md");
+    expect(instructions).not.toContain("MEMORY.md");
+    expect(instructions).not.toContain("private memory");
+  });
 });

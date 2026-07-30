@@ -9,6 +9,7 @@ import {
   registerInternalHook,
   type AgentBootstrapHookContext,
 } from "../hooks/internal-hooks.js";
+import type { SessionChatTypeHint } from "../routing/session-key.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -383,6 +384,185 @@ describe("resolveBootstrapFilesForRun", () => {
       "IDENTITY.md",
       "USER.md",
     ]);
+  });
+
+  it("excludes MEMORY.md for shared channel sessions", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-group-");
+    await Promise.all(
+      [
+        ["AGENTS.md", "project rules"],
+        ["TOOLS.md", "tool rules"],
+        ["SOUL.md", "persona"],
+        ["IDENTITY.md", "identity"],
+        ["USER.md", "user profile"],
+        ["MEMORY.md", "memory"],
+        ["HEARTBEAT.md", "heartbeat"],
+        ["BOOTSTRAP.md", "setup"],
+      ].map(([fileName, content]) =>
+        fs.writeFile(
+          path.join(workspaceDir, expectDefined(fileName, "fileName test invariant")),
+          expectDefined(content, "content test invariant"),
+          "utf8",
+        ),
+      ),
+    );
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:telegram:group:-100123",
+    });
+
+    const names = files.map((file) => file.name);
+    expect(names).not.toContain("MEMORY.md");
+    expect(names).toContain("AGENTS.md");
+    expect(names).toContain("SOUL.md");
+    expect(names).toContain("USER.md");
+  });
+
+  it("includes MEMORY.md for private DM sessions", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-dm-");
+    await Promise.all(
+      [
+        ["AGENTS.md", "project rules"],
+        ["MEMORY.md", "memory"],
+      ].map(([fileName, content]) =>
+        fs.writeFile(
+          path.join(workspaceDir, expectDefined(fileName, "fileName test invariant")),
+          expectDefined(content, "content test invariant"),
+          "utf8",
+        ),
+      ),
+    );
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:telegram:dm:123456",
+    });
+
+    expect(files.map((file) => file.name)).toContain("MEMORY.md");
+  });
+
+  it("re-enforces MEMORY.md exclusion after hook overrides for group sessions", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-group-hook-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "private memory", "utf8");
+
+    registerInternalHook("agent:bootstrap", (event) => {
+      const context = event.context as AgentBootstrapHookContext;
+      context.bootstrapFiles = [
+        ...context.bootstrapFiles,
+        {
+          name: "MEMORY.md",
+          path: path.join(workspaceDir, "MEMORY.md"),
+          content: "injected by hook",
+          missing: false,
+        } as unknown as WorkspaceBootstrapFile,
+      ];
+    });
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:discord:group:dev",
+    });
+
+    expect(files.map((file) => file.name)).not.toContain("MEMORY.md");
+  });
+
+  it("strips MEMORY.md even when a hook adds it alongside other files for group sessions", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-group-hook-multi-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "private memory", "utf8");
+
+    registerInternalHook("agent:bootstrap", (event) => {
+      const context = event.context as AgentBootstrapHookContext;
+      context.bootstrapFiles = [
+        ...context.bootstrapFiles,
+        {
+          name: "MEMORY.md",
+          path: path.join(workspaceDir, "MEMORY.md"),
+          content: "hook-injected memory",
+          missing: false,
+        } as unknown as WorkspaceBootstrapFile,
+        {
+          name: "AGENTS.md",
+          path: path.join(workspaceDir, "packages", "core", "AGENTS.md"),
+          content: "extra agents",
+          missing: false,
+        } as unknown as WorkspaceBootstrapFile,
+      ];
+    });
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:telegram:group:-100123",
+    });
+
+    expect(files.map((file) => file.name)).not.toContain("MEMORY.md");
+    expect(files.filter((f) => f.name === "AGENTS.md").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it.each([
+    {
+      chatType: undefined as SessionChatTypeHint | null | undefined,
+      expected: false,
+      label: "unknown key (fail-closed)",
+    },
+    { chatType: "direct" as const, expected: true, label: "routing-owned direct chatType" },
+    { chatType: "group" as const, expected: false, label: "routing-owned group chatType" },
+  ] as const)(
+    "handles MEMORY.md for unknown session key with $label",
+    async ({ chatType, expected }) => {
+      const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-routed-");
+      await Promise.all(
+        [
+          ["AGENTS.md", "project rules"],
+          ["MEMORY.md", "memory"],
+        ].map(([fileName, content]) =>
+          fs.writeFile(
+            path.join(workspaceDir, expectDefined(fileName, "fileName test invariant")),
+            expectDefined(content, "content test invariant"),
+            "utf8",
+          ),
+        ),
+      );
+
+      const files = await resolveBootstrapFilesForRun({
+        workspaceDir,
+        sessionKey: "agent:main:msteams:team:abc123",
+        sessionChatType: chatType,
+      });
+
+      const hasMemory = files.map((file) => file.name).includes("MEMORY.md");
+      expect(hasMemory).toBe(expected);
+    },
+  );
+
+  it("strips lowercase memory.md alias injected by hook for group sessions", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-group-lowercase-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "private memory", "utf8");
+
+    registerInternalHook("agent:bootstrap", (event) => {
+      const context = event.context as AgentBootstrapHookContext;
+      context.bootstrapFiles = [
+        ...context.bootstrapFiles,
+        {
+          name: "memory.md",
+          path: path.join(workspaceDir, "memory.md"),
+          content: "hook-injected lowercase memory",
+          missing: false,
+        } as unknown as WorkspaceBootstrapFile,
+      ];
+    });
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:telegram:group:-100123",
+    });
+
+    const names = files.map((file) => file.name);
+    expect(names).not.toContain("MEMORY.md");
+    expect(names).not.toContain("memory.md");
   });
 });
 

@@ -6,6 +6,7 @@
  */
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SessionChatTypeHint } from "../sessions/session-chat-type-shared.js";
 import { resolveUserPath, truncateUtf16Safe } from "../utils.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveBootstrapFilesForRun } from "./bootstrap-files.js";
@@ -80,6 +81,7 @@ export async function resolveRealtimeBootstrapContextInstructions(params: {
   files?: readonly RealtimeBootstrapContextFileName[];
   sessionKey?: string;
   warn?: (message: string) => void;
+  sessionChatType?: SessionChatTypeHint | null;
 }): Promise<string | undefined> {
   const requestedFiles = normalizeRealtimeBootstrapContextFileNames(
     params.files ?? REALTIME_BOOTSTRAP_CONTEXT_FILE_NAMES,
@@ -96,6 +98,7 @@ export async function resolveRealtimeBootstrapContextInstructions(params: {
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     warn: params.warn,
+    sessionChatType: params.sessionChatType,
   });
   const selectedFiles = bootstrapFiles
     .filter(

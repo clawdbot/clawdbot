@@ -1158,4 +1158,34 @@ describe("filterBootstrapFilesForSession", () => {
     const result = filterBootstrapFilesForSession(mockFiles, "agent:default:cron:daily-check");
     expectCronAllowedBootstrapNames(result);
   });
+
+  it.each([
+    { key: "agent:main:telegram:group:-100123", label: "telegram group" },
+    { key: "agent:main:discord:group:dev", label: "discord group" },
+    { key: "agent:main:discord:channel:c1", label: "discord channel" },
+    { key: "agent:main:discord:guild-123:channel-456", label: "discord guild/channel" },
+    { key: "agent:main:slack:group:general", label: "slack group" },
+    { key: "agent:main:feishu:group:oc-group", label: "feishu group" },
+    { key: "agent:main:matrix:channel:!Room:example.org", label: "matrix channel" },
+    { key: "agent:main:whatsapp:123@g.us", label: "whatsapp group" },
+    { key: "agent:main:signal:group:AbC123", label: "signal group" },
+  ] as const)("excludes MEMORY.md for shared channel session ($label)", ({ key }) => {
+    const result = filterBootstrapFilesForSession(mockFiles, key);
+    const names = result.map((f) => f.name);
+    expect(names).not.toContain("MEMORY.md");
+    expect(names).toContain("AGENTS.md");
+    expect(names).toContain("SOUL.md");
+    expect(names).toContain("USER.md");
+  });
+
+  it.each([
+    { key: "agent:main:main", label: "main session" },
+    { key: "agent:main:chat:main", label: "chat session" },
+    { key: "agent:main:direct:user1", label: "direct session" },
+    { key: "agent:main:telegram:dm:123456", label: "telegram dm" },
+    { key: "agent:main:discord:direct:user1", label: "discord direct" },
+  ] as const)("includes MEMORY.md for private session ($label)", ({ key }) => {
+    const result = filterBootstrapFilesForSession(mockFiles, key);
+    expect(result.map((f) => f.name)).toContain("MEMORY.md");
+  });
 });

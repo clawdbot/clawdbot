@@ -8,6 +8,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readFileWindowFully } from "../infra/file-read.js";
+import {
+  CANONICAL_ROOT_MEMORY_FILENAME,
+  LEGACY_ROOT_MEMORY_FILENAME,
+} from "../memory/root-memory-files.js";
+import { isPrivateMemorySessionKey, type SessionChatTypeHint } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
@@ -208,6 +213,29 @@ function applyContextModeFilter(params: {
   return [];
 }
 
+function enforcePrivateMemoryBoundary(
+  files: WorkspaceBootstrapFile[],
+  sessionKey?: string,
+  sessionChatType?: SessionChatTypeHint | null,
+): WorkspaceBootstrapFile[] {
+  if (isPrivateMemorySessionKey(sessionKey, sessionChatType)) {
+    return files;
+  }
+  // Hooks can inject memory.md (LEGACY_ROOT_MEMORY_FILENAME) via
+  // `as unknown as WorkspaceBootstrapFile`, which is not in the nominal
+  // type. Use case-insensitive basename comparison so both MEMORY.md and
+  // memory.md are stripped regardless of the typed name field.
+  return files.filter((file) => !isMemoryBootstrapFileName(file.name));
+}
+
+function isMemoryBootstrapFileName(name: string): boolean {
+  const lower = name.toLowerCase();
+  return (
+    lower === CANONICAL_ROOT_MEMORY_FILENAME.toLowerCase() ||
+    lower === LEGACY_ROOT_MEMORY_FILENAME.toLowerCase()
+  );
+}
+
 function filterCompletedWorkspaceBootstrapFile(
   files: WorkspaceBootstrapFile[],
   setupCompleted: boolean,
@@ -253,6 +281,7 @@ export async function resolveBootstrapFilesForRun(params: {
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
+  sessionChatType?: SessionChatTypeHint | null;
 }): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
   const workspaceSetupCompleted = await isWorkspaceSetupCompletedForContext(params.workspaceDir);
@@ -264,7 +293,7 @@ export async function resolveBootstrapFilesForRun(params: {
     : await loadWorkspaceBootstrapFiles(params.workspaceDir);
   const bootstrapFiles = applyContextModeFilter({
     files: filterCompletedWorkspaceBootstrapFile(
-      filterBootstrapFilesForSession(rawFiles, sessionKey),
+      filterBootstrapFilesForSession(rawFiles, sessionKey, params.sessionChatType),
       workspaceSetupCompleted,
       params.workspaceDir,
     ),
@@ -279,13 +308,17 @@ export async function resolveBootstrapFilesForRun(params: {
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     agentId: params.agentId,
+    sessionChatType: params.sessionChatType,
   });
-  const filteredUpdated = filterCompletedWorkspaceBootstrapFile(
-    updated,
-    workspaceSetupCompleted,
+  return sanitizeBootstrapFiles(
+    enforcePrivateMemoryBoundary(
+      filterCompletedWorkspaceBootstrapFile(updated, workspaceSetupCompleted, params.workspaceDir),
+      sessionKey,
+      params.sessionChatType,
+    ),
     params.workspaceDir,
+    params.warn,
   );
-  return sanitizeBootstrapFiles(filteredUpdated, params.workspaceDir, params.warn);
 }
 
 /** Resolves both raw bootstrap metadata and bounded context files for a run. */
@@ -298,6 +331,7 @@ export async function resolveBootstrapContextForRun(params: {
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
+  sessionChatType?: SessionChatTypeHint | null;
 }): Promise<{
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];

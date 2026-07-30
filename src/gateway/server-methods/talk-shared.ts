@@ -22,6 +22,7 @@ import {
   listRealtimeTranscriptionProviders,
 } from "../../realtime-transcription/provider-registry.js";
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
+import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME } from "../../talk/agent-run-control-shared.js";
 import { resolveTalkSessionAgentId, resolveTalkTargetAgentId } from "../../talk/agent-target.js";
@@ -82,6 +83,7 @@ export async function resolveTalkRealtimeProviderInstructions(params: {
     (requestedSessionKey
       ? resolveTalkSessionAgentId(params.config, requestedSessionKey)
       : defaultAgentId);
+  const requestedChatType = deriveSessionChatTypeFromKey(requestedSessionKey);
   const bootstrapContext =
     params.requireSessionKeyForProfile && !requestedSessionKey
       ? undefined
@@ -90,6 +92,7 @@ export async function resolveTalkRealtimeProviderInstructions(params: {
           config: params.config,
           sessionKey: requestedSessionKey,
           warn: params.warn,
+          sessionChatType: requestedChatType !== "unknown" ? requestedChatType : undefined,
         });
   return {
     agentId,

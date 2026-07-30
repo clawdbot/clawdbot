@@ -191,6 +191,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
             sessionKey: params.sessionKey,
             sessionId: params.sessionId,
             agentId: effectiveSkillAgentId,
+            sessionChatType: params.chatType,
             warn: makeBootstrapWarn({
               sessionLabel,
               warn: (message) => log.warn(message),

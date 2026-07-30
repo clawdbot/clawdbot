@@ -21,6 +21,8 @@ import type {
 import type { MessageHookMediaFact } from "./message-hook-media.js";
 export type { InternalHookEvent, InternalHookEventType, InternalHookHandler };
 
+import type { SessionChatTypeHint } from "../sessions/session-chat-type-shared.js";
+
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
   bootstrapFiles: WorkspaceBootstrapFile[];
@@ -28,6 +30,7 @@ export type AgentBootstrapHookContext = {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  sessionChatType?: SessionChatTypeHint | null;
 };
 
 export type AgentBootstrapHookEvent = InternalHookEvent & {

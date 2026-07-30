@@ -772,6 +772,7 @@ export async function prepareCliRunContext(
         agentId: sessionAgentId,
         contextMode: params.bootstrapContextMode,
         runKind: params.bootstrapContextRunKind,
+        sessionChatType: params.sessionEntry?.chatType,
         warn: prepareDeps.makeBootstrapWarn({
           sessionLabel,
           workspaceDir,

@@ -23,6 +23,11 @@ export {
   type ParsedAgentSessionKey,
 } from "../sessions/session-key-utils.js";
 export {
+  isSharedChannelSessionKey,
+  isPrivateMemorySessionKey,
+  type SessionChatTypeHint,
+} from "../sessions/session-chat-type-shared.js";
+export {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   normalizeOptionalAccountId,

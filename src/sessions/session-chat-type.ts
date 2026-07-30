@@ -9,6 +9,8 @@ import { parseAgentSessionKey } from "./session-key-utils.js";
 
 // Session chat-type derivation first uses generic key parsing, then falls back
 // to bootstrap channel plugins for legacy platform-specific session keys.
+// Agents and bootstrap code must use deriveSessionChatTypeFromKey instead of
+// this function to keep channel-plugin discovery out of the agent hot path.
 type LegacySessionChatTypeDeriver = NonNullable<
   NonNullable<ReturnType<typeof getBootstrapChannelPlugin>>["messaging"]
 >["deriveLegacySessionChatType"];

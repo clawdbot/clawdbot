@@ -18,7 +18,12 @@ import {
   exactWorkspaceEntryExists,
 } from "../memory/root-memory-files.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
+import {
+  isCronSessionKey,
+  isSharedChannelSessionKey,
+  isSubagentSessionKey,
+  type SessionChatTypeHint,
+} from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import {
   MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
@@ -1010,9 +1015,19 @@ const CRON_BOOTSTRAP_ALLOWLIST = new Set([
   DEFAULT_USER_FILENAME,
 ]);
 
+const GROUP_CHANNEL_BOOTSTRAP_ALLOWLIST = new Set([
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_USER_FILENAME,
+  DEFAULT_HEARTBEAT_FILENAME,
+  DEFAULT_BOOTSTRAP_FILENAME,
+]);
+
 export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
   sessionKey?: string,
+  sessionChatType?: SessionChatTypeHint | null,
 ): WorkspaceBootstrapFile[] {
   if (!sessionKey) {
     return files;
@@ -1022,6 +1037,9 @@ export function filterBootstrapFilesForSession(
   }
   if (isCronSessionKey(sessionKey)) {
     return files.filter((file) => CRON_BOOTSTRAP_ALLOWLIST.has(file.name));
+  }
+  if (isSharedChannelSessionKey(sessionKey, sessionChatType)) {
+    return files.filter((file) => GROUP_CHANNEL_BOOTSTRAP_ALLOWLIST.has(file.name));
   }
   return files;
 }

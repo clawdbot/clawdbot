@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentBootstrapHookContext } from "../hooks/internal-hooks.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import type { SessionChatTypeHint } from "../sessions/session-chat-type-shared.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 /** Runs bootstrap hooks and returns the effective bootstrap file list. */
@@ -15,6 +16,7 @@ export async function applyBootstrapHookOverrides(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  sessionChatType?: SessionChatTypeHint | null;
 }): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId ?? "unknown";
   const agentId =
@@ -27,6 +29,7 @@ export async function applyBootstrapHookOverrides(params: {
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     agentId,
+    sessionChatType: params.sessionChatType,
   };
   const event = createInternalHookEvent("agent", "bootstrap", sessionKey, context);
   await triggerInternalHook(event);
