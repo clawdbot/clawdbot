@@ -168,8 +168,9 @@ context when those fields are present. Diff content is not interpreted as an
 OpenClaw command or textual mention.
 
 Typing uses Buzz's ephemeral kind `20002` on the active authenticated Gateway
-connection. OpenClaw refreshes it every three seconds while the turn is active
-and stops refreshing when the turn completes, is cancelled, fails, or the
+connection. Ordinary replies refresh it every three seconds; heartbeat-driven
+replies use OpenClaw's shared typing interval, which defaults to six seconds.
+OpenClaw stops refreshing when the turn completes, is cancelled, fails, or the
 Gateway shuts down. Typing failures do not block the reply or reconnect the
 Gateway solely to send an ephemeral event.
 
