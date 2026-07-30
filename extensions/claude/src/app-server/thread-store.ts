@@ -92,7 +92,10 @@ export async function withClaudeAppServerBindingLock<T>(
   const bindingPath = resolveClaudeAppServerBindingPath(sessionFile);
   const ownedBindings = bindingMutationContext.getStore();
   if (ownedBindings?.has(bindingPath)) {
-    return await withFileLock(bindingPath, CLAUDE_APP_SERVER_BINDING_LOCK_OPTIONS, run);
+    // This call chain already holds the queue slot and the file lock below.
+    // fs-safe locks are non-reentrant without an owner key, so re-acquiring
+    // here self-deadlocks into file_lock_timeout and fails the turn.
+    return await run();
   }
 
   const previous = bindingMutationQueues.get(bindingPath) ?? Promise.resolve();
