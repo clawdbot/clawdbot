@@ -173,26 +173,6 @@ enum MacNodeCodexThreadCatalog {
         var archived: Bool
     }
 
-    static func list(paramsJSON: String?) async throws -> String {
-        let client = CodexAppServerThreadClient()
-        return try await self.withEphemeralClient(client) {
-            try await self.list(
-                paramsJSON: paramsJSON,
-                loadRoot: { OpenClawConfigFile.loadDict() },
-                client: client)
-        }
-    }
-
-    static func turns(paramsJSON: String?) async throws -> String {
-        let client = CodexAppServerThreadClient()
-        return try await self.withEphemeralClient(client) {
-            try await self.turns(
-                paramsJSON: paramsJSON,
-                loadRoot: { OpenClawConfigFile.loadDict() },
-                client: client)
-        }
-    }
-
     static func list(
         paramsJSON: String?,
         loadRoot: () -> [String: Any]) async throws -> String
