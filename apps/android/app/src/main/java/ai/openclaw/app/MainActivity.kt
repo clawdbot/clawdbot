@@ -35,9 +35,6 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -50,8 +47,6 @@ class MainActivity : AppCompatActivity() {
   private var didStartViewModelCollectors = false
   private var foreground = false
   private val pendingIntentRouter = MainActivityPendingIntentRouter()
-  private val shareLaunchMutex = Mutex()
-  private val shareLaunchSlots = Semaphore(MAX_PENDING_CHAT_SHARES)
   private val runtimeUiStarter = MainActivityRuntimeUiStarter()
   private var screenshotScene: AndroidScreenshotScene? = null
 
@@ -123,9 +118,7 @@ class MainActivity : AppCompatActivity() {
       pendingIntentRouter.onNewIntent(intent) { routedIntent ->
         initializedViewModel?.let { handleLaunchIntent(viewModel = it, intent = routedIntent) }
       }
-    if (!accepted) {
-      Toast.makeText(this, nativeString("Too many shares are waiting to be added."), Toast.LENGTH_SHORT).show()
-    }
+    if (!accepted) return
   }
 
   override fun onRequestPermissionsResult(
@@ -155,6 +148,7 @@ class MainActivity : AppCompatActivity() {
     pendingIntentRouter.activate { initialIntent ->
       handleLaunchIntent(viewModel = readyViewModel, intent = initialIntent)
     }
+    readyViewModel.reportShareLaunchOverflow(pendingIntentRouter.takeShareOverflowCount())
   }
 
   /**
@@ -193,6 +187,22 @@ class MainActivity : AppCompatActivity() {
         }
       }
     }
+
+    lifecycleScope.launch {
+      repeatOnLifecycle(Lifecycle.State.STARTED) {
+        readyViewModel.shareLaunchOverflowRevision.collect { revision ->
+          if (revision == 0L) return@collect
+          repeat(readyViewModel.takeShareLaunchOverflowCount()) {
+            Toast
+              .makeText(
+                this@MainActivity,
+                nativeString("Too many shares are waiting to be added."),
+                Toast.LENGTH_SHORT,
+              ).show()
+          }
+        }
+      }
+    }
   }
 
   /**
@@ -203,23 +213,7 @@ class MainActivity : AppCompatActivity() {
     intent: Intent?,
   ) {
     if (intent?.isShareLaunchIntent() == true) {
-      if (!shareLaunchSlots.tryAcquire()) {
-        Toast.makeText(this, nativeString("Too many shares are waiting to be added."), Toast.LENGTH_SHORT).show()
-        return
-      }
-      val owner = viewModel.captureChatShareOwner()
-      lifecycleScope
-        .launch {
-          shareLaunchMutex.withLock {
-            val request =
-              withContext(Dispatchers.IO) {
-                parseShareLaunchIntent(intent, contentResolver::getType)
-              } ?: return@withLock
-            if (!viewModel.handleShareLaunch(request, owner)) {
-              Toast.makeText(this@MainActivity, nativeString("Too many shares are waiting to be added."), Toast.LENGTH_SHORT).show()
-            }
-          }
-        }.invokeOnCompletion { shareLaunchSlots.release() }
+      viewModel.handleShareLaunchIntent(intent)
       return
     }
     parseHomeDestinationIntent(intent)?.let { destination ->
@@ -243,6 +237,7 @@ internal class MainActivityPendingIntentRouter {
   private var sequence = 0L
   private val pendingShareIntents = ArrayDeque<PendingLaunchIntent>()
   private var pendingNonShareIntent: PendingLaunchIntent? = null
+  private var shareOverflowCount = 0
 
   fun setInitialIntent(intent: Intent?) {
     if (!activated && intent != null) store(intent = intent, initial = true)
@@ -276,6 +271,11 @@ internal class MainActivityPendingIntentRouter {
     return true
   }
 
+  fun takeShareOverflowCount(): Int =
+    shareOverflowCount.also {
+      shareOverflowCount = 0
+    }
+
   private fun store(
     intent: Intent,
     initial: Boolean,
@@ -285,7 +285,10 @@ internal class MainActivityPendingIntentRouter {
       pendingNonShareIntent = pending
       return true
     }
-    if (pendingShareIntents.size >= MAX_PENDING_CHAT_SHARES) return false
+    if (pendingShareIntents.size >= MAX_PENDING_CHAT_SHARES) {
+      shareOverflowCount += 1
+      return false
+    }
     pendingShareIntents.addLast(pending)
     return true
   }
