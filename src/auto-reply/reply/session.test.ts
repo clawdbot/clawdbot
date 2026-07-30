@@ -1013,6 +1013,75 @@ describe("initSessionState RawBody", () => {
     expect(result.triggerBodyNormalized).toBe("/NEW KeepThisCase");
   });
 
+  it.each([
+    {
+      body: "/new review this snippet:\ndef add(a, b):\nreturn a + b",
+      expected: "review this snippet:\ndef add(a, b):\nreturn a + b",
+    },
+    {
+      body: "/new Please fix this bug:\n[2026-07-29 10:00:00] ERROR: connection refused\nStack: at foo()",
+      expected:
+        "Please fix this bug:\n[2026-07-29 10:00:00] ERROR: connection refused\nStack: at foo()",
+    },
+    {
+      body: "/new summarize [Q3 report] for me",
+      expected: "summarize [Q3 report] for me",
+    },
+    {
+      body: "/new: take notes",
+      expected: "take notes",
+    },
+  ])("preserves the raw message after a reset trigger", async ({ body, expected }) => {
+    const root = await makeCaseDir("openclaw-rawbody-reset-message-");
+    const storePath = path.join(root, "sessions.json");
+    const result = await initSessionState({
+      ctx: {
+        RawBody: body,
+        ChatType: "direct",
+        SessionKey: "agent:main:whatsapp:dm:s1",
+      },
+      cfg: {
+        session: {
+          store: storePath,
+          resetTriggers: ["/new"],
+        },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.bodyStripped).toBe(expected);
+    expect(result.sessionCtx.agentText).toBe(expected);
+  });
+
+  it("uses the mention-stripped body for a group reset message", async () => {
+    const root = await makeCaseDir("openclaw-group-reset-message-");
+    const storePath = path.join(root, "sessions.json");
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "@openclaw /new take notes",
+        ChatType: "group",
+        SessionKey: "agent:main:whatsapp:group:g1",
+      },
+      cfg: {
+        session: {
+          store: storePath,
+          resetTriggers: ["/new"],
+        },
+        messages: {
+          groupChat: {
+            mentionPatterns: [String.raw`@openclaw`],
+          },
+        },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.bodyStripped).toBe("take notes");
+    expect(result.sessionCtx.agentText).toBe("take notes");
+  });
+
   it("drops cached skills snapshot when /new rotates an existing session", async () => {
     const root = await makeCaseDir("openclaw-rawbody-reset-skills-");
     const storePath = path.join(root, "sessions.json");

@@ -549,7 +549,8 @@ async function initSessionStateAttemptLocked(
   // Reset triggers are configured as lowercased commands (e.g. "/new"), but users may type
   // "/NEW" etc. Match case-insensitively while keeping the original casing for any stripped body.
   const trimmedBodyLower = normalizeLowercaseStringOrEmpty(trimmedBody);
-  const strippedForResetLower = normalizeLowercaseStringOrEmpty(normalizedResetBody);
+  const strippedForResetLower = normalizeLowercaseStringOrEmpty(strippedForReset);
+  const normalizedResetBodyLower = normalizeLowercaseStringOrEmpty(normalizedResetBody);
   let matchedResetTriggerLower: string | undefined;
 
   for (const trigger of resetTriggers) {
@@ -560,7 +561,11 @@ async function initSessionStateAttemptLocked(
       break;
     }
     const triggerLower = normalizeLowercaseStringOrEmpty(trigger);
-    if (trimmedBodyLower === triggerLower || strippedForResetLower === triggerLower) {
+    if (
+      trimmedBodyLower === triggerLower ||
+      strippedForResetLower === triggerLower ||
+      normalizedResetBodyLower === triggerLower
+    ) {
       isNewSession = true;
       bodyStripped = "";
       resetTriggered = true;
@@ -571,10 +576,16 @@ async function initSessionStateAttemptLocked(
     if (
       !softReset.matched &&
       (trimmedBodyLower.startsWith(triggerPrefixLower) ||
-        strippedForResetLower.startsWith(triggerPrefixLower))
+        strippedForResetLower.startsWith(triggerPrefixLower) ||
+        normalizedResetBodyLower.startsWith(triggerPrefixLower))
     ) {
       isNewSession = true;
-      bodyStripped = normalizedResetBody.slice(trigger.length).trimStart();
+      const matchedBody = trimmedBodyLower.startsWith(triggerPrefixLower)
+        ? trimmedBody
+        : strippedForResetLower.startsWith(triggerPrefixLower)
+          ? strippedForReset
+          : normalizedResetBody;
+      bodyStripped = matchedBody.slice(trigger.length).trimStart();
       resetTriggered = true;
       matchedResetTriggerLower = triggerLower;
       break;
