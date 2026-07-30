@@ -5,14 +5,27 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AgentRunTerminalOutcomeError } from "../agents/agent-run-terminal-outcome.js";
 import {
   ensureAuthProfileStore,
   findPersistedAuthProfileCredential,
   loadAuthProfileStoreForRuntime,
   resolvePersistedAuthProfileOwnerAgentDir,
 } from "../agents/auth-profiles.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/io.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { agentExecCommand, classifyAgentExecResult, resolveAgentExecPrompt } from "./agent-exec.js";
+import {
+  agentExecCommand,
+  buildExecRunConfig,
+  classifyAgentExecResult,
+  resolveAgentExecPrompt,
+  resolveExecBaseConfig,
+} from "./agent-exec.js";
 
 const tempRoots: string[] = [];
 const execFileAsync = promisify(execFile);
@@ -167,6 +180,27 @@ describe("agent exec strict result classification", () => {
     });
     expect(envelope.payloads).toEqual([{ text: "done", mediaUrl: null }]);
   });
+
+  it("projects the embedded outer tool summary", () => {
+    const envelope = classifyAgentExecResult({
+      payloads: [{ text: "done" }],
+      meta: {
+        durationMs: 10,
+        toolSummary: {
+          calls: 2,
+          tools: ["read", "write"],
+          failures: 1,
+          totalToolTimeMs: 25,
+        },
+      },
+    });
+    expect(envelope.toolSummary).toEqual({
+      calls: 2,
+      tools: ["read", "write"],
+      failures: 1,
+      totalToolTimeMs: 25,
+    });
+  });
 });
 
 describe("agent exec command composition", () => {
@@ -237,31 +271,105 @@ describe("agent exec command composition", () => {
     });
   });
 
+  it("maps embedded terminal-outcome timeouts to exit code 2", async () => {
+    const { runtime } = createRuntime();
+    const timeout = new AgentRunTerminalOutcomeError(
+      new Error("attempt aborted before prompt submission"),
+      {
+        reason: "hard_timeout",
+        status: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+    );
+
+    const result = await agentExecCommand("inspect", { json: true }, runtime, {
+      runAgent: vi.fn(async () => {
+        throw timeout;
+      }),
+    });
+
+    expect(result).toMatchObject({
+      exitCode: 2,
+      envelope: {
+        status: "timeout",
+        error: {
+          kind: "timeout",
+          message: "attempt aborted before prompt submission",
+        },
+      },
+    });
+  });
+
   it("creates and removes ephemeral state around the embedded run", async () => {
     const { runtime } = createRuntime();
     let observedStateDir = "";
+    let observedConfigPath: string | undefined;
     let observedConfig: unknown;
     const result = await agentExecCommand("inspect", {}, runtime, {
       runAgent: vi.fn(async () => {
         observedStateDir = process.env.OPENCLAW_STATE_DIR ?? "";
-        observedConfig = JSON.parse(
-          await fs.readFile(process.env.OPENCLAW_CONFIG_PATH ?? "", "utf8"),
-        );
+        observedConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+        // The published snapshot is what the run reads; exec writes no config file.
+        observedConfig = getRuntimeConfigSnapshot();
         await expect(fs.stat(observedStateDir)).resolves.toBeDefined();
         return successResult();
       }),
     });
 
     expect(result.exitCode).toBe(0);
+    expect(observedConfigPath).toBeUndefined();
+    await expect(fs.readdir(observedStateDir).catch(() => [])).resolves.not.toContain(
+      "openclaw.json",
+    );
     expect(observedConfig).toMatchObject({
       agents: { defaults: { skipBootstrap: true, sandbox: { mode: "off" } } },
       tools: {
         profile: "coding",
         fs: { workspaceOnly: true },
-        exec: { host: "gateway", mode: "full" },
+        exec: { mode: "full" },
       },
     });
     await expect(fs.stat(observedStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("applies explicit Code Mode and lean local-model controls to the isolated config", async () => {
+    const { runtime } = createRuntime();
+    let observedConfig: unknown;
+
+    const result = await agentExecCommand(
+      "inspect",
+      { codeMode: "code", localModelLean: true },
+      runtime,
+      {
+        runAgent: vi.fn(async () => {
+          observedConfig = getRuntimeConfigSnapshot();
+          return successResult();
+        }),
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(observedConfig).toMatchObject({
+      agents: { defaults: { experimental: { localModelLean: true } } },
+      tools: { codeMode: true },
+    });
+  });
+
+  it("rejects invalid programmatic Code Mode values", async () => {
+    const { runtime } = createRuntime();
+
+    const result = await agentExecCommand("inspect", { codeMode: "invalid" as never }, runtime, {
+      runAgent: vi.fn(async () => successResult()),
+    });
+
+    expect(result).toMatchObject({
+      exitCode: 1,
+      envelope: {
+        status: "error",
+        error: { kind: "exception", message: "--code-mode must be one of direct, auto, code." },
+      },
+    });
   });
 
   it("classifies cleanup failures before emitting the JSON envelope", async () => {
@@ -350,26 +458,114 @@ describe("agent exec command composition", () => {
     );
   });
 
-  it("keeps an explicit state directory and deletes only its temporary config", async () => {
+  it("undoes environment mutations made by loading the config", async () => {
+    const seedDir = await makeTempRoot("openclaw-agent-exec-envseed-");
+    const seedPath = path.join(seedDir, "openclaw.json");
+    await fs.writeFile(
+      seedPath,
+      JSON.stringify({ env: { vars: { OPENCLAW_EXEC_ENV_PROBE: "from-config" } } }),
+      "utf8",
+    );
+    const { runtime } = createRuntime();
+    let observedDuringRun: string | undefined;
+
+    await agentExecCommand("inspect", { config: seedPath }, runtime, {
+      runAgent: vi.fn(async () => {
+        observedDuringRun = process.env.OPENCLAW_EXEC_ENV_PROBE;
+        return successResult();
+      }),
+    });
+
+    expect(observedDuringRun).toBe("from-config");
+    // Config-applied values must not outlive the command, or a later isolated
+    // run in the same process would inherit them.
+    expect(process.env.OPENCLAW_EXEC_ENV_PROBE).toBeUndefined();
+  });
+
+  it("leaves no runtime config snapshot behind when the caller had none", async () => {
+    clearRuntimeConfigSnapshot();
+    const { runtime } = createRuntime();
+
+    await agentExecCommand("inspect", {}, runtime, {
+      runAgent: vi.fn(async () => successResult()),
+    });
+
+    // Resolving the ambient config pins a snapshot of its own, so "previous" has
+    // to be read before that happens or cleanup reinstalls exec's own load.
+    expect(getRuntimeConfigSnapshot() ?? undefined).toBeUndefined();
+  });
+
+  it("restores a caller's runtime config snapshot after the run", async () => {
+    const callerSnapshot = {
+      models: { providers: { caller: { baseUrl: "https://caller.invalid", models: [] } } },
+    };
+    setRuntimeConfigSnapshot(callerSnapshot);
+    const { runtime } = createRuntime();
+    let observedDuringRun: string | undefined;
+
+    try {
+      await agentExecCommand("inspect", {}, runtime, {
+        runAgent: vi.fn(async () => {
+          observedDuringRun = getRuntimeConfigSnapshot()?.tools?.profile;
+          return successResult();
+        }),
+      });
+
+      // The run sees exec's composed config...
+      expect(observedDuringRun).toBe("coding");
+      // ...and the caller gets its own back afterwards.
+      expect(getRuntimeConfigSnapshot()?.models?.providers?.caller?.baseUrl).toBe(
+        "https://caller.invalid",
+      );
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
+  it("publishes no config env values when the config load fails", async () => {
+    const seedDir = await makeTempRoot("openclaw-agent-exec-badenv-");
+    const seedPath = path.join(seedDir, "openclaw.json");
+    // The loader owns this: it applies `env.vars` only after validation passes,
+    // and restores them from its own catch. Pinned here because the observable
+    // contract matters regardless of which layer enforces it.
+    await fs.writeFile(
+      seedPath,
+      JSON.stringify({
+        env: { vars: { OPENCLAW_EXEC_FAILED_PROBE: "from-rejected-config" } },
+        agents: { defaults: { sandbox: { mode: "not-a-real-mode" } } },
+      }),
+      "utf8",
+    );
+    const { runtime } = createRuntime();
+
+    const result = await agentExecCommand("inspect", { config: seedPath }, runtime, {
+      runAgent: vi.fn(async () => successResult()),
+    });
+
+    expect(result.exitCode).not.toBe(0);
+    expect(process.env.OPENCLAW_EXEC_FAILED_PROBE).toBeUndefined();
+  });
+
+  it("leaves an explicit state directory untouched", async () => {
     const stateDir = await makeTempRoot("openclaw-agent-exec-state-");
     const marker = path.join(stateDir, "keep.txt");
     await fs.writeFile(marker, "keep", "utf8");
     const { runtime } = createRuntime();
-    let configPath = "";
 
     await agentExecCommand("inspect", { stateDir }, runtime, {
       runAgent: vi.fn(async () => {
-        configPath = process.env.OPENCLAW_CONFIG_PATH ?? "";
         expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
         return successResult();
       }),
     });
 
     await expect(fs.readFile(marker, "utf8")).resolves.toBe("keep");
-    await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+    // The run config inherits the ambient config, so a retained state dir must
+    // never receive a serialized copy of it.
+    await expect(fs.readdir(stateDir)).resolves.toEqual(["keep.txt"]);
   });
 
-  it("skips external Codex CLI credentials in default auth-env-only mode", async () => {
+  it("skips external Codex CLI credentials under --auth-env-only", async () => {
     const codexHome = await makeTempRoot("openclaw-agent-exec-codex-home-");
     await fs.writeFile(
       path.join(codexHome, "auth.json"),
@@ -393,7 +589,7 @@ describe("agent exec command composition", () => {
     try {
       const { withHostExecInheritedEnvOmitted } = await import("../infra/host-env-security.js");
       await withHostExecInheritedEnvOmitted(["DATABASE_URL"], () =>
-        agentExecCommand("inspect", {}, runtime, {
+        agentExecCommand("inspect", { authEnvOnly: true }, runtime, {
           runAgent: vi.fn(async () => {
             profileIds = Object.keys(
               ensureAuthProfileStore(undefined, {
@@ -439,7 +635,42 @@ describe("agent exec command composition", () => {
     expect(hostExecDatabaseUrl).toBeUndefined();
   });
 
-  it("blocks direct persisted credential reads in default auth-env-only mode", async () => {
+  it("reads stored credentials from the configured agent directory", async () => {
+    const stateDir = await makeTempRoot("openclaw-agent-exec-cfg-auth-");
+    const customAgentDir = path.join(stateDir, "custom-home");
+    await fs.mkdir(customAgentDir, { recursive: true });
+    const seedPath = path.join(stateDir, "openclaw.json");
+    await fs.writeFile(
+      seedPath,
+      JSON.stringify({
+        agents: { entries: { main: { agentDir: customAgentDir } } },
+      }),
+      "utf8",
+    );
+    const { saveAuthProfileStore } = await import("../agents/auth-profiles.js");
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: { "openai:stored": { type: "api_key", provider: "openai", key: "test-key" } },
+      },
+      customAgentDir,
+    );
+    const { runtime } = createRuntime();
+    let scopedProfileIds: string[] = [];
+
+    await agentExecCommand("inspect", { config: seedPath }, runtime, {
+      runAgent: vi.fn(async () => {
+        scopedProfileIds = Object.keys(loadAuthProfileStoreForRuntime()?.profiles ?? {});
+        return successResult();
+      }),
+    });
+
+    // The run config strips agentDir to keep run state ephemeral, but credential
+    // ownership must still follow the operator's configured directory.
+    expect(scopedProfileIds).toContain("openai:stored");
+  });
+
+  it("blocks direct persisted credential reads under --auth-env-only", async () => {
     const normalStateDir = await makeTempRoot("openclaw-agent-exec-hidden-auth-");
     const normalAgentDir = path.join(normalStateDir, "agents", "main", "agent");
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -458,7 +689,7 @@ describe("agent exec command composition", () => {
     let persistedCredential: unknown;
     let ownerAgentDir: string | undefined;
     try {
-      await agentExecCommand("inspect", {}, runtime, {
+      await agentExecCommand("inspect", { authEnvOnly: true }, runtime, {
         runAgent: vi.fn(async () => {
           persistedCredential = findPersistedAuthProfileCredential({
             agentDir: normalAgentDir,
@@ -522,5 +753,205 @@ describe("agent exec command composition", () => {
     }
 
     expect(profileIds).toContain("openai:stored");
+  });
+});
+
+describe("agent exec run config layering", () => {
+  it("keeps the run scoped to the invocation folder over any config", () => {
+    const config = buildExecRunConfig({
+      base: { agents: { defaults: { workspace: "/elsewhere", skipBootstrap: false } } },
+      cwd: "/run/here",
+    });
+
+    expect(config.agents?.defaults?.workspace).toBe("/run/here");
+    expect(config.agents?.defaults?.skipBootstrap).toBe(true);
+  });
+
+  it("never downgrades a configured sandbox or shell env to the exec defaults", () => {
+    const config = buildExecRunConfig({
+      base: {
+        env: { shellEnv: { enabled: true } },
+        agents: { defaults: { sandbox: { mode: "all" } } },
+        tools: { profile: "full" },
+      },
+      cwd: "/run/here",
+    });
+
+    expect(config.agents?.defaults?.sandbox?.mode).toBe("all");
+    expect(config.env?.shellEnv?.enabled).toBe(true);
+    expect(config.tools?.profile).toBe("full");
+  });
+
+  it("applies coding one-shot defaults when the config leaves them unset", () => {
+    const config = buildExecRunConfig({ base: {}, cwd: "/run/here" });
+
+    expect(config.agents?.defaults?.sandbox?.mode).toBe("off");
+    expect(config.env?.shellEnv?.enabled).toBe(false);
+    expect(config.tools?.profile).toBe("coding");
+    expect(config.tools?.fs?.workspaceOnly).toBe(true);
+  });
+
+  it("leaves exec host routing to the configured sandbox", () => {
+    const sandboxed = buildExecRunConfig({
+      base: { agents: { defaults: { sandbox: { mode: "all" } } } },
+      cwd: "/run/here",
+    });
+
+    expect(sandboxed.agents?.defaults?.sandbox?.mode).toBe("all");
+    expect(sandboxed.tools?.exec?.host).toBeUndefined();
+    expect(buildExecRunConfig({ base: {}, cwd: "/run/here" }).tools?.exec?.host).toBeUndefined();
+  });
+
+  it("carries config-owned provider and harness surfaces into the run", () => {
+    const config = buildExecRunConfig({
+      base: {
+        models: { providers: { custom: { baseUrl: "https://example.invalid", models: [] } } },
+        tools: { codeMode: { enabled: true } },
+      },
+      cwd: "/run/here",
+    });
+
+    expect(config.models?.providers?.custom?.baseUrl).toBe("https://example.invalid");
+    expect(config.tools?.codeMode).toMatchObject({ enabled: true });
+  });
+
+  it("pins per-agent workspaces to the invocation folder", () => {
+    const config = buildExecRunConfig({
+      base: { agents: { entries: { ops: { workspace: "/elsewhere" } } } },
+      cwd: "/run/here",
+    });
+
+    expect(config.agents?.entries?.ops?.workspace).toBe("/run/here");
+  });
+
+  it("drops inherited agent directories so run state stays in the state dir", () => {
+    const config = buildExecRunConfig({
+      base: {
+        agents: {
+          entries: { ops: { agentDir: "/persistent/agents/ops", model: "openai/gpt-5.6-sol" } },
+        },
+      },
+      cwd: "/run/here",
+    });
+
+    expect(config.agents?.entries?.ops?.agentDir).toBeUndefined();
+    // Only the directory is dropped; the rest of the entry is still inherited.
+    expect(config.agents?.entries?.ops?.model).toBe("openai/gpt-5.6-sol");
+  });
+
+  it("drops an inherited harness cwd so --cwd wins", () => {
+    const config = buildExecRunConfig({
+      base: {
+        agents: {
+          entries: {
+            ops: { runtime: { type: "acp", acp: { agent: "codex", cwd: "/other/repo" } } },
+          },
+        },
+      },
+      cwd: "/run/here",
+    });
+
+    const runtime = config.agents?.entries?.ops?.runtime;
+    expect(runtime?.type === "acp" ? runtime.acp?.cwd : "unset").toBeUndefined();
+    // The rest of the harness selection survives.
+    expect(runtime?.type === "acp" ? runtime.acp?.agent : undefined).toBe("codex");
+  });
+
+  it("lets explicit flags outrank the resolved config", () => {
+    const config = buildExecRunConfig({
+      base: { tools: { codeMode: { enabled: true } } },
+      cwd: "/run/here",
+      opts: { codeMode: "direct", localModelLean: true },
+    });
+
+    expect(config.tools?.codeMode).toBe(false);
+    expect(config.agents?.defaults?.experimental?.localModelLean).toBe(true);
+  });
+});
+
+describe("agent exec base config resolution", () => {
+  const seedConfig = {
+    models: {
+      providers: {
+        custom: {
+          apiKey: "sk-config",
+          baseUrl: "https://example.invalid",
+          headers: { Authorization: "Bearer header-secret" },
+          request: { auth: { mode: "authorization-bearer", token: "request-secret" } },
+          models: [],
+        },
+      },
+    },
+  } satisfies OpenClawConfig;
+
+  async function writeSeed(body: string): Promise<string> {
+    const dir = await makeTempRoot("openclaw-agent-exec-seed-");
+    const seedPath = path.join(dir, "openclaw.json");
+    await fs.writeFile(seedPath, body, "utf8");
+    return seedPath;
+  }
+
+  it("rejects a missing or invalid pinned config instead of falling back", async () => {
+    const missing = path.join(await makeTempRoot("openclaw-agent-exec-seed-"), "absent.json");
+    await expect(resolveExecBaseConfig({ config: missing })).rejects.toThrow(
+      "--config file not found",
+    );
+
+    const broken = await writeSeed("{ this is not a config");
+    await expect(resolveExecBaseConfig({ config: broken })).rejects.toThrow();
+  });
+
+  it("reads the pinned file even when a runtime snapshot is already published", async () => {
+    const seedPath = await writeSeed(
+      JSON.stringify({
+        models: { providers: { custom: { baseUrl: "https://from-file.invalid", models: [] } } },
+      }),
+    );
+    setRuntimeConfigSnapshot({
+      models: { providers: { custom: { baseUrl: "https://from-snapshot.invalid", models: [] } } },
+    });
+
+    try {
+      const resolved = await resolveExecBaseConfig({ config: seedPath });
+      expect(resolved.models?.providers?.custom?.baseUrl).toBe("https://from-file.invalid");
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
+  it("reads --config through the JSON5-aware loader", async () => {
+    const seedPath = await writeSeed(
+      `{\n  // pinned run config\n  models: { providers: { custom: { baseUrl: "https://example.invalid", models: [] } } },\n}\n`,
+    );
+
+    const resolved = await resolveExecBaseConfig({ config: seedPath });
+
+    expect(resolved.models?.providers?.custom?.baseUrl).toBe("https://example.invalid");
+  });
+
+  it("rejects --config paired with a mode that reads no config", async () => {
+    const seedPath = await writeSeed(JSON.stringify(seedConfig));
+
+    await expect(resolveExecBaseConfig({ config: seedPath, isolated: true })).rejects.toThrow(
+      "--config cannot be combined with --isolated",
+    );
+    await expect(resolveExecBaseConfig({ config: seedPath, authEnvOnly: true })).rejects.toThrow(
+      "--config cannot be combined with --auth-env-only",
+    );
+  });
+
+  it("reads no config at all under --auth-env-only", async () => {
+    const seedPath = await writeSeed(JSON.stringify(seedConfig));
+
+    // A config can supply provider credentials through several surfaces, so
+    // env-only means no config at all.
+    await expect(resolveExecBaseConfig({ authEnvOnly: true })).resolves.toEqual({});
+    // Proves the assertion above is not vacuous.
+    const inherited = await resolveExecBaseConfig({ config: seedPath });
+    expect(inherited.models?.providers?.custom?.apiKey).toBe("sk-config");
+  });
+
+  it("ignores the ambient config under --isolated", async () => {
+    await expect(resolveExecBaseConfig({ isolated: true })).resolves.toEqual({});
   });
 });

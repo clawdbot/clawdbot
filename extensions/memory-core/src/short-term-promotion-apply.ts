@@ -10,16 +10,15 @@ import {
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
+  appendConsolidationSkippedSummary,
+  appendConsolidationSummary,
+  storeMemoryPreimage,
+} from "./dreaming-consolidation-artifacts.js";
+import {
   isConsolidationCandidateEligible,
   isPromotionOriginBlocked,
 } from "./dreaming-consolidation-candidates.js";
-import {
-  applyMemoryConsolidationPlan,
-  appendConsolidationSkippedSummary,
-  appendConsolidationSummary,
-  consolidateMemory,
-  storeMemoryPreimage,
-} from "./dreaming-consolidation.js";
+import { applyMemoryConsolidationPlan, consolidateMemory } from "./dreaming-consolidation.js";
 import {
   DREAMING_DAILY_PROVENANCE_NAMESPACE,
   readMemoryCoreWorkspaceEntries,
@@ -33,7 +32,10 @@ import {
   resolveMemoryWritePath,
   writeMemoryContent,
 } from "./short-term-promotion-memory-write.js";
-import { buildPromotionRecallAnnotations } from "./short-term-promotion-metadata.js";
+import {
+  buildPromotionRecallAnnotations,
+  groupPromotionCandidatesByProjectKey,
+} from "./short-term-promotion-metadata.js";
 import { resolveShortTermSourcePathCandidates } from "./short-term-promotion-record.js";
 import { rehydratePromotionCandidate } from "./short-term-promotion-rehydrate.js";
 import { readStore, withShortTermLock, writeStore } from "./short-term-promotion-store.js";
@@ -70,17 +72,26 @@ function buildPromotionSection(
 ): string {
   const sectionDate = formatMemoryDreamingDay(nowMs, timezone);
   const lines = ["", `## Promoted From Short-Term Memory (${sectionDate})`, ""];
+  const projectGroups = groupPromotionCandidatesByProjectKey(candidates);
 
-  for (const candidate of candidates) {
-    const source = `${candidate.path}:${candidate.startLine}-${candidate.endLine}`;
-    const metadata = `[score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`;
-    lines.push(`<!-- ${PROMOTION_MARKER_PREFIX}${candidate.key} -->`);
-    // Cap only the visible MEMORY.md text. The recall store keeps the full
-    // rehydrated snippet so ranking, provenance, and dream narratives remain
-    // tied to the source entry instead of this presentation budget.
-    lines.push(
-      `- ${formatPromotedSnippetForMemory(candidate.snippet, maxPromotedSnippetTokens)} ${metadata} ${buildPromotionRecallAnnotations(candidate)}`,
-    );
+  for (const { projectKey, candidates: groupCandidates } of projectGroups) {
+    if (projectGroups.length > 1) {
+      lines.push(projectKey ? `### Project: ${projectKey}` : "### Global", "");
+    }
+    for (const candidate of groupCandidates) {
+      const source = `${candidate.path}:${candidate.startLine}-${candidate.endLine}`;
+      const metadata = `[score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`;
+      lines.push(`<!-- ${PROMOTION_MARKER_PREFIX}${candidate.key} -->`);
+      // Cap only the visible MEMORY.md text. The recall store keeps the full
+      // rehydrated snippet so ranking, provenance, and dream narratives remain
+      // tied to the source entry instead of this presentation budget.
+      lines.push(
+        `- ${formatPromotedSnippetForMemory(candidate.snippet, maxPromotedSnippetTokens)} ${metadata} ${buildPromotionRecallAnnotations(candidate)}`,
+      );
+    }
+    if (projectGroups.length > 1) {
+      lines.push("");
+    }
   }
 
   lines.push("");
@@ -154,6 +165,7 @@ function consolidationCandidateFingerprint(candidate: PromotionCandidate): strin
     endLine: candidate.endLine,
     snippet: candidate.snippet,
     provenance: candidate.provenance,
+    projectKey: candidate.projectKey,
   });
 }
 

@@ -241,7 +241,13 @@ describe("routeReply", () => {
   });
 
   it("suppresses reasoning payloads", async () => {
-    await expectSlackNoDelivery({ text: "step", isReasoning: true });
+    await expect(expectSlackNoDelivery({ text: "step", isReasoning: true })).resolves.toMatchObject(
+      {
+        delivered: false,
+        suppressed: true,
+        reason: "reasoning_payload_not_external",
+      },
+    );
   });
 
   it("drops silent token payloads", async () => {
@@ -546,6 +552,7 @@ describe("routeReply", () => {
 
     expect(res).toEqual({
       ok: true,
+      delivered: false,
       suppressed: true,
       reason: "cancelled_by_reply_payload_sending_hook",
     });
@@ -585,6 +592,7 @@ describe("routeReply", () => {
 
     expect(res).toEqual({
       ok: true,
+      delivered: false,
       suppressed: true,
       reason: "cancelled_by_reply_payload_sending_hook",
     });
@@ -616,6 +624,7 @@ describe("routeReply", () => {
 
     expect(res).toEqual({
       ok: true,
+      delivered: false,
       suppressed: true,
       reason: "empty_after_reply_payload_sending_hook",
     });

@@ -45,6 +45,7 @@ export type CreateOpenClawToolsOptions = {
   fsPolicy?: ToolFsPolicy;
   sandboxed?: boolean;
   config?: OpenClawConfig;
+  webSearchEnabled?: boolean;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
   pluginToolAllowlist?: string[];

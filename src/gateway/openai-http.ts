@@ -7,6 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
@@ -282,7 +283,7 @@ function writeAssistantRoleChunk(res: ServerResponse, params: { runId: string; m
 
 function writeAssistantContentChunk(
   res: ServerResponse,
-  params: { runId: string; model: string; content: string; finishReason: "stop" | null },
+  params: { runId: string; model: string; content: string },
 ) {
   writeSse(res, {
     id: params.runId,
@@ -293,7 +294,7 @@ function writeAssistantContentChunk(
       {
         index: 0,
         delta: { content: params.content },
-        finish_reason: params.finishReason,
+        finish_reason: null,
       },
     ],
   });
@@ -324,8 +325,14 @@ function splitArgumentsForStreaming(argumentsValue: string): string[] {
   }
   const chunkSize = 256;
   const chunks: string[] = [];
-  for (let i = 0; i < argumentsValue.length; i += chunkSize) {
-    chunks.push(argumentsValue.slice(i, i + chunkSize));
+  for (let start = 0; start < argumentsValue.length;) {
+    const end = avoidTrailingHighSurrogateBreak(
+      argumentsValue,
+      start,
+      Math.min(start + chunkSize, argumentsValue.length),
+    );
+    chunks.push(argumentsValue.slice(start, end));
+    start = end;
   }
   return chunks.length > 0 ? chunks : [""];
 }
@@ -1182,17 +1189,19 @@ export async function handleOpenAiHttpRequest(
   let wroteRole = false;
   let wroteStopChunk = false;
   let sawAssistantDelta = false;
+  let streamedAssistantText = "";
   let bufferedAssistantContent = "";
   let bufferedReplaceableAssistantContent = "";
   let finalUsage: OpenAiChatCompletionsUsage | undefined;
   let finalizeRequested = false;
+  let finalizeScheduled = false;
   let finalizeFinishReason: "stop" | "tool_calls" = "stop";
   let resultResolved = false;
   let closed = false;
   let stopWatchingDisconnect = () => {};
 
   const maybeFinalize = () => {
-    if (closed || !finalizeRequested) {
+    if (closed || finalizeScheduled || !finalizeRequested) {
       return;
     }
     if (!resultResolved) {
@@ -1201,22 +1210,32 @@ export async function handleOpenAiHttpRequest(
     if (streamIncludeUsage && !finalUsage) {
       return;
     }
-    closed = true;
-    stopWatchingDisconnect();
-    unsubscribe();
-    if (!wroteStopChunk) {
-      writeAssistantFinishChunk(res, { runId, model, finishReason: finalizeFinishReason });
-      wroteStopChunk = true;
-    }
-    if (streamIncludeUsage && finalUsage) {
-      writeUsageChunk(res, { runId, model, usage: finalUsage });
-    }
-    writeDone(res);
-    res.end();
+    // Agent text_end flushes run in a microtask. Keep the stream subscribed
+    // until those same-turn deltas arrive, then emit exactly one terminal frame.
+    finalizeScheduled = true;
+    queueMicrotask(() => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      stopWatchingDisconnect();
+      unsubscribe();
+      if (!wroteStopChunk) {
+        writeAssistantFinishChunk(res, { runId, model, finishReason: finalizeFinishReason });
+        wroteStopChunk = true;
+      }
+      if (streamIncludeUsage && finalUsage) {
+        writeUsageChunk(res, { runId, model, usage: finalUsage });
+      }
+      writeDone(res);
+      res.end();
+    });
   };
 
   const requestFinalize = (finishReason: "stop" | "tool_calls" = "stop") => {
-    finalizeFinishReason = finishReason;
+    if (!finalizeRequested || finishReason === "tool_calls") {
+      finalizeFinishReason = finishReason;
+    }
     finalizeRequested = true;
     maybeFinalize();
   };
@@ -1244,10 +1263,16 @@ export async function handleOpenAiHttpRequest(
         return;
       }
 
-      const content = resolveAssistantStreamDeltaText(evt) ?? "";
+      // Snapshots include prefixes held during tag-boundary filtering; the raw
+      // delta alone can omit a literal leading less-than.
+      const content =
+        typeof text === "string" && text.startsWith(streamedAssistantText)
+          ? text.slice(streamedAssistantText.length)
+          : resolveAssistantStreamDeltaText(evt);
       if (!content) {
         return;
       }
+      streamedAssistantText += content;
 
       // Hold prose until the run proves the requested client-tool call exists.
       // If the provider ignores `tool_choice`, no partial text should leak
@@ -1267,7 +1292,6 @@ export async function handleOpenAiHttpRequest(
         runId,
         model,
         content,
-        finishReason: null,
       });
       return;
     }
@@ -1345,7 +1369,6 @@ export async function handleOpenAiHttpRequest(
               runId,
               model,
               content: commentary,
-              finishReason: null,
             });
           }
         }
@@ -1375,7 +1398,6 @@ export async function handleOpenAiHttpRequest(
           runId,
           model,
           content,
-          finishReason: null,
         });
       }
       requestFinalize();
@@ -1411,9 +1433,7 @@ export async function handleOpenAiHttpRequest(
         runId,
         model,
         content,
-        finishReason: "stop",
       });
-      wroteStopChunk = true;
       finalUsage = {
         prompt_tokens: 0,
         completion_tokens: 0,

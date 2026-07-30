@@ -67,6 +67,16 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
       `Invalid --mode "${String(opts.mode)}". Use "local" or "remote", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
     );
   }
+  const remoteOnlyFlags = [
+    opts.remoteUrl !== undefined ? "--remote-url" : undefined,
+    opts.remoteToken !== undefined ? "--remote-token" : undefined,
+  ].filter((flag): flag is string => flag !== undefined);
+  if (opts.nonInteractive && (opts.mode ?? "local") === "local" && remoteOnlyFlags.length > 0) {
+    return rejectOption(
+      runtime,
+      `${remoteOnlyFlags.join(" and ")} ${remoteOnlyFlags.length === 1 ? "requires" : "require"} --mode remote in non-interactive setup.`,
+    );
+  }
   const choiceValidations: Array<readonly [string, string | undefined, readonly string[]]> = [
     ["--gateway-bind", opts.gatewayBind, ["loopback", "tailnet", "lan", "auto", "custom"]],
     ["--gateway-auth", opts.gatewayAuth, ["token", "password"]],
@@ -473,6 +483,13 @@ export async function setupWizardCommand(
     runtime.exit(1);
     return;
   }
+  if (normalizedOpts.tui && normalizedOpts.nonInteractive) {
+    runtime.error(
+      "--tui cannot be combined with --non-interactive. Remove --tui for automation, or remove --non-interactive to open the terminal hatch.",
+    );
+    runtime.exit(1);
+    return;
+  }
   if (
     normalizedOpts.secretInputMode &&
     normalizedOpts.secretInputMode !== "plaintext" && // pragma: allowlist secret
@@ -488,6 +505,13 @@ export async function setupWizardCommand(
   if (normalizedOpts.resetScope && !VALID_RESET_SCOPES.has(normalizedOpts.resetScope)) {
     runtime.error(
       `Invalid --reset-scope. Use "config", "config+creds+sessions", or "full". Run ${formatCliCommand("openclaw onboard --reset --reset-scope config")} for a config-only reset.`,
+    );
+    runtime.exit(1);
+    return;
+  }
+  if (normalizedOpts.resetScope && !normalizedOpts.reset) {
+    runtime.error(
+      `--reset-scope requires --reset. Re-run with ${formatCliCommand(`openclaw onboard --reset --reset-scope ${normalizedOpts.resetScope}`)}.`,
     );
     runtime.exit(1);
     return;

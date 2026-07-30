@@ -30,6 +30,7 @@ type CliDispatchTranscriptToolEvent = {
   args?: Record<string, unknown>;
   result?: unknown;
   isError?: boolean;
+  resultContentSource?: "network";
 };
 
 type CliDispatchTranscriptRecorder = {
@@ -64,11 +65,13 @@ export function createCliDispatchTranscriptRecorder(params: {
   model?: string;
   cwd?: string;
   config?: OpenClawConfig;
+  senderIsOwner?: boolean;
 }): CliDispatchTranscriptRecorder {
   let tail: Promise<void> = Promise.resolve();
   let lastAssistantText = "";
   let lastWrittenAssistantText = "";
   let finalized = false;
+  let turnTainted = false;
   let toolRecordSequence = 0;
 
   // appendTranscriptMessage resolves its SQLite target from storePath, not
@@ -113,12 +116,24 @@ export function createCliDispatchTranscriptRecorder(params: {
   const buildZeroUsageAssistantMessage = (
     content: AssistantBuildParams["content"],
     stopReason: AssistantBuildParams["stopReason"],
-  ) => buildAssistantMessage({ model, content, stopReason, usage: buildUsageWithNoCost({}) });
+    tainted = turnTainted,
+  ) => {
+    const message = buildAssistantMessage({
+      model,
+      content,
+      stopReason,
+      usage: buildUsageWithNoCost({}),
+    });
+    return tainted ? ({ ...message, __openclaw: { turnTainted: true } } as AgentMessage) : message;
+  };
 
   enqueue(() => ({
     role: "user",
     content: [{ type: "text", text: params.prompt }],
     timestamp: Date.now(),
+    ...(params.senderIsOwner !== undefined
+      ? { __openclaw: { senderIsOwner: params.senderIsOwner } }
+      : {}),
   }));
 
   return {
@@ -130,6 +145,7 @@ export function createCliDispatchTranscriptRecorder(params: {
       const toolCallId =
         event.toolCallId?.trim() || `${params.runId}-tool-${String(toolRecordSequence)}`;
       if (event.phase === "start") {
+        const taintedAtStart = turnTainted;
         enqueue(() =>
           buildZeroUsageAssistantMessage(
             [
@@ -143,10 +159,12 @@ export function createCliDispatchTranscriptRecorder(params: {
               },
             ],
             "toolUse",
+            taintedAtStart,
           ),
         );
         return;
       }
+      turnTainted ||= event.resultContentSource === "network";
       enqueue(() => ({
         role: "toolResult",
         toolCallId,
@@ -155,6 +173,9 @@ export function createCliDispatchTranscriptRecorder(params: {
         details: readToolResultDetails(event.result),
         isError: event.isError === true,
         timestamp: Date.now(),
+        ...(event.resultContentSource
+          ? { __openclaw: { resultContentSource: event.resultContentSource } }
+          : {}),
       }));
     },
     noteAssistantText: (text) => {

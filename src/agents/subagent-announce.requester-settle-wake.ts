@@ -255,9 +255,11 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   const hasUndeliveredRequiredCompletion = requiredSettled.some(
     (entry) => entry.delivery?.status !== "delivered",
   );
-  // A frozen single-child batch can be re-admitted after its requester yielded.
-  // The earlier steered completion died with that run, so the idle requester needs a fresh turn.
-  const requesterYieldedAfterDelivery = selectedState.afterRequesterYield === true;
+  // A yielded batch owns a rearm generation even when its child settles later.
+  // Otherwise a delivered single child clears the batch before its requester wakes.
+  const requesterYieldedAfterDelivery =
+    selectedState.afterRequesterYield === true ||
+    (selectedState.requesterYieldBatch === true && selectedState.rearmGeneration !== undefined);
   if (
     requiredSettled.length === 0 ||
     (requiredSettled.length < 2 &&

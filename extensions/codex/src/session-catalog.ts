@@ -124,7 +124,7 @@ const boundCatalogSessionId = (value: unknown) =>
   boundedCatalogString(value, MAX_SESSION_ID_LENGTH);
 
 const CODEX_SUPERVISION_SESSION_KEY_PREFIX = "harness:codex:supervision:";
-const CODEX_SESSION_CATALOG_LIST_TTL_MS = 3_000;
+const CODEX_SESSION_CATALOG_LIST_TTL_MS = 32_000;
 const CODEX_SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES = 32;
 
 type CodexCatalogRequestOptions = {
@@ -135,6 +135,8 @@ type CodexCatalogRequestOptions = {
 type CodexCatalogPageCacheEntry = {
   expiresAt: number;
   page: Promise<CodexSessionCatalogPage>;
+  settledPage?: Promise<CodexSessionCatalogPage>;
+  stalePage?: Promise<CodexSessionCatalogPage>;
 };
 
 function codexCatalogPageCacheKey(params: CodexSessionCatalogPageParams): string {
@@ -428,18 +430,71 @@ export function createCodexSessionCatalogControl(params: {
       }
       const key = codexCatalogPageCacheKey(pageParams);
       const cached = cache.get(key);
-      if (pageParams.forceRefresh !== true && cached && cached.expiresAt > now()) {
-        // The app-server may scan rollout metadata for thread/list. Share a page for three seconds;
-        // config identity and forceRefresh invalidate it so specific actions cannot miss new rows.
+      if (pageParams.forceRefresh !== true && cached) {
+        // A settled page always serves immediately. Expiry only starts one background refresh;
+        // its result becomes visible on the next poll (one polling cycle, about 30s, for a native
+        // session created outside OpenClaw). The TTL is a refresh trigger, never a serve gate.
         cache.delete(key);
         cache.set(key, cached);
-        return await cached.page;
+        if (cached.stalePage) {
+          return await cached.stalePage;
+        }
+        if (cached.expiresAt > now()) {
+          return await cached.page;
+        }
+
+        const stalePage = cached.settledPage;
+        if (!stalePage) {
+          return await cached.page;
+        }
+        const page = control.listPage(pageParams);
+        const entry: CodexCatalogPageCacheEntry = {
+          expiresAt: Number.POSITIVE_INFINITY,
+          page,
+          settledPage: stalePage,
+          stalePage,
+        };
+        cache.set(key, entry);
+        void page.then(
+          () => {
+            if (cache.get(key) === entry) {
+              delete entry.stalePage;
+              entry.settledPage = page;
+              entry.expiresAt = now() + CODEX_SESSION_CATALOG_LIST_TTL_MS;
+            }
+          },
+          async () => {
+            let stale: CodexSessionCatalogPage | undefined;
+            try {
+              stale = await stalePage;
+            } catch {
+              // A still-pending cold fill is not a real stale page.
+            }
+            if (cache.get(key) !== entry) {
+              return;
+            }
+            if (stale) {
+              cache.delete(key);
+              const settledPage = Promise.resolve(stale);
+              cache.set(key, { expiresAt: now(), page: settledPage, settledPage });
+            } else {
+              cache.delete(key);
+            }
+          },
+        );
+        return await stalePage;
       }
       if (cached) {
         cache.delete(key);
       }
+      const serveStaleOnError = pageParams.forceRefresh !== true;
       const page = control.listPage(pageParams);
-      const entry = { expiresAt: now() + CODEX_SESSION_CATALOG_LIST_TTL_MS, page };
+      const stalePage = cached?.settledPage;
+      const entry: CodexCatalogPageCacheEntry = {
+        expiresAt: Number.POSITIVE_INFINITY,
+        page,
+        ...(stalePage ? { stalePage, settledPage: stalePage } : {}),
+      };
       cache.set(key, entry);
       while (cache.size > CODEX_SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES) {
         const oldest = cache.keys().next();
@@ -449,8 +504,32 @@ export function createCodexSessionCatalogControl(params: {
         cache.delete(oldest.value);
       }
       try {
-        return await page;
+        const result = await page;
+        if (cache.get(key) === entry) {
+          delete entry.stalePage;
+          entry.settledPage = page;
+          entry.expiresAt = now() + CODEX_SESSION_CATALOG_LIST_TTL_MS;
+        }
+        return result;
       } catch (error) {
+        if (stalePage) {
+          let stale: CodexSessionCatalogPage | undefined;
+          try {
+            stale = await stalePage;
+          } catch {
+            // The prior page was not real data, so propagate the current app-server failure.
+          }
+          if (stale) {
+            if (cache.get(key) === entry) {
+              cache.delete(key);
+              const settledPage = Promise.resolve(stale);
+              cache.set(key, { expiresAt: now(), page: settledPage, settledPage });
+            }
+            if (serveStaleOnError) {
+              return stale;
+            }
+          }
+        }
         if (cache.get(key) === entry) {
           cache.delete(key);
         }

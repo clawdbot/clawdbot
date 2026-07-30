@@ -25,7 +25,7 @@ import {
   hasVisibleInboundReplyDispatch,
   runChannelInboundEvent,
   shouldDebounceTextInbound,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
   toHistoryMediaEntries,
   type ChannelInboundMediaInput,
   type ChannelInboundTurnPlan,
@@ -98,6 +98,11 @@ import { renderSignalMentions, resolveSignalMentionFacts } from "./mentions.js";
 
 const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
 const RETRYABLE_FLUSH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
+type SignalInboundDebounceParams = Parameters<
+  typeof createChannelInboundDebouncer<SignalInboundEntry>
+>[0];
+type SignalInboundFlushFactory = Parameters<SignalInboundDebounceParams["onFlush"]>[1];
+type SignalInboundFlush = ReturnType<SignalInboundDebounceParams["onFlush"]>;
 function isSignalReplySessionInitConflictError(error: unknown): boolean {
   return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
     (candidate) => REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
@@ -252,7 +257,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       replyToMode,
       entry.isBatched === true,
     );
-    const media = toInboundMediaFacts(entry.media);
+    const media = await toInboundMediaFactsWithMetadata(entry.media);
     const ctxPayload = buildChannelInboundEventContext({
       channel: "signal",
       supplemental: {
@@ -317,7 +322,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     });
 
     if (shouldLogVerbose()) {
-      const preview = truncateUtf16Safe(body, 200).replace(/\\n/g, "\\\\n");
+      const preview = truncateUtf16Safe(body, 200).replace(/\r/g, "\\r").replace(/\n/g, "\\n");
       logVerbose(`signal inbound: from=${ctxPayload.From} len=${body.length} preview="${preview}"`);
     }
 
@@ -585,18 +590,17 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     });
   }
 
-  async function flushSignalInboundEntries(entries: SignalInboundEntry[]): Promise<void> {
+  async function flushSignalInboundEntries(
+    entries: SignalInboundEntry[],
+    lifecycle: SignalIngressLifecycle,
+    settle: () => Promise<void>,
+  ): Promise<void> {
     const last = entries.at(-1);
     if (!last) {
       return;
     }
-    const { lifecycle, settle } = fanInChannelIngressLifecycles(
-      entries.map((entry) => entry.turnAdoptionLifecycle),
-    );
     if (entries.length === 1) {
-      await handleSignalInboundMessage(
-        lifecycle ? { ...last, turnAdoptionLifecycle: lifecycle } : last,
-      );
+      await handleSignalInboundMessage({ ...last, turnAdoptionLifecycle: lifecycle });
       await settle();
       return;
     }
@@ -616,7 +620,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       ...last,
       bodyText: combinedText,
       commandBody: combinedCommandBody,
-      ...(lifecycle ? { turnAdoptionLifecycle: lifecycle } : {}),
+      turnAdoptionLifecycle: lifecycle,
       isBatched: true,
       nativeReplyBody: last.nativeReplyBody ?? last.bodyText,
       media: entries.flatMap((entry) => entry.media ?? []),
@@ -624,59 +628,122 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     await settle();
   }
 
-  const flushDebouncedSignalInboundEntries = async (entries: SignalInboundEntry[]) => {
-    // enqueue() awaits inline and overflow flushes, but not timer-backed work.
-    // Drain tracked inline work on shutdown; stop delayed work with no owner.
-    const hasActiveEnqueue = entries.some((entry) => activeEnqueueEntries.has(entry));
-    if (!hasActiveEnqueue && deps.abortSignal?.aborted) {
-      return;
-    }
-    const flushTask = (async () => {
+  async function retrySignalInboundFlush(
+    entries: SignalInboundEntry[],
+    lifecycle: SignalIngressLifecycle,
+    settle: () => Promise<void>,
+    initialError: unknown,
+  ): Promise<void> {
+    let lastError = initialError;
+    for (const [attemptIndex, delayMs] of RETRYABLE_FLUSH_RETRY_DELAYS_MS.entries()) {
+      const attempt = attemptIndex + 1;
+      logVerbose(
+        `signal: reply session init conflict, retrying ${entries.length} inbound message(s) in ${delayMs}ms (attempt ${attempt}/${RETRYABLE_FLUSH_RETRY_DELAYS_MS.length})`,
+      );
       try {
-        await flushSignalInboundEntries(entries);
+        await sleep(delayMs, undefined, { ref: false, signal: deps.abortSignal });
       } catch (err) {
-        const errorGraph = collectErrorGraphCandidates(err, (current) => [
-          current.cause,
-          current.error,
-        ]);
-        const abortedEntrySignals = entries
-          .map((entry) => entry.turnAdoptionLifecycle?.abortSignal)
-          .filter((signal): signal is AbortSignal => signal?.aborted === true);
-        if (abortedEntrySignals.some((signal) => errorGraph.includes(signal.reason))) {
-          // A merged abort may reclaim only one constituent claim. Release only
-          // still-live siblings; disposed/reclaimed claims retain drain ownership.
-          await Promise.all(
-            entries
-              .filter((entry) => entry.turnAdoptionLifecycle?.abortSignal.aborted === false)
-              .map((entry) => Promise.resolve(entry.turnAdoptionLifecycle?.onAbandoned())),
-          );
+        if (deps.abortSignal?.aborted) {
           return;
-        }
-        if (deps.abortSignal?.aborted && errorGraph.includes(deps.abortSignal.reason)) {
-          return;
-        }
-        if (isSignalReplySessionInitConflictError(err)) {
-          // Only exhausted session-init conflicts surrender durable claims;
-          // unrelated failures remain owned by the normal queue error path.
-          await Promise.all(
-            entries.map((entry) => Promise.resolve(entry.turnAdoptionLifecycle?.onAbandoned())),
-          );
         }
         throw err;
       }
-    })();
-    // The debouncer remains the error-reporting owner; task tracking owns only
-    // shutdown lifetime, including asynchronous claim abandonment.
-    deps.runTrackedTask?.(() => flushTask.catch(() => undefined));
-    await flushTask;
+      if (deps.abortSignal?.aborted) {
+        return;
+      }
+      try {
+        await flushSignalInboundEntries(entries, lifecycle, settle);
+        return;
+      } catch (err) {
+        if (deps.abortSignal?.aborted) {
+          return;
+        }
+        lastError = err;
+        if (!isSignalReplySessionInitConflictError(err)) {
+          throw err;
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  const flushDebouncedSignalInboundEntries = (
+    entries: SignalInboundEntry[],
+    createFlush: SignalInboundFlushFactory,
+  ): SignalInboundFlush => {
+    const { lifecycle, settle } = fanInChannelIngressLifecycles(
+      entries.map((entry) => entry.turnAdoptionLifecycle),
+    );
+    return createFlush({
+      lifecycle,
+      dispatch: async (admissionLifecycle) => {
+        // enqueue() awaits inline and overflow admission, but not timer-backed work.
+        // Drain tracked completion on shutdown; stop delayed work with no owner.
+        const hasActiveEnqueue = entries.some((entry) => activeEnqueueEntries.has(entry));
+        if (!hasActiveEnqueue && deps.abortSignal?.aborted) {
+          return;
+        }
+        try {
+          await flushSignalInboundEntries(entries, admissionLifecycle, settle);
+        } catch (err) {
+          const errorGraph = collectErrorGraphCandidates(err, (current) => [
+            current.cause,
+            current.error,
+          ]);
+          const abortedEntrySignals = entries
+            .map((entry) => entry.turnAdoptionLifecycle?.abortSignal)
+            .filter((signal): signal is AbortSignal => signal?.aborted === true);
+          if (abortedEntrySignals.some((signal) => errorGraph.includes(signal.reason))) {
+            // The fanned-in abort may reclaim only one constituent claim. Release
+            // only still-live siblings; reclaimed claims retain drain ownership.
+            await Promise.all(
+              entries
+                .filter((entry) => entry.turnAdoptionLifecycle?.abortSignal.aborted === false)
+                .map((entry) => Promise.resolve(entry.turnAdoptionLifecycle?.onAbandoned())),
+            );
+            return;
+          }
+          if (deps.abortSignal?.aborted && errorGraph.includes(deps.abortSignal.reason)) {
+            return;
+          }
+          if (!isSignalReplySessionInitConflictError(err)) {
+            throw err;
+          }
+          if (deps.abortSignal?.aborted) {
+            return;
+          }
+          // Retry only pre-admission session conflicts; admitted turns have already
+          // released the debounce lane and own their normal completion lifecycle.
+          await retrySignalInboundFlush(entries, admissionLifecycle, settle, err).catch(
+            async (terminalError: unknown) => {
+              // Exhausted retries: release the drain claims so queue retry policy
+              // owns redelivery instead of the stall watchdog dead-lettering them.
+              await Promise.all(
+                entries.map((entry) => Promise.resolve(entry.turnAdoptionLifecycle?.onAbandoned())),
+              );
+              throw terminalError;
+            },
+          );
+        }
+      },
+    });
   };
   const reportSignalInboundFlushError = (err: unknown) => {
     deps.runtime.error?.(`signal debounce flush failed: ${String(err)}`);
   };
   const pendingInboundRegistry = createSignalPendingInboundRegistry(deps.accountId);
-  const flushNormalSignalInboundEntries = pendingInboundRegistry.completeAfter(
-    flushDebouncedSignalInboundEntries,
-  );
+  const trackSignalInboundFlush = (flush: SignalInboundFlush): SignalInboundFlush => {
+    deps.runTrackedTask?.(() => flush.completion.catch(() => undefined));
+    return flush;
+  };
+  const flushNormalSignalInboundEntries = (
+    entries: SignalInboundEntry[],
+    createFlush: SignalInboundFlushFactory,
+  ) => {
+    const flush = flushDebouncedSignalInboundEntries(entries, createFlush);
+    const completion = flush.completion.finally(() => pendingInboundRegistry.complete(entries));
+    return trackSignalInboundFlush({ admission: flush.admission, completion });
+  };
 
   const { debouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
     cfg: deps.cfg,
@@ -699,7 +766,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     serializeImmediate: true,
     buildKey: (entry) => resolveSignalControlLaneKey(deps.accountId, entry),
     shouldDebounce: () => false,
-    onFlush: flushDebouncedSignalInboundEntries,
+    onFlush: (entries, createFlush) =>
+      trackSignalInboundFlush(flushDebouncedSignalInboundEntries(entries, createFlush)),
     onError: reportSignalInboundFlushError,
   });
 

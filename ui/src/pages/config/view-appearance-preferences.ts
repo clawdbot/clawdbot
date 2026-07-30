@@ -11,16 +11,35 @@ import { LOBSTER_PALETTE_LORE } from "../../components/lobster-pet-lore.ts";
 import {
   LOBSTER_PET_PALETTES,
   canonicalLobsterLook,
+  lobsterLookStyle,
   lobsterPaletteName,
   renderLobsterSvg,
 } from "../../components/lobster-pet.ts";
 import "../../components/tooltip.ts";
 import { renderSettingsRow, renderSettingsToggleRow } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { renderLanguageSelect } from "./language-select.ts";
 import { renderSessionObserverSettings } from "./session-observer-settings.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 import type { ConfigProps } from "./view-types.ts";
+
+export function renderLanguageSection(props: ConfigProps) {
+  return html`
+    <section id=${APPEARANCE_SETTINGS_TARGET_IDS.language} class="settings-section">
+      <div class="settings-section__header">
+        <h2 class="settings-section__heading">${t("quickSettings.language")}</h2>
+      </div>
+      <div class="settings-group">
+        ${renderSettingsRow({
+          title: t("quickSettings.language"),
+          description: t("configView.syncedHint"),
+          control: renderLanguageSelect(props.locale, props.onLocaleChange),
+        })}
+      </div>
+    </section>
+  `;
+}
 
 function renderSettingsMediaDeviceField(options: {
   state: ConfigProps["microphone"];
@@ -286,6 +305,7 @@ export function renderLobsterPetSection(props: ConfigProps) {
             <div class="lobsterdex__gallery">
               <div class="lobsterdex">
                 ${LOBSTER_PET_PALETTES.map((palette) => {
+                  const look = canonicalLobsterLook(palette);
                   const entry = dexEntries.get(palette.id);
                   const seen = entry !== undefined;
                   const shinySeen = entry?.shinySeenAt != null;
@@ -309,11 +329,11 @@ export function renderLobsterPetSection(props: ConfigProps) {
                         class="lobsterdex__mini lobster-pet--palette-${palette.id} ${seen
                           ? ""
                           : "lobsterdex__mini--unseen"}"
-                        style="--lob-shell:${palette.shell};--lob-claw:${palette.claw}"
+                        style=${lobsterLookStyle(look)}
                         tabindex="0"
                         aria-label=${ariaLabel}
                       >
-                        ${renderLobsterSvg(canonicalLobsterLook(palette), { standalone: true })}
+                        ${renderLobsterSvg(look, { standalone: true })}
                         ${shinySeen
                           ? html`<span class="lobsterdex__mini-star" aria-hidden="true">✦</span>`
                           : nothing}

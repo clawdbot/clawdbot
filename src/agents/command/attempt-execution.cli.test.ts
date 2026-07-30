@@ -80,6 +80,9 @@ const providerAuthAliasMocks = vi.hoisted(() => ({
 }));
 const INHERITED_TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 
+const sessionWriteLockMocks = vi.hoisted(() => ({
+  acquireSessionWriteLock: vi.fn(),
+}));
 vi.mock("../cli-runner.js", () => ({
   runCliAgent: runCliAgentMock,
 }));
@@ -135,6 +138,17 @@ vi.mock("../model-runtime-aliases.js", async () => {
 vi.mock("../embedded-agent.js", () => ({
   runEmbeddedAgent: runEmbeddedAgentMock,
 }));
+
+vi.mock("../session-write-lock.js", async () => {
+  const actual = await vi.importActual<typeof import("../session-write-lock.js")>(
+    "../session-write-lock.js",
+  );
+  sessionWriteLockMocks.acquireSessionWriteLock.mockImplementation(actual.acquireSessionWriteLock);
+  return {
+    ...actual,
+    acquireSessionWriteLock: sessionWriteLockMocks.acquireSessionWriteLock,
+  };
+});
 
 function makeCliResult(text: string): EmbeddedAgentRunResult {
   return {
@@ -279,6 +293,8 @@ describe("CLI attempt execution", () => {
     userTurnTranscriptRecorder?: RunAgentAttemptParams["userTurnTranscriptRecorder"];
     sessionEntry?: Partial<SessionEntry>;
     configuredAuthProfileId?: string;
+    timeoutMs?: number;
+    runTimeoutOverrideMs?: number;
   }) {
     const runId = overrides?.runId ?? "run-embedded-live-stream-gate";
     const sessionKey = `agent:main:direct:${runId}`;
@@ -311,7 +327,8 @@ describe("CLI attempt execution", () => {
       isFallbackRetry: overrides?.isFallbackRetry ?? false,
       fallbackRuntimeState: overrides?.fallbackRuntimeState,
       resolvedThinkLevel: "medium",
-      timeoutMs: 1_000,
+      timeoutMs: overrides?.timeoutMs ?? 1_000,
+      runTimeoutOverrideMs: overrides?.runTimeoutOverrideMs,
       runId,
       opts: {
         message: "stream gate",
@@ -345,6 +362,7 @@ describe("CLI attempt execution", () => {
     hasClaudeLiveSessionForOwnerMock.mockReturnValue(false);
     providerAuthAliasMocks.resolveProviderAuthAliasMap.mockClear();
     providerAuthAliasMocks.resolveProviderIdForAuth.mockClear();
+    sessionWriteLockMocks.acquireSessionWriteLock.mockClear();
   });
 
   async function writeSessionStoreSeed(sessionStore: Record<string, SessionEntry>): Promise<void> {
@@ -366,6 +384,25 @@ describe("CLI attempt execution", () => {
     homeEnvSnapshot = undefined;
     closeOpenClawAgentDatabasesForTest();
     await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("forwards explicit local-agent timeouts while preserving the default when omitted", async () => {
+    const explicitTimeoutMs = 21_600_000;
+    const explicit = await runOpenClawEmbeddedAttemptForTest({
+      runId: "explicit-local-timeout",
+      timeoutMs: explicitTimeoutMs,
+      runTimeoutOverrideMs: explicitTimeoutMs,
+    });
+    expect(explicit.timeoutMs).toBe(explicitTimeoutMs);
+    expect(explicit.runTimeoutOverrideMs).toBe(explicitTimeoutMs);
+
+    const configuredDefaultMs = 600_000;
+    const inherited = await runOpenClawEmbeddedAttemptForTest({
+      runId: "inherited-local-timeout",
+      timeoutMs: configuredDefaultMs,
+    });
+    expect(inherited.timeoutMs).toBe(configuredDefaultMs);
+    expect(inherited.runTimeoutOverrideMs).toBeUndefined();
   });
 
   async function runClaudeCliAttempt(params: {
@@ -563,6 +600,37 @@ describe("CLI attempt execution", () => {
     expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
+  });
+
+  it("clears a fork-marked Claude CLI session after terminal failover", async () => {
+    const sessionKey = "agent:main:direct:cli-fork-expired";
+    const cliSessionId = "expired-fork-source";
+    await writeClaudeCliAssistantTranscript(cliSessionId);
+    const sessionEntry = makeClaudeCliSessionEntry("session-cli-fork-expired", cliSessionId);
+    sessionEntry.cliSessionBindings!["claude-cli"]!.forkNextResume = true;
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    runCliAgentMock.mockRejectedValueOnce(
+      new FailoverError("fork source expired", {
+        reason: "session_expired",
+        provider: "claude-cli",
+        model: "opus",
+      }),
+    );
+
+    await expect(
+      runClaudeCliAttempt({
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        body: "fork from an expired source",
+        runId: "run-cli-fork-expired",
+      }),
+    ).rejects.toMatchObject({ name: "FailoverError", reason: "session_expired" });
+
+    expect(firstRunCliAgentArg().forkCliSessionOnResume).toBe(true);
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(readSessionStore()[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
   });
 
   it("preserves a reused Claude CLI session after detached media starts", async () => {
@@ -1841,6 +1909,39 @@ describe("CLI attempt execution", () => {
       role: "assistant",
       content: [{ type: "text", text: "runtime answer" }],
     });
+  });
+
+  it("holds the session-key lease for the embedded assistant gap-fill", async () => {
+    const sessionKey = "agent:main:direct:gap-fill-lease";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-gap-fill-lease",
+      updatedAt: Date.now(),
+    };
+    await writeSessionStoreSeed({ [sessionKey]: sessionEntry });
+    const release = vi.fn();
+    sessionWriteLockMocks.acquireSessionWriteLock.mockResolvedValueOnce({ release });
+
+    await persistCliTurnTranscript({
+      body: "ignored prompt",
+      result: makeCliResult("runtime answer"),
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+      embeddedAssistantGapFill: true,
+    });
+
+    expect(sessionWriteLockMocks.acquireSessionWriteLock).toHaveBeenCalledOnce();
+    expect(sessionWriteLockMocks.acquireSessionWriteLock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: expect.any(String),
+        targetKind: "session-key",
+      }),
+    );
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("persists a media-only ACP user turn when the reply is empty", async () => {

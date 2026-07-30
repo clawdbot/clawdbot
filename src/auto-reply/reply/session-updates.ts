@@ -170,6 +170,7 @@ export async function ensureSkillSnapshot(params: {
   execOverrides?: ExecPolicyOverrides;
   /** If provided, only load skills with these names (for per-channel skill filtering) */
   skillFilter?: string[];
+  skillOverrides?: Record<string, boolean>;
 }): Promise<{
   sessionEntry?: SessionEntry;
   skillsSnapshot?: SessionEntry["skillsSnapshot"];
@@ -196,6 +197,7 @@ export async function ensureSkillSnapshot(params: {
     workspaceDir,
     cfg,
     skillFilter,
+    skillOverrides,
   } = params;
 
   let nextEntry = sessionEntryHandle?.getCurrent() ?? sessionEntry;
@@ -218,6 +220,7 @@ export async function ensureSkillSnapshot(params: {
       config: cfg,
       agentId: sessionAgentId,
       skillFilter,
+      skillOverrides,
       eligibility: { nodeSkills: nodeSkillsEligibility, remote: remoteEligibility },
       existingSnapshot: snapshot,
     });

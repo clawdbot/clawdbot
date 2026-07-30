@@ -143,7 +143,7 @@ export function renderChatGoal(
             class="agent-chat__goal-action agent-chat__goal-expand"
             type="button"
             aria-expanded=${expanded ? "true" : "false"}
-            aria-label=${expanded ? "Hide goal details" : "Show goal details"}
+            aria-label=${t(expanded ? "chat.goals.hideDetails" : "chat.goals.showDetails")}
             @click=${toggleExpanded}
           >
             ${expanded ? icons.chevronDown : icons.chevronRight}

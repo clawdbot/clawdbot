@@ -17,7 +17,7 @@ import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admi
 import type { ChannelKind } from "./config-reload-plan.js";
 import { shouldRefreshContextWindowCache } from "./config-reload-recovery.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
-import { resolveHooksConfig } from "./hooks.js";
+import { commitHooksConfigReload, resolveHooksConfig } from "./hooks.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
@@ -99,9 +99,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     resetPreparedModelRuntimeStateForHotReload();
 
+    let hooksReloadResolved = false;
     if (plan.reloadHooks) {
       try {
         nextState.hooksConfig = resolveHooksConfig(nextConfig);
+        hooksReloadResolved = true;
       } catch (err) {
         params.logHooks.warn(`hooks config reload failed: ${String(err)}`);
         throw err;
@@ -176,6 +178,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         params.setState(nextState);
         // All rejecting work is complete. Publish pre-resolved lane limits at
         // the final synchronous commit edge, alongside the accepted state.
+        if (hooksReloadResolved) {
+          commitHooksConfigReload();
+        }
         applyGatewayLaneConcurrency(laneConcurrency);
         runtimeCommitted = true;
         setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });

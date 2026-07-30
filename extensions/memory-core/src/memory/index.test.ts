@@ -5,12 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { clearMemoryEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
-  formatSqliteSessionFileMarker,
-  upsertSessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
+  hashText,
+  INVALID_PROJECT_ANNOTATION_KEY,
+  MEMORY_CHUNKING_VERSION,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
@@ -19,6 +20,10 @@ import {
   openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  configureMemoryCoreDreamingStateForTests,
+  resetMemoryCoreDreamingStateForTests,
+} from "../test-helpers.js";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
@@ -38,6 +43,7 @@ afterAll(() => {
 });
 
 let embedBatchCalls = 0;
+let embeddedBatchTexts: string[] = [];
 let embedBatchInputCalls = 0;
 let providerRuntimeBatchCalls: string[][] = [];
 let providerRuntimeBatchGate: Promise<void> | null = null;
@@ -188,6 +194,7 @@ vi.mock("./embeddings.js", () => {
           embedQuery: async (text: string) => embedText(text),
           embedBatch: async (texts: string[]) => {
             embedBatchCalls += 1;
+            embeddedBatchTexts.push(...texts);
             return texts.map(embedText);
           },
           ...(providerId === "gemini" || providerId === "fallback-provider"
@@ -311,6 +318,7 @@ describe("memory index", () => {
     await closeAllMemorySearchManagers();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
+    resetMemoryCoreDreamingStateForTests();
     clearRegistry();
     managersForCleanup.clear();
     restoreMemoryIndexStateDir();
@@ -320,6 +328,7 @@ describe("memory index", () => {
     vi.useRealTimers();
     clearRegistry();
     embedBatchCalls = 0;
+    embeddedBatchTexts = [];
     embedBatchInputCalls = 0;
     providerRuntimeBatchCalls = [];
     providerRuntimeBatchGate = null;
@@ -340,6 +349,7 @@ describe("memory index", () => {
     rmSync(workspaceDir, { recursive: true, force: true });
     mkdirSync(memoryDir, { recursive: true });
     setMemoryIndexStateDir(path.join(workspaceDir, ".state-memory-index"));
+    await configureMemoryCoreDreamingStateForTests();
     await fs.writeFile(
       path.join(memoryDir, "2026-01-12.md"),
       "# Log\nAlpha memory line.\nZebra memory line.",
@@ -463,11 +473,6 @@ describe("memory index", () => {
       storePath,
       entry: {
         sessionId: params.sessionId,
-        sessionFile: formatSqliteSessionFileMarker({
-          agentId: "main",
-          sessionId: params.sessionId,
-          storePath,
-        }),
         updatedAt,
       },
     });
@@ -627,8 +632,12 @@ describe("memory index", () => {
     await fs.writeFile(
       path.join(workspaceDir, "MEMORY.md"),
       [
-        "- Keep the gateway local. <!-- trigger: gateway setup, local access --> <!-- importance: 4 -->",
-        "- Preserve loopback binding. <!-- trigger: local access; network safety --> <!-- importance: 9 -->",
+        "# Curated entries",
+        "",
+        "- Alpha deploy preference. <!-- trigger: alpha deploy --> <!-- importance: 4 --> <!-- project: alpha-key -->",
+        "  Keep the alpha gateway local.",
+        "- Beta deploy preference. <!-- trigger: beta deploy --> <!-- importance: 9 --> <!-- project: beta-key -->",
+        "- Global deploy preference. <!-- trigger: global defaults --> <!-- importance: 7 -->",
       ].join("\n"),
     );
     await fs.writeFile(
@@ -637,45 +646,337 @@ describe("memory index", () => {
     );
     await fs.writeFile(
       path.join(memoryDir, "2026-01-12.md"),
-      "- Daily note. <!-- trigger: should not inject --> <!-- importance: 10 -->\n",
+      "- Daily note. <!-- trigger: should not inject --> <!-- importance: 10 --> <!-- project: github.com/openclaw/openclaw -->\n",
+    );
+    await fs.writeFile(
+      path.join(memoryDir, "2026-01-13.md"),
+      [
+        "- Uppercase path. <!-- project: path:/Users/Alice/Repo -->",
+        "- Lowercase path. <!-- project: path:/Users/alice/repo -->",
+      ].join("\n"),
     );
 
-    const manager = await getFreshManager(createCfg({ provider: "none" }));
+    const manager = await getFreshManager(createCfg({}));
     try {
       await manager.sync({ reason: "test", force: true });
       const db = Reflect.get(manager, "db") as DatabaseSync;
       const rows = db
         .prepare(
-          `SELECT chunk.path, chunk.importance, chunk.triggers,
+          `SELECT chunk.path, chunk.start_line AS startLine, chunk.text, metadata.importance,
+                  metadata.triggers, metadata.project_key AS projectKey,
                   provenance.origin_class AS originClass
            FROM memory_index_chunks AS chunk
+           LEFT JOIN memory_index_chunk_recall_metadata AS metadata
+             ON metadata.chunk_id = chunk.id
            JOIN memory_index_chunk_provenance AS provenance
              ON provenance.chunk_id = chunk.id
            WHERE chunk.source = 'memory'
-           ORDER BY chunk.path`,
+           ORDER BY chunk.path, chunk.start_line`,
         )
         .all() as Array<{
         path: string;
+        startLine: number;
+        text: string;
         importance: number | null;
         triggers: string | null;
+        projectKey: string | null;
         originClass: string;
       }>;
 
-      expect(rows.find((row) => row.path === "MEMORY.md")).toMatchObject({
-        importance: 9,
-        triggers: "gateway setup; local access; network safety",
-        originClass: "agent",
-      });
+      const memoryEntries = rows.filter((row) => row.path === "MEMORY.md" && row.triggers !== null);
+      expect(memoryEntries).toHaveLength(3);
+      expect(memoryEntries).toMatchObject([
+        {
+          text: "- Alpha deploy preference.\n  Keep the alpha gateway local.",
+          importance: 4,
+          triggers: "alpha deploy",
+          projectKey: "alpha-key",
+          originClass: "agent",
+        },
+        {
+          text: "- Beta deploy preference.",
+          importance: 9,
+          triggers: "beta deploy",
+          projectKey: "beta-key",
+          originClass: "agent",
+        },
+        {
+          text: "- Global deploy preference.",
+          importance: 7,
+          triggers: "global defaults",
+          projectKey: null,
+          originClass: "agent",
+        },
+      ]);
       expect(rows.find((row) => row.path === "USER.md")).toMatchObject({
         importance: 7,
         triggers: "writing style",
+        projectKey: null,
         originClass: "agent",
       });
       expect(rows.find((row) => row.path === "memory/2026-01-12.md")).toMatchObject({
         importance: null,
         triggers: null,
+        projectKey: "github.com/openclaw/openclaw",
         originClass: "agent",
       });
+      expect(rows.find((row) => row.path === "memory/2026-01-13.md")).toMatchObject({
+        importance: null,
+        triggers: null,
+        projectKey: "path:/Users/Alice/Repo; path:/Users/alice/repo",
+        originClass: "agent",
+      });
+      expect(rows.every((row) => !row.text.includes("<!--"))).toBe(true);
+      expect(embeddedBatchTexts.length).toBeGreaterThan(0);
+      expect(embeddedBatchTexts.every((text) => !text.includes("<!--"))).toBe(true);
+
+      for (const query of ["trigger", "importance", "project"]) {
+        const annotationHits = await manager.search(query, {
+          lexicalOnly: true,
+          maxResults: 20,
+          minScore: 0,
+          sources: ["memory"],
+        });
+        expect(annotationHits).toEqual([]);
+      }
+
+      const bodyHits = await manager.search("Alpha deploy preference", {
+        lexicalOnly: true,
+        maxResults: 10,
+        minScore: 0,
+        sources: ["memory"],
+      });
+      expect(bodyHits[0]?.snippet).toContain("Alpha deploy preference.");
+      expect(bodyHits[0]?.snippet).not.toContain("<!--");
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("round-trips mixed-case project keys through indexed recall consumers", async () => {
+    const projectKey = "github.com/OpenClaw/OpenClaw";
+    await fs.writeFile(
+      path.join(workspaceDir, "MEMORY.md"),
+      `- Follow the kraken deploy ritual. <!-- trigger: kraken deploy ritual --> <!-- importance: 8 --> <!-- project: ${projectKey} -->\n`,
+    );
+
+    const manager = await getFreshManager(createCfg({}));
+    try {
+      await manager.sync({ reason: "test", force: true });
+      const db = Reflect.get(manager, "db") as DatabaseSync;
+      expect(
+        db
+          .prepare(
+            `SELECT metadata.project_key AS projectKey
+             FROM memory_index_chunks AS chunk
+             JOIN memory_index_chunk_recall_metadata AS metadata
+               ON metadata.chunk_id = chunk.id
+             WHERE chunk.path = 'MEMORY.md'
+               AND metadata.triggers = 'kraken deploy ritual'`,
+          )
+          .get(),
+      ).toEqual({ projectKey });
+
+      if (!manager.listCuratedProjectCandidates || !manager.listTriggerCandidates) {
+        throw new Error("expected curated project and trigger candidate listing");
+      }
+      const activeProjectKeys = [projectKey];
+      const curated = await manager.listCuratedProjectCandidates({ activeProjectKeys });
+      const triggers = await manager.listTriggerCandidates({ activeProjectKeys });
+      expect(curated).toMatchObject([{ projectKey, triggers: "kraken deploy ritual" }]);
+      expect(triggers).toMatchObject([{ projectKey, triggers: "kraken deploy ritual" }]);
+
+      const neutral = await manager.search("kraken deploy", {
+        minScore: 0,
+        maxResults: 10,
+        activeProjectKeys: [],
+      });
+      const active = await manager.search("kraken deploy", {
+        minScore: 0,
+        maxResults: 10,
+        activeProjectKeys,
+      });
+      const neutralHit = neutral.find((entry) => entry.projectKey === projectKey);
+      const activeHit = active.find((entry) => entry.projectKey === projectKey);
+      expect(neutralHit).toBeDefined();
+      expect(activeHit).toBeDefined();
+      if (!neutralHit || !activeHit) {
+        throw new Error("expected mixed-case project hit in neutral and active search");
+      }
+      expect(activeHit.score).toBeGreaterThan(neutralHit.score);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("keeps invalid project annotations scoped but unsatisfiable", async () => {
+    await fs.writeFile(
+      path.join(workspaceDir, "MEMORY.md"),
+      [
+        "- Invalid fact. <!-- trigger: invalid fact --> <!-- project: bad< -->",
+        "- Mixed fact. <!-- trigger: mixed fact --> <!-- project: alpha-key; bad< -->",
+        "- Unterminated fact. <!-- trigger: unterminated fact --> <!-- project: alpha-key",
+        "- Global fact. <!-- trigger: global fact -->",
+      ].join("\n"),
+    );
+    const manager = await getFreshManager(createCfg({ provider: "none" }));
+    try {
+      await manager.sync({ reason: "test", force: true });
+      const db = Reflect.get(manager, "db") as DatabaseSync;
+      expect(
+        db
+          .prepare(
+            `SELECT metadata.triggers, metadata.project_key AS projectKey
+             FROM memory_index_chunks AS chunk
+             LEFT JOIN memory_index_chunk_recall_metadata AS metadata
+               ON metadata.chunk_id = chunk.id
+             WHERE chunk.path = 'MEMORY.md'
+             ORDER BY chunk.start_line`,
+          )
+          .all(),
+      ).toEqual([
+        { triggers: "invalid fact", projectKey: INVALID_PROJECT_ANNOTATION_KEY },
+        { triggers: "mixed fact", projectKey: INVALID_PROJECT_ANNOTATION_KEY },
+        { triggers: null, projectKey: INVALID_PROJECT_ANNOTATION_KEY },
+        { triggers: "global fact", projectKey: null },
+      ]);
+      const activeProjectKeys = ["alpha-key"];
+      if (!manager.listTriggerCandidates) {
+        throw new Error("expected trigger candidate listing");
+      }
+      const triggerCandidates = await manager.listTriggerCandidates({ activeProjectKeys });
+      expect(triggerCandidates).toMatchObject([{ triggers: "global fact" }]);
+      const results = await manager.search("fact", {
+        minScore: 0,
+        maxResults: 10,
+        activeProjectKeys,
+      });
+      expect(
+        results.every((entry) => !/Invalid fact|Mixed fact|Unterminated fact/u.test(entry.snippet)),
+      ).toBe(true);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("inherits entry-scoped annotations across oversized curated fragments", async () => {
+    await fs.writeFile(
+      path.join(workspaceDir, "MEMORY.md"),
+      [
+        "- Oversized alpha entry. <!-- trigger: oversized alpha --> <!-- importance: 8 --> <!-- project: alpha-key -->",
+        `  ${"alpha-fragment-body ".repeat(400)}`,
+        "- Global neighbor. <!-- trigger: global neighbor -->",
+      ].join("\n"),
+    );
+
+    const manager = await getFreshManager(createCfg({ provider: "none" }));
+    try {
+      const settings = Reflect.get(manager, "settings") as {
+        chunking: { tokens: number; overlap: number };
+      };
+      settings.chunking = { tokens: 64, overlap: 0 };
+      await manager.sync({ reason: "test", force: true });
+      const db = Reflect.get(manager, "db") as DatabaseSync;
+      const rows = db
+        .prepare(
+          `SELECT chunk.text, metadata.importance, metadata.triggers,
+                  metadata.project_key AS projectKey
+           FROM memory_index_chunks AS chunk
+           LEFT JOIN memory_index_chunk_recall_metadata AS metadata
+             ON metadata.chunk_id = chunk.id
+           WHERE chunk.path = 'MEMORY.md' AND chunk.source = 'memory'
+           ORDER BY chunk.start_line, chunk.id`,
+        )
+        .all() as Array<{
+        text: string;
+        importance: number | null;
+        triggers: string | null;
+        projectKey: string | null;
+      }>;
+      const fragments = rows.filter((row) => row.triggers === "oversized alpha");
+
+      expect(fragments.length).toBeGreaterThanOrEqual(2);
+      expect(fragments.every((row) => row.projectKey === "alpha-key" && row.importance === 8)).toBe(
+        true,
+      );
+      expect(rows.find((row) => row.triggers === "global neighbor")).toMatchObject({
+        projectKey: null,
+        importance: null,
+      });
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("re-chunks unchanged curated files when the chunking version advances", async () => {
+    const curatedContent = [
+      "- Alpha entry. <!-- trigger: alpha entry --> <!-- project: alpha-key -->",
+      "- Beta entry. <!-- trigger: beta entry --> <!-- project: beta-key -->",
+      "- Global entry. <!-- trigger: global entry -->",
+    ].join("\n");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), curatedContent);
+
+    const manager = await getFreshManager(createCfg({ provider: "none" }));
+    try {
+      await manager.sync({ reason: "test", force: true });
+      const db = Reflect.get(manager, "db") as DatabaseSync;
+      const metaRow = db
+        .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
+        .get() as { value: string };
+      const currentMeta = JSON.parse(metaRow.value) as MemoryIndexMeta;
+      const legacyMeta: MemoryIndexMeta = {
+        ...currentMeta,
+        chunkingVersion: MEMORY_CHUNKING_VERSION - 1,
+      };
+
+      db.prepare("DELETE FROM memory_index_chunks WHERE path = ? AND source = 'memory'").run(
+        "MEMORY.md",
+      );
+      db.prepare(
+        `INSERT INTO memory_index_chunks
+         (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+         VALUES (?, ?, 'memory', 1, 3, ?, 'fts-only', ?, '[]', ?)`,
+      ).run(
+        "legacy-curated-chunk",
+        "MEMORY.md",
+        hashText(curatedContent),
+        curatedContent,
+        Date.now(),
+      );
+      db.prepare(
+        `INSERT INTO memory_index_chunk_provenance (
+           chunk_id, origin_class, session_kind, observed_at
+         ) VALUES ('legacy-curated-chunk', 'agent', 'unknown', ?)`,
+      ).run(Date.now());
+      db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'").run(
+        JSON.stringify(legacyMeta),
+      );
+
+      await manager.sync({ reason: "test" });
+
+      const rows = db
+        .prepare(
+          `SELECT chunk.text, metadata.triggers, metadata.project_key AS projectKey
+           FROM memory_index_chunks AS chunk
+           LEFT JOIN memory_index_chunk_recall_metadata AS metadata
+             ON metadata.chunk_id = chunk.id
+           WHERE chunk.path = 'MEMORY.md' AND chunk.source = 'memory'
+           ORDER BY chunk.start_line`,
+        )
+        .all();
+      expect(rows).toMatchObject([
+        { triggers: "alpha entry", projectKey: "alpha-key" },
+        { triggers: "beta entry", projectKey: "beta-key" },
+        { triggers: "global entry", projectKey: null },
+      ]);
+      expect(rows).toHaveLength(3);
+      expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      const upgradedMeta = db
+        .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
+        .get() as { value: string };
+      expect((JSON.parse(upgradedMeta.value) as MemoryIndexMeta).chunkingVersion).toBe(
+        MEMORY_CHUNKING_VERSION,
+      );
     } finally {
       await manager.close?.();
     }

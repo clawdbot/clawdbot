@@ -1,9 +1,8 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import { copyReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { replaceGenericExternalRunFailureText } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import { buildRecoverablePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import { sendDurableMessageBatch } from "../channels/message/runtime.js";
@@ -41,13 +40,6 @@ const log = heartbeatLog;
 // behind keeps the session stuck on a delivery that already happened.
 const CLEARED_PENDING_FINAL_DELIVERY_FIELDS = {
   pendingFinalDelivery: undefined,
-  pendingFinalDeliveryText: undefined,
-  pendingFinalDeliveryCreatedAt: undefined,
-  pendingFinalDeliveryLastAttemptAt: undefined,
-  pendingFinalDeliveryAttemptCount: undefined,
-  pendingFinalDeliveryLastError: undefined,
-  pendingFinalDeliveryContext: undefined,
-  pendingFinalDeliveryIntentId: undefined,
 } as const;
 
 // Clear pending-final only when this run produced it: the agent run stamps
@@ -57,13 +49,14 @@ function heartbeatRunOwnsPendingFinalDelivery(
   entry: SessionEntry | undefined,
   runStartedAt: number,
 ): boolean {
-  const createdAt = entry?.pendingFinalDeliveryCreatedAt;
+  const createdAt = entry?.pendingFinalDelivery?.createdAt;
   return typeof createdAt === "number" && createdAt >= runStartedAt;
 }
 
 export function classifyHeartbeatAgentOutcome(params: {
   agentRun: CompletedHeartbeatAgentRun;
   hasRelayableExecCompletion: boolean;
+  suppressUnmarkedSourceReplies: boolean;
   responsePrefix: string | undefined;
   ackMaxChars: number;
 }) {
@@ -75,6 +68,19 @@ export function classifyHeartbeatAgentOutcome(params: {
       preview: truncateHeartbeatPreview(heartbeatToolResponse.summary),
       response: heartbeatToolResponse,
     } as const;
+  }
+  if (
+    params.suppressUnmarkedSourceReplies &&
+    !params.hasRelayableExecCompletion &&
+    !heartbeatToolResponse &&
+    !heartbeatTerminalToolFailure &&
+    replyPayload &&
+    replyPayload.isError !== true &&
+    getReplyPayloadMetadata(replyPayload)?.deliverDespiteSourceReplySuppression !== true
+  ) {
+    // Message-tool privacy never makes an ordinary assistant final outbound;
+    // marked operator notices and terminal failures keep their visible paths.
+    return { kind: "ack", eventStatus: "ok-token", silent: true } as const;
   }
   if (!heartbeatToolResponse && (!replyPayload || !hasOutboundReplyContent(replyPayload))) {
     return { kind: "ack", eventStatus: "ok-empty" } as const;
@@ -433,7 +439,11 @@ export async function finalizeHeartbeatOutcome(params: {
     ...(normalized.silent === true ? { silent: true } : {}),
     indicatorType: visibility.useIndicator ? resolveIndicatorType(eventStatus) : undefined,
   });
-  consumeInspectedSystemEvents(params.wake, params.prepared);
+  // Intentional internal-only/no-target runs consume above. Once this branch
+  // expects visible delivery, suppressed sends must retain the original event.
+  if (visibleSendSucceeded) {
+    consumeInspectedSystemEvents(params.wake, params.prepared);
+  }
   return { status: "ran", durationMs: Date.now() - startedAt };
 }
 
@@ -456,7 +466,7 @@ async function clearSatisfiedPendingFinalDelivery(
       if (!context.existingEntry) {
         return null;
       }
-      if (current?.pendingFinalDelivery !== true && !current?.pendingFinalDeliveryText) {
+      if (!current?.pendingFinalDelivery) {
         return null;
       }
       if (!heartbeatRunOwnsPendingFinalDelivery(current, wake.startedAt)) {
@@ -466,7 +476,8 @@ async function clearSatisfiedPendingFinalDelivery(
       // several. Clear only when the delivered payload represents the whole final.
       if (
         expectedText !== undefined &&
-        normalizeOptionalString(current.pendingFinalDeliveryText) !== expectedText
+        (current.pendingFinalDelivery.kind !== "replayable" ||
+          current.pendingFinalDelivery.text !== expectedText)
       ) {
         return null;
       }

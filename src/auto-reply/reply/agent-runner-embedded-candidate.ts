@@ -153,6 +153,7 @@ export async function runEmbeddedFallbackCandidate(params: {
           agentId: embeddedContext.agentId,
           runId: params.runId,
           sessionKey: messageActionCapabilitySessionKey,
+          sourceReplySessionKey: embeddedContext.sessionKey,
           sessionId: embeddedContext.sessionId,
           requesterAccountId: embeddedContext.agentAccountId,
           requesterSenderId: senderContext.senderId,

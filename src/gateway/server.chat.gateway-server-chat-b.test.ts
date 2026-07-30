@@ -79,6 +79,27 @@ function waitForFast<T>(
 ) {
   return vi.waitFor(callback, { interval: 1, ...options });
 }
+
+function createChatVisionModelCatalogSnapshot(): Awaited<
+  ReturnType<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>
+> {
+  return {
+    agentId: "main",
+    agentDir: "/tmp/chat-attachment-vision-agent",
+    workspaceDir: "/tmp/chat-attachment-vision-workspace",
+    config: {},
+    entries: [
+      {
+        id: "vision-model",
+        name: "Vision Model",
+        provider: "test-provider",
+        input: ["text", "image"],
+      },
+    ],
+    routeVariants: [],
+  };
+}
+
 type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 type GatewaySocket = Awaited<ReturnType<GatewayHarness["openWs"]>>;
 let harness: GatewayHarness;
@@ -1631,21 +1652,16 @@ describe("gateway server chat", () => {
         },
       });
 
-      const firstCatalog =
-        createDeferred<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>>();
+      const firstCatalogSnapshot =
+        createDeferred<
+          Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>>
+        >();
       const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
       const context = createDirectChatContext({
-        loadGatewayModelCatalog: vi
-          .fn<GatewayRequestContext["loadGatewayModelCatalog"]>()
-          .mockImplementationOnce(() => firstCatalog.promise)
-          .mockResolvedValue([
-            {
-              id: "vision-model",
-              name: "Vision Model",
-              provider: "test-provider",
-              input: ["text", "image"],
-            },
-          ]),
+        loadGatewayModelCatalogSnapshot: vi
+          .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
+          .mockImplementationOnce(() => firstCatalogSnapshot.promise)
+          .mockResolvedValue(createChatVisionModelCatalogSnapshot()),
         getRuntimeConfig: () => ({}),
       });
       dispatchInboundMessageMock.mockImplementation(async () => dispatchRelease.promise);
@@ -1683,7 +1699,7 @@ describe("gateway server chat", () => {
 
       const first = Promise.resolve(callSend("first"));
       await waitForFast(() => {
-        expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+        expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
       }, FAST_WAIT_OPTS);
 
       await callSend("duplicate");
@@ -1696,14 +1712,7 @@ describe("gateway server chat", () => {
         },
       ]);
 
-      firstCatalog.resolve([
-        {
-          id: "vision-model",
-          name: "Vision Model",
-          provider: "test-provider",
-          input: ["text", "image"],
-        },
-      ]);
+      firstCatalogSnapshot.resolve(createChatVisionModelCatalogSnapshot());
       await first;
 
       expect(responses).toEqual([
@@ -1736,8 +1745,10 @@ describe("gateway server chat", () => {
 
   test("chat.abort cancels chat.send during attachment preparation before ACK", async () => {
     const sessionDir = autoCleanupTempDirs.make("openclaw-gw-");
-    const firstCatalog =
-      createDeferred<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>>();
+    const firstCatalogSnapshot =
+      createDeferred<
+        Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>>
+      >();
     try {
       testState.sessionStorePath = path.join(sessionDir, "sessions.json");
       await writeSessionStore({
@@ -1759,9 +1770,9 @@ describe("gateway server chat", () => {
       }> = [];
       const abortResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
       const context = createDirectChatContext({
-        loadGatewayModelCatalog: vi
-          .fn<GatewayRequestContext["loadGatewayModelCatalog"]>()
-          .mockImplementationOnce(() => firstCatalog.promise),
+        loadGatewayModelCatalogSnapshot: vi
+          .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
+          .mockImplementationOnce(() => firstCatalogSnapshot.promise),
         getRuntimeConfig: () => ({}),
       });
 
@@ -1804,7 +1815,7 @@ describe("gateway server chat", () => {
         }),
       );
       await waitForFast(() => {
-        expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+        expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
         expect(context.chatAbortControllers.has("idem-attachment-abort")).toBe(true);
       }, FAST_WAIT_OPTS);
 
@@ -1864,14 +1875,7 @@ describe("gateway server chat", () => {
         },
       ]);
 
-      firstCatalog.resolve([
-        {
-          id: "vision-model",
-          name: "Vision Model",
-          provider: "test-provider",
-          input: ["text", "image"],
-        },
-      ]);
+      firstCatalogSnapshot.resolve(createChatVisionModelCatalogSnapshot());
       await first;
 
       expect(sendResponses).toEqual([
@@ -1903,7 +1907,7 @@ describe("gateway server chat", () => {
       expect(context.addChatRun).not.toHaveBeenCalled();
       expect(context.removeChatRun).toHaveBeenCalledTimes(1);
     } finally {
-      firstCatalog.resolve([]);
+      firstCatalogSnapshot.resolve(createChatVisionModelCatalogSnapshot());
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
@@ -3619,11 +3623,14 @@ describe("gateway server chat", () => {
       caseName: "pending final delivery",
       runId: "idem-pending-final-delivery",
       entry: {
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: "older reply",
-        pendingFinalDeliveryContext: {
-          channel: "whatsapp",
-          to: "+15551234567",
+        pendingFinalDelivery: {
+          kind: "replayable" as const,
+          text: "older reply",
+          createdAt: Date.now(),
+          context: {
+            channel: "whatsapp",
+            to: "+15551234567",
+          },
         },
       },
     },

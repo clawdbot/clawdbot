@@ -51,8 +51,13 @@ export type CronRunContinuationSession = {
 };
 
 export class CronSessionLifecycleClaimError extends Error {
-  constructor(sessionKey: string) {
-    super(`Session "${sessionKey}" changed while starting work. Retry.`);
+  readonly admissionDisposition = "session-conflict" as const;
+
+  constructor(
+    sessionKey: string,
+    message = `Session "${sessionKey}" changed while starting work. Retry.`,
+  ) {
+    super(message);
     this.name = "CronSessionLifecycleClaimError";
   }
 }

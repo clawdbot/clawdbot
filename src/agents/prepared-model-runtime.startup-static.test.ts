@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => {
     buildPreparedModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
     ensureRuntimePluginsLoaded: vi.fn(),
     loadStaticCatalog: vi.fn(async () => []),
+    resolveStaticCatalogModel: vi.fn(() => undefined),
     mutationListener: undefined as
       | ((event: { agentDir?: string; affectsInheritedStores: boolean }) => void)
       | undefined,
@@ -80,6 +81,7 @@ vi.mock("./runtime-plugins.js", () => ({
 
 vi.mock("./embedded-agent-runner/model.static-catalog.js", () => ({
   loadBundledProviderStaticCatalogContextModels: mocks.loadStaticCatalog,
+  createBundledStaticCatalogModelResolver: () => mocks.resolveStaticCatalogModel,
 }));
 
 vi.mock("../logging/subsystem.js", () => ({

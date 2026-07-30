@@ -570,6 +570,7 @@ export async function spawnSubagentDirect(
       };
     }
     childRunId = pipelineResult.runId;
+    let collectorSessionKey: string | undefined;
     if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
       let launchTerminationConfirmed = false;
       activateSwarmRun({
@@ -640,33 +641,10 @@ export async function spawnSubagentDirect(
         },
       });
       swarmReservationPending = false;
-      emitSessionLifecycleEvent({
-        sessionKey: childSessionKey,
-        reason: "create",
-        parentSessionKey: requesterInternalKey,
-        label: label || undefined,
-      });
-      const acceptedNote = resolveSubagentSpawnAcceptedNote({
-        spawnMode,
-        agentSessionKey: ctx.agentSessionKey,
-      });
-      return {
-        status: "accepted",
-        childSessionKey,
-        sessionKey: childSessionKey,
-        runId: childRunId,
-        mode: spawnMode,
-        taskName,
-        note: preparedSpawnContext.forkFallbackNote
-          ? `${acceptedNote} ${preparedSpawnContext.forkFallbackNote}`
-          : acceptedNote,
-        ...resolvedModelMetadata,
-        modelApplied: resolvedModel ? modelApplied : undefined,
-        attachments: attachmentsReceipt,
-      };
+      collectorSessionKey = childSessionKey;
+    } else {
+      await emitSpawnLifecycleHooks(childRunId);
     }
-
-    await emitSpawnLifecycleHooks(childRunId);
 
     // Emit lifecycle event so the gateway can broadcast sessions.changed to SSE subscribers.
     emitSessionLifecycleEvent({
@@ -683,6 +661,7 @@ export async function spawnSubagentDirect(
     return {
       status: "accepted",
       childSessionKey,
+      ...(collectorSessionKey ? { sessionKey: collectorSessionKey } : {}),
       runId: childRunId,
       mode: spawnMode,
       taskName,

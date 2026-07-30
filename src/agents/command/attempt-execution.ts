@@ -26,6 +26,7 @@ import {
 } from "../../auto-reply/reply/source-turn-id.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
+import { acquireOwnedSessionTranscriptWriteLock } from "../../config/sessions/transcript-write-context.js";
 import { readTailAssistantTextFromSessionTranscript } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -40,7 +41,6 @@ import {
 } from "../../infra/continuation-tracer.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { runWithDiagnosticTraceparent } from "../../infra/diagnostic-trace-context.js";
-import { readErrorName } from "../../infra/errors.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -72,20 +72,28 @@ import {
 import { runCliAgent } from "../cli-runner.js";
 import { hasClaudeLiveSessionForOwner } from "../cli-runner/claude-live-session.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
-import { getCliSessionBinding } from "../cli-session.js";
+import {
+  getCliSessionBinding,
+  resolveCliSessionClearReason,
+  shouldClearFailedCliSessionBinding,
+} from "../cli-session.js";
 import type { RequestCompactionInvocation } from "../compaction-attribution.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
-import { FailoverError } from "../failover-error.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
-import type { AgentRunSessionTarget } from "../run-session-target.js";
+import { resolveAgentRunSessionTarget, type AgentRunSessionTarget } from "../run-session-target.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { withLocalSessionPlacementTurnAdmission } from "../session-placement-admission.js";
+import {
+  acquireSessionWriteLock,
+  resolveSessionWriteLockOptions,
+  resolveSessionWriteLockTargetKey,
+} from "../session-write-lock.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import { isSubagentAnnounceCompletionHandoff } from "../subagent-announce-handoff.js";
 import type { ContinueWorkRequest } from "../tools/continue-work-tool.js";
@@ -109,20 +117,6 @@ export {
 } from "./attempt-execution.helpers.js";
 
 const log = createSubsystemLogger("agents/agent-command");
-
-function shouldClearReusedCliSessionAfterError(err: unknown): boolean {
-  if (readErrorName(err) === "AbortError") {
-    return true;
-  }
-  return err instanceof FailoverError;
-}
-
-function resolveClearedCliSessionReason(err: unknown): string {
-  if (err instanceof FailoverError) {
-    return err.reason;
-  }
-  return readErrorName(err) || "error";
-}
 
 function normalizeTranscriptMirrorText(value: string): string {
   return value.trim().replace(/\s+/gu, " ");
@@ -441,30 +435,65 @@ export async function persistCliTurnTranscript(params: {
   const gapFill = params.embeddedAssistantGapFill ?? false;
   const skipUserTurn = gapFill || params.skipUserTurn === true;
 
-  return await persistTextTurnTranscript({
-    body: skipUserTurn ? "" : params.body,
-    transcriptBody: skipUserTurn ? undefined : params.transcriptBody,
-    ...(!skipUserTurn && params.userMessage ? { userMessage: params.userMessage } : {}),
-    finalText: replyText,
+  const persist = async () =>
+    await persistTextTurnTranscript({
+      body: skipUserTurn ? "" : params.body,
+      transcriptBody: skipUserTurn ? undefined : params.transcriptBody,
+      ...(!skipUserTurn && params.userMessage ? { userMessage: params.userMessage } : {}),
+      finalText: replyText,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionFile: params.sessionFile,
+      sessionEntry: params.sessionEntry,
+      sessionStore: params.sessionStore,
+      storePath: params.storePath,
+      sessionAgentId: params.sessionAgentId,
+      threadId: params.threadId,
+      sessionCwd: params.sessionCwd,
+      config: params.config,
+      embeddedAssistantGapFill: gapFill,
+      assistant: {
+        api: "cli",
+        provider,
+        model,
+        usage: params.result.meta.agentMeta?.usage,
+      },
+      skipAssistantTurn: params.skipAssistantTurn,
+    });
+  if (!gapFill) {
+    return await persist();
+  }
+
+  const sessionTarget = await resolveAgentRunSessionTarget({
+    agentId: params.sessionAgentId,
+    config: params.config,
+    sessionFile: params.sessionFile,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    sessionFile: params.sessionFile,
-    sessionEntry: params.sessionEntry,
-    sessionStore: params.sessionStore,
-    storePath: params.storePath,
-    sessionAgentId: params.sessionAgentId,
-    threadId: params.threadId,
-    sessionCwd: params.sessionCwd,
-    config: params.config,
-    embeddedAssistantGapFill: gapFill,
-    assistant: {
-      api: "cli",
-      provider,
-      model,
-      usage: params.result.meta.agentMeta?.usage,
+    sessionTarget: {
+      agentId: params.sessionAgentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      ...(params.storePath ? { storePath: params.storePath } : {}),
+      ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
     },
-    skipAssistantTurn: params.skipAssistantTurn,
   });
+  const sessionLock =
+    (await acquireOwnedSessionTranscriptWriteLock({
+      sessionFile: params.sessionFile,
+      sessionKey: params.sessionKey,
+      sessionTarget,
+    })) ??
+    (await acquireSessionWriteLock({
+      sessionFile: resolveSessionWriteLockTargetKey(sessionTarget),
+      targetKind: "session-key",
+      ...resolveSessionWriteLockOptions(params.config),
+    }));
+  try {
+    return await persist();
+  } finally {
+    await sessionLock.release();
+  }
 }
 
 export async function runAgentAttempt(params: {
@@ -925,14 +954,19 @@ export async function runAgentAttempt(params: {
         const failedCliSessionId = failedCliSessionBinding?.sessionId;
         if (
           isClaudeCliProvider(cliExecutionProvider) &&
-          failedCliSessionBinding?.forkNextResume !== true &&
-          shouldClearReusedCliSessionAfterError(err) &&
-          !hasNewGeneratedMediaTaskForSessionKey(params.sessionKey, mediaTaskIdsBefore) &&
+          shouldClearFailedCliSessionBinding({
+            error: err,
+            binding: failedCliSessionBinding,
+            hasNewGeneratedMediaTask: hasNewGeneratedMediaTaskForSessionKey(
+              params.sessionKey,
+              mediaTaskIdsBefore,
+            ),
+          }) &&
           failedCliSessionId &&
           mutableCliSessionStore
         ) {
           log.warn(
-            `CLI session cleared after failed reused turn: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(resolveClearedCliSessionReason(err))}`,
+            `CLI session cleared after failed reused turn: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(resolveCliSessionClearReason(err))}`,
           );
 
           params.sessionEntry =
@@ -1128,6 +1162,7 @@ export async function runAgentAttempt(params: {
     bashElevated: params.opts.bashElevated,
     approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
     timeoutMs: params.timeoutMs,
+    runTimeoutOverrideMs: params.runTimeoutOverrideMs,
     runId: params.runId,
     lifecycleGeneration: params.lifecycleGeneration,
     lane: params.opts.lane,

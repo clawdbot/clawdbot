@@ -225,6 +225,7 @@ export type GetReplyOptions = {
     meta?: string;
     approvalId?: string;
     approvalSlug?: string;
+    suppressDurableProgress?: true;
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /**
    * Called when the utility-model narration of the in-progress turn changes.

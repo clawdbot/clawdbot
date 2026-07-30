@@ -476,6 +476,7 @@ export async function persistAgentSessionPhase(params: {
       sessionId: resolvedSessionId,
       storePath: params.storePath,
       agentId: params.sessionAgentId,
+      workspaceDir: params.entry?.spawnedWorkspaceDir,
       previousSessionId,
       previousEndReason: previousSessionId
         ? (freshness?.staleReason ??

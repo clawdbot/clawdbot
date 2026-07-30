@@ -243,6 +243,26 @@ export async function probeIMessagePrivateApi(
   try {
     const result = await runCommandWithTimeout([key, "status", "--json"], { timeoutMs });
     const combined = `${result.stdout}\n${result.stderr}`.trim();
+    const normalized = normalizeLowercaseStringOrEmpty(combined);
+    if (
+      result.code !== 0 &&
+      normalized.includes("unknown subcommand") &&
+      normalized.includes("status")
+    ) {
+      const status: NonNullable<IMessageProbe["privateApi"]> = {
+        available: false,
+        v2Ready: false,
+        selectors: {},
+        rpcMethods: [],
+        cliCapabilities: {
+          sendRichSupportsAttachment: false,
+          pollSendSupportsNoComment: false,
+        },
+        error: `imsg CLI does not support the "status" subcommand. Update imsg on the Messages Mac: ${IMESSAGE_UPDATE_COMMAND}`,
+      };
+      cacheIMessagePrivateApiStatus(key, status);
+      return status;
+    }
     const { payload, firstLineSnippet } = parseStatusPayload(result.stdout);
     const selectors = payload ? selectorsFromPayload(payload) : {};
     const rpcMethods = payload ? rpcMethodsFromPayload(payload) : [];

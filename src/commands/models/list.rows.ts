@@ -208,8 +208,9 @@ async function buildRow(params: {
   routeIndex?: ModelCatalogLogicalRouteIndex;
   authEvaluation?: ModelListAuthEvaluation;
   allowAuthAvailabilityOverride?: boolean;
+  configuredEntry?: ConfiguredEntry;
 }): Promise<ModelRow> {
-  const configured = params.context.configuredByKey.get(params.key);
+  const configured = params.configuredEntry ?? params.context.configuredByKey.get(params.key);
   const authRef = toModelAuthRef(params.model, params.routeIndex);
   const authEvaluation =
     params.authEvaluation ??
@@ -299,6 +300,7 @@ async function appendVisibleRow(params: {
   allowAuthAvailabilityOverride?: boolean;
   skipSuppression?: boolean;
   normalizeWithProviderPlugin?: boolean;
+  configuredEntry?: ConfiguredEntry;
 }): Promise<boolean> {
   if (params.seenKeys?.has(params.key)) {
     return false;
@@ -338,6 +340,7 @@ async function appendVisibleRow(params: {
       ...(params.routeIndex ? { routeIndex: params.routeIndex } : {}),
       authEvaluation,
       allowAuthAvailabilityOverride: params.allowAuthAvailabilityOverride,
+      ...(params.configuredEntry ? { configuredEntry: params.configuredEntry } : {}),
     }),
   );
   params.seenKeys?.add(params.key);
@@ -424,13 +427,21 @@ function findConfiguredProviderModel(params: {
   });
 }
 
-function toFallbackConfiguredListModel(entry: ConfiguredEntry, cfg: OpenClawConfig): ListRowModel {
+function toFallbackConfiguredListModel(
+  entry: ConfiguredEntry,
+  cfg: OpenClawConfig,
+  catalogEntry?: ModelCatalogEntry,
+): ListRowModel {
+  // Explicit models.providers definitions stay authoritative; the prepared
+  // catalog fills plugin-owned refs so this view matches `--all`, and the
+  // placeholder is a last resort for refs nothing knows.
   return (
     findConfiguredProviderModel({
       cfg,
       provider: entry.ref.provider,
       modelId: entry.ref.model,
-    }) ?? {
+    }) ??
+    (catalogEntry ? toPreparedCatalogListModel(catalogEntry) : undefined) ?? {
       provider: entry.ref.provider,
       id: entry.ref.model,
       name: entry.ref.model,
@@ -438,6 +449,35 @@ function toFallbackConfiguredListModel(entry: ConfiguredEntry, cfg: OpenClawConf
       contextWindow: DEFAULT_CONTEXT_TOKENS,
     }
   );
+}
+
+/** Loads the committed catalog generation shared by every model-list row source. */
+export async function loadListModelCatalogSnapshot(
+  context: RowBuilderContext,
+): Promise<ModelCatalogSnapshot> {
+  const { loadPreparedModelCatalogSnapshot } = await loadPreparedModelCatalogModule();
+  const workspaceDir = context.workspaceDir ?? context.metadataSnapshot?.workspaceDir;
+  return loadPreparedModelCatalogSnapshot({
+    config: context.cfg,
+    ...(context.agentId ? { agentId: context.agentId } : {}),
+    agentDir: context.agentDir,
+    ...(workspaceDir ? { workspaceDir } : {}),
+    readOnly: true,
+  });
+}
+
+/** Indexes a catalog generation by model key so configured refs can reuse its metadata. */
+function indexModelCatalogEntriesByKey(
+  snapshot: ModelCatalogSnapshot,
+): ReadonlyMap<string, ModelCatalogEntry> {
+  const byKey = new Map<string, ModelCatalogEntry>();
+  for (const entry of [...snapshot.entries, ...(snapshot.staticEntries ?? [])]) {
+    const key = modelKey(entry.provider, entry.id);
+    if (!byKey.has(key)) {
+      byKey.set(key, entry);
+    }
+  }
+  return byKey;
 }
 
 /** Appends rows discovered from the loaded model registry. */
@@ -538,20 +578,10 @@ export async function appendAuthenticatedCatalogRows(params: {
   rows: ModelRow[];
   context: RowBuilderContext;
   seenKeys: Set<string>;
+  catalogSnapshot?: ModelCatalogSnapshot;
 }): Promise<void> {
-  const { loadPreparedModelCatalogSnapshot } = await loadPreparedModelCatalogModule();
-  const { entries: catalog, routeVariants } = await loadPreparedModelCatalogSnapshot({
-    config: params.context.cfg,
-    ...(params.context.agentId ? { agentId: params.context.agentId } : {}),
-    agentDir: params.context.agentDir,
-    ...((params.context.workspaceDir ?? params.context.metadataSnapshot?.workspaceDir)
-      ? {
-          workspaceDir:
-            params.context.workspaceDir ?? params.context.metadataSnapshot?.workspaceDir,
-        }
-      : {}),
-    readOnly: true,
-  });
+  const { entries: catalog, routeVariants } =
+    params.catalogSnapshot ?? (await loadListModelCatalogSnapshot(params.context));
   const routeIndex = createModelCatalogLogicalRouteIndex(routeVariants);
   for (const entry of catalog) {
     const model = toPreparedCatalogListModel(entry);
@@ -587,21 +617,7 @@ export async function appendPreparedModelCatalogRows(params: {
   catalogSnapshot?: ModelCatalogSnapshot;
 }): Promise<void> {
   const catalogSnapshot =
-    params.catalogSnapshot ??
-    (await (
-      await loadPreparedModelCatalogModule()
-    ).loadPreparedModelCatalogSnapshot({
-      config: params.context.cfg,
-      ...(params.context.agentId ? { agentId: params.context.agentId } : {}),
-      agentDir: params.context.agentDir,
-      ...((params.context.workspaceDir ?? params.context.metadataSnapshot?.workspaceDir)
-        ? {
-            workspaceDir:
-              params.context.workspaceDir ?? params.context.metadataSnapshot?.workspaceDir,
-          }
-        : {}),
-      readOnly: true,
-    }));
+    params.catalogSnapshot ?? (await loadListModelCatalogSnapshot(params.context));
   const staticEntries = catalogSnapshot.staticEntries ?? [];
   const routeVariants = [...catalogSnapshot.routeVariants];
   const seenRouteVariants = new Set(
@@ -640,9 +656,18 @@ export async function appendConfiguredRows(params: {
   entries: ConfiguredEntry[];
   modelRegistry?: ModelRegistry;
   context: RowBuilderContext;
+  catalogSnapshot?: ModelCatalogSnapshot;
 }): Promise<void> {
   const resolveModelWithRegistry = params.modelRegistry
     ? (await loadModelResolverModule()).resolveModelWithRegistry
+    : undefined;
+  const catalogByKey = params.catalogSnapshot
+    ? indexModelCatalogEntriesByKey(params.catalogSnapshot)
+    : undefined;
+  // Route-aware auth/projection keeps configured rows consistent with the
+  // catalog rows built from the same snapshot two sources later.
+  const routeIndex = params.catalogSnapshot
+    ? createModelCatalogLogicalRouteIndex(params.catalogSnapshot.routeVariants)
     : undefined;
   for (const entry of params.entries) {
     if (!matchesProviderFilter(params.context, entry.ref.provider)) {
@@ -656,48 +681,39 @@ export async function appendConfiguredRows(params: {
             modelRegistry: params.modelRegistry,
             cfg: params.context.cfg,
           })
-        : toFallbackConfiguredListModel(entry, params.context.cfg);
-    const model = resolvedModel
-      ? normalizeListRowWithProviderPlugin({ model: resolvedModel, context: params.context })
-      : resolvedModel;
-    if (params.context.filter.local && !model) {
+        : toFallbackConfiguredListModel(entry, params.context.cfg, catalogByKey?.get(entry.key));
+    if (!resolvedModel) {
+      // Registry-resolved refs can miss entirely; the configured view still
+      // surfaces the ref as a "missing" row so a typo'd fallback is visible.
+      if (!params.context.filter.local) {
+        params.rows.push(
+          toModelRow({
+            key: entry.key,
+            tags: Array.from(entry.tags),
+            aliases: entry.aliases,
+            availableKeys: params.context.availableKeys,
+            authAvailability: undefined,
+          }),
+        );
+      }
       continue;
     }
-    const authEvaluation = model
-      ? params.context.authIndex.evaluateModelAuth(model.provider, toModelAuthRef(model))
-      : undefined;
-    const projectedModel =
-      model && authEvaluation
-        ? projectListRowModel({ model, evaluation: authEvaluation, cfg: params.context.cfg })
-        : model;
-    if (
-      params.context.filter.local &&
-      projectedModel &&
-      !isLocalBaseUrl(projectedModel.baseUrl ?? "")
-    ) {
-      continue;
-    }
-    if (
-      projectedModel &&
-      shouldSuppressListModel({ model: projectedModel, context: params.context })
-    ) {
-      continue;
-    }
-    params.rows.push(
-      toModelRow({
-        model: projectedModel,
-        key: entry.key,
-        tags: Array.from(entry.tags),
-        aliases: entry.aliases,
-        availableKeys: params.context.availableKeys,
-        authAvailability: authEvaluation?.availability,
-        authAvailabilityAuthoritative:
-          Boolean(
-            model && !params.context.discoveredKeys.has(modelKey(model.provider, model.id)),
-          ) ||
-          normalizeProviderIdForAuth(model?.provider ?? entry.ref.provider) === "openai" ||
-          (authEvaluation !== undefined && authEvaluation.routeResolution !== null),
-      }),
-    );
+    // Normalize before the availability decision so the discovered-keys check
+    // uses the same canonical key the registry rows carry.
+    const model = normalizeListRowWithProviderPlugin({
+      model: resolvedModel,
+      context: params.context,
+    });
+    await appendVisibleRow({
+      rows: params.rows,
+      model,
+      key: entry.key,
+      context: params.context,
+      ...(routeIndex ? { routeIndex } : {}),
+      configuredEntry: entry,
+      allowAuthAvailabilityOverride: !params.context.discoveredKeys.has(
+        modelKey(model.provider, model.id),
+      ),
+    });
   }
 }

@@ -738,19 +738,25 @@ function queuePendingToolMedia(
   ctx: ToolHandlerContext,
   mediaReply: { mediaUrls: string[]; audioAsVoice?: boolean; trustedLocalMedia?: boolean },
 ) {
-  const seen = new Set(ctx.state.pendingToolMediaUrls);
+  const seen = new Set(ctx.state.pendingToolMediaUrls.map((url) => url.trim()));
   for (const mediaUrl of mediaReply.mediaUrls) {
-    if (seen.has(mediaUrl)) {
+    const normalized = mediaUrl.trim();
+    if (!normalized) {
       continue;
     }
-    seen.add(mediaUrl);
-    ctx.state.pendingToolMediaUrls.push(mediaUrl);
+    if (mediaReply.trustedLocalMedia) {
+      ctx.state.pendingToolMediaTrustByUrl.set(normalized, true);
+    } else if (!ctx.state.pendingToolMediaTrustByUrl.has(normalized)) {
+      ctx.state.pendingToolMediaTrustByUrl.set(normalized, false);
+    }
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    ctx.state.pendingToolMediaUrls.push(normalized);
   }
   if (mediaReply.audioAsVoice) {
     ctx.state.pendingToolAudioAsVoice = true;
-  }
-  if (mediaReply.trustedLocalMedia) {
-    ctx.state.pendingToolTrustedLocalMedia = true;
   }
 }
 

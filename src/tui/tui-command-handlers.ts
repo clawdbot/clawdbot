@@ -38,6 +38,10 @@ import {
   TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
   TUI_SESSION_PICKER_LIMIT,
 } from "./tui-session-list-policy.js";
+import {
+  readTuiSessionProjectionScope,
+  reduceTuiSessionProjection,
+} from "./tui-session-projection.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import {
   acceptPendingSubmit,
@@ -916,12 +920,23 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       return;
     }
     const runId = randomUUID();
+    const sendScope = readTuiSessionProjectionScope(state);
     try {
       if (!isBtw) {
         if (opts.local === true && state.activeChatRunId && !hasPendingSubmit(state)) {
           chatLog.reserveAssistantSlot(state.activeChatRunId);
         }
         chatLog.addPendingUser(runId, text);
+        reduceTuiSessionProjection(state, {
+          type: "sendPending",
+          message: {
+            role: "user",
+            content: [{ type: "text", text }],
+            __openclaw: { idempotencyKey: `${runId}:user` },
+          },
+          runId,
+          scope: sendScope,
+        });
         beginPendingSubmit(state, runId, text);
         noteLocalRunId?.(runId);
         setActivityStatus("sending");
@@ -962,6 +977,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         return;
       }
       if (!isBtw) {
+        // Adopt a durable turn that beat its ACK; otherwise preserve and re-key
+        // the optimistic viewport until the authoritative message arrives.
+        const acknowledgedProjection = reduceTuiSessionProjection(state, {
+          type: "sendAcknowledged",
+          runId: acceptedRunId,
+          previousRunId: runId,
+          scope: sendScope,
+        });
         const acceptedRunAlreadyCompleted =
           acceptedRunId !== runId &&
           !terminalAck &&
@@ -978,12 +1001,25 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           if (!acceptedRunAlreadyCompleted && !terminalAck) {
             noteLocalRunId?.(acceptedRunId);
           }
-          chatLog.rekeyPendingUser(runId, acceptedRunId);
+          if (
+            acknowledgedProjection.entries.some(
+              (entry) => entry.pending && entry.pendingRunId === acceptedRunId,
+            )
+          ) {
+            chatLog.rekeyPendingUser(runId, acceptedRunId);
+          } else {
+            chatLog.dropPendingUser(runId);
+          }
         }
         if (terminalAck) {
           clearPendingSubmit(state, acceptedRunId);
           forgetLocalRunId?.(acceptedRunId);
           if (terminalAckFailure) {
+            reduceTuiSessionProjection(state, {
+              type: "sendFailed",
+              runId: acceptedRunId,
+              scope: sendScope,
+            });
             chatLog.dropPendingUser(acceptedRunId);
           }
           if (state.activeChatRunId === acceptedRunId) {
@@ -1027,6 +1063,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           state.activeChatRunId = null;
         }
         clearPendingSubmit(state, runId);
+        reduceTuiSessionProjection(state, {
+          type: "sendFailed",
+          runId,
+          scope: sendScope,
+        });
         chatLog.dropPendingUser(runId);
       }
       chatLog.addSystem(`${isBtw ? "btw failed" : "send failed"}: ${formatTuiErrorMessage(err)}`);

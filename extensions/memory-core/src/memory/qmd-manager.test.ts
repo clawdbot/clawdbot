@@ -230,10 +230,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { PluginStateLeaseError } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  formatSqliteSessionFileMarker,
-  upsertSessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { formatSessionTranscriptMemoryHitKey } from "openclaw/plugin-sdk/session-transcript-hit";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -289,11 +286,6 @@ async function seedQmdSessionTranscript(params: {
     storePath,
     entry: {
       sessionId: params.sessionId,
-      sessionFile: formatSqliteSessionFileMarker({
-        agentId: params.agentId,
-        sessionId: params.sessionId,
-        storePath,
-      }),
       updatedAt: timestamp,
     },
   });
@@ -3672,7 +3664,8 @@ describe("QmdMemoryManager", () => {
                 collection: "workspace-main",
                 start_line: 8,
                 end_line: 10,
-                snippet: "@@ -20,3\nline one\nline two\nline three",
+                snippet:
+                  "@@ -20,3\nline one\nline two\nline three <!-- project: github.com/acme/Alpha -->",
               },
             ],
           }),
@@ -3707,7 +3700,7 @@ describe("QmdMemoryManager", () => {
         startLine: 8,
         endLine: 10,
         score: 0.91,
-        snippet: "@@ -20,3\nline one\nline two\nline three",
+        snippet: "@@ -20,3\nline one\nline two\nline three <!-- project: github.com/acme/Alpha -->",
         source: "memory",
         provenance: expectedQmdProvenance("untrusted"),
       },
@@ -5872,9 +5865,9 @@ describe("QmdMemoryManager", () => {
       const readResult = await manager.readFile({ relPath: result.path });
       expect(readResult).toEqual({
         path: "qmd/sessions-main/session-1.md",
-        text: "# Session session-1\n\nsession canary\n",
+        text: "# Session session-1\n\nsession canary",
         from: 1,
-        lines: 4,
+        lines: 3,
       });
     } finally {
       lstatSpy.mockRestore();

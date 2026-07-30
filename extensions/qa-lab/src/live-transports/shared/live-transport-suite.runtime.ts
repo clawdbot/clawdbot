@@ -1,10 +1,11 @@
 import type { LiveTransportQaCommandOptions } from "openclaw/plugin-sdk/qa-runtime";
 import { runQaSuiteCommand } from "../../cli.runtime.js";
 import type { QaProviderMode } from "../../providers/index.js";
-import { normalizeQaProviderMode } from "../../run-config.js";
+import { defaultQaModelForMode, normalizeQaProviderMode } from "../../run-config.js";
 
 type LiveTransportScenarioSelection = (params: {
   profile?: string;
+  primaryModel: string;
   providerMode: QaProviderMode;
   scenarioIds?: readonly string[];
 }) => string[];
@@ -36,6 +37,13 @@ export async function runLiveTransportQaSuiteCommand(params: {
     options.providerMode === undefined
       ? params.defaultProviderMode
       : normalizeQaProviderMode(options.providerMode);
+  const primaryModel = options.primaryModel?.trim() || defaultQaModelForMode(providerMode);
+  const selectedScenarioIds = params.selectScenarioIds({
+    profile: options.profile,
+    primaryModel,
+    providerMode,
+    scenarioIds: options.scenarioIds,
+  });
   return runQaSuiteCommand({
     repoRoot: options.repoRoot,
     outputDir: options.outputDir,
@@ -48,11 +56,7 @@ export async function runLiveTransportQaSuiteCommand(params: {
     channelDriver: "live",
     channel: params.channelId,
     concurrency: 1,
-    scenarioIds: params.selectScenarioIds({
-      profile: options.profile,
-      providerMode,
-      scenarioIds: options.scenarioIds,
-    }),
+    scenarioIds: selectedScenarioIds,
     sutAccountId: options.sutAccountId,
     ...(params.credentialMode === "env-only"
       ? {}

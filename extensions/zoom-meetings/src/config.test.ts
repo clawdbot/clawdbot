@@ -1,9 +1,10 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it } from "vitest";
-import {
-  resolveZoomMeetingsConfig,
-  resolveZoomMeetingsGatewayOperationTimeoutMs,
-} from "./config.js";
+import { zoomMeetingsConfig } from "./config.js";
+
+const resolveZoomMeetingsConfig = zoomMeetingsConfig.resolveConfig;
+const resolveZoomMeetingsGatewayOperationTimeoutMs =
+  zoomMeetingsConfig.resolveGatewayOperationTimeoutMs;
 
 describe("Zoom meetings config", () => {
   it("allows the live Zoom web client enough time to reach prejoin and in-call UI", () => {

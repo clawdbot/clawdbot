@@ -1,4 +1,5 @@
 // QQBot plugin module validates raw gateway envelopes for durable ingress.
+import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { GatewayEvent, GatewayOp } from "./constants.js";
 import type { WSPayload } from "./types.js";
 
@@ -23,10 +24,6 @@ type QQBotIngressEnvelopeFacts = {
   laneKey: string;
   payload: WSPayload;
 };
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
 
 function record(value: unknown, field: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {

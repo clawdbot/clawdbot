@@ -2,28 +2,32 @@
 // summaries, bind URLs, ANSI output, and dangerous config reporting.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import { captureEnv, deleteTestEnvValue, withEnvAsync } from "../test-utils/env.js";
-import { formatAgentModelStartupDetails, logGatewayStartup } from "./server-startup-log.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import {
+  formatAgentModelStartupDetails,
+  formatAgentModelStartupLogLine,
+  logGatewayStartup,
+} from "./server-startup-log.js";
 
-const pluginRegistryMocks = vi.hoisted(() => ({
-  loadPluginManifestRegistryForPluginRegistry: vi.fn(),
-}));
 const modelMocks = vi.hoisted(() => ({
   resolveThinkingDefault: vi.fn(() => "medium" as const),
 }));
-// Scrub the host's real reef guard env so ambient channel triggers cannot leak
-// warnings into these assertions. Names are built dynamically so secret scanners
-// do not mistake the identifiers for credential assignments; no values are set.
-const AMBIENT_REEF_ENV_NAMES = ["API", "OPENAI", "ANTHROPIC"].map(
-  (provider) => `REEF_GUARD_${provider}_KEY`,
-);
-const ambientChannelEnvSnapshot = captureEnv(AMBIENT_REEF_ENV_NAMES);
-
-vi.mock("../plugins/plugin-registry.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/plugin-registry.js")>()),
-  loadPluginManifestRegistryForPluginRegistry:
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
-}));
+function createManifestRecord(
+  overrides: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">,
+): PluginManifestRecord {
+  return {
+    channels: [],
+    cliBackends: [],
+    hooks: [],
+    manifestPath: `/tmp/${overrides.id}/openclaw.plugin.json`,
+    origin: "global",
+    providers: [],
+    rootDir: `/tmp/${overrides.id}`,
+    skills: [],
+    source: `/tmp/${overrides.id}/index.js`,
+    ...overrides,
+  };
+}
 
 // Provider thinking owns a dedicated suite. Startup logging only needs its
 // fixture-level default while proving precedence and banner composition.
@@ -33,21 +37,12 @@ vi.mock("../agents/model-thinking-default.js", () => ({
 
 describe("gateway startup log", () => {
   beforeEach(() => {
-    for (const name of AMBIENT_REEF_ENV_NAMES) {
-      deleteTestEnvValue(name);
-    }
     modelMocks.resolveThinkingDefault.mockClear();
     modelMocks.resolveThinkingDefault.mockReturnValue("medium");
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    ambientChannelEnvSnapshot.restore();
   });
 
   afterAll(() => {});
@@ -58,6 +53,8 @@ describe("gateway startup log", () => {
 
     await logGatewayStartup({
       cfg: { hooks: { gmail: { allowUnsafeExternalContent: true } } },
+      env: {},
+      manifestRecords: [],
       bindHost: "127.0.0.1",
       loadedPluginIds: [],
       port: 18789,
@@ -78,6 +75,8 @@ describe("gateway startup log", () => {
 
     await logGatewayStartup({
       cfg: {},
+      env: {},
+      manifestRecords: [],
       bindHost: "127.0.0.1",
       loadedPluginIds: [],
       port: 18789,
@@ -89,17 +88,13 @@ describe("gateway startup log", () => {
   });
 
   it("warns when a configured channel plugin is blocked from startup", async () => {
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "slack",
-          origin: "global",
-          channels: ["slack"],
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    });
+    const manifestRecords = [
+      createManifestRecord({
+        id: "slack",
+        channels: ["slack"],
+        enabledByDefault: false,
+      }),
+    ];
     const info = vi.fn();
     const warn = vi.fn();
 
@@ -112,6 +107,8 @@ describe("gateway startup log", () => {
           },
         },
       },
+      env: {},
+      manifestRecords,
       bindHost: "127.0.0.1",
       loadedPluginIds: [],
       port: 18789,
@@ -139,6 +136,8 @@ describe("gateway startup log", () => {
           },
         },
       },
+      env: {},
+      manifestRecords: [],
       bindHost: "127.0.0.1",
       loadedPluginIds: [],
       port: 18789,
@@ -154,38 +153,34 @@ describe("gateway startup log", () => {
   });
 
   it("logs one dev suppression notice without an ambient configured-channel warning", async () => {
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
-      plugins: [
-        {
+    const manifestRecords = [
+      createManifestRecord({
+        id: "discord",
+        channels: ["discord"],
+        packageChannel: {
           id: "discord",
-          origin: "global",
-          channels: ["discord"],
-          packageChannel: {
-            id: "discord",
-            configuredState: { env: { allOf: ["DISCORD_FAKE_TEST_TRIGGER"] } },
-          },
-          enabledByDefault: false,
+          configuredState: { env: { allOf: ["DISCORD_FAKE_TEST_TRIGGER"] } },
         },
-      ],
-      diagnostics: [],
-    });
+        enabledByDefault: false,
+      }),
+    ];
     const info = vi.fn();
     const warn = vi.fn();
 
-    await withEnvAsync({ DISCORD_FAKE_TEST_TRIGGER: "configured" }, async () => {
-      await logGatewayStartup({
-        cfg: {
-          plugins: {
-            entries: { discord: { enabled: true } },
-          },
+    await logGatewayStartup({
+      cfg: {
+        plugins: {
+          entries: { discord: { enabled: true } },
         },
-        ambientEnvTriggers: "suppress",
-        bindHost: "127.0.0.1",
-        loadedPluginIds: [],
-        port: 18789,
-        log: { info, warn },
-        isNixMode: false,
-      });
+      },
+      env: { DISCORD_FAKE_TEST_TRIGGER: "configured" },
+      manifestRecords,
+      ambientEnvTriggers: "suppress",
+      bindHost: "127.0.0.1",
+      loadedPluginIds: [],
+      port: 18789,
+      log: { info, warn },
+      isNixMode: false,
     });
 
     expect(warn.mock.calls).toEqual([
@@ -198,17 +193,13 @@ describe("gateway startup log", () => {
 
   it("sanitizes configured channel ids in startup warnings", async () => {
     const unsafeChannelId = `slack${String.fromCharCode(0x1b)}[31m`;
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "slack",
-          origin: "global",
-          channels: [unsafeChannelId],
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    });
+    const manifestRecords = [
+      createManifestRecord({
+        id: "slack",
+        channels: [unsafeChannelId],
+        enabledByDefault: false,
+      }),
+    ];
     const info = vi.fn();
     const warn = vi.fn();
 
@@ -221,6 +212,8 @@ describe("gateway startup log", () => {
           },
         },
       },
+      env: {},
+      manifestRecords,
       bindHost: "127.0.0.1",
       loadedPluginIds: [],
       port: 18789,
@@ -233,17 +226,13 @@ describe("gateway startup log", () => {
   });
 
   it("does not warn when startup activation enables the configured channel owner", async () => {
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "openclaw-modern-chat",
-          origin: "global",
-          channels: ["legacy-chat"],
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    });
+    const manifestRecords = [
+      createManifestRecord({
+        id: "openclaw-modern-chat",
+        channels: ["legacy-chat"],
+        enabledByDefault: false,
+      }),
+    ];
     const info = vi.fn();
     const warn = vi.fn();
 
@@ -256,6 +245,8 @@ describe("gateway startup log", () => {
           },
         },
       },
+      env: {},
+      manifestRecords,
       activationSourceConfig: {
         plugins: {
           entries: {
@@ -275,11 +266,8 @@ describe("gateway startup log", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("logs configured model thinking and fast mode defaults with the startup model", async () => {
-    const info = vi.fn();
-    const warn = vi.fn();
-
-    await logGatewayStartup({
+  it("formats configured model thinking and fast mode defaults with the startup model", () => {
+    const line = formatAgentModelStartupLogLine({
       cfg: {
         agents: {
           defaults: {
@@ -296,16 +284,12 @@ describe("gateway startup log", () => {
           },
         },
       },
-      bindHost: "127.0.0.1",
-      loadedPluginIds: [],
-      port: 18789,
-      log: { info, warn },
-      isNixMode: false,
+      provider: "openai",
+      model: "gpt-5.5",
     });
 
-    const firstInfoCall = info.mock.calls[0];
-    expect(firstInfoCall?.[0]).toBe("agent model: openai/gpt-5.5 (thinking=medium, fast=on)");
-    expect(stripAnsi(String(firstInfoCall?.[1]?.consoleMessage))).toBe(
+    expect(line.message).toBe("agent model: openai/gpt-5.5 (thinking=medium, fast=on)");
+    expect(stripAnsi(line.consoleMessage)).toBe(
       "agent model: openai/gpt-5.5 (thinking=medium, fast=on)",
     );
   });
@@ -419,6 +403,8 @@ describe("gateway startup log", () => {
 
     await logGatewayStartup({
       cfg: {},
+      env: {},
+      manifestRecords: [],
       bindHost: "127.0.0.1",
       bindHosts: ["127.0.0.1", "::1"],
       loadedPluginIds: ["delta", "alpha", "delta", "beta"],

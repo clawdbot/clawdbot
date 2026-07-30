@@ -698,6 +698,8 @@ export const handleNodeEvent = async (
         const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
         const supportsInlineImages = await resolveGatewayModelSupportsImages({
           loadGatewayModelCatalog: ctx.loadGatewayModelCatalog,
+          loadGatewayModelCatalogSnapshot: ctx.loadGatewayModelCatalogSnapshot,
+          agentId: sessionAgentId,
           provider: modelRef.provider,
           model: modelRef.model,
         });
@@ -942,7 +944,9 @@ export const handleNodeEvent = async (
       if (!sessionKey) {
         return undefined;
       }
-      await ctx.nodeSubscribe(nodeId, sessionKey, opts?.connId);
+      const { canonicalKey } = loadSessionEntry(sessionKey);
+      // Fanout is keyed by the canonical session; retain the connection owner for safe reconnect.
+      await ctx.nodeSubscribe(nodeId, canonicalKey, opts?.connId);
       return undefined;
     }
     case "chat.unsubscribe": {
@@ -953,7 +957,8 @@ export const handleNodeEvent = async (
       if (!sessionKey) {
         return undefined;
       }
-      await ctx.nodeUnsubscribe(nodeId, sessionKey, opts?.connId);
+      const { canonicalKey } = loadSessionEntry(sessionKey);
+      await ctx.nodeUnsubscribe(nodeId, canonicalKey, opts?.connId);
       return undefined;
     }
     case "exec.started":

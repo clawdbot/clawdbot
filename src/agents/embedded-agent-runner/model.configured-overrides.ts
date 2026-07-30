@@ -20,6 +20,7 @@ import {
 } from "./model.compat.js";
 import {
   buildInlineProviderModels,
+  type InlineModelEntry,
   type InlineProviderConfig,
   normalizeResolvedTransportApi,
   resolveProviderModelInput,
@@ -125,6 +126,7 @@ function matchesProviderScopedModelId(params: {
 
 export function findInlineModelMatch(params: {
   providers: Record<string, InlineProviderConfig>;
+  preparedModels?: readonly InlineModelEntry[];
   provider: string;
   modelId: string;
 }) {
@@ -134,7 +136,7 @@ export function findInlineModelMatch(params: {
       provider: entry.provider,
       modelId: params.modelId,
     });
-  const inlineModels = buildInlineProviderModels(params.providers);
+  const inlineModels = params.preparedModels ?? buildInlineProviderModels(params.providers);
   const exact = inlineModels.find(
     (entry) => entry.provider === params.provider && matchesModelId(entry),
   );
@@ -329,6 +331,7 @@ export function applyConfiguredProviderOverrides(params: {
   runtimeHooks?: ProviderRuntimeHooks;
   preferDiscoveredModelMetadata?: boolean;
   preferDiscoveredTransport?: boolean;
+  staticCatalogModel?: StaticCatalogFallbackModel;
   workspaceDir?: string;
 }): ProviderRuntimeModel {
   const { providerConfig, modelId } = params;
@@ -387,15 +390,16 @@ export function applyConfiguredProviderOverrides(params: {
     (discoveredModel.id !== modelId
       ? findConfiguredProviderModel(providerConfig, params.provider, discoveredModel.id)
       : undefined);
-  const configuredStaticCatalogModel = configuredModel
-    ? (resolveBundledStaticCatalogModel({
+  const configuredStaticCatalogModel =
+    configuredModel &&
+    (params.staticCatalogModel ??
+      (resolveBundledStaticCatalogModel({
         provider: params.provider,
         modelId,
         cfg: params.cfg,
         workspaceDir: params.workspaceDir,
         includeRuntimeDiscovery: true,
-      }) as StaticCatalogFallbackModel | undefined)
-    : undefined;
+      }) as StaticCatalogFallbackModel | undefined));
   const metadataOverrideModel =
     params.preferDiscoveredModelMetadata && isModelsAddMetadataModel({ model: configuredModel })
       ? undefined

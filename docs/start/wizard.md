@@ -28,6 +28,20 @@ setup, channel pairing, daemon controls, skills, and imports. Run it explicitly
 with `openclaw onboard --classic`; the guided inference picker does not delegate
 into it. After inference passes, OpenClaw can use `open channel wizard for
 <channel>` to hand channel setup that needs secrets to a masked terminal wizard.
+Workspace skills and web search are configured the same conversational way:
+`configure skills` and `configure web search` host those setup flows in the
+chat, and `open search wizard` hands credential entry to the masked terminal
+wizard.
+For a local Gateway, `configure gateway` guides port, bind, auth, and Tailscale
+settings but saves config without restarting; say `restart gateway` afterward,
+or use `open gateway wizard` for masked terminal credential entry and then run
+`openclaw gateway restart`. Remote Gateway mode remains an onboarding or
+`openclaw configure` choice rather than a hosted chat wizard.
+
+After onboarding has created the default agent workspace, `import memory` can
+copy detected local memory into it. This conversational import does not change
+config or import credentials or skills, needs no Gateway restart, and reports
+per-source partial or failed copies honestly.
 To change the model provider or its authentication, exit OpenClaw and run
 `openclaw onboard`; OpenClaw does not open guided or classic provider flows.
 
@@ -65,8 +79,9 @@ openclaw agents add <name>
 The classic wizard includes a web search step where you can pick a provider: Brave,
 DuckDuckGo, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search, Ollama Web
 Search, Perplexity, SearXNG, or Tavily. Some need an API key; others are
-key-free. Configure this later with `openclaw configure --section web`. Docs:
-[Web tools](/tools/web).
+key-free. Configure this later with `openclaw configure --section web`, or say
+`configure web search` in the OpenClaw chat to run the same provider setup
+conversationally. Docs: [Web tools](/tools/web).
 </Tip>
 
 ## Guided default

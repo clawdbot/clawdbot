@@ -474,6 +474,10 @@ export function resolveEffectiveToolPolicy(params: {
   };
 }
 
+function denyAllToolPolicy(): SandboxToolPolicy {
+  return { allow: [], deny: ["*"] };
+}
+
 /** Resolve group-scoped tool policy after validating session provenance. */
 export function resolveGroupToolPolicy(params: {
   config?: OpenClawConfig;
@@ -514,7 +518,7 @@ export function resolveGroupToolPolicy(params: {
   const accountId = normalizeAccountId(params.accountId);
   if (!channel) {
     return params.requireConfiguredAccount && accountId !== DEFAULT_ACCOUNT_ID
-      ? { allow: [] }
+      ? denyAllToolPolicy()
       : undefined;
   }
   let plugin;
@@ -536,7 +540,7 @@ export function resolveGroupToolPolicy(params: {
     if (!configured) {
       // A named creator account is an authority boundary, not a fallback hint.
       // If it disappears, deny the scheduled surface instead of selecting default config.
-      return { allow: [] };
+      return denyAllToolPolicy();
     }
   }
   if (groupIds.length === 0) {

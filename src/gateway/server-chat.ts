@@ -562,6 +562,7 @@ export function createAgentEventHandler({
       childSessions: row?.childSessions,
       thinkingLevel: row?.thinkingLevel,
       fastMode: row?.fastMode,
+      toolOverrides: row?.toolOverrides,
       verboseLevel: row?.verboseLevel,
       traceLevel: row?.traceLevel,
       reasoningLevel: row?.reasoningLevel,

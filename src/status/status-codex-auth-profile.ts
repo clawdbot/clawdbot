@@ -1,6 +1,5 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
-import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export function resolveCodexSyntheticUsageAuthProfileId(params: {
@@ -24,12 +23,7 @@ export function resolveCodexSyntheticUsageAuthProfileId(params: {
       return undefined;
     }
     const credentialProvider = normalizeOptionalLowercaseString(credential.provider);
-    const resolvedProvider = resolveProviderIdForAuth(credential.provider, { config: params.cfg });
-    return resolvedProvider === "openai" ||
-      credentialProvider === "openai-codex" ||
-      credentialProvider === "codex-cli"
-      ? normalizedProfileId
-      : undefined;
+    return credentialProvider === "openai" ? normalizedProfileId : undefined;
   } catch {
     return undefined;
   }

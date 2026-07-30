@@ -219,6 +219,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           cfg,
           execOverrides: params.execOverrides,
           skillFilter: opts?.skillFilter,
+          skillOverrides: opts?.skillOverrides,
         });
       });
   sessionEntry = skillResult.sessionEntry;

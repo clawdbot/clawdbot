@@ -52,7 +52,12 @@ describe("custodian page", () => {
     await page.updateComplete;
     const assistantGroup = page.querySelector<HTMLElement>(".chat-group.assistant")!;
     expect(assistantGroup.querySelector("strong")?.textContent).toBe("aboard");
-    expect(assistantGroup.querySelector(".chat-avatar.assistant")?.textContent?.trim()).toBe("OC");
+    expect(
+      assistantGroup
+        .querySelector<HTMLImageElement>("img.chat-avatar.assistant")
+        ?.getAttribute("src"),
+    ).toBe("/favicon.svg");
+    expect(page.querySelector(".custodian__mark openclaw-mascot")).not.toBeNull();
     const card = page.querySelector("openclaw-option-card")!;
     await card.updateComplete;
     expect(page.querySelector(".option-card__choice--recommended")?.textContent).toContain(
@@ -73,6 +78,26 @@ describe("custodian page", () => {
     const userGroup = page.querySelector<HTMLElement>(".chat-group.user")!;
     expect(userGroup.textContent).toContain("Connect WhatsApp");
     expect(connectOption.disabled).toBe(true);
+  });
+
+  it("collapses an empty transcript around a blocking startup error", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValue(
+        new Error(
+          "OpenClaw requires working inference: No agent model is configured. Run `openclaw onboard` first.",
+        ),
+      );
+    const { context } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() =>
+      expect(page.querySelector(".custodian-surface--empty-error")).not.toBeNull(),
+    );
+    expect(page.querySelector("[role=alert]")?.textContent).toContain(
+      "No agent model is configured",
+    );
   });
 
   it.each([

@@ -22,6 +22,7 @@ import type {
   PluginHookChannelContext,
   PluginHookToolRequesterContext,
 } from "../plugins/hook-types.js";
+import { resolveMemoryFlushPlan } from "../plugins/memory-state.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../security/dangerous-tools.js";
@@ -83,6 +84,7 @@ import {
   filterLocalModelLeanTools,
   resolveLocalModelLeanPreserveToolNames,
 } from "./local-model-lean.js";
+import { createMemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { createOpenClawTools, filterToolsByClientCaps } from "./openclaw-tools.js";
@@ -361,6 +363,7 @@ type OpenClawCodingToolsOptions = {
   modelCompat?: ModelCompatConfig;
   /** If false, keep OpenClaw web_search even when a provider-native search tool is active. */
   suppressManagedWebSearch?: boolean;
+  webSearchEnabled?: boolean;
   /**
    * Auth mode for the current provider. We only need this for Anthropic OAuth
    * tool-name blocking quirks.
@@ -473,6 +476,8 @@ type OpenClawCodingToolsOptions = {
   toolPolicyAuditLogLevel?: "info" | "debug";
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
+  /** Reads the sticky untrusted-content flag for the current user turn. */
+  isTurnTainted?: () => boolean;
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   /** Runtime-only resolved skill paths that the read tool may load under workspaceOnly. */
@@ -623,6 +628,18 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const runtimeRoot = capabilityProfile.workspace.runtimeRoot;
   const codingRoot = sandboxRoot ?? runtimeRoot;
   const memoryFlushWriteRoot = sandboxRoot ?? workspaceRoot;
+  // Flush exposes one append-only target; its fallback records inherited taint after success.
+  const memoryWriteProvenance = isMemoryFlushRun
+    ? undefined
+    : createMemoryWriteProvenanceObserver({
+        mutationRoot: sandboxRoot ?? workspaceRoot,
+        workspaceDir: workspaceRoot,
+        plan: resolveMemoryFlushPlan({ cfg: options?.config }) ?? {},
+        resolveOriginClass: () =>
+          options?.senderIsOwner === false || options?.isTurnTainted?.() === true
+            ? "untrusted"
+            : "agent",
+      });
   const includeCoreTools = options?.includeCoreTools !== false;
   const toolConstructionPlan = options?.toolConstructionPlan ?? {
     includeBaseCodingTools: includeCoreTools,
@@ -706,7 +723,10 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
         if (sandboxRoot) {
           continue;
         }
-        const wrapped = createHostWorkspaceWriteTool(codingRoot, { workspaceOnly });
+        const wrapped = createHostWorkspaceWriteTool(codingRoot, {
+          workspaceOnly,
+          memoryWriteProvenance,
+        });
         base.push(workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, codingRoot) : wrapped);
         continue;
       }
@@ -714,7 +734,10 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
         if (sandboxRoot) {
           continue;
         }
-        const wrapped = createHostWorkspaceEditTool(codingRoot, { workspaceOnly });
+        const wrapped = createHostWorkspaceEditTool(codingRoot, {
+          workspaceOnly,
+          memoryWriteProvenance,
+        });
         base.push(workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, codingRoot) : wrapped);
         continue;
       }
@@ -807,6 +830,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
               ? { root: sandboxRoot, bridge: sandboxFsBridge! }
               : undefined,
           workspaceOnly: applyPatchWorkspaceOnly,
+          memoryWriteProvenance,
         });
   options?.recordToolPrepStage?.("shell-tools");
   const ownerOnlyCoreToolDenylist =
@@ -915,22 +939,38 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
         ? [
             workspaceOnly
               ? wrapToolWorkspaceRootGuardWithOptions(
-                  createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                  createSandboxedEditTool({
+                    root: sandboxRoot,
+                    bridge: sandboxFsBridge!,
+                    memoryWriteProvenance,
+                  }),
                   sandboxRoot,
                   {
                     containerWorkdir: sandbox.containerWorkdir,
                   },
                 )
-              : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+              : createSandboxedEditTool({
+                  root: sandboxRoot,
+                  bridge: sandboxFsBridge!,
+                  memoryWriteProvenance,
+                }),
             workspaceOnly
               ? wrapToolWorkspaceRootGuardWithOptions(
-                  createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                  createSandboxedWriteTool({
+                    root: sandboxRoot,
+                    bridge: sandboxFsBridge!,
+                    memoryWriteProvenance,
+                  }),
                   sandboxRoot,
                   {
                     containerWorkdir: sandbox.containerWorkdir,
                   },
                 )
-              : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+              : createSandboxedWriteTool({
+                  root: sandboxRoot,
+                  bridge: sandboxFsBridge!,
+                  memoryWriteProvenance,
+                }),
           ]
         : []
       : []),
@@ -978,6 +1018,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
               : runtimeRoot,
             sandboxed: Boolean(sandbox),
             config: options?.config,
+            webSearchEnabled: options?.webSearchEnabled,
             clientCaps: options?.clientCaps,
             toolBindings: options?.toolBindings,
             pluginToolAllowlist,
@@ -1167,6 +1208,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     sessionKey: options?.sessionKey,
     sessionId: options?.sessionId,
     runId: options?.runId,
+    trigger: options?.trigger,
     approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
     channelId: options?.hookChannelId ?? options?.currentChannelId,
     ...(hasRequester ? { requester } : {}),

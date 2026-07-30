@@ -12,7 +12,17 @@ type UserTurnSessionEntry = SessionEntry;
 
 export type PersistedUserTurnMediaInput = Pick<
   MediaFactInput,
-  "contentType" | "hydrationSuppressed" | "messageId" | "path" | "transcribed" | "url"
+  | "contentType"
+  | "durationMs"
+  | "fileName"
+  | "height"
+  | "hydrationSuppressed"
+  | "messageId"
+  | "path"
+  | "sizeBytes"
+  | "transcribed"
+  | "url"
+  | "width"
 > & {
   kind?: string | null;
   workspaceDir?: string | null;

@@ -269,6 +269,24 @@ export async function executeSystemAgentOperation(
         ].join("\n"),
       );
       return { applied: false };
+    case "gateway-config-setup":
+      runtime.log(
+        [
+          "Gateway configuration needs an interactive session.",
+          "Run `openclaw setup` and say `configure gateway`,",
+          "or run `openclaw configure --section gateway` for the masked terminal wizard.",
+        ].join("\n"),
+      );
+      return { applied: false };
+    case "memory-import":
+      runtime.log(
+        [
+          "Memory import needs an interactive session.",
+          "Open the Memory page in the Control UI,",
+          "or run `openclaw onboard` for the terminal wizard.",
+        ].join("\n"),
+      );
+      return { applied: false };
     case "model-setup":
       runtime.log(
         [
@@ -285,7 +303,9 @@ export async function executeSystemAgentOperation(
             ? "openclaw onboard --classic"
             : operation.target === "channels"
               ? `openclaw channels add${operation.channel ? ` --channel ${operation.channel}` : ""}`
-              : "openclaw configure --section web";
+              : operation.target === "search"
+                ? "openclaw configure --section web"
+                : "openclaw configure --section gateway";
       runtime.log(
         `One-shot mode cannot open an interactive wizard. Run \`${command}\` in a terminal.`,
       );

@@ -88,6 +88,7 @@ export function handleApprovalRequest(params: {
   turnId: string;
   nativeHookRelay?: NativeHookRelayRegistrationHandle;
   autoApprove?: boolean;
+  autoApproveOpenClawToolPolicy?: boolean;
   signal?: AbortSignal;
   onNativeToolFailureDisposition?: Parameters<
     typeof handleCodexAppServerApprovalRequest
@@ -101,6 +102,7 @@ export function handleApprovalRequest(params: {
     turnId: params.turnId,
     nativeHookRelay: params.nativeHookRelay,
     autoApprove: params.autoApprove,
+    autoApproveOpenClawToolPolicy: params.autoApproveOpenClawToolPolicy,
     signal: params.signal,
     onNativeToolFailureDisposition: params.onNativeToolFailureDisposition,
   });

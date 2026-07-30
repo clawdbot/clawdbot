@@ -99,10 +99,22 @@ describe("OpenClaw setup detection protocol", () => {
           website: "https://ollama.com/download",
         },
       ],
+      unavailableCandidates: [
+        {
+          id: "gemini-cli",
+          brandId: "google-gemini-cli",
+          label: "Gemini CLI",
+          detail: "installed; login status unavailable",
+          reason: "Reconnect through OpenClaw or use a Gemini API key.",
+          authOptionId: "google-gemini-cli",
+          manualProviderId: "gemini-api-key",
+        },
+      ],
       manualProviders: [
         {
           id: "ollama",
           brandId: "ollama",
+          groupLabel: "Ollama",
           label: "Ollama",
           icon: "https://cdn.simpleicons.org/ollama",
           website: "https://ollama.com/download",
@@ -128,8 +140,11 @@ describe("OpenClaw setup detection protocol", () => {
       Value.Check(SystemAgentSetupDetectResultSchema, {
         ...result,
         candidates: result.candidates.map(({ brandId: _brandId, ...candidate }) => candidate),
+        unavailableCandidates: result.unavailableCandidates.map(
+          ({ brandId: _brandId, ...candidate }) => candidate,
+        ),
         manualProviders: result.manualProviders.map(
-          ({ brandId: _brandId, ...provider }) => provider,
+          ({ brandId: _brandId, groupLabel: _groupLabel, ...provider }) => provider,
         ),
         recommendedInstalls: result.recommendedInstalls.map(
           ({ brandId: _brandId, ...install }) => install,

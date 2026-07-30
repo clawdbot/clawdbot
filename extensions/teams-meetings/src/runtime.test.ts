@@ -1,7 +1,9 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { resolveTeamsMeetingsConfig } from "./config.js";
+import { teamsMeetingsConfig } from "./config.js";
 import { TeamsMeetingsRuntime } from "./runtime.js";
+
+const resolveTeamsMeetingsConfig = teamsMeetingsConfig.resolveConfig;
 
 const URL =
   "https://teams.microsoft.com/l/meetup-join/19%3ameeting_runtime%40thread.v2/0?context=%7b%22Tid%22%3a%22one%22%7d";

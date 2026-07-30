@@ -807,6 +807,34 @@ describe("normalizeClaudeBackendConfig", () => {
     );
   });
 
+  it("does not forward an expired selected OAuth profile", () => {
+    const backend = buildAnthropicCliBackend();
+
+    expect(() =>
+      backend.prepareExecution?.({
+        workspaceDir: "/tmp/openclaw-claude-cli",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-7",
+        authProfileId: "anthropic:claude-cli",
+        authCredential: {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "expired-access-token",
+          refresh: "expired-refresh-token",
+          expires: Date.now() - 60_000,
+        },
+      } as Parameters<NonNullable<typeof backend.prepareExecution>>[0] & {
+        authCredential: {
+          type: "oauth";
+          provider: string;
+          access: string;
+          refresh: string;
+          expires: number;
+        };
+      }),
+    ).toThrow("Selected Claude CLI OAuth credential is expired or invalid");
+  });
+
   it("keeps native Claude login when no compatible profile is selected", () => {
     const backend = buildAnthropicCliBackend();
 

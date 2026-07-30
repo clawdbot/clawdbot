@@ -32,6 +32,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "completionOwnerSessionKey",
   "spawnedWorkspaceDir",
   "spawnedCwd",
+  "sessionDiffBaseline",
   "worktree",
   "parentSessionKey",
   "createdVia",
@@ -73,6 +74,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "thinkingLevel",
   "cronRunContinuation",
   "fastMode",
+  "toolOverrides",
   "verboseLevel",
   "traceLevel",
   "reasoningLevel",
@@ -111,13 +113,6 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "outputTokens",
   "totalTokens",
   "pendingFinalDelivery",
-  "pendingFinalDeliveryCreatedAt",
-  "pendingFinalDeliveryLastAttemptAt",
-  "pendingFinalDeliveryAttemptCount",
-  "pendingFinalDeliveryLastError",
-  "pendingFinalDeliveryText",
-  "pendingFinalDeliveryContext",
-  "pendingFinalDeliveryIntentId",
   "restartRecoveryDeliveryContext",
   "restartRecoveryDeliveryMediaUrls",
   "restartRecoveryDisableMessageTool",
@@ -143,20 +138,13 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "model",
   "modelSelectionLocked",
   "agentHarnessId",
-  "fallbackNoticeSelectedModel",
-  "fallbackNoticeActiveModel",
-  "fallbackNoticeReason",
+  "fallbackNotice",
   "contextTokens",
   "contextBudgetStatus",
   "lastContextPressureBand",
   "compactionCount",
   "compactionCheckpoints",
-  "memoryFlushAt",
-  "memoryFlushCompactionCount",
-  "memoryFlushContextHash",
-  "memoryFlushFailureCount",
-  "memoryFlushLastFailedAt",
-  "memoryFlushLastFailureError",
+  "memoryFlush",
   "cliSessionIds",
   "cliSessionBindings",
   "acpSessionBinding",
@@ -200,7 +188,7 @@ type SessionEntryReservedSlotSetValue = [MissingSessionEntryReservedSlotKey] ext
 const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set<SessionEntryReservedSlotSetValue>(
   SESSION_ENTRY_RESERVED_SLOT_KEY_LIST,
 );
-const RETIRED_SESSION_DELIVERY_SLOT_KEYS = new Set<string>([
+const RETIRED_SESSION_SLOT_KEYS = new Set<string>([
   "channel",
   "origin",
   "route",
@@ -209,6 +197,22 @@ const RETIRED_SESSION_DELIVERY_SLOT_KEYS = new Set<string>([
   "lastTo",
   "lastAccountId",
   "lastThreadId",
+  "pendingFinalDeliveryCreatedAt",
+  "pendingFinalDeliveryLastAttemptAt",
+  "pendingFinalDeliveryAttemptCount",
+  "pendingFinalDeliveryLastError",
+  "pendingFinalDeliveryText",
+  "pendingFinalDeliveryContext",
+  "pendingFinalDeliveryIntentId",
+  "fallbackNoticeSelectedModel",
+  "fallbackNoticeActiveModel",
+  "fallbackNoticeReason",
+  "memoryFlushAt",
+  "memoryFlushCompactionCount",
+  "memoryFlushContextHash",
+  "memoryFlushFailureCount",
+  "memoryFlushLastFailedAt",
+  "memoryFlushLastFailureError",
 ]);
 const OBJECT_PROTOTYPE_RESERVED_SLOT_KEYS = new Set<string>([
   "prototype",
@@ -233,7 +237,7 @@ export function normalizeSessionEntrySlotKey(
       error: "sessionEntrySlotKey must be an identifier-style field name",
     };
   }
-  if (SESSION_ENTRY_RESERVED_SLOT_KEYS.has(key) || RETIRED_SESSION_DELIVERY_SLOT_KEYS.has(key)) {
+  if (SESSION_ENTRY_RESERVED_SLOT_KEYS.has(key) || RETIRED_SESSION_SLOT_KEYS.has(key)) {
     return {
       ok: false,
       error: `sessionEntrySlotKey is reserved by SessionEntry: ${key}`,

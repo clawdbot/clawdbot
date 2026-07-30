@@ -43,7 +43,10 @@ function createFixture() {
   const removeAbortSignalListener = vi.fn(() => order.push("remove-abort-listener"));
   const getBeforeAgentFinalizeRevisionReason = vi.fn(() => "revision");
   const promptActiveSession = vi.fn(async () => undefined);
-  const activeSession = { sessionId: "active-session" };
+  const activeSession = {
+    sessionId: "active-session",
+    getActiveToolNames: vi.fn(() => ["read"]),
+  };
   const sessionManager = { kind: "session-manager" };
   const hookRunner = { kind: "hook-runner" };
   const cacheTrace = { kind: "cache-trace" };
@@ -280,6 +283,12 @@ describe("runEmbeddedAttemptSettledPhase", () => {
             timestamp: 100,
             __openclaw: { senderName: "Alice" },
           }),
+        }),
+        toolPolicy: expect.objectContaining({
+          baseline: {
+            activeToolNames: ["read"],
+            catalogEntries: [],
+          },
         }),
       }),
     );

@@ -3,7 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -835,6 +835,79 @@ module.exports = {
         expect(resToken.ok).toBe(true);
       } finally {
         await server2.close({ reason: "wizard auth verify" });
+        await removeGatewayTempHome(tempHome);
+        envSnapshot.restore();
+      }
+    },
+  );
+
+  it.each([
+    { flow: "setup", exitCode: 0, status: "done" },
+    { flow: "setup", exitCode: 23, status: "error" },
+    { flow: "channels", exitCode: 0, status: "done" },
+    { flow: "channels", exitCode: 23, status: "error" },
+  ] as const)(
+    "keeps the authenticated Gateway alive after a $flow wizard exits $exitCode",
+    { timeout: GATEWAY_E2E_TIMEOUT_MS },
+    async ({ flow, exitCode, status }) => {
+      const { envSnapshot, tempHome } = await setupGatewayTempHome({
+        prefix: `openclaw-wizard-${flow}-exit-home-`,
+        minimalGateway: true,
+      });
+      const wizardToken = nextGatewayId("wiz-contained-exit");
+      const port = await getFreeGatewayPort();
+      const server = await startGatewayServer(port, {
+        bind: "loopback",
+        auth: { mode: "token", token: wizardToken },
+        controlUiEnabled: false,
+        wizardRunner: async (_opts, runtime, prompter) => {
+          await prompter.outro("wizard complete");
+          runtime.exit(exitCode);
+        },
+        channelWizardRunner: async (_opts, runtime, prompter) => {
+          await prompter.outro("channel wizard complete");
+          runtime.exit(exitCode);
+        },
+      });
+      const client = await connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token: wizardToken,
+        clientDisplayName: "vitest-wizard-contained-exit",
+      });
+      // Intercept an actual host exit so the fail-first Gateway test cannot
+      // terminate its Vitest worker before reporting the regression.
+      const processExit = vi.spyOn(process, "exit").mockImplementation((code) => {
+        throw new Error(`Gateway process exit ${code}`);
+      });
+
+      try {
+        const start = await client.request<{
+          sessionId: string;
+          done: boolean;
+          status: "running" | "done" | "cancelled" | "error";
+          step?: { id: string };
+        }>("wizard.start", flow === "channels" ? { flow } : { mode: "local" });
+        expect(start).toMatchObject({ done: false, status: "running" });
+        expect(start.step?.id).toBeTruthy();
+
+        const result = await client.request<{
+          done: boolean;
+          status: "running" | "done" | "cancelled" | "error";
+          error?: string;
+        }>("wizard.next", {
+          sessionId: start.sessionId,
+          answer: { stepId: start.step?.id, value: null },
+        });
+        expect(result).toMatchObject({ done: true, status });
+        if (exitCode !== 0) {
+          expect(result.error).toContain(String(exitCode));
+        }
+        expect(processExit).not.toHaveBeenCalled();
+        await expect(client.request("health", {})).resolves.toBeDefined();
+      } finally {
+        processExit.mockRestore();
+        await disconnectGatewayClient(client);
+        await server.close({ reason: "wizard runtime isolation E2E complete" });
         await removeGatewayTempHome(tempHome);
         envSnapshot.restore();
       }

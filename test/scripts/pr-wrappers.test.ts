@@ -23,6 +23,7 @@ function readScript(path: string): string {
 const canonicalMismatchMessage = (repo: string) =>
   [
     "scripts/pr implementation differs between this worktree and the canonical checkout, and does not match origin/main.",
+    "differing wrapper components vs origin/main: scripts/pr-lib",
     `Refusing to silently substitute canonical wrapper code from: ${repo}`,
     "Run scripts/pr from a checkout whose wrapper matches the canonical checkout or a fetched origin/main.",
     "",
@@ -422,6 +423,7 @@ describe("scripts/pr wrappers", () => {
 
     expect(result.stderr).not.toContain("Refusing to silently substitute");
     expect(result.stderr).not.toContain("scripts/pr implementation differs");
+    expect(result.stderr).not.toContain("differing wrapper components vs origin/main");
     expect(result.stderr).not.toContain("uncommitted changes");
 
     // A local branch literally named "origin/main" must not spoof the trust

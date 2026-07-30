@@ -180,7 +180,6 @@ type ProviderMetadataOwners = {
 function resolveProviderMetadataOwners(): ProviderMetadataOwners {
   const current = getCurrentPluginMetadataSnapshot({
     allowWorkspaceScopedSnapshot: true,
-    requireDefaultDiscoveryContext: true,
   });
   if (current) {
     return {

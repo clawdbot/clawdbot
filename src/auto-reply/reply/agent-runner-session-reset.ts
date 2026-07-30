@@ -91,20 +91,13 @@ export async function resetReplyRunSession(params: {
     contextTokens: undefined,
     contextBudgetStatus: undefined,
     systemPromptReport: undefined,
-    fallbackNoticeSelectedModel: undefined,
-    fallbackNoticeActiveModel: undefined,
-    fallbackNoticeReason: undefined,
+    fallbackNotice: undefined,
     continuationChainCount: undefined,
     continuationChainStartedAt: undefined,
     continuationChainTokens: undefined,
     continuationChainId: undefined,
     compactionCount: 0,
-    memoryFlushAt: undefined,
-    memoryFlushCompactionCount: undefined,
-    memoryFlushContextHash: undefined,
-    memoryFlushFailureCount: undefined,
-    memoryFlushLastFailedAt: undefined,
-    memoryFlushLastFailureError: undefined,
+    memoryFlush: undefined,
   };
   clearAllCliSessions(nextEntry);
   nextEntry.agentHarnessId = undefined;

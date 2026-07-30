@@ -168,6 +168,12 @@ export type ChannelAccountSnapshot = {
   stateReason?: string;
   lastError?: string | null;
   healthState?: string;
+  /**
+   * Inbound admission, which is a different failure domain from `connected`.
+   * Optional-`true` on purpose: there is no `false` to mistake for "unknown",
+   * so the 20+ channels that never report ingress at all stay unaffected.
+   */
+  ingressUnavailable?: true;
   terminalDisconnect?: boolean;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
