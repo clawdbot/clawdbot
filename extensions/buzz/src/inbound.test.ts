@@ -231,6 +231,34 @@ describe("handleBuzzInbound", () => {
     });
   });
 
+  it("logs typing startup failures through the plugin runtime logger", async () => {
+    const runtime = createPluginRuntimeMock();
+    const error = vi.fn();
+    vi.mocked(runtime.logging.getChildLogger).mockReturnValue({
+      info: vi.fn(),
+      warn: vi.fn(),
+      error,
+    });
+    setBuzzRuntime(runtime);
+
+    await handleBuzzInbound({
+      account: createAccount(),
+      cfg: {} satisfies OpenClawConfig,
+      bus: createBus(),
+      message: createMessage({ mentionedPubkeys: [BOT_PUBLIC_KEY] }),
+    });
+
+    firstDispatch(runtime).replyPipeline?.typing?.onStartError?.(new Error("relay unavailable"));
+
+    expect(runtime.logging.getChildLogger).toHaveBeenCalledWith({
+      plugin: "buzz",
+      feature: "typing",
+    });
+    expect(error).toHaveBeenCalledWith(
+      `[default] Buzz typing failed for ${ROOM_ID}: Error: relay unavailable`,
+    );
+  });
+
   it("provides bounded structured diff context without treating diff content as commands", async () => {
     const runtime = createPluginRuntimeMock();
     vi.mocked(runtime.channel.commands.shouldComputeCommandAuthorized).mockReturnValue(true);
