@@ -337,6 +337,51 @@ describe("watchClientDisconnect", () => {
     expect(controller.signal.aborted).toBe(true);
   });
 
+  it("aborts when the client disconnected before close listeners were installed", () => {
+    const socket = Object.assign(new EventEmitter(), { destroyed: true });
+    const { req, res } = makeMockHttpReqRes(socket, socket);
+    Object.assign(req, { complete: true, destroyed: true });
+    Object.assign(res, { destroyed: true, writableEnded: false });
+    socket.emit("close");
+
+    const controller = new AbortController();
+    const onDisconnect = vi.fn();
+    watchClientDisconnect(req, res, controller, onDisconnect);
+
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+    expect(controller.signal.aborted).toBe(true);
+  });
+
+  it.each([
+    ["an incomplete request was destroyed", { req: { complete: false, destroyed: true } }],
+    ["the response was destroyed", { res: { destroyed: true } }],
+    ["the response already ended", { res: { writableEnded: true } }],
+  ])("aborts immediately when %s", (_name, state) => {
+    const socket = Object.assign(new EventEmitter(), { destroyed: false });
+    const { req, res } = makeMockHttpReqRes(socket, socket);
+    Object.assign(req, { complete: false, destroyed: false }, state.req);
+    Object.assign(res, { destroyed: false, writableEnded: false }, state.res);
+    const controller = new AbortController();
+
+    watchClientDisconnect(req, res, controller);
+
+    expect(controller.signal.aborted).toBe(true);
+  });
+
+  it("keeps watching after a complete request was consumed on a live socket", () => {
+    const socket = Object.assign(new EventEmitter(), { destroyed: false });
+    const { req, res } = makeMockHttpReqRes(socket, socket);
+    Object.assign(req, { complete: true, destroyed: true });
+    Object.assign(res, { destroyed: false, writableEnded: false });
+    const controller = new AbortController();
+
+    const cleanup = watchClientDisconnect(req, res, controller);
+
+    expect(controller.signal.aborted).toBe(false);
+    expect(socket.listenerCount("close")).toBe(1);
+    cleanup();
+  });
+
   it("does not double-abort when the controller is already aborted", () => {
     const socket = new EventEmitter();
     const { req, res } = makeMockHttpReqRes(socket, null);

@@ -171,21 +171,26 @@ export function watchClientDisconnect(
       ),
     ),
   );
-  if (sockets.length === 0) {
-    return () => {};
-  }
   const handleClose = () => {
     onDisconnect?.();
     if (!abortController.signal.aborted) {
       abortController.abort(new ClientDisconnectError());
     }
   };
-  for (const socket of sockets) {
-    socket.on("close", handleClose);
-  }
-  return () => {
+  const stopWatching = () => {
     for (const socket of sockets) {
       socket.off("close", handleClose);
     }
   };
+  for (const socket of sockets) {
+    socket.on("close", handleClose);
+  }
+  // A fully consumed IncomingMessage may be destroyed while its keep-alive socket is still open.
+  const requestTerminatedEarly = req.destroyed && !req.complete;
+  const socketClosed = sockets.some((socket) => socket.destroyed);
+  if (requestTerminatedEarly || socketClosed || res.destroyed || res.writableEnded) {
+    stopWatching();
+    handleClose();
+  }
+  return stopWatching;
 }
