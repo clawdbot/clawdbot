@@ -117,14 +117,14 @@ describe("Codex app-server websocket transport", () => {
     transports.push(transport);
     await connected;
 
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(20_000);
     await expect(receivedPing).resolves.toBeUndefined();
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(20_000);
 
     expect(transport.killed).toBe(false);
   });
 
-  it("closes a remote websocket when the app-server does not answer a ping", async () => {
+  it("closes a remote websocket only after five consecutive unanswered pings", async () => {
     vi.useFakeTimers();
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0, autoPong: false });
     servers.push(server);
@@ -161,12 +161,49 @@ describe("Codex app-server websocket transport", () => {
     });
     await connected;
 
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(20_000);
     await expect(receivedPing).resolves.toBeUndefined();
-    await vi.advanceTimersByTimeAsync(10_000);
+
+    for (let missedPongs = 1; missedPongs < 5; missedPongs += 1) {
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(transport.killed).toBe(false);
+    }
+    await vi.advanceTimersByTimeAsync(20_000);
 
     await expect(exited).resolves.toBe(1006);
     expect(transport.killed).toBe(true);
+  });
+
+  it.each([401, 403])("surfaces a rejected HTTP %i websocket upgrade", async (statusCode) => {
+    const httpServer = http.createServer((_request, response) => {
+      response.writeHead(statusCode);
+      response.end();
+    });
+    httpServers.push(httpServer);
+    await new Promise<void>((resolve) => {
+      httpServer.listen(0, "127.0.0.1", resolve);
+    });
+    const address = httpServer.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected websocket test server port");
+    }
+
+    const transport = createWebSocketTransport({
+      transport: "websocket",
+      command: "codex",
+      args: [],
+      url: `ws://127.0.0.1:${address.port}`,
+      headers: {},
+    });
+    transports.push(transport);
+    const connectionError = new Promise<unknown>((resolve) => {
+      transport.once("error", (error) => resolve(error));
+    });
+
+    await expect(connectionError).resolves.toHaveProperty(
+      "message",
+      `Unexpected server response: ${statusCode}`,
+    );
   });
 
   it("preserves UTF-8 JSON-RPC bytes split across writable chunks", async () => {

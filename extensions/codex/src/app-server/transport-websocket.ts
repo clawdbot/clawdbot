@@ -12,8 +12,9 @@ import { resolveCodexAppServerUserHomeDir, type CodexAppServerStartOptions } fro
 import type { CodexAppServerTransport } from "./transport.js";
 
 const WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 10_000;
-const WEBSOCKET_PING_INTERVAL_MS = 30_000;
-const WEBSOCKET_PONG_TIMEOUT_MS = 10_000;
+const WEBSOCKET_PING_INTERVAL_MS = 20_000;
+const WEBSOCKET_PONG_TIMEOUT_MS = 20_000;
+const MAX_CONSECUTIVE_MISSED_WEBSOCKET_PONGS = 5;
 
 /** Opens a WebSocket app-server transport and maps newline-delimited frames to stdout/stdin. */
 export function createWebSocketTransport(
@@ -50,18 +51,73 @@ export function createWebSocketTransport(
   const stdinDecoder = new StringDecoder("utf8");
   let pendingLine = "";
   let killed = false;
-  let pingInterval: NodeJS.Timeout | undefined;
+  let pingTimeout: NodeJS.Timeout | undefined;
   let pongTimeout: NodeJS.Timeout | undefined;
+  let expectedPong: Buffer | undefined;
+  let consecutiveMissedPongs = 0;
+  let heartbeatSequence = 0;
 
   const clearConnectionHealthTimers = () => {
-    if (pingInterval) {
-      clearInterval(pingInterval);
-      pingInterval = undefined;
+    if (pingTimeout) {
+      clearTimeout(pingTimeout);
+      pingTimeout = undefined;
     }
     if (pongTimeout) {
       clearTimeout(pongTimeout);
       pongTimeout = undefined;
     }
+    expectedPong = undefined;
+  };
+
+  const sendHeartbeatPing = () => {
+    if (socket.readyState !== WebSocket.OPEN || pongTimeout) {
+      return;
+    }
+
+    const payload = Buffer.from(`openclaw-codex-${++heartbeatSequence}`);
+    expectedPong = payload;
+    pongTimeout = setTimeout(() => {
+      pongTimeout = undefined;
+      expectedPong = undefined;
+      consecutiveMissedPongs += 1;
+      if (consecutiveMissedPongs >= MAX_CONSECUTIVE_MISSED_WEBSOCKET_PONGS) {
+        socket.terminate();
+        return;
+      }
+      sendHeartbeatPing();
+    }, WEBSOCKET_PONG_TIMEOUT_MS);
+    pongTimeout.unref();
+    socket.ping(payload, (error) => {
+      if (error) {
+        socket.terminate();
+      }
+    });
+  };
+
+  const scheduleHeartbeatPing = () => {
+    if (
+      options.transport !== "websocket" ||
+      socket.readyState !== WebSocket.OPEN ||
+      pingTimeout ||
+      pongTimeout
+    ) {
+      return;
+    }
+    pingTimeout = setTimeout(() => {
+      pingTimeout = undefined;
+      sendHeartbeatPing();
+    }, WEBSOCKET_PING_INTERVAL_MS);
+    pingTimeout.unref();
+  };
+
+  const recordConnectionActivity = () => {
+    consecutiveMissedPongs = 0;
+    if (pongTimeout) {
+      clearTimeout(pongTimeout);
+      pongTimeout = undefined;
+    }
+    expectedPong = undefined;
+    scheduleHeartbeatPing();
   };
 
   const sendFrame = (frame: string) => {
@@ -82,29 +138,11 @@ export function createWebSocketTransport(
     for (const frame of pendingFrames.splice(0)) {
       socket.send(frame);
     }
-    if (options.transport === "websocket") {
-      pingInterval = setInterval(() => {
-        if (socket.readyState !== WebSocket.OPEN || pongTimeout) {
-          return;
-        }
-        pongTimeout = setTimeout(() => {
-          pongTimeout = undefined;
-          socket.terminate();
-        }, WEBSOCKET_PONG_TIMEOUT_MS);
-        pongTimeout.unref();
-        socket.ping((error) => {
-          if (error) {
-            socket.terminate();
-          }
-        });
-      }, WEBSOCKET_PING_INTERVAL_MS);
-      pingInterval.unref();
-    }
+    scheduleHeartbeatPing();
   });
-  socket.on("pong", () => {
-    if (pongTimeout) {
-      clearTimeout(pongTimeout);
-      pongTimeout = undefined;
+  socket.on("pong", (payload) => {
+    if (expectedPong?.equals(payload)) {
+      recordConnectionActivity();
     }
   });
   socket.once("error", (error) => {
@@ -117,6 +155,9 @@ export function createWebSocketTransport(
     events.emit("exit", code, reason.toString("utf8"));
   });
   socket.on("message", (data) => {
+    if (options.transport === "websocket") {
+      recordConnectionActivity();
+    }
     const text = websocketFrameToText(data);
     stdout.write(text.endsWith("\n") ? text : `${text}\n`);
   });

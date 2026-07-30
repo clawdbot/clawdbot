@@ -75,6 +75,78 @@ describe("Codex remote WebSocket connection health", () => {
     expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledTimes(2);
   });
 
+  it("retries a transient remote connection failure without starting a model", async () => {
+    const client = createClient();
+    sharedClientMocks.getLeasedSharedCodexAppServerClient
+      .mockRejectedValueOnce(new Error("Opening handshake has timed out"))
+      .mockResolvedValueOnce(client.client);
+    const ctx = createServiceContext();
+    const service = createCodexAppServerConnectionHealthService({
+      getPluginConfig: () => ({
+        appServer: { transport: "websocket", url: "ws://127.0.0.1:39175" },
+      }),
+      getRuntimeConfig: () => ctx.config,
+    });
+
+    await service.start(ctx);
+
+    await vi.waitFor(
+      () => {
+        expect(sharedClientMocks.getLeasedSharedCodexAppServerClient).toHaveBeenCalledTimes(2);
+        expect(client.addCloseHandler).toHaveBeenCalledOnce();
+      },
+      { timeout: 3_000 },
+    );
+    expect(client.request).not.toHaveBeenCalled();
+
+    await service.stop?.(ctx);
+
+    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
+  });
+
+  it.each([401, 403])("does not retry an HTTP %i authentication failure", async (statusCode) => {
+    sharedClientMocks.getLeasedSharedCodexAppServerClient.mockRejectedValueOnce(
+      new Error(`Unexpected server response: ${statusCode}`),
+    );
+    const ctx = createServiceContext();
+    const service = createCodexAppServerConnectionHealthService({
+      getPluginConfig: () => ({
+        appServer: { transport: "websocket", url: "ws://127.0.0.1:39175" },
+      }),
+      getRuntimeConfig: () => ctx.config,
+    });
+
+    await service.start(ctx);
+
+    await vi.waitFor(() => {
+      expect(ctx.logger.error).toHaveBeenCalledWith(
+        expect.stringContaining(`Unexpected server response: ${statusCode}`),
+      );
+    });
+    expect(sharedClientMocks.getLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
+
+    await service.stop?.(ctx);
+
+    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).not.toHaveBeenCalled();
+  });
+
+  it("does not retry an invalid remote app-server configuration", async () => {
+    const ctx = createServiceContext();
+    const service = createCodexAppServerConnectionHealthService({
+      getPluginConfig: () => ({ appServer: { transport: "websocket" } }),
+      getRuntimeConfig: () => ctx.config,
+    });
+
+    await service.start(ctx);
+
+    expect(ctx.logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("configuration is invalid"),
+    );
+    expect(sharedClientMocks.getLeasedSharedCodexAppServerClient).not.toHaveBeenCalled();
+
+    await service.stop?.(ctx);
+  });
+
   it("does not connect or start a model for local transports", async () => {
     const ctx = createServiceContext();
     const service = createCodexAppServerConnectionHealthService({
