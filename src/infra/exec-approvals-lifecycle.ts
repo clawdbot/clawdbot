@@ -12,6 +12,7 @@ import {
   unresolvedEnvironmentMayHideLifecycle,
 } from "./exec-approvals-lifecycle-env.js";
 import { classifyOpenClawGatewayArgv } from "./exec-approvals-lifecycle-gateway.js";
+import { classifyOpenClawNodeServiceArgv } from "./exec-approvals-lifecycle-node-service.js";
 import { resolveNodeOpenClawArgv } from "./exec-approvals-lifecycle-node.js";
 import {
   isOpenClawExecutablePattern,
@@ -268,10 +269,12 @@ function classifyOpenClawArgv(argv: readonly string[]): boolean {
       return classifyUpdateArgv(argv, index + 1);
     case "doctor":
       return classifyOpenClawDoctorArgv(argv, index + 1);
+    case "node":
+      return classifyOpenClawNodeServiceArgv(argv, index + 1);
     case "configure":
     case "onboard":
     case "setup":
-      return argv.slice(index + 1).some((token) => optionName(token) === "--install-daemon");
+      return !HELP_OR_VERSION_FLAGS.has(argv[index + 1]?.trim() ?? "");
     default:
       return false;
   }

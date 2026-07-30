@@ -18,7 +18,7 @@ const START_PROCESS_OPTIONS_WITH_VALUE = new Set([
 ]);
 
 function optionName(token: string): string {
-  return token.trim().toLowerCase().split("=", 1)[0] ?? "";
+  return token.trim().toLowerCase().split(/[=:]/u, 1)[0] ?? "";
 }
 
 function resolveOptionName(token: string): string {
@@ -34,6 +34,11 @@ function splitArgumentList(value: string): string[] {
   return splitShellArgs(normalized) ?? normalized.split(/\s+/u).filter(Boolean);
 }
 
+function inlineOptionValue(token: string): string | undefined {
+  const separatorIndex = token.search(/[=:]/u);
+  return separatorIndex === -1 ? undefined : token.slice(separatorIndex + 1);
+}
+
 function parseStartProcessArgv(
   argv: readonly string[],
 ): { argumentList: string[]; filePath: string | undefined } | null {
@@ -46,16 +51,16 @@ function parseStartProcessArgv(
     const token = argv[index]?.trim() ?? "";
     const name = resolveOptionName(token);
     if (name === "-filepath") {
-      filePath = token.includes("=") ? token.slice(token.indexOf("=") + 1) : argv[++index];
+      filePath = inlineOptionValue(token) ?? argv[++index];
       continue;
     }
     if (name === "-argumentlist") {
-      const value = token.includes("=") ? token.slice(token.indexOf("=") + 1) : argv[++index];
+      const value = inlineOptionValue(token) ?? argv[++index];
       argumentList = splitArgumentList(value ?? "");
       continue;
     }
     if (START_PROCESS_OPTIONS_WITH_VALUE.has(name)) {
-      if (!token.includes("=")) {
+      if (inlineOptionValue(token) === undefined) {
         index += 1;
       }
       continue;

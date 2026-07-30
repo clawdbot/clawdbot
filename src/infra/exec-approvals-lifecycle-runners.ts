@@ -12,6 +12,7 @@ const PACKAGE_GLOBAL_OPTIONS_WITH_VALUE = new Set([
   "--global-dir",
   "--globalconfig",
   "--loglevel",
+  "--location",
   "--node-options",
   "--prefix",
   "--registry",
@@ -83,6 +84,31 @@ function scanFirstPositional(
   return argv.length;
 }
 
+function scanPackageSubcommand(
+  argv: readonly string[],
+  start: number,
+): { ambiguousOption: boolean; index: number } {
+  let ambiguousOption = false;
+  for (let index = start; index < argv.length; index += 1) {
+    const token = argv[index]?.trim() ?? "";
+    if (token === "--") {
+      return { ambiguousOption, index: index + 1 };
+    }
+    if (!token.startsWith("-") || token === "-") {
+      return { ambiguousOption, index };
+    }
+    const name = optionName(token);
+    if (PACKAGE_GLOBAL_OPTIONS_WITH_VALUE.has(name)) {
+      if (!token.includes("=")) {
+        index += 1;
+      }
+    } else {
+      ambiguousOption = true;
+    }
+  }
+  return { ambiguousOption, index: argv.length };
+}
+
 function resolveInlineCommand(argv: readonly string[], start: number): string[] | null {
   const commandFlag = argv.findIndex(
     (token, index) => index >= start && ["-c", "--call"].includes(optionName(token)),
@@ -122,7 +148,12 @@ function packageTargets(argv: readonly string[], start: number): string[] {
 
 function looksLikeUnresolvedLifecycleRunner(argv: readonly string[]): boolean {
   const text = argv.join(" ").toLowerCase();
-  return text.includes("openclaw") && /\b(?:daemon|gateway|uninstall|update)\b/u.test(text);
+  return (
+    text.includes("openclaw") &&
+    /\b(?:add|daemon|gateway|install|link|rebuild|remove|restart|rm|start|stop|uninstall|unlink|update|upgrade)\b/u.test(
+      text,
+    )
+  );
 }
 
 function isOpenClawPackageTarget(token: string): boolean {
@@ -206,7 +237,8 @@ export function resolveLifecyclePackageRunnerArgv(
     return { kind: "not-runner" };
   }
 
-  const subcommandIndex = scanFirstPositional(argv, 1, PACKAGE_GLOBAL_OPTIONS_WITH_VALUE);
+  const subcommandScan = scanPackageSubcommand(argv, 1);
+  const subcommandIndex = subcommandScan.index;
   const subcommand = normalizedToken(argv[subcommandIndex]);
   if (packageOperationMutatesOpenClaw(argv, subcommandIndex)) {
     return { kind: "approval-required" };
@@ -248,7 +280,7 @@ export function resolveLifecyclePackageRunnerArgv(
     return { kind: "argv", argv: argv.slice(subcommandIndex) };
   }
 
-  return looksLikeUnresolvedLifecycleRunner(argv)
+  return subcommandScan.ambiguousOption && looksLikeUnresolvedLifecycleRunner(argv)
     ? { kind: "approval-required" }
     : { kind: "not-runner" };
 }
@@ -274,10 +306,14 @@ export function unresolvedPackageMutationMayTargetOpenClaw(
   if (!["bun", "npm", "pnpm", "yarn"].includes(executable)) {
     return false;
   }
-  const subcommandIndex = scanFirstPositional(argv, 1, PACKAGE_GLOBAL_OPTIONS_WITH_VALUE);
+  const subcommandScan = scanPackageSubcommand(argv, 1);
+  const subcommandIndex = subcommandScan.index;
   const subcommand = normalizedToken(argv[subcommandIndex]);
   if (hasEffectivePackageNoExecute(argv, subcommandIndex + 1)) {
     return false;
+  }
+  if (subcommandScan.ambiguousOption && looksLikeUnresolvedLifecycleRunner(argv)) {
+    return true;
   }
   if (isUnresolved(argv[subcommandIndex])) {
     return argv

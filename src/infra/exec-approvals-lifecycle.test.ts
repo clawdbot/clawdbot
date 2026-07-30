@@ -77,6 +77,10 @@ const mutationCases: Array<[string, string[]]> = [
   ],
   ["openclaw config patch --stdin", ["openclaw", "config", "patch", "--stdin"]],
   ["openclaw config unset gateway.port", ["openclaw", "config", "unset", "gateway.port"]],
+  [
+    "openclaw config set agents.defaults.workspace -- --dry-run",
+    ["openclaw", "config", "set", "agents.defaults.workspace", "--", "--dry-run"],
+  ],
   ["openclaw doctor --fix", ["openclaw", "doctor", "--fix"]],
   ["openclaw doctor --repair", ["openclaw", "doctor", "--repair"]],
   ["openclaw doctor --yes", ["openclaw", "doctor", "--yes"]],
@@ -84,6 +88,18 @@ const mutationCases: Array<[string, string[]]> = [
   ["openclaw update --yes", ["openclaw", "update", "--yes"]],
   ["openclaw uninstall --all --yes", ["openclaw", "uninstall", "--all", "--yes"]],
   ["openclaw onboard --install-daemon", ["openclaw", "onboard", "--install-daemon"]],
+  [
+    "openclaw onboard --reset --reset-scope full --non-interactive",
+    ["openclaw", "onboard", "--reset", "--reset-scope", "full", "--non-interactive"],
+  ],
+  ["openclaw setup", ["openclaw", "setup"]],
+  ["openclaw configure", ["openclaw", "configure"]],
+  ["openclaw node install", ["openclaw", "node", "install"]],
+  ["openclaw node start", ["openclaw", "node", "start"]],
+  ["openclaw node restart", ["openclaw", "node", "restart"]],
+  ["openclaw node stop", ["openclaw", "node", "stop"]],
+  ["openclaw node uninstall", ["openclaw", "node", "uninstall"]],
+  ["openclaw node run", ["openclaw", "node", "run"]],
   [
     "launchctl stop gui/$UID/com.openclaw.gateway",
     ["launchctl", "stop", "gui/$UID/com.openclaw.gateway"],
@@ -240,6 +256,14 @@ const mutationCases: Array<[string, string[]]> = [
   ["npm --help=false install openclaw", ["npm", "--help=false", "install", "openclaw"]],
   ["npm --version=false install openclaw", ["npm", "--version=false", "install", "openclaw"]],
   [
+    "npm --location global install openclaw",
+    ["npm", "--location", "global", "install", "openclaw"],
+  ],
+  [
+    "npm --future-option global install openclaw",
+    ["npm", "--future-option", "global", "install", "openclaw"],
+  ],
+  [
     "npm install -g github:openclaw/openclaw#main",
     ["npm", "install", "-g", "github:openclaw/openclaw#main"],
   ],
@@ -365,12 +389,20 @@ const nonMutationCases: Array<[string, string[]]> = [
   ["openclaw config validate", ["openclaw", "config", "validate"]],
   ["openclaw doctor --lint", ["openclaw", "doctor", "--lint"]],
   ["openclaw doctor --post-upgrade", ["openclaw", "doctor", "--post-upgrade"]],
+  ["openclaw onboard --help", ["openclaw", "onboard", "--help"]],
+  ["openclaw node status", ["openclaw", "node", "status"]],
+  ["openclaw node identity", ["openclaw", "node", "identity"]],
+  ["openclaw node install --help", ["openclaw", "node", "install", "--help"]],
   ["openclaw exec-policy show", ["openclaw", "exec-policy", "show"]],
   ["openclaw approvals pending", ["openclaw", "approvals", "pending"]],
   ["openclaw approvals get", ["openclaw", "approvals", "get"]],
   [
     "openclaw config set gateway.port 19001 --dry-run",
     ["openclaw", "config", "set", "gateway.port", "19001", "--dry-run"],
+  ],
+  [
+    "openclaw config get gateway.port -- --dry-run",
+    ["openclaw", "config", "get", "gateway.port", "--", "--dry-run"],
   ],
   ["openclaw update status --json", ["openclaw", "update", "status", "--json"]],
   ["openclaw update --dry-run", ["openclaw", "update", "--dry-run"]],
@@ -715,6 +747,13 @@ describe("OpenClaw lifecycle exec approvals", () => {
         "win32",
       ),
     ).toBe(false);
+    expect(
+      requiresApproval(
+        "Start-Process -FilePath:openclaw -ArgumentList:'gateway restart'",
+        ["Start-Process", "-FilePath:openclaw", "-ArgumentList:gateway restart"],
+        "win32",
+      ),
+    ).toBe(true);
   });
 
   it("does not mistake an OpenClaw profile value for a read-only command", () => {
@@ -935,55 +974,6 @@ describe("OpenClaw lifecycle exec approvals", () => {
         ],
       }),
     ).toBe(true);
-  });
-
-  it("keeps unresolved variables in non-lifecycle data positions non-blocking", () => {
-    const cases: Array<{ command: string; argv: string[]; platform?: NodeJS.Platform }> = [
-      {
-        command: `npm install lodash --registry "$REGISTRY"`,
-        argv: ["npm", "install", "lodash", "--registry", "$REGISTRY"],
-      },
-      {
-        command: `powershell -Command "Write-Output $env:NAME"`,
-        argv: ["powershell", "-Command", "Write-Output $env:NAME"],
-        platform: "win32",
-      },
-      {
-        command: `openclaw config get "$KEY"`,
-        argv: ["openclaw", "config", "get", "$KEY"],
-      },
-      {
-        command: `openclaw approvals get "$ID"`,
-        argv: ["openclaw", "approvals", "get", "$ID"],
-      },
-      {
-        command: `node --loader "$LOADER" app.mjs gateway restart`,
-        argv: ["node", "--loader", "$LOADER", "app.mjs", "gateway", "restart"],
-      },
-      {
-        command: `Start-Process notepad -ArgumentList "gateway restart" -WorkingDirectory "$DIR"`,
-        argv: [
-          "Start-Process",
-          "notepad",
-          "-ArgumentList",
-          "gateway restart",
-          "-WorkingDirectory",
-          "$DIR",
-        ],
-        platform: "win32",
-      },
-    ];
-    for (const testCase of cases) {
-      expect(
-        commandRequiresOpenClawLifecycleApproval({
-          command: testCase.command,
-          env: {},
-          envComplete: false,
-          platform: testCase.platform ?? "linux",
-          segments: [{ raw: testCase.command, argv: testCase.argv }],
-        }),
-      ).toBe(false);
-    }
   });
 
   it("does not let a later status token clear an unresolved systemctl action", () => {

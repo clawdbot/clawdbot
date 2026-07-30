@@ -36,19 +36,24 @@ function optionName(token: string): string {
 /** Return true when config argv can persist changes to the active configuration. */
 export function classifyOpenClawConfigArgv(argv: readonly string[], start: number): boolean {
   let action: string | undefined;
+  let endOfOptions = false;
   for (let index = start; index < argv.length; index += 1) {
     const token = argv[index]?.trim() ?? "";
+    if (token === "--" && !endOfOptions) {
+      endOfOptions = true;
+      continue;
+    }
     const name = optionName(token);
-    if (HELP_OR_VERSION_FLAGS.has(token) || name === "--dry-run") {
+    if (!endOfOptions && (HELP_OR_VERSION_FLAGS.has(token) || name === "--dry-run")) {
       return false;
     }
-    if (CONFIG_OPTIONS_WITH_VALUE.has(name)) {
+    if (!endOfOptions && CONFIG_OPTIONS_WITH_VALUE.has(name)) {
       if (!token.includes("=")) {
         index += 1;
       }
       continue;
     }
-    if (!token.startsWith("-") || token === "-") {
+    if (endOfOptions || !token.startsWith("-") || token === "-") {
       action ??= normalizedToken(token);
     }
   }
@@ -61,19 +66,24 @@ export function unresolvedOpenClawConfigActionMayMutate(
   start: number,
   isUnresolved: (value: string | undefined) => boolean,
 ): boolean {
+  let endOfOptions = false;
   for (let index = start; index < argv.length; index += 1) {
     const token = argv[index]?.trim() ?? "";
+    if (token === "--" && !endOfOptions) {
+      endOfOptions = true;
+      continue;
+    }
     const name = optionName(token);
-    if (HELP_OR_VERSION_FLAGS.has(token) || name === "--dry-run") {
+    if (!endOfOptions && (HELP_OR_VERSION_FLAGS.has(token) || name === "--dry-run")) {
       return false;
     }
-    if (CONFIG_OPTIONS_WITH_VALUE.has(name)) {
+    if (!endOfOptions && CONFIG_OPTIONS_WITH_VALUE.has(name)) {
       if (!token.includes("=")) {
         index += 1;
       }
       continue;
     }
-    if (!token.startsWith("-") || token === "-") {
+    if (endOfOptions || !token.startsWith("-") || token === "-") {
       return isUnresolved(token);
     }
   }

@@ -6,6 +6,7 @@ import {
   classifyOpenClawGatewayArgv,
   unresolvedGatewayMethodMayHideLifecycle,
 } from "./exec-approvals-lifecycle-gateway.js";
+import { unresolvedOpenClawNodeServiceActionMayMutate } from "./exec-approvals-lifecycle-node-service.js";
 import { unresolvedNodeEntryMayHideLifecycle } from "./exec-approvals-lifecycle-node.js";
 import { unresolvedOpenClawApprovalPolicyActionMayMutate } from "./exec-approvals-lifecycle-policy.js";
 import { unresolvedPowerShellStartProcessMayHideLifecycle } from "./exec-approvals-lifecycle-powershell.js";
@@ -195,6 +196,13 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
     if (["approvals", "exec-approvals", "exec-policy"].includes(command)) {
       return unresolvedOpenClawApprovalPolicyActionMayMutate(
         command,
+        argv,
+        commandIndex + 1,
+        isVariableReference,
+      );
+    }
+    if (command === "node") {
+      return unresolvedOpenClawNodeServiceActionMayMutate(
         argv,
         commandIndex + 1,
         isVariableReference,

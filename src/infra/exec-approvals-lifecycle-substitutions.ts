@@ -4,6 +4,7 @@ import {
   classifyOpenClawGatewayArgv,
   unresolvedGatewayMethodMayHideLifecycle,
 } from "./exec-approvals-lifecycle-gateway.js";
+import { unresolvedOpenClawNodeServiceActionMayMutate } from "./exec-approvals-lifecycle-node-service.js";
 import { unresolvedOpenClawApprovalPolicyActionMayMutate } from "./exec-approvals-lifecycle-policy.js";
 // Extracts shell command/process substitutions without treating quoted text as executable.
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
@@ -243,6 +244,9 @@ function openClawSubstitutionMayHideLifecycle(argv: readonly string[]): boolean 
       commandIndex + 1,
       isSubstitution,
     );
+  }
+  if (command === "node") {
+    return unresolvedOpenClawNodeServiceActionMayMutate(argv, commandIndex + 1, isSubstitution);
   }
   if (command === "update") {
     const actionIndex = scanFirstPositional(argv, commandIndex + 1, UPDATE_OPTIONS_WITH_VALUE);
