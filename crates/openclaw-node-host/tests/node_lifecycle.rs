@@ -76,7 +76,7 @@ async fn lifecycle_reacquires_each_attempt_delivers_token_and_stops_cleanly() {
             let _ = stop_rx.await;
         },
     );
-    tokio::time::timeout(Duration::from_secs(5), lifecycle)
+    tokio::time::timeout(Duration::from_secs(5), Box::pin(lifecycle))
         .await
         .expect("lifecycle did not stop")
         .unwrap();

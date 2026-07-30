@@ -66,6 +66,24 @@ describe("node protocol schemas", () => {
         invokeId: "invoke-1",
         nodeId: "node-1",
         seq: 0,
+        chunk: "é".repeat(8 * 1024),
+      }),
+    ).toBe(true);
+
+    expect(
+      validateNodeInvokeProgressParams({
+        invokeId: "invoke-1",
+        nodeId: "node-1",
+        seq: 0,
+        chunk: "é".repeat(8 * 1024 + 1),
+      }),
+    ).toBe(false);
+
+    expect(
+      validateNodeInvokeProgressParams({
+        invokeId: "invoke-1",
+        nodeId: "node-1",
+        seq: 0,
         chunk: "stdout line",
         extra: "not allowed",
       }),

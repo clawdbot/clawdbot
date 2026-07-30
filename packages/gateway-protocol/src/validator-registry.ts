@@ -162,7 +162,26 @@ export const validateNodeInvokeParams = compile(S.NodeInvokeParamsSchema);
 export const validateNodeInvokeRequestEvent = compile(S.NodeInvokeRequestEventSchema);
 export const validateNodeInvokeInputEvent = compile(S.NodeInvokeInputEventSchema);
 export const validateNodeInvokeResultParams = compile(S.NodeInvokeResultParamsSchema);
-export const validateNodeInvokeProgressParams = compile(S.NodeInvokeProgressParamsSchema);
+export const validateNodeInvokeProgressParams = compile(
+  S.NodeInvokeProgressParamsSchema,
+  (data) => {
+    if (
+      typeof data === "object" &&
+      data !== null &&
+      "chunk" in data &&
+      typeof data.chunk === "string" &&
+      new TextEncoder().encode(data.chunk).byteLength > 16 * 1024
+    ) {
+      return {
+        keyword: "maxUtf8Bytes",
+        instancePath: "/chunk",
+        params: { limit: 16 * 1024 },
+        message: "must not exceed 16384 UTF-8 bytes",
+      };
+    }
+    return undefined;
+  },
+);
 export const validateNodeEventParams = compile(S.NodeEventParamsSchema);
 export const validateNodePresenceActivityPayload = compile(S.NodePresenceActivityPayloadSchema);
 export const validateNodePendingDrainParams = compile(S.NodePendingDrainParamsSchema);
