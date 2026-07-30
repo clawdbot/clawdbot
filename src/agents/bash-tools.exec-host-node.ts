@@ -4,7 +4,7 @@
  * and `node.invoke system.run` execution for host=node calls.
  */
 import { randomUUID } from "node:crypto";
-import { APPROVALS_SCOPE, WRITE_SCOPE } from "../gateway/operator-scopes.js";
+import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../gateway/operator-scopes.js";
 import {
   type ExecAsk,
   type ExecSecurity,
@@ -46,7 +46,7 @@ import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
-const APPROVED_NODE_INVOKE_SCOPES = [WRITE_SCOPE, APPROVALS_SCOPE];
+const APPROVED_NODE_INVOKE_SCOPES = [ADMIN_SCOPE, APPROVALS_SCOPE];
 
 type NodeGatewayDispatchAuthority =
   | "current-policy"

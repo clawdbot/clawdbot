@@ -955,7 +955,7 @@ describe("executeNodeHostCommand", () => {
 
     const call = requireGatewayCall(2);
     expect(call.options.timeoutMs).toBe(35_000);
-    expect(call.callOptions).toEqual({ scopes: ["operator.write", "operator.approvals"] });
+    expect(call.callOptions).toEqual({ scopes: ["operator.admin", "operator.approvals"] });
     const runParams = requireRunParams(call);
     expect(runParams.approved).toBe(true);
     expect(runParams.approvalDecision).toBe("allow-once");
@@ -987,7 +987,7 @@ describe("executeNodeHostCommand", () => {
     expect(result.details?.status).toBe("approval-pending");
     await vi.waitFor(() => {
       expect(requireGatewayCommand("system.run").callOptions).toEqual({
-        scopes: ["operator.write", "operator.approvals"],
+        scopes: ["operator.admin", "operator.approvals"],
         signal: abortController.signal,
       });
     });
@@ -1031,7 +1031,7 @@ describe("executeNodeHostCommand", () => {
       expect(result.details?.status).toBe("approval-pending");
       await vi.waitFor(() => {
         expect(requireGatewayCommand("system.run").callOptions).toEqual({
-          scopes: ["operator.write", "operator.approvals"],
+          scopes: ["operator.admin", "operator.approvals"],
           signal: abortController.signal,
         });
       });

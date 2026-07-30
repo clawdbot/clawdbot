@@ -227,7 +227,7 @@ describe("node-host dispatch cancellation", () => {
       "node.invoke",
       { timeoutMs: 30_000 },
       expect.objectContaining({ command: "system.run" }),
-      { scopes: ["operator.write", "operator.approvals"], signal: controller.signal },
+      { scopes: ["operator.admin", "operator.approvals"], signal: controller.signal },
     );
   });
 
