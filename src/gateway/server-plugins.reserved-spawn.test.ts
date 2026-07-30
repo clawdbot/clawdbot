@@ -8,7 +8,7 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 
 const spawnSubagentDirect = vi.hoisted(() => vi.fn());
 const getAgentRunContext = vi.hoisted(() => vi.fn());
-const getSubagentRunByRunId = vi.hoisted(() => vi.fn());
+const hasSubagentRunIdentity = vi.hoisted(() => vi.fn());
 const getLatestSubagentRunByChildSessionKey = vi.hoisted(() => vi.fn());
 
 vi.mock("../agents/subagent-spawn.js", () => ({
@@ -16,7 +16,7 @@ vi.mock("../agents/subagent-spawn.js", () => ({
 }));
 vi.mock("../agents/subagent-registry.js", () => ({
   getLatestSubagentRunByChildSessionKey,
-  getSubagentRunByRunId,
+  hasSubagentRunIdentity,
 }));
 vi.mock("../infra/agent-events.js", () => ({
   getAgentRunContext,
@@ -50,7 +50,7 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
   beforeEach(() => {
     spawnSubagentDirect.mockReset();
     getAgentRunContext.mockReset().mockReturnValue(undefined);
-    getSubagentRunByRunId.mockReset().mockReturnValue(undefined);
+    hasSubagentRunIdentity.mockReset().mockReturnValue(false);
     getLatestSubagentRunByChildSessionKey.mockReset().mockReturnValue(undefined);
     spawnSubagentDirect.mockResolvedValue({
       status: "accepted",
@@ -83,6 +83,14 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
       expected: "canonical agent session key",
     },
     {
+      name: "noncanonical requester",
+      params: {
+        ...reservation,
+        requesterSessionKey: "Agent:Main:Subagent:Controller",
+      },
+      expected: "canonical agent session key",
+    },
+    {
       name: "invalid target",
       params: { ...reservation, targetAgentId: "Worker Agent" },
       expected: "targetAgentId is invalid",
@@ -99,6 +107,14 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
       name: "blank task",
       params: { ...reservation, task: " " },
       expected: "task must be non-empty",
+    },
+    {
+      name: "backend-reserved run ID",
+      params: {
+        ...reservation,
+        runId: "exec-approval-followup:approval-1:nonce:nonce-1",
+      },
+      expected: "backend-reserved namespace",
     },
   ])("rejects malformed reserved spawn input: $name", async ({ params, expected }) => {
     await expect(
@@ -182,7 +198,7 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
     },
     {
       name: "persisted run",
-      arrange: () => getSubagentRunByRunId.mockReturnValue({ runId: reservation.runId }),
+      arrange: () => hasSubagentRunIdentity.mockReturnValue(true),
       dedupe: new Map() as GatewayRequestContext["dedupe"],
       expected: "runId already exists",
     },

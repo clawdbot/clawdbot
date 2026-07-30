@@ -112,6 +112,18 @@ export function createSubagentRegistryPublicApi(config: {
     return snapshot.get(key) ?? [...snapshot.values()].find((entry) => entry.swarmRunId === key);
   }
 
+  function hasSubagentRunIdentity(runId: string): boolean {
+    const key = runId.trim();
+    if (!key) {
+      return false;
+    }
+    const snapshot = deps().getSubagentRunsSnapshotForRead(runs);
+    return (
+      snapshot.has(key) ||
+      [...snapshot.values()].some((entry) => entry.taskRunId === key || entry.swarmRunId === key)
+    );
+  }
+
   function getSubagentRunsByRunIds(runIds: readonly string[]): {
     entries: Map<string, SubagentRunRecord>;
   } {
@@ -293,6 +305,7 @@ export function createSubagentRegistryPublicApi(config: {
     releasePendingAgentSteeringItems,
     listSubagentRunsForController,
     getSubagentRunByRunId,
+    hasSubagentRunIdentity,
     getSubagentRunsByRunIds,
     completeCollectorLaunchCleanup,
     recordSwarmStructuredOutput,

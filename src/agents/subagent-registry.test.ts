@@ -4544,6 +4544,9 @@ describe("subagent registry seam flow", () => {
         taskRunId: "run-replacement-persist-old",
       }),
     ]);
+    expect(mod.getSubagentRunByRunId("run-replacement-persist-old")).toBeUndefined();
+    expect(mod.hasSubagentRunIdentity("run-replacement-persist-old")).toBe(true);
+    expect(mod.hasSubagentRunIdentity("run-replacement-persist-new")).toBe(true);
     expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalled();
   });
 

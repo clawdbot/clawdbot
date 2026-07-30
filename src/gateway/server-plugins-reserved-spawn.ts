@@ -1,8 +1,9 @@
 // Plugin-managed reserved spawn adapter. Service-specific lease state stays in plugins.
 import { randomUUID } from "node:crypto";
+import { parseExecApprovalFollowupApprovalId } from "../agents/bash-tools.exec-approval-followup-state.js";
 import {
   getLatestSubagentRunByChildSessionKey,
-  getSubagentRunByRunId,
+  hasSubagentRunIdentity,
 } from "../agents/subagent-registry.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -63,7 +64,7 @@ function assertReservedSubagentIdentitiesAvailable(params: {
   if (getAgentRunContext(params.runId)) {
     throw new Error("reserved subagent runId is already active.");
   }
-  if (getSubagentRunByRunId(params.runId)) {
+  if (hasSubagentRunIdentity(params.runId)) {
     throw new Error("reserved subagent runId already exists.");
   }
   if (getLatestSubagentRunByChildSessionKey(params.childSessionKey)) {
@@ -87,6 +88,7 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
   const task = params.task.trim();
   if (
     requesterSessionKey !== params.requesterSessionKey ||
+    normalizeSessionKeyPreservingOpaquePeerIds(requesterSessionKey) !== requesterSessionKey ||
     !parseAgentSessionKey(requesterSessionKey)
   ) {
     throw new Error("spawnReserved requesterSessionKey must be a canonical agent session key.");
@@ -102,6 +104,9 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
     runId !== params.runId
   ) {
     throw new Error("spawnReserved childSessionKey and runId must be non-empty canonical values.");
+  }
+  if (parseExecApprovalFollowupApprovalId(runId)) {
+    throw new Error("spawnReserved runId uses a backend-reserved namespace.");
   }
   if (!task) {
     throw new Error("spawnReserved task must be non-empty.");

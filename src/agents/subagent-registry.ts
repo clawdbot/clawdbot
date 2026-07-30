@@ -583,6 +583,7 @@ export const ackPendingAgentSteeringItems = publicApi.ackPendingAgentSteeringIte
 export const releasePendingAgentSteeringItems = publicApi.releasePendingAgentSteeringItems;
 export const listSubagentRunsForController = publicApi.listSubagentRunsForController;
 export const getSubagentRunByRunId = publicApi.getSubagentRunByRunId;
+export const hasSubagentRunIdentity = publicApi.hasSubagentRunIdentity;
 export const getSubagentRunsByRunIds = publicApi.getSubagentRunsByRunIds;
 export const completeCollectorLaunchCleanup = publicApi.completeCollectorLaunchCleanup;
 export const recordSwarmStructuredOutput = publicApi.recordSwarmStructuredOutput;
