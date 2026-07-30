@@ -390,7 +390,7 @@ struct MacNodeClaudeSessionCatalogTests {
         #expect((refreshed["sessions"] as? [[String: Any]])?.first?["name"] as? String == "Bravo")
     }
 
-    @Test func `reuses catalog discovery across transcript read pages`() throws {
+    @Test func `reuses catalog discovery only across transcript read pages`() throws {
         let home = try makeHome()
         defer { try? FileManager.default.removeItem(at: home) }
         let project = home.appendingPathComponent(".claude/projects/-workspace", isDirectory: true)
@@ -426,8 +426,6 @@ struct MacNodeClaudeSessionCatalogTests {
             }
         }
         defer { MacNodeClaudeSessionCatalog.setCatalogEnumerationObserverForTesting(nil) }
-        _ = try MacNodeClaudeSessionCatalog.list(paramsJSON: nil, homeURL: home)
-        #expect(enumerations.value() == 1)
 
         let latestJSON = try MacNodeClaudeSessionCatalog.read(
             paramsJSON: #"{"threadId":"transcript-session","limit":2}"#,
@@ -459,7 +457,60 @@ struct MacNodeClaudeSessionCatalogTests {
         #expect(enumerations.value() == 1)
     }
 
-    @Test func `missing and stale file snapshots refresh the catalog once`() throws {
+    @Test func `fresh reads recheck catalog eligibility after a pagination lease`() throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let project = home.appendingPathComponent(".claude/projects/-workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        let sessionId = "eligibility-session"
+        let transcript = project.appendingPathComponent("\(sessionId).jsonl")
+        let index = project.appendingPathComponent("sessions-index.json")
+        try writeTranscript([
+            message(sessionId: sessionId, role: "user", text: "old", index: 1),
+            message(sessionId: sessionId, role: "assistant", text: "new", index: 2),
+        ], to: transcript)
+        try writeJSON(
+            [
+                "version": 1,
+                "entries": [[
+                    "sessionId": sessionId,
+                    "fullPath": transcript.path,
+                    "isSidechain": false,
+                ]],
+            ],
+            to: index
+        )
+
+        let firstJSON = try MacNodeClaudeSessionCatalog.read(
+            paramsJSON: #"{"threadId":"eligibility-session","limit":1}"#,
+            homeURL: home
+        )
+        let first = try #require(
+            JSONSerialization.jsonObject(with: Data(firstJSON.utf8)) as? [String: Any]
+        )
+        #expect(first["nextCursor"] is String)
+
+        try writeJSON(
+            [
+                "version": 1,
+                "entries": [[
+                    "sessionId": sessionId,
+                    "fullPath": transcript.path,
+                    "isSidechain": true,
+                ]],
+            ],
+            to: index
+        )
+
+        #expect(throws: MacNodeClaudeSessionCatalog.CatalogError.self) {
+            try MacNodeClaudeSessionCatalog.read(
+                paramsJSON: #"{"threadId":"eligibility-session","limit":1}"#,
+                homeURL: home
+            )
+        }
+    }
+
+    @Test func `fresh reads discover a moved session file`() throws {
         let home = try makeHome()
         defer { try? FileManager.default.removeItem(at: home) }
         let firstProject = home.appendingPathComponent(".claude/projects/-first", isDirectory: true)
@@ -536,7 +587,7 @@ struct MacNodeClaudeSessionCatalogTests {
             paramsJSON: #"{"threadId":"moving-session","limit":1}"#,
             homeURL: home
         )
-        #expect(enumerations.value() == 2)
+        #expect(enumerations.value() == 3)
     }
 
     @Test func `bounds oversized transcript items by encoded response size`() throws {
