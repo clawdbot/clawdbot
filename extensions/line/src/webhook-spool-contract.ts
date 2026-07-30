@@ -9,6 +9,10 @@ export const LINE_WEBHOOK_SPOOL_VERSION = 1;
  *  dead-lettered; the identity fence writes a different message on purpose. */
 export const LINE_WEBHOOK_SPOOL_INVALID_PAYLOAD_MESSAGE = "LINE webhook spool payload is invalid.";
 
+/** Dead-letter reason for undecodable events; shared so the migration's
+ *  recovery signature can never drift from what the spool writes. */
+export const LINE_WEBHOOK_SPOOL_INVALID_EVENT_REASON = "invalid-event";
+
 export type LineWebhookSpoolPayload = {
   version: number;
   rawEvent: string;

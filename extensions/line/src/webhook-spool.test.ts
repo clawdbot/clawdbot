@@ -41,12 +41,13 @@ function createEvent(params: {
   userId?: string;
   text?: string;
 }): webhook.Event {
-  return {
+  const event: webhook.MessageEvent = {
     type: "message",
     message: {
       id: params.messageId ?? `message-${params.webhookEventId}`,
       type: "text",
       text: params.text ?? "hello",
+      quoteToken: "test-quote-token-placeholder",
     },
     replyToken: "test-reply-token",
     timestamp: Date.now(),
@@ -54,7 +55,8 @@ function createEvent(params: {
     mode: "active",
     webhookEventId: params.webhookEventId,
     deliveryContext: { isRedelivery: false },
-  } as webhook.MessageEvent;
+  };
+  return event;
 }
 
 function callback(event: webhook.Event): webhook.CallbackRequest {

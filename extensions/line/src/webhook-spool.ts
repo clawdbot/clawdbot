@@ -14,6 +14,7 @@ import {
   errorText,
   eventIdFor,
   laneKeyFor,
+  LINE_WEBHOOK_SPOOL_INVALID_EVENT_REASON,
   LINE_WEBHOOK_SPOOL_INVALID_PAYLOAD_MESSAGE,
   LINE_WEBHOOK_SPOOL_VERSION,
   LineWebhookPayloadError,
@@ -224,7 +225,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       },
       resolveNonRetryableFailure: (error) => {
         if (error instanceof LineWebhookPayloadError) {
-          return { reason: "invalid-event", message: error.message };
+          return { reason: LINE_WEBHOOK_SPOOL_INVALID_EVENT_REASON, message: error.message };
         }
         if (error instanceof LineWebhookTerminalDeliveryError) {
           return { reason: error.reason, message: error.message };

@@ -21,16 +21,22 @@ const context: PluginDoctorStateMigrationContext = {
 };
 
 function legacyEvent(webhookEventId: string): webhook.Event {
-  return {
+  const event: webhook.MessageEvent = {
     type: "message",
-    message: { id: `message-${webhookEventId}`, type: "text", text: "hello" },
+    message: {
+      id: `message-${webhookEventId}`,
+      type: "text",
+      text: "hello",
+      quoteToken: "test-quote-token-placeholder",
+    },
     replyToken: "test-reply-token",
     timestamp: Date.now(),
     source: { type: "user", userId: "user-1" },
     mode: "active",
     webhookEventId,
     deliveryContext: { isRedelivery: false },
-  } as webhook.MessageEvent;
+  };
+  return event;
 }
 
 async function withStateDir<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {

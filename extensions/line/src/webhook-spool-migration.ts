@@ -6,6 +6,7 @@ import {
   eventIdFor,
   laneKeyFor,
   legacyEventIdFor,
+  LINE_WEBHOOK_SPOOL_INVALID_EVENT_REASON,
   LINE_WEBHOOK_SPOOL_INVALID_PAYLOAD_MESSAGE,
   LINE_WEBHOOK_SPOOL_VERSION,
   LineWebhookPayloadError,
@@ -47,7 +48,7 @@ function isLegacyDecodeDeadLetter(row: {
   message?: string;
 }): boolean {
   return (
-    row.reason === "invalid-event" &&
+    row.reason === LINE_WEBHOOK_SPOOL_INVALID_EVENT_REASON &&
     row.message === LINE_WEBHOOK_SPOOL_INVALID_PAYLOAD_MESSAGE &&
     parseLegacySpoolPayload(row.payload) !== null
   );
@@ -122,7 +123,10 @@ export async function migrateLineLegacySpoolRows(
       }
       eventId = eventIdFor(legacy.event);
     } catch (error) {
-      await queue.fail(record.id, { reason: "invalid-event", message: errorText(error) });
+      await queue.fail(record.id, {
+        reason: LINE_WEBHOOK_SPOOL_INVALID_EVENT_REASON,
+        message: errorText(error),
+      });
       result.deadLettered += 1;
       continue;
     }
