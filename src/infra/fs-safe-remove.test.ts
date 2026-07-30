@@ -145,9 +145,14 @@ describe("removePathWithinRoot", () => {
       await fs.writeFile(leafPath, "leaf");
       await fs.writeFile(outsideFile, "outside");
       let rebound = false;
+      const leafName = path.basename(leafPath).toLowerCase();
       __setFsSafeTestHooksForTest({
         beforeRootFallbackMutation: async (operation, targetPath) => {
-          if (rebound || operation !== "remove" || targetPath !== leafPath) {
+          if (
+            rebound ||
+            operation !== "remove" ||
+            path.basename(targetPath).toLowerCase() !== leafName
+          ) {
             return;
           }
           rebound = true;
