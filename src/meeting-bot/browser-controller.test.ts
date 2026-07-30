@@ -251,8 +251,10 @@ describe("meeting browser recovery", () => {
       locationLabel: "for testing",
       meetingSessionId: "session-1",
       mode: "listen",
+      requestedMeetingUrl: undefined,
       timeoutMs: 500,
-      // No requestedMeetingUrl, no trackedTargetId, no trackedMeetingUrl
+      trackedMeetingUrl: undefined,
+      trackedTargetId: undefined,
     });
 
     expect(acted).toBe(false);
