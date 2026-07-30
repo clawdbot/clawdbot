@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   loadSubagentRunsForControllerFromSqlite:
     vi.fn<(controllerSessionKey: string) => SubagentRunRecord[]>(),
   loadSubagentRegistryFromSqlite: vi.fn<() => Map<string, SubagentRunRecord>>(),
+  saveSubagentRegistryChangesToSqlite:
+    vi.fn<(runs: Map<string, SubagentRunRecord>, changedRunIds: readonly string[]) => void>(),
   saveSubagentRegistryToSqlite: vi.fn<(runs: Map<string, SubagentRunRecord>) => void>(),
 }));
 
@@ -23,6 +25,7 @@ vi.mock("./subagent-registry.store.sqlite.js", () => ({
   loadSubagentRunsForChildSessionFromSqlite: mocks.loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentRunsForControllerFromSqlite: mocks.loadSubagentRunsForControllerFromSqlite,
   loadSubagentRegistryFromSqlite: mocks.loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryChangesToSqlite: mocks.saveSubagentRegistryChangesToSqlite,
   saveSubagentRegistryToSqlite: mocks.saveSubagentRegistryToSqlite,
 }));
 
@@ -50,6 +53,7 @@ describe("subagent registry state read cache", () => {
     mocks.loadSubagentRunsForChildSessionFromSqlite.mockReset();
     mocks.loadSubagentRunsForControllerFromSqlite.mockReset();
     mocks.loadSubagentRegistryFromSqlite.mockReset();
+    mocks.saveSubagentRegistryChangesToSqlite.mockReset();
     mocks.saveSubagentRegistryToSqlite.mockReset();
   });
 
@@ -92,6 +96,51 @@ describe("subagent registry state read cache", () => {
     expect([...getSubagentRunsSnapshotForRead(new Map()).keys()]).toEqual(["run-saved"]);
     expect(mocks.saveSubagentRegistryToSqlite).toHaveBeenCalledOnce();
     expect(mocks.loadSubagentRegistryFromSqlite).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates only named runs in the local read cache", () => {
+    const changed = createRun("changed");
+    const untouched = createRun("untouched");
+    mocks.loadSubagentRegistryFromSqlite.mockReturnValue(
+      new Map([
+        [changed.runId, changed],
+        [untouched.runId, untouched],
+      ]),
+    );
+    expect([...getSubagentRunsSnapshotForRead(new Map()).keys()]).toEqual(["changed", "untouched"]);
+
+    changed.task = "updated";
+    const runs = new Map([
+      [changed.runId, changed],
+      [untouched.runId, untouched],
+    ]);
+    persistSubagentRunsToDisk(runs, [changed.runId]);
+
+    expect(mocks.saveSubagentRegistryChangesToSqlite).toHaveBeenCalledWith(runs, [changed.runId]);
+    expect(mocks.saveSubagentRegistryToSqlite).not.toHaveBeenCalled();
+    expect(getSubagentRunsSnapshotForRead(new Map()).get(changed.runId)?.task).toBe("updated");
+    expect(getSubagentRunsSnapshotForRead(new Map()).get(untouched.runId)?.task).toBe(
+      untouched.task,
+    );
+  });
+
+  it("keeps an exact deletion authoritative after a best-effort write failure", () => {
+    const retained = createRun("retained");
+    const removed = createRun("removed");
+    mocks.loadSubagentRegistryFromSqlite.mockReturnValue(
+      new Map([
+        [retained.runId, retained],
+        [removed.runId, removed],
+      ]),
+    );
+    expect([...getSubagentRunsSnapshotForRead(new Map()).keys()]).toEqual(["retained", "removed"]);
+    mocks.saveSubagentRegistryChangesToSqlite.mockImplementationOnce(() => {
+      throw new Error("disk unavailable");
+    });
+
+    persistSubagentRunsToDisk(new Map([[retained.runId, retained]]), [removed.runId]);
+
+    expect([...getSubagentRunsSnapshotForRead(new Map()).keys()]).toEqual(["retained"]);
   });
 
   it("wakes local readers when a best-effort write fails", () => {

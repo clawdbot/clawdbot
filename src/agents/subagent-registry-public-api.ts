@@ -21,8 +21,8 @@ import type { SubagentRunRecord, SwarmStructuredOutputState } from "./subagent-r
 export function createSubagentRegistryPublicApi(config: {
   runs: Map<string, SubagentRunRecord>;
   deps: () => SubagentRegistryDeps;
-  persist: () => void;
-  persistOrThrow: () => void;
+  persist: (...runIds: string[]) => void;
+  persistOrThrow: (...runIds: string[]) => void;
   restoreOnce: () => void;
   startAnnounceCleanup: (runId: string, entry: SubagentRunRecord) => boolean;
   settleRequesterTurn: ReturnType<
@@ -52,7 +52,7 @@ export function createSubagentRegistryPublicApi(config: {
       now: params.now,
     });
     if (leased) {
-      persist();
+      persist(...leased.runIds);
     }
     return leased;
   }
@@ -69,7 +69,7 @@ export function createSubagentRegistryPublicApi(config: {
       now: params.now,
     });
     if (updated > 0) {
-      persist();
+      persist(...params.runIds);
       for (const runId of params.runIds) {
         const entry = runs.get(runId);
         if (!entry || typeof entry.cleanupCompletedAt === "number") {
@@ -94,7 +94,7 @@ export function createSubagentRegistryPublicApi(config: {
       error: params.error,
     });
     if (updated > 0) {
-      persist();
+      persist(...params.runIds);
     }
     return updated;
   }
@@ -143,7 +143,7 @@ export function createSubagentRegistryPublicApi(config: {
     entry.collectorLaunchCleanupPending = false;
     entry.cleanupCompletedAt = Date.now();
     entry.contextEngineCleanupCompletedAt ??= entry.cleanupCompletedAt;
-    persist();
+    persist(entry.runId);
   }
 
   function recordSwarmStructuredOutput(
@@ -168,7 +168,7 @@ export function createSubagentRegistryPublicApi(config: {
     const previous = entry.structuredOutput;
     entry.structuredOutput = structuredClone(state);
     try {
-      persistOrThrow();
+      persistOrThrow(entry.runId);
     } catch (error) {
       entry.structuredOutput = previous;
       throw error;
