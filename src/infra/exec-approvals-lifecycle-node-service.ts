@@ -29,6 +29,13 @@ function actionIndex(argv: readonly string[], start: number): number {
     if (token === "--") {
       return index + 1;
     }
+    const name = optionName(token);
+    if (NODE_SERVICE_OPTIONS_WITH_VALUE.has(name)) {
+      if (!token.includes("=")) {
+        index += 1;
+      }
+      continue;
+    }
     if (!token.startsWith("-") || token === "-") {
       return index;
     }

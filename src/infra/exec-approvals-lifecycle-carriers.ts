@@ -182,7 +182,15 @@ export function resolveLifecycleXargsArgv(argv: readonly string[]): LifecycleXar
       }
       continue;
     }
-    if (/^-[EILPnsa].+/u.test(token)) {
+    if (
+      [...XARGS_OPTIONS_WITH_VALUE].some(
+        (option) =>
+          option.startsWith("-") &&
+          !option.startsWith("--") &&
+          token.startsWith(option) &&
+          token.length > option.length,
+      )
+    ) {
       continue;
     }
     return looksLifecycleSensitive(argv) || containsSensitiveCommandCandidate(argv, index + 1)

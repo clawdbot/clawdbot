@@ -9,6 +9,7 @@ import {
   expandKnownLifecycleEnvironmentCommand,
   expandLifecycleEnvironmentArgv,
   lifecycleAssignedEnvironmentKeys,
+  lifecycleCommandShellDialect,
   unresolvedEnvironmentMayHideLifecycle,
 } from "./exec-approvals-lifecycle-env.js";
 import { classifyOpenClawGatewayArgv } from "./exec-approvals-lifecycle-gateway.js";
@@ -665,14 +666,15 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
   segments: LifecycleSegment[];
 }): boolean {
   const envComplete = params.envComplete ?? params.env !== undefined;
+  const platform = params.platform ?? process.platform;
   const shadowedKeys = lifecycleAssignedEnvironmentKeys(params.command);
   const expandedCommand = expandKnownLifecycleEnvironmentCommand(
     params.command,
     params.env,
     shadowedKeys,
+    lifecycleCommandShellDialect(params.segments[0]?.argv[0], platform),
   );
-  const shellContext: ShellContext =
-    (params.platform ?? process.platform) === "win32" ? "powershell" : undefined;
+  const shellContext: ShellContext = platform === "win32" ? "powershell" : undefined;
   if (
     commandHasPowerShellLifecyclePipeline(expandedCommand, !envComplete) ||
     commandHasLifecycleSubstitution(expandedCommand, 0, shellContext, params.cwd)

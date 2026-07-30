@@ -1,7 +1,26 @@
 import { describe, expect, it } from "vitest";
+import { expandKnownLifecycleEnvironmentCommand } from "./exec-approvals-lifecycle-env.js";
 import { commandRequiresOpenClawLifecycleApproval } from "./exec-approvals.js";
 
 describe("OpenClaw lifecycle environment data positions", () => {
+  it("uses shell-specific single-quote expansion semantics", () => {
+    const command = `echo '%TOOL%'`;
+    expect(
+      expandKnownLifecycleEnvironmentCommand(command, { TOOL: "openclaw" }, new Set(), "cmd"),
+    ).toBe(`echo 'openclaw'`);
+    expect(
+      expandKnownLifecycleEnvironmentCommand(
+        command,
+        { TOOL: "openclaw" },
+        new Set(),
+        "powershell",
+      ),
+    ).toBe(command);
+    expect(
+      expandKnownLifecycleEnvironmentCommand(command, { TOOL: "openclaw" }, new Set(), "posix"),
+    ).toBe(command);
+  });
+
   it("keeps unresolved variables in non-lifecycle data positions non-blocking", () => {
     const cases: Array<{ command: string; argv: string[]; platform?: NodeJS.Platform }> = [
       {

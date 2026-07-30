@@ -100,6 +100,7 @@ const mutationCases: Array<[string, string[]]> = [
   ["openclaw node stop", ["openclaw", "node", "stop"]],
   ["openclaw node uninstall", ["openclaw", "node", "uninstall"]],
   ["openclaw node run", ["openclaw", "node", "run"]],
+  ["openclaw node --host example restart", ["openclaw", "node", "--host", "example", "restart"]],
   [
     "launchctl stop gui/$UID/com.openclaw.gateway",
     ["launchctl", "stop", "gui/$UID/com.openclaw.gateway"],
@@ -354,6 +355,7 @@ const mutationCases: Array<[string, string[]]> = [
     ["env", "env", "env", "env", "env", "env", "env", "env", "openclaw", "gateway", "restart"],
   ],
   ["xargs openclaw gateway", ["xargs", "openclaw", "gateway"]],
+  ["xargs -d, openclaw", ["xargs", "-d,", "openclaw"]],
   ["printf 'gateway restart' | xargs openclaw", ["xargs", "openclaw"]],
   ["printf 'gateway' | xargs -I{} openclaw {}", ["xargs", "-I{}", "openclaw", "{}"]],
   ["pgrep openclaw | xargs kill", ["xargs", "kill"]],

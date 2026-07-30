@@ -14,7 +14,10 @@ import {
   resolveLifecyclePackageRunnerArgv,
   unresolvedPackageMutationMayTargetOpenClaw,
 } from "./exec-approvals-lifecycle-runners.js";
-import { splitLifecycleInlineCommands } from "./exec-approvals-lifecycle-shell.js";
+import {
+  type LifecycleShellDialect,
+  splitLifecycleInlineCommands,
+} from "./exec-approvals-lifecycle-shell.js";
 import { extractShellWrapperInlineCommand } from "./shell-wrapper-resolution.js";
 const POSIX_VARIABLE_RE = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/gu;
 const POWERSHELL_VARIABLE_RE = /\$env:([A-Za-z_][A-Za-z0-9_]*)/giu;
@@ -63,6 +66,20 @@ function normalizedExecutable(value: string | undefined): string {
       ?.toLowerCase()
       .replace(/\.(?:bat|cmd|com|exe)$/u, "") ?? ""
   );
+}
+
+/** Resolve command-level quoting rules from its explicit wrapper and host platform. */
+export function lifecycleCommandShellDialect(
+  executableToken: string | undefined,
+  platform: NodeJS.Platform,
+): LifecycleShellDialect {
+  const executable = normalizedExecutable(executableToken);
+  if (executable === "cmd") {
+    return "cmd";
+  }
+  return ["powershell", "pwsh"].includes(executable) || platform === "win32"
+    ? "powershell"
+    : "posix";
 }
 
 function optionName(token: string): string {
@@ -311,7 +328,13 @@ export function expandKnownLifecycleEnvironmentCommand(
   command: string,
   env: NodeJS.ProcessEnv | undefined,
   shadowedKeys: ReadonlySet<string> = new Set(),
+  dialect: LifecycleShellDialect = "posix",
 ): string {
+  if (dialect === "cmd") {
+    return expandKnownEnvironmentReferences(command, env, shadowedKeys);
+  }
+  // POSIX shells and PowerShell both suppress environment expansion inside
+  // single-quoted strings. cmd.exe does not and is handled above.
   return command
     .split(/('[^']*')/u)
     .map((part, index) =>
