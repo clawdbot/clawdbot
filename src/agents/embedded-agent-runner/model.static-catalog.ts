@@ -27,7 +27,11 @@ import {
 } from "../../plugins/providers.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildInlineProviderModels } from "./model.inline-provider.js";
-import { staticModelIdMatches } from "./model.static-id.js";
+import {
+  createStaticModelIdMatcher,
+  staticModelIdMatches,
+  type StaticModelIdMatcher,
+} from "./model.static-id.js";
 
 export { resolveManifestModelCatalogProviderAliasMetadata } from "./model.manifest-alias.js";
 export type { ManifestModelCatalogProviderAliasMetadata } from "./model.manifest-alias.js";
@@ -39,8 +43,9 @@ function rowMatchesModel(params: {
   row: NormalizedModelCatalogRow;
   provider: string;
   modelId: string;
+  matchesStaticModelId: StaticModelIdMatcher;
 }): boolean {
-  return staticModelIdMatches({
+  return params.matchesStaticModelId({
     candidateId: params.row.id,
     provider: params.provider,
     modelId: params.modelId,
@@ -302,6 +307,9 @@ export function createBundledStaticCatalogModelResolver(params?: {
     ...(params?.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
     workspaceDir: params?.workspaceDir,
   };
+  const matchesStaticModelId = params?.metadataSnapshot
+    ? createStaticModelIdMatcher({ manifestPlugins: params.metadataSnapshot.plugins })
+    : staticModelIdMatches;
   let standaloneState: BundledStaticCatalogState | undefined;
   return (lookup) => {
     const provider = normalizeProviderId(lookup.provider);
@@ -342,6 +350,7 @@ export function createBundledStaticCatalogModelResolver(params?: {
           row: candidate,
           provider,
           modelId: lookup.modelId,
+          matchesStaticModelId,
         }),
       );
       if (row) {
@@ -554,6 +563,9 @@ function createScopedBundledProviderStaticCatalogModelResolver(
   scopedPluginIds?: string[],
 ) => Promise<ProviderRuntimeModel | undefined> {
   const env = params.env ?? process.env;
+  const matchesStaticModelId = params.metadataSnapshot
+    ? createStaticModelIdMatcher({ manifestPlugins: params.metadataSnapshot.plugins })
+    : staticModelIdMatches;
   const pluginCatalogs = new Map<string, Promise<Map<string, ProviderRuntimeModel[]>>>();
   const providerPluginIds = new Map<string, string[]>();
   return async (lookup, scopedPluginIds) => {
@@ -589,7 +601,7 @@ function createScopedBundledProviderStaticCatalogModelResolver(
       pluginCatalogs.set(catalogKey, catalog);
     }
     return ((await catalog).get(provider) ?? []).find((candidate) =>
-      staticModelIdMatches({
+      matchesStaticModelId({
         candidateId: candidate.id,
         provider,
         modelId: lookup.modelId,
