@@ -1,3 +1,4 @@
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 // Signal compatibility migration moves shipped flat transport config into account ownership.
 import type { ChannelDoctorConfigMutation } from "openclaw/plugin-sdk/channel-contract";
