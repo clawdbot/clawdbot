@@ -671,6 +671,69 @@ describe("runtime tool fixture", () => {
     ).rejects.toThrow("expected live happy-path successful tool output for read");
   });
 
+  it("allows successful live happy-path tool output to mention failure words", async () => {
+    const env = await makeEnv();
+    await writeQaSessionTranscript(env, "agent:qa:runtime-tool:web_fetch:happy", [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "call-web-fetch-happy",
+            name: "web_fetch",
+            input: { url: "https://example.com/" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolName: "web_fetch",
+        tool_call_id: "call-web-fetch-happy",
+        content: "The page documents invalid requests, errors, and denied inputs.",
+      },
+    ]);
+    await writeQaSessionTranscript(env, "agent:qa:runtime-tool:web_fetch:failure", [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "call-web-fetch-failure",
+            name: "web_fetch",
+            input: { url: "file:///etc/passwd" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolName: "web_fetch",
+        tool_call_id: "call-web-fetch-failure",
+        isError: true,
+        content: "Invalid URL: must be http or https",
+      },
+    ]);
+
+    await expect(
+      runRuntimeToolFixture(
+        env,
+        {
+          toolName: "web_fetch",
+          toolCoverage: {
+            bucket: "openclaw-dynamic-integration",
+            expectedLayer: "openclaw-dynamic",
+          },
+        },
+        {
+          createSession: vi.fn(async (_env, _label, key) => key!),
+          readEffectiveTools: vi.fn(async () => new Set(["web_fetch"])),
+          runAgentPrompt: vi.fn(async () => ({})),
+          fetchJson: vi.fn(),
+          ensureImageGenerationConfigured: vi.fn(),
+        },
+      ),
+    ).resolves.toContain("web_fetch live provider happy planned args");
+  });
+
   it("skips Codex-native fixtures when only OpenClaw dynamic exposure evidence is absent", async () => {
     const env = await makeEnv({
       mock: { baseUrl: "http://127.0.0.1:9999" },
