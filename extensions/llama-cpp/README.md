@@ -16,7 +16,7 @@ native installs and updates.
 
 ## Configure text inference
 
-Choose **Local model (llama.cpp)** during onboarding. After explicit consent,
+Choose **llama.cpp** during onboarding. After explicit consent,
 OpenClaw downloads Gemma 4 E4B IT Q4_K_M (approximately 5.0 GB) as the default.
 The bundled download is offered only on machines with at least 16 GiB of RAM.
 Discovery never downloads a model.

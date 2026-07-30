@@ -1162,6 +1162,51 @@ describe("Codex supervision catalog", () => {
     });
   });
 
+  it("omits the Gateway's same-install node host from native discovery", async () => {
+    const control = createControl({
+      listPage: vi.fn(async () => ({
+        sessions: [{ threadId: "local", status: "idle", archived: false }],
+      })),
+    });
+    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async ({ nodeId }) => ({
+      payloadJSON: JSON.stringify({
+        sessions: [{ threadId: `remote-${nodeId}`, status: "idle", archived: false }],
+      }),
+    }));
+    const { runtime } = createRuntime({
+      nodes: [
+        {
+          nodeId: "gateway-node",
+          displayName: "Gateway node",
+          gatewayLocal: true,
+          connected: true,
+          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
+        },
+        {
+          nodeId: "remote-node",
+          displayName: "Remote node",
+          connected: true,
+          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
+        },
+      ],
+      invoke,
+    });
+
+    const result = await listCodexSessionCatalog({
+      bindingStore: createCodexTestBindingStore(),
+      config,
+      runtime,
+      control,
+    });
+
+    expect(result.hosts.map((host) => host.hostId)).toEqual([
+      CODEX_LOCAL_SESSION_HOST_ID,
+      "node:remote-node",
+    ]);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "remote-node" }));
+  });
+
   it("isolates federated host failures while preserving selected healthy hosts", async () => {
     const control = createControl({
       listPage: vi.fn(async () => ({

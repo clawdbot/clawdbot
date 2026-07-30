@@ -133,7 +133,7 @@ export function renderSettingsNavRow(
  * title is not associated with the input; prefer renderSettingsToggleRow. */
 export function renderSettingsToggle(props: {
   checked: boolean;
-  onChange: (checked: boolean) => void;
+  onChange: (checked: boolean) => boolean | void;
   disabled?: boolean;
   ariaLabel: string;
 }): TemplateResult {
@@ -144,7 +144,10 @@ export function renderSettingsToggle(props: {
       .checked=${live(props.checked)}
       ?disabled=${props.disabled ?? false}
       @change=${(event: Event) => {
-        props.onChange((event.currentTarget as HTMLElement & { checked: boolean }).checked);
+        const target = event.currentTarget as HTMLElement & { checked: boolean };
+        if (props.onChange(target.checked) === false) {
+          target.checked = props.checked;
+        }
       }}
     >
       <span class="settings-control__sr-label">${props.ariaLabel}</span>
@@ -159,7 +162,7 @@ export function renderSettingsToggleRow(props: {
   ariaLabel?: unknown;
   description?: unknown;
   checked: boolean;
-  onChange: (checked: boolean) => void;
+  onChange: (checked: boolean) => boolean | void;
   /** Runs synchronously during direct activation for effects gated on user activation. */
   onAct?: (checked: boolean) => void;
   disabled?: boolean;
@@ -205,7 +208,10 @@ export function renderSettingsToggleRow(props: {
           @click=${notifySwitchActivation}
           @keydown=${notifySwitchActivation}
           @change=${(event: Event) => {
-            props.onChange((event.currentTarget as HTMLElement & { checked: boolean }).checked);
+            const target = event.currentTarget as HTMLElement & { checked: boolean };
+            if (props.onChange(target.checked) === false) {
+              target.checked = props.checked;
+            }
           }}
         >
           <span class="settings-control__sr-label">${props.ariaLabel ?? props.title}</span>

@@ -1086,7 +1086,12 @@ export const en: TranslationMap = {
     defaultValue: "Default: {value}",
     resetToDefault: "Reset to default",
     select: "Select...",
+    nullValue: "null",
     jsonValue: "JSON value",
+    invalidJson: "Enter valid JSON before leaving this field.",
+    invalidString: "Enter a value that matches this setting's constraints.",
+    invalidNumber: "Enter a value within the allowed range and step.",
+    draftRejected: "This setting could not be saved. Your draft is still here.",
     unsupportedArray: "Unsupported array schema. Use Raw mode.",
     itemCountOne: "{count} item",
     itemCount: "{count} items",
@@ -2016,15 +2021,14 @@ export const en: TranslationMap = {
       more: "More sign-in options",
     },
     prepare: {
-      title: "Set up a local model",
-      intro:
-        "OpenClaw checks the local service, confirms tool support, and helps prepare a compatible model.",
-      button: "Set up / Download model",
+      title: "Run a model locally",
+      intro: "Use a local model service, or run a private GGUF model directly inside this Gateway.",
       ollamaButton: "Check & set up",
       ollamaLabel: "Ollama",
       ollamaHint: "Connect to the Ollama service on this Gateway and prepare a tools-capable model",
-      llamaCppLabel: "Local model (llama.cpp)",
-      llamaCppHint: "Download an approximately 5.0 GB local model; requires 16 GB RAM",
+      llamaCppLabel: "llama.cpp",
+      llamaCppNotReady:
+        "llama.cpp did not produce a usable local model. Review the setup result, then retry.",
     },
     manual: {
       title: "Connect with an API key or token",

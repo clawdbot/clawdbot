@@ -2636,6 +2636,8 @@ describe("package artifact reuse", () => {
     expect(matrixJob.strategy).toBeUndefined();
     expect(workflowStep(matrixJob, "Run Matrix live lane").env).toEqual({
       FAIL_FAST: "${{ inputs.fail_fast }}",
+      OPENAI_API_KEY: "${{ secrets.OPENAI_API_KEY }}",
+      OPENCLAW_LIVE_OPENAI_KEY: "${{ secrets.OPENAI_API_KEY }}",
       OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1",
     });
     expect(releaseTelegramWorkflow).toContain(
