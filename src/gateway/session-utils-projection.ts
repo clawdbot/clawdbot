@@ -3,7 +3,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { normalizeStoredOverrideModel } from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
-import { buildSubagentRunReadIndex } from "../agents/subagent-registry-read.js";
+import { buildSubagentSessionListReadIndex } from "../agents/subagent-registry-read.js";
 import { resolveStorePath, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -27,7 +27,7 @@ export function buildSessionListRowContext(params: {
   now: number;
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
 }): SessionListRowContext {
-  const subagentRuns = buildSubagentRunReadIndex(params.now);
+  const subagentRuns = buildSubagentSessionListReadIndex(params.now);
   return buildSessionListRowContextFromParts({
     subagentRuns,
     storeChildSessionsByKey: buildStoreChildSessionIndex(params.store, params.now, subagentRuns),
@@ -36,7 +36,7 @@ export function buildSessionListRowContext(params: {
 }
 
 function buildSessionListRowContextFromParts(params: {
-  subagentRuns: ReturnType<typeof buildSubagentRunReadIndex>;
+  subagentRuns: SessionListRowContext["subagentRuns"];
   storeChildSessionsByKey: Map<string, string[]>;
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
 }): SessionListRowContext {
@@ -57,7 +57,7 @@ export function buildSessionListRowMetadataContext(params: {
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
 }): SessionListRowContext {
   return buildSessionListRowContextFromParts({
-    subagentRuns: buildSubagentRunReadIndex(params.now),
+    subagentRuns: buildSubagentSessionListReadIndex(params.now),
     storeChildSessionsByKey: new Map(),
     userProfileIdentityById: params.userProfileIdentityById,
   });
