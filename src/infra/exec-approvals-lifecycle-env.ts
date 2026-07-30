@@ -95,6 +95,44 @@ export function lifecycleCommandShellDialect(
   return platform === "win32" ? "powershell" : "posix";
 }
 
+/** Return true when POSIX expansion can split an unquoted environment reference into argv. */
+export function lifecycleCommandHasUnquotedEnvironmentReference(
+  command: string,
+  dialect: LifecycleShellDialect,
+): boolean {
+  if (dialect !== "posix") {
+    return false;
+  }
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index] ?? "";
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === "'" && quote !== '"') {
+      quote = quote === "'" ? null : "'";
+      continue;
+    }
+    if (char === '"' && quote !== "'") {
+      quote = quote === '"' ? null : '"';
+      continue;
+    }
+    if (quote === null && char === "$") {
+      const suffix = command.slice(index);
+      if (/^\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)/u.test(suffix)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function optionName(token: string): string {
   return token.trim().toLowerCase().split("=", 1)[0] ?? "";
 }

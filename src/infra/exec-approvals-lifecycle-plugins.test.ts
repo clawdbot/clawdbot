@@ -110,6 +110,45 @@ describe("OpenClaw PowerShell filter pipeline approvals", () => {
 });
 
 describe("OpenClaw lifecycle runner parsing edges", () => {
+  it.each(["bun", "corepack", "pnpx", "yarnpkg"])(
+    "fails closed when xargs appends stdin to %s",
+    (runner) => {
+      expect(requiresApproval(`xargs ${runner}`, ["xargs", runner])).toBe(true);
+    },
+  );
+
+  it("classifies Node package-script run mode", () => {
+    expect(
+      requiresApproval("node --run openclaw -- gateway restart", [
+        "node",
+        "--run",
+        "openclaw",
+        "--",
+        "gateway",
+        "restart",
+      ]),
+    ).toBe(true);
+    expect(
+      requiresApproval("node --run=openclaw -- gateway restart", [
+        "node",
+        "--run=openclaw",
+        "--",
+        "gateway",
+        "restart",
+      ]),
+    ).toBe(true);
+    expect(
+      requiresApproval("node --run build -- gateway restart", [
+        "node",
+        "--run",
+        "build",
+        "--",
+        "gateway",
+        "restart",
+      ]),
+    ).toBe(false);
+  });
+
   it("classifies directly executable OpenClaw entry scripts", () => {
     expect(
       requiresApproval("/opt/openclaw/dist/entry.js gateway restart", [

@@ -21,6 +21,38 @@ describe("OpenClaw lifecycle environment data positions", () => {
     ).toBe(command);
   });
 
+  it.each([
+    [`echo "$TEXT"`, ["echo", "$TEXT"], "$(openclaw gateway restart)"],
+    [`echo "$TEXT"`, ["echo", "$TEXT"], "safe; openclaw gateway restart"],
+    [`openclaw "$ACTION"`, ["openclaw", "$ACTION"], "$(printf restart)"],
+  ] as Array<[string, string[], string]>)(
+    "does not reparse expanded environment data: %s",
+    (command, argv, value) => {
+      const key = command.includes("$ACTION") ? "ACTION" : "TEXT";
+      expect(
+        commandRequiresOpenClawLifecycleApproval({
+          command,
+          env: { [key]: value },
+          envComplete: true,
+          platform: "linux",
+          segments: [{ raw: command, argv }],
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("preserves POSIX field-splitting uncertainty for unquoted executable references", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `$TOOL restart`,
+        env: { TOOL: "openclaw gateway" },
+        envComplete: true,
+        platform: "linux",
+        segments: [{ raw: `$TOOL restart`, argv: ["$TOOL", "restart"] }],
+      }),
+    ).toBe(true);
+  });
+
   it("keeps unresolved variables in non-lifecycle data positions non-blocking", () => {
     const cases: Array<{ command: string; argv: string[]; platform?: NodeJS.Platform }> = [
       {
@@ -377,6 +409,20 @@ describe("OpenClaw lifecycle dynamic carrier edges", () => {
         envComplete: false,
         platform: "linux",
         segments: [{ raw: `openclaw node "$ACTION"`, argv: ["openclaw", "node", "$ACTION"] }],
+      }),
+    ).toBe(true);
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `node --run "$SCRIPT" -- gateway restart`,
+        env: {},
+        envComplete: false,
+        platform: "linux",
+        segments: [
+          {
+            raw: `node --run "$SCRIPT" -- gateway restart`,
+            argv: ["node", "--run", "$SCRIPT", "--", "gateway", "restart"],
+          },
+        ],
       }),
     ).toBe(true);
   });

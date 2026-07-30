@@ -86,12 +86,16 @@ const REPLACEMENT_SENSITIVE_EXECUTABLES = new Set([
 ]);
 const STDIN_APPEND_SENSITIVE_EXECUTABLES = new Set([
   ...REPLACEMENT_SENSITIVE_EXECUTABLES,
+  "bun",
   "bunx",
+  "corepack",
   "kill",
   "killall",
   "openclaw",
+  "pnpx",
   "pnpm",
   "yarn",
+  "yarnpkg",
 ]);
 
 export type LifecycleXargsPlan =

@@ -142,6 +142,7 @@ function isPowerShellPipelineMutation(argv: readonly string[]): boolean {
 export function commandHasPowerShellLifecyclePipeline(
   command: string,
   allowUnresolved = false,
+  transformArgv?: (argv: string[]) => readonly string[],
 ): boolean {
   const stages = splitLifecycleCommandText(command, new Set(["|"]), "powershell");
   if (stages.length < 2) {
@@ -151,10 +152,11 @@ export function commandHasPowerShellLifecyclePipeline(
   let selectedOpenClaw = false;
   for (const stage of stages) {
     const normalizedStage = stage.trim().replace(/^[({\s]+|[)}\s]+$/gu, "");
-    const argv = splitShellArgs(normalizedStage);
-    if (!argv) {
+    const parsedArgv = splitShellArgs(normalizedStage);
+    if (!parsedArgv) {
       return false;
     }
+    const argv = transformArgv?.(parsedArgv) ?? parsedArgv;
     if (isPowerShellSelection(argv, allowUnresolved)) {
       processOrServiceSource = true;
       selectedOpenClaw = true;

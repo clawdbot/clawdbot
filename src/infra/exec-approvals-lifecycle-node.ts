@@ -70,10 +70,39 @@ function nodeScriptIndex(argv: readonly string[]): number {
   return scriptIndex;
 }
 
+function resolveNodeRunArgv(argv: readonly string[]): {
+  args: string[];
+  scriptIndex: number;
+  scriptToken: string;
+} | null {
+  for (let index = 1; index < argv.length; index += 1) {
+    const token = argv[index]?.trim() ?? "";
+    const name = optionName(token);
+    if (name === "--run") {
+      const inline = token.includes("=") ? token.slice(token.indexOf("=") + 1) : undefined;
+      const scriptIndex = inline === undefined ? index + 1 : index;
+      const scriptToken = inline ?? argv[scriptIndex] ?? "";
+      const argStart = scriptIndex + 1 + (argv[scriptIndex + 1] === "--" ? 1 : 0);
+      return { args: argv.slice(argStart), scriptIndex, scriptToken };
+    }
+    if (token === "--" || (!token.startsWith("-") && token !== "-")) {
+      return null;
+    }
+    if (NODE_OPTIONS_WITH_VALUE.has(name) && !token.includes("=")) {
+      index += 1;
+    }
+  }
+  return null;
+}
+
 /** Return OpenClaw-equivalent argv when Node directly launches its CLI entry script. */
 export function resolveNodeOpenClawArgv(argv: readonly string[], cwd?: string): string[] | null {
   if (normalizeExecutableToken(argv[0] ?? "") !== "node") {
     return null;
+  }
+  const run = resolveNodeRunArgv(argv);
+  if (run && normalizeExecutableToken(run.scriptToken) === "openclaw") {
+    return ["openclaw", ...run.args];
   }
   const scriptIndex = nodeScriptIndex(argv);
   const scriptToken = (argv[scriptIndex] ?? "").trim();
@@ -92,6 +121,13 @@ export function unresolvedNodeEntryMayHideLifecycle(
 ): boolean {
   if (normalizeExecutableToken(argv[0] ?? "") !== "node") {
     return false;
+  }
+  const run = resolveNodeRunArgv(argv);
+  if (run) {
+    return (
+      isUnresolved(run.scriptToken) &&
+      /\b(?:daemon|gateway|uninstall|update)\b/iu.test(run.args.join(" "))
+    );
   }
   const scriptIndex = nodeScriptIndex(argv);
   return (
