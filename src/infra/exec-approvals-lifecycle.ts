@@ -348,7 +348,7 @@ function classifyProcessMutation(argv: readonly string[], raw: string): boolean 
 function resolvePackageRunnerArgv(argv: readonly string[]): string[] | null {
   const executable = normalizeExecutableToken(argv[0] ?? "");
   if (executable === "corepack") {
-    return argv.length > 1 ? [...argv.slice(1)] : null;
+    return argv.length > 1 ? argv.slice(1) : null;
   }
   if (executable === "pnpm" && normalizedToken(argv[1]) === "dlx") {
     const index = scanFirstPositional(argv, 2, new Set(["--package"]));
@@ -366,7 +366,7 @@ function resolvePackageRunnerArgv(argv: readonly string[]): string[] | null {
   }
   if (["pnpm", "yarn"].includes(executable)) {
     const index = scanFirstPositional(argv, 1, new Set(["-c", "--cwd", "--dir"]));
-    return index < argv.length ? [...argv.slice(index)] : null;
+    return index < argv.length ? argv.slice(index) : null;
   }
   return null;
 }
