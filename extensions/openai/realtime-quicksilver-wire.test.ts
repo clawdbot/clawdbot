@@ -315,4 +315,37 @@ describe("GPT-Live call creation", () => {
       message: "GPT-Live call creation returned an empty SDP answer",
     });
   });
+
+  it.each([
+    {
+      label: "GPT-Live",
+      auth: { type: "oauth" as const, token: "oauth-token", accountId: "acct-1" },
+      model: "gpt-live-1-codex",
+      location: "/v1/live/rtc_oversized_answer",
+    },
+    {
+      label: "OpenAI Realtime",
+      auth: { type: "api-key" as const, token: "platform-key" },
+      model: "gpt-realtime-2.1",
+      location: undefined,
+    },
+  ])("rejects an oversized streaming $label SDP answer", async (testCase) => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(`v=answer\r\n${"x".repeat(256 * 1024)}`, {
+          status: 201,
+          headers: testCase.location ? { Location: testCase.location } : undefined,
+        }),
+    );
+
+    await expect(
+      createOpenAIQuicksilverCall({
+        auth: testCase.auth,
+        requestIds: createRequestIds(`oversized-answer-${testCase.label}`),
+        sdp: "v=offer\r\n",
+        session: buildOpenAIQuicksilverSession({ model: testCase.model }),
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      }),
+    ).rejects.toThrow(`${testCase.label} SDP answer: text response exceeds 262144 bytes`);
+  });
 });
