@@ -110,6 +110,10 @@ const rootEntries = [
   // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
   "src/agents/compaction-planning.worker.ts!",
   "scripts/print-cli-backend-live-metadata.ts!",
+  "scripts/repro/code-mode-namespace-live.ts!",
+  "scripts/repro/browser-vision-failure-live-handler.ts!",
+  "scripts/repro/tool-schema-hint-bench.ts!",
+  "scripts/repro/tool-surface-live-bench.ts!",
   // Workflow/package-script entrypoints are not imported from production modules.
   "scripts/openclaw-cross-os-release-checks.ts!",
   "scripts/bench-transcript-cursors.ts!",
