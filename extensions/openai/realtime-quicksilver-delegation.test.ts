@@ -301,14 +301,16 @@ describe("GPT-Live sideband protocol", () => {
             content: [{ type: "input_text", text }],
           },
         });
-        await vi.waitFor(() =>
-          expect(runAgentConsult).toHaveBeenCalledTimes(id.endsWith("1") ? 1 : 2),
-        );
+        if (id.endsWith("1")) {
+          await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(1));
+        }
       }
 
       expect(signals[0]?.aborted).toBe(true);
-      expect(signals[1]?.aborted).toBe(false);
+      expect(runAgentConsult).toHaveBeenCalledTimes(1);
       resolutions[0]?.({ text: "stale" });
+      await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(2));
+      expect(signals[1]?.aborted).toBe(false);
       resolutions[1]?.({ text: "fresh" });
       await vi.waitFor(() =>
         expect(parseSent(socket)).toContainEqual(
