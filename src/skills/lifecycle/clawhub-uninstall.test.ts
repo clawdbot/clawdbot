@@ -14,7 +14,7 @@ import { digestClawHubSkillTree } from "./skill-tree-digest.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => resetGlobalHookRunner());
 
-async function fixture() {
+async function fixture(ownerHandle?: string) {
   const workspaceDir = tempDirs.make("openclaw-skill-uninstall-");
   const slug = "triage";
   const skillDir = join(workspaceDir, "skills", slug);
@@ -32,6 +32,7 @@ async function fixture() {
       version: 1,
       registry,
       slug,
+      ...(ownerHandle ? { ownerHandle } : {}),
       installedVersion: "1.0.0",
       installedAt,
       skillFile: { path: "SKILL.md", sha256 },
@@ -46,6 +47,7 @@ async function fixture() {
         [slug]: {
           version: "1.0.0",
           registry,
+          ...(ownerHandle ? { ownerHandle } : {}),
           installedAt,
           skillFile: { path: "SKILL.md", sha256 },
           fileTreeSha256,
@@ -92,6 +94,32 @@ describe("ClawHub skill uninstall lifecycle", () => {
           treeSha256: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
         },
       },
+    });
+  });
+
+  it("plans an owner-qualified tracked skill by its local slug", async () => {
+    const current = await fixture("acme");
+    await expect(
+      planClawHubSkillUninstall({
+        workspaceDir: current.workspaceDir,
+        slug: "@acme/triage",
+        expectedVersion: "1.0.0",
+      }),
+    ).resolves.toMatchObject({ ok: true, plan: { slug: "triage", version: "1.0.0" } });
+  });
+
+  it("rejects an owner-qualified reference that does not own the tracked skill", async () => {
+    const current = await fixture("other");
+    await expect(
+      planClawHubSkillUninstall({
+        workspaceDir: current.workspaceDir,
+        slug: "@acme/triage",
+        expectedVersion: "1.0.0",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: "ambiguous",
+      error: expect.stringContaining("tracked as @other/triage"),
     });
   });
 

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { normalizeTrackedSkillSlug, resolveWorkspaceSkillInstallDir } from "./archive-install.js";
+import { parseRequestedClawHubSkillRef } from "./clawhub-store.js";
 import { resolveClawHubSkillStatusLinkSync, untrackClawHubSkill } from "./clawhub.js";
 import {
   dispatchCommittedSkillChangeBestEffort,
@@ -36,8 +37,11 @@ export async function planClawHubSkillUninstall(params: {
   expectedVersion: string;
 }): Promise<ClawHubSkillUninstallPlanResult> {
   let slug: string;
+  let ownerHandle: string | undefined;
   try {
-    slug = normalizeTrackedSkillSlug(params.slug);
+    const requested = parseRequestedClawHubSkillRef(params.slug);
+    slug = normalizeTrackedSkillSlug(requested.slug);
+    ownerHandle = requested.ownerHandle;
   } catch (error) {
     return { ok: false, code: "ambiguous", error: String(error) };
   }
@@ -61,6 +65,14 @@ export async function planClawHubSkillUninstall(params: {
       error: link.valid
         ? `Skill ${JSON.stringify(slug)} has no complete installed-file digest.`
         : link.reason,
+    };
+  }
+  if (ownerHandle && link.ownerHandle !== ownerHandle) {
+    const trackedRef = link.ownerHandle ? `@${link.ownerHandle}/${slug}` : slug;
+    return {
+      ok: false,
+      code: "ambiguous",
+      error: `Skill ${JSON.stringify(slug)} is tracked as ${trackedRef}, not @${ownerHandle}/${slug}.`,
     };
   }
   if (link.installedVersion !== params.expectedVersion) {
