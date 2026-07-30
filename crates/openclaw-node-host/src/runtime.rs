@@ -24,7 +24,7 @@ const DEFAULT_MAX_CONCURRENCY: usize = 8;
 const DEFAULT_MAX_INPUT_BYTES: usize = 256 * 1024;
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 256 * 1024;
 const DEFAULT_HANDLER_TIMEOUT: Duration = Duration::from_secs(30);
-const DEFAULT_MAX_HANDLER_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const DEFAULT_MAX_HANDLER_TIMEOUT: Duration = Duration::from_mins(5);
 const DEFAULT_RESULT_GRACE: Duration = Duration::from_millis(100);
 
 type HandlerFuture = Pin<Box<dyn Future<Output = Result<Value, HandlerError>> + Send>>;

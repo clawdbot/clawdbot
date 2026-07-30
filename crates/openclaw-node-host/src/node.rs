@@ -464,6 +464,8 @@ pub enum ClientError {
     InsecureRemoteGateway,
     #[error("Gateway connection failed: {0}")]
     Transport(String),
+    #[error("Gateway TLS validation failed: {0}")]
+    Tls(String),
     #[error("Gateway connect challenge timed out")]
     ChallengeTimeout,
     #[error("Gateway connect challenge was invalid: {0}")]
@@ -692,9 +694,8 @@ fn map_gateway_error(error: GatewayClientError) -> ClientError {
             ClientError::InvalidUrl(error)
         }
         GatewayClientError::InsecureRemoteGateway => ClientError::InsecureRemoteGateway,
-        GatewayClientError::Transport(error) | GatewayClientError::Tls(error) => {
-            ClientError::Transport(error)
-        }
+        GatewayClientError::Transport(error) => ClientError::Transport(error),
+        GatewayClientError::Tls(error) => ClientError::Tls(error),
         GatewayClientError::ChallengeTimeout => ClientError::ChallengeTimeout,
         GatewayClientError::InvalidChallenge(error) => ClientError::InvalidChallenge(error),
         GatewayClientError::ConnectParams(error) => ClientError::ConnectParams(error),
@@ -859,5 +860,13 @@ mod tests {
         assert_eq!(invocation.params, Value::Null);
         assert_eq!(invocation.input_bytes(), Some(0));
         assert_eq!(invocation.session_key.as_deref(), Some("agent:main:main"));
+    }
+
+    #[test]
+    fn preserves_gateway_tls_failures() {
+        assert!(matches!(
+            map_gateway_error(GatewayClientError::Tls("pin mismatch".into())),
+            ClientError::Tls(message) if message == "pin mismatch"
+        ));
     }
 }

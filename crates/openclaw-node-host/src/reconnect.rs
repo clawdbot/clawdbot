@@ -1,3 +1,4 @@
+use openclaw_gateway_client::{ConnectErrorDetails, TLS_PIN_MISMATCH_ERROR};
 use serde_json::Value;
 use std::time::Duration;
 
@@ -147,13 +148,21 @@ fn classify_pause(error: &ClientError) -> Option<ReconnectPause> {
         ClientError::InvalidUrl(_) | ClientError::InsecureRemoteGateway => {
             Some(ReconnectPause::Configuration)
         }
+        ClientError::Tls(reason) if is_tls_configuration_error(reason) => {
+            Some(ReconnectPause::Configuration)
+        }
         ClientError::ConnectParams(_) | ClientError::Identity(_) => {
             Some(ReconnectPause::LocalIdentity)
         }
         ClientError::InvalidChallenge(_) | ClientError::InvalidFrame(_) => {
             Some(ReconnectPause::Protocol { detail_code: None })
         }
-        ClientError::Gateway { code, details, .. } => {
+        ClientError::Gateway {
+            code,
+            details,
+            retryable,
+            ..
+        } => {
             let detail_code = connect_detail_code(code, details.as_ref());
             if detail_code == "PAIRING_REQUIRED" {
                 let pairing = parse_pairing_request(details.as_ref());
@@ -163,6 +172,18 @@ fn classify_pause(error: &ClientError) -> Option<ReconnectPause> {
                     return None;
                 }
                 return Some(ReconnectPause::DevicePairing(pairing));
+            }
+            if matches!(detail_code, "PROTOCOL_MISMATCH" | "CLIENT_VERSION_MISMATCH") {
+                return Some(ReconnectPause::Protocol {
+                    detail_code: Some(detail_code.to_owned()),
+                });
+            }
+            if *retryable == Some(false)
+                || ConnectErrorDetails::from_value(details.as_ref()).should_pause_reconnect()
+            {
+                return Some(ReconnectPause::Authentication {
+                    detail_code: detail_code.to_owned(),
+                });
             }
             // Authentication rate limits outlive the short reconnect loop, so
             // they pause even when the generic recovery hint says to wait.
@@ -190,20 +211,21 @@ fn classify_pause(error: &ClientError) -> Option<ReconnectPause> {
                     detail_code: detail_code.to_owned(),
                 });
             }
-            if matches!(detail_code, "PROTOCOL_MISMATCH" | "CLIENT_VERSION_MISMATCH") {
-                return Some(ReconnectPause::Protocol {
-                    detail_code: Some(detail_code.to_owned()),
-                });
-            }
             None
         }
         ClientError::Transport(_)
+        | ClientError::Tls(_)
         | ClientError::ChallengeTimeout
         | ClientError::RequestTimeout(_)
         | ClientError::Closed(_)
         | ClientError::EventLagged(_)
         | ClientError::NotActivated => None,
     }
+}
+
+fn is_tls_configuration_error(reason: &str) -> bool {
+    reason.contains(TLS_PIN_MISMATCH_ERROR)
+        || reason.contains("Gateway TLS fingerprint requires a wss:// URL")
 }
 
 fn is_auth_pause_code(code: &str) -> bool {
@@ -435,6 +457,30 @@ mod tests {
     }
 
     #[test]
+    fn explicit_terminal_gateway_metadata_pauses_unknown_errors() {
+        for error in [
+            ClientError::Gateway {
+                method: "connect".into(),
+                code: "NEW_GATEWAY_ERROR".into(),
+                message: "connect failed".into(),
+                details: None,
+                retryable: Some(false),
+                retry_after_ms: None,
+            },
+            gateway_error(
+                "NEW_GATEWAY_ERROR",
+                json!({"code":"NEW_TERMINAL_ERROR","pauseReconnect":true}),
+            ),
+        ] {
+            let mut policy = ReconnectPolicy::default();
+            assert!(matches!(
+                policy.after_failure(&error),
+                ReconnectAction::Pause(ReconnectPause::Authentication { .. })
+            ));
+        }
+    }
+
+    #[test]
     fn unsafe_pairing_request_id_is_not_exposed() {
         let error = gateway_error(
             "NOT_PAIRED",
@@ -494,6 +540,19 @@ mod tests {
             ReconnectAction::Pause(ReconnectPause::Protocol {
                 detail_code: Some("PROTOCOL_MISMATCH".into())
             })
+        );
+    }
+
+    #[test]
+    fn permanent_tls_configuration_failures_pause_but_transient_tls_retries() {
+        let mut policy = ReconnectPolicy::default();
+        assert_eq!(
+            policy.after_failure(&ClientError::Tls(TLS_PIN_MISMATCH_ERROR.into())),
+            ReconnectAction::Pause(ReconnectPause::Configuration)
+        );
+        assert_eq!(
+            policy.after_failure(&ClientError::Tls("temporary handshake alert".into())),
+            ReconnectAction::RetryAfter(Duration::from_secs(1))
         );
     }
 
