@@ -756,6 +756,16 @@ describe("OpenAI-compatible completions compatibility", () => {
       },
     },
     {
+      name: "alias deployment with a non-OpenAI display name on an Azure cognitiveservices host",
+      model: createModel({
+        id: "prod-spud",
+        name: "Llama 3.1 405B Instruct",
+        provider: "azure-openai",
+        baseUrl: "https://example.cognitiveservices.azure.com/openai/v1",
+      }),
+      expected: { ...proxyResolvedCompat, supportsPromptCacheKey: true },
+    },
+    {
       name: "uppercase Azure OpenAI host",
       model: createModel({
         id: "gpt-5.6-luna",

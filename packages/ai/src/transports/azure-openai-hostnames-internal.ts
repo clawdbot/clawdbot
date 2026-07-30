@@ -5,9 +5,16 @@
  * change without a public API obligation.
  */
 
-/** Dedicated Azure OpenAI hostnames; every deployment speaks the OpenAI API. */
+/**
+ * Dedicated/traditional Azure OpenAI hostnames; every deployment speaks the
+ * OpenAI API. `.cognitiveservices.azure.com` belongs here to mirror the Azure
+ * Responses classification (`isTraditionalAzureOpenAIHost`): deployment ids on
+ * these hosts are operator-chosen but always front OpenAI models.
+ */
 export function isDedicatedAzureOpenAIHostname(hostname: string): boolean {
-  return hostname.endsWith(".openai.azure.com");
+  return (
+    hostname.endsWith(".openai.azure.com") || hostname.endsWith(".cognitiveservices.azure.com")
+  );
 }
 
 /**
@@ -17,9 +24,7 @@ export function isDedicatedAzureOpenAIHostname(hostname: string): boolean {
  */
 export function isAzureFoundryMultiModelHostname(hostname: string): boolean {
   return (
-    hostname.endsWith(".services.ai.azure.com") ||
-    hostname.endsWith(".cognitiveservices.azure.com") ||
-    hostname.endsWith(".api.cognitive.microsoft.com")
+    hostname.endsWith(".services.ai.azure.com") || hostname.endsWith(".api.cognitive.microsoft.com")
   );
 }
 

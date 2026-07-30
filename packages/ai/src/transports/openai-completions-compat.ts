@@ -79,7 +79,7 @@ function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) 
  * is the open-weight family served via serverless inference, not an Azure
  * OpenAI deployment, so it stays excluded on both fields.
  */
-function isOpenAIFamilyFoundryDeployment(
+export function isOpenAIFamilyFoundryDeployment(
   modelId: string | undefined,
   modelName: string | undefined,
 ): boolean {
