@@ -32,6 +32,20 @@ describe("redactedCaptureHeaders", () => {
     expect(redacted?.["x-trace-note"]).not.toContain("super-secret-value");
   });
 
+  it("redacts caller-declared sensitive header names regardless of case", () => {
+    const redacted = redactedCaptureHeaders(
+      {
+        "X-Routing-Target": "staging-private-route",
+        Accept: "text/plain",
+      },
+      ["x-routing-target"],
+    );
+    expect(redacted).toEqual({
+      "X-Routing-Target": "[REDACTED]",
+      Accept: "text/plain",
+    });
+  });
+
   it("flattens node's array-valued headers instead of dropping them", () => {
     // node:http exposes repeated headers as arrays; the standalone proxy feeds
     // those in directly.

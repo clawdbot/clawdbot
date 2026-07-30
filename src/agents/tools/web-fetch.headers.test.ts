@@ -8,6 +8,7 @@ import * as logger from "../../logger.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import "./web-fetch.test-mocks.js";
 import { createWebFetchTool } from "./web-fetch.js";
+import * as webGuardedFetch from "./web-guarded-fetch.js";
 
 const lookupMock = vi.fn();
 
@@ -64,6 +65,10 @@ describe("web_fetch configured request headers", () => {
   it("sends configured headers with the direct fetch request", async () => {
     const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Routed"));
     global.fetch = withFetchPreconnect(fetchSpy);
+    const fetchWithRealGuard = webGuardedFetch.fetchWithWebToolsNetworkGuard;
+    const guardedFetchSpy = vi
+      .spyOn(webGuardedFetch, "fetchWithWebToolsNetworkGuard")
+      .mockImplementation((params) => fetchWithRealGuard(params));
 
     const tool = createToolWithHeaders({
       "ATL-SG-SERVICE-INJECTION-URL": "http://host.docker.internal:9999",
@@ -78,6 +83,17 @@ describe("web_fetch configured request headers", () => {
     );
     expect(getRequestHeaders(fetchSpy)["X-Tokenizer-Version"]).toBe("v2");
     expect(getRequestHeaders(fetchSpy)["X-Trace-Token"]).toBe("trace-context");
+    expect(guardedFetchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capture: {
+          sensitiveRequestHeaderNames: [
+            "ATL-SG-SERVICE-INJECTION-URL",
+            "X-Tokenizer-Version",
+            "X-Trace-Token",
+          ],
+        },
+      }),
+    );
   });
 
   it("keeps fetch-owned header names and casing when no headers are configured", async () => {

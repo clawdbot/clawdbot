@@ -727,6 +727,9 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       lookupFn: params.lookupFn,
       useEnvProxy: useTrustedEnvProxy,
       policy: ssrfPolicy,
+      capture: params.headers
+        ? { sensitiveRequestHeaderNames: Object.keys(params.headers) }
+        : undefined,
       init: {
         headers: buildWebFetchRequestHeaders({
           userAgent: params.userAgent,

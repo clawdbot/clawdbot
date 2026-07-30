@@ -441,6 +441,7 @@ export function captureHttpExchange(
     transport?: "http" | "sse";
     flowId?: string;
     meta?: Record<string, unknown>;
+    sensitiveRequestHeaderNames?: Iterable<string>;
   },
   resolved?: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},
@@ -486,7 +487,9 @@ export function captureHttpExchange(
       method: params.method,
     }),
     contentType: requestContentType,
-    headersJson: runtime.safeJsonString(redactedCaptureHeaders(params.requestHeaders)),
+    headersJson: runtime.safeJsonString(
+      redactedCaptureHeaders(params.requestHeaders, params.sensitiveRequestHeaderNames),
+    ),
     metaJson: redactedCaptureJson(params.meta, runtime.safeJsonString),
     ...requestPayload,
   });
