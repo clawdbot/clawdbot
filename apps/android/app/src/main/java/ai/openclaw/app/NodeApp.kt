@@ -1,7 +1,9 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.SystemSpeechSpeaker
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.notifyNativeLocaleChanged
+import ai.openclaw.app.ui.popup.PopupOverlayWindow
 import ai.openclaw.app.wear.GoogleWearMessageSender
 import ai.openclaw.app.wear.GoogleWearPeerResolver
 import ai.openclaw.app.wear.WearProxyBridge
@@ -42,6 +44,17 @@ class NodeApp : Application() {
 
   internal val wearRealtimeChannels: WearRealtimeChannelRegistry by lazy {
     WearRealtimeChannelRegistry(this, runtimeScope)
+  }
+
+  // One shared engine so a second overlay-notify popup correctly interrupts a still-speaking
+  // prior one (TextToSpeech.QUEUE_FLUSH) instead of two engines talking over each other.
+  internal val popupSpeechSpeaker: SystemSpeechSpeaker by lazy { SystemSpeechSpeaker(this) }
+
+  internal val popupOverlayWindow: PopupOverlayWindow by lazy { PopupOverlayWindow(this) }
+
+  /** Speaks an overlay-notify message outside the popup UI (see SystemHandler's fallback delivery mode). */
+  internal fun speakPopupMessage(text: String) {
+    runtimeScope.launch { popupSpeechSpeaker.speak(text) }
   }
 
   /**

@@ -312,6 +312,8 @@ dependencies {
   // AppCompat owns per-app locale persistence and Activity recreation on API 31-32.
   implementation(libs.androidx.appcompat)
   implementation(libs.androidx.lifecycle.runtime.ktx)
+  // ViewTree*Owner wiring for PopupOverlayWindow, which hosts Compose outside an Activity.
+  implementation(libs.androidx.lifecycle.viewmodel.ktx)
   implementation(libs.androidx.activity.compose)
   implementation(libs.androidx.webkit)
 

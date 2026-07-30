@@ -3,6 +3,7 @@ package ai.openclaw.app.node
 import ai.openclaw.app.MainActivity
 import android.Manifest
 import android.app.Application
+import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
@@ -17,6 +18,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowSettings
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -124,6 +126,7 @@ class SystemHandlerTest {
             subtitle = "Anna",
             timestampMillis = 1_785_335_520_000L,
           ),
+        wantsFullScreenIntent = true,
       )
 
     assertNotNull(notification.fullScreenIntent)
@@ -191,6 +194,9 @@ class SystemHandlerTest {
   fun handleSystemNotify_overlayDeliveryChannelBypassesDnd() {
     val context: Context = RuntimeEnvironment.getApplication()
     Shadows.shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+    // Isolate this from delivery-mode branching (own coverage below): locked keeps the
+    // full-screen-intent path, which is all this test cares about.
+    Shadows.shadowOf(context.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(true)
     val handler = SystemHandler(context)
 
     val result = handler.handleSystemNotify("""{"title":"WhatsApp","body":"hi","delivery":"overlay"}""")
@@ -215,6 +221,32 @@ class SystemHandlerTest {
     val channel = manager.getNotificationChannel("openclaw.system.notify.active")
     assertNotNull(channel)
     assertFalse(channel!!.canBypassDnd())
+  }
+
+  @Test
+  fun resolvePopupDeliveryMode_locked_returnsFullScreenLocked() {
+    val context: Context = RuntimeEnvironment.getApplication()
+    Shadows.shadowOf(context.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(true)
+
+    assertEquals(PopupDeliveryMode.FullScreenLocked, resolvePopupDeliveryMode(context))
+  }
+
+  @Test
+  fun resolvePopupDeliveryMode_unlockedWithOverlayPermission_returnsOverlayWindow() {
+    val context: Context = RuntimeEnvironment.getApplication()
+    Shadows.shadowOf(context.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(false)
+    ShadowSettings.setCanDrawOverlays(true)
+
+    assertEquals(PopupDeliveryMode.OverlayWindow, resolvePopupDeliveryMode(context))
+  }
+
+  @Test
+  fun resolvePopupDeliveryMode_unlockedWithoutOverlayPermission_returnsHeadsUpFallback() {
+    val context: Context = RuntimeEnvironment.getApplication()
+    Shadows.shadowOf(context.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(false)
+    ShadowSettings.setCanDrawOverlays(false)
+
+    assertEquals(PopupDeliveryMode.HeadsUpFallback, resolvePopupDeliveryMode(context))
   }
 }
 

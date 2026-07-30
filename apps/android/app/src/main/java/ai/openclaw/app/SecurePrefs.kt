@@ -58,11 +58,27 @@ class SecurePrefs(
     private const val notificationsForwardingMaxEventsPerMinuteKey =
       "notifications.forwarding.maxEventsPerMinute"
     private const val notificationsForwardingSessionKeyPrefix = "notifications.forwarding.sessionKey"
-    private const val popupBackgroundImageUrisKey = "popup.backgroundImageUris"
     private const val popupOpacityKey = "popup.opacity"
-    private const val defaultPopupOpacity = 0.55f
+    // Small solid card (not a full-screen scrim over a photo), so it needs to stay legible
+    // against whatever's behind it by default.
+    private const val defaultPopupOpacity = 0.92f
     private const val popupAutoDismissSecondsKey = "popup.autoDismissSeconds"
     private const val defaultPopupAutoDismissSeconds = 12
+    private const val popupCardColorKey = "popup.cardColor"
+    private const val defaultPopupCardColor = 0xFF1C1C1E.toInt()
+    private const val popupCardCornerRadiusDpKey = "popup.cardCornerRadiusDp"
+    private const val defaultPopupCardCornerRadiusDp = 24
+
+    /** Preset swatches offered in Settings; a full color picker is more than this needs. */
+    val POPUP_CARD_COLOR_PRESETS =
+      listOf(
+        0xFF1C1C1E.toInt(), // near-black
+        0xFF334155.toInt(), // slate
+        0xFF3730A3.toInt(), // indigo
+        0xFF7F1D1D.toInt(), // crimson
+        0xFF14532D.toInt(), // forest
+        0xFF0F172A.toInt(), // charcoal blue
+      )
     private const val installedAppsSharingEnabledKey = "device.apps.sharing.enabled"
     private const val installedAppsDisclosureConsentVersionKey =
       "device.apps.prominentDisclosure.consentVersion"
@@ -247,9 +263,6 @@ class SecurePrefs(
 
   // Full-screen popup ("delivery: overlay") appearance: user-picked background images cycle
   // randomly per popup; opacity/duration tune legibility and how long it stays on screen.
-  private val _popupBackgroundImageUris = MutableStateFlow(loadChatModelRefs(popupBackgroundImageUrisKey))
-  val popupBackgroundImageUris: StateFlow<List<String>> = _popupBackgroundImageUris
-
   private val _popupOpacity = MutableStateFlow(plainPrefs.getFloat(popupOpacityKey, defaultPopupOpacity))
   val popupOpacity: StateFlow<Float> = _popupOpacity
 
@@ -258,6 +271,15 @@ class SecurePrefs(
       plainPrefs.getInt(popupAutoDismissSecondsKey, defaultPopupAutoDismissSeconds).coerceIn(3, 30),
     )
   val popupAutoDismissSeconds: StateFlow<Int> = _popupAutoDismissSeconds
+
+  private val _popupCardColor = MutableStateFlow(plainPrefs.getInt(popupCardColorKey, defaultPopupCardColor))
+  val popupCardColor: StateFlow<Int> = _popupCardColor
+
+  private val _popupCardCornerRadiusDp =
+    MutableStateFlow(
+      plainPrefs.getInt(popupCardCornerRadiusDpKey, defaultPopupCardCornerRadiusDp).coerceIn(0, 32),
+    )
+  val popupCardCornerRadiusDp: StateFlow<Int> = _popupCardCornerRadiusDp
 
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
@@ -748,12 +770,6 @@ class SecurePrefs(
     _sessionCustomGroups.value = sanitized
   }
 
-  fun setPopupBackgroundImageUris(uris: List<String>) {
-    val sanitized = uris.map(String::trim).filter { it.isNotEmpty() }.distinct()
-    persistChatModelRefs(popupBackgroundImageUrisKey, sanitized)
-    _popupBackgroundImageUris.value = sanitized
-  }
-
   fun setPopupOpacity(value: Float) {
     val clamped = value.coerceIn(0f, 1f)
     plainPrefs.edit { putFloat(popupOpacityKey, clamped) }
@@ -764,6 +780,19 @@ class SecurePrefs(
     val clamped = value.coerceIn(3, 30)
     plainPrefs.edit { putInt(popupAutoDismissSecondsKey, clamped) }
     _popupAutoDismissSeconds.value = clamped
+  }
+
+  fun setPopupCardColor(value: Int) {
+    // Force opaque; visual transparency is controlled separately by popupOpacity.
+    val opaque = (0xFF000000.toInt()) or (value and 0x00FFFFFF)
+    plainPrefs.edit { putInt(popupCardColorKey, opaque) }
+    _popupCardColor.value = opaque
+  }
+
+  fun setPopupCardCornerRadiusDp(value: Int) {
+    val clamped = value.coerceIn(0, 32)
+    plainPrefs.edit { putInt(popupCardCornerRadiusDpKey, clamped) }
+    _popupCardCornerRadiusDp.value = clamped
   }
 
   private fun persistChatModelRefs(

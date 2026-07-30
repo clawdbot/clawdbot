@@ -423,4 +423,31 @@ class SecurePrefsTest {
     assertEquals(mapOf("X-Two" to "secret-two"), prefs.loadGatewayCustomHeaders("manual|two.example|443"))
     assertEquals("keep", prefs.getString("unrelated.secret"))
   }
+
+  @Test
+  fun popupCardColor_defaultsToNearBlackAndForcesOpaqueOnSet() {
+    val context = RuntimeEnvironment.getApplication()
+    val prefs = testPrefs(context)
+
+    assertEquals(0xFF1C1C1E.toInt(), prefs.popupCardColor.value)
+
+    // Alpha channel is always forced opaque; visual transparency is popupOpacity's job.
+    prefs.setPopupCardColor(0x807F1D1D.toInt())
+
+    assertEquals(0xFF7F1D1D.toInt(), prefs.popupCardColor.value)
+  }
+
+  @Test
+  fun popupCardCornerRadiusDp_defaultsAndClamps() {
+    val context = RuntimeEnvironment.getApplication()
+    val prefs = testPrefs(context)
+
+    assertEquals(24, prefs.popupCardCornerRadiusDp.value)
+
+    prefs.setPopupCardCornerRadiusDp(999)
+    assertEquals(32, prefs.popupCardCornerRadiusDp.value)
+
+    prefs.setPopupCardCornerRadiusDp(-5)
+    assertEquals(0, prefs.popupCardCornerRadiusDp.value)
+  }
 }

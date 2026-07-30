@@ -22,6 +22,7 @@ import ai.openclaw.app.GatewayUsageProviderSummary
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
+import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.VoiceCaptureMode
 import ai.openclaw.app.appLanguageRowSubtitle
@@ -87,10 +88,10 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -157,6 +158,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -1174,13 +1177,15 @@ private fun NotificationSettingsScreen(
 @Composable
 private fun PopupNotificationSettingsPanel(viewModel: MainViewModel) {
   val context = LocalContext.current
-  val backgroundImageUris by viewModel.popupBackgroundImageUris.collectAsState()
   val opacity by viewModel.popupOpacity.collectAsState()
   val autoDismissSeconds by viewModel.popupAutoDismissSeconds.collectAsState()
+  val cardColor by viewModel.popupCardColor.collectAsState()
+  val cornerRadiusDp by viewModel.popupCardCornerRadiusDp.collectAsState()
   var fullScreenIntentGranted by remember { mutableStateOf(fullScreenIntentPermissionGranted(context)) }
   var notificationPolicyAccessGranted by remember {
     mutableStateOf(notificationPolicyAccessPermissionGranted(context))
   }
+  var overlayPermissionGranted by remember { mutableStateOf(overlayPermissionGranted(context)) }
   val lifecycleOwner = LocalLifecycleOwner.current
 
   DisposableEffect(lifecycleOwner, context) {
@@ -1189,48 +1194,46 @@ private fun PopupNotificationSettingsPanel(viewModel: MainViewModel) {
         if (event == Lifecycle.Event.ON_RESUME) {
           fullScreenIntentGranted = fullScreenIntentPermissionGranted(context)
           notificationPolicyAccessGranted = notificationPolicyAccessPermissionGranted(context)
+          overlayPermissionGranted = overlayPermissionGranted(context)
         }
       }
     lifecycleOwner.lifecycle.addObserver(observer)
     onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
   }
 
-  val imagePickerLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(9)) { uris ->
-      if (uris.isNotEmpty()) {
-        viewModel.setPopupBackgroundImageUris(uris.map { it.toString() })
-      }
-    }
-
   ClawPanel {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-      Text(text = nativeString("Full-Screen Popup"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      Text(text = nativeString("Message Popup"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       Text(
-        text = nativeString("Used when the agent sends a notify with delivery=overlay — e.g. a summarized message you shouldn't miss while driving."),
+        text =
+          nativeString(
+            "Used when the agent sends a notify with delivery=overlay — a small card that reads " +
+              "the message aloud, e.g. a summary you shouldn't miss while driving.",
+          ),
         style = ClawTheme.type.caption,
         color = ClawTheme.colors.textMuted,
       )
 
-      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        ClawSecondaryButton(
-          text =
-            if (backgroundImageUris.isEmpty()) {
-              nativeString("Choose Background Images")
-            } else {
-              nativeString("\$count images selected", backgroundImageUris.size.toString())
-            },
-          onClick = {
-            imagePickerLauncher.launch(
-              PickVisualMediaRequest(mediaType = ActivityResultContracts.PickVisualMedia.ImageOnly),
-            )
-          },
-          modifier = Modifier.weight(1f),
+      Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+          text = nativeString("Card Color"),
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
         )
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+          SecurePrefs.POPUP_CARD_COLOR_PRESETS.forEach { preset ->
+            PopupCardColorSwatch(
+              color = Color(preset),
+              selected = preset == cardColor,
+              onClick = { viewModel.setPopupCardColor(preset) },
+            )
+          }
+        }
       }
 
       Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
-          text = nativeString("Popup Opacity: \$percent%", (opacity * 100).toInt().toString()),
+          text = nativeString("Card Opacity: \$percent%", (opacity * 100).toInt().toString()),
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.textMuted,
         )
@@ -1238,6 +1241,20 @@ private fun PopupNotificationSettingsPanel(viewModel: MainViewModel) {
           value = opacity,
           onValueChange = { viewModel.setPopupOpacity(it) },
           valueRange = 0f..1f,
+        )
+      }
+
+      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+          text = nativeString("Corner Radius: \$dp dp", cornerRadiusDp.toString()),
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+        )
+        Slider(
+          value = cornerRadiusDp.toFloat(),
+          onValueChange = { viewModel.setPopupCardCornerRadiusDp(it.toInt()) },
+          valueRange = 0f..32f,
+          steps = 31,
         )
       }
 
@@ -1274,8 +1291,39 @@ private fun PopupNotificationSettingsPanel(viewModel: MainViewModel) {
           )
         }
       }
+
+      if (!overlayPermissionGranted) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          ClawSecondaryButton(
+            text = nativeString("Allow Display Over Other Apps"),
+            onClick = { openOverlayPermissionSettings(context) },
+            modifier = Modifier.weight(1f),
+          )
+        }
+      }
     }
   }
+}
+
+@Composable
+private fun PopupCardColorSwatch(
+  color: Color,
+  selected: Boolean,
+  onClick: () -> Unit,
+) {
+  Box(
+    modifier =
+      Modifier
+        .size(32.dp)
+        .clip(CircleShape)
+        .background(color)
+        .border(
+          width = if (selected) 2.dp else 0.dp,
+          color = if (selected) ClawTheme.colors.text else Color.Transparent,
+          shape = CircleShape,
+        )
+        .clickable(onClick = onClick),
+  )
 }
 
 /** Full-screen intent needs an explicit OS grant on Android 14+; earlier versions allow it by default. */
@@ -1301,6 +1349,15 @@ private fun notificationPolicyAccessPermissionGranted(context: Context): Boolean
 
 private fun openNotificationPolicyAccessSettings(context: Context) {
   context.startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
+}
+
+/** The unlocked-screen popup (PopupOverlayWindow) only shows once this special access is granted. */
+private fun overlayPermissionGranted(context: Context): Boolean = Settings.canDrawOverlays(context)
+
+private fun openOverlayPermissionSettings(context: Context) {
+  val intent =
+    Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))
+  context.startActivity(intent)
 }
 
 @Composable

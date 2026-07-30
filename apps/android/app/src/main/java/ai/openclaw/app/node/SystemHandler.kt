@@ -1,10 +1,13 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.NodeApp
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.mainActivityPendingIntent
 import ai.openclaw.app.ui.popup.PopupOverlayActivity
+import ai.openclaw.app.ui.popup.popupSpokenText
 import android.Manifest
+import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -12,6 +15,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -59,11 +63,15 @@ private class AndroidSystemNotificationPoster(
 
   /** Posts through a priority-specific channel so Android's immutable channel importance is respected. */
   override fun post(request: SystemNotifyRequest) {
+    val isOverlay = request.delivery == "overlay"
+    val deliveryMode = if (isOverlay) resolvePopupDeliveryMode(appContext) else null
     // A full-screen intent only actually fires from a HIGH-importance channel, regardless of
     // the caller's requested priority, so an overlay delivery always gets the loudest channel.
-    val channelPriority = if (request.delivery == "overlay") "timesensitive" else request.priority
+    val channelPriority = if (isOverlay) "timesensitive" else request.priority
     val channelId = ensureChannel(channelPriority)
-    val notification = buildSystemNotification(appContext, channelId, request)
+    val wantsFullScreenIntent =
+      deliveryMode == PopupDeliveryMode.FullScreenLocked && fullScreenIntentPermitted(appContext)
+    val notification = buildSystemNotification(appContext, channelId, request, wantsFullScreenIntent)
     if (
       Build.VERSION.SDK_INT >= 33 &&
       ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) !=
@@ -72,6 +80,22 @@ private class AndroidSystemNotificationPoster(
       throw SecurityException("notifications permission missing")
     }
     NotificationManagerCompat.from(appContext).notify((System.currentTimeMillis() and 0x7FFFFFFF).toInt(), notification)
+
+    when (deliveryMode) {
+      PopupDeliveryMode.OverlayWindow ->
+        (appContext as NodeApp).popupOverlayWindow.show(
+          title = request.title,
+          subtitle = request.subtitle,
+          body = request.body,
+          timestampMillis = request.timestampMillis ?: System.currentTimeMillis(),
+        )
+      PopupDeliveryMode.HeadsUpFallback ->
+        // No visual card renders in this mode (the notification alone can't force full-screen
+        // while unlocked+backgrounded), so speak explicitly here — TTS has no visual-permission
+        // dependency and is the core purpose of overlay delivery, not a nice-to-have.
+        (appContext as NodeApp).speakPopupMessage(popupSpokenText(request.subtitle, request.body))
+      PopupDeliveryMode.FullScreenLocked, null -> Unit
+    }
   }
 
   private fun ensureChannel(priority: String?): String {
@@ -107,6 +131,23 @@ private class AndroidSystemNotificationPoster(
   }
 }
 
+/** Which surface an overlay-delivery notify shows through; see AndroidSystemNotificationPoster.post. */
+internal enum class PopupDeliveryMode { FullScreenLocked, OverlayWindow, HeadsUpFallback }
+
+/**
+ * Full-screen-intent notifications only auto-launch their Activity while the device is locked;
+ * unlocked+backgrounded just shows a heads-up banner (an intentional Android anti-abuse policy).
+ * So overlay delivery needs a second mechanism (PopupOverlayWindow) for the unlocked case.
+ */
+internal fun resolvePopupDeliveryMode(appContext: Context): PopupDeliveryMode {
+  val locked = appContext.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true
+  return when {
+    locked -> PopupDeliveryMode.FullScreenLocked
+    Settings.canDrawOverlays(appContext) -> PopupDeliveryMode.OverlayWindow
+    else -> PopupDeliveryMode.HeadsUpFallback
+  }
+}
+
 private fun compatPriority(priority: String?): Int =
   when (priority.orEmpty().trim().lowercase()) {
     "passive" -> NotificationCompat.PRIORITY_LOW
@@ -123,6 +164,7 @@ internal fun buildSystemNotification(
   appContext: Context,
   channelId: String,
   request: SystemNotifyRequest,
+  wantsFullScreenIntent: Boolean = false,
 ): Notification {
   val builder =
     NotificationCompat
@@ -142,7 +184,7 @@ internal fun buildSystemNotification(
     builder.setShowWhen(true)
   }
 
-  if (request.delivery == "overlay" && fullScreenIntentPermitted(appContext)) {
+  if (wantsFullScreenIntent) {
     builder.setFullScreenIntent(popupOverlayPendingIntent(appContext, request), true)
   }
 
