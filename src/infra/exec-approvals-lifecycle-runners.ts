@@ -302,6 +302,11 @@ export function resolveLifecyclePackageRunnerArgv(
     if (resolved?.length) {
       return { kind: "argv", argv: resolved };
     }
+  } else if (executable === "npm" && ["run", "run-script", "rum", "urn"].includes(subcommand)) {
+    const resolved = packageTarget(argv, subcommandIndex + 1);
+    if (resolved?.length) {
+      return { kind: "argv", argv: resolved };
+    }
   } else if (["pnpm", "yarn"].includes(executable) && subcommand === "dlx") {
     const resolved = packageTarget(argv, subcommandIndex + 1);
     if (resolved?.length) {

@@ -1,6 +1,7 @@
 // Expands known shell environment references used in lifecycle-sensitive argv.
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { resolveCarrierCommandArgv } from "./command-carriers.js";
+import { resolveLifecycleXargsArgv } from "./exec-approvals-lifecycle-carriers.js";
 import { unresolvedOpenClawConfigActionMayMutate } from "./exec-approvals-lifecycle-config.js";
 import {
   classifyOpenClawGatewayArgv,
@@ -308,6 +309,13 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
   if (unresolvedPowerShellStartProcessMayHideLifecycle(argv, isVariableReference)) {
     return true;
   }
+  if (executable === "xargs") {
+    const xargs = resolveLifecycleXargsArgv(argv);
+    if (xargs.kind === "approval-required") {
+      return true;
+    }
+    return xargs.kind === "argv" ? unresolvedEnvironmentMayHideLifecycle(xargs.argv) : false;
+  }
   if (executable === "env") {
     const carried = resolveCarrierCommandArgv([...argv], 0, { includeExec: true });
     return carried ? unresolvedEnvironmentMayHideLifecycle(carried) : false;
@@ -328,7 +336,6 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
     "stop-service",
     "suspend-service",
     "taskkill",
-    "xargs",
   ].includes(executable);
 }
 

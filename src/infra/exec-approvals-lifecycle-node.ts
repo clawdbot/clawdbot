@@ -1,5 +1,6 @@
 // Resolves an OpenClaw Node entry script without confusing Node option values for the script.
 import path from "node:path";
+import { isOpenClawEntryScriptPath } from "./exec-approvals-lifecycle-patterns.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 
 const NODE_OPTIONS_WITH_VALUE = new Set([
@@ -78,10 +79,7 @@ export function resolveNodeOpenClawArgv(argv: readonly string[], cwd?: string): 
   const scriptToken = (argv[scriptIndex] ?? "").trim();
   const isAbsolute = path.win32.isAbsolute(scriptToken) || path.posix.isAbsolute(scriptToken);
   const script = (cwd && !isAbsolute ? path.resolve(cwd, scriptToken) : scriptToken).toLowerCase();
-  if (
-    !script.includes("openclaw") ||
-    !/(?:^|[/\\])(?:openclaw\.mjs|(?:dist[/\\])?(?:entry|index)\.(?:c?js|mjs))$/u.test(script)
-  ) {
+  if (!isOpenClawEntryScriptPath(script)) {
     return null;
   }
   return ["openclaw", ...argv.slice(scriptIndex + 1)];

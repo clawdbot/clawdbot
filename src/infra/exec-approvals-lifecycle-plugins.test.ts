@@ -110,6 +110,43 @@ describe("OpenClaw PowerShell filter pipeline approvals", () => {
 });
 
 describe("OpenClaw lifecycle runner parsing edges", () => {
+  it("classifies directly executable OpenClaw entry scripts", () => {
+    expect(
+      requiresApproval("/opt/openclaw/dist/entry.js gateway restart", [
+        "/opt/openclaw/dist/entry.js",
+        "gateway",
+        "restart",
+      ]),
+    ).toBe(true);
+    expect(
+      requiresApproval("/opt/other/dist/entry.js gateway restart", [
+        "/opt/other/dist/entry.js",
+        "gateway",
+        "restart",
+      ]),
+    ).toBe(false);
+  });
+
+  it.each(["run", "run-script", "rum", "urn"])("unwraps npm %s OpenClaw scripts", (subcommand) => {
+    const command = `npm ${subcommand} openclaw -- gateway restart`;
+    expect(
+      requiresApproval(command, ["npm", subcommand, "openclaw", "--", "gateway", "restart"]),
+    ).toBe(true);
+  });
+
+  it("keeps unrelated npm scripts non-blocking", () => {
+    expect(
+      requiresApproval("npm run build -- gateway restart", [
+        "npm",
+        "run",
+        "build",
+        "--",
+        "gateway",
+        "restart",
+      ]),
+    ).toBe(false);
+  });
+
   it("fails closed before unwrapping ambiguous Yarn options", () => {
     const command = "yarn --mutex network run openclaw gateway restart";
     expect(

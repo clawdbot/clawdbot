@@ -1,6 +1,15 @@
 // Matches executable shell glob patterns that can resolve to the OpenClaw CLI.
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 
+/** Return true for known OpenClaw CLI entry scripts under an OpenClaw path. */
+export function isOpenClawEntryScriptPath(value: string | undefined): boolean {
+  const script = (value ?? "").trim().toLowerCase().replace(/["']/gu, "");
+  return (
+    script.includes("openclaw") &&
+    /(?:^|[/\\])(?:openclaw\.mjs|(?:dist[/\\])?(?:entry|index)\.(?:c?js|mjs))$/u.test(script)
+  );
+}
+
 function globPatternToRegExp(pattern: string): RegExp {
   let source = "^";
   for (let index = 0; index < pattern.length; index += 1) {
@@ -59,7 +68,8 @@ export function isOpenClawExecutablePattern(value: string | undefined): boolean 
   if (
     executable === "openclaw" ||
     executable === "openclaw.mjs" ||
-    executable.startsWith("openclaw@")
+    executable.startsWith("openclaw@") ||
+    isOpenClawEntryScriptPath(value)
   ) {
     return true;
   }

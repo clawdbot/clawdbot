@@ -218,6 +218,32 @@ describe("OpenClaw lifecycle environment data positions", () => {
       ).toBe(true);
     },
   );
+
+  it("keeps unresolved xargs data operands non-blocking", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `xargs echo "$PREFIX"`,
+        env: {},
+        envComplete: false,
+        platform: "linux",
+        segments: [{ raw: `xargs echo "$PREFIX"`, argv: ["xargs", "echo", "$PREFIX"] }],
+      }),
+    ).toBe(false);
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `xargs "$TOOL" gateway restart`,
+        env: {},
+        envComplete: false,
+        platform: "linux",
+        segments: [
+          {
+            raw: `xargs "$TOOL" gateway restart`,
+            argv: ["xargs", "$TOOL", "gateway", "restart"],
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("OpenClaw lifecycle dynamic carrier edges", () => {
