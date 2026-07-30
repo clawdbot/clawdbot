@@ -88,6 +88,42 @@ struct TailscaleIntegrationSectionTests {
         #expect(service.statusError == nil)
     }
 
+    @Test func `concurrent status checks share one request`() async {
+        let loader = TailscaleStatusLoader()
+        let completion = TailscaleStatusCompletion()
+        let joinBarrier = TailscaleStatusJoinBarrier()
+        let service = TailscaleService(
+            isInstalled: true,
+            isRunning: true,
+            tailscaleHostname: "april.tail7a0b9.ts.net",
+            tailscaleIP: "100.66.5.88",
+            appInstallationProbe: { true },
+            cliInstallationProbe: { false },
+            statusDataLoader: loader.load,
+            statusCheckJoinHandler: { await joinBarrier.signal() })
+
+        let first = Task { await service.checkTailscaleStatus() }
+        await loader.waitForRequestStart()
+        let second = Task {
+            await service.checkTailscaleStatus()
+            await completion.markFinished()
+        }
+        await joinBarrier.wait()
+
+        #expect(await loader.requestCount == 1)
+        #expect(await completion.finishedCount == 0)
+
+        await loader.releaseRequest()
+        await first.value
+        await second.value
+
+        #expect(await completion.finishedCount == 1)
+        #expect(service.tailscaleIP == "100.66.5.88")
+
+        await service.checkTailscaleStatus()
+        #expect(await loader.requestCount == 2)
+    }
+
     @Test func `tailscale section builds body when not installed`() {
         let service = TailscaleService(isInstalled: false, isRunning: false, statusError: "not installed")
         var view = TailscaleIntegrationSection(connectionMode: .local, isPaused: false)
@@ -211,5 +247,77 @@ struct TailscaleIntegrationSectionTests {
         #expect(messages.validationMessage == nil)
         #expect(messages.shouldRecordSuccess == false)
         #expect(messages.shouldRestartGateway == false)
+    }
+}
+
+private actor TailscaleStatusLoader {
+    private(set) var requestCount = 0
+    private var requestStartedContinuations: [CheckedContinuation<Void, Never>] = []
+    private var requestContinuation: CheckedContinuation<Void, Never>?
+    private var shouldSuspendRequest = true
+
+    func load(url: URL) async throws -> (Data, URLResponse) {
+        self.requestCount += 1
+        for continuation in self.requestStartedContinuations {
+            continuation.resume()
+        }
+        self.requestStartedContinuations.removeAll()
+        if self.shouldSuspendRequest {
+            self.shouldSuspendRequest = false
+            await withCheckedContinuation { continuation in
+                self.requestContinuation = continuation
+            }
+        }
+        let data = try JSONEncoder().encode(
+            TailscaleService.TailscaleAPIResponse(
+                status: "Running",
+                deviceName: "april",
+                tailnetName: "tail7a0b9.ts.net",
+                iPv4: "100.66.5.88"))
+        let response = try #require(
+            HTTPURLResponse(
+                url: url,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil))
+        return (data, response)
+    }
+
+    func waitForRequestStart() async {
+        guard self.requestCount == 0 else { return }
+        await withCheckedContinuation { continuation in
+            self.requestStartedContinuations.append(continuation)
+        }
+    }
+
+    func releaseRequest() {
+        self.requestContinuation?.resume()
+        self.requestContinuation = nil
+    }
+}
+
+private actor TailscaleStatusCompletion {
+    private(set) var finishedCount = 0
+
+    func markFinished() {
+        self.finishedCount += 1
+    }
+}
+
+private actor TailscaleStatusJoinBarrier {
+    private var joined = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func signal() {
+        self.joined = true
+        self.continuation?.resume()
+        self.continuation = nil
+    }
+
+    func wait() async {
+        guard !self.joined else { return }
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
     }
 }
