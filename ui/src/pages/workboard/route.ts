@@ -7,14 +7,6 @@ import { resolveWorkboardRouteLocation, type WorkboardRouteData } from "./route-
 
 export type { WorkboardRouteData } from "./route-location.ts";
 
-function workboardLoaderDeps(context: ApplicationContext, location: RouteLocation): string {
-  const route = resolveWorkboardRouteLocation(location, context.basePath);
-  const canonicalLocation = route.canonicalLocation;
-  return `${canonicalLocation?.pathname ?? location.pathname}\u0000${
-    canonicalLocation?.search ?? route.search
-  }`;
-}
-
 async function loadWorkboardRoute(
   context: ApplicationContext,
   location: RouteLocation,
@@ -32,7 +24,10 @@ async function loadWorkboardRoute(
 
 export const page = definePage({
   ...routePageSpec("workboard"),
-  loaderDeps: workboardLoaderDeps,
+  // Synthetic dynamic routes can canonicalize to the same URL with different
+  // route data. Keep their raw identity so the router does not reuse stale data.
+  loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
+    `${location.pathname}\u0000${location.search}`,
   loader: (context: ApplicationContext, { location }) => loadWorkboardRoute(context, location),
   component: () =>
     import("./workboard-page.ts").then(() => ({
