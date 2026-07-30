@@ -1454,16 +1454,20 @@ export class RealtimeCallHandler {
       const cancellation = new Promise<void>((resolve) => {
         cancel = resolve;
       });
+      let completeConsult = (_result: unknown) => {};
+      const consult = new Promise<unknown>((resolve) => {
+        completeConsult = resolve;
+      });
       const state: NativeConsultState = {
         owner: bridge,
         startedAt,
-        promise: Promise.resolve(),
+        promise: consult,
         cancellation,
         cancelled: false,
         cancel,
       };
       this.nativeConsultsInFlightByCallId.set(callId, state);
-      state.promise = Promise.resolve().then(async () => {
+      void (async () => {
         try {
           await submitWorkingResponse();
           if (state.cancelled) {
@@ -1492,7 +1496,7 @@ export class RealtimeCallHandler {
             error: formatErrorMessage(error),
           };
         }
-      });
+      })().then(completeConsult);
       try {
         const outcome = await waitForNativeConsult(state);
         if (outcome.kind === "cancelled") {
