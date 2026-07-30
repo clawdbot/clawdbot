@@ -84,10 +84,10 @@ function redactStructuredSecretLine(text: string, key: string) {
 
 function redactStructuredSecretArray(text: string, key: string) {
   const escapedKey = escapeRegExp(key);
-  const jsonString = `"(?:\\\\.|[^"\\\\])*"`;
-  const jsonStringArray = `\\[\\s*${jsonString}(?:\\s*,\\s*${jsonString})*\\s*\\]`;
+  const quotedString = `"(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'`;
+  const quotedStringArray = `\\[\\s*(?:${quotedString})(?:\\s*,\\s*(?:${quotedString}))*\\s*\\]`;
   return text.replace(
-    new RegExp(`("?${escapedKey}"?\\s*[:=]\\s*)${jsonStringArray}`, "gi"),
+    new RegExp(`("?${escapedKey}"?\\s*[:=]\\s*)${quotedStringArray}`, "gi"),
     `$1<redacted>`,
   );
 }

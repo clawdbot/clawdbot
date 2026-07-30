@@ -43,13 +43,21 @@ describe("gateway log redaction", () => {
         '  "signature"',
         "]",
       ].join("\n"),
+      [
+        "channels.buzz.authTag: [",
+        "  'auth',",
+        "  'pubkey',",
+        "  'conditions',",
+        "  'escaped\\'signature'",
+        "]",
+      ].join("\n"),
     ].join("\n");
 
     const redacted = redactQaGatewayDebugText(raw);
     expect(redacted).not.toContain(privateKey);
     expect(redacted).not.toContain(authTag);
     expect(redacted).not.toContain("signature");
-    expect(redacted.match(/<redacted>/gu)).toHaveLength(6);
+    expect(redacted.match(/<redacted>/gu)).toHaveLength(7);
   });
 
   it("neutralizes GitHub workflow commands at every line boundary", () => {
