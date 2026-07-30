@@ -83,6 +83,9 @@ export function createTelegramProgressController(params: {
     commentaryLinePrefix: "💬 ",
     commentaryItalics: false,
     updateOnLineChange: true,
+    // renderTelegramProgressDraftPreview draws the work lines from `lines` in
+    // headline/checklist mode, so they must not also arrive inside the text.
+    rendersRollingLinesNatively: true,
     update: async (streamText, options) => {
       draftEverRendered = true;
       await params.draft.prepareAnswerLaneForToolProgress();
