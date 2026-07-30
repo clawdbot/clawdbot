@@ -225,7 +225,7 @@ fn classify_pause(error: &ClientError) -> Option<ReconnectPause> {
     }
 }
 
-fn is_tls_configuration_error(reason: &str) -> bool {
+pub(crate) fn is_tls_configuration_error(reason: &str) -> bool {
     reason.contains(TLS_PIN_MISMATCH_ERROR)
         || reason.contains("Gateway TLS fingerprint requires a wss:// URL")
 }

@@ -2,6 +2,7 @@ use std::{future::Future, time::Duration};
 
 use thiserror::Error;
 
+use crate::reconnect::is_tls_configuration_error;
 use crate::{
     ClientError, CommandRuntime, NodeSession, ReconnectAction, ReconnectPause, ReconnectPolicy,
     RuntimeError,
@@ -29,6 +30,8 @@ impl ClientErrorClass {
     pub fn of(error: &ClientError) -> Self {
         match error {
             ClientError::InvalidUrl(_) | ClientError::InsecureRemoteGateway => Self::Configuration,
+            ClientError::Tls(reason) if is_tls_configuration_error(reason) => Self::Configuration,
+            ClientError::Tls(_) => Self::Transport,
             ClientError::Transport(_) | ClientError::ChallengeTimeout | ClientError::Closed(_) => {
                 Self::Transport
             }
