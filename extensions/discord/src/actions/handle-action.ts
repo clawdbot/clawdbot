@@ -29,7 +29,7 @@ import {
   buildDiscordInteractiveComponents,
   buildDiscordPresentationComponents,
 } from "../shared-interactive.js";
-import { resolveDiscordChannelId } from "../targets.js";
+import { parseDiscordTarget, resolveDiscordChannelId } from "../targets.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
 import type { DiscordMessagingActionOptions } from "./runtime.messaging.shared.js";
 import { readDiscordAutoArchiveDurationParam } from "./runtime.shared.js";
@@ -111,6 +111,31 @@ export async function handleDiscordMessageAction(
       accountId,
       inboundEventKind: ctx.inboundEventKind,
     });
+  const withAdoptedThreadReplyRoute = (
+    result: AgentToolResult<unknown>,
+    to: string,
+    fallbackSessionKey?: string,
+  ) => {
+    let target;
+    try {
+      target = parseDiscordTarget(to, { defaultKind: "channel" });
+    } catch {
+      // Route classification runs after delivery and must not turn a
+      // successfully resolved Discord target into a failed tool result.
+      return result;
+    }
+    if (
+      target?.kind === "channel" &&
+      notifyDiscordActiveTurnThreadReplyDelivered({
+        sessionKey: ctx.sessionKey ?? fallbackSessionKey,
+        accountId,
+        threadId: target.id,
+      })
+    ) {
+      return withCurrentSourceReplyRoute(result);
+    }
+    return result;
+  };
 
   const readTarget = () => {
     const target =
@@ -215,7 +240,7 @@ export async function handleDiscordMessageAction(
       actionOptions,
     );
     notifyVisibleOutbound(to, sessionKey);
-    return result;
+    return withAdoptedThreadReplyRoute(result, to, sessionKey);
   }
 
   if (action === "upload-file") {
@@ -254,7 +279,7 @@ export async function handleDiscordMessageAction(
       actionOptions,
     );
     notifyVisibleOutbound(to, sessionKey);
-    return result;
+    return withAdoptedThreadReplyRoute(result, to, sessionKey);
   }
 
   if (action === "poll") {
