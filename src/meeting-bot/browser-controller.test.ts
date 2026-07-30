@@ -187,4 +187,77 @@ describe("meeting browser recovery", () => {
       notes: ["Test meeting navigated while recovering; retrying browser inspection."],
     });
   });
+
+  it("does not adopt a random meeting tab without ownership or URL (#113990)", async () => {
+    let acted = false;
+    const result = await recoverMeetingBrowserTab({
+      adapter: {
+        browserLabel: "Test meeting",
+        urls: {
+          accountHint: () => undefined,
+          buildJoinUrl: (session) => session.url,
+          isPreferredJoinUrl: () => true,
+          isRecoverableTab: () => true,
+          isSameMeeting: () => true,
+          localeAction: () => undefined,
+          normalizeForReuse: () => "test-meeting",
+          validateAndNormalize: (input) => String(input),
+        },
+        browser: {
+          allowsMicrophone: () => true,
+          browserControlUnavailable: () => ({
+            category: "browser-control-unavailable",
+            reason: "browser-unavailable",
+            message: "Browser unavailable.",
+          }),
+          buildLeaveScript: () => "",
+          buildStatusJoinScript: () => {
+            acted = true;
+            return "() => '{}'";
+          },
+          captions: {
+            buildTranscriptScript: () => "",
+            enabled: () => false,
+            parseTranscript: () => ({ droppedLines: 0, lines: [] }),
+          },
+          classifyManualAction: () => undefined,
+          parseLeaveResult: () => ({ departed: false }),
+          parseStatus: () => ({ status: "browser-control", inCall: true }),
+          permissions: () => undefined,
+          permissionNotes: () => [],
+        },
+      },
+      allowSessionAdoption: true,
+      autoJoin: true,
+      callBrowser: async (request) => {
+        if (request.path === "/tabs") {
+          return {
+            tabs: [{ targetId: "unrelated-meet", url: "https://meet.test/other-meeting" }],
+          };
+        }
+        if (request.path === "/act") {
+          acted = true;
+        }
+        return {};
+      },
+      config: {
+        launch: true,
+        reuseExistingTab: true,
+        autoJoin: true,
+        guestName: "OpenClaw QA",
+        joinTimeoutMs: 2_000,
+        waitForInCallMs: 2_000,
+      },
+      locationLabel: "for testing",
+      meetingSessionId: "session-1",
+      mode: "listen",
+      timeoutMs: 500,
+      // No requestedMeetingUrl, no trackedTargetId, no trackedMeetingUrl
+    });
+
+    expect(acted).toBe(false);
+    expect(result.browser).toBeUndefined();
+    expect(result.tab).toBeUndefined();
+    expect(result.message).toMatch(/No owned Test meeting tab/i);
+  });
 });
