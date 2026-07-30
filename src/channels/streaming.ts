@@ -7,7 +7,7 @@ import {
   isShellToolDisplayName,
   resolveToolDisplay,
 } from "../agents/tool-display.js";
-import { formatToolAggregate } from "../auto-reply/tool-meta.js";
+import { formatToolAggregate, formatToolAggregateParts } from "../auto-reply/tool-meta.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
@@ -329,22 +329,14 @@ function buildNamedProgressLine(
 ): ChannelProgressDraftLine | undefined {
   const normalizedName = name?.trim() || "tool_call";
   const compactMetas = compactStrings(metas ?? []);
-  const text = formatToolAggregate(normalizedName, compactMetas.length ? compactMetas : undefined, {
-    markdown: options?.markdown,
-  });
+  // The formatter owns both halves: taking the detail from it keeps the line's
+  // structured fields and its rendered text describing the same thing.
+  const { text, detail } = formatToolAggregateParts(
+    normalizedName,
+    compactMetas.length ? compactMetas : undefined,
+    { markdown: options?.markdown },
+  );
   const display = resolveToolDisplay({ name: normalizedName });
-  const prefix = `${display.emoji} ${display.label}`;
-  const compactCommandDetail =
-    isShellToolDisplayName(display.name) && text.startsWith(`${display.emoji} `)
-      ? text.slice(display.emoji.length + 1).trim()
-      : undefined;
-  const compactCommandPrefix =
-    compactCommandDetail && compactCommandDetail !== display.label
-      ? compactCommandDetail
-      : undefined;
-  const detail = text.startsWith(`${prefix}: `)
-    ? text.slice(prefix.length + 2).trim()
-    : compactCommandPrefix;
   const line = {
     ...(fields?.id ? { id: fields.id } : {}),
     kind,
