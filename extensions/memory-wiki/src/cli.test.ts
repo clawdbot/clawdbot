@@ -867,6 +867,66 @@ cli note
     );
   });
 
+  it("preserves a page recreated between the rollback move-aside and the snapshot restore", async () => {
+    const { rootDir, config } = await createCliVault({ initialize: true });
+    const exportDir = await createChatGptExport(rootDir);
+    await runRegisteredWikiCommand(config, ["chatgpt", "import", "--export", exportDir, "--json"]);
+    const sourceFiles = (await fs.readdir(path.join(rootDir, "sources"))).filter(
+      (entry) => entry !== "index.md",
+    );
+    const sourceFile = expectDefined(sourceFiles[0], "imported ChatGPT source file");
+    const pagePath = path.join(rootDir, "sources", sourceFile);
+    const firstImportContent = await fs.readFile(pagePath, "utf8");
+
+    const conversationsPath = path.join(exportDir, "conversations.json");
+    const conversationsText = await fs.readFile(conversationsPath, "utf8");
+    await fs.writeFile(
+      conversationsPath,
+      conversationsText.replace(
+        "Noted. I will keep travel options close to the airport.",
+        "Noted. I will keep hotel options within a short ride of the airport.",
+      ),
+      "utf8",
+    );
+    const secondApplied = JSON.parse(
+      await runRegisteredWikiCommand(config, [
+        "chatgpt",
+        "import",
+        "--export",
+        exportDir,
+        "--json",
+      ]),
+    ) as { runId?: string };
+    const secondRunId = expectDefined(secondApplied.runId, "second ChatGPT import runId");
+
+    const concurrentSave = "Concurrent editor save during rollback.\n";
+    let recreated = false;
+    const realRename = fs.rename;
+    const renameSpy = vi
+      .spyOn(fs, "rename")
+      .mockImplementation(async (from: Parameters<typeof fs.rename>[0], to) => {
+        await realRename(from, to);
+        if (!recreated && String(to).includes("recovered")) {
+          recreated = true;
+          await fs.writeFile(from, concurrentSave, "utf8");
+        }
+      });
+    const rollback = JSON.parse(
+      await runRegisteredWikiCommand(config, ["chatgpt", "rollback", secondRunId, "--json"]),
+    ) as { restoredCount: number; preservedPaths: Array<{ path: string; recoveryPath: string }> };
+    renameSpy.mockRestore();
+
+    expect(recreated).toBe(true);
+    expect(rollback.restoredCount).toBe(1);
+    await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(firstImportContent);
+    expect(rollback.preservedPaths).toHaveLength(1);
+    const preserved = expectDefined(rollback.preservedPaths[0], "preserved recreated page");
+    expect(preserved.path).toBe(`sources/${sourceFile}`);
+    await expect(fs.readFile(path.join(rootDir, preserved.recoveryPath), "utf8")).resolves.toBe(
+      concurrentSave,
+    );
+  });
+
   it("imports ChatGPT exports with out-of-range Unix timestamps", async () => {
     const { rootDir, config } = await createCliVault({ initialize: true });
     const exportDir = await createChatGptExport(rootDir);

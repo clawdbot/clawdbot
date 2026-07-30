@@ -912,8 +912,18 @@ export async function rollbackChatGptImportRun(params: {
   }): Promise<void> => {
     const targetPath = path.join(vaultRoot, entry.path);
     const recoveryHash = createHash("sha1").update(entry.path).digest("hex").slice(0, 12);
-    const recoveryAbsolutePath = path.join(recoveredDir, `${recoveryHash}.md`);
     await fs.mkdir(recoveredDir, { recursive: true });
+    let recoveryAbsolutePath = path.join(recoveredDir, `${recoveryHash}.md`);
+    let attempt = 0;
+    while (
+      await fs.access(recoveryAbsolutePath).then(
+        () => true,
+        () => false,
+      )
+    ) {
+      attempt += 1;
+      recoveryAbsolutePath = path.join(recoveredDir, `${recoveryHash}-${attempt}.md`);
+    }
     try {
       await fs.rename(targetPath, recoveryAbsolutePath);
     } catch (error) {
@@ -944,10 +954,19 @@ export async function rollbackChatGptImportRun(params: {
     }
     const snapshotPath = path.join(runDir, entry.snapshotPath);
     const snapshot = await fs.readFile(snapshotPath, "utf8");
-    await moveAsideCurrentPage(entry);
     const targetPath = path.join(vaultRoot, entry.path);
     await fs.mkdir(path.dirname(targetPath), { recursive: true });
-    await fs.writeFile(targetPath, snapshot, "utf8");
+    for (;;) {
+      await moveAsideCurrentPage(entry);
+      try {
+        await fs.writeFile(targetPath, snapshot, { encoding: "utf8", flag: "wx" });
+        break;
+      } catch (error) {
+        if (asRecord(error)?.code !== "EEXIST") {
+          throw error;
+        }
+      }
+    }
     restoredCount += 1;
   }
   await fs.rmdir(recoveredDir).catch(() => undefined);
