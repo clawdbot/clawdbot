@@ -9,8 +9,9 @@ title: "Plugin inventory"
 
 # Plugin inventory
 
-This page is generated from `extensions/*/package.json`, `openclaw.plugin.json`,
-and the root npm package `files` exclusions. Regenerate it with:
+This page is generated from bundled plugin package metadata, selected official
+external catalog entries, and the root npm package `files` exclusions.
+Regenerate it with:
 
 ```bash
 pnpm plugins:inventory:gen
@@ -315,7 +316,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[teams-meetings](/plugins/reference/teams-meetings)** (`@openclaw/teams-meetings`) - npm; ClawHub: `clawhub:@openclaw/teams-meetings`. Join Microsoft Teams meetings as a Chrome browser guest.
 
-- **[tencent](/plugins/reference/tencent)** (`@openclaw/tencent-provider`) - npm; ClawHub: `clawhub:@openclaw/tencent-provider`. Adds Tencent TokenHub, Tencent Tokenplan model provider support to OpenClaw.
+- **[tencent](/plugins/reference/tencent)** (`openclaw-tencent-provider`) - ClawHub: `clawhub:@tencent/openclaw-tencent-provider`; npm. Adds Tencent TokenHub, Tencent Tokenplan model provider support to OpenClaw.
 
 - **[tlon](/plugins/reference/tlon)** (`@openclaw/tlon`) - npm; ClawHub. OpenClaw Tlon/Urbit channel plugin for chat workflows.
 

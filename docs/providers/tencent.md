@@ -11,7 +11,7 @@ Install the official Tencent Cloud provider plugin to access Tencent Hy3 through
 | Property                  | Value                                                 |
 | ------------------------- | ----------------------------------------------------- |
 | Provider ids              | `tencent-tokenhub`, `tencent-tokenplan`               |
-| Package                   | `@openclaw/tencent-provider`                          |
+| Package                   | `openclaw-tencent-provider`                           |
 | TokenHub auth env var     | `TOKENHUB_API_KEY`                                    |
 | TokenPlan auth env var    | `TOKENPLAN_API_KEY`                                   |
 | TokenHub onboarding flag  | `--auth-choice tokenhub-api-key`                      |
@@ -27,6 +27,18 @@ Install the official Tencent Cloud provider plugin to access Tencent Hy3 through
 ## Quick start
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install clawhub:@tencent/openclaw-tencent-provider
+    ```
+
+    If ClawHub is unavailable, install the same plugin from npm:
+
+    ```bash
+    openclaw plugins install npm:openclaw-tencent-provider
+    ```
+
+  </Step>
   <Step title="Create a Tencent API key">
     Create an API key for Tencent Cloud TokenHub and TokenPlan. If you choose a limited access scope for the key, include **hy3** (and **hy3 preview** if you plan to use it on TokenHub) in the allowed models.
   </Step>

@@ -316,7 +316,6 @@
     "!dist/extensions/synology-chat/**",
     "!dist/extensions/tavily/**",
     "!dist/extensions/teams-meetings/**",
-    "!dist/extensions/tencent/**",
     "!dist/extensions/tokenjuice/**",
     "!dist/extensions/tlon/**",
     "!dist/extensions/twitch/**",

@@ -8,8 +8,8 @@ title: "Plugin reference"
 
 # Plugin reference
 
-This page is generated from `extensions/*/package.json` and
-`openclaw.plugin.json`. Regenerate it with:
+This page is generated from bundled plugin package metadata and selected
+official external catalog entries. Regenerate it with:
 
 ```bash
 pnpm plugins:inventory:gen

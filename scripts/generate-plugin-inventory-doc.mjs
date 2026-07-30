@@ -10,6 +10,13 @@ const REFERENCE_INDEX_PATH = "docs/plugins/reference.md";
 const REFERENCE_DIR = "docs/plugins/reference";
 const ROOT = process.cwd();
 const EXTENSIONS_DIR = path.join(ROOT, "extensions");
+const MANIFEST_KEY = "openclaw";
+const OFFICIAL_EXTERNAL_CATALOG_PATHS = [
+  "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/official-external-provider-catalog.json",
+  "scripts/lib/official-external-plugin-catalog.json",
+];
+const OFFICIAL_EXTERNAL_INVENTORY_IDS = new Set(["tencent"]);
 
 const PROVIDER_DOC_ALIASES = new Map([
   ["amazon-bedrock", "/providers/bedrock"],
@@ -492,8 +499,8 @@ title: "Plugin reference"
 
 # Plugin reference
 
-This page is generated from \`extensions/*/package.json\` and
-\`openclaw.plugin.json\`. Regenerate it with:
+This page is generated from bundled plugin package metadata and selected
+official external catalog entries. Regenerate it with:
 
 \`\`\`bash
 pnpm plugins:inventory:gen
@@ -518,6 +525,67 @@ function collectPluginSourceEntries() {
     const manifest = readJsonPath(manifestPath);
     const id = typeof manifest.id === "string" && manifest.id ? manifest.id : dirName;
     entries.push({ dirName, id, manifest, packageJson });
+  }
+  return entries;
+}
+
+function catalogEntriesFrom(raw) {
+  if (Array.isArray(raw)) {
+    return raw;
+  }
+  if (raw && typeof raw === "object") {
+    const list = raw.entries ?? raw.packages ?? raw.plugins;
+    return Array.isArray(list) ? list : [];
+  }
+  return [];
+}
+
+function resolveCatalogPluginId(entry) {
+  const manifest = entry?.[MANIFEST_KEY];
+  return (
+    manifest?.plugin?.id ??
+    manifest?.channel?.id ??
+    manifest?.providers?.find((provider) => typeof provider?.id === "string")?.id
+  );
+}
+
+function collectOfficialExternalInventoryEntries(sourceEntries) {
+  const sourceIds = new Set(sourceEntries.map((entry) => entry.id));
+  const entries = [];
+  for (const catalogPath of OFFICIAL_EXTERNAL_CATALOG_PATHS) {
+    for (const entry of catalogEntriesFrom(readJson(catalogPath))) {
+      const id = resolveCatalogPluginId(entry);
+      if (!OFFICIAL_EXTERNAL_INVENTORY_IDS.has(id) || sourceIds.has(id)) {
+        continue;
+      }
+      const manifest = entry[MANIFEST_KEY] ?? {};
+      const providerIds = (manifest.providers ?? [])
+        .map((provider) => provider?.id)
+        .filter((providerId) => typeof providerId === "string" && providerId.length > 0);
+      const channelId = typeof manifest.channel?.id === "string" ? manifest.channel.id : null;
+      entries.push({
+        dirName: id,
+        id,
+        manifest: {
+          id,
+          ...(channelId ? { channels: [channelId] } : {}),
+          ...(providerIds.length > 0 ? { providers: providerIds } : {}),
+          ...(manifest.contracts ? { contracts: manifest.contracts } : {}),
+        },
+        packageJson: {
+          name: entry.name,
+          description: entry.description,
+          [MANIFEST_KEY]: {
+            install: manifest.install,
+            release: {
+              publishToClawHub: typeof manifest.install?.clawhubSpec === "string",
+              publishToNpm: typeof manifest.install?.npmSpec === "string",
+            },
+          },
+        },
+        status: "external",
+      });
+    }
   }
   return entries;
 }
@@ -550,10 +618,16 @@ function collectPluginRecords() {
   const rootPackageJson = readJson("package.json");
   const excludedDirs = collectExcludedPackagedExtensionDirs(rootPackageJson);
   const sourceEntries = collectPluginSourceEntries();
+  // Externalized bundled plugins no longer have source in this repo, but their
+  // official catalog metadata must still generate install and reference docs.
+  const officialExternalEntries = collectOfficialExternalInventoryEntries(sourceEntries);
   const records = [];
 
-  for (const { dirName, id, manifest, packageJson } of sourceEntries) {
-    const status = resolveStatus({ dirName, packageJson, excludedDirs });
+  for (const { dirName, id, manifest, packageJson, status: staticStatus } of [
+    ...sourceEntries,
+    ...officialExternalEntries,
+  ]) {
+    const status = staticStatus ?? resolveStatus({ dirName, packageJson, excludedDirs });
     records.push({
       description: resolveDescription({ manifest, packageJson }),
       docs: resolveDocs({ dirName, manifest, packageJson }),
@@ -566,7 +640,7 @@ function collectPluginRecords() {
     });
   }
 
-  validatePluginCoverage(records, sourceEntries);
+  validatePluginCoverage(records, [...sourceEntries, ...officialExternalEntries]);
   return records.toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
@@ -613,8 +687,9 @@ title: "Plugin inventory"
 
 # Plugin inventory
 
-This page is generated from \`extensions/*/package.json\`, \`openclaw.plugin.json\`,
-and the root npm package \`files\` exclusions. Regenerate it with:
+This page is generated from bundled plugin package metadata, selected official
+external catalog entries, and the root npm package \`files\` exclusions.
+Regenerate it with:
 
 \`\`\`bash
 pnpm plugins:inventory:gen

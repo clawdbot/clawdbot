@@ -471,10 +471,6 @@
       - any-glob-to-any-file:
           - "extensions/gmi/**"
           - "docs/providers/gmi.md"
-"extensions: tencent":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/tencent/**"
 "extensions: stepfun":
   - changed-files:
       - any-glob-to-any-file:
