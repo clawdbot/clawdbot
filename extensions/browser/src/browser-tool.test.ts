@@ -3568,4 +3568,188 @@ describe("browser tool upload inbound media fallback (#83544)", () => {
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 });
+
+// Redacted stand-in for the raw PNG bytes the pre-fix catch path base64-encoded
+// into the tool result. Byte content is irrelevant to the mechanism.
+const SAMPLE_SCREENSHOT_BASE64 = Buffer.from("PNG-SCREENSHOT-BYTES-REDACTED").toString("base64");
+
+type ProofToolResult = { content?: readonly unknown[]; details?: unknown } | undefined;
+
+type ProofSessionMessage =
+  | { role: "user" | "assistant"; content: string }
+  | { role: "toolResult"; toolName: string; result: ProofToolResult };
+
+function proofContentBlockTypes(result: ProofToolResult): string[] {
+  const content = result?.content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content.map((block) => ((block as { type?: unknown })?.type as string) ?? "unknown");
+}
+
+function countImageContentBlocks(result: ProofToolResult): number {
+  return proofContentBlockTypes(result).filter((type) => type === "image").length;
+}
+
+function proofResultText(result: ProofToolResult): string {
+  const content = result?.content;
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .filter(
+      (block): block is { type: "text"; text: string } =>
+        (block as { type?: unknown })?.type === "text",
+    )
+    .map((block) => block.text)
+    .join("\n");
+}
+
+function buildContaminationSession(
+  screenshotResult: ProofToolResult,
+  snapshotResult: ProofToolResult,
+): ProofSessionMessage[] {
+  // A read tool result is always plain text; it is the kind of later result the
+  // reported bug forced into image-analysis framing when a base64 screenshot
+  // survived alongside it in session state (#106703, #105305).
+  const readResult: ProofToolResult = {
+    content: [{ type: "text", text: "status=green\nregion=us-west-2" }],
+    details: { path: "/workspace/deploy-status.txt" },
+  };
+  return [
+    { role: "user", content: "screenshot the dashboard and summarize it" },
+    { role: "toolResult", toolName: "browser:screenshot", result: screenshotResult },
+    { role: "assistant", content: "the configured vision model was unavailable" },
+    { role: "user", content: "now read the deploy status file" },
+    { role: "toolResult", toolName: "read", result: readResult },
+    { role: "assistant", content: "deploy is green" },
+    { role: "user", content: "take a page snapshot" },
+    { role: "toolResult", toolName: "browser:snapshot", result: snapshotResult },
+    { role: "assistant", content: "captured snapshot" },
+  ];
+}
+
+function totalImageContentBlocks(session: ProofSessionMessage[]): number {
+  let total = 0;
+  for (const message of session) {
+    if (message.role === "toolResult") {
+      total += countImageContentBlocks(message.result);
+    }
+  }
+  return total;
+}
+
+function redactBase64ForLog(text: string): string {
+  return text.replace(/[A-Za-z0-9+/]{24,}={0,2}/g, (match) => `${match.slice(0, 12)}…REDACTED`);
+}
+
+function renderRedactedResult(label: string, result: ProofToolResult): string {
+  const types = proofContentBlockTypes(result);
+  const images = countImageContentBlocks(result);
+  const text = redactBase64ForLog(proofResultText(result)).replace(/\n/g, " \\n ");
+  return [
+    `--- ${label} ---`,
+    `content-block types: [${types.join(", ")}]`,
+    `image content blocks: ${images}`,
+    `text: ${text}`,
+  ].join("\n");
+}
+
+function renderRedactedTranscript(session: ProofSessionMessage[]): string {
+  const lines: string[] = ["=== session transcript (redacted) ==="];
+  for (const message of session) {
+    if (message.role === "toolResult") {
+      const types = proofContentBlockTypes(message.result).join(", ");
+      const images = countImageContentBlocks(message.result);
+      lines.push(`toolResult(${message.toolName}): blocks=[${types}] images=${images}`);
+      continue;
+    }
+    lines.push(`${message.role}: ${message.content}`);
+  }
+  lines.push(`total image content blocks across session: ${totalImageContentBlocks(session)}`);
+  return lines.join("\n");
+}
+
+describe("browser screenshot vision-failure session-contamination proof (#106703, #105305)", () => {
+  registerBrowserToolAfterEachReset();
+
+  it("drives the real screenshot handler with configured vision forced to fail and keeps later tool results text-only", async () => {
+    // An image-understanding model is configured, so the real screenshot handler
+    // takes the vision path rather than the raw-image fallback.
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      tools: { media: { image: { models: [{ provider: "openai", model: "gpt-vision" }] } } },
+    } as never);
+    // Force the ONLY vision call to fail (configured provider error). Everything
+    // else runs through the real production browser screenshot handler.
+    toolCommonMocks.describeImageFile.mockRejectedValueOnce(
+      new Error("vision provider unavailable (HTTP 503)"),
+    );
+
+    const tool = createBrowserTool();
+    const screenshotResult = await tool.execute?.("call-screenshot", {
+      action: "screenshot",
+      target: "host",
+      targetId: "tab-dashboard",
+    });
+    // A later tool call through the same real handler (no vision involved).
+    const snapshotResult = await tool.execute?.("call-snapshot", {
+      action: "snapshot",
+      target: "host",
+      targetId: "tab-dashboard",
+    });
+
+    const session = buildContaminationSession(screenshotResult, snapshotResult);
+    console.log(
+      renderRedactedResult("real screenshot handler (configured vision failure)", screenshotResult),
+    );
+    console.log(renderRedactedResult("real snapshot handler (later tool call)", snapshotResult));
+    console.log(renderRedactedTranscript(session));
+
+    // The changed catch path returned text only: no base64 image block that
+    // could persist across turns and contaminate later results.
+    expect(countImageContentBlocks(screenshotResult)).toBe(0);
+    expect(proofResultText(screenshotResult)).toContain("browser screenshot vision failed");
+    expect((screenshotResult?.details as { vision?: { failed?: boolean } })?.vision?.failed).toBe(
+      true,
+    );
+    expect((screenshotResult?.details as { media?: unknown })?.media).toBeUndefined();
+    expect(toolCommonMocks.imageResultFromFile).not.toHaveBeenCalled();
+
+    // The later snapshot result stays text-framed and the whole session carries
+    // zero base64 image blocks.
+    expect(countImageContentBlocks(snapshotResult)).toBe(0);
+    expect(totalImageContentBlocks(session)).toBe(0);
+  });
+
+  it("shows the same handler still emits base64 on the unchanged no-vision path (the pre-fix contamination shape)", async () => {
+    // With no image-understanding model configured, the real handler reaches the
+    // unchanged imageResultFromFile path: the exact base64 tool-result shape the
+    // pre-fix catch block produced and that pruneProcessedHistoryImages preserves
+    // for recent turns. This confirms the mechanism is real and that the fix only
+    // neutralizes the configured-vision-failure catch.
+    configMocks.loadConfig.mockReturnValue({ browser: {} } as never);
+    toolCommonMocks.imageResultFromFile.mockResolvedValueOnce({
+      content: [
+        { type: "text", text: "browser:screenshot" },
+        { type: "image", data: SAMPLE_SCREENSHOT_BASE64, mimeType: "image/png" },
+      ],
+      details: { path: "/tmp/test.png", media: { outbound: false } },
+    });
+
+    const tool = createBrowserTool();
+    const rawImageResult = await tool.execute?.("call-screenshot-nofix-shape", {
+      action: "screenshot",
+      target: "host",
+      targetId: "tab-dashboard",
+    });
+
+    console.log(
+      renderRedactedResult("no-vision path (unchanged) screenshot result", rawImageResult),
+    );
+
+    expect(countImageContentBlocks(rawImageResult)).toBe(1);
+    expect(toolCommonMocks.imageResultFromFile).toHaveBeenCalledOnce();
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
