@@ -131,7 +131,10 @@ The backend also maps OpenClaw `/think` levels to Claude Code's native `--effort
 OpenClaw `/fast` settings also map to Claude Code's per-invocation `fastMode`
 setting. Automatic mode is recalculated before every fresh, retry, fallback,
 tool-result, or continuation call, while restricted and `/btw` side-question
-runs keep fast mode off.
+runs keep fast mode off. If `--settings` names a file, leave OpenClaw fast mode
+unset or replace the argument with inline JSON; Claude Code accepts only one
+file-or-JSON value, so OpenClaw rejects an authoritative `/fast` override rather
+than silently contradicting the file.
 
 Before OpenClaw can use `claude-cli`, Claude Code itself must be logged in on the same host:
 

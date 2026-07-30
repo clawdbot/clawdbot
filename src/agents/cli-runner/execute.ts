@@ -212,11 +212,14 @@ export async function executePreparedCliRun(
     : (context.claudeSkillsPluginArgs ?? fallbackClaudeSkillsPlugin?.args ?? []);
   const baseArgsWithSkills =
     claudeSkillsPluginArgs.length > 0 ? [...resolvedArgs, ...claudeSkillsPluginArgs] : resolvedArgs;
-  const fastMode = resolveFastModeForElapsed({
-    mode: params.fastMode,
-    startedAtMs: params.fastModeStartedAtMs ?? context.started,
-    fastAutoOnSeconds: params.fastModeAutoOnSeconds,
-  }).enabled;
+  const fastMode =
+    params.fastMode === undefined
+      ? undefined
+      : resolveFastModeForElapsed({
+          mode: params.fastMode,
+          startedAtMs: params.fastModeStartedAtMs ?? context.started,
+          fastAutoOnSeconds: params.fastModeAutoOnSeconds,
+        }).enabled;
   const resolvedExecutionArgs = context.backendResolved.resolveExecutionArgs?.({
     config: params.config,
     workspaceDir: context.workspaceDir,

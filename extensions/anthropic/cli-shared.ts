@@ -325,11 +325,8 @@ function resolveClaudeFastModeArgs(
       settings = undefined;
     }
     if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
-      if (!fastMode) {
-        return [...args];
-      }
       throw new Error(
-        "claude-cli fast mode requires inline JSON when --settings is already configured; use inline JSON or disable fast mode",
+        "claude-cli cannot apply an OpenClaw fast-mode override when --settings names a file; use inline JSON settings or remove the OpenClaw fast-mode override",
       );
     }
     const normalized = [...args];
@@ -535,18 +532,20 @@ export function resolveClaudeCliExecutionArgs(
         return action satisfies never;
     }
   })();
-  const executionArgs = resolveClaudeFastModeArgs(
-    executionArgsWithoutFastMode,
+  const executionArgsWithRestrictions = context.toolAvailability
+    ? resolveClaudeCliRestrictedExecutionArgs(
+        executionArgsWithoutFastMode,
+        context.toolAvailability,
+      )
+    : executionArgsWithoutFastMode;
+  return resolveClaudeFastModeArgs(
+    executionArgsWithRestrictions,
     context.fastMode === undefined
       ? undefined
       : context.executionMode === "side-question" || context.toolAvailability
         ? false
         : context.fastMode,
   );
-  if (!context.toolAvailability) {
-    return executionArgs;
-  }
-  return resolveClaudeCliRestrictedExecutionArgs(executionArgs, context.toolAvailability);
 }
 
 /** Normalize Claude CLI backend config before registration or execution. */

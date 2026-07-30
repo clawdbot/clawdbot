@@ -4,14 +4,21 @@ import type { FollowupRun } from "./queue.js";
 
 const hoisted = vi.hoisted(() => {
   const resolveEffectiveModelFallbacksMock = vi.fn();
+  const resolveAgentConfigMock = vi.fn();
   const getChannelPluginMock = vi.fn();
   const isReasoningTagProviderMock = vi.fn();
-  return { resolveEffectiveModelFallbacksMock, getChannelPluginMock, isReasoningTagProviderMock };
+  return {
+    resolveEffectiveModelFallbacksMock,
+    resolveAgentConfigMock,
+    getChannelPluginMock,
+    isReasoningTagProviderMock,
+  };
 });
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveEffectiveModelFallbacks: (...args: unknown[]) =>
     hoisted.resolveEffectiveModelFallbacksMock(...args),
+  resolveAgentConfig: (...args: unknown[]) => hoisted.resolveAgentConfigMock(...args),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -22,8 +29,12 @@ vi.mock("../../utils/provider-utils.js", () => ({
   isReasoningTagProvider: (...args: unknown[]) => hoisted.isReasoningTagProviderMock(...args),
 }));
 
-const { buildThreadingToolContext, buildEmbeddedRunExecutionParams, resolveModelFallbackOptions } =
-  await import("./agent-runner-utils.js");
+const {
+  buildThreadingToolContext,
+  buildEmbeddedRunExecutionParams,
+  resolveModelFallbackOptions,
+  resolveRunFastModeForFallbackCandidate,
+} = await import("./agent-runner-utils.js");
 const { resolveProviderScopedAuthProfile } = await import("./agent-runner-auth-profile.js");
 const { buildEmbeddedRunBaseParams: buildEmbeddedRunBaseParamsCore } =
   await import("./agent-runner-run-params.js");
@@ -66,6 +77,7 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
 describe("agent-runner-utils", () => {
   beforeEach(() => {
     hoisted.resolveEffectiveModelFallbacksMock.mockClear();
+    hoisted.resolveAgentConfigMock.mockReset();
     hoisted.getChannelPluginMock.mockReset();
     hoisted.isReasoningTagProviderMock.mockReset();
     hoisted.isReasoningTagProviderMock.mockReturnValue(false);
@@ -124,6 +136,55 @@ describe("agent-runner-utils", () => {
 
     expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
     expect(resolved.fallbacksOverride).toEqual([]);
+  });
+
+  it("keeps the default fast mode unset for backend-native defaults", () => {
+    const run = makeRun({ fastMode: false });
+
+    expect(
+      resolveRunFastModeForFallbackCandidate({
+        run,
+        config: run.config,
+        provider: "anthropic",
+        model: "claude-opus-5",
+      }).fastMode,
+    ).toBeUndefined();
+  });
+
+  it("keeps an explicit fast-off override authoritative", () => {
+    const run = makeRun({ fastMode: false, fastModeOverride: true });
+
+    expect(
+      resolveRunFastModeForFallbackCandidate({
+        run,
+        config: run.config,
+        provider: "anthropic",
+        model: "claude-opus-5",
+      }).fastMode,
+    ).toBe(false);
+  });
+
+  it("keeps a configured fast-off value authoritative", () => {
+    const run = makeRun({
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-5": { params: { fastMode: false } },
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      resolveRunFastModeForFallbackCandidate({
+        run,
+        config: run.config,
+        provider: "anthropic",
+        model: "claude-opus-5",
+      }).fastMode,
+    ).toBe(false);
   });
 
   it("passes through missing agentId for helper-based fallback resolution", () => {

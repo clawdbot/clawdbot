@@ -525,33 +525,38 @@ describe("resolveClaudeCliExecutionArgs", () => {
   it.each([
     ["split", ["-p", "--settings", "/tmp/claude-settings.json"]],
     ["equals", ["-p", "--settings=/tmp/claude-settings.json"]],
-  ] as const)("preserves file-backed settings in the %s form when fast mode is off", (_, args) => {
-    expect(
-      resolveClaudeCliExecutionArgs({
-        workspaceDir: "/tmp",
-        provider: "claude-cli",
-        modelId: "claude-opus-5",
-        fastMode: false,
-        useResume: false,
-        baseArgs: args,
-      }),
-    ).toEqual(args);
-  });
+  ] as const)(
+    "preserves file-backed settings in the %s form when fast mode is unset",
+    (_, args) => {
+      expect(
+        resolveClaudeCliExecutionArgs({
+          workspaceDir: "/tmp",
+          provider: "claude-cli",
+          modelId: "claude-opus-5",
+          useResume: false,
+          baseArgs: args,
+        }),
+      ).toEqual(args);
+    },
+  );
 
-  it("rejects file-backed settings only when fast mode is on", () => {
-    expect(() =>
-      resolveClaudeCliExecutionArgs({
-        workspaceDir: "/tmp",
-        provider: "claude-cli",
-        modelId: "claude-opus-5",
-        fastMode: true,
-        useResume: false,
-        baseArgs: ["-p", "--settings", "/tmp/claude-settings.json"],
-      }),
-    ).toThrow(
-      "claude-cli fast mode requires inline JSON when --settings is already configured; use inline JSON or disable fast mode",
-    );
-  });
+  it.each([true, false])(
+    "rejects file-backed settings when fast mode has an authoritative %s override",
+    (fastMode) => {
+      expect(() =>
+        resolveClaudeCliExecutionArgs({
+          workspaceDir: "/tmp",
+          provider: "claude-cli",
+          modelId: "claude-opus-5",
+          fastMode,
+          useResume: false,
+          baseArgs: ["-p", "--settings", "/tmp/claude-settings.json"],
+        }),
+      ).toThrow(
+        "claude-cli cannot apply an OpenClaw fast-mode override when --settings names a file; use inline JSON settings or remove the OpenClaw fast-mode override",
+      );
+    },
+  );
 
   it("forces isolated no-tool one-shot args for side-question execution", () => {
     expect(
