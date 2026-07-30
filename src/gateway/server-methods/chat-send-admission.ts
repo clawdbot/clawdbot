@@ -9,6 +9,7 @@ import {
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import {
+  readSessionTranscriptActivePathEntryState,
   readSessionTranscriptActiveLeafEvents,
   resolveSessionTranscriptActiveLeafEntryId,
 } from "../../config/sessions/session-accessor.js";
@@ -200,9 +201,8 @@ export async function admitChatSend(params: {
     if (entry && !latestEntry) {
       throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
     }
-    // An active owner can advance this branch while a steer is being composed.
-    // The lifecycle admission keeps branch identity fixed after this check; if
-    // the owner clears, acceptance-aware dispatch preserves this turn as follow-up.
+    // Resolve one operation under lifecycle admission. Modern steering binds by
+    // exact run; the targetless compatibility path binds by immutable origin leaf.
     const hasSteerIdentity = expectedRunId !== undefined || expectedLeafEntryId !== undefined;
     const resolvedInjectionTarget =
       p.queueMode === "steer" && hasSteerIdentity
@@ -212,9 +212,6 @@ export async function admitChatSend(params: {
             expectedRunId,
           })
         : undefined;
-    if (commitOutcome && resolvedInjectionTarget) {
-      messageInjectionTarget = resolvedInjectionTarget;
-    }
     if (
       commitOutcome &&
       p.queueMode === "steer" &&
@@ -223,24 +220,56 @@ export async function admitChatSend(params: {
     ) {
       throw new Error(ACTIVE_LEAF_CHANGED_ERROR_REASON);
     }
-    if (commitOutcome && expectedLeafEntryId !== undefined && !resolvedInjectionTarget) {
-      // Runtime session identity resolves through the canonical SQLite accessor;
-      // legacy/reset-archive files are read-only history fallbacks, never send targets.
-      const currentLeafEntryId = latestEntry?.sessionId
-        ? resolveSessionTranscriptActiveLeafEntryId(
-            readSessionTranscriptActiveLeafEvents({
-              agentId,
-              sessionId: latestEntry.sessionId,
-              sessionKey: latestSession.canonicalKey,
-              sessionEntry: latestEntry,
-              storePath: latestSession.storePath,
-            }),
-          )
-        : undefined;
-      // The lifecycle admission fence also blocks branch switching. Check the canonical
-      // transcript under that fence so a stale pane cannot dispatch onto another branch.
-      if ((currentLeafEntryId ?? null) !== expectedLeafEntryId) {
+    if (commitOutcome && expectedLeafEntryId !== undefined) {
+      const latestSessionId = latestEntry?.sessionId;
+      const initialSessionId = requestedSessionId ?? backingSessionId;
+      // A captured run target bypasses mutable leaf progress, never backing-session
+      // generation. A copied branch can retain the old leaf after that rotation.
+      if (initialSessionId && latestSessionId && initialSessionId !== latestSessionId) {
         throw new Error(ACTIVE_LEAF_CHANGED_ERROR_REASON);
+      }
+      const requestedSessionMatchesLatest =
+        requestedSessionId !== undefined && requestedSessionId === latestSessionId;
+      if (!resolvedInjectionTarget) {
+        // Runtime session identity resolves through the canonical SQLite accessor;
+        // legacy/reset-archive files are read-only history fallbacks, never send targets.
+        const activePathState =
+          requestedSessionMatchesLatest && latestSessionId && expectedLeafEntryId !== null
+            ? readSessionTranscriptActivePathEntryState(
+                {
+                  agentId,
+                  sessionId: latestSessionId,
+                  sessionKey: latestSession.canonicalKey,
+                  sessionEntry: latestEntry,
+                  storePath: latestSession.storePath,
+                },
+                expectedLeafEntryId,
+              )
+            : undefined;
+        const currentLeafEntryId = activePathState
+          ? activePathState.activeLeafEntryId
+          : latestSessionId
+            ? resolveSessionTranscriptActiveLeafEntryId(
+                readSessionTranscriptActiveLeafEvents({
+                  agentId,
+                  sessionId: latestSessionId,
+                  sessionKey: latestSession.canonicalKey,
+                  sessionEntry: latestEntry,
+                  storePath: latestSession.storePath,
+                }),
+              )
+            : undefined;
+        // The lifecycle admission fence also blocks branch switching. Check the canonical
+        // transcript under that fence so a stale pane cannot dispatch onto another branch.
+        // A same-generation ancestor only proves linear progress on the selected path;
+        // callers without a rendered session generation retain exact-leaf semantics.
+        const acceptsSameBranchAdvance =
+          expectedLeafEntryId !== null &&
+          requestedSessionMatchesLatest &&
+          activePathState?.entryOnActivePath === true;
+        if ((currentLeafEntryId ?? null) !== expectedLeafEntryId && !acceptsSameBranchAdvance) {
+          throw new Error(ACTIVE_LEAF_CHANGED_ERROR_REASON);
+        }
       }
     }
     // Admission can queue behind reset. Never route a request captured
@@ -296,6 +325,9 @@ export async function admitChatSend(params: {
     });
     if (retryableClaim && !restartSafeAdmission) {
       throw new Error("chat retry does not match its durable admission");
+    }
+    if (resolvedInjectionTarget) {
+      messageInjectionTarget = resolvedInjectionTarget;
     }
     // A terminal Control UI claim can survive a crash after status commit.
     // The transcript transaction merges its source with fresh tombstones.

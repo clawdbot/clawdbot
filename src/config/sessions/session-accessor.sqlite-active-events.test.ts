@@ -20,6 +20,7 @@ import {
   readSessionTranscriptMessageEventPage,
   SessionTranscriptProjectionUnavailableError,
 } from "./session-accessor.sqlite-active-events.js";
+import { readSessionTranscriptActivePathEntryState } from "./session-accessor.sqlite-active-path.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import {
@@ -116,6 +117,22 @@ describe("SQLite active transcript event projection", () => {
     expect(readSessionTranscriptActiveLeafEvents(scope)).toEqual([
       expect.objectContaining({ id: "active" }),
     ]);
+    expect(readSessionTranscriptActivePathEntryState(scope, "root")).toEqual({
+      activeLeafEntryId: "active",
+      entryOnActivePath: true,
+    });
+    expect(readSessionTranscriptActivePathEntryState(scope, "active")).toEqual({
+      activeLeafEntryId: "active",
+      entryOnActivePath: true,
+    });
+    expect(readSessionTranscriptActivePathEntryState(scope, "inactive")).toEqual({
+      activeLeafEntryId: "active",
+      entryOnActivePath: false,
+    });
+    expect(readSessionTranscriptActivePathEntryState(scope, "missing")).toEqual({
+      activeLeafEntryId: "active",
+      entryOnActivePath: false,
+    });
     expect(page.events.map((entry) => entry.seq)).toEqual([1, 2]);
     expect(page.totalMessages).toBe(2);
     expect(
