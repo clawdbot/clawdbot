@@ -75,21 +75,21 @@
   "cwd": "/tmp/openclaw-happy-path/workspace",
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "dynamicTools": [
-    "message",
     "agents_list",
+    "message",
     "sessions_spawn",
-    "nodes",
     "automations",
-    "tts",
     "gateway",
-    "sessions_list",
+    "nodes",
+    "session_status",
     "sessions_history",
+    "sessions_list",
     "sessions_search",
     "sessions_send",
     "subagents",
-    "session_status",
-    "web_search",
+    "tts",
     "web_fetch",
+    "web_search",
     "heartbeat_respond",
     "sessions_yield"
   ],
@@ -222,20 +222,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 62622,
-    "roughTokens": 15656
+    "chars": 62682,
+    "roughTokens": 15671
   },
   "openClawDeveloperInstructions": {
-    "chars": 2369,
-    "roughTokens": 593
+    "chars": 2702,
+    "roughTokens": 676
   },
   "totalTextOnly": {
-    "chars": 26797,
-    "roughTokens": 6700
+    "chars": 27130,
+    "roughTokens": 6783
   },
   "totalWithDynamicToolsJson": {
-    "chars": 89421,
-    "roughTokens": 22356
+    "chars": 89814,
+    "roughTokens": 22454
   },
   "userInputText": {
     "chars": 1271,
@@ -426,6 +426,8 @@ Deferred searchable OpenClaw dynamic tools available: automations, gateway, node
 
 Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.
 
+When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion.
+
 Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. When the message is the completed reply to the current source conversation, set `final=true`; OpenClaw stops after confirming delivery. If `final` is omitted, OpenClaw continues and resolves the latest omitted source reply only when the turn ends successfully. Do not repeat visible message content in your final answer.
 
 ### Inbound Context (trusted metadata)
@@ -516,21 +518,21 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
 
 ```json
 [
-  "message",
   "agents_list",
+  "message",
   "sessions_spawn",
-  "nodes",
   "automations",
-  "tts",
   "gateway",
-  "sessions_list",
+  "nodes",
+  "session_status",
   "sessions_history",
+  "sessions_list",
   "sessions_search",
   "sessions_send",
   "subagents",
-  "session_status",
-  "web_search",
+  "tts",
   "web_fetch",
+  "web_search",
   "heartbeat_respond",
   "sessions_yield"
 ]
