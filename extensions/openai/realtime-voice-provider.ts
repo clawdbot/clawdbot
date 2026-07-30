@@ -558,6 +558,15 @@ function readRealtimeErrorEventId(error: unknown): string | undefined {
   return typeof eventId === "string" ? eventId : undefined;
 }
 
+function parsePlaybackMarkSequence(markName: string): number | undefined {
+  const match = /^audio-(\d+)$/u.exec(markName);
+  if (!match) {
+    return undefined;
+  }
+  const sequence = Number(match[1]);
+  return Number.isSafeInteger(sequence) && sequence > 0 ? sequence : undefined;
+}
+
 class OpenAIRealtimeMalformedAudioError extends Error {}
 
 function base64ToBuffer(b64: string): Buffer {
@@ -586,7 +595,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private readonly lifecycle = new OpenAIRealtimeVoiceLifecycle();
   private pendingAudio: Buffer[] = [];
   private pendingAudioBytes = 0;
-  private markQueue: string[] = [];
+  private nextMarkSequence = 1;
+  private oldestOutstandingMarkSequence: number | null = null;
+  private latestOutstandingMarkSequence: number | null = null;
   private responseStartTimestamp: number | null = null;
   private responseActive = false;
   private responseCreateInFlight = false;
@@ -697,10 +708,28 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   acknowledgeMark(markName?: string): void {
-    const index = markName === undefined ? 0 : this.markQueue.indexOf(markName);
-    if (index >= 0) {
-      this.markQueue.splice(index, 1);
+    const oldest = this.oldestOutstandingMarkSequence;
+    const latest = this.latestOutstandingMarkSequence;
+    if (oldest === null || latest === null) {
+      return;
     }
+    const acknowledgedSequence =
+      markName === undefined ? oldest : parsePlaybackMarkSequence(markName);
+    if (
+      acknowledgedSequence === undefined ||
+      acknowledgedSequence < oldest ||
+      acknowledgedSequence > latest
+    ) {
+      return;
+    }
+    // Marks follow ordered playback. Reaching a named mark also acknowledges every
+    // earlier mark, while late acknowledgements from that prefix remain harmless.
+    if (acknowledgedSequence === latest) {
+      this.oldestOutstandingMarkSequence = null;
+      this.latestOutstandingMarkSequence = null;
+      return;
+    }
+    this.oldestOutstandingMarkSequence = acknowledgedSequence + 1;
   }
 
   close(): void {
@@ -1461,7 +1490,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     const shouldInterruptProvider =
       assistantItemId !== null &&
       ((responseStartTimestamp !== null &&
-        (this.markQueue.length > 0 || options?.audioPlaybackActive === true)) ||
+        (this.oldestOutstandingMarkSequence !== null || options?.audioPlaybackActive === true)) ||
         force);
     const audioEndMs = shouldInterruptProvider
       ? Math.max(
@@ -1502,7 +1531,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         `reason=barge-in audioEndMs=${audioEndMs}`,
       );
       this.config.onClearAudio("barge-in");
-      this.markQueue = [];
+      this.clearOutstandingMarks();
       this.lastAssistantItemId = null;
       this.responseStartTimestamp = null;
       return;
@@ -1586,7 +1615,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private resetRealtimeSessionState(): void {
-    this.markQueue = [];
+    this.clearOutstandingMarks();
     this.responseStartTimestamp = null;
     this.responseActive = false;
     this.responseCreateInFlight = false;
@@ -1657,9 +1686,19 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private sendMark(): void {
-    const markName = `audio-${Date.now()}`;
-    this.markQueue.push(markName);
+    const sequence = this.nextMarkSequence;
+    this.nextMarkSequence += 1;
+    if (this.oldestOutstandingMarkSequence === null) {
+      this.oldestOutstandingMarkSequence = sequence;
+    }
+    this.latestOutstandingMarkSequence = sequence;
+    const markName = `audio-${sequence}`;
     this.config.onMark?.(markName);
+  }
+
+  private clearOutstandingMarks(): void {
+    this.oldestOutstandingMarkSequence = null;
+    this.latestOutstandingMarkSequence = null;
   }
 
   private sendEvent(event: unknown, detail?: string): void {

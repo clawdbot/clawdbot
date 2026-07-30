@@ -2556,8 +2556,10 @@ jobs:
         if: always() && steps.terminate_sut.outputs.quiescent == 'true' && steps.run_lane.outputs.output_dir != ''
         env:
           BOUNDARY_EVIDENCE_DIR: ${{ steps.create_sut.outputs.boundary_evidence_dir }}
+          CANDIDATE_ROOT: ${{ steps.create_sut.outputs.candidate_root }}
           OUTPUT_DIR: ${{ steps.run_lane.outputs.output_dir }}
           RUN_LANE_OUTCOME: ${{ steps.run_lane.outcome }}
+          TARGET_SHA: ${{ inputs.target_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2568,17 +2570,6 @@ jobs:
           shopt -s nullglob
           retain_lease_paths=("${BOUNDARY_EVIDENCE_DIR}"/retain-credential-lease-*.json)
           ((${#retain_lease_paths[@]} == 0))
-          runtime_parts=("${BOUNDARY_EVIDENCE_DIR}"/runtime-boundary-*.json)
-          ((${#runtime_parts[@]} > 0))
-          jq -s \
-            '{
-              version: 1,
-              kind: "qa-gateway-process-boundary",
-              launches: [.[].launches[]]
-            }' \
-            "${runtime_parts[@]}" >"${runtime_path}.tmp"
-          chmod 0600 "${runtime_path}.tmp"
-          mv "${runtime_path}.tmp" "$runtime_path"
 
           jq -e \
             --arg runId "$GITHUB_RUN_ID" \
@@ -2600,6 +2591,30 @@ jobs:
               (.candidateArtifact.sourceSha | test("^[a-f0-9]{40}$")) and
               (.candidateArtifact.version | length > 0)
             ' "$context_path" >/dev/null
+
+          # This frozen extended-stable candidate predates the boundary protocol.
+          # Every other target fails closed until it emits the required evidence.
+          legacy_process_boundary_target_sha="2dbfe013e511d0c7e0720356f5af5c7bb210db19"
+          if [[ "$TARGET_SHA" == "$legacy_process_boundary_target_sha" ]]; then
+            jq --arg executionMode "legacy-runner" \
+              '. + {executionMode: $executionMode}' "$context_path" >"$aggregate_path"
+            chmod 0600 "$aggregate_path"
+            echo "aggregate_path=$aggregate_path" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          runtime_parts=("${BOUNDARY_EVIDENCE_DIR}"/runtime-boundary-*.json)
+          ((${#runtime_parts[@]} > 0))
+          jq -s \
+            '{
+              version: 1,
+              kind: "qa-gateway-process-boundary",
+              launches: [.[].launches[]]
+            }' \
+            "${runtime_parts[@]}" >"${runtime_path}.tmp"
+          chmod 0600 "${runtime_path}.tmp"
+          mv "${runtime_path}.tmp" "$runtime_path"
+
           jq -e \
             --arg runLaneOutcome "$RUN_LANE_OUTCOME" \
             '

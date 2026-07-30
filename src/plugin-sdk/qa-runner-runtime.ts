@@ -136,6 +136,7 @@ type QaRunnerTransportAdapterDefinition = {
     isolatedWorkers?: boolean;
   }) => string[];
   cleanup?: () => Promise<void>;
+  cleanupAfterGatewayStop?: () => Promise<void>;
 };
 
 type QaRunnerTransportFactory = {
