@@ -125,7 +125,7 @@ describe("meeting node host audio output", () => {
     expect(settled).toBe(false);
 
     outputStdin.accept();
-    await expect(pushing).resolves.toMatchObject({ ok: true, outputGeneration: 0 });
+    await expect(pushing).resolves.toMatchObject({ ok: true });
     await invokeHost(host, { action: "stop", bridgeId });
   });
 
@@ -188,10 +188,9 @@ describe("meeting node host audio output", () => {
       bridgeId,
       outputGeneration: 1,
     });
-    expect(cleared).toMatchObject({ ok: true, outputGeneration: 1 });
+    expect(cleared).toMatchObject({ ok: true });
     await expect(firstPush).resolves.toMatchObject({
       ok: true,
-      outputGeneration: 1,
       stale: true,
     });
 
@@ -201,7 +200,7 @@ describe("meeting node host audio output", () => {
       bridgeId,
       outputGeneration: 0,
     });
-    expect(stalePush).toMatchObject({ ok: true, outputGeneration: 1, stale: true });
+    expect(stalePush).toMatchObject({ ok: true, stale: true });
     expect(replacementStdin.write).not.toHaveBeenCalled();
 
     await invokeHost(host, { action: "stop", bridgeId });

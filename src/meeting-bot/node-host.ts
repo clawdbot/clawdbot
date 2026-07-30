@@ -267,7 +267,6 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     bridgeId: session.id,
     ok: true,
     stale: true,
-    outputGeneration: session.outputGeneration,
   });
 
   const writeOutputChunk = (
@@ -348,11 +347,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     }
     session.lastOutputAt = new Date().toISOString();
     session.lastOutputBytes += audio.byteLength;
-    return {
-      bridgeId,
-      ok: true,
-      outputGeneration: session.outputGeneration,
-    };
+    return { bridgeId, ok: true };
   };
 
   const clearAudio = (params: Record<string, unknown>) => {
@@ -381,12 +376,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     session.clearCount += 1;
     session.lastClearAt = new Date().toISOString();
     retireOutputProcess(session, previousOutput);
-    return {
-      bridgeId,
-      ok: true,
-      clearCount: session.clearCount,
-      outputGeneration: session.outputGeneration,
-    };
+    return { bridgeId, ok: true, clearCount: session.clearCount };
   };
 
   const startBrowser = (params: Record<string, unknown>) => {
@@ -485,7 +475,6 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
             lastInputBytes: session.lastInputBytes,
             lastOutputBytes: session.lastOutputBytes,
             clearCount: session.clearCount,
-            outputGeneration: session.outputGeneration,
             queuedInputChunks: session.chunks.length,
           }
         : bridgeId
