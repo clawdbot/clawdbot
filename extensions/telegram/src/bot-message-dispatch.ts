@@ -593,4 +593,4 @@ export const dispatchTelegramMessage = async ({
     );
   }
   return { kind: "completed" };
-}
+};
