@@ -105,7 +105,12 @@ function isAzureFoundryUrl(baseUrl: string): boolean {
   try {
     const url = new URL(baseUrl);
     const host = normalizeLowercaseStringOrEmpty(url.hostname);
-    return host.endsWith(".services.ai.azure.com");
+    // Mirrors isAzureFoundryMultiModelHostname in
+    // packages/ai/src/transports/azure-openai-hostnames-internal.ts (kept
+    // internal there on purpose): multi-model Foundry resources also answer
+    // on regional *.api.cognitive.microsoft.com hosts, and the prompt-cache
+    // opt-out below must cover them too.
+    return host.endsWith(".services.ai.azure.com") || host.endsWith(".api.cognitive.microsoft.com");
   } catch {
     return false;
   }
@@ -115,7 +120,10 @@ function isAzureOpenAiUrl(baseUrl: string): boolean {
   try {
     const url = new URL(baseUrl);
     const host = normalizeLowercaseStringOrEmpty(url.hostname);
-    return host.endsWith(".openai.azure.com");
+    // Mirrors isDedicatedAzureOpenAIHostname: cognitiveservices hosts are
+    // dedicated Azure OpenAI resources, so every deployment speaks the
+    // OpenAI API regardless of its operator-chosen alias.
+    return host.endsWith(".openai.azure.com") || host.endsWith(".cognitiveservices.azure.com");
   } catch {
     return false;
   }

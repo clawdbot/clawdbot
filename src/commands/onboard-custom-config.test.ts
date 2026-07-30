@@ -253,6 +253,38 @@ describe("applyCustomApiConfig", () => {
     expect(result.config.agents?.defaults?.models?.[modelRef]?.params?.thinking).toBeUndefined();
   });
 
+  it("keeps the prompt-cache opt-out for regional Foundry hosts", () => {
+    const result = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://eastus.api.cognitive.microsoft.com",
+      modelId: "gpt-prod",
+      compatibility: "openai",
+      apiKey: "key123",
+    });
+    const provider = result.config.models?.providers?.[result.providerId!];
+
+    expect(provider?.baseUrl).toBe("https://eastus.api.cognitive.microsoft.com/openai/v1");
+    const model = provider?.models?.find((m) => m.id === "gpt-prod");
+    // Regional multi-model Foundry hosts front non-OpenAI deployments too, so
+    // the synthesized alias-derived name must not enable prompt-cache fields.
+    expect(model?.compat).toEqual({ supportsStore: false, supportsPromptCacheKey: false });
+  });
+
+  it("omits the prompt-cache opt-out for dedicated cognitiveservices hosts", () => {
+    const result = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://my-resource.cognitiveservices.azure.com",
+      modelId: "my-deployment",
+      compatibility: "openai",
+      apiKey: "key123",
+    });
+    const provider = result.config.models?.providers?.[result.providerId!];
+
+    const model = provider?.models?.find((m) => m.id === "my-deployment");
+    // Dedicated Azure OpenAI resource: transport defaults apply unconditionally.
+    expect(model?.compat).toEqual({ supportsStore: false });
+  });
+
   it("preserves a caller-authored Foundry prompt-cache opt-in across re-onboarding", () => {
     const first = applyCustomApiConfig({
       config: {},
