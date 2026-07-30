@@ -189,7 +189,7 @@ export class GatewayChatClient implements TuiBackend {
         this.readyPromise = new Promise((resolve) => {
           this.resolveReady = resolve;
         });
-        if (this.pendingConnectError) {
+        if (this.pendingConnectError && this.onConnectError) {
           return;
         }
         this.onDisconnected?.(reason);
@@ -219,11 +219,11 @@ export class GatewayChatClient implements TuiBackend {
     })
       .then((readiness) => {
         if (!readiness.ready && !readiness.aborted) {
-          this.notifyConnectError(new Error("gateway event loop readiness timeout"));
+          this.notifyUnclosedConnectError(new Error("gateway event loop readiness timeout"));
         }
       })
       .catch((err: unknown) => {
-        this.notifyConnectError(err instanceof Error ? err : new Error(String(err)));
+        this.notifyUnclosedConnectError(err instanceof Error ? err : new Error(String(err)));
       });
   }
 
@@ -232,9 +232,13 @@ export class GatewayChatClient implements TuiBackend {
       return;
     }
     this.pendingConnectError = error;
-    if (this.onConnectError) {
-      this.onConnectError(error);
-    } else {
+    this.onConnectError?.(error);
+  }
+
+  private notifyUnclosedConnectError(error: Error) {
+    const hasStructuredHandler = Boolean(this.onConnectError);
+    this.notifyConnectError(error);
+    if (!hasStructuredHandler) {
       this.onDisconnected?.(error.message);
     }
   }

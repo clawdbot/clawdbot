@@ -733,6 +733,17 @@ describe("GatewayChatClient", () => {
       options.onHelloOk?.({});
       options.onConnectError?.(retryError);
       expect(onConnectError).toHaveBeenNthCalledWith(2, retryError);
+
+      options.onHelloOk?.({});
+      onDisconnected.mockClear();
+      client.onConnectError = (error) => {
+        onConnectError(error);
+        client.onConnectError = undefined;
+      };
+      (
+        client as unknown as { notifyUnclosedConnectError: (error: Error) => void }
+      ).notifyUnclosedConnectError(new Error("one-shot structured failure"));
+      expect(onDisconnected).not.toHaveBeenCalled();
     } finally {
       vi.doUnmock("../gateway/client.js");
       vi.resetModules();
