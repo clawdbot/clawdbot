@@ -38,7 +38,8 @@ function splitArgs(input: string | undefined): string[] {
 function formatCardLine(card: WorkboardCard): string {
   const boardId = card.metadata?.automation?.boardId ?? "default";
   const agent = card.agentId ? ` @${card.agentId}` : "";
-  return `${card.id.slice(0, 8)} ${card.status.padEnd(8)} ${card.priority.padEnd(6)} [${boardId}]${agent} ${card.title}`;
+  const archived = card.metadata?.archivedAt ? " (archived)" : "";
+  return `${card.id.slice(0, 8)} ${card.status.padEnd(8)} ${card.priority.padEnd(6)} [${boardId}]${agent}${archived} ${card.title}`;
 }
 
 function formatCardDetails(card: WorkboardCard): string {
@@ -49,6 +50,9 @@ function formatCardDetails(card: WorkboardCard): string {
     `priority: ${card.priority}`,
     `board: ${card.metadata?.automation?.boardId ?? "default"}`,
   ];
+  if (card.metadata?.archivedAt) {
+    lines.push("archived: yes (excluded from dispatch)");
+  }
   if (card.agentId) {
     lines.push(`agent: ${card.agentId}`);
   }

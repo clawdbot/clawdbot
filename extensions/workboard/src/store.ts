@@ -228,13 +228,16 @@ export class WorkboardStore extends WorkboardNotificationStore {
       const rows: WorkboardDiagnosticsResult["diagnostics"] = [];
       for (const card of cards) {
         const latest = await this.get(card.id);
-        if (!latest || latest.metadata?.archivedAt) {
+        if (!latest) {
           continue;
         }
-        const diagnostics = mergeDiagnostics(
-          latest.metadata?.diagnostics,
-          computeCardDiagnostics(latest, now),
-        );
+        const computed = computeCardDiagnostics(latest, now);
+        // Archived cards are refreshed only to persist the archived-but-active diagnostic (#116359);
+        // with nothing to report they keep their stored history instead of being rewritten.
+        if (latest.metadata?.archivedAt && computed.length === 0) {
+          continue;
+        }
+        const diagnostics = mergeDiagnostics(latest.metadata?.diagnostics, computed);
         if (diagnostics.length === 0 && !latest.metadata?.diagnostics?.length) {
           continue;
         }

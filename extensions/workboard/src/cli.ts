@@ -69,7 +69,10 @@ function isWorkboardStatus(value: string): value is WorkboardStatus {
 function formatCardLine(card: WorkboardCard): string {
   const boardId = card.metadata?.automation?.boardId ?? "default";
   const agent = card.agentId ? ` ${card.agentId}` : "";
-  return `${card.id.slice(0, 8)}  ${card.status.padEnd(8)}  ${card.priority.padEnd(6)}  ${boardId}${agent}  ${card.title}`;
+  // Archived cards are excluded from dispatch at any status, so the marker has to stay visible
+  // wherever a card is printed, including `show` and `list --include-archived` (#116359).
+  const archived = card.metadata?.archivedAt ? " (archived)" : "";
+  return `${card.id.slice(0, 8)}  ${card.status.padEnd(8)}  ${card.priority.padEnd(6)}  ${boardId}${agent}${archived}  ${card.title}`;
 }
 
 function redactDispatchResult(result: WorkboardDispatchResult): WorkboardDispatchResult {

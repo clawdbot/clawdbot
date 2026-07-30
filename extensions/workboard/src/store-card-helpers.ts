@@ -358,6 +358,9 @@ export function retryBudgetExhausted(card: WorkboardCard): boolean {
   return Boolean(maxRetries && (card.metadata?.failureCount ?? 0) > maxRetries);
 }
 
+/** Statuses where dispatch would otherwise promote, start, or reclaim the card. */
+const ARCHIVED_ACTIVE_STATUSES = new Set<WorkboardStatus>(["scheduled", "ready", "running"]);
+
 function diagnostic(
   params: {
     kind: WorkboardDiagnosticKind;
@@ -395,7 +398,22 @@ export function mergeDiagnostics(
 
 export function computeCardDiagnostics(card: WorkboardCard, now: number): WorkboardDiagnostic[] {
   if (card.metadata?.archivedAt) {
-    return [];
+    // Archived cards never re-enter dispatch, so one left in a dispatchable status stalls with no
+    // other signal on any surface; report that instead of returning no diagnostics (#116359).
+    return ARCHIVED_ACTIVE_STATUSES.has(card.status)
+      ? [
+          diagnostic(
+            {
+              kind: "archived_but_active",
+              severity: "warning",
+              title: "Archived card is still in an active status",
+              detail: `The card is archived, so dispatch skips it while its status is ${card.status}. Unarchive it to resume dispatch, or move it to done.`,
+              actions: [],
+            },
+            now,
+          ),
+        ]
+      : [];
   }
   const diagnostics: WorkboardDiagnostic[] = [];
   const claim = card.metadata?.claim;
