@@ -1,7 +1,11 @@
 // Native hook relay CLI tests cover relay command registration and runtime delegation.
 import { PassThrough, Readable, Writable } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
-import { runNativeHookRelayCli, runNativeHookRelayCliFromArgv } from "./native-hook-relay-cli.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  installParentDeathWatchLinux,
+  runNativeHookRelayCli,
+  runNativeHookRelayCliFromArgv,
+} from "./native-hook-relay-cli.js";
 
 function createReadableTextStream(text: string): NodeJS.ReadableStream {
   return Readable.from([text]);
@@ -666,3 +670,90 @@ function createHeldOpenTextStream(text: string): PassThrough {
   stream.write(text);
   return stream;
 }
+
+describe("parent death watch", () => {
+  const PARENT_PID = 88888;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("starts a periodic poll on Linux", () => {
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const watch = installParentDeathWatchLinux(PARENT_PID);
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 5000);
+    watch.dispose();
+  });
+
+  it("does not exit while the parent stays alive", () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    vi.spyOn(process, "kill").mockReturnValue(true);
+
+    installParentDeathWatchLinux(PARENT_PID);
+    vi.advanceTimersByTime(5000);
+    vi.advanceTimersByTime(5000);
+    vi.advanceTimersByTime(5000);
+    expect(exitSpy).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+
+  it("exits when the parent process disappears", () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    let parentDead = false;
+    vi.spyOn(process, "kill").mockImplementation((pid, sig) => {
+      if (parentDead && pid === PARENT_PID && sig === 0) {
+        const err = new Error("ESRCH") as NodeJS.ErrnoException;
+        err.code = "ESRCH";
+        throw err;
+      }
+      return true;
+    });
+
+    installParentDeathWatchLinux(PARENT_PID);
+
+    // Tick 1: parent alive.
+    vi.advanceTimersByTime(5000);
+    expect(exitSpy).not.toHaveBeenCalled();
+
+    // Tick 2: parent dead → exit(0).
+    parentDead = true;
+    vi.advanceTimersByTime(5000);
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    exitSpy.mockRestore();
+  });
+
+  it("dispose stops the watch and prevents further ticks", () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    vi.spyOn(process, "kill").mockReturnValue(true);
+
+    const watch = installParentDeathWatchLinux(PARENT_PID);
+    watch.dispose();
+
+    // Advance well past several intervals — nothing should fire.
+    vi.advanceTimersByTime(30000);
+    expect(exitSpy).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+
+  it("skips the watch in runNativeHookRelayCli on non-Linux platforms", async () => {
+    Object.defineProperty(process, "platform", {
+      value: "darwin",
+      configurable: true,
+      writable: true,
+    });
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const invokeBridge = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
+
+    await runNativeHookRelayCli(
+      { provider: "codex", relayId: "r1", generation: "g1", event: "pre_tool_use" },
+      { stdin: createReadableTextStream("{}"), invokeBridge: invokeBridge as never },
+    );
+
+    expect(setIntervalSpy).not.toHaveBeenCalled();
+  });
+});

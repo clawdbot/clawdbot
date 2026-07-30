@@ -88,11 +88,57 @@ function parseNativeHookRelayCliOptions(argv: string[]): NativeHookRelayCliOptio
   return opts;
 }
 
+/**
+ * On Linux, polls the parent process and exits when the parent disappears.
+ * Hook relay helpers are spawned per tool call by Codex. When the gateway
+ * or Codex process tree is SIGKILLed (cgroup OOM, container memory cap),
+ * the relay process is reparented to PID 1 without cleanup. This watch
+ * detects parent death and exits early, preventing orphaned memory bloat.
+ */
+export function installParentDeathWatchLinux(parentPid: number): { dispose: () => void } {
+  const pollMs = 5000;
+  const dispose = () => {
+    if (timer) {
+      clearInterval(timer);
+      timer = undefined;
+    }
+  };
+  let timer: ReturnType<typeof setInterval> | undefined;
+  // Poll the parent process; exit cleanly when it is gone.
+  timer = setInterval(() => {
+    if (disposed) {
+      return;
+    }
+    try {
+      process.kill(parentPid, 0);
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code === "ESRCH") {
+        dispose();
+        process.exit(0);
+      }
+    }
+  }, pollMs);
+  timer.unref();
+  let disposed = false;
+  return {
+    dispose: () => {
+      disposed = true;
+      dispose();
+    },
+  };
+}
+
 /** Run one native hook relay invocation from stdin JSON to stdout/stderr response streams. */
 export async function runNativeHookRelayCli(
   opts: NativeHookRelayCliOptions,
   deps: NativeHookRelayCliDeps = {},
 ): Promise<number> {
+  // Start parent-death watch on Linux so this relay process exits when the
+  // spawning Codex process is SIGKILLed (container OOM, cgroup cap).
+  const parentDeathWatch =
+    process.platform === "linux" ? installParentDeathWatchLinux(process.ppid) : undefined;
+
   const stdin = deps.stdin ?? process.stdin;
   const stdout = deps.stdout ?? process.stdout;
   const stderr = deps.stderr ?? process.stderr;
@@ -198,6 +244,7 @@ export async function runNativeHookRelayCli(
     }
   } finally {
     deadline.dispose();
+    parentDeathWatch?.dispose();
   }
 }
 
