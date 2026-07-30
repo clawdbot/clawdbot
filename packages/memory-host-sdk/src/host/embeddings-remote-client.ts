@@ -1,10 +1,10 @@
 // Memory Host SDK module implements embeddings remote client behavior.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddingProviderOptions } from "./embeddings.types.js";
 import { requireApiKey, resolveApiKeyForProvider } from "./openclaw-runtime-auth.js";
 import { buildRemoteBaseUrlPolicy } from "./remote-http.js";
 import { resolveMemorySecretInputString } from "./secret-input.js";
 import type { SsrFPolicy } from "./ssrf-policy.js";
-import { normalizeOptionalString } from "./string-utils.js";
 
 // Builds authenticated remote embedding HTTP clients from agent memory config.
 
@@ -38,11 +38,12 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   provider: RemoteEmbeddingProviderId;
   options: EmbeddingProviderOptions;
   defaultBaseUrl: string;
+  forceRefresh?: boolean;
 }): Promise<{ baseUrl: string; headers: Record<string, string>; ssrfPolicy?: SsrFPolicy }> {
   const remote = params.options.remote;
   const remoteApiKey = resolveMemorySecretInputString({
     value: remote?.apiKey,
-    path: "agents.*.memorySearch.remote.apiKey",
+    path: "memory.search.remote.apiKey",
   });
   const remoteBaseUrl = normalizeOptionalString(remote?.baseUrl);
   const providerConfig = params.options.config.models?.providers?.[params.provider];
@@ -53,6 +54,7 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
           provider: params.provider,
           cfg: params.options.config,
           agentDir: params.options.agentDir,
+          forceRefresh: params.forceRefresh,
         }),
         params.provider,
       );

@@ -53,6 +53,7 @@ export async function fetchRemoteEmbeddingVectors(params: {
     signal: params.signal,
     body: params.body,
     errorPrefix: params.errorPrefix,
+    attachStatus: true,
     parse: (payload) => {
       const root = asRecord(payload);
       if (!root || !Array.isArray(root.data)) {
