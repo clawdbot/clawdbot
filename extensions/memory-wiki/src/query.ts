@@ -1246,7 +1246,7 @@ async function readCanonicalWikiPage(
   const segments = relativePath.split("/");
   const [rootSegment] = segments;
   // Only vault-relative paths under a queryable dir may bypass enumeration; absolute paths,
-  // traversal, empty segments, and reserved index pages fall back to the scanning path (#116048).
+  // traversal, empty segments, and reserved index pages fall back to the scanning path.
   if (
     segments.length < 2 ||
     segments.some((segment) => segment === "" || segment === "." || segment === "..") ||

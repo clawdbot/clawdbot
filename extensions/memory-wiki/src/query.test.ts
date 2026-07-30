@@ -1629,6 +1629,32 @@ describe("getMemoryWikiPage", () => {
     }
   });
 
+  it("does not direct-read through a directory symlink outside the vault", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    const outsideDir = `${rootDir}-outside`;
+    const outsidePage = path.join(outsideDir, "external.md");
+    const linkedDir = path.join(rootDir, "sources", "linked");
+    await fs.mkdir(outsideDir, { recursive: true });
+    await fs.writeFile(
+      outsidePage,
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.external", title: "External Source" },
+        body: "# External Source\n\nmust remain outside\n",
+      }),
+      "utf8",
+    );
+    await fs.symlink(outsideDir, linkedDir, process.platform === "win32" ? "junction" : "dir");
+
+    const result = await getMemoryWikiPage({
+      config,
+      lookup: "sources/linked/external.md",
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("defaults non-finite wiki line options before slicing", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,
