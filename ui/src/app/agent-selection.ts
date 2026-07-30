@@ -87,6 +87,7 @@ export function createAgentSelectionCapability(
   // Construction has no explicit-selection input: a roster repair still follows
   // hello until a navigation or picker action establishes explicit ownership.
   let followsGatewayDefault = true;
+  let initialRosterResolved = false;
   const listeners = new Set<(next: AgentSelectionState) => void>();
 
   const publish = (next: AgentSelectionState) => {
@@ -138,10 +139,20 @@ export function createAgentSelectionCapability(
     } else {
       publish(state);
     }
-    // When the roster invalidates the agent that owns the current gateway session,
-    // retarget the session to the reconciled default's main key. Without this, a
-    // persisted sessionKey for a deleted agent keeps chat.send/sessions.resolve
-    // failing with "Agent ... no longer exists in configuration".
+    // When the first authoritative roster invalidates the agent that owns the
+    // current gateway session, retarget the session to the reconciled default's
+    // main key. Without this, a persisted sessionKey for a deleted agent keeps
+    // chat.send/sessions.resolve failing with "Agent ... no longer exists in
+    // configuration". Restricting the repair to the initial roster avoids
+    // clobbering later deliberate session switches (for example, a pane switch
+    // that races ahead of a deferred chat.startup agents list).
+    const agentsList = roster.state.agentsList;
+    const isFirstAuthoritativeRoster =
+      !initialRosterResolved && agentsList && agentsList.agents.length > 0;
+    if (!isFirstAuthoritativeRoster) {
+      return;
+    }
+    initialRosterResolved = true;
     if (!followsGatewayDefault) {
       return;
     }
@@ -156,10 +167,7 @@ export function createAgentSelectionCapability(
     if (!fallbackAgentId) {
       return;
     }
-    const mainKey = resolveUiConfiguredMainKey({
-      agentsList: roster.state.agentsList,
-      hello: gateway.snapshot.hello,
-    });
+    const mainKey = resolveUiConfiguredMainKey({ agentsList, hello: gateway.snapshot.hello });
     const fallbackSessionKey = buildAgentMainSessionKey({ agentId: fallbackAgentId, mainKey });
     if (fallbackSessionKey !== gateway.snapshot.sessionKey) {
       gateway.setSessionKey(fallbackSessionKey);

@@ -394,6 +394,33 @@ describe("agent selection", () => {
     expect(selection.state).toEqual({ selectedId: "research", scopeId: "research" });
     expect(harness.setSessionKeyCalls).toEqual([]);
   });
+
+  it("does not retarget a session switch that happens after the initial roster load", () => {
+    const harness = createGateway("Main", "agent:main:main");
+    const roster = createRoster();
+    const selection = createAgentSelectionCapability(harness.gateway, roster.roster);
+
+    roster.publish({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main", kind: "agent" }],
+    });
+    expect(harness.setSessionKeyCalls).toEqual([]);
+
+    // Simulate a deliberate pane switch to an agent that has not yet appeared
+    // in the roster (for example, ahead of a deferred chat.startup).
+    harness.publish({ sessionKey: "agent:work:main" });
+    roster.publish({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main", kind: "agent" }],
+    });
+
+    expect(selection.state).toEqual({ selectedId: "main", scopeId: "main" });
+    expect(harness.setSessionKeyCalls).toEqual([]);
+  });
 });
 
 describe("application session selection", () => {
