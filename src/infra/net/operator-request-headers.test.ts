@@ -85,7 +85,6 @@ describe("resolveOperatorRequestHeaders", () => {
       "X-Amz-Security-Token": "aws-live",
       "X-GitHub-Token": "github-live",
       "X-APIKEY": "generic-live",
-      "X-Trace-Token": "trace-live",
       "X-Fine": "ok",
     });
     expect(Object.keys(headers ?? {})).toEqual(["X-Fine"]);
@@ -108,7 +107,6 @@ describe("resolveOperatorRequestHeaders", () => {
         "X-Amz-Security-Token",
         "X-GitHub-Token",
         "X-APIKEY",
-        "X-Trace-Token",
       ]),
     );
   });
@@ -136,12 +134,14 @@ describe("resolveOperatorRequestHeaders", () => {
     const { headers, suspicious } = resolve({
       "X-Tokenizer-Version": "v2",
       "X-Secret-Scan-Status": "clean",
+      "X-Trace-Token": "trace-context",
     });
 
     expect(headers).toEqual({
       "X-Secret-Scan-Status": "clean",
       "X-Tokenizer-Version": "v2",
+      "X-Trace-Token": "trace-context",
     });
-    expect(suspicious).toEqual(["X-Secret-Scan-Status", "X-Tokenizer-Version"]);
+    expect(suspicious).toEqual(["X-Secret-Scan-Status", "X-Tokenizer-Version", "X-Trace-Token"]);
   });
 });

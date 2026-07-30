@@ -68,6 +68,7 @@ describe("web_fetch configured request headers", () => {
     const tool = createToolWithHeaders({
       "ATL-SG-SERVICE-INJECTION-URL": "http://host.docker.internal:9999",
       "X-Tokenizer-Version": "v2",
+      "X-Trace-Token": "trace-context",
     });
 
     await tool?.execute?.("call", { url: "https://example.com/routed" });
@@ -76,6 +77,7 @@ describe("web_fetch configured request headers", () => {
       "http://host.docker.internal:9999",
     );
     expect(getRequestHeaders(fetchSpy)["X-Tokenizer-Version"]).toBe("v2");
+    expect(getRequestHeaders(fetchSpy)["X-Trace-Token"]).toBe("trace-context");
   });
 
   it("keeps fetch-owned header names and casing when no headers are configured", async () => {
@@ -143,7 +145,6 @@ describe("web_fetch configured request headers", () => {
       "X-Amz-Security-Token": "aws-live-key",
       "X-GitHub-Token": "github-live-key",
       "X-APIKEY": "generic-live-key",
-      "X-Trace-Token": "trace-live-key",
       "X-Routing-Target": "staging",
     });
 
@@ -168,7 +169,6 @@ describe("web_fetch configured request headers", () => {
     expect(names).not.toContain("X-Amz-Security-Token");
     expect(names).not.toContain("X-GitHub-Token");
     expect(names).not.toContain("X-APIKEY");
-    expect(names).not.toContain("X-Trace-Token");
     const warnings = warnSpy.mock.calls.map(([message]) => message);
     expect(warnings.some((message) => message.includes("Authorization"))).toBe(true);
     expect(warnings.every((message) => !message.includes(credentialLogSentinel))).toBe(true);
