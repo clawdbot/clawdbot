@@ -282,6 +282,37 @@ class PermissionRequesterTest {
     }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun rationaleHostLossRetriesOnReplacementActivity() =
+    runTest {
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      val rationaleActivity = rationaleActivity()
+      val rationaleRequests = FakePermissionRequests()
+      val requester = requester(rationaleActivity, rationaleRequests)
+
+      try {
+        val pending = async { requester.requestIfMissing(listOf(Manifest.permission.CAMERA), timeoutMs = 1_000) }
+        runCurrent()
+        assertEquals(0, rationaleRequests.size)
+        assertFalse(pending.isCompleted)
+
+        val replacementActivity = activity()
+        val replacementRequests = FakePermissionRequests()
+        requester.attach(replacementActivity, replacementRequests::request)
+        requester.activate(replacementActivity)
+        runCurrent()
+
+        assertEquals(0, rationaleRequests.size)
+        assertEquals(1, replacementRequests.size)
+        assertTrue(replacementRequests.deliver(requester, 0, mapOf(Manifest.permission.CAMERA to true)))
+        runCurrent()
+        assertEquals(mapOf(Manifest.permission.CAMERA to true), pending.await())
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
   fun requestCodeAllocatorWrapsWithinLegacyRangeAndSkipsLiveCodes() {
     val allocator =
       PermissionRequestCodeAllocator(PermissionRequestCodeAllocator.LAST_PERMISSION_REQUEST_CODE)
@@ -301,6 +332,12 @@ class PermissionRequesterTest {
       .setup()
       .get()
 
+  private fun rationaleActivity(): ComponentActivity =
+    Robolectric
+      .buildActivity(PermissionRationaleActivity::class.java)
+      .setup()
+      .get()
+
   private fun requester(
     activity: ComponentActivity,
     requests: FakePermissionRequests,
@@ -309,6 +346,10 @@ class PermissionRequesterTest {
       requester.attach(activity, requests::request)
       requester.activate(activity)
     }
+}
+
+class PermissionRationaleActivity : ComponentActivity() {
+  override fun shouldShowRequestPermissionRationale(permission: String): Boolean = true
 }
 
 private class FakePermissionRequest(

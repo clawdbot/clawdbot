@@ -16,10 +16,14 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -314,6 +318,7 @@ class PermissionRequester internal constructor(
         val lifecycle = activity.lifecycle
         var dialog: AlertDialog? = null
         var observer: LifecycleEventObserver? = null
+        var hostLossJob: Job? = null
         val finished = AtomicBoolean(false)
         val removeObserver = {
           observer?.let(lifecycle::removeObserver)
@@ -322,6 +327,8 @@ class PermissionRequester internal constructor(
 
         fun finish(result: RationaleResult?) {
           if (!finished.compareAndSet(false, true)) return
+          hostLossJob?.cancel()
+          hostLossJob = null
           removeObserver()
           dialog?.dismiss()
           if (result != null) {
@@ -335,11 +342,18 @@ class PermissionRequester internal constructor(
           }
         observer = actualObserver
         lifecycle.addObserver(actualObserver)
+        hostLossJob =
+          CoroutineScope(cont.context)
+            .launch(start = CoroutineStart.LAZY) {
+              activeActivityHost.first { current -> current != active }
+              finish(RationaleResult.HostLost)
+            }.also(Job::start)
         cont.invokeOnCancellation {
           mainHandler.post {
             finish(null)
           }
         }
+        if (finished.get()) return@suspendCancellableCoroutine
         dialog =
           AlertDialog
             .Builder(activity)

@@ -100,12 +100,22 @@ class MainActivity : AppCompatActivity() {
 
   override fun onStart() {
     super.onStart()
-    permissionRequester.activate(this)
     foreground = true
     initializedViewModel?.setForeground(true)
   }
 
+  override fun onTopResumedActivityChanged(isTopResumedActivity: Boolean) {
+    super.onTopResumedActivityChanged(isTopResumedActivity)
+    // minSdk 31 guarantees this callback and lets multi-resume select the actually interactive task.
+    if (isTopResumedActivity) {
+      permissionRequester.activate(this)
+    } else {
+      permissionRequester.deactivate(this)
+    }
+  }
+
   override fun onStop() {
+    // Top-resumed ownership normally clears first; this also covers abnormal lifecycle ordering.
     permissionRequester.deactivate(this)
     foreground = false
     if (shouldNotifyRuntimeBackgrounded(isChangingConfigurations)) {
