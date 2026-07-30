@@ -3262,6 +3262,53 @@ describe("qa mock openai server", () => {
     expect(outputText(await toolResult.json())).toContain("Attachment: /tmp/qa-lighthouse.png");
   });
 
+  it("completes background image generation from the current internal completion event", async () => {
+    const server = await startMockServer();
+    const prompt = "Image generation check: generate a QA lighthouse image.";
+    const imagePlan = await expectResponsesJson<{ output?: Array<{ type?: string }> }>(server, {
+      stream: false,
+      input: [makeUserInput(prompt)],
+    });
+    expect(imagePlan.output?.[0]?.type).toBe("function_call");
+
+    const completion = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call",
+          name: "image_generate",
+          call_id: "call_mock_image_generate_1",
+          arguments: JSON.stringify({
+            prompt: "A QA lighthouse",
+            filename: "qa-lighthouse.png",
+          }),
+        },
+        {
+          type: "function_call_output",
+          call_id: "call_mock_image_generate_1",
+          output: JSON.stringify({
+            content: [{ type: "text", text: "Background image generation started." }],
+            details: { async: true, status: "started" },
+          }),
+        },
+        makeUserInput(
+          [
+            "[Internal task completion event]",
+            "source: image_generation",
+            "status: completed successfully",
+            "Generated media:",
+            "MEDIA:/tmp/qa-lighthouse.png",
+          ].join("\n"),
+        ),
+      ],
+    });
+
+    expect(outputText(completion)).toContain("MEDIA:/tmp/qa-lighthouse.png");
+  });
+
   it("plans QA tool-search calls for instruction-declared Codex dynamic tools", async () => {
     const server = await startMockServer();
 

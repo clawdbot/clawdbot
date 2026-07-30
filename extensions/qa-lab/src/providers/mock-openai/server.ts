@@ -1229,12 +1229,33 @@ function readFirstMediaPath(value: unknown): string {
   return "";
 }
 
+function readCompletedImageGenerationMediaPath(text: string): string | undefined {
+  const eventStart = text.lastIndexOf("[Internal task completion event]");
+  if (eventStart < 0) {
+    return undefined;
+  }
+  const completionEvent = text.slice(eventStart);
+  if (
+    !/^source:\s*image_generation\s*$/im.test(completionEvent) ||
+    !/^status:\s*completed successfully\s*$/im.test(completionEvent)
+  ) {
+    return undefined;
+  }
+  return /^MEDIA:\s*([^\r\n]+)$/im.exec(completionEvent)?.[1]?.trim() || undefined;
+}
+
 function buildAssistantText(
   input: ResponsesInputItem[],
   body: Record<string, unknown>,
   scenarioState: MockScenarioState,
 ) {
   const prompt = extractLastUserText(input);
+  const completedImageMediaPath = readCompletedImageGenerationMediaPath(
+    extractAllUserTexts(input).at(-1) ?? "",
+  );
+  if (completedImageMediaPath) {
+    return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${completedImageMediaPath}`;
+  }
   const toolOutput = extractToolOutput(input);
   const scenarioToolOutput =
     toolOutput ||
@@ -1957,6 +1978,9 @@ async function buildResponsesPayload(
   const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
   const prompt = extractLastUserText(input);
   const toolOutput = extractToolOutput(input);
+  const completedImageMediaPath = readCompletedImageGenerationMediaPath(
+    extractAllUserTexts(input).at(-1) ?? "",
+  );
   const allInputText = extractAllRequestTexts(input, body);
   const scenarioToolOutput =
     toolOutput ||
@@ -2777,7 +2801,11 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) && !toolOutput) {
+  if (
+    QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) &&
+    !toolOutput &&
+    !completedImageMediaPath
+  ) {
     return buildToolCallEventsWithArgs("image_generate", {
       prompt: "A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
       filename: "qa-lighthouse.png",

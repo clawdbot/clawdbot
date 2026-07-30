@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 - **Execution and transport safety:** browser, sandbox, exec, MCP, and secret-resolution paths reject unsafe inputs and handle stream failures without crashing the host process.
 - **Delivery and channel stability:** outbound receipts, delivery evidence, channel lifecycle, health monitoring, and gateway queues recover cleanly under retries, restarts, and overload.
 - **Gateway and storage reliability:** plugin responses, process probes, workspace bootstrap reads, and SQLite writes tolerate expected transient failures while preserving correct state.
+- **Matrix QA image checks:** the mock OpenAI adapter recognizes internal completed image-generation events and emits the normal media response.
 
 ### Upcoming deprecations
 
