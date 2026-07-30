@@ -890,18 +890,20 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     }
   };
 
-  const load = async (options: SessionRefreshOptions) => {
-    const scope = captureConnection();
-    if (!scope) {
-      return;
-    }
-    const { append = false, force: _force, backgroundHydrate = false, ...requestOptions } = options;
-    const durableListOptions: SessionListOptions = { ...requestOptions };
+  // Foreground options become authoritative at refresh-call time, before any
+  // queueing: a queued refresh can be coalesced away by a later canonical
+  // `{ ...lastListOptions }` refresh, and capture-at-load-time would resurrect
+  // stale filters (e.g. the previous agent's scope after an agent switch).
+  const rememberListOptions = (options: SessionRefreshOptions) => {
+    const {
+      append: _append,
+      force: _force,
+      backgroundHydrate = false,
+      ...durableListOptions
+    } = options;
     // Pagination is request-local. Replacement refreshes restart at page one
     // while retaining the filters and response enrichments that shape the list.
     delete durableListOptions.offset;
-    // Foreground options become authoritative before I/O so a concurrent
-    // mutation cannot queue a replacement refresh with stale filters.
     if (!backgroundHydrate) {
       lastListOptions = durableListOptions;
       hasForegroundListOptions = true;
@@ -909,6 +911,14 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       lastListOptions = durableListOptions;
       hasSeededListOptions = true;
     }
+  };
+
+  const load = async (options: SessionRefreshOptions) => {
+    const scope = captureConnection();
+    if (!scope) {
+      return;
+    }
+    const { append = false, force: _force, backgroundHydrate = false, ...requestOptions } = options;
     if (!backgroundHydrate) {
       publish({ ...state, loading: true, error: null, deletedSessions: [] });
     }
@@ -1003,6 +1013,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (inFlight) {
       // An explicit queued refresh subsumes any older event invalidation.
       clearEventRefreshTimer();
+      rememberListOptions(options);
       queuedRefresh = options;
       return inFlight;
     }
@@ -1014,6 +1025,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     }
     // An explicit refresh that will issue a request must run now.
     clearEventRefreshTimer();
+    rememberListOptions(options);
     const request = drainRefreshQueue(options).finally(() => {
       if (inFlight === request) {
         inFlight = null;

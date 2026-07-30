@@ -217,6 +217,44 @@ describe("event-driven session list refresh", () => {
     }
   });
 
+  it("keeps a queued agent switch when the debounced refresh fires mid-flight", async () => {
+    vi.useFakeTimers();
+    const firstList = deferred<SessionsListResult>();
+    const listParams: Array<Record<string, unknown>> = [];
+    const request = vi.fn((method: string, params?: unknown) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      listParams.push({ ...(params as Record<string, unknown>) });
+      if (listParams.length === 1) {
+        return firstList.promise;
+      }
+      return Promise.resolve(sessionsResult(listParams.length));
+    });
+    const { sessions, emitEvent } = createHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+
+    try {
+      const initial = sessions.refresh({ agentId: "main", force: true });
+      // The sidebar agent switch queues behind the in-flight canonical refresh.
+      void sessions.refresh({ agentId: "ticket-plus", force: true });
+      emitEvent(sessionChangedEvent("agent:main:main"));
+      // The debounced canonical refresh fires while the first list is still in
+      // flight; its coalesced options must carry the switched agent instead of
+      // resurrecting the previous agent over the queued switch.
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+      firstList.resolve(sessionsResult(1));
+      await initial;
+
+      expect(sessions.state.agentId).toBe("ticket-plus");
+      expect(listParams.at(-1)?.agentId).toBe("ticket-plus");
+    } finally {
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("flushes a pending event refresh synchronously on dispose", async () => {
     vi.useFakeTimers();
     const request = vi.fn(async (method: string) => {
