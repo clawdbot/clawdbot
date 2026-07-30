@@ -6,6 +6,7 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe/errors";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { privateFileStore } from "../infra/private-file-store.js";
@@ -161,19 +162,42 @@ function redactContinuationAttachmentValidationError(params: {
   return fields.length > 0 ? `${code} (${fields.join(" ")})` : code;
 }
 
+type AttachmentMaterializationStage = "prepare_directory" | "attachment_write" | "manifest_write";
+type AttachmentMaterializationFailureReason =
+  | `fs_safe_${FsSafeErrorCode}`
+  | "permission_denied"
+  | "storage_unavailable"
+  | "target_conflict"
+  | "unknown";
+
+function classifyAttachmentMaterializationFailure(
+  error: unknown,
+): AttachmentMaterializationFailureReason {
+  if (error instanceof FsSafeError) {
+    return `fs_safe_${error.code}`;
+  }
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === "EACCES" || code === "EPERM" || code === "EROFS") {
+    return "permission_denied";
+  }
+  if (code === "EEXIST" || code === "EISDIR" || code === "ENOTDIR" || code === "ENOTEMPTY") {
+    return "target_conflict";
+  }
+  if (code === "EDQUOT" || code === "EMFILE" || code === "ENFILE" || code === "ENOSPC") {
+    return "storage_unavailable";
+  }
+  // fs-safe currently reports an existing non-file target as an untyped error.
+  return error instanceof Error && error.message.endsWith("must be a regular file.")
+    ? "target_conflict"
+    : "unknown";
+}
+
 function formatAttachmentMaterializationError(params: {
   error: unknown;
-  absDir: string;
-  attachmentNames: string[];
+  stage: AttachmentMaterializationStage;
 }): string {
-  if (!(params.error instanceof Error) || !params.error.message.trim()) {
-    return "attachments_materialization_failed";
-  }
-  let reason = params.error.message.replaceAll(params.absDir, "[redacted]");
-  for (const attachmentName of params.attachmentNames) {
-    reason = reason.replaceAll(attachmentName, "[redacted]");
-  }
-  return `attachments_materialization_failed (${reason})`;
+  const reason = classifyAttachmentMaterializationFailure(params.error);
+  return `attachments_materialization_failed (stage=${params.stage} reason=${reason})`;
 }
 
 export function validateSubagentAttachments(params: {
@@ -282,6 +306,7 @@ export async function materializeSubagentAttachments(params: {
     };
   }
 
+  let materializationStage: AttachmentMaterializationStage = "prepare_directory";
   try {
     await fs.mkdir(absDir, { recursive: true, mode: 0o700 });
     const store = privateFileStore(absDir);
@@ -295,8 +320,10 @@ export async function materializeSubagentAttachments(params: {
       files.push({ name, bytes, sha256 });
     }
 
+    materializationStage = "attachment_write";
     await Promise.all(writeJobs.map(({ outPath, buf }) => store.writeText(outPath, buf)));
 
+    materializationStage = "manifest_write";
     const manifest = {
       relDir,
       count: files.length,
@@ -333,8 +360,7 @@ export async function materializeSubagentAttachments(params: {
         ? "attachments_materialization_failed"
         : formatAttachmentMaterializationError({
             error,
-            absDir,
-            attachmentNames: prepared.attachments.map((attachment) => attachment.name),
+            stage: materializationStage,
           }),
     };
   }

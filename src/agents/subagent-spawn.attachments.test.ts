@@ -256,20 +256,26 @@ describe("spawnSubagentDirect filename validation", () => {
     expect(JSON.stringify(result)).not.toContain("MATERIALIZER_SECRET");
   });
 
-  async function spawnWithForcedMaterializationFailure(params: { continuation: boolean }) {
+  async function spawnWithForcedMaterializationFailure(params: {
+    continuation: boolean;
+    attachmentNames?: string[];
+  }) {
     const attachmentId = "00000000-0000-4000-8000-000000000001";
-    const attachmentName = "MATERIALIZATION_FILENAME_MUST_NOT_ECHO.txt";
+    const attachmentNames = params.attachmentNames ?? [
+      "MATERIALIZATION_FILENAME_MUST_NOT_ECHO.txt",
+    ];
+    const collisionName = expectDefined(attachmentNames.at(-1), "collision attachment name");
     const randomUuid = vi.spyOn(crypto, "randomUUID").mockReturnValue(attachmentId);
     try {
       fs.mkdirSync(
-        path.join(workspaceDirOverride, ".openclaw", "attachments", attachmentId, attachmentName),
+        path.join(workspaceDirOverride, ".openclaw", "attachments", attachmentId, collisionName),
         { recursive: true },
       );
 
       const result = await subagentSpawnModule.spawnSubagentDirect(
         {
           task: "test materialization failure redaction",
-          attachments: [{ name: attachmentName, content: "snapshot" }],
+          attachments: attachmentNames.map((name) => ({ name, content: "snapshot" })),
           ...(params.continuation
             ? {
                 drainsContinuationDelegateQueue: true,
@@ -284,37 +290,52 @@ describe("spawnSubagentDirect filename validation", () => {
         },
         ctx,
       );
-      return { result, attachmentId, attachmentName };
+      return { result, attachmentId, attachmentNames };
     } finally {
       randomUuid.mockRestore();
     }
   }
 
   it("keeps ordinary materialization failures actionable without exposing paths", async () => {
-    const { result, attachmentId, attachmentName } = await spawnWithForcedMaterializationFailure({
+    const { result, attachmentId, attachmentNames } = await spawnWithForcedMaterializationFailure({
       continuation: false,
     });
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       status: "error",
-      error: expect.stringMatching(
-        /^attachments_materialization_failed \(.+must be a regular file\.\)$/,
-      ),
+      error: "attachments_materialization_failed (stage=attachment_write reason=target_conflict)",
     });
     const serialized = JSON.stringify(result);
-    expect(serialized).not.toContain(attachmentName);
+    expect(serialized).not.toContain(attachmentNames[0]);
     expect(serialized).not.toContain(attachmentId);
     expect(serialized).not.toContain(workspaceDirOverride);
   });
 
+  it("does not leak overlapping attachment name fragments from ordinary failures", async () => {
+    const overlappingFragment = "OVERLAP_FRAGMENT_MUST_NOT_ECHO";
+    const secretPrefix = "SECRET_PREFIX_MUST_NOT_ECHO";
+    const { result } = await spawnWithForcedMaterializationFailure({
+      continuation: false,
+      attachmentNames: [overlappingFragment, `${secretPrefix}-${overlappingFragment}`],
+    });
+
+    expect(result).toEqual({
+      status: "error",
+      error: "attachments_materialization_failed (stage=attachment_write reason=target_conflict)",
+    });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain(overlappingFragment);
+    expect(serialized).not.toContain(secretPrefix);
+  });
+
   it("fully redacts continuation materialization failures", async () => {
-    const { result, attachmentId, attachmentName } = await spawnWithForcedMaterializationFailure({
+    const { result, attachmentId, attachmentNames } = await spawnWithForcedMaterializationFailure({
       continuation: true,
     });
 
     expect(result).toEqual({ status: "error", error: "attachments_materialization_failed" });
     const serialized = JSON.stringify(result);
-    expect(serialized).not.toContain(attachmentName);
+    expect(serialized).not.toContain(attachmentNames[0]);
     expect(serialized).not.toContain(attachmentId);
     expect(serialized).not.toContain(workspaceDirOverride);
   });
