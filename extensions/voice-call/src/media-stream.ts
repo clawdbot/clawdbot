@@ -101,6 +101,7 @@ const DEFAULT_MAX_PENDING_CONNECTIONS_PER_IP = 4;
 const DEFAULT_MAX_CONNECTIONS = 128;
 const MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
 const MAX_WS_BUFFERED_BYTES = 1024 * 1024;
+const MAX_PENDING_TTS_OPERATIONS_PER_STREAM = 8;
 const CLOSE_REASON_LOG_MAX_CHARS = 120;
 
 function sanitizeLogText(value: string, maxChars: number): string {
@@ -703,6 +704,12 @@ export class MediaStreamHandler {
    */
   async queueTts(streamSid: string, playFn: (signal: AbortSignal) => Promise<void>): Promise<void> {
     const queue = this.getTtsQueue(streamSid);
+    if (queue.length >= MAX_PENDING_TTS_OPERATIONS_PER_STREAM) {
+      throw new Error(
+        `Telephony TTS queue is full for stream; maxPending=${MAX_PENDING_TTS_OPERATIONS_PER_STREAM}`,
+      );
+    }
+
     let resolveEntry: () => void;
     let rejectEntry: (error: unknown) => void;
     const promise = new Promise<void>((resolve, reject) => {
@@ -728,8 +735,10 @@ export class MediaStreamHandler {
    * Clear TTS queue and interrupt current playback (barge-in).
    */
   clearTtsQueue(streamSid: string, _reason = "unspecified"): void {
-    const queue = this.getTtsQueue(streamSid);
-    this.resolveQueuedTtsEntries(queue);
+    const queue = this.ttsQueues.get(streamSid);
+    if (queue) {
+      this.resolveQueuedTtsEntries(queue);
+    }
     this.ttsActiveControllers.get(streamSid)?.abort();
     const session = this.sessions.get(streamSid);
     if (session?.talk.activeTurnId) {
@@ -763,8 +772,9 @@ export class MediaStreamHandler {
     while (true) {
       const queue = this.ttsQueues.get(streamSid);
       if (!queue || queue.length === 0) {
-        this.ttsPlaying.set(streamSid, false);
+        this.ttsPlaying.delete(streamSid);
         this.ttsActiveControllers.delete(streamSid);
+        this.ttsQueues.delete(streamSid);
         return;
       }
 
