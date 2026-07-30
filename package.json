@@ -183,7 +183,6 @@
     "!dist/plugin-sdk/secret-file-runtime.d.ts",
     "!dist/plugin-sdk/secure-random-runtime.d.ts",
     "!dist/plugin-sdk/session-binding-runtime.d.ts",
-    "!dist/plugin-sdk/session-catalog.d.ts",
     "!dist/plugin-sdk/session-catalog-runtime.d.ts",
     "!dist/plugin-sdk/session-key-runtime.d.ts",
     "!dist/plugin-sdk/session-transcript-hit.d.ts",
@@ -224,7 +223,6 @@
     "!dist/plugin-sdk/thread-bindings-session-runtime.d.ts",
     "!dist/plugin-sdk/time-runtime.d.ts",
     "!dist/plugin-sdk/tool-payload.d.ts",
-    "!dist/plugin-sdk/tool-results.d.ts",
     "!dist/plugin-sdk/transcripts.d.ts",
     "!dist/plugin-sdk/transport-ready-runtime.d.ts",
     "!dist/plugin-sdk/tts-runtime.d.ts",
@@ -1022,6 +1020,7 @@
       "default": "./dist/plugin-sdk/session-binding-runtime.js"
     },
     "./plugin-sdk/session-catalog": {
+      "types": "./dist/plugin-sdk/session-catalog.d.ts",
       "default": "./dist/plugin-sdk/session-catalog.js"
     },
     "./plugin-sdk/session-catalog-runtime": {
@@ -1370,6 +1369,7 @@
       "default": "./dist/plugin-sdk/tool-payload.js"
     },
     "./plugin-sdk/tool-results": {
+      "types": "./dist/plugin-sdk/tool-results.d.ts",
       "default": "./dist/plugin-sdk/tool-results.js"
     },
     "./plugin-sdk/tool-send": {

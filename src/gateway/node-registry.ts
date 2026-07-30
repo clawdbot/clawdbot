@@ -1068,8 +1068,8 @@ export class NodeRegistry {
     signal?: AbortSignal;
     idempotencyKey?: string;
     sessionKey?: string;
-    /** Receives the id synchronously after send; the terminal relay depends on this timing. */
-    onInvokeId?: (invokeId: string) => void;
+    /** Receives the id after pairing validation and a successful dispatch. */
+    onDispatchReady?: (invokeId: string) => void;
   }): Promise<NodeInvokeResult> {
     if (params.signal?.aborted) {
       return { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } };
@@ -1199,7 +1199,7 @@ export class NodeRegistry {
         ...systemRunEvent,
       });
     }
-    params.onInvokeId?.(requestId);
+    params.onDispatchReady?.(requestId);
     return await result;
   }
 
