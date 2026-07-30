@@ -302,9 +302,11 @@ describe("MediaStreamHandler security hardening", () => {
       expect(createSession).toHaveBeenCalledTimes(1);
       expect(shouldAcceptStream).toHaveBeenCalledTimes(1);
       expect(onConnect).toHaveBeenCalledTimes(1);
-      expect(sttSession.close).toHaveBeenCalledTimes(1);
-      expect(onDisconnect).toHaveBeenCalledWith("CA-first", "MZ-first");
-      expect(onDisconnect).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(sttSession.close).toHaveBeenCalledTimes(1);
+        expect(onDisconnect).toHaveBeenCalledWith("CA-first", "MZ-first");
+        expect(onDisconnect).toHaveBeenCalledTimes(1);
+      });
     } finally {
       await server.close();
     }
