@@ -104,7 +104,11 @@ describe("failReleasedPostCompactionDelegate", () => {
       throw new Error("expected a handed-off flow");
     }
     // Two revisions past the claim is not the post-handoff shape, so this is a
-    // superseded claim and must not be blindly overwritten.
+    // superseded claim and must not be blindly overwritten. `succeeded@+2` is
+    // reachable in production — `reserveAcceptedPostCompactionChainHop` produces
+    // it — but only after a spawn was accepted, and an accepted spawn has already
+    // written its child run, so `maybeFinalizePreviouslyAcceptedDelivery` settles
+    // that entry before any rejection gate can observe the row.
     flow.revision += 1;
 
     expect(failReleasedPostCompactionDelegate(source, STALE_SUMMARY)).toBe(false);

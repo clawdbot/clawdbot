@@ -8,6 +8,7 @@ import {
   delegateDueAt,
   delegateFlowRecords,
   isAwaitingNextCompactionDelegateFlow,
+  isDurablyHandedOffPostCompactionFlow,
   isPendingDelegateFlow,
   isPostCompactionDelegateFlow,
   isRecoverableContinuationDelegateFlow,
@@ -72,8 +73,7 @@ export function revalidatePendingDelegateForSpawn(
     current?.revision === expectedRevision && current?.status === "running";
   const isExpectedDurableHandoffRevision =
     controller === "post-compaction" &&
-    current?.revision === expectedRevision + 1 &&
-    current?.status === "succeeded";
+    isDurablyHandedOffPostCompactionFlow(current, expectedRevision);
   if (
     current &&
     isExpectedController(current) &&

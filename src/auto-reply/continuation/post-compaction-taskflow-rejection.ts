@@ -1,5 +1,8 @@
 import { removeUnacceptedDelegateArtifactPolicy } from "../../agents/delegate-artifacts.js";
-import { delegateFlowRecords, isPostCompactionDelegateFlow } from "./delegate-flow-store.js";
+import {
+  delegateFlowRecords,
+  isDurablyHandedOffPostCompactionFlow,
+} from "./delegate-flow-store.js";
 import { markPendingDelegateFailed } from "./delegate-store.js";
 
 export type RejectablePostCompactionDelegate = {
@@ -32,13 +35,9 @@ export function failReleasedPostCompactionDelegate(
     return markPendingDelegateFailed(delegate, blockedSummary, currentStep);
   }
   const flow = delegateFlowRecords.get(delegate.flowId);
-  const durablyHandedOff =
-    flow !== undefined &&
-    isPostCompactionDelegateFlow(flow) &&
-    flow.status === "succeeded" &&
-    flow.revision === delegate.expectedRevision + 1;
+  const durablyHandedOff = isDurablyHandedOffPostCompactionFlow(flow, delegate.expectedRevision);
   return markPendingDelegateFailed(
-    durablyHandedOff ? { ...delegate, expectedRevision: flow.revision } : delegate,
+    durablyHandedOff && flow ? { ...delegate, expectedRevision: flow.revision } : delegate,
     blockedSummary,
     currentStep,
   );

@@ -465,6 +465,26 @@ export function isSucceededDelegateFlow(flow: TaskFlowRecord): boolean {
   return isContinuationDelegateFlow(flow) && flow.status === "succeeded";
 }
 
+/**
+ * True when a post-compaction row sits in its durable-handoff state: finalized
+ * to `succeeded` exactly one revision past the claim a queued delivery carries.
+ * `dispatchPostCompactionDelegates` enqueues the delivery and only then calls
+ * `finalizeStagedPostCompactionDelegates`, so this — not the claim revision — is
+ * what a drain observes. Delivery-time spawn fences and terminal transitions
+ * both key off this shape, so it has one spelling and cannot drift apart.
+ */
+export function isDurablyHandedOffPostCompactionFlow(
+  flow: TaskFlowRecord | undefined,
+  claimRevision: number,
+): boolean {
+  return (
+    flow !== undefined &&
+    isPostCompactionDelegateFlow(flow) &&
+    flow.status === "succeeded" &&
+    flow.revision === claimRevision + 1
+  );
+}
+
 export function isRecoverablePendingFlow(flow: TaskFlowRecord): boolean {
   return (
     isPendingDelegateFlow(flow) &&
