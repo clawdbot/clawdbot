@@ -119,3 +119,40 @@ export function classifyOpenClawHooksArgv(argv: readonly string[], start: number
   }
   return true;
 }
+
+/** Return true when an unresolved value can select a mutating plugin action. */
+export function unresolvedOpenClawPluginsActionMayMutate(
+  argv: readonly string[],
+  start: number,
+  isUnresolved: (value: string | undefined) => boolean,
+): boolean {
+  if (hasEffectiveHelpOrVersion(argv, start, PLUGIN_OPTIONS_WITH_VALUE)) {
+    return false;
+  }
+  const actionIndex = firstPositional(argv, start);
+  const actionToken = argv[actionIndex];
+  if (isUnresolved(actionToken)) {
+    return true;
+  }
+  const action = lifecycleOptionName(actionToken ?? "");
+  if (action === "registry") {
+    return argv.slice(actionIndex + 1).some(isUnresolved);
+  }
+  if (action === "marketplace") {
+    const marketplaceActionIndex = firstPositional(argv, actionIndex + 1);
+    return isUnresolved(argv[marketplaceActionIndex]);
+  }
+  return false;
+}
+
+/** Return true when an unresolved value can select a mutating hook action. */
+export function unresolvedOpenClawHooksActionMayMutate(
+  argv: readonly string[],
+  start: number,
+  isUnresolved: (value: string | undefined) => boolean,
+): boolean {
+  if (hasEffectiveHelpOrVersion(argv, start, HOOK_OPTIONS_WITH_VALUE)) {
+    return false;
+  }
+  return isUnresolved(argv[firstPositional(argv, start)]);
+}

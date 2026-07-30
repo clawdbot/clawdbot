@@ -153,6 +153,39 @@ describe("OpenClaw lifecycle environment data positions", () => {
       }),
     ).toBe(true);
   });
+
+  it("fails closed for unresolved plugin and hook actions", () => {
+    for (const family of ["plugins", "hooks"]) {
+      const command = `ACTION=install; openclaw ${family} "$ACTION" memory`;
+      expect(
+        commandRequiresOpenClawLifecycleApproval({
+          command,
+          env: { ACTION: "list" },
+          platform: "linux",
+          segments: [
+            {
+              raw: `openclaw ${family} "$ACTION" memory`,
+              argv: ["openclaw", family, "$ACTION", "memory"],
+            },
+          ],
+        }),
+        family,
+      ).toBe(true);
+    }
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `FLAG=--refresh; openclaw plugins registry "$FLAG"`,
+        env: { FLAG: "--json" },
+        platform: "linux",
+        segments: [
+          {
+            raw: `openclaw plugins registry "$FLAG"`,
+            argv: ["openclaw", "plugins", "registry", "$FLAG"],
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("OpenClaw lifecycle dynamic carrier edges", () => {

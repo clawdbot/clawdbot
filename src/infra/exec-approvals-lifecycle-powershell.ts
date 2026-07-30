@@ -5,6 +5,17 @@ import { splitLifecycleCommandText } from "./exec-approvals-lifecycle-shell.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 
 const START_PROCESS_NAMES = new Set(["saps", "start", "start-process"]);
+const START_PROCESS_FLAGS = new Set([
+  "-confirm",
+  "-debug",
+  "-loaduserprofile",
+  "-nonewwindow",
+  "-passthru",
+  "-usenewenvironment",
+  "-verbose",
+  "-wait",
+  "-whatif",
+]);
 const START_PROCESS_OPTIONS_WITH_VALUE = new Set([
   "-argumentlist",
   "-credential",
@@ -33,6 +44,26 @@ function resolveOptionName(token: string): string {
 function splitArgumentList(value: string): string[] {
   const normalized = value.replace(/[,@()]/gu, " ");
   return splitShellArgs(normalized) ?? normalized.split(/\s+/u).filter(Boolean);
+}
+
+function collectArgumentList(
+  argv: readonly string[],
+  start: number,
+): { argumentList: string[]; lastIndex: number } {
+  const argumentList: string[] = [];
+  let index = start;
+  for (; index < argv.length; index += 1) {
+    const token = argv[index]?.trim() ?? "";
+    const name = resolveOptionName(token);
+    if (
+      index > start &&
+      (START_PROCESS_OPTIONS_WITH_VALUE.has(name) || START_PROCESS_FLAGS.has(name))
+    ) {
+      break;
+    }
+    argumentList.push(...splitArgumentList(token));
+  }
+  return { argumentList, lastIndex: index - 1 };
 }
 
 function inlineOptionValue(token: string): string | undefined {
@@ -145,8 +176,17 @@ function parseStartProcessArgv(
       continue;
     }
     if (name === "-argumentlist") {
-      const value = inlineOptionValue(token) ?? argv[++index];
-      argumentList = splitArgumentList(value ?? "");
+      const inline = inlineOptionValue(token);
+      if (inline !== undefined) {
+        argumentList = splitArgumentList(inline);
+      } else {
+        const collected = collectArgumentList(argv, index + 1);
+        argumentList = collected.argumentList;
+        index = collected.lastIndex;
+      }
+      continue;
+    }
+    if (START_PROCESS_FLAGS.has(name)) {
       continue;
     }
     if (START_PROCESS_OPTIONS_WITH_VALUE.has(name)) {
@@ -158,7 +198,9 @@ function parseStartProcessArgv(
     if (!token.startsWith("-") && !filePath) {
       filePath = token;
     } else if (!token.startsWith("-") && argumentList.length === 0) {
-      argumentList = splitArgumentList(token);
+      const collected = collectArgumentList(argv, index);
+      argumentList = collected.argumentList;
+      index = collected.lastIndex;
     }
   }
   return { argumentList, filePath };
@@ -187,7 +229,9 @@ export function unresolvedPowerShellStartProcessMayHideLifecycle(
   }
   return (
     (isUnresolved(parsed.filePath) &&
-      /\b(?:daemon|gateway|uninstall|update)\b/iu.test(parsed.argumentList.join(" "))) ||
+      /\b(?:daemon|gateway|hooks|plugins|uninstall|update)\b/iu.test(
+        parsed.argumentList.join(" "),
+      )) ||
     (isOpenClawExecutablePattern(parsed.filePath) && parsed.argumentList.some(isUnresolved))
   );
 }

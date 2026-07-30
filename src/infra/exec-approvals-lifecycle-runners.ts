@@ -244,6 +244,9 @@ export function resolveLifecyclePackageRunnerArgv(
   const subcommandScan = scanPackageSubcommand(argv, 1);
   const subcommandIndex = subcommandScan.index;
   const subcommand = normalizedToken(argv[subcommandIndex]);
+  if (subcommandScan.ambiguousOption && looksLikeUnresolvedLifecycleRunner(argv)) {
+    return { kind: "approval-required" };
+  }
   if (packageOperationMutatesOpenClaw(argv, subcommandIndex)) {
     return { kind: "approval-required" };
   }
@@ -284,9 +287,7 @@ export function resolveLifecyclePackageRunnerArgv(
     return { kind: "argv", argv: argv.slice(subcommandIndex) };
   }
 
-  return subcommandScan.ambiguousOption && looksLikeUnresolvedLifecycleRunner(argv)
-    ? { kind: "approval-required" }
-    : { kind: "not-runner" };
+  return { kind: "not-runner" };
 }
 
 /** Return true when a dynamic package target could mutate the OpenClaw installation. */

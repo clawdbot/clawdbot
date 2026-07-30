@@ -108,3 +108,44 @@ describe("OpenClaw PowerShell filter pipeline approvals", () => {
     ).toBe(false);
   });
 });
+
+describe("OpenClaw lifecycle runner parsing edges", () => {
+  it("fails closed before unwrapping ambiguous Yarn options", () => {
+    const command = "yarn --mutex network run openclaw gateway restart";
+    expect(
+      requiresApproval(command, [
+        "yarn",
+        "--mutex",
+        "network",
+        "run",
+        "openclaw",
+        "gateway",
+        "restart",
+      ]),
+    ).toBe(true);
+  });
+
+  it("preserves PowerShell Start-Process ArgumentList arrays", () => {
+    const command =
+      'Start-Process openclaw -ArgumentList "plugins", "install", "memory" -WorkingDirectory C:\\tmp';
+    expect(
+      requiresApproval(command, [
+        "Start-Process",
+        "openclaw",
+        "-ArgumentList",
+        "plugins,",
+        "install,",
+        "memory",
+        "-WorkingDirectory",
+        "C:\\tmp",
+      ]),
+    ).toBe(true);
+  });
+
+  it("keeps read-only Start-Process ArgumentList arrays non-blocking", () => {
+    const command = 'Start-Process openclaw -ArgumentList "plugins", "list"';
+    expect(
+      requiresApproval(command, ["Start-Process", "openclaw", "-ArgumentList", "plugins,", "list"]),
+    ).toBe(false);
+  });
+});

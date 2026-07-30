@@ -8,6 +8,10 @@ import {
 } from "./exec-approvals-lifecycle-gateway.js";
 import { unresolvedOpenClawNodeServiceActionMayMutate } from "./exec-approvals-lifecycle-node-service.js";
 import { unresolvedNodeEntryMayHideLifecycle } from "./exec-approvals-lifecycle-node.js";
+import {
+  unresolvedOpenClawHooksActionMayMutate,
+  unresolvedOpenClawPluginsActionMayMutate,
+} from "./exec-approvals-lifecycle-plugins.js";
 import { unresolvedOpenClawApprovalPolicyActionMayMutate } from "./exec-approvals-lifecycle-policy.js";
 import { unresolvedPowerShellStartProcessMayHideLifecycle } from "./exec-approvals-lifecycle-powershell.js";
 import {
@@ -232,6 +236,12 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
         commandIndex + 1,
         isVariableReference,
       );
+    }
+    if (command === "plugins") {
+      return unresolvedOpenClawPluginsActionMayMutate(argv, commandIndex + 1, isVariableReference);
+    }
+    if (command === "hooks") {
+      return unresolvedOpenClawHooksActionMayMutate(argv, commandIndex + 1, isVariableReference);
     }
     if (command === "update") {
       const actionIndex = scanFirstPositional(argv, commandIndex + 1, UPDATE_OPTIONS_WITH_VALUE);
