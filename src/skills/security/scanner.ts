@@ -341,7 +341,7 @@ function collectChildProcessAliases(lines: readonly string[]): Map<string, strin
       // ESM: group1=original, group2=alias. CJS: group1=original, group2=alias.
       const original = aliasMatch[1];
       const alias = aliasMatch[2];
-      if (DANGEROUS_EXEC_METHODS.has(original)) {
+      if (original !== undefined && alias !== undefined && DANGEROUS_EXEC_METHODS.has(original)) {
         aliases.set(alias, original);
       }
     }
