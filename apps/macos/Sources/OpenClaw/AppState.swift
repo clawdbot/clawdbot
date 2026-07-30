@@ -329,7 +329,7 @@ final class AppState {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.remoteCliPath, forKey: remoteCliPathKey) } }
     }
 
-    private var earBoostTask: Task<Void, Never>?
+    @ObservationIgnored private var earBoostTask: Task<Void, Never>?
 
     init(
         preview: Bool = false,
@@ -782,13 +782,20 @@ final class AppState {
 
     func triggerVoiceEars(ttl: TimeInterval? = 5) {
         self.earBoostTask?.cancel()
+        self.earBoostTask = nil
         self.earBoostActive = true
 
         guard let ttl else { return }
 
         self.earBoostTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(ttl * 1_000_000_000))
-            await MainActor.run { [weak self] in self?.earBoostActive = false }
+            do {
+                try await Task.sleep(nanoseconds: UInt64(ttl * 1_000_000_000))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, let self else { return }
+            self.earBoostTask = nil
+            self.earBoostActive = false
         }
     }
 
