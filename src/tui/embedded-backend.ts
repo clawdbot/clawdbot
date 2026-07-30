@@ -91,7 +91,7 @@ import {
   setEmbeddedPluginApprovalBroker,
 } from "../infra/embedded-plugin-approval-broker.js";
 import { logInfo, logWarn } from "../logger.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { agentSessionKeysMatchByRequestKey, normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import {
@@ -116,7 +116,7 @@ import { formatTuiErrorMessage } from "./tui-formatters.js";
 
 type LocalRunState = {
   sessionKey: string;
-  agentId?: string;
+  agentId: string;
   controller: AbortController;
   buffer: string;
   lastBroadcastText?: string;
@@ -453,9 +453,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const runId = opts.runId ?? randomUUID();
     const question = resolveBtwQuestion(opts.message);
     const isQueueCommand = resolveTextCommand(opts.message)?.command.key === "queue";
+    const agentId = resolveSessionAgentId({
+      sessionKey: opts.sessionKey,
+      config: getRuntimeConfig(),
+      agentId: opts.agentId,
+    });
     const runScope = {
       sessionKey: opts.sessionKey,
-      agentId: opts.agentId,
+      agentId,
     };
     const abortableSessionRun = this.hasAbortableSessionRun(runScope);
     const stopCommand = abortableSessionRun && isChatStopCommandText(opts.message);
@@ -512,7 +517,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const queuedRunReadiness = createQueuedRunReadiness();
     this.runs.set(runId, {
       sessionKey: opts.sessionKey,
-      agentId: opts.agentId,
+      agentId,
       controller,
       buffer: "",
       isBtw: Boolean(question),
@@ -657,6 +662,22 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
     const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
     const messages = bounded.messages;
+    const newestInFlightRun = [...this.runs.entries()].findLast(
+      ([, run]) =>
+        !run.isBtw &&
+        !run.finalSent &&
+        agentSessionKeysMatchByRequestKey(run.sessionKey, opts.sessionKey) &&
+        normalizeAgentId(run.agentId) === normalizeAgentId(sessionAgentId),
+    );
+    const inFlightRun = newestInFlightRun
+      ? {
+          runId: newestInFlightRun[0],
+          text: projectLiveAssistantBufferedText(
+            normalizeLiveAssistantBufferedText(newestInFlightRun[1].buffer).trim(),
+            { suppressLeadFragments: true },
+          ).text.trim(),
+        }
+      : undefined;
 
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
@@ -691,6 +712,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       fastMode: entry?.fastMode,
       verboseLevel: sessionInfo.verboseLevel,
       runtimePluginsPrewarm,
+      ...(inFlightRun ? { inFlightRun } : {}),
     };
   }
 
@@ -1216,6 +1238,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
+      agentId: run.agentId,
       state: "delta",
       ...deltaPayload,
       message: {
@@ -1247,6 +1270,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
+      agentId: run.agentId,
       state: "final",
       ...(stopReason ? { stopReason } : {}),
       ...(shouldIncludeMessage
@@ -1277,6 +1301,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
+      agentId: run.agentId,
       state: "aborted",
       ...(diagnostic ? { errorMessage: diagnostic } : {}),
     });
@@ -1297,6 +1322,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
+      agentId: run.agentId,
       state: "error",
       ...(errorMessage ? { errorMessage } : {}),
     });
@@ -1311,6 +1337,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
+      agentId: run.agentId,
       state: "delta",
       deltaText: "",
       message: {
@@ -1339,6 +1366,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
     this.emit("agent", {
       runId: evt.runId,
+      sessionKey: run.sessionKey,
+      agentId: run.agentId,
       stream: evt.stream,
       data: evt.data,
     });
@@ -1471,6 +1500,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           kind: "btw",
           runId: params.runId,
           sessionKey: result.sessionKey,
+          agentId: run.agentId,
           question: run.question,
           text: result.text,
           ...(result.isError ? { isError: true } : {}),
@@ -1520,6 +1550,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
             kind: "btw",
             runId: params.runId,
             sessionKey: run.sessionKey,
+            agentId: run.agentId,
             question: run.question,
             text,
           });

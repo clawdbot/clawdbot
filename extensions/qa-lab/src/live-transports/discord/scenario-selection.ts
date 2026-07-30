@@ -3,6 +3,7 @@ import { resolveLiveTransportQaScenarioIds } from "../shared/scenario-selection.
 
 export function resolveDiscordQaScenarioIds(params: {
   profile?: string;
+  primaryModel?: string;
   providerMode?: QaProviderModeInput;
   scenarioIds?: readonly string[];
 }) {

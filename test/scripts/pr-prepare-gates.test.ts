@@ -434,7 +434,8 @@ describe("remote testbox gate delegation", () => {
         "--blacksmith-ref main " +
         "--idle-timeout 90m --ttl 240m --timing-json " +
         "--label pr-424242-gates " +
-        "-- env CI=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=install corepack pnpm test",
+        "-- env CI=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 " +
+        "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=install corepack pnpm test",
     );
   });
 

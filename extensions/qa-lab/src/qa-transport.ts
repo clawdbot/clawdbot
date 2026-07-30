@@ -184,9 +184,7 @@ function createFailureAwareTransportWaitForCondition(state: QaTransportState) {
 
 type QaTransportAdapterDefinition = Awaited<
   ReturnType<NonNullable<QaRunnerCliRegistration["adapterFactory"]>["create"]>
-> & {
-  cleanupAfterGatewayStop?: () => Promise<void>;
-};
+>;
 
 export type QaTransportAdapter = Omit<
   QaTransportAdapterDefinition,

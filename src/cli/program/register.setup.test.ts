@@ -176,6 +176,7 @@ describe("registerSetupCommand", () => {
 
     expect(setupCommandMock).toHaveBeenCalledWith(lastSetupOptions(), runtime);
     expect(lastSetupOptions()?.workspace).toBe("/tmp/ws");
+    expect(lastSetupOptions()?.json).toBe(true);
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 

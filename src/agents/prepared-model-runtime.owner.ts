@@ -1,22 +1,7 @@
 import path from "node:path";
-import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import type { PreparedMessageToolCatalog } from "../channels/plugins/message-action-discovery.js";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
-import { MODEL_APIS } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withTimeout } from "../node-host/with-timeout.js";
-import { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import {
-  EMPTY_PREPARED_MESSAGE_TOOL_CATALOG,
-  getPreparedMessageToolCatalog,
-  getPreparedMessageToolCatalogForRegistry,
-} from "../plugins/prepared-message-tool-catalog.js";
-import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
-import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -25,101 +10,34 @@ import {
   resolveDefaultAgentId,
 } from "./agent-scope.js";
 import {
-  buildInlineProviderModels,
-  type InlineModelEntry,
-} from "./embedded-agent-runner/model.inline-provider.js";
+  startSerializedSnapshotBuild,
+  startSerializedSnapshotBuildBatch,
+} from "./prepared-model-runtime.build.js";
 import {
-  createBundledStaticCatalogModelResolver,
-  loadBundledProviderStaticCatalogContextModels,
-} from "./embedded-agent-runner/model.static-catalog.js";
-import { staticModelIdMatches } from "./embedded-agent-runner/model.static-id.js";
-import { buildPreparedModelCatalogSnapshot, type ModelCatalogEntry } from "./model-catalog.js";
-import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
-import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
-import { AuthStorage, type AuthStorageData } from "./sessions/auth-storage.js";
-import type { ModelRegistry } from "./sessions/model-registry.js";
+  PreparedModelRuntimeOwnerNotPublishedError,
+  PreparedModelRuntimePublicationSupersededError,
+  toPreparedModelRuntimeError,
+} from "./prepared-model-runtime.errors.js";
+import type {
+  PreparedModelRuntimeCatalogMode,
+  PreparedModelRuntimeInput,
+  PreparedModelRuntimeOwner,
+  PreparedModelRuntimeReplacement,
+  PreparedModelRuntimeSnapshot,
+} from "./prepared-model-runtime.types.js";
 
-const MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
-
-type PreparedModelRuntimeCatalogMode = "live" | "static";
-
-export type PreparedModelRuntimeSnapshot = Readonly<{
-  agentId?: string;
-  agentDir: string;
-  inheritedAuthDir?: string;
-  workspaceDir?: string;
-  /** Run-prepared repository root; null means discovery completed without a match. */
-  repoRoot?: string | null;
-  /** Stable identity derived from repoRoot; null means the run is outside a repository. */
-  projectKey?: string | null;
-  /** Session active project set, ordered most-recent first; empty before run binding. */
-  activeProjectKeys: readonly string[];
-  config: OpenClawConfig;
-  metadataSnapshot: PluginMetadataSnapshot;
-  messageToolCatalog?: PreparedMessageToolCatalog;
-  mediaCapabilityProviders?: ReturnType<typeof prepareMediaCapabilityProviders>;
-  modelCatalog: ModelCatalogSnapshot;
-  /** Full static models for configured refs, resolved once at the lifecycle boundary. */
-  configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
-  /** Inline provider projection prepared once for all resolutions owned by this snapshot. */
-  inlineProviderModels: readonly InlineModelEntry[];
-  createStores: () => PreparedModelRuntimeStores;
-}>;
-
-type PreparedConfiguredRuntimeModel = Readonly<{
-  provider: string;
-  modelId: string;
-  model: ProviderRuntimeModel;
-}>;
-
-export type PreparedModelRuntimeStores = {
-  authStorage: AuthStorage;
-  modelRegistry: ModelRegistry;
-};
-
-export type PreparedModelRuntimeInput = {
-  agentId?: string;
-  agentDir: string;
-  inheritedAuthDir?: string;
-  workspaceDir?: string;
-  preserveWorkspaceDirOnRefresh?: boolean;
-  readOnly?: boolean;
-  skipCredentials?: boolean;
-  env?: NodeJS.ProcessEnv;
-  config: OpenClawConfig;
-};
-
-export type PreparedModelRuntimeLease = Readonly<{
-  snapshot: PreparedModelRuntimeSnapshot;
-  release: () => void;
-}>;
-
-export type PreparedModelRuntimePublicationOptions = {
-  force?: boolean;
-  provenance?: PreparedModelRuntimeOwner["provenance"];
-  catalogMode?: PreparedModelRuntimeCatalogMode;
-};
-
-export type PreparedModelRuntimeRefreshOptions = {
-  gatewayLifecycle?: boolean;
-  defaultWorkspaceDir?: string;
-  catalogMode?: PreparedModelRuntimeCatalogMode;
-};
-
-export type PreparedModelRuntimeOwner = {
-  input: PreparedModelRuntimeInput;
-  environmentFingerprint: string;
-  catalogMode: PreparedModelRuntimeCatalogMode;
-  provenance: "configured" | "standalone" | "explicit" | "run" | "ephemeral";
-  generation: number;
-  needsRefresh: boolean;
-  refreshError?: Error;
-  snapshot?: PreparedModelRuntimeSnapshot;
-  pending?: Promise<PreparedModelRuntimeSnapshot>;
-  buildCompletion?: Promise<void>;
-  leaseCount?: number;
-};
+export { startSerializedSnapshotBuildBatch };
+export type {
+  PreparedModelRuntimeInput,
+  PreparedModelRuntimeLease,
+  PreparedModelRuntimeOwner,
+  PreparedModelRuntimePublicationOptions,
+  PreparedModelRuntimeRefreshOptions,
+  PreparedModelRuntimeReplacement,
+  PreparedModelRuntimeReplacementGateId,
+  PreparedModelRuntimeSnapshot,
+  PreparedModelRuntimeStores,
+} from "./prepared-model-runtime.types.js";
 
 export function createPreparedModelRuntimeOwner(
   input: PreparedModelRuntimeInput,
@@ -136,16 +54,10 @@ export function createPreparedModelRuntimeOwner(
   };
 }
 
-export type PreparedModelRuntimeReplacement = {
-  gateId: PreparedModelRuntimeReplacementGateId;
-  promise: Promise<void>;
-  resolve: () => void;
-  reject: (error: Error) => void;
+export {
+  PreparedModelRuntimeOwnerNotPublishedError,
+  PreparedModelRuntimePublicationSupersededError,
 };
-export type PreparedModelRuntimeReplacementGateId = symbol;
-export class PreparedModelRuntimeOwnerNotPublishedError extends Error {}
-
-export class PreparedModelRuntimePublicationSupersededError extends PreparedModelRuntimeOwnerNotPublishedError {}
 
 function findConfiguredOwnerCandidates(
   owners: Map<string, PreparedModelRuntimeOwner>,
@@ -264,107 +176,6 @@ export function effectiveEnvironmentFingerprint(input: PreparedModelRuntimeInput
   return hashRuntimeConfigValue(input.env ?? process.env);
 }
 
-function isCatalogModelApi(
-  value: string | undefined,
-): value is NonNullable<ModelCatalogEntry["api"]> {
-  return value !== undefined && (MODEL_APIS as readonly string[]).includes(value);
-}
-
-function toStaticCatalogEntry(
-  model: Awaited<ReturnType<typeof loadBundledProviderStaticCatalogContextModels>>[number],
-): ModelCatalogEntry {
-  return {
-    id: model.id,
-    name: model.name ?? model.id,
-    provider: model.provider,
-    ...(isCatalogModelApi(model.api) ? { api: model.api } : {}),
-    ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
-    ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
-    ...(model.contextTokens ? { contextTokens: model.contextTokens } : {}),
-    ...(model.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
-    ...(model.input ? { input: model.input } : {}),
-    ...(model.params ? { params: model.params } : {}),
-    ...(model.compat ? { compat: model.compat } : {}),
-    ...(model.mediaInput ? { mediaInput: model.mediaInput } : {}),
-  };
-}
-
-function collectPreparedModelRuntimeProviderIds(
-  config: OpenClawConfig,
-  credentials: Readonly<AuthStorageData>,
-): string[] {
-  const providerIds = new Set<string>();
-  const addProviderId = (value: string) => {
-    const providerId = normalizeProviderId(value);
-    if (providerId) {
-      providerIds.add(providerId);
-    }
-  };
-  for (const providerId of Object.keys(credentials)) {
-    addProviderId(providerId);
-  }
-  for (const providerId of Object.keys(config.models?.providers ?? {})) {
-    addProviderId(providerId);
-  }
-  for (const ref of collectConfiguredModelRefs(config)) {
-    const separator = ref.value.indexOf("/");
-    if (separator > 0) {
-      addProviderId(ref.value.slice(0, separator));
-    }
-  }
-  return [...providerIds].toSorted((left, right) => left.localeCompare(right));
-}
-
-function prepareConfiguredRuntimeModels(params: {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  metadataSnapshot: PluginMetadataSnapshot;
-  providerStaticModels: readonly ProviderRuntimeModel[];
-  workspaceDir?: string;
-}): PreparedConfiguredRuntimeModel[] {
-  const prepared: PreparedConfiguredRuntimeModel[] = [];
-  const seen = new Set<string>();
-  const resolveStaticCatalogModel = createBundledStaticCatalogModelResolver({
-    cfg: params.config,
-    env: params.env,
-    includeRuntimeDiscovery: true,
-    metadataSnapshot: params.metadataSnapshot,
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  });
-  for (const { value } of collectConfiguredModelRefs(params.config)) {
-    const separator = value.indexOf("/");
-    if (separator <= 0 || separator >= value.length - 1) {
-      continue;
-    }
-    const provider = normalizeProviderId(value.slice(0, separator));
-    const modelId = value.slice(separator + 1).trim();
-    if (!provider || !modelId) {
-      continue;
-    }
-    const key = `${provider}\0${modelId.toLowerCase()}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    // Match request-time fallback precedence exactly: manifest/runtime-discovery rows win,
-    // and the provider-static catalog fills only models absent from that surface.
-    const model =
-      resolveStaticCatalogModel({ provider, modelId }) ??
-      params.providerStaticModels.find((candidate) =>
-        staticModelIdMatches({
-          candidateId: candidate.id,
-          rowProvider: candidate.provider,
-          provider,
-          modelId,
-        }),
-      );
-    if (model) {
-      prepared.push({ provider, modelId, model });
-    }
-  }
-  return prepared;
-}
-
 export function ownerKey(input: PreparedModelRuntimeInput): string {
   return JSON.stringify({
     agentId: input.agentId,
@@ -424,7 +235,7 @@ export function hasSameLifecycleInput(
 }
 
 export function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
+  return toPreparedModelRuntimeError(error);
 }
 
 export function createPreparedModelRuntimeReplacement(): PreparedModelRuntimeReplacement {
@@ -464,166 +275,136 @@ export function listConfiguredOwnerInputs(
   });
 }
 
-async function buildSnapshot(
-  input: PreparedModelRuntimeInput,
-  catalogMode: PreparedModelRuntimeCatalogMode,
-): Promise<PreparedModelRuntimeSnapshot> {
-  const env = input.env ?? process.env;
-  const runtimePluginRegistry = !input.readOnly
-    ? ensureRuntimePluginsLoaded({
-        config: input.config,
-        ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-      })
-    : undefined;
-  const pluginMetadataSnapshot = resolvePluginMetadataSnapshot({
-    config: input.config,
-    env,
-    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+export async function publishPreparedModelRuntimeOwnerBatch(params: {
+  entries: Array<{
+    owner: PreparedModelRuntimeOwner;
+    input: PreparedModelRuntimeInput;
+  }>;
+  owners: Map<string, PreparedModelRuntimeOwner>;
+  agentBuildCompletions: Map<string, Promise<void>>;
+  buildTimeoutMs: number;
+}): Promise<void> {
+  const candidates = params.entries.map(({ owner, input }) => {
+    owner.input = input;
+    owner.environmentFingerprint = effectiveEnvironmentFingerprint(input);
+    owner.generation += 1;
+    owner.needsRefresh = true;
+    owner.refreshError = undefined;
+    const generation = owner.generation;
+    const key = ownerKey(input);
+    return {
+      catalogMode: owner.catalogMode,
+      input,
+      isCurrent: () => owner.generation === generation && params.owners.get(key) === owner,
+      owner,
+    };
   });
-  const mediaCapabilityProviders = input.readOnly
-    ? undefined
-    : prepareMediaCapabilityProviders({
-        cfg: input.config,
-        pluginMetadataSnapshot,
-        registry: runtimePluginRegistry,
-      });
-  const messageToolCatalog =
-    (runtimePluginRegistry
-      ? getPreparedMessageToolCatalogForRegistry(runtimePluginRegistry)
-      : getPreparedMessageToolCatalog()) ?? EMPTY_PREPARED_MESSAGE_TOOL_CATALOG;
-  const templateAuthStorage = discoverAuthStorage(input.agentDir, {
-    config: input.config,
-    // Snapshot construction never initializes, migrates, or externally syncs auth. ModelRegistry
-    // discovery only parses the credential generation captured here.
-    readOnly: true,
-    ...(input.skipCredentials ? { skipCredentials: true } : {}),
-    ...(input.inheritedAuthDir ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
-    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-    ...(input.env ? { env } : {}),
-  });
-  const credentials = templateAuthStorage.getAll();
-  const providerIds = collectPreparedModelRuntimeProviderIds(input.config, credentials);
-  if (!input.readOnly) {
-    await ensureOpenClawModelsJson(input.config, input.agentDir, {
-      pluginMetadataSnapshot,
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-      ...(input.env ? { env } : {}),
-      ...(catalogMode === "static"
-        ? {
-            providerDiscoveryEntriesOnly: true,
-            providerDiscoveryProviderIds: providerIds,
+  const groups = new Map<PreparedModelRuntimeOwner["catalogMode"], typeof candidates>();
+  for (const candidate of candidates) {
+    const group = groups.get(candidate.catalogMode);
+    if (group) {
+      group.push(candidate);
+    } else {
+      groups.set(candidate.catalogMode, [candidate]);
+    }
+  }
+  const snapshots = new Map<PreparedModelRuntimeOwner, PreparedModelRuntimeSnapshot>();
+  const publication = (async () => {
+    try {
+      while (true) {
+        const attempt = candidates.filter(
+          (candidate) => candidate.isCurrent() && !snapshots.has(candidate.owner),
+        );
+        if (attempt.length === 0) {
+          break;
+        }
+        try {
+          // Auth events can touch live and static owners together. Build mode groups in sequence
+          // so one mutation cannot reintroduce broad plugin/catalog fanout on constrained hosts.
+          for (const [catalogMode, group] of groups) {
+            const currentGroup = group.filter(
+              (candidate) => candidate.isCurrent() && !snapshots.has(candidate.owner),
+            );
+            if (currentGroup.length === 0) {
+              continue;
+            }
+            const build = startSerializedSnapshotBuildBatch(
+              currentGroup.map(({ input }) => input),
+              params.agentBuildCompletions,
+              params.buildTimeoutMs,
+              catalogMode,
+              undefined,
+              new Map(currentGroup.map((candidate) => [candidate.input, candidate.isCurrent])),
+            );
+            for (const candidate of currentGroup) {
+              candidate.owner.buildCompletion = build.completion;
+              void build.completion.then(() => {
+                if (candidate.owner.buildCompletion === build.completion) {
+                  candidate.owner.buildCompletion = undefined;
+                }
+              });
+            }
+            const built = await build.pending;
+            for (const [index, candidate] of currentGroup.entries()) {
+              snapshots.set(candidate.owner, built[index]!);
+            }
           }
-        : { providerDiscoveryTimeoutMs: MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS }),
-    });
-  }
-  const templateModelRegistry = discoverModels(templateAuthStorage, input.agentDir, {
-    config: input.config,
-    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-    ...(catalogMode === "static" ? { normalizeModels: false } : {}),
-  });
-  const modelCatalog = await buildPreparedModelCatalogSnapshot({
-    agentDir: input.agentDir,
-    authCredentials: credentials,
-    config: input.config,
-    modelRegistry: templateModelRegistry,
-    metadataSnapshot: pluginMetadataSnapshot,
-    includeProviderPluginAugmentation: catalogMode === "live",
-    ...(input.env ? { env } : {}),
-    ...(input.readOnly ? { readOnly: true } : {}),
-    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-  });
-  const providerStaticModels = await loadBundledProviderStaticCatalogContextModels({
-    cfg: input.config,
-    env,
-    ...(catalogMode === "static" ? { providerIds } : {}),
-    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-  });
-  const configuredRuntimeModels = prepareConfiguredRuntimeModels({
-    config: input.config,
-    env,
-    metadataSnapshot: pluginMetadataSnapshot,
-    providerStaticModels,
-    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-  });
-  const staticModels = new Map<string, ProviderRuntimeModel>();
-  for (const model of [
-    ...configuredRuntimeModels.map((configured) => configured.model),
-    ...providerStaticModels,
-  ]) {
-    const modelKey = `${normalizeProviderId(model.provider)}\0${model.id.trim().toLowerCase()}`;
-    if (!staticModels.has(modelKey)) {
-      staticModels.set(modelKey, model);
+          break;
+        } catch (error) {
+          const refreshError = toError(error);
+          const lostCandidate = attempt.some((candidate) => !candidate.isCurrent());
+          if (
+            !(refreshError instanceof PreparedModelRuntimePublicationSupersededError) ||
+            !lostCandidate
+          ) {
+            throw refreshError;
+          }
+          // Supersession belongs to one owner generation. Retry only still-current siblings so
+          // an agent-local mutation cannot discard an inherited-auth refresh built for others.
+        }
+      }
+      for (const candidate of candidates) {
+        if (!candidate.isCurrent()) {
+          continue;
+        }
+        const snapshot = snapshots.get(candidate.owner);
+        if (!snapshot) {
+          throw new Error(
+            `prepared model runtime snapshot missing after auth refresh for ${candidate.input.agentDir}`,
+          );
+        }
+        candidate.owner.snapshot = snapshot;
+        candidate.owner.pending = undefined;
+        candidate.owner.needsRefresh = false;
+      }
+    } catch (error) {
+      const refreshError = toError(error);
+      for (const candidate of candidates) {
+        if (!candidate.isCurrent()) {
+          continue;
+        }
+        candidate.owner.pending = undefined;
+        candidate.owner.needsRefresh = true;
+        candidate.owner.refreshError = refreshError;
+      }
+      throw refreshError;
     }
-  }
-  const staticEntries = [...staticModels.values()].map(toStaticCatalogEntry);
-  // Config reload publishes a replacement snapshot. Keep the synchronous inline projection
-  // at that lifecycle boundary instead of rebuilding it on every model resolution in a turn.
-  const inlineProviderModels = buildInlineProviderModels(input.config.models?.providers ?? {});
-  const createStores = (): PreparedModelRuntimeStores => {
-    // Runtime API keys and session extensions mutate these objects. Fork them per run while the
-    // credential map and parsed catalog remain owned by the lifecycle snapshot.
-    const authStorage = AuthStorage.inMemory(credentials);
-    return { authStorage, modelRegistry: templateModelRegistry.fork(authStorage) };
-  };
-  return Object.freeze({
-    ...(input.agentId ? { agentId: input.agentId } : {}),
-    agentDir: input.agentDir,
-    activeProjectKeys: [],
-    ...(input.inheritedAuthDir ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
-    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-    config: input.config,
-    metadataSnapshot: pluginMetadataSnapshot,
-    messageToolCatalog,
-    ...(mediaCapabilityProviders ? { mediaCapabilityProviders } : {}),
-    modelCatalog: { ...modelCatalog, staticEntries },
-    configuredRuntimeModels,
-    inlineProviderModels,
-    createStores,
-  });
-}
-
-export function startSerializedSnapshotBuild(
-  input: PreparedModelRuntimeInput,
-  agentBuildCompletions: Map<string, Promise<void>>,
-  buildTimeoutMs: number,
-  catalogMode: PreparedModelRuntimeCatalogMode = "live",
-): {
-  pending: Promise<PreparedModelRuntimeSnapshot>;
-  completion: Promise<void>;
-} {
-  const previousBuildCompletion = agentBuildCompletions.get(input.agentDir);
-  // Lifecycle events may overlap. The timeout covers queueing plus this build, while completion
-  // follows the real work so a timed-out generation can never overlap a replacement.
-  const startBuild = (async () => {
-    if (previousBuildCompletion) {
-      await previousBuildCompletion;
-    }
-    return { actualBuild: buildSnapshot(input, catalogMode) };
   })();
-  const completion = startBuild
-    .then(async ({ actualBuild }) => await actualBuild)
-    .then(
-      () => undefined,
-      () => undefined,
-    );
-  agentBuildCompletions.set(input.agentDir, completion);
-  void completion.then(() => {
-    if (agentBuildCompletions.get(input.agentDir) === completion) {
-      agentBuildCompletions.delete(input.agentDir);
-    }
-  });
-  return {
-    pending: withTimeout(
-      async () => {
-        const { actualBuild } = await startBuild;
-        return await actualBuild;
-      },
-      buildTimeoutMs,
-      "prepared model runtime publication",
-    ),
-    completion,
-  };
+  for (const candidate of candidates) {
+    const pending = publication.then(() => {
+      // A newer auth publication may win while this batch finishes. Reject deduplicated callers
+      // at the owner boundary so the stale snapshot cannot escape despite being skipped at commit.
+      if (!candidate.isCurrent()) {
+        throw new PreparedModelRuntimePublicationSupersededError(
+          `prepared model runtime publication was superseded for ${candidate.input.agentDir}`,
+        );
+      }
+      return snapshots.get(candidate.owner)!;
+    });
+    candidate.owner.pending = pending;
+    void pending.catch(() => undefined);
+  }
+  await publication;
 }
 
 export async function publishModelRuntimeSnapshot(
@@ -650,6 +431,7 @@ export async function publishModelRuntimeSnapshot(
     agentBuildCompletions,
     buildTimeoutMs,
     catalogMode,
+    () => owner.generation === generation && owners.get(key) === owner,
   );
   owner.buildCompletion = build.completion;
   void build.completion.then(() => {

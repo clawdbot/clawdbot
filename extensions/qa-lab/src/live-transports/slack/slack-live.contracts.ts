@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { z } from "zod";
 import type { startQaGatewayChild } from "../../gateway-child.js";
 import { splitQaModelRef } from "../../model-selection.js";
-import type { RuntimeId } from "../../runtime-parity.js";
 
 export type SlackQaRuntimeEnv = {
   channelId: string;
@@ -85,26 +84,6 @@ export const SLACK_QA_NATIVE_TABLE = {
 // These scenarios force the Codex harness, whose default provider set is intentionally narrow.
 const SLACK_QA_CODEX_PROVIDER_IDS = new Set(["codex", "openai"]);
 
-export type SlackQaScenarioId =
-  | "slack-allowlist-block"
-  | "slack-approval-exec-native"
-  | "slack-approval-plugin-native"
-  | "slack-canary"
-  | "slack-codex-approval-exec-native"
-  | "slack-codex-approval-plugin-native"
-  | "slack-chart-presentation-native"
-  | "slack-channel-disabled-warning"
-  | "slack-mention-gating"
-  | "slack-mpim-app-mention-dedupe"
-  | "slack-progress-commentary-false"
-  | "slack-progress-commentary-omitted"
-  | "slack-progress-commentary-true"
-  | "slack-progress-commentary-verbose-dedupe"
-  | "slack-reaction-glyph-native"
-  | "slack-table-invalid-blocks-fallback"
-  | "slack-table-presentation-native"
-  | "slack-top-level-reply-shape";
-
 export type SlackQaApprovalKind = "exec" | "plugin";
 export type SlackQaApprovalDecision = "allow-always" | "allow-once" | "deny";
 export const SLACK_QA_APPROVAL_ACTION_PREFIX = "openclaw:approval:v1:";
@@ -184,7 +163,7 @@ export type SlackQaCodexApprovalScenarioRun = {
   token: string;
 };
 
-type SlackQaScenarioRun =
+export type SlackQaScenarioRun =
   | SlackQaApprovalScenarioRun
   | SlackQaCodexApprovalScenarioRun
   | SlackQaDirectTransportScenarioRun
@@ -230,13 +209,15 @@ export type SlackQaScenarioContext = {
   waitForReady: () => Promise<void>;
 };
 
-export type SlackQaScenarioDefinition = {
-  id: SlackQaScenarioId;
-  title: string;
-  timeoutMs: number;
+export type SlackQaScenarioImplementation = {
   buildRun: (sutUserId: string) => SlackQaScenarioRun;
   configOverrides?: SlackQaConfigOverrides;
-  forcedRuntime?: RuntimeId;
+};
+
+export type SlackQaScenarioMetadata = {
+  id: string;
+  timeoutMs: number;
+  title: string;
 };
 
 export type SlackAuthIdentity = {

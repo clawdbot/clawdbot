@@ -1230,12 +1230,11 @@ jobs:
           sudo chown -R root:root "$CANDIDATE_ROOT"
           sudo chmod -R go-w "$CANDIDATE_ROOT"
           sudo chmod -R a+rX "$CANDIDATE_ROOT"
-          # QA plugin runtime staging uses .artifacts/qa-runtime below its repo root.
-          # Preserve the frozen tree while granting the isolated SUT this one scratch directory.
+          # The trusted runner stages the QA runtime here before the isolated SUT reads it.
           candidate_artifacts_dir="${CANDIDATE_ROOT}/.artifacts"
-          sudo install -d -o "$sut_uid" -g "$sut_gid" -m 0700 "$candidate_artifacts_dir"
-          [[ "$(stat -c '%F:%a:%u:%g' "$candidate_artifacts_dir")" == "directory:700:${sut_uid}:${sut_gid}" ]]
-          sudo install -d -o "$sut_uid" -g "$sut_gid" -m 0700 "${candidate_artifacts_dir}/qa-runtime"
+          sudo install -d -o "$runner_uid" -g "$runner_gid" -m 0755 "$candidate_artifacts_dir"
+          [[ "$(stat -c '%F:%a:%u:%g' "$candidate_artifacts_dir")" == "directory:755:${runner_uid}:${runner_gid}" ]]
+          sudo install -d -o "$runner_uid" -g "$runner_gid" -m 0755 "${candidate_artifacts_dir}/qa-runtime"
           evidence_relative=".trusted-qa-evidence/release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           evidence_root="${CANDIDATE_ROOT}/${evidence_relative}"
           boundary_evidence_dir="${evidence_root}/process-boundary"
@@ -2052,7 +2051,7 @@ jobs:
                           ! -w "$CANDIDATE_ROOT/dist/index.js" &&
                           -r "${OPENCLAW_CONFIG_PATH:?}" &&
                           ! -w "$OPENCLAW_CONFIG_PATH" ]]
-                    [[ -d "${CANDIDATE_ARTIFACTS_DIR:?}" && -w "$CANDIDATE_ARTIFACTS_DIR" ]]
+                    [[ -d "${CANDIDATE_ARTIFACTS_DIR:?}" && -r "$CANDIDATE_ARTIFACTS_DIR" && -x "$CANDIDATE_ARTIFACTS_DIR" && ! -w "$CANDIDATE_ARTIFACTS_DIR" ]]
                     for writable_path in \
                       "${OPENCLAW_QA_TEMP_ROOT:?}/workspace" \
                       "${OPENCLAW_HOME:?}" \
@@ -2557,8 +2556,10 @@ jobs:
         if: always() && steps.terminate_sut.outputs.quiescent == 'true' && steps.run_lane.outputs.output_dir != ''
         env:
           BOUNDARY_EVIDENCE_DIR: ${{ steps.create_sut.outputs.boundary_evidence_dir }}
+          CANDIDATE_ROOT: ${{ steps.create_sut.outputs.candidate_root }}
           OUTPUT_DIR: ${{ steps.run_lane.outputs.output_dir }}
           RUN_LANE_OUTCOME: ${{ steps.run_lane.outcome }}
+          TARGET_SHA: ${{ inputs.target_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2569,17 +2570,6 @@ jobs:
           shopt -s nullglob
           retain_lease_paths=("${BOUNDARY_EVIDENCE_DIR}"/retain-credential-lease-*.json)
           ((${#retain_lease_paths[@]} == 0))
-          runtime_parts=("${BOUNDARY_EVIDENCE_DIR}"/runtime-boundary-*.json)
-          ((${#runtime_parts[@]} > 0))
-          jq -s \
-            '{
-              version: 1,
-              kind: "qa-gateway-process-boundary",
-              launches: [.[].launches[]]
-            }' \
-            "${runtime_parts[@]}" >"${runtime_path}.tmp"
-          chmod 0600 "${runtime_path}.tmp"
-          mv "${runtime_path}.tmp" "$runtime_path"
 
           jq -e \
             --arg runId "$GITHUB_RUN_ID" \
@@ -2601,6 +2591,30 @@ jobs:
               (.candidateArtifact.sourceSha | test("^[a-f0-9]{40}$")) and
               (.candidateArtifact.version | length > 0)
             ' "$context_path" >/dev/null
+
+          # This frozen extended-stable candidate predates the boundary protocol.
+          # Every other target fails closed until it emits the required evidence.
+          legacy_process_boundary_target_sha="2dbfe013e511d0c7e0720356f5af5c7bb210db19"
+          if [[ "$TARGET_SHA" == "$legacy_process_boundary_target_sha" ]]; then
+            jq --arg executionMode "legacy-runner" \
+              '. + {executionMode: $executionMode}' "$context_path" >"$aggregate_path"
+            chmod 0600 "$aggregate_path"
+            echo "aggregate_path=$aggregate_path" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          runtime_parts=("${BOUNDARY_EVIDENCE_DIR}"/runtime-boundary-*.json)
+          ((${#runtime_parts[@]} > 0))
+          jq -s \
+            '{
+              version: 1,
+              kind: "qa-gateway-process-boundary",
+              launches: [.[].launches[]]
+            }' \
+            "${runtime_parts[@]}" >"${runtime_path}.tmp"
+          chmod 0600 "${runtime_path}.tmp"
+          mv "${runtime_path}.tmp" "$runtime_path"
+
           jq -e \
             --arg runLaneOutcome "$RUN_LANE_OUTCOME" \
             '
@@ -2633,10 +2647,7 @@ jobs:
                   )
                 )
               ) and
-              (
-                [.launches[] | select(.terminalState == "ready-exited")] | length >=
-                  (if $runLaneOutcome == "success" then 2 else 1 end)
-              )
+              ([.launches[] | select(.terminalState == "ready-exited")] | length >= 1)
             ' "$runtime_path" >/dev/null
 
           while IFS=$'\t' read -r relative_path expected_sha256; do

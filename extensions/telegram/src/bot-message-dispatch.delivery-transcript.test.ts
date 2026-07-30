@@ -10,7 +10,7 @@ import {
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
   editMessageTelegram,
-  emitInternalMessageSentHook,
+  emitTelegramMessageSentHooks,
   expectDraftStreamParams,
   expectRecordFields,
   loadSessionStore,
@@ -85,7 +85,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
     expect(answerDraftStream.stop).toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(editMessageTelegram).not.toHaveBeenCalled();
-    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+    expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), {
       content: "Final answer",
       messageId: 2001,
     });
@@ -618,7 +618,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
 
     expect(answerDraftStream.update).toHaveBeenCalledWith(fullAnswer);
     expect(answerDraftStream.update).not.toHaveBeenCalledWith(truncatedFinal);
-    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+    expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), {
       content: fullAnswer,
       messageId: 2001,
     });

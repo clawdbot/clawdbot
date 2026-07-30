@@ -287,6 +287,42 @@ describe("provider attribution", () => {
     expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
+  it("uses explicitly prepared provider facts without reading process metadata", () => {
+    providerMetadataState.pluginIdScoped = true;
+    providerMetadataState.snapshot = undefined;
+    const providerMetadataOwners = {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+      providerEndpoints: [
+        {
+          endpointClass: "anthropic-public" as const,
+          hosts: ["prepared.example"],
+          hostSuffixes: [],
+          baseUrls: [],
+        },
+      ],
+      providerRequests: new Map([["prepared", { family: "prepared-family" }]]),
+    };
+
+    expect(
+      resolveProviderRequestPolicy({
+        provider: "prepared",
+        baseUrl: "https://prepared.example",
+        providerMetadataOwners,
+      }),
+    ).toMatchObject({
+      endpointClass: "anthropic-public",
+      knownProviderFamily: "prepared-family",
+    });
+    expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
+
   it("resolves the canonical OpenClaw product and runtime version", () => {
     const identity = resolveProviderAttributionIdentity({
       OPENCLAW_VERSION: "2026.3.99",
