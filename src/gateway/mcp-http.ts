@@ -160,13 +160,45 @@ function createRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
   };
 }
 
+type StickyMcpLoopbackIdentity = {
+  port: number;
+  ownerToken: string;
+  nonOwnerToken: string;
+};
+
+let stickyMcpLoopbackIdentityState: StickyMcpLoopbackIdentity | undefined;
+
+/**
+ * Loopback identity (port + bearer tokens) is reused across server generations
+ * within one gateway process. CLI runs freeze the loopback URL and bearer into
+ * per-run MCP config files at prepare time; regenerating either during an
+ * in-process gateway restart strands every live CLI session on a dead port
+ * with an invalid credential ("Unable to connect" for the rest of the run).
+ * OPENCLAW_MCP_LOOPBACK_PORT optionally pins the port across hard restarts.
+ */
+function resolveStickyMcpLoopbackIdentity(): StickyMcpLoopbackIdentity {
+  if (!stickyMcpLoopbackIdentityState) {
+    const envPort = Number.parseInt(process.env.OPENCLAW_MCP_LOOPBACK_PORT ?? "", 10);
+    stickyMcpLoopbackIdentityState = {
+      port: Number.isInteger(envPort) && envPort > 0 && envPort < 65536 ? envPort : 0,
+      ownerToken: crypto.randomBytes(32).toString("hex"),
+      nonOwnerToken: crypto.randomBytes(32).toString("hex"),
+    };
+  }
+  return stickyMcpLoopbackIdentityState;
+}
+
 /** Starts a new MCP loopback HTTP server and registers its bearer tokens. */
 async function startMcpLoopbackServer(port = 0): Promise<{
   port: number;
   close: () => Promise<void>;
 }> {
-  const ownerToken = crypto.randomBytes(32).toString("hex");
-  const nonOwnerToken = crypto.randomBytes(32).toString("hex");
+  const stickyIdentity = resolveStickyMcpLoopbackIdentity();
+  const ownerToken = stickyIdentity.ownerToken;
+  const nonOwnerToken = stickyIdentity.nonOwnerToken;
+  if (!port) {
+    port = stickyIdentity.port;
+  }
   const toolCache = new McpLoopbackToolCache();
   // GET notification streams are intentionally long-lived; shutdown must end
   // them itself before waiting for httpServer.close() to drain active responses.
@@ -461,13 +493,24 @@ async function startMcpLoopbackServer(port = 0): Promise<{
     })();
   });
 
-  await new Promise<void>((resolve, reject) => {
-    httpServer.once("error", reject);
-    httpServer.listen(port, "127.0.0.1", () => {
-      httpServer.removeListener("error", reject);
-      resolve();
+  const listenLoopback = (listenPort: number) =>
+    new Promise<void>((resolve, reject) => {
+      httpServer.once("error", reject);
+      httpServer.listen(listenPort, "127.0.0.1", () => {
+        httpServer.removeListener("error", reject);
+        resolve();
+      });
     });
-  });
+  try {
+    await listenLoopback(port);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    if (port && code === "EADDRINUSE") {
+      await listenLoopback(0);
+    } else {
+      throw error;
+    }
+  }
 
   const address = httpServer.address();
   if (!address || typeof address === "string") {
@@ -475,6 +518,7 @@ async function startMcpLoopbackServer(port = 0): Promise<{
   }
   // Register tokens only after the TCP listener is live so clients never learn
   // a bearer token for a server that failed to bind.
+  stickyIdentity.port = address.port;
   setActiveMcpLoopbackRuntime({ port: address.port, ownerToken, nonOwnerToken });
   logDebug(`mcp loopback listening on 127.0.0.1:${address.port}`);
 
