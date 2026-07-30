@@ -411,12 +411,39 @@ struct OpenClawTypographyTests {
             .font(.body)
         Button("System") {}
             .font(.headline)
+        VStack {
+            Text("Inherited system")
+        }
+        .font(.body)
+        Text("Trailing closure")
+            .background { Color.clear }
+            .font(.caption)
+        Text("Later override")
+            .font(OpenClawType.body)
+            .font(.title)
+        NavigationStack {
+            Text("Custom boundary")
+        }
+        .font(.footnote)
+        Button {
+            action()
+        } label: {
+            Text("Closure-only control")
+        }
+        .font(.headline)
+        Image(systemName: "checkmark")
+            .font(.system(size: 14))
         """
 
         let offenders = Self.unbrandedTextCallOffenders(in: source, relativePath: "Sample.swift")
-        #expect(offenders.count == 2)
+        #expect(offenders.count == 7)
         #expect(offenders[0].contains(".font(.body)"))
         #expect(offenders[1].contains(".font(.headline)"))
+        #expect(offenders[2].contains(".font(.body)"))
+        #expect(offenders[3].contains(".font(.caption)"))
+        #expect(offenders[4].contains(".font(.title)"))
+        #expect(offenders[5].contains(".font(.footnote)"))
+        #expect(offenders[6].contains(".font(.headline)"))
     }
 
     @Test func `accessibility metadata text does not require visual typography`() throws {
@@ -558,54 +585,21 @@ struct OpenClawTypographyTests {
     }
 
     private static func unbrandedTextCallOffenders(in source: String, relativePath: String) -> [String] {
-        let fontTokens = ["OpenClawType", "OpenClawChatTypography"]
-        let auditedCallTokens = [
-            "Text",
-            "Label",
-            "Button",
-            "Link",
-            "Picker",
-            "Toggle",
-            "TextField",
-            "SecureField",
-            "Menu",
-            "DisclosureGroup",
-            "LabeledContent",
-        ].map { Array($0.utf8) }
-
+        let fontTokens = ["OpenClawType", "OpenClawChatTypography", "typography."]
         let sourceBytes = Array(source.utf8)
         let code = self.maskedSwiftCode(source)
-        let lines = source.components(separatedBy: .newlines)
-        let accessibilityMetadataTextLines = self.accessibilityMetadataTextLines(in: lines)
+        let imageFontRanges = Set(self.directImageFontModifierRanges(in: code))
         var offenders: [String] = []
-        var line = 0
 
-        for offset in code.indices {
-            if code[offset] == 10 {
-                line += 1
-                continue
-            }
+        for fontRange in self.fontModifierRanges(in: code) {
+            let fontCall = String(decoding: sourceBytes[fontRange], as: UTF8.self)
+            let hasBrandedFont = fontTokens.contains { fontCall.contains($0) }
+                || self.hasAllowedBrandedFontParameter(fontCall, relativePath: relativePath)
+            guard !hasBrandedFont, !imageFontRanges.contains(fontRange) else { continue }
 
-            for token in auditedCallTokens {
-                guard let opening = self.callOpeningParenthesis(after: token, at: offset, in: code),
-                      let closing = self.matchingParenthesis(in: code, openingAt: opening)
-                else { continue }
-                if token == Array("Text".utf8), accessibilityMetadataTextLines.contains(line) {
-                    continue
-                }
-                guard let fontRange = self.chainedFontModifier(after: closing, in: code) else {
-                    continue
-                }
-
-                let fontCall = String(decoding: sourceBytes[fontRange], as: UTF8.self)
-                let hasLocalFont = fontTokens.contains { fontCall.contains($0) }
-                    || self.hasAllowedBrandedFontParameter(fontCall, relativePath: relativePath)
-                guard !hasLocalFont else { continue }
-
-                let fontLine = line + code[offset..<fontRange.lowerBound].count(where: { $0 == 10 })
-                offenders.append(
-                    "\(relativePath):\(fontLine + 1): \(fontCall.trimmingCharacters(in: .whitespacesAndNewlines))")
-            }
+            let fontLine = code[..<fontRange.lowerBound].count(where: { $0 == 10 })
+            offenders.append(
+                "\(relativePath):\(fontLine + 1): \(fontCall.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
         return offenders
     }
@@ -793,59 +787,29 @@ struct OpenClawTypographyTests {
         return code
     }
 
-    private static func chainedFontModifier(after callClosing: Int, in code: [UInt8]) -> Range<Int>? {
-        var cursor = callClosing + 1
-        while cursor < code.count {
-            cursor = self.skippingWhitespace(in: code, from: cursor)
-            guard cursor < code.count else { return nil }
-
-            if code[cursor] == 123,
-               let closing = self.matchingDelimiter(
-                   in: code,
-                   openingAt: cursor,
-                   opening: 123,
-                   closing: 125)
-            {
-                cursor = closing + 1
-                continue
-            }
-
-            if self.isSwiftIdentifierByte(code[cursor]) {
-                while cursor < code.count, self.isSwiftIdentifierByte(code[cursor]) {
-                    cursor += 1
-                }
-                cursor = self.skippingWhitespace(in: code, from: cursor)
-                guard cursor < code.count, code[cursor] == 58 else { return nil }
-                cursor = self.skippingWhitespace(in: code, from: cursor + 1)
-                guard cursor < code.count, code[cursor] == 123,
-                      let closing = self.matchingDelimiter(
-                          in: code,
-                          openingAt: cursor,
-                          opening: 123,
-                          closing: 125)
-                else { return nil }
-                cursor = closing + 1
-                continue
-            }
-
-            guard code[cursor] == 46 else { return nil }
-            let modifierStart = cursor
-            cursor += 1
-            let nameStart = cursor
-            while cursor < code.count, self.isSwiftIdentifierByte(code[cursor]) {
-                cursor += 1
-            }
-            let modifierName = String(decoding: code[nameStart..<cursor], as: UTF8.self)
-            cursor = self.skippingWhitespace(in: code, from: cursor)
-            guard cursor < code.count, code[cursor] == 40,
-                  let closing = self.matchingParenthesis(in: code, openingAt: cursor)
+    private static func fontModifierRanges(in code: [UInt8]) -> [Range<Int>] {
+        let token = Array(".font".utf8)
+        return code.indices.compactMap { offset in
+            guard let opening = self.callOpeningParenthesis(after: token, at: offset, in: code),
+                  let closing = self.matchingParenthesis(in: code, openingAt: opening)
             else { return nil }
-            if modifierName == "font" {
-                return modifierStart..<(closing + 1)
-            }
-            cursor = closing + 1
+            return offset..<(closing + 1)
         }
-        return nil
+    }
+
+    private static func directImageFontModifierRanges(in code: [UInt8]) -> [Range<Int>] {
+        let imageToken = Array("Image".utf8)
+        let fontToken = Array(".font".utf8)
+        return code.indices.compactMap { offset in
+            guard let imageOpening = self.callOpeningParenthesis(after: imageToken, at: offset, in: code),
+                  let imageClosing = self.matchingParenthesis(in: code, openingAt: imageOpening)
+            else { return nil }
+            let fontStart = self.skippingWhitespace(in: code, from: imageClosing + 1)
+            guard let fontOpening = self.callOpeningParenthesis(after: fontToken, at: fontStart, in: code),
+                  let fontClosing = self.matchingParenthesis(in: code, openingAt: fontOpening)
+            else { return nil }
+            return fontStart..<(fontClosing + 1)
+        }
     }
 
     private static func skippingWhitespace(in code: [UInt8], from offset: Int) -> Int {
