@@ -191,6 +191,29 @@ function resolveLegacyAutoStart(
   return !optionalString(inherited(entry, parent, "httpUrl"));
 }
 
+function resolveLegacyManagedBindPort(
+  entry: Record<string, unknown>,
+  parent: Record<string, unknown>,
+): number {
+  const rawBindPort = inherited(entry, parent, "httpPort");
+  if (typeof rawBindPort === "number" && isValidSignalManagedNativePort(rawBindPort)) {
+    return rawBindPort;
+  }
+  // Infer from loopback httpUrl so autoStart daemon bind matches client probe (#116165).
+  const httpUrl = optionalString(inherited(entry, parent, "httpUrl"));
+  if (httpUrl) {
+    try {
+      const localPort = resolveLocalSignalTransportPort(normalizeSignalTransportUrl(httpUrl));
+      if (localPort !== undefined && isValidSignalManagedNativePort(localPort)) {
+        return localPort;
+      }
+    } catch {
+      // fall through to default
+    }
+  }
+  return DEFAULT_SIGNAL_MANAGED_NATIVE_PORT;
+}
+
 function resolveManagedConnectionUrl(
   entry: Record<string, unknown>,
   parent: Record<string, unknown>,
@@ -204,8 +227,7 @@ function resolveManagedConnectionUrl(
   const bindHost = (optionalString(inherited(entry, parent, "httpHost")) ?? "127.0.0.1")
     .replace(/^\[|\]$/g, "")
     .toLowerCase();
-  const rawBindPort = inherited(entry, parent, "httpPort");
-  const bindPort = typeof rawBindPort === "number" ? rawBindPort : 8080;
+  const bindPort = resolveLegacyManagedBindPort(entry, parent);
   const endpointHost = endpoint.hostname.replace(/^\[|\]$/g, "").toLowerCase();
   const endpointPort = endpoint.port
     ? Number.parseInt(endpoint.port, 10)
@@ -226,7 +248,9 @@ function buildManagedNativeTransport(
   const cliPath = optionalString(value("cliPath"));
   const url = resolveManagedConnectionUrl(entry, parent);
   const httpHost = optionalString(value("httpHost"));
-  const httpPort = value("httpPort");
+  const rawHttpPort = value("httpPort");
+  const httpPort =
+    typeof rawHttpPort === "number" ? rawHttpPort : resolveLegacyManagedBindPort(entry, parent);
   const startupTimeoutMs = value("startupTimeoutMs");
   const receiveMode = value("receiveMode");
   const ignoreStories = value("ignoreStories");

@@ -92,6 +92,39 @@ function isSignalAccountEnabled(cfg: OpenClawConfig, config: SignalAccountConfig
   return cfg.channels?.signal?.enabled !== false && config.enabled !== false;
 }
 
+/**
+ * True when a managed-native transport URL is the daemon bind endpoint (not an independent
+ * proxy). When httpPort is omitted, evaluate against the URL's local port so legacy
+ * httpUrl + autoStart configs do not look like "independent" endpoints (#116165).
+ */
+function isManagedNativeBindConnectionUrl(
+  transport: Extract<SignalTransportConfig, { kind: "managed-native" }>,
+): boolean {
+  if (!transport.url) {
+    return false;
+  }
+  if (transport.httpPort !== undefined) {
+    return isSignalManagedNativeConnectionUrlForBind(transport);
+  }
+  const urlPort = resolveLocalSignalTransportPort(transport.url);
+  if (urlPort === undefined) {
+    return false;
+  }
+  return isSignalManagedNativeConnectionUrlForBind({ ...transport, httpPort: urlPort });
+}
+
+function preferredManagedNativePortFromTransport(
+  transport: Extract<SignalTransportConfig, { kind: "managed-native" }>,
+): number | undefined {
+  if (transport.httpPort !== undefined) {
+    return transport.httpPort;
+  }
+  if (!transport.url || !isManagedNativeBindConnectionUrl(transport)) {
+    return undefined;
+  }
+  return resolveLocalSignalTransportPort(transport.url);
+}
+
 function resolveSignalManagedNativePort(params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -136,7 +169,7 @@ function resolveSignalManagedNativePort(params: {
         transport?.kind === "container" ||
         (transport?.kind === "managed-native" &&
           Boolean(transport.url) &&
-          !isSignalManagedNativeConnectionUrlForBind(transport))
+          !isManagedNativeBindConnectionUrl(transport))
           ? transport.url
           : undefined;
       if (
@@ -177,7 +210,9 @@ function resolveSignalManagedNativePort(params: {
       } else {
         implicitManagedAccountIds.push(accountId);
       }
-      if (transport.url && !isSignalManagedNativeConnectionUrlForBind(transport)) {
+      // Only reserve URL ports that are independent proxies — not the daemon bind itself
+      // when httpPort is omitted (legacy httpUrl / autoStart; #116165).
+      if (transport.url && !isManagedNativeBindConnectionUrl(transport)) {
         const localConnectionPort = resolveLocalSignalTransportPort(transport.url);
         if (localConnectionPort !== undefined) {
           reservedPorts.add(localConnectionPort);
@@ -189,7 +224,13 @@ function resolveSignalManagedNativePort(params: {
   }
 
   for (const accountId of implicitManagedAccountIds) {
-    const port = allocateSignalManagedNativePort({ reservedPorts });
+    const accountConfig = resolveSignalAccountConfig(params.cfg, accountId);
+    const transport =
+      accountConfig.transport?.kind === "managed-native" ? accountConfig.transport : undefined;
+    const preferredPort = transport
+      ? preferredManagedNativePortFromTransport(transport)
+      : undefined;
+    const port = allocateSignalManagedNativePort({ reservedPorts, preferredPort });
     reservedPorts.add(port);
     if (normalizeAccountId(accountId) === params.accountId) {
       return port;
