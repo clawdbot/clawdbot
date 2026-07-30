@@ -5,10 +5,11 @@ import { connectWs, startUpgradeWsServer, waitForClose } from "./websocket-test-
 
 describe("MediaStreamHandler lifecycle", () => {
   it("rejects duplicate start frames without creating another STT session", async () => {
+    const closeSession = vi.fn();
     const sttSession: RealtimeTranscriptionSession = {
       connect: async () => {},
       sendAudio: () => {},
-      close: vi.fn(),
+      close: closeSession,
       isConnected: () => true,
     };
     const createSession = vi.fn(() => sttSession);
@@ -61,7 +62,7 @@ describe("MediaStreamHandler lifecycle", () => {
       expect(shouldAcceptStream).toHaveBeenCalledTimes(1);
       expect(onConnect).toHaveBeenCalledTimes(1);
       await vi.waitFor(() => {
-        expect(sttSession.close).toHaveBeenCalledTimes(1);
+        expect(closeSession).toHaveBeenCalledTimes(1);
         expect(onDisconnect).toHaveBeenCalledWith("CA-first", "MZ-first");
         expect(onDisconnect).toHaveBeenCalledTimes(1);
       });
