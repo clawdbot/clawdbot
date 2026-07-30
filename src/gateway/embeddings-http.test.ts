@@ -623,7 +623,9 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       receivedSignal = signal;
       embedStarted.resolve();
       await (signal
-        ? new Promise<void>((resolve) => signal.addEventListener("abort", resolve, { once: true }))
+        ? new Promise<void>((resolve) =>
+            signal.addEventListener("abort", () => resolve(), { once: true }),
+          )
         : releaseEmbed.promise);
       return [[0.1, 0.2]];
     });
