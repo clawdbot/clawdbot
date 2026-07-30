@@ -370,6 +370,10 @@ export function resolveFollowupDeliveryDecision(params: {
   if (responseUsageLine) {
     payloads = appendUsageLine(payloads, responseUsageLine);
   }
+  // Compaction and fallback payloads are assembled after the initial room-event
+  // filter. Reapply it so only explicit command replies or policy-owned notices
+  // can reach an ambient group turn.
+  payloads = filterRoomEventOperationalPayloads({ payloads, turn });
   if (sourcePolicy.sourceReplyDeliveryMode === "message_tool_only") {
     const explicitlyDeliverable = payloads.filter(
       (payload) =>

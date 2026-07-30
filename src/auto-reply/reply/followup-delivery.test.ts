@@ -524,6 +524,29 @@ describe("resolveFollowupDeliveryDecision", () => {
     ).toMatchObject({ kind: "deliver", payloads: [{ text: "compacted" }] });
   });
 
+  it("does not append an ambient compaction notice beside a room-event command reply", () => {
+    const turn = createTurn({
+      queued: {
+        ...createTurn().queued,
+        currentInboundEventKind: "room_event",
+      },
+    });
+    const commandReply = markCommandReplyForDelivery({ text: "command result" }) as ReplyPayload;
+
+    expect(
+      resolveFollowupDeliveryDecision({
+        turn,
+        execution: createSettledExecution(),
+        accounting: createAccounting([commandReply], {
+          compactionNotice: { text: "ambient compaction", isCompactionNotice: true },
+        }),
+      }),
+    ).toMatchObject({
+      kind: "deliver",
+      payloads: [{ text: "command result" }],
+    });
+  });
+
   it("honors the admission-time send policy before any final projection", () => {
     expect(
       resolveFollowupDeliveryDecision({
