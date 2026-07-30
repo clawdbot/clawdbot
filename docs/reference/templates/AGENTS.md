@@ -114,7 +114,7 @@ Example placeholders (replace or remove them):
 
 ## Heartbeats - Be Proactive
 
-When you receive a heartbeat poll (message matches the configured heartbeat prompt), don't just reply `HEARTBEAT_OK` every time. Keep a short checklist or reminders in the heartbeat monitor's automation scratch; use `openclaw cron list --all` to find the monitor job, then `openclaw cron scratch <jobId> --set "..."` to update it. Keep it small to limit token burn.
+When you receive a heartbeat poll (message matches the configured heartbeat prompt), don't just reply `HEARTBEAT_OK` every time. Keep a short checklist or reminders in the heartbeat monitor's automation scratch; use `openclaw automations list --all` to find the monitor job, then `openclaw automations scratch <jobId> --set "..."` to update it. Keep it small to limit token burn.
 
 See [Automations vs Heartbeat](/automation#automations-vs-heartbeat) for the full decision table. Short version: heartbeat batches periodic checks with full session context on approximate timing (default every 30 minutes); automations are for exact timing, isolated runs, a different model, or one-shot reminders.
 
