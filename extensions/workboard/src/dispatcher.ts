@@ -219,11 +219,17 @@ function sortReadyCards(a: WorkboardCard, b: WorkboardCard): number {
   );
 }
 
-function resolveDispatchOwner(card: WorkboardCard, now: number, ownerOverride?: string): string {
+function resolveDispatchOwner(
+  card: WorkboardCard,
+  now: number,
+  ownerOverride: string | undefined,
+  defaultAssignees: ReadonlyMap<string, string>,
+): string {
   return (
     ownerOverride ||
     (cardHasActiveClaim(card, now) ? card.metadata?.claim?.ownerId : undefined) ||
     card.agentId ||
+    defaultAssignees.get(cardBoardId(card)) ||
     DEFAULT_DISPATCH_OWNER
   );
 }
@@ -233,6 +239,7 @@ function selectStartableCards(
   limit: number,
   candidates: WorkboardCard[],
   ownerOverride: string | undefined,
+  defaultAssignees: ReadonlyMap<string, string>,
   now: number,
 ): WorkboardCard[] {
   if (limit <= 0) {
@@ -253,7 +260,7 @@ function selectStartableCards(
     }
     // A grace-protected running claim still occupies its actual worker, even
     // after the lease expires and the card's assigned agent differs.
-    const owner = claim?.ownerId ?? resolveDispatchOwner(card, now);
+    const owner = claim?.ownerId ?? resolveDispatchOwner(card, now, undefined, defaultAssignees);
     runningByOwner.set(owner, (runningByOwner.get(owner) ?? 0) + 1);
   }
   const selected: WorkboardCard[] = [];
@@ -265,7 +272,7 @@ function selectStartableCards(
         entry.status === "ready" && !cardHasActiveClaim(entry, now) && !cardIsArchived(entry),
     )
     .toSorted(sortReadyCards)) {
-    const owner = resolveDispatchOwner(card, now, ownerOverride);
+    const owner = resolveDispatchOwner(card, now, ownerOverride, defaultAssignees);
     if ((runningByOwner.get(owner) ?? 0) > 0) {
       continue;
     }
@@ -318,19 +325,44 @@ async function runWorkboardDispatch(
   const cards = await params.store.list();
   const candidates = await params.store.list({ boardId });
   const ownerOverride = params.options?.ownerId?.trim() || undefined;
+  const defaultAssignees = await params.store.boardDefaultAssignees();
   const startedOwners = new Set<string>();
   // Allow one fallback per worker slot without draining the queue during an outage.
   const maxAttempts = maxStarts * 2;
   let acceptedStarts = 0;
   let attemptedStarts = 0;
 
-  for (const card of selectStartableCards(cards, maxStarts, candidates, ownerOverride, now)) {
-    const ownerId = resolveDispatchOwner(card, now, ownerOverride);
+  for (const startable of selectStartableCards(
+    cards,
+    maxStarts,
+    candidates,
+    ownerOverride,
+    defaultAssignees,
+    now,
+  )) {
+    const ownerId = resolveDispatchOwner(startable, now, ownerOverride, defaultAssignees);
     if (acceptedStarts >= maxStarts || attemptedStarts >= maxAttempts) {
       break;
     }
     if (startedOwners.has(ownerId)) {
       continue;
+    }
+    let card = startable;
+    const boardAssignee = card.agentId ? undefined : defaultAssignees.get(cardBoardId(card));
+    if (boardAssignee) {
+      // The board default assignee is the owner of record, so adopt it before the claim;
+      // otherwise the claim persists the dispatcher's transient identity into agentId and
+      // the session key stays unscoped (#116358).
+      try {
+        card = await params.store.update(card.id, { agentId: boardAssignee });
+      } catch (error) {
+        startFailures.push({
+          cardId: card.id,
+          title: card.title,
+          error: formatErrorMessage(error),
+        });
+        continue;
+      }
     }
     const sessionKey = workboardSessionKeyForCard(card);
     let claimValue = "";

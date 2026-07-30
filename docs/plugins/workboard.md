@@ -275,9 +275,11 @@ as unavailable; they surface as command errors, and so does any Gateway
 failure when an explicit `--url`/`--token` target was given.
 
 Board metadata can set `autoDecompose`, `autoDecomposePerDispatch`,
-`defaultAssignee`, and `orchestratorProfile`. OpenClaw records this intent and
-exposes it in worker context; actual specification/decomposition still runs
-through the normal Workboard tools.
+`defaultAssignee`, and `orchestratorProfile`. Dispatch applies
+`defaultAssignee` to cards that have no `agentId`, so the board default becomes
+the card owner of record and scopes the worker session key. The remaining
+settings are recorded intent exposed in worker context; actual
+specification/decomposition still runs through the normal Workboard tools.
 
 ## CLI and slash command
 
