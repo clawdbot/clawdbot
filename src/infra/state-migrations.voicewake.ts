@@ -1,9 +1,9 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { FsSafeError, root, type Root } from "@openclaw/fs-safe";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { formatErrorMessage } from "./errors.js";
-import { FsSafeError, root, type Root } from "./fs-safe.js";
 import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
 import {
   executeSqliteQuerySync,

@@ -5,23 +5,28 @@ import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { normalizeConversationRef } from "./outbound/session-binding-normalization.js";
 import type { SessionBindingRecord } from "./outbound/session-binding.types.js";
 import { fileExists } from "./state-migrations.fs.js";
 import { archiveLegacyImportSource } from "./state-migrations.storage.js";
-import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
-import { normalizeVoiceWakeRoutingConfig } from "./voicewake-routing.js";
+import type { LegacyStateDetection } from "./state-migrations.types.js";
 
 export {
   migrateLegacyVoiceWakeSettings,
   resolveLegacyVoiceWakeRoutingPath,
   resolveLegacyVoiceWakeTriggersPath,
 } from "./state-migrations.voicewake.js";
+
+type LegacyConfigHealthImportDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
+type LegacyPluginBindingApprovalsImportDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "plugin_binding_approvals"
+>;
+type LegacyCurrentConversationBindingsImportDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "current_conversation_bindings"
+>;
 
 function readLegacyJsonObject(sourcePath: string): unknown {
   return JSON.parse(fs.readFileSync(sourcePath, "utf8")) as unknown;
