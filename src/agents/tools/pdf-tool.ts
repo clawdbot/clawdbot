@@ -425,6 +425,10 @@ export function createPdfTool(options?: {
   return {
     label: "PDF",
     name: "pdf",
+    // Remote PDF text is externally controlled content (a prompt-injection
+    // vector), so the turn must be tainted and subsequent memory writes
+    // quarantined.
+    resultContentSource: "network",
     description,
     parameters: PdfToolSchema,
     execute: async (_toolCallId, args, signal) => {

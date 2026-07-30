@@ -875,6 +875,10 @@ export function createImageTool(options?: {
   return {
     label: "View Image",
     name: "view_image",
+    // Remote image content is externally controlled (a prompt-injection vector
+    // via the visual description), so the turn must be tainted and subsequent
+    // memory writes quarantined.
+    resultContentSource: "network",
     description,
     ...(modelHasVision ? { catalogMode: "direct-only" as const } : {}),
     parameters: Type.Object({
