@@ -273,6 +273,80 @@ const SKILL_CONTENT_RULES: SourceRule[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Child-process alias and computed-member utilities
+// ---------------------------------------------------------------------------
+
+const CHILD_PROCESS_EXEC_METHODS = new Set([
+  "exec",
+  "execSync",
+  "spawn",
+  "spawnSync",
+  "execFile",
+  "execFileSync",
+] as const);
+
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Collect import-alias / destructure-alias mappings for child_process methods.
+ * Returns Map<localName, methodName> for *actual renames only* (local !== method).
+ * Direct "import { spawn }" without an alias is not included — the original
+ * pattern already catches those calls.
+ *
+ * Handles:
+ *   import { spawn as launch } from "node:child_process"  → launch → spawn
+ *   const { exec: run } = require("child_process")        → run    → exec
+ */
+function collectChildProcessAliases(source: string): Map<string, string> {
+  const aliases = new Map<string, string>();
+
+  // ESM named-import aliases:  import { spawn as launch } from "node:child_process"
+  const esmRe = /import\s*\{\s*([^}]+)\s*\}\s*from\s*["'](?:node:)?child_process["']/g;
+  let m: RegExpExecArray | null;
+  while ((m = esmRe.exec(source)) !== null) {
+    const members = m[1]!.split(",").map((s) => s.trim());
+    for (const member of members) {
+      const parts = member.split(/\s+as\s+/).map((s) => s.trim());
+      if (parts.length === 2) {
+        const [methodName, localName] = parts;
+        if (
+          methodName &&
+          localName &&
+          methodName !== localName &&
+          CHILD_PROCESS_EXEC_METHODS.has(methodName)
+        ) {
+          aliases.set(localName, methodName);
+        }
+      }
+    }
+  }
+
+  // CJS destructure aliases:  const { exec: run } = require("child_process")
+  const cjsRe = /const\s*\{\s*([^}]+)\s*\}\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
+  while ((m = cjsRe.exec(source)) !== null) {
+    const members = m[1]!.split(",").map((s) => s.trim());
+    for (const member of members) {
+      const parts = member.split(":").map((s) => s.trim());
+      if (parts.length === 2) {
+        const [methodName, localName] = parts;
+        if (
+          methodName &&
+          localName &&
+          methodName !== localName &&
+          CHILD_PROCESS_EXEC_METHODS.has(methodName)
+        ) {
+          aliases.set(localName, methodName);
+        }
+      }
+    }
+  }
+
+  return aliases;
+}
+
+// ---------------------------------------------------------------------------
 // Core scanner
 // ---------------------------------------------------------------------------
 
@@ -394,6 +468,20 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   const heuristicSource = stripCommentsForHeuristics(source);
   const heuristicLines = heuristicSource.split("\n");
 
+  // Collect child_process import aliases for supplementary dangerous-exec detection.
+  // Only actual renames are included (e.g. "import { spawn as launch }").
+  const childProcessAliases = collectChildProcessAliases(source);
+
+  // Build a single regex for all alias local names so we can test lines quickly.
+  let aliasPattern: RegExp | null = null;
+  if (childProcessAliases.size > 0) {
+    const names = [...childProcessAliases.keys()].map(escapeRegex).join("|");
+    aliasPattern = new RegExp(`\\b(?:${names})\\s*\\(`, "g");
+  }
+
+  // Regex for computed-member access:   cp["spawn"](...)   or   cp['exec'](...)
+  const COMPUTED_MEMBER_PATTERN = /\[\s*["'](?:exec|execSync|spawn|spawnSync|execFile|execFileSync)["']\s*\]\s*\(/g;
+
   // --- Line rules ---
   for (const rule of LINE_RULES) {
     // Skip rule entirely if context requirement not met
@@ -405,6 +493,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
     let omittedMatches = 0;
     let lastOmittedLine: number | undefined;
     for (const [i, line] of lines.entries()) {
+      // --- Primary pattern matches (original rule pattern) ---
       const matches = line.matchAll(
         new RegExp(
           rule.pattern.source,
@@ -430,8 +519,6 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
           continue;
         }
 
-        // Retain distinct calls up to the cap, then aggregate every remaining match.
-        // This keeps hostile output bounded without hiding that later sites exist.
         findings.push({
           ruleId: rule.ruleId,
           severity: rule.severity,
@@ -441,6 +528,49 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
           evidence: formatScanEvidence(line),
         });
         acceptedMatches += 1;
+      }
+
+      // --- Supplementary dangerous-exec checks for patterns the primary regex misses ---
+      if (rule.ruleId === "dangerous-exec") {
+        // 1. Alias calls:  launch("node", ...)  where "launch" is an alias for "spawn"
+        if (aliasPattern) {
+          const aliasMatches = line.matchAll(aliasPattern);
+          for (const _aliasMatch of aliasMatches) {
+            if (acceptedMatches >= MAX_LINE_RULE_FINDINGS_PER_RULE) {
+              omittedMatches += 1;
+              lastOmittedLine = i + 1;
+              continue;
+            }
+            findings.push({
+              ruleId: rule.ruleId,
+              severity: rule.severity,
+              file: filePath,
+              line: i + 1,
+              message: rule.message,
+              evidence: formatScanEvidence(line),
+            });
+            acceptedMatches += 1;
+          }
+        }
+
+        // 2. Computed-member access:  cp["spawn"](...)  or  cp['exec'](...)
+        const computedMatches = line.matchAll(COMPUTED_MEMBER_PATTERN);
+        for (const _computedMatch of computedMatches) {
+          if (acceptedMatches >= MAX_LINE_RULE_FINDINGS_PER_RULE) {
+            omittedMatches += 1;
+            lastOmittedLine = i + 1;
+            continue;
+          }
+          findings.push({
+            ruleId: rule.ruleId,
+            severity: rule.severity,
+            file: filePath,
+            line: i + 1,
+            message: rule.message,
+            evidence: formatScanEvidence(line),
+          });
+          acceptedMatches += 1;
+        }
       }
     }
     if (lastOmittedLine !== undefined) {

