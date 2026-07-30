@@ -1035,10 +1035,12 @@ function setOwnedWebSocketSession(
   sessionId: string,
   entry: CachedWebSocketConnection,
   expected: CachedWebSocketConnection | undefined,
-): void {
+): boolean {
   if (websocketSessionCache.get(sessionId) === expected) {
     websocketSessionCache.set(sessionId, entry);
+    return true;
   }
+  return false;
 }
 
 function scheduleSessionWebSocketExpiry(sessionId: string, entry: CachedWebSocketConnection): void {
@@ -1211,12 +1213,12 @@ async function acquireWebSocket(
   // stale entry it removed, or empty for a first connect). A different cached
   // entry means a concurrent request already won this session during the await;
   // let it keep the lease and leave this socket transient.
-  setOwnedWebSocketSession(sessionId, entry, expectedCacheValue);
+  const ownsCache = setOwnedWebSocketSession(sessionId, entry, expectedCacheValue);
   return {
     socket,
-    entry,
+    entry: ownsCache ? entry : undefined,
     release: ({ keep } = {}) => {
-      if (!keep || !isWebSocketReusable(entry.socket)) {
+      if (!ownsCache || !keep || !isWebSocketReusable(entry.socket)) {
         closeWebSocketSilently(entry.socket);
         if (entry.idleTimer) {
           clearTimeout(entry.idleTimer);
