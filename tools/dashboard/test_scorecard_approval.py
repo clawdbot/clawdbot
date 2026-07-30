@@ -37,6 +37,7 @@ def install_stubs():
     flask.Flask = DummyFlask
     flask.Response = lambda *args, **kwargs: (args, kwargs)
     flask.request = DummyRequest()
+    flask.session = {}
     flask.redirect = lambda location: location
     flask.abort = lambda code: (_ for _ in ()).throw(PermissionError(code))
     flask.send_from_directory = lambda *_args, **_kwargs: None
