@@ -247,7 +247,12 @@ function readAttachAsParam(params: Record<string, unknown>): InlineAttachmentMou
   }
   const parsed = parseInlineAttachmentMountPath(mountPath);
   if (parsed.status === "invalid") {
-    throw new ToolInputError("attachAs.mountPath contains unsupported characters.");
+    if (parsed.reason === "too_long") {
+      throw new ToolInputError(
+        `attachAs.mountPath invalid (reason=too_long maxMountPathBytes=${MAX_INLINE_ATTACHMENT_MOUNT_PATH_BYTES}).`,
+      );
+    }
+    throw new ToolInputError(`attachAs.mountPath invalid (reason=${parsed.reason}).`);
   }
   return parsed.status === "valid" ? { mountPath: parsed.mountPath } : undefined;
 }

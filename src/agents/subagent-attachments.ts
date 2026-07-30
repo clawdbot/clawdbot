@@ -13,6 +13,7 @@ import { privateFileStore } from "../infra/private-file-store.js";
 import {
   DEFAULT_INLINE_ATTACHMENT_SNAPSHOT_LIMITS,
   MAX_INLINE_ATTACHMENT_BASENAME_BYTES,
+  MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES,
   prepareInlineAttachmentSnapshots,
   validateInlineAttachmentSnapshots,
   type InlineAttachment,
@@ -161,6 +162,26 @@ function redactContinuationAttachmentValidationError(params: {
     ) {
       return `${code} (attachmentIndex=${attachmentIndex} basenameBytes=${basenameBytes} maxBasenameBytes=${MAX_INLINE_ATTACHMENT_BASENAME_BYTES})`;
     }
+  }
+  const mimeTypeValidation = message.match(
+    /^attachments_invalid_member \(attachmentIndex=(\d+) reason=(mime_type_not_string|mime_type_too_long|mime_type_whitespace|mime_type_control_characters|mime_type_invalid_unicode)(?: maxMimeTypeBytes=(\d+))?\)$/,
+  );
+  if (mimeTypeValidation) {
+    const [, attachmentIndex, reason, rawMaxMimeTypeBytes] = mimeTypeValidation;
+    if (reason === "mime_type_too_long") {
+      if (Number(rawMaxMimeTypeBytes) === MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES) {
+        return `${code} (attachmentIndex=${attachmentIndex} reason=${reason} maxMimeTypeBytes=${MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES})`;
+      }
+    } else if (rawMaxMimeTypeBytes === undefined) {
+      return `${code} (attachmentIndex=${attachmentIndex} reason=${reason})`;
+    }
+  }
+  const contentValidation = message.match(
+    /^attachments_invalid_content \(attachmentIndex=(\d+) reason=(invalid_unicode)\)$/,
+  );
+  if (contentValidation) {
+    const [, attachmentIndex, reason] = contentValidation;
+    return `${code} (attachmentIndex=${attachmentIndex} reason=${reason})`;
   }
   if (code === "attachments_file_count_exceeded") {
     return `${code} (maxFiles=${limits.maxFiles})`;

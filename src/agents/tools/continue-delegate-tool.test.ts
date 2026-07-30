@@ -395,7 +395,7 @@ describe("continue_delegate tool", () => {
         task: "invalid mount hint",
         attachAs: { mountPath: "unsafe\npath" },
       }),
-    ).rejects.toThrow("attachAs.mountPath contains unsupported characters");
+    ).rejects.toThrow("attachAs.mountPath invalid (reason=unsupported_characters)");
     expect(consumePendingDelegates("test-session")).toEqual([]);
   });
 

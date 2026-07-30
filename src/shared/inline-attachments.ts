@@ -14,7 +14,10 @@ export type InlineAttachmentMount = {
 export type InlineAttachmentMountPathResult =
   | { status: "absent" }
   | { status: "valid"; mountPath: string }
-  | { status: "invalid" };
+  | {
+      status: "invalid";
+      reason: "invalid_type" | "too_long" | "unsupported_characters";
+    };
 
 export const MAX_INLINE_ATTACHMENT_MOUNT_PATH_BYTES = 1024;
 export const MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES = 256;
@@ -24,17 +27,17 @@ export function parseInlineAttachmentMountPath(value: unknown): InlineAttachment
     return { status: "absent" };
   }
   if (typeof value !== "string") {
-    return { status: "invalid" };
+    return { status: "invalid", reason: "invalid_type" };
   }
   if (Buffer.byteLength(value, "utf8") > MAX_INLINE_ATTACHMENT_MOUNT_PATH_BYTES) {
-    return { status: "invalid" };
+    return { status: "invalid", reason: "too_long" };
   }
   const mountPath = value.trim();
   if (!mountPath) {
     return { status: "absent" };
   }
   if (!/^[A-Za-z0-9._\-/:]+$/.test(mountPath)) {
-    return { status: "invalid" };
+    return { status: "invalid", reason: "unsupported_characters" };
   }
   return { status: "valid", mountPath };
 }
@@ -170,16 +173,30 @@ export function prepareInlineAttachmentSnapshots(params: {
       throw new Error("attachments_invalid_member (encoding must be utf8 or base64)");
     }
     if (item.mimeType !== undefined && typeof item.mimeType !== "string") {
-      throw new Error("attachments_invalid_member (mimeType must be a string)");
+      throw new Error(
+        `attachments_invalid_member (attachmentIndex=${attachmentIndex} reason=mime_type_not_string)`,
+      );
     }
     const rawMimeType = item.mimeType ?? "";
-    if (
-      Buffer.byteLength(rawMimeType, "utf8") > MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES ||
-      rawMimeType.trim() !== rawMimeType ||
-      /\p{Cc}/u.test(rawMimeType) ||
-      !isWellFormedAttachmentName(rawMimeType)
-    ) {
-      throw new Error("attachments_invalid_member (invalid mimeType metadata)");
+    if (Buffer.byteLength(rawMimeType, "utf8") > MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES) {
+      throw new Error(
+        `attachments_invalid_member (attachmentIndex=${attachmentIndex} reason=mime_type_too_long maxMimeTypeBytes=${MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES})`,
+      );
+    }
+    if (rawMimeType.trim() !== rawMimeType) {
+      throw new Error(
+        `attachments_invalid_member (attachmentIndex=${attachmentIndex} reason=mime_type_whitespace)`,
+      );
+    }
+    if (/\p{Cc}/u.test(rawMimeType)) {
+      throw new Error(
+        `attachments_invalid_member (attachmentIndex=${attachmentIndex} reason=mime_type_control_characters)`,
+      );
+    }
+    if (!isWellFormedAttachmentName(rawMimeType)) {
+      throw new Error(
+        `attachments_invalid_member (attachmentIndex=${attachmentIndex} reason=mime_type_invalid_unicode)`,
+      );
     }
 
     const rawName = item.name;
@@ -196,7 +213,9 @@ export function prepareInlineAttachmentSnapshots(params: {
     const name = rawName.normalize("NFC");
     const content = item.content;
     if (!isWellFormedAttachmentName(content)) {
-      throw new Error("attachments_invalid_content (invalid Unicode)");
+      throw new Error(
+        `attachments_invalid_content (attachmentIndex=${attachmentIndex} reason=invalid_unicode)`,
+      );
     }
     const encoding = item.encoding ?? "utf8";
     const mimeType = rawMimeType;

@@ -128,18 +128,34 @@ describe("inline attachment snapshots", () => {
   });
 
   it("bounds raw MIME metadata and mount-path representations", () => {
-    for (const mimeType of [
-      ` ${"m".repeat(MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES - 1)}`,
-      `${"m".repeat(MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES - 1)} `,
-      "text/plain\n",
-      "m".repeat(MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES + 1),
-    ]) {
+    for (const [mimeType, expected] of [
+      [
+        ` ${"m".repeat(MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES - 1)}`,
+        "attachments_invalid_member (attachmentIndex=0 reason=mime_type_whitespace)",
+      ],
+      [
+        `${"m".repeat(MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES - 1)} `,
+        "attachments_invalid_member (attachmentIndex=0 reason=mime_type_whitespace)",
+      ],
+      [
+        "text/\u0001plain",
+        "attachments_invalid_member (attachmentIndex=0 reason=mime_type_control_characters)",
+      ],
+      [
+        "text/\uD800plain",
+        "attachments_invalid_member (attachmentIndex=0 reason=mime_type_invalid_unicode)",
+      ],
+      [
+        "m".repeat(MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES + 1),
+        "attachments_invalid_member (attachmentIndex=0 reason=mime_type_too_long maxMimeTypeBytes=256)",
+      ],
+    ] as const) {
       expect(() =>
         prepareInlineAttachmentSnapshots({
           attachments: [{ name: "snapshot.bin", content: "x", mimeType }],
           limits: DEFAULT_INLINE_ATTACHMENT_SNAPSHOT_LIMITS,
         }),
-      ).toThrow("attachments_invalid_member (invalid mimeType metadata)");
+      ).toThrow(expected);
     }
 
     expect(
@@ -147,7 +163,11 @@ describe("inline attachment snapshots", () => {
     ).toEqual({ status: "valid", mountPath: "a".repeat(MAX_INLINE_ATTACHMENT_MOUNT_PATH_BYTES) });
     expect(
       parseInlineAttachmentMountPath("a".repeat(MAX_INLINE_ATTACHMENT_MOUNT_PATH_BYTES + 1)),
-    ).toEqual({ status: "invalid" });
+    ).toEqual({ status: "invalid", reason: "too_long" });
+    expect(parseInlineAttachmentMountPath("unsafe\npath")).toEqual({
+      status: "invalid",
+      reason: "unsupported_characters",
+    });
   });
 
   it("measures UTF-8 snapshots before allocating rejected file or total bytes", () => {
@@ -184,7 +204,7 @@ describe("inline attachment snapshots", () => {
           attachments: [{ name: "snapshot.txt", content }],
           limits: DEFAULT_INLINE_ATTACHMENT_SNAPSHOT_LIMITS,
         }),
-      ).toThrow("attachments_invalid_content (invalid Unicode)");
+      ).toThrow("attachments_invalid_content (attachmentIndex=0 reason=invalid_unicode)");
     }
 
     const prepared = prepareInlineAttachmentSnapshots({
