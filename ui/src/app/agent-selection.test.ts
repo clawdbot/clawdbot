@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import { createAgentSelectionCapability, selectApplicationSession } from "./agent-selection.ts";
 
-function createGateway(assistantAgentId: string | null = "Main") {
-  let snapshot = { client: null as GatewayBrowserClient | null, assistantAgentId };
+function createGateway(assistantAgentId: string | null = "Main", sessionKey = "agent:main:main") {
+  let snapshot = {
+    client: null as GatewayBrowserClient | null,
+    assistantAgentId,
+    sessionKey,
+    hello: null as GatewayHelloOk | null,
+  };
   const listeners = new Set<(next: typeof snapshot) => void>();
+  const setSessionKeyCalls: string[] = [];
   return {
     gateway: {
       get snapshot() {
@@ -15,12 +21,19 @@ function createGateway(assistantAgentId: string | null = "Main") {
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
+      setSessionKey(sessionKey: string) {
+        setSessionKeyCalls.push(sessionKey);
+        snapshot = { ...snapshot, sessionKey };
+      },
     },
-    publish(next: typeof snapshot) {
-      snapshot = next;
+    publish(next: Partial<typeof snapshot>) {
+      snapshot = { ...snapshot, ...next } as typeof snapshot;
       for (const listener of listeners) {
         listener(snapshot);
       }
+    },
+    get setSessionKeyCalls() {
+      return setSessionKeyCalls;
     },
   };
 }
@@ -329,6 +342,57 @@ describe("agent selection", () => {
     });
 
     expect(selection.state).toEqual({ selectedId: "roboclaw", scopeId: "roboclaw" });
+  });
+
+  it("retargets the gateway session to the default agent when the persisted owner is deleted", () => {
+    const harness = createGateway("Main", "agent:expert-ms5rlf07:main");
+    const roster = createRoster();
+    const selection = createAgentSelectionCapability(harness.gateway, roster.roster);
+
+    roster.publish({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main", kind: "agent" }],
+    });
+
+    expect(selection.state).toEqual({ selectedId: "main", scopeId: "main" });
+    expect(harness.setSessionKeyCalls).toEqual(["agent:main:main"]);
+  });
+
+  it("retargets the deleted session owner using the configured main key", () => {
+    const harness = createGateway("Main", "agent:expert-ms5rlf07:workspace");
+    const roster = createRoster();
+    const selection = createAgentSelectionCapability(harness.gateway, roster.roster);
+
+    roster.publish({
+      defaultId: "main",
+      mainKey: "workspace",
+      scope: "per-sender",
+      agents: [{ id: "main", kind: "agent" }],
+    });
+
+    expect(selection.state).toEqual({ selectedId: "main", scopeId: "main" });
+    expect(harness.setSessionKeyCalls).toEqual(["agent:main:workspace"]);
+  });
+
+  it("does not retarget the gateway session when the owner is still configured", () => {
+    const harness = createGateway("Research", "agent:research:main");
+    const roster = createRoster();
+    const selection = createAgentSelectionCapability(harness.gateway, roster.roster);
+
+    roster.publish({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [
+        { id: "main", kind: "agent" },
+        { id: "research", kind: "agent" },
+      ],
+    });
+
+    expect(selection.state).toEqual({ selectedId: "research", scopeId: "research" });
+    expect(harness.setSessionKeyCalls).toEqual([]);
   });
 });
 

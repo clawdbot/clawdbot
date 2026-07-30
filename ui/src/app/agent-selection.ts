@@ -1,11 +1,20 @@
+import type { GatewayHelloOk } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
-import { normalizeAgentId, parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import {
+  buildAgentMainSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveUiConfiguredMainKey,
+} from "../lib/sessions/session-key.ts";
 
 type AgentSelectionGateway = {
   readonly snapshot: {
     assistantAgentId: string | null;
+    sessionKey: string;
+    hello: GatewayHelloOk | null;
   };
   subscribe: (listener: (snapshot: AgentSelectionGateway["snapshot"]) => void) => () => void;
+  setSessionKey: (sessionKey: string) => void;
 };
 
 type AgentSelectionRoster = {
@@ -107,6 +116,17 @@ export function createAgentSelectionCapability(
       publish({ selectedId: nextAssistantAgentId, scopeId: nextAssistantAgentId });
     }
   });
+  const isAgentInRoster = (agentId: string): boolean => {
+    const agentsList = roster.state.agentsList;
+    if (!agentsList || agentsList.agents.length === 0) {
+      // Roster not loaded yet; do not assume the agent is invalid.
+      return true;
+    }
+    return agentsList.agents.some(
+      (agent) => normalizeAgentId(agent.id) === normalizeAgentId(agentId),
+    );
+  };
+
   roster.subscribe(() => {
     // Re-enable implicit ownership before publishing the roster fallback. A
     // synchronous subscriber may establish a new explicit owner during publish.
@@ -117,6 +137,32 @@ export function createAgentSelectionCapability(
       publish({ selectedId: assistantAgentId, scopeId: assistantAgentId });
     } else {
       publish(state);
+    }
+    // When the roster invalidates the agent that owns the current gateway session,
+    // retarget the session to the reconciled default's main key. Without this, a
+    // persisted sessionKey for a deleted agent keeps chat.send/sessions.resolve
+    // failing with "Agent ... no longer exists in configuration".
+    if (!followsGatewayDefault) {
+      return;
+    }
+    const parsed = parseAgentSessionKey(gateway.snapshot.sessionKey);
+    if (!parsed) {
+      return;
+    }
+    if (isAgentInRoster(parsed.agentId)) {
+      return;
+    }
+    const fallbackAgentId = state.selectedId;
+    if (!fallbackAgentId) {
+      return;
+    }
+    const mainKey = resolveUiConfiguredMainKey({
+      agentsList: roster.state.agentsList,
+      hello: gateway.snapshot.hello,
+    });
+    const fallbackSessionKey = buildAgentMainSessionKey({ agentId: fallbackAgentId, mainKey });
+    if (fallbackSessionKey !== gateway.snapshot.sessionKey) {
+      gateway.setSessionKey(fallbackSessionKey);
     }
   });
 
