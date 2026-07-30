@@ -72,4 +72,17 @@ describe("detectChangedScope Windows routing", () => {
       });
     }
   });
+
+  it("routes exec script preflight changes and Windows-only coverage to Windows", () => {
+    for (const preflightPath of [
+      "src/agents/bash-tools.exec-script-preflight.ts",
+      "src/agents/bash-tools.exec-script-target.ts",
+      "src/agents/bash-tools.exec.script-preflight.test.ts",
+    ]) {
+      expect(detectChangedScope([preflightPath]), preflightPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
 });
