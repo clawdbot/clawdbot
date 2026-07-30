@@ -107,6 +107,12 @@ export function resolveSandboxDockerConfig(params: {
     : globalDocker?.ulimits;
 
   const binds = [...(globalDocker?.binds ?? []), ...(agentDocker?.binds ?? [])];
+  // Allowlisted roots union global and agent policy: a root declared once for the fleet stays
+  // usable by an agent that also declares its own.
+  const allowedBindSources = [
+    ...(globalDocker?.allowedBindSources ?? []),
+    ...(agentDocker?.allowedBindSources ?? []),
+  ];
 
   return {
     image: agentDocker?.image ?? globalDocker?.image ?? DEFAULT_SANDBOX_IMAGE,
@@ -133,6 +139,7 @@ export function resolveSandboxDockerConfig(params: {
     dns: agentDocker?.dns ?? globalDocker?.dns,
     extraHosts: agentDocker?.extraHosts ?? globalDocker?.extraHosts,
     binds: binds.length ? binds : undefined,
+    allowedBindSources: allowedBindSources.length ? allowedBindSources : undefined,
     ...resolveDangerousSandboxDockerBooleans(agentDocker, globalDocker),
   };
 }

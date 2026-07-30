@@ -318,6 +318,21 @@ function formatUlimitValue(
   return `${name}=${soft}:${hard}`;
 }
 
+/**
+ * Widens the bind source allowlist with configured shared roots. An absent caller allowlist
+ * means the gate is off, so it must stay off: adding roots there would silently start gating.
+ */
+export function resolveAllowedBindSourceRoots(
+  cfg: Pick<SandboxDockerConfig, "allowedBindSources">,
+  bindSourceRoots: string[] | undefined,
+): string[] | undefined {
+  if (!bindSourceRoots) {
+    return undefined;
+  }
+  const configured = cfg.allowedBindSources ?? [];
+  return configured.length ? [...bindSourceRoots, ...configured] : bindSourceRoots;
+}
+
 export function buildSandboxCreateArgs(params: {
   name: string;
   cfg: SandboxDockerConfig;
@@ -334,7 +349,7 @@ export function buildSandboxCreateArgs(params: {
   // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
   validateSandboxSecurity({
     ...params.cfg,
-    allowedSourceRoots: params.bindSourceRoots,
+    allowedSourceRoots: resolveAllowedBindSourceRoots(params.cfg, params.bindSourceRoots),
     allowSourcesOutsideAllowedRoots:
       params.allowSourcesOutsideAllowedRoots ??
       params.cfg.dangerouslyAllowExternalBindSources === true,

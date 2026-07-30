@@ -320,7 +320,7 @@ This example gives the `research` agent a writable primary workspace, read-only 
           docker: {
             binds: ["/srv/shared/reference:/reference:ro", "/srv/shared/drafts:/drafts:rw"],
             // Required because these sources are outside the agent workspace.
-            dangerouslyAllowExternalBindSources: true,
+            allowedBindSources: ["/srv/shared/reference", "/srv/shared/drafts"],
           },
         },
       },
@@ -342,7 +342,35 @@ Changing `workspaceAccess` does not change an additional bind from `ro` to `rw`,
 
 Bind mounts are the supported multi-folder boundary because Docker constructs the container's filesystem view with mount isolation, and the `ro`/`rw` mode applies to every process in the sandbox. That boundary covers `exec`, filesystem tools, child processes, and libraries without duplicating path-authorization checks across each OpenClaw code path. A host-side path allowlist cannot provide the same complete boundary when an allowed shell or dependency can access files directly.
 
-The opt-in `dangerouslyAllowExternalBindSources` only permits sources outside the workspace roots. It does not disable OpenClaw's blocked system, credential, Docker socket, symlink-parent, or reserved-target checks. Prefer the smallest folder, use `ro` unless writes are required, and recreate the sandbox after changing mounts:
+`allowedBindSources` names the exact host roots an agent may bind beyond its own workspace and agent dirs. Global and per-agent roots are merged, so a shared directory can be declared once for the fleet. Every other check still applies: sources outside the listed roots stay blocked, as do blocked system, credential, Docker socket, symlink-parent, and reserved-target paths.
+
+Use it when several agents need one shared directory while each keeps a private workspace no other agent can mount:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "all",
+        scope: "agent",
+        workspaceAccess: "rw",
+        docker: {
+          binds: ["/srv/shared/team:/team:rw"],
+          allowedBindSources: ["/srv/shared/team"],
+        },
+      },
+    },
+    list: [
+      { id: "member-one", workspace: "/srv/openclaw/member-one-workspace" },
+      { id: "member-two", workspace: "/srv/openclaw/member-two-workspace" },
+    ],
+  },
+}
+```
+
+Each container mounts only its own workspace plus `/team`, so one agent's workspace is absent from another agent's mount namespace.
+
+`dangerouslyAllowExternalBindSources` remains a break-glass override that skips the source-root check for **every** bind on that agent. Prefer `allowedBindSources`. Either way, prefer the smallest folder, use `ro` unless writes are required, and recreate the sandbox after changing mounts:
 
 ```bash
 openclaw sandbox recreate --agent research
@@ -385,7 +413,7 @@ openclaw sandbox recreate --agent research
 - OpenClaw blocks dangerous bind sources by default: system paths (`/etc`, `/proc`, `/sys`, `/dev`, `/root`, `/boot`), Docker socket directories (`/run`, `/var/run`, and their `docker.sock` variants), and common home-directory credential roots (`~/.aws`, `~/.cargo`, `~/.config`, `~/.docker`, `~/.gnupg`, `~/.netrc`, `~/.npm`, `~/.ssh`).
 - Validation normalizes the source path, then resolves it again through the deepest existing ancestor before re-checking blocked paths and allowed roots, so symlink-parent escapes fail closed even when the final leaf doesn't exist yet (e.g. `/workspace/run-link/new-file` still resolves as `/var/run/...` if `run-link` points there).
 - Bind targets that shadow the reserved container mount points (`/workspace`, `/agent`) are also blocked by default; override with `agents.defaults.sandbox.docker.dangerouslyAllowReservedContainerTargets: true`.
-- Bind sources outside the workspace/agent-workspace allowlisted roots are blocked by default; override with `agents.defaults.sandbox.docker.dangerouslyAllowExternalBindSources: true`. Allowed roots are canonicalized the same way, so a path that only looks inside the allowlist before symlink resolution is still rejected as outside allowed roots.
+- Bind sources outside the workspace/agent-workspace allowlisted roots are blocked by default. Widen the allowlist with `agents.defaults.sandbox.docker.allowedBindSources` (named roots, everything else still blocked), or skip the check entirely with `agents.defaults.sandbox.docker.dangerouslyAllowExternalBindSources: true`. Allowed roots are canonicalized the same way, so a path that only looks inside the allowlist before symlink resolution is still rejected as outside allowed roots.
 - Sensitive mounts (secrets, SSH keys, service credentials) should be `:ro` unless absolutely required.
 - Combine with `workspaceAccess: "ro"` if you only need read access to the workspace; bind modes stay independent.
 - See [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) for how binds interact with tool policy and elevated exec.

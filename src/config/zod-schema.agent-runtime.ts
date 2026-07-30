@@ -57,6 +57,35 @@ function validateSandboxBindEntries(
   }
 }
 
+function validateSandboxAllowedBindSources(
+  roots: readonly string[] | undefined,
+  ctx: z.RefinementCtx,
+): void {
+  if (!roots) {
+    return;
+  }
+  for (let i = 0; i < roots.length; i += 1) {
+    const root = normalizeOptionalString(roots[i]) ?? "";
+    if (!root) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["allowedBindSources", i],
+        message: "Sandbox security: allowed bind source must be a non-empty string.",
+      });
+      continue;
+    }
+    if (!isSandboxHostPathAbsolute(root)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["allowedBindSources", i],
+        message:
+          `Sandbox security: allowed bind source "${root}" is not absolute. ` +
+          "Only absolute POSIX or Windows drive-letter paths can widen the bind allowlist.",
+      });
+    }
+  }
+}
+
 const AgentEntryEmbeddedAgentConfigSchema = z
   .object({
     executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
@@ -187,6 +216,7 @@ const SandboxDockerSchema = z
     dns: z.array(z.string()).optional(),
     extraHosts: z.array(z.string()).optional(),
     binds: z.array(z.string()).optional(),
+    allowedBindSources: z.array(z.string()).optional(),
     dangerouslyAllowReservedContainerTargets: z.boolean().optional(),
     dangerouslyAllowExternalBindSources: z.boolean().optional(),
     dangerouslyAllowContainerNamespaceJoin: z.boolean().optional(),
@@ -194,6 +224,7 @@ const SandboxDockerSchema = z
   .strict()
   .superRefine((data, ctx) => {
     validateSandboxBindEntries(data.binds, ctx);
+    validateSandboxAllowedBindSources(data.allowedBindSources, ctx);
     const blockedNetworkReason = getBlockedNetworkModeReason({
       network: data.network,
       allowContainerNamespaceJoin: data.dangerouslyAllowContainerNamespaceJoin === true,
