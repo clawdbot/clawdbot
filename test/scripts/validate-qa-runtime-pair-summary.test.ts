@@ -9,7 +9,7 @@ type CellStatus = "pass" | "fail" | "skip";
 
 type RuntimeCell = {
   runtime: "openclaw" | "codex";
-  status: CellStatus;
+  status?: CellStatus;
   details?: string;
   runtimeErrorClass?: string;
   toolCalls: Array<{ errorClass?: string }>;
@@ -146,6 +146,19 @@ describe("frozen QA runtime-pair summary validation", () => {
       passed: 1,
       failed: 0,
       skipped: 2,
+    });
+  });
+
+  it("accepts statusless passing cells from an older frozen candidate", () => {
+    const legacyScenario = scenario({ name: "legacy passing", status: "pass" });
+    delete legacyScenario.runtimeParity.cells.openclaw.status;
+    delete legacyScenario.runtimeParity.cells.codex.status;
+
+    expect(validateQaRuntimePairSummary(summary([legacyScenario]))).toEqual({
+      total: 1,
+      passed: 1,
+      failed: 0,
+      skipped: 0,
     });
   });
 

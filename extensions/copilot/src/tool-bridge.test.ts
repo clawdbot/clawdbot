@@ -125,7 +125,7 @@ describe("createCopilotToolBridge", () => {
       sessionId: "session-1",
     });
 
-    expect(result).toEqual({ sdkTools: [], sourceTools: [] });
+    expect(result).toEqual({ codeModeEngaged: false, sdkTools: [], sourceTools: [] });
     expect(createOpenClawCodingTools).toHaveBeenCalledTimes(0);
   });
 
@@ -353,8 +353,26 @@ describe("createCopilotToolBridge", () => {
         toolSearchCatalogExecutor: expect.any(Function),
       }),
     );
+    expect(result.codeModeEngaged).toBe(true);
     expect(result.sourceTools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
     expect(result.sdkTools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
+  });
+
+  it("reports code mode as disengaged when the config leaves it off", async () => {
+    const result = await createCopilotToolBridge({
+      agentId: "agent-1",
+      attemptParams: {
+        config: { tools: { codeMode: false } },
+        runId: "run-no-code-mode",
+        sessionKey: "agent:main:main",
+      } as never,
+      createOpenClawCodingTools: vi.fn(async () => [makeTool({ name: "read" })]),
+      modelId: "gpt-4o",
+      modelProvider: "github-copilot",
+      sessionId: "session-1",
+    });
+
+    expect(result.codeModeEngaged).toBe(false);
   });
 
   it("keeps code-mode controls visible when a narrow allowlist is active", async () => {
@@ -967,7 +985,7 @@ describe("createCopilotToolBridge", () => {
         modelProvider: "github-copilot",
         sessionId: "session-1",
       });
-      expect(result).toEqual({ sdkTools: [], sourceTools: [] });
+      expect(result).toEqual({ codeModeEngaged: false, sdkTools: [], sourceTools: [] });
       expect(createOpenClawCodingTools).toHaveBeenCalledTimes(0);
     });
 
@@ -981,7 +999,7 @@ describe("createCopilotToolBridge", () => {
         modelProvider: "github-copilot",
         sessionId: "session-1",
       });
-      expect(result).toEqual({ sdkTools: [], sourceTools: [] });
+      expect(result).toEqual({ codeModeEngaged: false, sdkTools: [], sourceTools: [] });
       expect(createOpenClawCodingTools).toHaveBeenCalledTimes(0);
     });
 
@@ -995,7 +1013,7 @@ describe("createCopilotToolBridge", () => {
         modelProvider: "github-copilot",
         sessionId: "session-1",
       });
-      expect(result).toEqual({ sdkTools: [], sourceTools: [] });
+      expect(result).toEqual({ codeModeEngaged: false, sdkTools: [], sourceTools: [] });
       expect(createOpenClawCodingTools).toHaveBeenCalledTimes(0);
     });
 

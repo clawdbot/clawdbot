@@ -348,15 +348,15 @@ By default, OpenClaw validates `X-Twilio-Signature` using `publicWebhookUrl` and
 The webhook route also enforces, independent of signature validation:
 
 - `POST` only.
-- Failed-request budget of 300 requests per minute per SMS account, webhook route, and resolved client address. All requests count toward this budget, but HTTP 429 is applied only after a request fails body parsing, Twilio validation, or AccountSid matching.
-- Dispatchable callback rate limit of 30 accepted callbacks per minute per SMS account, webhook route, and resolved client address after those checks pass (HTTP 429 above that). If signature validation is disabled, this 30/min limit is the unauthenticated dispatch cap.
-- Client addresses are resolved through the shared Gateway trusted-proxy rules. If `gateway.trustedProxies` contains the reverse proxy that forwards Twilio callbacks, OpenClaw keys these limits from the forwarded client address; otherwise it falls back to the direct socket address.
-- The payload `AccountSid` must match the configured `accountSid` (HTTP 403 otherwise).
-- Replayed `MessageSid` values are deduplicated for 10 minutes.
-- Each SMS account's replay cache retains up to 10,000 live message SIDs. When every slot is live, new webhooks for that account fail closed with HTTP 429 and a `Retry-After` header until the oldest slot expires.
+- Failed-request budget of 300 requests per minute per SMS account, webhook route, and resolved client address. All requests count toward this budget, but HTTP 429 is applied only after body parsing or Twilio signature validation fails.
+- Dispatchable callback rate limit of 30 accepted callbacks per minute per SMS account, webhook route, and validated sender after body parsing and signature validation pass (HTTP 429 above that). The sender key is the canonicalized, signature-covered `From` value, so equivalent SMS/RCS address forms share one budget, one flooding sender exhausts only its own budget, and callbacks from other senders behind Twilio's shared egress addresses remain dispatchable. Invalid or missing sender values share a separate empty-sender budget.
+- Aggregate validated-callback ceiling of 300 accepted callbacks per minute per SMS account and webhook route. This bounds durable-ingress pressure from many distinct signed senders without recreating shared-egress cross-throttling. If signature validation is disabled, nothing authenticates `From`; the stricter 30/min resolved-client-address dispatch cap applies instead of the validated sender and aggregate policy.
+- Client addresses are resolved through the shared Gateway trusted-proxy rules. If `gateway.trustedProxies` contains the reverse proxy that forwards Twilio callbacks, OpenClaw keys the address-based limits from the forwarded client address; otherwise it falls back to the direct socket address.
+- The payload `AccountSid` must match the configured `accountSid`. The raw callback is first committed to the durable ingress queue and acknowledged; a mismatch is then marked as a permanent invalid-payload failure during drain and is never dispatched.
+- Replayed `MessageSid` values are deduplicated by the durable ingress queue. Completed-message tombstones are retained for 24 hours (up to 20,000 entries per account); permanent-failure tombstones are retained for 30 days (up to 1,000 entries).
 - Request bodies over 32 KB are rejected.
 
-Twilio does not retry HTTP 429 by default or document support for `Retry-After`. The `#rp=4xx` and `#rp=all` connection overrides opt into 4xx retries, but Twilio caps the complete retry transaction at 15 seconds, so retries can still finish before a replay-cache slot expires. Configure a fallback URL when another handler must receive failed deliveries; treat a 429 as a fail-closed rejection, not reliable backpressure.
+Twilio does not retry HTTP 429 by default. The `#rp=4xx` and `#rp=all` connection overrides opt into 4xx retries, but Twilio caps the complete retry transaction at 15 seconds. Configure a fallback URL when another handler must receive failed deliveries; treat a 429 as a fail-closed rejection, not reliable backpressure.
 
 For local tunnel testing only, you can set:
 

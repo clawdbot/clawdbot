@@ -28,6 +28,19 @@ const ClickClackAccountConfigSchema = z
     reconnectMs: z.number().int().min(100).max(60_000).optional(),
     agentActivity: z.boolean().optional(),
     commandMenu: z.boolean().optional(),
+    requireMention: z.boolean().optional(),
+    mentionPatterns: z.array(z.string()).optional(),
+    groups: z
+      .record(
+        z.string(),
+        z
+          .object({
+            requireMention: z.boolean().optional(),
+            mentionPatterns: z.array(z.string()).optional(),
+          })
+          .strict(),
+      )
+      .optional(),
     discussions: z
       .object({
         enabled: z.boolean().optional(),

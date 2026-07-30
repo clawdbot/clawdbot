@@ -5,6 +5,7 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import {
@@ -63,7 +64,10 @@ function pickPluginMetadataEnv(env: NodeJS.ProcessEnv): Record<string, string> {
 }
 
 export function resolvePluginMetadataEnvFingerprint(env: NodeJS.ProcessEnv): string {
-  return hashJson(pickPluginMetadataEnv(env));
+  return hashJson({
+    env: pickPluginMetadataEnv(env),
+    installRoots: resolveActivePluginInstallRoots(env),
+  });
 }
 
 function throwReadonlyPluginMetadataMutation(): never {
@@ -105,19 +109,6 @@ function freezeSnapshotValue<T>(value: T, seen = new WeakSet<object>()): T {
     freezeSnapshotValue(entry, seen);
   }
   return Object.freeze(value);
-}
-
-function freezePluginMetadataSnapshot(snapshot: PluginMetadataSnapshot): PluginMetadataSnapshot {
-  return freezeSnapshotValue(snapshot);
-}
-
-function resolvePluginMetadataControlPlaneFingerprint(
-  params: Pick<LoadPluginMetadataSnapshotParams, "config" | "env" | "workspaceDir"> & {
-    index?: InstalledPluginIndex;
-    policyHash?: string;
-  },
-): string {
-  return resolvePluginControlPlaneFingerprint(params);
 }
 
 function indexesMatch(
@@ -189,7 +180,7 @@ export function isPluginMetadataSnapshotCompatible(params: {
     params.snapshot.policyHash === resolveInstalledPluginIndexPolicyHash(params.config) &&
     (!params.snapshot.configFingerprint ||
       params.snapshot.configFingerprint ===
-        resolvePluginMetadataControlPlaneFingerprint({
+        resolvePluginControlPlaneFingerprint({
           config: params.config,
           env,
           index: params.index ?? params.snapshot.index,
@@ -317,7 +308,7 @@ export function loadPluginMetadataSnapshot(
   );
   return measureDiagnosticsTimelineSpanSync(
     "plugins.metadata.freeze",
-    () => freezePluginMetadataSnapshot(snapshot),
+    () => freezeSnapshotValue(snapshot),
     {
       phase: activeTimelineSpan?.phase ?? "startup",
       config: params.config,
@@ -411,7 +402,7 @@ function loadPluginMetadataSnapshotImpl(
   return {
     policyHash: index.policyHash,
     registrySource: registryResult.source,
-    configFingerprint: resolvePluginMetadataControlPlaneFingerprint({
+    configFingerprint: resolvePluginControlPlaneFingerprint({
       config: params.config,
       env: params.env,
       index,

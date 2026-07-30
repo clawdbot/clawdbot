@@ -507,6 +507,34 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("still aborts status when its own memory SecretRef cannot be resolved", async () => {
+    getRuntimeConfig.mockReturnValue({
+      memory: {
+        search: {
+          remote: {
+            apiKey: { source: "env", provider: "default", id: "MISSING_MEMORY_API_KEY" },
+          },
+        },
+      },
+    });
+    resolveCommandSecretRefsViaGateway.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "Secret owner capability:memory-provider:main is configured but unavailable: code=SECRET_SURFACE_UNAVAILABLE",
+        ),
+        {
+          code: "SECRET_SURFACE_UNAVAILABLE",
+          ownerKind: "capability",
+          ownerId: "memory-provider:main",
+          paths: ["memory.search.remote.apiKey"],
+        },
+      ),
+    );
+
+    await expect(runMemoryCli(["status", "--deep"])).rejects.toThrow("SECRET_SURFACE_UNAVAILABLE");
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+  });
+
   it("prints index identity mismatch reasons", async () => {
     const close = vi.fn(async () => {});
     mockManager({
@@ -603,12 +631,51 @@ describe("memory cli", () => {
     const secretRefsCall = firstMockCallArg(
       resolveCommandSecretRefsViaGateway,
       "resolve command secret refs",
-    ) as { config?: unknown; commandName?: unknown; targetIds?: unknown };
+    ) as { config?: unknown; commandName?: unknown; targetIds?: unknown; mode?: unknown };
     expect(secretRefsCall.config).toBe(config);
     expect(secretRefsCall.commandName).toBe("memory status");
     expect(secretRefsCall.targetIds).toStrictEqual(
       new Set(["memory.search.remote.apiKey", "agents.entries.*.memory.search.remote.apiKey"]),
     );
+    expect(secretRefsCall.mode).toBe("read_only_status");
+  });
+
+  it("keeps status available when a memory SecretRef owner is degraded", async () => {
+    const close = vi.fn(async () => {});
+    getRuntimeConfig.mockReturnValue({
+      memory: {
+        search: {
+          remote: {
+            apiKey: { source: "env", provider: "default", id: "HEALTHY_MEMORY_API_KEY" },
+          },
+        },
+      },
+    });
+    resolveCommandSecretRefsViaGateway.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "Secret owner agent:main:openai:manual is configured but unavailable: code=SECRET_SURFACE_UNAVAILABLE",
+        ),
+        { code: "SECRET_SURFACE_UNAVAILABLE" },
+      ),
+    );
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      probeEmbeddingAvailability: vi.fn(async () => ({
+        ok: false,
+        error: "embedding provider unavailable",
+      })),
+      status: () => makeMemoryStatus({ workspaceDir: undefined }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status", "--deep"]);
+
+    expect(loggedOutput(log)).toContain("agent:main:openai:manual");
+    expect(loggedOutput(log)).toContain("healthy memory surfaces remain visible");
+    expect(loggedOutput(log)).toContain("Embeddings: unavailable");
+    expect(close).toHaveBeenCalled();
   });
 
   it("logs gateway secret diagnostics for non-json status output", async () => {

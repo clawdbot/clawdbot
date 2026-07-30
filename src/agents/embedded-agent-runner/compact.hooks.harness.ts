@@ -1007,6 +1007,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../date-time.js", () => ({
+    formatDateStamp: vi.fn(() => "2026-01-01"),
     formatUserTime: vi.fn(() => ""),
     resolveUserTimeFormat: vi.fn(() => ""),
     resolveUserTimezone: vi.fn(() => ""),

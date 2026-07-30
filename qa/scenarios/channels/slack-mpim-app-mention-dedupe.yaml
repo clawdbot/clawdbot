@@ -13,8 +13,9 @@ scenario:
     timeoutMs: 180000
     retryCount: 0
     suiteIsolation: isolated
-    config: { slackScenarioId: slack-mpim-app-mention-dedupe }
 flow:
   module: ./live-transports/slack/scenario-runtime.js
-  call: runSlackMpimAppMentionDedupeScenario
-  args: [{ expr: slackScenarioContext }]
+  call: runSlackScenario
+  args:
+    - { expr: slackScenarioContext }
+    - { moduleExport: slackQaMpimAppMentionDedupeScenario }

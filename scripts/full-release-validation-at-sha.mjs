@@ -15,6 +15,7 @@ const DEFAULT_INPUTS = {
   mode: "both",
   rerun_group: "all",
   reuse_evidence: "true",
+  fail_fast: "false",
 };
 
 function usage() {
@@ -26,8 +27,10 @@ watches the parent run, verifies all child workflow head SHAs match the trusted
 workflow lineage through the release evidence manifest, then deletes the
 temporary branch by default. Exact-target and changelog-only Release SHA
 evidence reuse stay enabled; pass -f reuse_evidence=false to force a fresh
-run. The release profile defaults to beta for alpha/beta package versions and
-stable otherwise; pass -f release_profile=full for the broad advisory sweep.`);
+run. Child workflows collect independent failures by default; pass
+-f fail_fast=true to cancel each child after its first failed job. The release
+profile defaults to beta for alpha/beta package versions and stable otherwise;
+pass -f release_profile=full for the broad advisory sweep.`);
 }
 
 function run(command, args, options = {}) {
@@ -143,6 +146,9 @@ export function parseArgs(argv) {
 
   if (!["true", "false"].includes(args.inputs.reuse_evidence)) {
     throw new Error("reuse_evidence must be true or false");
+  }
+  if (!["true", "false"].includes(args.inputs.fail_fast)) {
+    throw new Error("fail_fast must be true or false");
   }
   if (
     Object.hasOwn(args.inputs, "allow_unreleased_changelog") &&

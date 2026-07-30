@@ -69,9 +69,13 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       ...initialSessionEntry,
       sessionId: "session-after-setup",
     });
-    await expect(runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey))).rejects.toThrow(
-      `Session "${sessionKey}" changed while starting work. Retry.`,
-    );
+    await expect(
+      runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey)),
+    ).resolves.toMatchObject({
+      status: "error",
+      error: `Session "${sessionKey}" changed while starting work. Retry.`,
+      admissionDisposition: "session-conflict",
+    });
     expect(preflightCronModelProviderMock).not.toHaveBeenCalled();
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
@@ -183,9 +187,13 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     );
     loadSessionEntryMock.mockReturnValue(undefined);
 
-    await expect(runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey))).rejects.toThrow(
-      `Session "${sessionKey}" changed while starting work. Retry.`,
-    );
+    await expect(
+      runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey)),
+    ).resolves.toMatchObject({
+      status: "error",
+      error: `Session "${sessionKey}" changed while starting work. Retry.`,
+      admissionDisposition: "session-conflict",
+    });
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 

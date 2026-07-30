@@ -25,6 +25,8 @@ import {
 export type MemoryEngineOption = {
   id: string;
   label: string;
+  /** False when config names an engine absent from the current plugin catalog. */
+  available: boolean;
 };
 
 /**
@@ -119,7 +121,12 @@ function renderEngineSection(props: MemoryViewProps) {
     );
   }
   const options = [
-    ...props.engineOptions.map((option) => ({ value: option.id, label: option.label })),
+    ...props.engineOptions.map((option) => ({
+      value: option.id,
+      label: option.available
+        ? option.label
+        : `${option.label} (${t("memoryPage.engine.unavailable")})`,
+    })),
     { value: MEMORY_ENGINE_OFF, label: t("memoryPage.engine.off") },
   ];
   return renderSettingsSection(

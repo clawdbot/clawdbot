@@ -73,6 +73,7 @@ export default definePluginEntry({
     api.registerRealtimeVoiceProvider(
       buildOpenAIRealtimeVoiceProvider({
         quicksilverBrowserSessionBroker: quicksilverSession?.broker,
+        logger: api.logger,
       }),
     );
     api.registerSpeechProvider(buildOpenAISpeechProvider());

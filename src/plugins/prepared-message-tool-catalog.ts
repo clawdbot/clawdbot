@@ -22,12 +22,6 @@ export type PreparedMessageToolCatalog = Readonly<{
 const catalogsByRegistry = new WeakMap<PluginRegistry, Map<number, PreparedMessageToolCatalog>>();
 const latestCatalogByRegistry = new WeakMap<PluginRegistry, PreparedMessageToolCatalog>();
 
-export const EMPTY_PREPARED_MESSAGE_TOOL_CATALOG: PreparedMessageToolCatalog = Object.freeze({
-  version: 0,
-  channels: Object.freeze([]),
-  getChannel: () => undefined,
-});
-
 function selectedRegistry(
   snapshot: ActivePluginChannelRegistrySnapshot,
 ): PluginRegistry | undefined {

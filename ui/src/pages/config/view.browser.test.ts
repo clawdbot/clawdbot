@@ -1376,6 +1376,31 @@ describe("config view", () => {
     expect(onOpenCustomThemeImport).toHaveBeenCalledTimes(1);
   });
 
+  it("exposes theme and text-size selection to assistive technology", () => {
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      theme: "knot",
+      textScale: 110,
+    });
+
+    expect(findButtonByText(container, "Knot").getAttribute("aria-pressed")).toBe("true");
+    expect(findButtonByText(container, "Claw").getAttribute("aria-pressed")).toBe("false");
+    const textScaleButtons = [
+      ...container.querySelectorAll<HTMLButtonElement>(".settings-text-scale__btn"),
+    ];
+    expect(
+      textScaleButtons
+        .find((button) => button.textContent?.includes("110%"))
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      textScaleButtons
+        .find((button) => button.textContent?.includes("100%"))
+        ?.getAttribute("aria-pressed"),
+    ).toBe("false");
+  });
+
   it("shows the tweakcn importer once the custom slot is opened", () => {
     const { container } = renderConfigView({
       activeSection: "__appearance__",

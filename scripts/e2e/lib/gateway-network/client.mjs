@@ -4,6 +4,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { pathToFileURL } from "node:url";
 import { WebSocket } from "ws";
+import { isRecord } from "../../../lib/record-shared.mjs";
 import { sleep as delay } from "../../../lib/sleep.mjs";
 import { waitForWebSocketOpen } from "../websocket-open.mjs";
 import { readGatewayNetworkClientConnectTimeoutMs } from "./limits.mjs";
@@ -22,10 +23,6 @@ async function openSocket(url, timeoutMs = 10_000) {
   const ws = new WebSocket(url);
   await waitForWebSocketOpen(ws, timeoutMs, "ws open timeout");
   return ws;
-}
-
-function isRecord(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function hasGatewayHealthSummaryPayload(response) {

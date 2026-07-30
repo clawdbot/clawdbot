@@ -106,6 +106,7 @@ type QaUnifiedPartitionResult = {
 type QaUnifiedPartitionTask = {
   exclusiveKey?: string;
   run: () => Promise<QaUnifiedPartitionResult>;
+  scenarios: readonly QaSeedScenarioWithSource[];
   weight: number;
 };
 
@@ -741,11 +742,17 @@ async function runUnifiedQaSuite(params: {
       );
       // Isolated adapters may use the caller's full suite budget; every partition
       // still has weight one in the global scheduler below.
-      const sharedFlowPartitions = partitionSharedFlowScenarios(
-        sharedFlowScenarios,
-        usesContributedChannelDriver && !channelGroup.isolatesAdapterInstances ? 1 : concurrency,
-        channelGroup.isolatesAdapterInstances ? concurrency : MAX_SHARED_FLOW_PARTITIONS,
-      );
+      // A rejected worker cannot return its completed prefix or active scenario.
+      // Single-scenario fail-fast tasks keep retries and failure evidence attributable.
+      const sharedFlowPartitions = failFast
+        ? sharedFlowScenarios.map((scenario) => [scenario])
+        : partitionSharedFlowScenarios(
+            sharedFlowScenarios,
+            usesContributedChannelDriver && !channelGroup.isolatesAdapterInstances
+              ? 1
+              : concurrency,
+            channelGroup.isolatesAdapterInstances ? concurrency : MAX_SHARED_FLOW_PARTITIONS,
+          );
       // Channel-driver flow workers each launch a gateway plus transport harness.
       // Serializing their isolated workers keeps state-mutating smoke checks from
       // flaking under concurrent child gateways while preserving non-driver speed.
@@ -845,6 +852,7 @@ async function runUnifiedQaSuite(params: {
           exclusiveKey: channelDriverFlowRequiresExclusiveWorkers
             ? `channel:${channelGroup.channel ?? channelGroup.channelId ?? "default"}`
             : undefined,
+          scenarios: partition.scenarios,
           weight: partition.concurrency,
           run: async () => {
             const unavailableDetails = channelGroup.channelId
@@ -943,6 +951,7 @@ async function runUnifiedQaSuite(params: {
     scenariosByKind: ReadonlyMap<QaTestFileExecutionKind, QaTestFileScenario[]>,
   ) =>
     ({
+      scenarios: [...scenariosByKind.values()].flat(),
       weight: 1,
       run: async () => {
         const testFileEvidenceSummaries: QaEvidenceSummaryJson[] = [];
@@ -1009,11 +1018,27 @@ async function runUnifiedQaSuite(params: {
     [...params.plan.testFileScenariosByKind].filter(([kind]) => kind !== "script"),
   );
   if (concurrentTestFileScenariosByKind.size > 0) {
-    testFilePartitionTasks.push(createTestFilePartitionTask(concurrentTestFileScenariosByKind));
+    if (failFast) {
+      for (const [kind, scenarios] of concurrentTestFileScenariosByKind) {
+        for (const scenario of scenarios) {
+          testFilePartitionTasks.push(createTestFilePartitionTask(new Map([[kind, [scenario]]])));
+        }
+      }
+    } else {
+      testFilePartitionTasks.push(createTestFilePartitionTask(concurrentTestFileScenariosByKind));
+    }
   }
   const scriptScenarios = params.plan.testFileScenariosByKind.get("script");
   if (scriptScenarios?.length) {
-    scriptPartitionTasks.push(createTestFilePartitionTask(new Map([["script", scriptScenarios]])));
+    if (failFast) {
+      for (const scenario of scriptScenarios) {
+        scriptPartitionTasks.push(createTestFilePartitionTask(new Map([["script", [scenario]]])));
+      }
+    } else {
+      scriptPartitionTasks.push(
+        createTestFilePartitionTask(new Map([["script", scriptScenarios]])),
+      );
+    }
   }
   const concurrentPartitionTasks = [
     ...sharedFlowPartitionTasks,
@@ -1103,12 +1128,56 @@ async function runUnifiedQaSuite(params: {
     );
     return partition.startedScenarioIds.some((scenarioId) => !returnedScenarioIds.has(scenarioId));
   };
+  const capturePartitionFailure = (
+    task: QaUnifiedPartitionTask,
+    error: unknown,
+  ): QaUnifiedPartitionResult => {
+    const scenarios = task.scenarios;
+    const details = `suite partition failed: ${formatErrorMessage(error)}`;
+    const scenarioResults = scenarios.map((scenario) => ({
+      scenarioId: scenario.id,
+      result: {
+        name: scenario.title,
+        status: "fail" as const,
+        details,
+        steps: [{ name: "suite partition", status: "fail" as const, details }],
+      },
+    }));
+    return {
+      evidenceSummaries: [
+        buildQaSuiteEvidenceSummary({
+          artifactPaths: [],
+          evidenceMode: params.runParams?.evidenceMode,
+          channelDriver: params.runParams?.channelDriver,
+          channelId: transportId,
+          env: process.env,
+          generatedAt: new Date().toISOString(),
+          primaryModel,
+          providerMode,
+          repoRoot,
+          scenarioDefinitions: scenarios,
+          scenarioResults: scenarioResults.map(({ result }) => result),
+        }),
+      ],
+      scenarioResults,
+      startedScenarioIds: scenarios.map((scenario) => scenario.id),
+      submittedScenarioIds: task.scenarios.map((scenario) => scenario.id),
+    };
+  };
   const runPartitionTasks = async (tasks: readonly QaUnifiedPartitionTask[], maxWeight: number) => {
     // Retry inside the scheduled task so its weight and exclusive key stay held;
     // one failed channel must not replay partitions that already completed.
     const retryingTasks = tasks.map((task) => ({
       ...task,
-      run: async () => await runQaSuiteWithInfraRetry(task.run),
+      run: async () => {
+        try {
+          return await runQaSuiteWithInfraRetry(task.run);
+        } catch (error) {
+          // Failed partitions still own durable failure evidence; rejecting here would
+          // discard completed siblings and prevent the unified artifacts from existing.
+          return capturePartitionFailure(task, error);
+        }
+      },
     }));
     return failFast
       ? await mapQaSuiteWithConcurrency(retryingTasks, 1, runFailFastPartition, {

@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -68,11 +69,17 @@ function mockOpenPathError(error: Error) {
 let storedConfig: OpenClawConfig;
 let storedHash: string;
 let nextHash: number;
+let modelNormalizationPluginMetadata: PluginMetadataSnapshot | undefined;
 
 function currentWriteSnapshot() {
   const result = createConfigWriteSnapshot(storedConfig);
   result.snapshot.hash = storedHash;
   result.snapshot.raw = JSON.stringify(storedConfig);
+  if (modelNormalizationPluginMetadata) {
+    result.writeOptions = {
+      basePluginMetadataSnapshot: modelNormalizationPluginMetadata,
+    } as never;
+  }
   return result;
 }
 
@@ -100,6 +107,7 @@ beforeEach(() => {
   storedConfig = {};
   storedHash = "base-hash";
   nextHash = 1;
+  modelNormalizationPluginMetadata = undefined;
   configWriteMocks.readConfigFileSnapshotForWrite.mockImplementation(async () =>
     currentWriteSnapshot(),
   );
@@ -518,5 +526,191 @@ describe("config.patch ID-keyed arrays", () => {
       }),
     );
     expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce();
+  });
+});
+
+describe("config.patch model input normalization", () => {
+  it("uses write-snapshot policies before merging manifest-backed model IDs", async () => {
+    modelNormalizationPluginMetadata = {
+      plugins: [
+        {
+          modelIdNormalization: {
+            providers: {
+              myproxy: { aliases: { latest: "modern-model" }, prefixWhenBare: "vendor" },
+            },
+          },
+        },
+      ],
+    } as unknown as PluginMetadataSnapshot;
+    storedConfig = {
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            models: [
+              {
+                id: "vendor/modern-model",
+                name: "Before",
+                contextWindow: 200_000,
+                maxTokens: 8192,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                reasoning: false,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const harness = await invokeConfigPatch({
+      raw: {
+        models: {
+          providers: {
+            myproxy: { models: [{ id: "latest", name: "After" }] },
+          },
+        },
+      },
+      baseHash: storedHash,
+    });
+
+    expect(harness.respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
+    expect(storedConfig.models?.providers?.myproxy?.models).toHaveLength(1);
+    expect(storedConfig.models?.providers?.myproxy?.models?.[0]).toMatchObject({
+      id: "vendor/modern-model",
+      name: "After",
+    });
+  });
+
+  it("normalizes model identities before map and ID-keyed array merges", async () => {
+    const canonical = "google/gemini-3.1-pro-preview";
+    storedConfig = {
+      agents: { defaults: { models: { [canonical]: { alias: "Gemini" } } } },
+      models: {
+        providers: {
+          google: {
+            api: "google-generative-ai",
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            models: [
+              {
+                id: "gemini-3.1-pro-preview",
+                name: "Gemini before",
+                contextWindow: 1_048_576,
+                maxTokens: 65_536,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                reasoning: true,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const harness = await invokeConfigPatch({
+      raw: {
+        agents: {
+          defaults: { models: { "google/gemini-3-pro-preview": null } },
+        },
+        models: {
+          providers: {
+            google: {
+              models: [{ id: "gemini-3-pro-preview", name: "Gemini after" }],
+            },
+          },
+        },
+      },
+      baseHash: storedHash,
+    });
+
+    expect(harness.respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
+    expect(storedConfig.agents?.defaults?.models).toEqual({});
+    expect(storedConfig.models?.providers?.google?.models).toHaveLength(1);
+    expect(storedConfig.models?.providers?.google?.models?.[0]).toMatchObject({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini after",
+    });
+  });
+
+  it("canonicalizes newly submitted nested model refs before persistence", async () => {
+    storedConfig = { gateway: { port: 18789 } };
+    const retired = "google/gemini-3-pro-preview";
+    const canonical = "google/gemini-3.1-pro-preview";
+
+    const harness = await invokeConfigPatch({
+      raw: {
+        agents: {
+          defaults: {
+            model: { primary: retired, fallbacks: [retired] },
+            utilityModel: retired,
+            imageModel: retired,
+            voiceModel: retired,
+            pdfModel: retired,
+            mediaModels: {
+              image: retired,
+              video: { primary: retired, fallbacks: [retired] },
+              music: retired,
+            },
+            heartbeat: { model: retired },
+            subagents: { model: retired },
+            compaction: { model: retired, memoryFlush: { model: retired } },
+            models: { [retired]: { alias: "Gemini" } },
+          },
+          entries: {
+            ops: {
+              model: retired,
+              utilityModel: retired,
+              subagents: { model: retired },
+              models: { [retired]: { alias: "Ops Gemini" } },
+            },
+          },
+        },
+        models: {
+          providers: {
+            google: {
+              api: "google-generative-ai",
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              models: [
+                {
+                  id: "gemini-3-pro-preview",
+                  name: "Gemini 3 Pro",
+                  contextWindow: 1_048_576,
+                  maxTokens: 65_536,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  reasoning: true,
+                },
+              ],
+            },
+          },
+        },
+      },
+      baseHash: storedHash,
+    });
+
+    expect(harness.respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
+    expect(storedConfig.agents?.defaults).toMatchObject({
+      model: { primary: canonical, fallbacks: [canonical] },
+      utilityModel: canonical,
+      imageModel: canonical,
+      voiceModel: canonical,
+      pdfModel: canonical,
+      mediaModels: {
+        image: canonical,
+        video: { primary: canonical, fallbacks: [canonical] },
+        music: canonical,
+      },
+      heartbeat: { model: canonical },
+      subagents: { model: canonical },
+      compaction: { model: canonical, memoryFlush: { model: canonical } },
+      models: { [canonical]: { alias: "Gemini" } },
+    });
+    expect(storedConfig.agents?.entries?.ops).toMatchObject({
+      model: canonical,
+      utilityModel: canonical,
+      subagents: { model: canonical },
+      models: { [canonical]: { alias: "Ops Gemini" } },
+    });
+    expect(storedConfig.models?.providers?.google?.models?.[0]?.id).toBe("gemini-3.1-pro-preview");
   });
 });

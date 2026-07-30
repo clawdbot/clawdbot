@@ -50,9 +50,9 @@ const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
 const WINDOWS_SQLITE_SCOPE_RE = /^src\/(?:state\/|.*sqlite.*\.ts$)/;
 const WINDOWS_SCOPE_RE =
-  /^(src\/config\/sessions\/(?:session-accessor\.sqlite-archive|store\.session-lifecycle-mutation\.test)\.ts$|src\/process\/|src\/infra\/(?:ssh-client(?:\.windows\.test)?|update-managed-service-handoff(?:\.test)?|windows-install-roots)\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|src\/test-utils\/openclaw-test-state(?:\.test)?\.ts$|scripts\/(?:install\.ps1|openclaw-cross-os-release-checks\.ts|github\/run-openclaw-cross-os-release-checks\.sh|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|js)|lib\/(?:format-generated-module\.mjs|cross-os-release-checks\/[^/]+\.ts))$|test\/scripts\/(?:format-generated-module|install-ps1|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/(?:ci|openclaw-cross-os-release-checks-reusable)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
+  /^(extensions\/mxc\/|src\/agents\/(?:bash-tools\.exec-script-(?:preflight|target)|bash-tools\.exec\.script-preflight\.test)\.ts$|src\/config\/sessions\/(?:session-accessor\.sqlite-archive|store\.session-lifecycle-mutation\.test)\.ts$|src\/process\/|src\/infra\/(?:exec-allowlist-pattern(?:\.test)?|ssh-client(?:\.windows\.test)?|update-managed-service-handoff(?:\.test)?|windows-install-roots)\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|src\/test-utils\/openclaw-test-state(?:\.test)?\.ts$|scripts\/(?:install\.ps1|openclaw-cross-os-release-checks\.ts|github\/run-openclaw-cross-os-release-checks\.sh|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|js)|lib\/(?:format-generated-module\.mjs|cross-os-release-checks\/[^/]+\.ts))$|test\/scripts\/(?:format-generated-module|install-ps1|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/(?:ci|openclaw-cross-os-release-checks-reusable)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
 const WINDOWS_TEST_SCOPE_RE =
-  /^(src\/config\/sessions\/store\.session-lifecycle-mutation\.test\.ts$|src\/process\/(?:exec\.windows|windows-command)\.test\.ts$|src\/infra\/(?:ssh-client\.windows|update-managed-service-handoff|windows-install-roots)\.test\.ts$|src\/shared\/runtime-import\.test\.ts$|src\/state\/openclaw-database-paths\.windows\.test\.ts$|src\/test-utils\/openclaw-test-state\.test\.ts$|test\/scripts\/(?:format-generated-module|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$)/;
+  /^(extensions\/mxc\/test\/(?:mxc-backend|sandbox-policy-loader)\.test\.ts$|src\/agents\/bash-tools\.exec\.script-preflight\.test\.ts$|src\/config\/sessions\/store\.session-lifecycle-mutation\.test\.ts$|src\/process\/(?:exec\.windows|windows-command)\.test\.ts$|src\/infra\/(?:exec-allowlist-pattern|ssh-client\.windows|update-managed-service-handoff|windows-install-roots)\.test\.ts$|src\/shared\/runtime-import\.test\.ts$|src\/state\/openclaw-database-paths\.windows\.test\.ts$|src\/test-utils\/openclaw-test-state\.test\.ts$|test\/scripts\/(?:format-generated-module|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$)/;
 const WINDOWS_DAEMON_SCOPE_RE =
   /^src\/daemon\/(?:schtasks(?:[-.][^/]+)?|runtime-hints\.windows-paths(?:\.test)?|test-helpers\/schtasks-(?:base-mocks|fixtures))\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
@@ -64,8 +64,8 @@ const RELEASE_BRANCH_RE = /^release\/\d{4}\.\d+\.\d+$/;
 
 export class ControlUiGeneratedArtifactsMixedError extends Error {}
 export class NativeGeneratedArtifactsMixedError extends Error {}
-const CONTROL_UI_TEST_SCOPE_RE =
-  /^(ui\/|test\/vitest\/vitest\.(?:shared|ui-e2e)\.config\.ts$|scripts\/ensure-playwright-chromium\.mjs$)/;
+const CHROMIUM_UI_TEST_SCOPE_RE =
+  /^(ui\/|extensions\/browser\/chrome-extension\/|test\/vitest\/vitest\.(?:shared|ui-e2e)\.config\.ts$|scripts\/ensure-playwright-chromium\.mjs$|package\.json$|\.github\/workflows\/ci\.yml$)/;
 const NATIVE_I18N_SCOPE_RE =
   /^(?:apps\/\.i18n\/|apps\/android\/(?:app\/src\/(?:main|play|thirdParty)\/|wear\/src\/main\/)|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
 // Android base resources are co-owned: source PRs edit their English content,
@@ -175,7 +175,7 @@ export function detectChangedScope(changedPaths) {
       runControlUiI18n = true;
     }
 
-    if (CONTROL_UI_TEST_SCOPE_RE.test(path)) {
+    if (CHROMIUM_UI_TEST_SCOPE_RE.test(path)) {
       runUiTests = true;
     }
 

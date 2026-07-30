@@ -18,11 +18,13 @@ import { readCronStoreStatePath } from "./store/config-state.js";
 import { cronStoreKey } from "./store/key.js";
 import {
   assertCronStoreCanPersist,
+  deleteStaleCronJobFamilyRows,
   loadedCronStoreFromRows,
   loadCronRows,
   replaceCronRows,
   updateCronRuntimeRows,
 } from "./store/row-codec.js";
+import type { CronJobFamilyIdentity } from "./store/row-codec.js";
 import type {
   CronQuarantineFile,
   LoadedCronStore,
@@ -89,6 +91,19 @@ export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promis
     configJobRuntimeEntries: [],
     invalidConfigRows: [],
   };
+}
+
+/** Removes an owned declarative job family left under obsolete absolute store keys. */
+export function removeStaleCronJobFamilyRows(
+  storePath: string,
+  family: CronJobFamilyIdentity,
+): number {
+  const activeStoreKey = cronStoreKey(path.resolve(storePath));
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => deleteStaleCronJobFamilyRows(db, activeStoreKey, family),
+    {},
+    { operationLabel: "cron.job-family-adoption" },
+  );
 }
 
 function emptyLoadedCronStore(): LoadedCronStore {

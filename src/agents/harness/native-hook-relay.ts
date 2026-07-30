@@ -27,6 +27,7 @@ import {
 } from "./native-hook-relay-command.js";
 import {
   nativeHookRelayEventHasLocalWork,
+  nativeHookRelayEventToolMatcher,
   processNativeHookRelayInvocation,
 } from "./native-hook-relay-events.js";
 import {
@@ -115,6 +116,7 @@ export function registerNativeHookRelay(
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
     ...(params.requester ? { requester: params.requester } : {}),
+    ...(params.approvalContext ? { approvalContext: params.approvalContext } : {}),
     allowedEvents,
     preToolUseLoopDetection: params.preToolUseLoopDetection !== false,
     expiresAtMs,
@@ -127,6 +129,7 @@ export function registerNativeHookRelay(
   const handle: ActiveNativeHookRelayRegistrationHandle = {
     ...registration,
     shouldRelayEvent: (event) => nativeHookRelayEventHasLocalWork(registration, event),
+    toolMatcherForEvent: (event) => nativeHookRelayEventToolMatcher(registration, event),
     commandForEvent: (event, options) =>
       buildNativeHookRelayCommandWithStateDatabase({
         provider: params.provider,

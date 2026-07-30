@@ -18,7 +18,7 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { fetchCatalogIconBlobUrl } from "../plugins/icon-loader.ts";
-import type { ModelSetupPrepareOption } from "./prepare-options.ts";
+import { findPreparedModelCandidate, type ModelSetupPrepareOption } from "./prepare-options.ts";
 import { detectModelSetup, verifyModelSetup } from "./rpc.ts";
 import {
   activationTargetId,
@@ -57,6 +57,11 @@ type BoundModelResult<T> =
   | { client: GatewayBrowserClient; value: T }
   | { client: GatewayBrowserClient; error: unknown };
 
+type ActivationTaskResult = {
+  result: SystemAgentSetupActivateResult;
+  refreshError: string | null;
+};
+
 async function captureModelResult<T>(
   client: GatewayBrowserClient,
   load: () => Promise<T>,
@@ -88,6 +93,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
 
   private observedClient: GatewayBrowserClient | null = null;
   private dataClient: GatewayBrowserClient | null = null;
+  private pendingPrepareOption: ModelSetupPrepareOption | null = null;
   private readonly iconMisses = new Set<string>();
   private readonly iconRequests = new Map<
     string,
@@ -141,19 +147,37 @@ export class ModelSetupPage extends OpenClawLightDomElement {
 
   private readonly activationTask = new Task<
     readonly [GatewayBrowserClient | null, SystemAgentSetupActivateParams | null],
-    BoundModelResult<SystemAgentSetupActivateResult>
+    BoundModelResult<ActivationTaskResult>
   >(this, {
     autoRun: false,
     args: () => [null, null],
-    task: ([client, params], { signal }) =>
-      client && params
-        ? captureModelResult(client, () =>
-            client.request<SystemAgentSetupActivateResult>("openclaw.setup.activate", params, {
+    task: ([client, params], { signal }) => {
+      if (!client || !params) {
+        return initialState;
+      }
+      return captureModelResult(client, async () => {
+        const mutation = await this.context.runtimeConfig.runExternalMutation((mutationClient) => {
+          if (mutationClient !== client) {
+            throw new Error("Connection changed before model activation started.");
+          }
+          return mutationClient.request<SystemAgentSetupActivateResult>(
+            "openclaw.setup.activate",
+            params,
+            {
               timeoutMs: activationTimeoutForKind(params.kind),
               signal,
-            }),
-          )
-        : initialState,
+            },
+          );
+        });
+        if (!mutation.ok) {
+          throw new Error(mutation.error);
+        }
+        return {
+          result: mutation.value,
+          refreshError: mutation.refresh.ok ? null : mutation.refresh.error,
+        };
+      });
+    },
     onComplete: (outcome) => {
       const current = this.activationState;
       if (current.phase !== "testing" || this.context.gateway.snapshot.client !== outcome.client) {
@@ -168,11 +192,15 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         };
         return;
       }
-      this.activationState = mapActivationResult({
-        result: outcome.value,
+      const activationState = mapActivationResult({
+        result: outcome.value.result,
         targetId: current.targetId,
         fallbackError: t("modelSetup.errors.activationFailed"),
       });
+      this.activationState =
+        activationState.phase === "success" && outcome.value.refreshError
+          ? { ...activationState, warning: outcome.value.refreshError }
+          : activationState;
       if (this.activationState.phase === "success") {
         this.manualApiKey = "";
       }
@@ -484,6 +512,9 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   }
 
   private async handleWizardDone(startMethod: ModelSetupWizardStartMethod): Promise<void> {
+    const prepareOption =
+      startMethod === "openclaw.setup.prepare.start" ? this.pendingPrepareOption : null;
+    this.pendingPrepareOption = null;
     const result = await this.detect();
     if (!result) {
       this.wizard.fail(t("modelSetup.errors.requestFailed"));
@@ -499,6 +530,26 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         modelRef: result.configuredModel ?? t("modelSetup.success.configuredModel"),
       };
     }
+    if (prepareOption?.activateAfterPrepare) {
+      const candidate = findPreparedModelCandidate(result, prepareOption.id);
+      if (!candidate) {
+        this.wizard.fail(t("modelSetup.prepare.llamaCppNotReady"));
+        return;
+      }
+      this.wizard.close();
+      this.activateCandidate(candidate);
+      return;
+    }
+    this.wizard.close();
+  }
+
+  private cancelWizard(): void {
+    this.pendingPrepareOption = null;
+    void this.wizard.cancel();
+  }
+
+  private closeWizard(): void {
+    this.pendingPrepareOption = null;
     this.wizard.close();
   }
 
@@ -541,15 +592,18 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       manualApiKey: this.manualApiKey,
       manualError: this.manualError,
       moreSignInOpen: this.moreSignInOpen,
+      firstRun: this.routeData?.firstRun === true,
       iconUrls: this.iconUrls,
       onDetect: () => void this.detect(),
       onVerify: () => void this.verifyConnection(),
       onActivateCandidate: (candidate) => this.activateCandidate(candidate),
       onStartAuth: (option: AuthOption) => {
+        this.pendingPrepareOption = null;
         this.wizardMode = "auth";
         void this.wizard.start(option.id);
       },
       onStartPrepare: (option: ModelSetupPrepareOption) => {
+        this.pendingPrepareOption = option;
         this.wizardMode = "prepare";
         void this.wizard.start(option.id, "openclaw.setup.prepare.start");
       },
@@ -569,10 +623,14 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         }
         this.context.navigate("chat");
       },
+      onSuccessClose: () => {
+        this.activationState = { phase: "idle" };
+        void this.detect();
+      },
       onWizardValueChange: (value) => (this.wizardValue = value),
       onWizardAnswer: (value, includeValue) => void this.wizard.answer(value, includeValue),
-      onWizardCancel: () => void this.wizard.cancel(),
-      onWizardClose: () => this.wizard.close(),
+      onWizardCancel: () => this.cancelWizard(),
+      onWizardClose: () => this.closeWizard(),
     });
     return html`
       <section class="content-header">

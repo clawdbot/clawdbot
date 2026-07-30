@@ -216,7 +216,7 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
           : "";
     defaultRuntime.error(
       [
-        "warning: cron scheduler is disabled in the Gateway; jobs are saved but will not run automatically.",
+        "warning: the automations scheduler is disabled in the Gateway; jobs are saved but will not run automatically.",
         "Re-enable with `cron.enabled: true` (or remove `cron.enabled: false`) and restart the Gateway.",
         store ? `store: ${store}` : "",
       ]
@@ -442,7 +442,7 @@ export function printCronList(
   opts?: { deliveryPreviews?: Map<string, CronDeliveryPreview> },
 ) {
   if (jobs.length === 0) {
-    runtime.log("No cron jobs.");
+    runtime.log("No automations.");
     return;
   }
 

@@ -1079,6 +1079,11 @@ openclaw-chat-page {
   display: block;
 }
 
+openclaw-chat-audio-player,
+openclaw-chat-video-player {
+  display: block;
+}
+
 .chat-assistant-attachment-card {
   display: flex;
   align-items: center;
@@ -1264,6 +1269,39 @@ openclaw-chat-page {
   outline-offset: 4px;
 }
 
+.chat-audio-player__waveform {
+  position: relative;
+  height: 24px;
+}
+
+.chat-audio-player__waveform svg {
+  display: block;
+  width: 100%;
+  height: 24px;
+  overflow: visible;
+}
+
+.chat-audio-player__waveform rect {
+  fill: color-mix(in srgb, var(--muted) 55%, transparent);
+}
+
+.chat-audio-player__waveform rect.is-played {
+  fill: var(--accent);
+}
+
+.chat-audio-player__seek--waveform {
+  position: absolute;
+  inset: 0;
+  height: 24px;
+  opacity: 0;
+}
+
+.chat-audio-player__waveform:has(.chat-audio-player__seek:focus-visible) {
+  border-radius: 4px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .chat-audio-player__time {
   display: flex;
   justify-content: space-between;
@@ -1288,6 +1326,10 @@ openclaw-chat-page {
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--muted) 10%, var(--bg));
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+}
+
+.chat-assistant-video-frame[hidden] {
+  display: none;
 }
 
 .chat-assistant-video-frame video {
@@ -1349,6 +1391,13 @@ openclaw-chat-page {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
+}
+
+.chat-media-preparing {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
 }
 
 .chat-assistant-attachment-card__icon {

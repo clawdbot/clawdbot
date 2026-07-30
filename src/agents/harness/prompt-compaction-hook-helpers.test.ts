@@ -11,6 +11,26 @@ afterEach(() => {
 });
 
 describe("resolveAgentHarnessBeforePromptBuildResult", () => {
+  it("forwards a per-turn tool restriction to native harness adapters", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: () => ({ toolsAllow: [] }),
+        },
+      ]),
+    );
+
+    const result = await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "answer directly",
+      developerInstructions: "base instructions",
+      messages: [],
+      ctx: {},
+    });
+
+    expect(result.toolsAllow).toEqual([]);
+  });
+
   it("retains an empty prompt range without hooks", async () => {
     const result = await resolveAgentHarnessBeforePromptBuildResult({
       prompt: "",

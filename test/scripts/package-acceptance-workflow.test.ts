@@ -2587,6 +2587,7 @@ describe("package artifact reuse", () => {
     expect(releaseJob.if).toContain('contains(fromJSON(\'["all","qa","qa-live"]\')');
     expect(releaseJob.with).toMatchObject({
       expected_sha: "${{ needs.resolve_target.outputs.revision }}",
+      fail_fast: "${{ fromJSON(needs.resolve_target.outputs.fail_fast) }}",
       run_matrix: true,
     });
     for (const lane of ["mock_parity", "telegram", "discord", "whatsapp", "slack"]) {
@@ -2607,6 +2608,7 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).not.toContain("Run QA Lab live Matrix lane");
     expect(releaseWorkflow).not.toContain("pnpm openclaw qa matrix");
     expect(qaWorkflow).toContain("pnpm openclaw qa matrix");
+    expect(qaWorkflow).toContain('if [[ "$FAIL_FAST" == "true" ]]');
     expect(qaWorkflow).toContain('trusted_reason="repository-branch"');
     expect(qaWorkflow).toContain('"${selected_revision}" != "${EXPECTED_SHA}"');
     expect(qaWorkflow).toContain("EXPECTED_SHA: ${{ inputs.expected_sha }}");
@@ -2633,6 +2635,9 @@ describe("package artifact reuse", () => {
     expect(matrixJob["continue-on-error"]).toBeUndefined();
     expect(matrixJob.strategy).toBeUndefined();
     expect(workflowStep(matrixJob, "Run Matrix live lane").env).toEqual({
+      FAIL_FAST: "${{ inputs.fail_fast }}",
+      OPENAI_API_KEY: "${{ secrets.OPENAI_API_KEY }}",
+      OPENCLAW_LIVE_OPENAI_KEY: "${{ secrets.OPENAI_API_KEY }}",
       OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1",
     });
     expect(releaseTelegramWorkflow).toContain(
@@ -2745,7 +2750,7 @@ describe("package artifact reuse", () => {
     expect(laneJob.strategy?.matrix?.lane).toContain('["core"]');
     const runtimePairRun = workflowStep(laneJob, "Run runtime-pair lane").run;
     expect(runtimePairRun).toContain('--runtime-pair-lane "$RUNTIME_PAIR_LANE"');
-    expect(runtimePairRun).toContain("--runtime-parity-tier standard,live-only");
+    expect(runtimePairRun).toContain("--runtime-parity-tier standard");
     expect(runtimePairRun).toContain("--runtime-parity-tier soak");
     expect(runtimePairRun).toContain("Frozen candidate cannot select runtime-pair lane");
     expect(workflowStep(laneJob, "Run runtime-pair lane")["continue-on-error"]).toBe(true);
@@ -3058,6 +3063,7 @@ describe("package artifact reuse", () => {
     expect(npmTelegramJob.if).not.toContain("inputs.rerun_group == 'all'");
     expect(dispatchStep.env).toEqual({
       CHILD_WORKFLOW_REF: "${{ github.ref_name }}",
+      FAIL_FAST: "${{ inputs.fail_fast }}",
       GH_TOKEN: "${{ github.token }}",
       PACKAGE_SPEC: "${{ inputs.npm_telegram_package_spec || inputs.release_package_spec }}",
       PARENT_WORKFLOW_SHA: "${{ github.sha }}",
@@ -4431,9 +4437,17 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       "validate_macos_release_request",
     );
     const stepNames = validateJob.steps?.map((step) => step.name) ?? [];
+    const buildControlUi = validateJob.steps?.find((step) => step.name === "Build Control UI");
 
     expect(stepNames).not.toContain("Ensure matching GitHub release exists");
     expect(macosRelease.jobs?.validate_macos_release_request).toBeDefined();
+    expect(buildControlUi?.env?.OPENCLAW_CONTROL_UI_RELEASE_BUILD).toBe("1");
+  });
+
+  it("classifies fast pretag Control UI output as a release artifact", () => {
+    const script = readFileSync("scripts/release-fast-pretag-check.sh", "utf8");
+
+    expect(script).toContain("OPENCLAW_CONTROL_UI_RELEASE_BUILD=1 pnpm ui:build");
   });
 
   it("keeps every tracked repository skill visible to Git-aware syncs", () => {

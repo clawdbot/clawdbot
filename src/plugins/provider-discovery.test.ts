@@ -380,27 +380,7 @@ describe("runProviderStaticCatalog", () => {
       },
     };
 
-    await expect(
-      runProviderStaticCatalog({
-        provider,
-        config: {
-          models: {
-            providers: {
-              demo: {
-                baseUrl: "https://configured.example/v1",
-                models: [],
-                apiKey: "secret-value",
-              },
-            },
-          },
-        },
-        agentDir: "/tmp/agent",
-        workspaceDir: "/tmp/workspace",
-        env: {
-          SECRET_TOKEN: "secret-value",
-        },
-      }),
-    ).resolves.toEqual({
+    await expect(runProviderStaticCatalog({ provider })).resolves.toEqual({
       provider: {
         baseUrl: "https://static.example/v1",
         models: [],

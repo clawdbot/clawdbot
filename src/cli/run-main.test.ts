@@ -324,6 +324,15 @@ describe("shouldUseSetupOnboardConfigureHelpFastPath", () => {
     expect(
       shouldUseSetupOnboardConfigureHelpFastPath(["node", "openclaw", "status", "--help"]),
     ).toBe(false);
+    expect(
+      shouldUseSetupOnboardConfigureHelpFastPath([
+        "node",
+        "openclaw",
+        "onboard",
+        "--gateway-port",
+        "--help",
+      ]),
+    ).toBe(false);
   });
 });
 

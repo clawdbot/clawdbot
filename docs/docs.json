@@ -1747,6 +1747,7 @@
                     "group": "Media capabilities",
                     "pages": [
                       "nodes/media-understanding",
+                      "nodes/media-playback",
                       "nodes/images",
                       "nodes/audio",
                       "nodes/camera",

@@ -325,21 +325,12 @@ Values:
 
 ### `agents.defaults.userTimezone`
 
-Timezone for system prompt context (not message timestamps). Falls back to host timezone.
+Timezone for message envelopes, queued system events, and the system prompt's local
+date context. Falls back to the host timezone.
 
 ```json5
 {
   agents: { defaults: { userTimezone: "America/Chicago" } },
-}
-```
-
-### `agents.defaults.timeFormat`
-
-Time format in system prompt. Default: `auto` (OS preference).
-
-```json5
-{
-  agents: { defaults: { timeFormat: "auto" } }, // auto | 12 | 24
 }
 ```
 
@@ -1340,6 +1331,7 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 - Per-channel overrides: `channels.<channel>.ackReaction`, `channels.<channel>.accounts.<id>.ackReaction`.
 - Resolution order: account → channel → `messages.ackReaction` → identity fallback.
 - Scope: `group-mentions` (default), `group-all`, `direct`, `all`, or `off`/`none` (disables ack reactions entirely).
+- `group-mentions` acks group messages that mention the agent, including in groups with `requireMention: false`. Use `group-all` to ack every group message.
 - `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, Signal, Telegram, and WhatsApp.
   On Discord, unset keeps status reactions enabled when ack reactions are active.
   On Slack, Signal, Telegram, and WhatsApp, set it explicitly to `true` to enable lifecycle status reactions.

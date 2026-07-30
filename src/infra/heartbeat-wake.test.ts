@@ -844,7 +844,7 @@ describe("heartbeat-wake", () => {
     expect(handler).toHaveBeenCalledWith(wake("exec-event"));
   });
 
-  it("resets running/scheduled flags when new handler is registered", async () => {
+  it("recovers interrupted wakes when a replacement handler is registered", async () => {
     vi.useFakeTimers();
 
     // Simulate a handler that's mid-execution when SIGUSR1 fires.
@@ -868,14 +868,15 @@ describe("heartbeat-wake", () => {
     const handlerB = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     setHeartbeatWakeHandler(handlerB);
 
-    // handlerB should be able to fire (running was reset)
-    requestHeartbeat(wake("interval", { coalesceMs: 0 }));
+    // The replacement must handle both the interrupted global barrier and fresh
+    // targeted work. The recovered barrier runs first so the two cannot overlap.
+    requestHeartbeat(wake("interval", { agentId: "ready", coalesceMs: 0 }));
     await vi.advanceTimersByTimeAsync(1);
-    expect(handlerB).toHaveBeenCalledTimes(1);
+    expect(handlerB.mock.calls.map(([request]) => request.agentId)).toEqual([undefined, "ready"]);
 
     // Clean up the hanging promise
     resolveHang!();
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
   });
 
   it("does not let a stale heartbeat lifecycle release a newer active wake", async () => {
@@ -926,7 +927,7 @@ describe("heartbeat-wake", () => {
   });
 
   it.each([
-    { outcome: "completed", expectedReasons: ["cron:job-b"] },
+    { outcome: "completed", expectedReasons: ["cron:job-a", "cron:job-b"] },
     { outcome: "thrown", expectedReasons: ["cron:job-a", "cron:job-b"] },
     { outcome: "busy", expectedReasons: ["cron:job-a", "cron:job-b"] },
     { outcome: "guarded", expectedReasons: ["cron:job-a", "cron:job-b"] },
@@ -960,10 +961,10 @@ describe("heartbeat-wake", () => {
       for (const target of ["a", "b"]) {
         requestHeartbeat({
           source: "cron",
-          intent: "event",
+          intent: target === "a" ? "task" : "event",
           reason: `cron:job-${target}`,
-          agentId: `agent-${target}`,
-          sessionKey: `agent:agent-${target}:main`,
+          agentId: "main",
+          sessionKey: "agent:main:main",
           coalesceMs: 100,
         });
       }

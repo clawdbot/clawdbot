@@ -89,6 +89,37 @@ describe("compatibility binding repair migrate", () => {
     expect(res.changes).toContain("Removed 1 binding that referenced missing agents.list ids.");
   });
 
+  it("preserves exact main bindings because the implicit main agent always exists", () => {
+    const res = repairBindingsForTest({
+      agents: {
+        list: [{ id: "alpha" }],
+      },
+      bindings: [
+        { agentId: "main", match: { channel: "discord" } },
+        { agentId: "MAIN", match: { channel: "discord" } },
+        { agentId: "ghost", match: { channel: "discord" } },
+      ],
+    } as OpenClawConfig);
+
+    expect(res.config.bindings).toEqual([{ agentId: "main", match: { channel: "discord" } }]);
+    expect(res.changes).toContain("Removed 2 bindings that referenced missing agents.list ids.");
+  });
+
+  it("preserves normalized main bindings when the agent is explicitly listed", () => {
+    const res = repairBindingsForTest({
+      agents: {
+        list: [{ id: "MAIN" }],
+      },
+      bindings: [
+        { agentId: "MAIN", match: { channel: "discord" } },
+        { agentId: "ghost", match: { channel: "discord" } },
+      ],
+    } as OpenClawConfig);
+
+    expect(res.config.bindings).toEqual([{ agentId: "MAIN", match: { channel: "discord" } }]);
+    expect(res.changes).toContain("Removed 1 binding that referenced missing agents.list ids.");
+  });
+
   it("leaves bindings untouched when agents.list has malformed entries", () => {
     const cfg = {
       agents: {
@@ -3364,6 +3395,121 @@ describe("legacy model compat migrate", () => {
       'config.plugins.entries.lossless-claw.config.summaryModel from "anthropic/claude-3-5-sonnet" to "anthropic/claude-sonnet-4-6"',
       'config.channels.modelByChannel.telegram.* from "anthropic/claude-opus-4-5" to "anthropic/claude-opus-4-7"',
     ]);
+  });
+
+  it("normalizes persisted model aliases across nested selections and provider catalogs", () => {
+    const retired = "google/gemini-3-pro-preview";
+    const canonical = "google/gemini-3.1-pro-preview";
+    const raw = {
+      agents: {
+        defaults: {
+          model: retired,
+          utilityModel: retired,
+          imageModel: retired,
+          voiceModel: retired,
+          pdfModel: retired,
+          mediaModels: {
+            image: retired,
+            video: { primary: retired, fallbacks: [retired] },
+            music: retired,
+          },
+          heartbeat: { model: retired },
+          subagents: { model: { primary: retired, fallbacks: [retired] } },
+          compaction: { model: retired, memoryFlush: { model: retired } },
+          models: { [retired]: { alias: "Gemini" } },
+        },
+        entries: {
+          ops: {
+            model: retired,
+            utilityModel: retired,
+            heartbeat: { model: retired },
+            subagents: { model: retired },
+            models: { [retired]: { alias: "Ops Gemini" } },
+          },
+        },
+      },
+      models: {
+        providers: {
+          google: { models: [{ id: "gemini-3-pro-preview", name: "Gemini" }] },
+          myproxy: {
+            models: [{ id: "google/gemini-3-pro-preview", name: "Gemini proxy" }],
+          },
+          openai: { models: [{ id: "gpt-4o", name: "GPT-4o" }] },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(
+      expect.arrayContaining(["agents", "models"]),
+    );
+    const res = migrateLegacyConfigForTest(raw);
+    const defaults = res.config?.agents?.defaults;
+    expect(defaults).toMatchObject({
+      model: canonical,
+      utilityModel: canonical,
+      imageModel: canonical,
+      voiceModel: canonical,
+      pdfModel: canonical,
+      mediaModels: {
+        image: canonical,
+        video: { primary: canonical, fallbacks: [canonical] },
+        music: canonical,
+      },
+      heartbeat: { model: canonical },
+      subagents: { model: { primary: canonical, fallbacks: [canonical] } },
+      compaction: { model: canonical, memoryFlush: { model: canonical } },
+      models: { [canonical]: { alias: "Gemini" } },
+    });
+    expect(res.config?.agents?.entries?.ops).toMatchObject({
+      model: canonical,
+      utilityModel: canonical,
+      heartbeat: { model: canonical },
+      subagents: { model: canonical },
+      models: { [canonical]: { alias: "Ops Gemini" } },
+    });
+    expect(res.config?.models?.providers?.google?.models?.[0]?.id).toBe("gemini-3.1-pro-preview");
+    expect(res.config?.models?.providers?.myproxy?.models?.[0]?.id).toBe(canonical);
+    expect(res.config?.models?.providers?.openai?.models?.[0]?.id).toBe("gpt-5.5");
+  });
+
+  it("merges provider catalog rows that normalize to an explicitly canonical id", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          google: {
+            models: [
+              {
+                id: "gemini-3-pro-preview",
+                name: "Retired alias",
+                maxTokens: 65_536,
+                cost: { input: 1 },
+              },
+              {
+                id: "gemini-3.1-pro-preview",
+                name: "Canonical",
+                cost: { output: 2 },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.google?.models).toEqual([
+      {
+        id: "gemini-3.1-pro-preview",
+        name: "Canonical",
+        maxTokens: 65_536,
+        cost: { output: 2, input: 1 },
+      },
+    ]);
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          'Merged config.models.providers.google.models.0 into model id "gemini-3.1-pro-preview"; kept canonical values for conflicting fields: name.',
+        ),
+      ]),
+    );
   });
 
   it("deep-merges colliding retired model refs and reports only unequal fields", () => {

@@ -1,4 +1,5 @@
 // Tests Dockerfile metadata and expected install commands.
+import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +18,20 @@ const dockerSetupDockerfilePaths = ["Dockerfile", "scripts/docker/sandbox/Docker
 
 function collapseDockerContinuations(dockerfile: string): string {
   return dockerfile.replace(/\\\r?\n[ \t]*/g, " ");
+}
+
+function resolveOptionalAptPackages(dockerfile: string, env: NodeJS.ProcessEnv): string {
+  const assignment = collapseDockerContinuations(dockerfile).match(
+    /\bpackages="(\$\{OPENCLAW_IMAGE_APT_PACKAGES:-\$OPENCLAW_DOCKER_APT_PACKAGES\})";/u,
+  )?.[1];
+  if (!assignment) {
+    throw new Error("Dockerfile optional apt package assignment is missing");
+  }
+  const script = `packages="${assignment}"; printf '%s' "$packages"`;
+  return execFileSync("/bin/sh", ["-c", script], {
+    encoding: "utf8",
+    env,
+  });
 }
 
 describe("Dockerfile", () => {
@@ -80,6 +95,38 @@ describe("Dockerfile", () => {
       "ca-certificates curl git hostname lsof openssl procps python3 tini",
     );
     expect(dockerfile).toContain('ENTRYPOINT ["tini", "-s", "--"]');
+  });
+
+  it.runIf(process.platform !== "win32").each([
+    {
+      name: "preferred packages",
+      env: { OPENCLAW_IMAGE_APT_PACKAGES: "python3 wget" },
+      expected: "python3 wget",
+    },
+    {
+      name: "legacy packages when the preferred argument is empty",
+      env: {
+        OPENCLAW_IMAGE_APT_PACKAGES: "",
+        OPENCLAW_DOCKER_APT_PACKAGES: "git curl jq",
+      },
+      expected: "git curl jq",
+    },
+    {
+      name: "no packages when both arguments are absent",
+      env: {},
+      expected: "",
+    },
+    {
+      name: "preferred packages when both arguments are present",
+      env: {
+        OPENCLAW_IMAGE_APT_PACKAGES: "python3",
+        OPENCLAW_DOCKER_APT_PACKAGES: "git",
+      },
+      expected: "python3",
+    },
+  ])("resolves optional apt package args: $name", async ({ env, expected }) => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    expect(resolveOptionalAptPackages(dockerfile, env)).toBe(expected);
   });
 
   it("installs optional browser dependencies after pnpm install", async () => {

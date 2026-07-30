@@ -46,7 +46,7 @@ async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<Cro
     );
     const existing = inventory.jobs.find((job) => job.id === id);
     if (!existing) {
-      throw new Error(`unknown cron job id: ${id}`, { cause: error });
+      throw new Error(`unknown automation id: ${id}`, { cause: error });
     }
     return existing;
   }
@@ -56,7 +56,7 @@ export function registerCronEditCommand(cron: Command) {
   addGatewayClientOptions(
     cron
       .command("edit")
-      .description("Edit a cron job (patch fields)")
+      .description("Edit an automation (patch fields)")
       .argument("<id>", "Job id")
       .option("--name <name>", "Set name")
       .option("--description <text>", "Set description")

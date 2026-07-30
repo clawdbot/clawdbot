@@ -22,6 +22,15 @@ import {
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
 
+type PlaybackTranscodeResolution = Awaited<
+  ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackTranscode"]>
+>;
+type PlaybackModeForSourceResolver = (
+  ...args: Parameters<
+    (typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]
+  >
+) => ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]>;
+
 const authorizeGatewayHttpRequestOrReplyMock = vi.fn();
 const resolveOpenAiCompatibleHttpOperatorScopesMock = vi.fn();
 const resolveOpenAiCompatibleHttpSenderIsOwnerMock = vi.fn();
@@ -29,6 +38,11 @@ const loadSessionEntryMock = vi.fn();
 const readSessionMessagesMock = vi.fn();
 const resolveSessionHistoryTranscriptPathMock = vi.fn();
 const getRuntimeConfigMock = vi.fn(() => ({}));
+const probePlaybackMediaFileDescriptorMock = vi.fn(async () => ({ durationMs: 1000 }));
+const resolvePlaybackModeForSourceMock = vi.fn<PlaybackModeForSourceResolver>();
+const resolvePlaybackTranscodeMock = vi.fn(
+  async (): Promise<PlaybackTranscodeResolution> => ({ kind: "passthrough" }),
+);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../config/config.js", () => ({
@@ -54,6 +68,28 @@ vi.mock("./session-transcript-readers.js", () => ({
     transcriptPath: await resolveSessionHistoryTranscriptPathMock(...args),
   }),
 }));
+
+vi.mock("../media/media-probe.js", () => ({
+  probePlaybackMediaFileDescriptor: probePlaybackMediaFileDescriptorMock,
+}));
+
+vi.mock("../media/playback-transcode.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media/playback-transcode.js")>();
+  const testApi = (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.playbackTranscodeTestApi")
+  ] as {
+    PLAYBACK_TRANSCODE_POLICY: Record<"audio" | "video", unknown>;
+    resolvePlaybackMode(mimeType: string, policy: unknown): "native" | "transcode" | undefined;
+  };
+  resolvePlaybackModeForSourceMock.mockImplementation(async (params) =>
+    testApi.resolvePlaybackMode(params.mimeType, testApi.PLAYBACK_TRANSCODE_POLICY[params.kind]),
+  );
+  return {
+    ...actual,
+    resolvePlaybackModeForSource: resolvePlaybackModeForSourceMock,
+    resolvePlaybackTranscode: resolvePlaybackTranscodeMock,
+  };
+});
 
 const {
   DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS,
@@ -113,6 +149,7 @@ type ManagedImageBlock = {
   url?: string;
   openUrl?: string;
   fileName?: string;
+  playback?: "native" | "transcode";
 };
 
 function requireBlock(blocks: unknown[], index = 0): ManagedImageBlock {
@@ -423,6 +460,96 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.statusCode).toBe(206);
     expect(result.headers["content-type"]).toBe("audio/mpeg");
     expect(result.headers["content-range"]).toBe(`bytes 9-13/${body.byteLength}`);
+    expect(result.body.toString("utf8")).toBe("audio");
+  });
+
+  it("returns 202 while a managed playback transcode is preparing", async () => {
+    resolvePlaybackTranscodeMock.mockResolvedValueOnce({ kind: "preparing" });
+    const { attachmentId, sessionKey } = await createFixture(stateDir, {
+      filename: "voice.caf",
+      contentType: "audio/x-caf",
+      body: Buffer.from("caff-original"),
+    });
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full?playback=1`,
+      authResponse: { authMethod: "token" },
+    });
+
+    expect(result.statusCode).toBe(202);
+    expect(result.headers["content-type"]).toContain("application/json");
+    expect(JSON.parse(result.body.toString("utf8"))).toEqual({ status: "preparing" });
+  });
+
+  it("falls back to original managed bytes when playback transcode fails", async () => {
+    resolvePlaybackTranscodeMock.mockResolvedValueOnce({ kind: "fallback" });
+    const body = Buffer.from("caff-original");
+    const { attachmentId, sessionKey } = await createFixture(stateDir, {
+      filename: "voice.caf",
+      contentType: "audio/x-caf",
+      body,
+    });
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full?playback=1`,
+      authResponse: { authMethod: "token" },
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.headers["content-type"]).toBe("audio/x-caf");
+    expect(result.body).toEqual(body);
+  });
+
+  it("passes native managed playback bytes through unchanged", async () => {
+    const body = Buffer.from("ID3-native-audio");
+    const { attachmentId, sessionKey } = await createFixture(stateDir, {
+      filename: "voice.mp3",
+      contentType: "audio/mpeg",
+      body,
+    });
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full?playback=1`,
+      authResponse: { authMethod: "token" },
+    });
+
+    expect(resolvePlaybackTranscodeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ mimeType: "audio/mpeg", kind: "audio" }),
+    );
+    expect(result.statusCode).toBe(200);
+    expect(result.body).toEqual(body);
+  });
+
+  it("serves byte ranges from a cached managed playback transcode", async () => {
+    const transcodedPath = path.join(stateDir, "cached-voice.m4a");
+    const transcoded = Buffer.from("normalized-audio");
+    await fs.writeFile(transcodedPath, transcoded);
+    resolvePlaybackTranscodeMock.mockResolvedValueOnce({
+      kind: "transcoded",
+      path: transcodedPath,
+      contentType: "audio/mp4",
+      extension: ".m4a",
+    });
+    const { attachmentId, sessionKey } = await createFixture(stateDir, {
+      filename: "voice.caf",
+      contentType: "audio/x-caf",
+      body: Buffer.from("caff-original"),
+    });
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full?playback=1`,
+      authResponse: { authMethod: "token" },
+      headers: { range: "bytes=11-15" },
+    });
+
+    expect(result.statusCode).toBe(206);
+    expect(result.headers["content-type"]).toBe("audio/mp4");
+    expect(result.headers["content-disposition"]).toContain('filename="voice.m4a"');
+    expect(result.headers["content-range"]).toBe(`bytes 11-15/${transcoded.byteLength}`);
     expect(result.body.toString("utf8")).toBe("audio");
   });
 
@@ -868,7 +995,12 @@ describe("createManagedOutgoingImageBlocks", () => {
 
       expect(blocks).toHaveLength(1);
       const block = requireBlock(blocks);
-      expect(block).toMatchObject({ type: kind, mimeType: contentType, fileName });
+      expect(block).toMatchObject({
+        type: kind,
+        mimeType: contentType,
+        fileName,
+        playback: "native",
+      });
       const attachmentId = requireAttachmentIdFromUrl(block.url);
       expect(block.artifactId).toBe(`${MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX}${attachmentId}`);
       expect(readManagedImageRecord(attachmentId, stateDir)?.original).toMatchObject({
@@ -878,6 +1010,26 @@ describe("createManagedOutgoingImageBlocks", () => {
       });
     },
   );
+
+  it("marks exotic managed media metadata for playback transcoding", async () => {
+    const sourcePath = path.join(stateDir, "workspace", "voice.caf");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, Buffer.concat([Buffer.from("caff"), Buffer.alloc(16)]));
+
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [sourcePath],
+      stateDir,
+      localRoots: [path.dirname(sourcePath)],
+      allowLocalNonImage: true,
+    });
+
+    expect(requireBlock(blocks)).toMatchObject({
+      type: "audio",
+      mimeType: "audio/x-caf",
+      playback: "transcode",
+    });
+  });
 
   it.each(["audio", "video"] as const)("caps managed %s data URLs by media kind", async (kind) => {
     const maxBytes = maxBytesForKind(kind);

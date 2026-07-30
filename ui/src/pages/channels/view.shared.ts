@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import type { ChannelAccountSnapshot } from "../../api/types.ts";
 import { renderSettingsSection, renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { channelSnapshotEntryIsActive } from "../../lib/channels/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type { ChannelKey, ChannelsProps } from "./view.types.ts";
 
@@ -11,7 +12,6 @@ type ChannelDisplayState = {
   running: boolean | null;
   connected: boolean | null;
   defaultAccount: ChannelAccountSnapshot | null;
-  hasAnyActiveAccount: boolean;
   status: Record<string, unknown> | undefined;
 };
 
@@ -52,7 +52,6 @@ export function resolveChannelDisplayState(
   props: ChannelsProps,
 ): ChannelDisplayState {
   const status = resolveChannelStatus(key, props);
-  const accounts = props.snapshot?.channelAccounts?.[key] ?? [];
   const defaultAccount = resolveDefaultChannelAccount(key, props);
   const configured =
     typeof status?.configured === "boolean"
@@ -62,31 +61,18 @@ export function resolveChannelDisplayState(
         : null;
   const running = typeof status?.running === "boolean" ? status.running : null;
   const connected = typeof status?.connected === "boolean" ? status.connected : null;
-  const hasAnyActiveAccount = accounts.some(
-    (account) => account.configured || account.running || account.connected,
-  );
 
   return {
     configured,
     running,
     connected,
     defaultAccount,
-    hasAnyActiveAccount,
     status,
   };
 }
 
 export function channelEnabled(key: ChannelKey, props: ChannelsProps) {
-  if (!props.snapshot) {
-    return false;
-  }
-  const displayState = resolveChannelDisplayState(key, props);
-  return (
-    displayState.configured === true ||
-    displayState.running === true ||
-    displayState.connected === true ||
-    displayState.hasAnyActiveAccount
-  );
+  return channelSnapshotEntryIsActive(props.snapshot, key);
 }
 
 export function resolveChannelConfigured(key: ChannelKey, props: ChannelsProps): boolean | null {

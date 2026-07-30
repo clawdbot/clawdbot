@@ -275,7 +275,9 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `plugins.entries.<id>.subagent.allowModelOverride`: explicitly trust this plugin to request per-run `provider` and `model` overrides for background subagent runs.
 - `plugins.entries.<id>.subagent.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted subagent overrides. Use `"*"` only when you intentionally want to allow any model.
 - `plugins.entries.<id>.llm.allowModelOverride`: explicitly trust this plugin to request model overrides for `api.runtime.llm.complete`.
-- `plugins.entries.<id>.llm.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted plugin LLM completion overrides. Use `"*"` only when you intentionally want to allow any model.
+- `plugins.entries.<id>.llm.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted model overrides. Use `"*"` only when you intentionally want to allow any model override.
+- `plugins.entries.<id>.llm.allowedCompletionModels`: optional allowlist applied to every plugin LLM completion, including host-resolved defaults and overrides. Use `"*"` only when you intentionally want to allow any model.
+- `plugins.entries.<id>.llm.allowAuthProfileOverride`: explicitly trust this plugin to select a non-default auth profile for isolated `api.runtime.llm.complete` execution. Direct `model@profile` calls remain governed by model-override policy.
 - `plugins.entries.<id>.llm.allowAgentIdOverride`: explicitly trust this plugin to run `api.runtime.llm.complete` against a non-default agent id.
 - `plugins.entries.<id>.config`: plugin-defined config object (validated by native OpenClaw plugin schema when available).
 - Channel plugin account/runtime settings live under `channels.<id>` and should be described by the owning plugin's manifest `channelConfigs` metadata, not by a central OpenClaw option registry.
@@ -604,6 +606,9 @@ See [Plugins](/tools/plugin).
     allowRealIpFallback: false,
     nodes: {
       pairing: {
+        // Silent same-host pairing and access upgrades. Default: enabled.
+        // Set false to require explicit approval for every device.
+        autoApproveLocal: true,
         // Optional. Default unset/disabled.
         autoApproveCidrs: ["192.168.1.0/24", "fd00:1234:5678::/64"],
         // SSH-verified auto-approval. Default: enabled (true).
@@ -688,6 +693,7 @@ See [Plugins](/tools/plugin).
 - If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
 - `trustedProxies`: reverse proxy IPs that terminate TLS or inject forwarded-client headers. Only list proxies you control. Loopback entries are still valid for same-host proxy/local-detection setups (for example Tailscale Serve or a local reverse proxy), but they do **not** make loopback requests eligible for `gateway.auth.mode: "trusted-proxy"`.
 - `allowRealIpFallback`: when `true`, the gateway accepts `X-Real-IP` if `X-Forwarded-For` is missing. Default `false` for fail-closed behavior.
+- `gateway.nodes.pairing.autoApproveLocal`: silently approves pairing, role upgrades, and scope upgrades from trusted local connections (default: `true`). Set `false` to require explicit approval for every device; metadata-only reconnect refreshes remain automatic.
 - `gateway.nodes.pairing.autoApproveCidrs`: optional CIDR/IP allowlist for auto-approving first-time node device pairing with no requested scopes. It is disabled when unset. This does not auto-approve operator/browser/Control UI/WebChat pairing, and it does not auto-approve role, scope, metadata, or public-key upgrades.
 - `gateway.nodes.pairing.sshVerify`: SSH-verified auto-approval for first-time node device pairing (default: enabled). The gateway SSHes back to the pairing host (BatchMode, strict host keys) and approves only on an exact `openclaw node identity` device-key match. Same eligibility floor as `autoApproveCidrs`; probes are limited to private/CGNAT source addresses unless `cidrs` overrides them. Set `false` to disable, or `{ user, identity, timeoutMs, cidrs }` to tune. See [Node pairing](/gateway/pairing#ssh-verified-device-auto-approval-default).
 - `gateway.nodes.commands.allow` / `gateway.nodes.commands.deny`: global allow/deny shaping for declared node commands after pairing and platform allowlist evaluation. `commands.allow` is the one-time persistent enable for classified commands such as `camera.snap`, `camera.clip`, `screen.record`, `health.summary`, `sms.search`, and `sms.send`; `commands.deny` removes a command even if a platform default or explicit allow would otherwise include it. Computer and mobile UI control instead rely on default-off node-local enablement plus pairing. iOS Health permission, Android SMS permission, and Gateway command authorization are independent. After a node changes its declared command list, reject and re-approve that device pairing so the gateway stores the updated command snapshot.
@@ -894,10 +900,13 @@ Lifetime values are data only in the first cloud-worker release; automatic enfor
       {
         match: { path: "gmail" },
         action: "agent",
+        // Configure this agent under agents.entries with a restricted tool
+        // profile and sandbox before routing untrusted content to it.
         agentId: "hooks",
         wakeMode: "now",
         name: "Gmail",
         sessionKey: "hook:gmail:{{messages[0].id}}",
+        sessionMode: "persistent",
         messageTemplate: "From: {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}",
         deliver: true,
         channel: "last",
@@ -923,12 +932,17 @@ Validation and safety notes:
 **Endpoints:**
 
 - `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
-- `POST /hooks/agent` → `{ message, name?, agentId?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
+- `POST /hooks/agent` → `{ message, name?, agentId?, sessionKey?, sessionMode?, wakeMode?, deliver?, channel?, to?, accountId?, model?, thinking?, timeoutSeconds? }`
   - `sessionKey` from request payload is accepted only when `hooks.allowRequestSessionKey=true` (default: `false`).
+  - `sessionMode` is `"isolated"` by default. `"persistent"` reuses the resolved session and requires an explicit request `sessionKey`, `hooks.allowRequestSessionKey=true`, and non-empty `hooks.allowedSessionKeyPrefixes`.
   - Direct announce delivery requires both a concrete `channel` and `to`; supplying only one fails before the run is scheduled.
+  - `accountId` selects a configured, enabled account for direct announce delivery and requires both `channel` and `to`; invalid selections return `400` before a run starts.
   - Omit both delivery fields for completion-only hooks, or set `deliver: false` to ignore supplied destination data.
+  - The request waits up to 15 seconds for runner admission, not run completion. `200` means the agent runner was entered.
+  - Pre-run failures return `{ ok: false, error, runId }`: `400` for invalid delivery coordinates or account selection, `409` for session admission conflicts, `502` for other preparation failures, and `503` when the 15-second admission deadline expires. Timed-out queued work is canceled and will not start later.
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
   - Template-rendered mapping `sessionKey` values are treated as externally supplied and also require `hooks.allowRequestSessionKey=true`.
+  - Mapped `agent` actions use the same admission wait and `200`/`400`/`409`/`502`/`503` outcomes.
 
 <Accordion title="Mapping details">
 
@@ -943,6 +957,7 @@ Validation and safety notes:
 - `defaultSessionKey`: optional fixed session key for hook agent runs without explicit `sessionKey`.
 - `allowRequestSessionKey`: allow `/hooks/agent` callers and template-driven mapping session keys to set `sessionKey` (default: `false`).
 - `allowedSessionKeyPrefixes`: optional prefix allowlist for explicit `sessionKey` values (request + mapping), e.g. `["hook:"]`. It becomes required when any mapping or preset uses a templated `sessionKey`.
+- `sessionMode`: mapping session behavior (`"isolated"` by default or `"persistent"`). Persistent mappings must resolve a stable key from `sessionKey` or `hooks.defaultSessionKey`; template-derived keys retain the request-key and prefix checks.
 - `deliver: true` sends the final reply to a channel; mapped hooks may use `channel: "last"`.
 - `deliver: false` keeps the mapped run completion-only.
 - `model` overrides LLM for this hook run (must be allowed if model catalog is set).
@@ -954,6 +969,7 @@ Validation and safety notes:
 - The built-in Gmail preset uses `sessionKey: "hook:gmail:{{messages[0].id}}"`.
 - This per-message key isolates conversation context, not tools or workspace access. Without a custom mapping that sets `agentId`, the preset uses the default agent.
 - For untrusted inboxes, route Gmail to a dedicated reader agent and restrict that agent with [per-agent sandbox and tool policy](/tools/multi-agent-sandbox-tools). If the reader must notify the main agent, constrain the handoff with [`tools.agentToAgent`](/gateway/config-tools#toolsagenttoagent). See [Prompt injection](/gateway/security#prompt-injection) for the recommended threat model and model tier.
+- The setup wizard configures Gmail transport but does not create the reader agent or required session-key policy. Apply the complete [restricted Gmail reader configuration](/automation/cron-jobs#configure-a-restricted-gmail-reader-recommended) before running setup for untrusted mail.
 - If you keep that per-message routing, set `hooks.allowRequestSessionKey: true` and constrain `hooks.allowedSessionKeyPrefixes` to match the Gmail namespace, for example `["hook:", "hook:gmail:"]`.
 - If you need `hooks.allowRequestSessionKey: false`, override the preset with a static `sessionKey` instead of the templated default.
 
@@ -1433,7 +1449,7 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 
 ---
 
-## Cron
+## Automations (`cron`)
 
 ```json5
 {
@@ -1448,11 +1464,11 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 }
 ```
 
-- `enabled`: execute stored cron jobs (default: `true`). Set `false` to pause all cron execution without deleting jobs.
-- `triggers.enabled`: also run event-driven cron triggers (default: `false`).
-- `sessionRetention`: how long to keep completed isolated cron run sessions before pruning SQLite session rows. Also controls cleanup of archived deleted cron transcripts. Default: `24h`; set `false` to disable.
+- `enabled`: execute stored automation jobs (default: `true`). Set `false` to pause all automation execution without deleting jobs.
+- `triggers.enabled`: also run event-driven automation triggers (default: `false`).
+- `sessionRetention`: how long to keep completed isolated automation run sessions before pruning SQLite session rows. Also controls cleanup of archived deleted automation transcripts. Default: `24h`; set `false` to disable.
 - Run history automatically keeps the newest 2000 terminal rows per job. Lost rows retain their 24-hour cleanup window.
-- `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
+- `webhookToken`: bearer token used for automation webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
 
 The `cron` block is strict; `cron.enabled`, `cron.triggers`, `cron.webhookToken`,
 `cron.sessionRetention`, and `cron.failureAlert` are the only accepted keys. The
@@ -1484,7 +1500,7 @@ when preserving announce delivery. `openclaw doctor --fix` strips a leftover
 destination for every job. The retired `cron.failureDestination` block is merged
 into it by [`openclaw doctor --fix`](/cli/doctor).
 
-- `enabled`: enable failure alerts for cron jobs (default: `false`).
+- `enabled`: enable failure alerts for automation jobs (default: `false`).
 - `after`: consecutive failures before an alert fires (positive integer, min: `1`; default: `2`).
 - `cooldownMs`: minimum milliseconds between repeated alerts for the same job (non-negative integer; default: `3600000`).
 - `includeSkipped`: count consecutive skipped runs toward the alert threshold (default: `false`). Skipped runs are tracked separately and do not affect execution-error backoff.
@@ -1496,7 +1512,7 @@ into it by [`openclaw doctor --fix`](/cli/doctor).
 - When neither global nor per-job failure destination is set, jobs that already deliver via `announce` fall back to that primary announce target on failure.
 - `delivery.failureDestination` is only supported for `sessionTarget="isolated"` jobs unless the job's primary `delivery.mode` is `"webhook"`.
 
-See [Cron Jobs](/automation/cron-jobs). Isolated cron executions are tracked as [background tasks](/automation/tasks).
+See [Automations](/automation/cron-jobs). Isolated automation runs are tracked as [background tasks](/automation/tasks).
 
 ## Media model template variables
 

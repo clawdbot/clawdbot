@@ -24,7 +24,7 @@ export function createSubagentRegistryRestorer(config: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
   deps: () => SubagentRegistryDeps;
-  persist: () => void;
+  persist: (...runIds: string[]) => void;
   settleRequesterTurn: ReturnType<
     typeof createSubagentRegistryLifecycleController
   >["settleRequesterTurnAfterSessionSpawns"];

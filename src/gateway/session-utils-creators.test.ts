@@ -9,6 +9,8 @@ const getUserProfileListItem = vi.hoisted(() =>
   vi.fn((profileId: string) => ({
     id: profileId,
     displayName: profileId === "profile-ada" ? "Ada" : "Bob",
+    hasAvatar: profileId === "profile-ada",
+    updatedAt: 42,
   })),
 );
 
@@ -44,13 +46,18 @@ it("returns the complete deterministic creator facet independently of pagination
   expect(result.count).toBe(1);
   expect(result.totalCount).toBe(2);
   expect(result.creators).toEqual([
-    { id: "profile-ada", label: "Ada" },
+    {
+      id: "profile-ada",
+      label: "Ada",
+      avatarUrl: "/api/users/profile-ada/avatar?v=42",
+    },
     { id: "profile-bob", label: "Bob" },
   ]);
   expect(result.sessions[0]?.createdActor).toEqual({
     type: "human",
     id: "profile-ada",
     label: "Ada",
+    avatarUrl: "/api/users/profile-ada/avatar?v=42",
   });
   expect(result.sessions[0]?.archivedBy).toEqual({
     type: "human",
@@ -76,6 +83,8 @@ it("preserves legacy list output across visibility, scope, creator, and search f
     id: profileId,
     displayName:
       profileId === "profile-ada" ? "Ada" : profileId === "profile-bob" ? "Bob" : "Carol",
+    hasAvatar: false,
+    updatedAt: now,
   }));
   const cfg = {
     agents: {

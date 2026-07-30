@@ -1,4 +1,4 @@
-// Subagent registry SQLite store tests cover canonical whole-snapshot persistence.
+// Subagent registry SQLite store tests cover canonical snapshot and exact-row persistence.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +14,7 @@ import {
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentRunsForControllerFromSqlite,
   loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryChangesToSqlite,
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -149,6 +150,57 @@ describe("subagent registry sqlite store", () => {
       saveSubagentRegistryToSqlite(new Map([[second.runId, second]]));
 
       expect([...loadSubagentRegistryFromSqlite().keys()]).toEqual(["run-two"]);
+    });
+  });
+
+  it("writes only named registry mutations", async () => {
+    await withTempStateEnv(async () => {
+      const first = createRun({ runId: "run-one", childSessionKey: "agent:main:subagent:one" });
+      const removed = createRun({ runId: "run-two", childSessionKey: "agent:main:subagent:two" });
+      const untouched = createRun({
+        runId: "run-three",
+        childSessionKey: "agent:main:subagent:three",
+      });
+      const runs = new Map([first, removed, untouched].map((run) => [run.runId, run] as const));
+      saveSubagentRegistryToSqlite(runs);
+
+      const { db } = openOpenClawStateDatabase();
+      db.exec(`
+        CREATE TEMP TABLE subagent_run_write_audit (
+          action TEXT NOT NULL,
+          run_id TEXT NOT NULL
+        );
+        CREATE TEMP TRIGGER subagent_run_audit_insert
+        AFTER INSERT ON subagent_runs
+        BEGIN
+          INSERT INTO subagent_run_write_audit VALUES ('insert', NEW.run_id);
+        END;
+        CREATE TEMP TRIGGER subagent_run_audit_update
+        AFTER UPDATE ON subagent_runs
+        BEGIN
+          INSERT INTO subagent_run_write_audit VALUES ('update', NEW.run_id);
+        END;
+        CREATE TEMP TRIGGER subagent_run_audit_delete
+        AFTER DELETE ON subagent_runs
+        BEGIN
+          INSERT INTO subagent_run_write_audit VALUES ('delete', OLD.run_id);
+        END;
+      `);
+
+      first.task = "updated task";
+      runs.delete(removed.runId);
+      saveSubagentRegistryChangesToSqlite(runs, [first.runId, removed.runId]);
+
+      expect(
+        db.prepare("SELECT action, run_id FROM subagent_run_write_audit ORDER BY rowid").all(),
+      ).toEqual([
+        { action: "update", run_id: first.runId },
+        { action: "delete", run_id: removed.runId },
+      ]);
+      expect([...loadSubagentRegistryFromSqlite().entries()]).toMatchObject([
+        [first.runId, { task: "updated task" }],
+        [untouched.runId, { task: untouched.task }],
+      ]);
     });
   });
 

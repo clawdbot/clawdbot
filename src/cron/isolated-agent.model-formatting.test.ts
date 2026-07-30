@@ -238,7 +238,7 @@ describe("cron model formatting and precedence edge cases", () => {
         }),
       ).resolves.toEqual({
         ok: false,
-        error: "cron payload.model 'openai/' rejected: invalid model",
+        error: "automation model override 'openai/' rejected: invalid model",
       });
     });
 
@@ -249,7 +249,7 @@ describe("cron model formatting and precedence edge cases", () => {
         }),
       ).resolves.toEqual({
         ok: false,
-        error: "cron payload.model '/gpt-4.1-mini' rejected: invalid model",
+        error: "automation model override '/gpt-4.1-mini' rejected: invalid model",
       });
     });
 
@@ -269,7 +269,7 @@ describe("cron model formatting and precedence edge cases", () => {
       ).resolves.toEqual({
         ok: false,
         error:
-          "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.modelPolicy.allow: anthropic/claude-sonnet-4-6 is not in [(none configured)]",
+          "automation model override 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.modelPolicy.allow: anthropic/claude-sonnet-4-6 is not in [(none configured)]",
       });
     });
 
@@ -291,7 +291,7 @@ describe("cron model formatting and precedence edge cases", () => {
       ).resolves.toEqual({
         ok: false,
         error:
-          "cron payload.model 'openai/gpt-5.5' rejected by agents.entries.*.modelPolicy.allow: openai/gpt-5.5 is not in [anthropic/*]",
+          "automation model override 'openai/gpt-5.5' rejected by agents.entries.*.modelPolicy.allow: openai/gpt-5.5 is not in [anthropic/*]",
       });
     });
 

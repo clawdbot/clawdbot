@@ -2,12 +2,12 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { collectErrorGraphCandidates, extractErrorCode } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
-import { isRecord } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import {
   applyConfigEnvVars,
@@ -59,10 +59,7 @@ export function resolveConfigSnapshotHash(snapshot: {
 }
 
 export function coerceConfig(value: unknown): OpenClawConfig {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  return value as OpenClawConfig;
+  return (asOptionalRecord(value) ?? {}) as OpenClawConfig;
 }
 
 export function hasConfigMeta(value: unknown): boolean {

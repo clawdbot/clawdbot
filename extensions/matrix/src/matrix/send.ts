@@ -197,7 +197,9 @@ export async function sendMessageMatrix(
         const contentWithExtra = withMatrixExtraContentFields(content, pendingExtraContent);
         pendingExtraContent = undefined;
         const eventId = await client.sendMessage(roomId, contentWithExtra);
+        const visibleContent = contentWithExtra.body ?? "";
         if (eventId) {
+          acceptedContents.push(visibleContent);
           await opts.onDeliveryResult?.({
             messageId: eventId,
             roomId,
@@ -209,12 +211,14 @@ export async function sendMessageMatrix(
               replyToId: opts.replyToId,
               threadId,
             }),
+            content: visibleContent,
           });
         }
         return eventId;
       };
 
       const platformMessageIds: string[] = [];
+      const acceptedContents: string[] = [];
       let lastMessageId = "";
       let receiptKind: MessageReceiptPartKind = "text";
       if (opts.mediaUrl) {
@@ -332,6 +336,7 @@ export async function sendMessageMatrix(
           replyToId: opts.replyToId,
           threadId,
         }),
+        content: acceptedContents.join("\n"),
       };
     },
   );
@@ -499,6 +504,7 @@ export async function sendSingleTextMessageMatrix(
           replyToId: opts.replyToId,
           threadId: normalizedThreadId,
         }),
+        content: content.body,
       };
     },
   );

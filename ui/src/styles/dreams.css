@@ -930,7 +930,7 @@
   color: var(--muted);
 }
 
-.dreams-diary__insight-badge--palace {
+.dreams-diary__insight-badge--wiki {
   color: var(--accent);
   background: color-mix(in oklab, var(--accent-subtle) 72%, transparent);
   border-color: color-mix(in oklab, var(--accent) 24%, transparent);

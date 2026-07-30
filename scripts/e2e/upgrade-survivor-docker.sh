@@ -4,10 +4,11 @@
 # baseline first and upgrades it to the selected candidate.
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
-source "$ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh"
+HARNESS_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$HARNESS_ROOT_DIR}" && pwd)"
+source "$HARNESS_ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$HARNESS_ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+source "$HARNESS_ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-upgrade-survivor-e2e" OPENCLAW_UPGRADE_SURVIVOR_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_UPGRADE_SURVIVOR_E2E_SKIP_BUILD:-0}"
@@ -145,6 +146,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
   docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
 
   echo "Running published upgrade survivor Docker E2E..."
+  # Keep candidate images from selecting an older copy of the trusted release runner.
   docker_e2e_run_with_harness \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     -e OPENCLAW_TEST_STATE_FUNCTION_B64="$OPENCLAW_TEST_STATE_FUNCTION_B64" \
@@ -161,10 +163,11 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     -e OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS="$STATUS_BUDGET_SECONDS" \
     "${PROBE_ENV_ARGS[@]}" \
     -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
+    -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/run.sh:/tmp/openclaw-upgrade-survivor-run.sh:ro" \
     "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
     "${DOCKER_RUN_USER_ARGS[@]}" \
     "$IMAGE_NAME" \
-    timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash scripts/e2e/lib/upgrade-survivor/run.sh
+    timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash /tmp/openclaw-upgrade-survivor-run.sh
   exit 0
 fi
 

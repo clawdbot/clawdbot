@@ -244,6 +244,11 @@ export class MediaStreamHandler {
             break;
 
           case "start":
+            if (session) {
+              console.warn("[MediaStream] Rejecting duplicate start frame for active connection");
+              ws.close(1008, "Duplicate start");
+              break;
+            }
             session = this.handleStart(ws, message, streamToken);
             if (session) {
               this.clearPendingConnection(ws);
