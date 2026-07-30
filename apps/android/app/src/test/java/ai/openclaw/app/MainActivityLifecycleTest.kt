@@ -190,6 +190,26 @@ class MainActivityLifecycleTest {
   }
 
   @Test
+  fun topResumedPermissionHostRefreshesAuthorityAfterActivation() {
+    val events = mutableListOf<String>()
+
+    updateTopResumedPermissionHost(
+      isTopResumedActivity = true,
+      activate = { events += "activate" },
+      deactivate = { events += "deactivate" },
+      refreshPermissionSurface = { events += "refresh" },
+    )
+    updateTopResumedPermissionHost(
+      isTopResumedActivity = false,
+      activate = { events += "activate" },
+      deactivate = { events += "deactivate" },
+      refreshPermissionSurface = { events += "refresh" },
+    )
+
+    assertEquals(listOf("activate", "refresh", "deactivate"), events)
+  }
+
+  @Test
   fun runtimeUiStarterWaitsForReadinessAndStartsOnce() {
     val starter = MainActivityRuntimeUiStarter()
     var attachCount = 0

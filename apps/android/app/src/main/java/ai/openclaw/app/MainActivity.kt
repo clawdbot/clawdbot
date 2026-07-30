@@ -107,11 +107,12 @@ class MainActivity : AppCompatActivity() {
   override fun onTopResumedActivityChanged(isTopResumedActivity: Boolean) {
     super.onTopResumedActivityChanged(isTopResumedActivity)
     // minSdk 31 guarantees this callback and lets multi-resume select the actually interactive task.
-    if (isTopResumedActivity) {
-      permissionRequester.activate(this)
-    } else {
-      permissionRequester.deactivate(this)
-    }
+    updateTopResumedPermissionHost(
+      isTopResumedActivity = isTopResumedActivity,
+      activate = { permissionRequester.activate(this) },
+      deactivate = { permissionRequester.deactivate(this) },
+      refreshPermissionSurface = { initializedViewModel?.refreshNodePermissionSurface() },
+    )
   }
 
   override fun onStop() {
@@ -324,6 +325,20 @@ internal class MainActivityInitialIntentGate {
 }
 
 internal fun shouldNotifyRuntimeBackgrounded(isChangingConfigurations: Boolean): Boolean = !isChangingConfigurations
+
+internal fun updateTopResumedPermissionHost(
+  isTopResumedActivity: Boolean,
+  activate: () -> Unit,
+  deactivate: () -> Unit,
+  refreshPermissionSurface: () -> Unit,
+) {
+  if (isTopResumedActivity) {
+    activate()
+    refreshPermissionSurface()
+  } else {
+    deactivate()
+  }
+}
 
 /** Preserves one-shot runtime UI startup while allowing screenshot fixtures to skip side effects. */
 internal class MainActivityRuntimeUiStarter {
