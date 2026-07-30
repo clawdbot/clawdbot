@@ -24,21 +24,33 @@ const FeishuGroupPolicySchema = z.union([
   z.literal("allowall").transform(() => "open" as const),
 ]);
 // URL schemes are case-insensitive (RFC 3986 §3.1), so accept an uppercase
-// HTTPS scheme such as "HTTPS://tenant.example" and normalize it to lowercase
-// before the value reaches resolveDomain(), which hands the string directly to
-// the Lark SDK as a base URL. http:// is still rejected.
+// HTTPS scheme such as "HTTPS://tenant.example" and normalize it to lowercase.
+// The Lark SDK concatenates API paths onto this value, so it must be an API
+// base URL, not a URL with client-only or credential-bearing components.
 const FeishuCustomDomainSchema = z
   .string()
   .url()
-  .refine((value) => value.toLowerCase().startsWith("https://"), {
-    message: "Custom Feishu domain must use HTTPS",
+  .transform((value) => new URL(value))
+  .superRefine((url, ctx) => {
+    if (url.protocol !== "https:") {
+      ctx.addIssue({ code: "custom", message: "Custom Feishu domain must use HTTPS" });
+    }
+    if (
+      url.username ||
+      url.password ||
+      url.href.includes("?") ||
+      url.href.includes("#")
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Custom Feishu domain must be an HTTPS API base URL",
+      });
+    }
   })
-  .transform((value) => {
-    const normalized = new URL(value);
-    normalized.protocol = "https:";
-    // resolveDomain() already strips trailing slashes, but normalize here too
-    // so the persisted config and downstream base URL stay consistent.
-    return normalized.toString().replace(/\/+$/, "");
+  .transform((url) => {
+    url.protocol = "https:";
+    // The SDK concatenates its API routes, so retain only a canonical base URL.
+    return url.toString().replace(/\/+$/, "");
   });
 const FeishuDomainSchema = z.union([z.enum(["feishu", "lark"]), FeishuCustomDomainSchema]);
 const FeishuConnectionModeSchema = z.enum(["websocket", "webhook"]);
