@@ -5,9 +5,11 @@ import { resolveTelegramGroupAllowFromContext, resolveTelegramStreamMode } from 
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 
 describe("resolveTelegramStreamMode", () => {
-  it("defaults to partial when telegram streaming is unset", () => {
-    expect(resolveTelegramStreamMode(undefined)).toBe("partial");
-    expect(resolveTelegramStreamMode({})).toBe("partial");
+  it("defaults to progress when telegram streaming is unset", () => {
+    expect(resolveTelegramStreamMode(undefined)).toBe("progress");
+    expect(resolveTelegramStreamMode({})).toBe("progress");
+    // An explicit mode still wins, including the previous default.
+    expect(resolveTelegramStreamMode({ streaming: { mode: "partial" } })).toBe("partial");
   });
 
   it("resolves nested streaming.mode values", () => {

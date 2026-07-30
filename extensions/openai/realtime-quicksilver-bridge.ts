@@ -38,6 +38,7 @@ import {
 const OPENAI_QUICKSILVER_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 const OPENAI_QUICKSILVER_READY_TIMEOUT_MS = 15_000;
 const OPENAI_QUICKSILVER_PENDING_AUDIO_CHUNKS = 320;
+const OPENAI_QUICKSILVER_PENDING_AUDIO_BYTES = 1024 * 1024;
 const OPENAI_QUICKSILVER_SAMPLE_RATE = 24_000;
 const WEBSOCKET_OPEN = 1;
 
@@ -88,6 +89,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   private connectPromise: Promise<void> | undefined;
   private readonly lifecycle = new OpenAIRealtimeVoiceLifecycle();
   private pendingAudio: Buffer[] = [];
+  private pendingAudioBytes = 0;
   private activeDelegations = new Set<string>();
   private readonly flowId = randomUUID();
   private readonly requestIds: OpenAIQuicksilverRequestIds = {
@@ -141,7 +143,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       ) {
         return;
       }
-      this.lifecycle.failure(connection);
+      this.failLifecycle(connection);
       throw error;
     }
     if (!this.lifecycle.isCurrent(connection) || connection.signal.aborted) {
@@ -198,7 +200,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       if (!this.lifecycle.acceptsEvents(connection) || reachedReady) {
         return;
       }
-      this.lifecycle.failure(connection);
+      this.failLifecycle(connection);
       failReady(error);
       this.closeSocket(reason, connected.socket);
     };
@@ -269,7 +271,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
           return;
         }
         const error = new Error("GPT-Live WebSocket closed before session.started");
-        this.lifecycle.failure(connection);
+        this.failLifecycle(connection);
         failReady(error);
         this.lifecycle.close(connection, "error");
         return;
@@ -309,10 +311,11 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   }
 
   sendAudio(audio: Buffer): void {
+    if (this.lifecycle.phase() === "terminal") {
+      return;
+    }
     if (!this.lifecycle.isReady() || this.socket?.readyState !== WEBSOCKET_OPEN) {
-      if (this.pendingAudio.length < OPENAI_QUICKSILVER_PENDING_AUDIO_CHUNKS) {
-        this.pendingAudio.push(audio);
-      }
+      this.enqueuePendingAudio(audio);
       return;
     }
     this.sendAudioNow(audio);
@@ -360,6 +363,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
     if (!connection || !this.lifecycle.cancel()) {
       return;
     }
+    this.resetTerminalState();
     if (this.socket?.readyState === WEBSOCKET_OPEN) {
       this.sendEvent({ type: "session.close" });
     }
@@ -425,7 +429,9 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
     }
     if (event.kind === "session-started") {
       if (this.lifecycle.ready(connection)) {
-        for (const audio of this.pendingAudio.splice(0)) {
+        const pendingAudio = this.pendingAudio.splice(0);
+        this.pendingAudioBytes = 0;
+        for (const audio of pendingAudio) {
           this.sendAudioNow(audio);
         }
         this.config.onReady?.();
@@ -535,12 +541,37 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
     error: Error,
     reason = "bridge error",
   ): boolean {
-    if (!this.lifecycle.failure(connection)) {
+    if (!this.failLifecycle(connection)) {
       return false;
     }
     this.config.onError?.(error);
     this.closeSocket(reason);
     return true;
+  }
+
+  private failLifecycle(connection: OpenAIRealtimeVoiceConnection): boolean {
+    if (!this.lifecycle.failure(connection)) {
+      return false;
+    }
+    this.resetTerminalState();
+    return true;
+  }
+
+  private enqueuePendingAudio(audio: Buffer): void {
+    if (
+      this.pendingAudio.length >= OPENAI_QUICKSILVER_PENDING_AUDIO_CHUNKS ||
+      this.pendingAudioBytes + audio.byteLength > OPENAI_QUICKSILVER_PENDING_AUDIO_BYTES
+    ) {
+      return;
+    }
+    this.pendingAudio.push(audio);
+    this.pendingAudioBytes += audio.byteLength;
+  }
+
+  private resetTerminalState(): void {
+    this.pendingAudio = [];
+    this.pendingAudioBytes = 0;
+    this.activeDelegations.clear();
   }
 
   private closeSocket(reason: string, socket = this.socket): void {
@@ -559,6 +590,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
     if (!outcome) {
       return;
     }
+    this.resetTerminalState();
     this.config.onClose?.(outcome);
   }
 }

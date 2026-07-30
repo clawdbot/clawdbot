@@ -20,7 +20,7 @@ describe("sessions_yield tool", () => {
     expect(onYield).not.toHaveBeenCalled();
   });
 
-  it("invokes onYield callback with default message", async () => {
+  it("invokes onYield callback with default message provenance", async () => {
     const onYield = vi.fn();
     const tool = createSessionsYieldTool({ sessionId: "test-session", onYield });
     const result = await tool.execute("call-1", {});
@@ -28,7 +28,7 @@ describe("sessions_yield tool", () => {
     expect(details.status).toBe("yielded");
     expect(details.message).toBe("Turn yielded.");
     expect(onYield).toHaveBeenCalledOnce();
-    expect(onYield).toHaveBeenCalledWith("Turn yielded.");
+    expect(onYield).toHaveBeenCalledWith("Turn yielded.", { hasExplicitMessage: false });
   });
 
   it("passes the custom message through the yield callback", async () => {
@@ -41,7 +41,9 @@ describe("sessions_yield tool", () => {
     expect(details.status).toBe("yielded");
     expect(details.message).toBe("Waiting for fact-checker");
     expect(onYield).toHaveBeenCalledOnce();
-    expect(onYield).toHaveBeenCalledWith("Waiting for fact-checker");
+    expect(onYield).toHaveBeenCalledWith("Waiting for fact-checker", {
+      hasExplicitMessage: true,
+    });
   });
 
   it("persists yield intent before aborting the requester run", async () => {

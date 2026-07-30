@@ -801,6 +801,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               if (abort.signal.aborted || manuallyStopped.has(rKey) || !isCurrentTask()) {
                 return;
               }
+              if (getRuntime(channelId, id).terminalDisconnect) {
+                // Terminal status carries the operator-facing diagnosis and restart policy.
+                // Do not replace it with a generic clean-exit error before policy consumes it.
+                return;
+              }
               const message = "channel exited without an error";
               setRuntime(channelId, id, { accountId: id, lastError: message });
               log.error?.(`[${id}] ${message}`);

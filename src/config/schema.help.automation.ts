@@ -326,7 +326,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "When true, suppress ⚠️ tool-error warnings from being shown to the user. The agent already sees errors in context and can retry. Default: false.",
   "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
   "messages.ackReactionScope":
-    'When to send ack reactions ("group-mentions", "group-all", "direct", "all", "off", "none"). "off"/"none" disables ack reactions entirely.',
+    'When to send ack reactions ("group-mentions", "group-all", "direct", "all", "off", "none"). "group-mentions" acks group messages that mention the agent, whether or not the group requires mentions; "group-all" acks every group message. "off"/"none" disables ack reactions entirely.',
   "messages.statusReactions":
     "Lifecycle status reactions that update the emoji on the trigger message as the agent progresses (queued → thinking → tool → done/error).",
   "messages.statusReactions.enabled":

@@ -4176,20 +4176,46 @@ describe("qa mock openai server", () => {
 
   it("completes an image without replaying a tool unavailable to the completion turn", async () => {
     const server = await startMockServer();
+    const prompt = "Image generation check: generate a QA lighthouse image.";
+    const imagePlan = await expectResponsesJson<unknown>(server, {
+      stream: false,
+      tools: [IMAGE_GENERATE_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+    const imageCall = outputToolCall(imagePlan, "image_generate");
+    const callId = outputToolCallId(imageCall, "call_mock_image_generate_unavailable");
+    const completionEvent = [
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "OpenClaw runtime context (internal):",
+      "",
+      "[Internal task completion event]",
+      "source: image_generation",
+      "task: A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
+      "status: completed successfully",
+      "Generated media:",
+      "MEDIA:/tmp/qa-lighthouse.png",
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    ].join("\n");
     const completion = await expectResponsesJson<unknown>(server, {
       stream: false,
       tools: [MESSAGE_TOOL],
       input: [
-        makeUserInput("Image generation check: generate a QA lighthouse image."),
-        makeUserInput(
-          [
-            "[Internal task completion event]",
-            "source: image_generation",
-            "status: completed successfully",
-            "Generated media:",
-            "MEDIA:/tmp/qa-lighthouse.png",
-          ].join("\n"),
-        ),
+        makeUserInput(prompt),
+        {
+          type: "function_call",
+          name: "image_generate",
+          call_id: callId,
+          arguments: String(imageCall.arguments),
+        },
+        {
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify({
+            content: [{ type: "text", text: "Background image generation started." }],
+            details: { async: true, status: "started" },
+          }),
+        },
+        makeUserInput(completionEvent),
       ],
     });
 

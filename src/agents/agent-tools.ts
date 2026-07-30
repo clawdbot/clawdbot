@@ -121,6 +121,7 @@ import {
   type CronCreatorToolAllowlistEntry,
 } from "./tools/cron-tool.js";
 import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
+import type { SessionsYieldEvent } from "./tools/sessions-yield-tool.js";
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
@@ -452,7 +453,7 @@ type OpenClawCodingToolsOptions = {
   /** Auth profiles already loaded for this run; used for prompt-time tool availability. */
   authProfileStore?: AuthProfileStore;
   /** Callback invoked when sessions_yield tool is called. */
-  onYield?: (message: string) => Promise<void> | void;
+  onYield?: (message: string, event: SessionsYieldEvent) => Promise<void> | void;
   /** Optional instrumentation callback for tool preparation stage timing. */
   recordToolPrepStage?: (name: string) => void;
   /** Lower routine policy-removal audits for diagnostic-only tool probes. */

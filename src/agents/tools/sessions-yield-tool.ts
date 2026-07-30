@@ -11,11 +11,15 @@ const SessionsYieldToolSchema = Type.Object({
   message: Type.Optional(Type.String()),
 });
 
+export type SessionsYieldEvent = {
+  hasExplicitMessage: boolean;
+};
+
 /** Creates the sessions_yield tool for runtimes that support yield callbacks. */
 export function createSessionsYieldTool(opts?: {
   sessionId?: string;
   onBeforeYield?: () => Promise<void> | void;
-  onYield?: (message: string) => Promise<void> | void;
+  onYield?: (message: string, event: SessionsYieldEvent) => Promise<void> | void;
 }): AnyAgentTool {
   return {
     label: "Yield",
@@ -27,7 +31,8 @@ export function createSessionsYieldTool(opts?: {
     parameters: SessionsYieldToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const message = readStringParam(params, "message") || "Turn yielded.";
+      const explicitMessage = readStringParam(params, "message");
+      const message = explicitMessage || "Turn yielded.";
       if (!opts?.sessionId) {
         return jsonResult({ status: "error", error: "No session context" });
       }
@@ -36,7 +41,7 @@ export function createSessionsYieldTool(opts?: {
       }
       await opts.onBeforeYield?.();
       // The runtime owns the actual pause/end-turn behavior; this tool records intent.
-      await opts.onYield(message);
+      await opts.onYield(message, { hasExplicitMessage: explicitMessage !== undefined });
       return jsonResult({ status: "yielded", message });
     },
   };

@@ -1319,6 +1319,18 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("keeps npm release workflow edits on the preflight cache guard", () => {
+    expect(resolveChangedTestTargetPlan([".github/workflows/openclaw-npm-release.yml"])).toEqual({
+      mode: "targets",
+      targets: [
+        "test/openclaw-npm-postpublish-verify.test.ts",
+        "test/scripts/openclaw-npm-extended-stable-workflow.test.ts",
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
+      ],
+    });
+  });
+
   it("keeps generated locale publisher and inventory edits on workflow guards", () => {
     for (const actionPath of [
       ".github/actions/create-generated-pr-tokens/action.yml",

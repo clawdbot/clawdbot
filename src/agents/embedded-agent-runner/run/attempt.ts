@@ -184,9 +184,9 @@ export async function runEmbeddedAttempt(
       effectiveCwd,
       effectiveWorkspace,
       markCoreToolStage: (name) => corePluginToolStages.mark(name),
-      onYield: (message) => {
+      onYield: (message, event) => {
         yieldDetected = true;
-        yieldMessage = message;
+        yieldMessage = event.hasExplicitMessage ? message : null;
         queueYieldInterruptForSession?.();
         runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
         abortSessionForYield?.();

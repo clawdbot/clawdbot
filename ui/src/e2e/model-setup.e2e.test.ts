@@ -235,6 +235,184 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
     }
   });
 
+  it("recovers Ollama setup in place after the local server starts", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const initialDetection = {
+      candidates: [],
+      manualProviders: [],
+      recommendedInstalls: [
+        {
+          id: "ollama",
+          brandId: "ollama",
+          label: "Ollama",
+          hint: "Run open models locally",
+          website: "https://ollama.com/download",
+        },
+      ],
+      workspace: "/tmp/openclaw-e2e",
+      setupComplete: false,
+    };
+    const gateway = await installMockGateway(page, {
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "openclaw.setup.detect",
+        "openclaw.setup.prepare.start",
+        "wizard.next",
+      ],
+      methodResponses: {
+        "openclaw.setup.detect": initialDetection,
+        "openclaw.setup.prepare.start": {
+          sessionId: "ollama-prepare-session",
+          done: false,
+          status: "running",
+        },
+        "wizard.next": {
+          sequence: [
+            {
+              done: false,
+              status: "running",
+              step: {
+                id: "ollama-mode",
+                type: "select",
+                message: "Ollama mode",
+                options: [
+                  {
+                    value: "cloud-local",
+                    label: "Cloud + Local",
+                    hint: "Route cloud and local models through your Ollama host",
+                  },
+                  { value: "cloud-only", label: "Cloud only", hint: "Hosted Ollama models" },
+                  { value: "local-only", label: "Local only", hint: "Local models only" },
+                ],
+              },
+            },
+            {
+              done: false,
+              status: "running",
+              step: {
+                id: "ollama-base-url",
+                type: "text",
+                message: "Ollama base URL",
+                initialValue: "http://127.0.0.1:11434",
+              },
+            },
+            {
+              done: false,
+              status: "running",
+              step: {
+                id: "ollama-retry",
+                type: "note",
+                title: "Ollama",
+                message: [
+                  "Ollama could not be reached at http://127.0.0.1:11434.",
+                  "Start or restart the Ollama server for this address.",
+                  "If Ollama is not installed on that machine, download it at https://ollama.com/download",
+                  "",
+                  "Continue when it is running. OpenClaw will retry this address.",
+                ].join("\n"),
+              },
+            },
+            {
+              done: false,
+              status: "running",
+              step: {
+                id: "ollama-retry-confirm",
+                type: "confirm",
+                message: "Retry this Ollama address now?",
+                initialValue: true,
+              },
+            },
+            { done: true, status: "done" },
+          ],
+        },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}settings/model-setup`);
+      expect(response?.status()).toBe(200);
+      await page
+        .locator('[data-prepare-choice="ollama"]')
+        .getByRole("button", { name: "Check & set up" })
+        .click();
+
+      const start = await gateway.waitForRequest("openclaw.setup.prepare.start");
+      expect(start.params).toMatchObject({ authChoice: "ollama" });
+      await page.getByRole("radio", { name: /Local only/u }).check();
+      await page.getByRole("button", { name: "Continue" }).click();
+      const baseUrl = page.getByLabel("Ollama base URL");
+      await expect.poll(() => baseUrl.inputValue()).toBe("http://127.0.0.1:11434");
+      await page.getByRole("button", { name: "Submit" }).click();
+      await page.getByText("Ollama could not be reached at http://127.0.0.1:11434.").waitFor();
+      await page
+        .getByText("Continue when it is running. OpenClaw will retry this address.")
+        .waitFor();
+
+      if (artifactDir) {
+        await mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "ollama-recovery-desktop.png"),
+        });
+      }
+
+      await page.getByRole("button", { name: "Continue" }).click();
+      await page.getByText("Retry this Ollama address now?").waitFor();
+
+      await gateway.setMethodResponse("openclaw.setup.detect", {
+        ...initialDetection,
+        candidates: [
+          {
+            kind: "provider-auto:ollama",
+            brandId: "ollama",
+            label: "Ollama",
+            detail: "qwen3:0.6b at http://127.0.0.1:11434",
+            modelRef: "ollama/qwen3:0.6b",
+            recommended: true,
+            credentials: true,
+          },
+        ],
+        recommendedInstalls: [],
+      });
+      await page.getByRole("button", { name: "Yes" }).click();
+      await page.getByText("qwen3:0.6b at http://127.0.0.1:11434").waitFor();
+      await expect.poll(() => page.locator('[data-prepare-choice="ollama"]').count()).toBe(0);
+
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "ollama-ready-desktop.png"),
+        });
+      }
+
+      const wizardRequests = await gateway.getRequests("wizard.next");
+      expect(wizardRequests).toHaveLength(5);
+      expect(wizardRequests[2]?.params).toMatchObject({
+        answer: {
+          stepId: "ollama-base-url",
+          value: "http://127.0.0.1:11434",
+        },
+      });
+      expect(wizardRequests[3]?.params).toMatchObject({
+        answer: { stepId: "ollama-retry" },
+      });
+      expect(wizardRequests[4]?.params).toMatchObject({
+        answer: { stepId: "ollama-retry-confirm", value: true },
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("turns an unverifiable Gemini CLI login into direct recovery actions", async () => {
     const context = await browser.newContext({
       colorScheme: "dark",

@@ -296,11 +296,41 @@ enum LocationPermissionHelper {
 }
 
 @MainActor
+final class LocationPermissionRequestCoordinator {
+    private var continuations: [CheckedContinuation<CLAuthorizationStatus, Never>] = []
+
+    var hasPendingRequests: Bool {
+        !self.continuations.isEmpty
+    }
+
+    var pendingRequestCount: Int {
+        self.continuations.count
+    }
+
+    func wait(onEnqueue: (_ isFirstRequest: Bool) -> Void) async -> CLAuthorizationStatus {
+        await withCheckedContinuation { continuation in
+            let isFirstRequest = self.continuations.isEmpty
+            self.continuations.append(continuation)
+            onEnqueue(isFirstRequest)
+        }
+    }
+
+    func finish(status: CLAuthorizationStatus) {
+        let continuations = self.continuations
+        self.continuations.removeAll()
+        for continuation in continuations {
+            continuation.resume(returning: status)
+        }
+    }
+}
+
+@MainActor
 final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
     static let shared = LocationPermissionRequester()
     private let manager = CLLocationManager()
-    private var continuation: CheckedContinuation<CLAuthorizationStatus, Never>?
+    private let requests = LocationPermissionRequestCoordinator()
     private var timeoutTask: Task<Void, Never>?
+    private var requestedAlways = false
 
     override init() {
         super.init()
@@ -318,35 +348,47 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
             return current
         }
 
-        return await withCheckedContinuation { cont in
-            self.continuation = cont
-            self.timeoutTask?.cancel()
-            self.timeoutTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-                await MainActor.run { [weak self] in
-                    guard let self else { return }
-                    guard self.continuation != nil else { return }
-                    LocationPermissionHelper.openSettings()
-                    self.finish(status: self.manager.authorizationStatus)
-                }
-            }
-            if always {
+        return await self.requests.wait { isFirstRequest in
+            if isFirstRequest {
+                self.requestedAlways = always
+                self.scheduleTimeout()
+                self.requestAuthorization(always: always)
+                // On macOS, requesting an actual fix makes the prompt more reliable.
+                self.manager.requestLocation()
+            } else if always, !self.requestedAlways {
+                self.requestedAlways = true
                 self.manager.requestAlwaysAuthorization()
-            } else {
-                self.manager.requestWhenInUseAuthorization()
             }
+        }
+    }
 
-            // On macOS, requesting an actual fix makes the prompt more reliable.
-            self.manager.requestLocation()
+    private func requestAuthorization(always: Bool) {
+        if always {
+            self.manager.requestAlwaysAuthorization()
+        } else {
+            self.manager.requestWhenInUseAuthorization()
+        }
+    }
+
+    private func scheduleTimeout() {
+        self.timeoutTask?.cancel()
+        self.timeoutTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 3_000_000_000)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, let self, self.requests.hasPendingRequests else { return }
+            LocationPermissionHelper.openSettings()
+            self.finish(status: self.manager.authorizationStatus)
         }
     }
 
     private func finish(status: CLAuthorizationStatus) {
         self.timeoutTask?.cancel()
         self.timeoutTask = nil
-        guard let cont = self.continuation else { return }
-        self.continuation = nil
-        cont.resume(returning: status)
+        self.requestedAlways = false
+        self.requests.finish(status: status)
     }
 
     /// nonisolated for Swift 6 strict concurrency compatibility

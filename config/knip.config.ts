@@ -81,6 +81,7 @@ const repositoryScriptEntries = [
   "scripts/qa-parity-report.ts!",
   "scripts/resolve-frozen-codex-live-suite.mjs!",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
+  "scripts/sqlite-session-entry-cache-lifetime-proof.ts!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mjs!",
   "scripts/update-clawtributors.ts!",

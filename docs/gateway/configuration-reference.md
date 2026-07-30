@@ -934,13 +934,13 @@ Validation and safety notes:
   - `sessionKey` from request payload is accepted only when `hooks.allowRequestSessionKey=true` (default: `false`).
   - `sessionMode` is `"isolated"` by default. `"persistent"` reuses the resolved session and requires an explicit request `sessionKey`, `hooks.allowRequestSessionKey=true`, and non-empty `hooks.allowedSessionKeyPrefixes`.
   - Direct announce delivery requires both a concrete `channel` and `to`; supplying only one fails before the run is scheduled.
-  - `accountId` selects a configured account for direct announce delivery and requires both `channel` and `to`.
+  - `accountId` selects a configured, enabled account for direct announce delivery and requires both `channel` and `to`; invalid selections return `400` before a run starts.
   - Omit both delivery fields for completion-only hooks, or set `deliver: false` to ignore supplied destination data.
   - The request waits up to 15 seconds for runner admission, not run completion. `200` means the agent runner was entered.
-  - Pre-run failures return `{ ok: false, error, runId }`: `409` for session admission conflicts, `502` for other preparation failures, and `503` when the 15-second admission deadline expires. Timed-out queued work is canceled and will not start later.
+  - Pre-run failures return `{ ok: false, error, runId }`: `400` for invalid delivery coordinates or account selection, `409` for session admission conflicts, `502` for other preparation failures, and `503` when the 15-second admission deadline expires. Timed-out queued work is canceled and will not start later.
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
   - Template-rendered mapping `sessionKey` values are treated as externally supplied and also require `hooks.allowRequestSessionKey=true`.
-  - Mapped `agent` actions use the same admission wait and `200`/`409`/`502`/`503` outcomes.
+  - Mapped `agent` actions use the same admission wait and `200`/`400`/`409`/`502`/`503` outcomes.
 
 <Accordion title="Mapping details">
 

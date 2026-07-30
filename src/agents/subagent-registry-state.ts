@@ -8,6 +8,7 @@ import {
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentRunsForControllerFromSqlite,
   loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryChangesToSqlite,
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -54,6 +55,25 @@ function rememberPersistedSubagentRunsSnapshot(runs: Map<string, SubagentRunReco
     loadedAtMs: Date.now(),
     runs: cloneSubagentRunsSnapshot(runs),
   };
+}
+
+function rememberPersistedSubagentRunChanges(
+  runs: Map<string, SubagentRunRecord>,
+  changedRunIds: readonly string[],
+): void {
+  if (!persistedSubagentRunsReadCache) {
+    rememberPersistedSubagentRunsSnapshot(runs);
+    return;
+  }
+  for (const runId of new Set(changedRunIds)) {
+    const entry = runs.get(runId);
+    if (entry) {
+      persistedSubagentRunsReadCache.runs.set(runId, structuredClone(entry));
+    } else {
+      persistedSubagentRunsReadCache.runs.delete(runId);
+    }
+  }
+  persistedSubagentRunsReadCache.loadedAtMs = Date.now();
 }
 
 function shouldReadPersistedSubagentRuns(): boolean {
@@ -108,21 +128,42 @@ export function clearSubagentRunsReadCacheForTest(): void {
   persistedSubagentRunsReadCache = undefined;
 }
 
-export function persistSubagentRunsToDisk(runs: Map<string, SubagentRunRecord>) {
+export function persistSubagentRunsToDisk(
+  runs: Map<string, SubagentRunRecord>,
+  // Undefined replaces the complete snapshot; an array applies exact row mutations.
+  changedRunIds?: readonly string[],
+) {
   try {
-    saveSubagentRegistryToSqlite(runs);
+    if (changedRunIds) {
+      saveSubagentRegistryChangesToSqlite(runs, changedRunIds);
+    } else {
+      saveSubagentRegistryToSqlite(runs);
+    }
   } catch {
     // ignore persistence failures
   } finally {
     // In-process readers must observe the authoritative memory snapshot before the wake.
-    rememberPersistedSubagentRunsSnapshot(runs);
+    if (changedRunIds) {
+      rememberPersistedSubagentRunChanges(runs, changedRunIds);
+    } else {
+      rememberPersistedSubagentRunsSnapshot(runs);
+    }
     emitSubagentRegistryPersisted();
   }
 }
 
-export function persistSubagentRunsToDiskOrThrow(runs: Map<string, SubagentRunRecord>) {
-  saveSubagentRegistryToSqlite(runs);
-  rememberPersistedSubagentRunsSnapshot(runs);
+export function persistSubagentRunsToDiskOrThrow(
+  runs: Map<string, SubagentRunRecord>,
+  // Undefined replaces the complete snapshot; an array applies exact row mutations.
+  changedRunIds?: readonly string[],
+) {
+  if (changedRunIds) {
+    saveSubagentRegistryChangesToSqlite(runs, changedRunIds);
+    rememberPersistedSubagentRunChanges(runs, changedRunIds);
+  } else {
+    saveSubagentRegistryToSqlite(runs);
+    rememberPersistedSubagentRunsSnapshot(runs);
+  }
   emitSubagentRegistryPersisted();
 }
 

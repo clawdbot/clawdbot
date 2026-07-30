@@ -84,7 +84,7 @@ import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsTool } from "./tools/sessions-tool.js";
-import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
+import { createSessionsYieldTool, type SessionsYieldEvent } from "./tools/sessions-yield-tool.js";
 import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-factory.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
@@ -214,7 +214,7 @@ export function createOpenClawTools(
     /** Current runtime directory used as the default project for follow-up suggestions. */
     cwd?: string;
     /** Callback invoked when sessions_yield tool is called. */
-    onYield?: (message: string) => Promise<void> | void;
+    onYield?: (message: string, event: SessionsYieldEvent) => Promise<void> | void;
     /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
     allowGatewaySubagentBinding?: boolean;
   } & SpawnedToolContext &
@@ -286,11 +286,14 @@ export function createOpenClawTools(
       : (message: string) => {
           // Commit the start before yielding; handle teardown failures outside the owner turn.
           setImmediate(() => {
-            void (async () => yieldMediaGenerationTurn(message))().catch((error: unknown) => {
-              mediaGenerationYieldLog.warn("Failed to yield foreground media generation turn", {
-                error: formatErrorMessage(error),
-              });
-            });
+            void (async () =>
+              yieldMediaGenerationTurn(message, { hasExplicitMessage: true }))().catch(
+              (error: unknown) => {
+                mediaGenerationYieldLog.warn("Failed to yield foreground media generation turn", {
+                  error: formatErrorMessage(error),
+                });
+              },
+            );
           });
         };
   const taskKey = normalizeOptionalString(options?.runSessionKey ?? options?.agentSessionKey);

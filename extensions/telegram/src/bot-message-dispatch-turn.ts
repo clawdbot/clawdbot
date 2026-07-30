@@ -221,7 +221,11 @@ export async function runTelegramDispatchTurn(params: {
               !params.draft.streamDeliveryEnabled || Boolean(params.draft.answerLane.stream),
             forceToolResultProgress:
               params.streamMode === "progress" &&
-              resolveChannelStreamingPreviewToolProgress(params.telegramCfg),
+              resolveChannelStreamingPreviewToolProgress(
+                params.telegramCfg,
+                true,
+                params.streamMode,
+              ),
             allowProgressCallbacksWhenSourceDeliverySuppressed:
               !isRoomEvent && Boolean(params.draft.answerLane.stream),
             onVerboseProgressVisibility: (isActive) => {
