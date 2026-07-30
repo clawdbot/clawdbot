@@ -2,6 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  isNodeCommandAllowed,
+  resolveNodeCommandAllowlist,
+} from "../gateway/node-command-policy.js";
 import { normalizeNodeApprovalSurfaceList } from "./node-pairing-surface.js";
 
 type IntegrationFixture = {
@@ -10,10 +14,16 @@ type IntegrationFixture = {
   expectedCapabilities: string[];
   declaredCommands: string[];
   expectedCommands: string[];
-  approvedCommands: string[];
+  gatewayPolicy: {
+    allow: string[];
+    deny: string[];
+  };
   invocations: Array<{
     command: string;
-    expected: "allow" | "deny";
+    gatewayDelivery: "deliver" | "reject";
+    gatewayReason?: string;
+    localAdmission: "allow" | "deny" | "not-evaluated";
+    expected?: "success" | "failure";
     errorCode?: string;
     errorMessage?: string;
   }>;
@@ -30,22 +40,32 @@ function loadFixture(): IntegrationFixture {
 }
 
 describe("node runtime integration contract", () => {
-  it("normalizes the approved catalog and pins admission outcomes", () => {
+  it("keeps Gateway authority ahead of node-local admission", () => {
     const fixture = loadFixture();
-    expect(fixture.version).toBe(1);
-    expect(normalizeNodeApprovalSurfaceList(fixture.declaredCapabilities).toSorted()).toEqual(
-      fixture.expectedCapabilities,
-    );
-    expect(normalizeNodeApprovalSurfaceList(fixture.declaredCommands).toSorted()).toEqual(
-      fixture.expectedCommands,
-    );
+    expect(fixture.version).toBe(2);
+    const declaredCapabilities = [
+      ...new Set(normalizeNodeApprovalSurfaceList(fixture.declaredCapabilities)),
+    ].toSorted();
+    expect(declaredCapabilities).toEqual(fixture.expectedCapabilities);
+    const declaredCommands = [
+      ...new Set(normalizeNodeApprovalSurfaceList(fixture.declaredCommands)),
+    ].toSorted();
+    expect(declaredCommands).toEqual(fixture.expectedCommands);
 
-    const approved = new Set(normalizeNodeApprovalSurfaceList(fixture.approvedCommands));
+    const allowlist = resolveNodeCommandAllowlist({
+      gateway: { nodes: { commands: fixture.gatewayPolicy } },
+    });
+
     for (const invocation of fixture.invocations) {
-      expect(approved.has(invocation.command) ? "allow" : "deny").toBe(invocation.expected);
-      if (invocation.expected === "deny") {
-        expect(invocation.errorCode).toBe("COMMAND_NOT_APPROVED");
-        expect(invocation.errorMessage).toBeTruthy();
+      const decision = isNodeCommandAllowed({
+        command: invocation.command,
+        declaredCommands,
+        allowlist,
+      });
+      expect(decision.ok ? "deliver" : "reject").toBe(invocation.gatewayDelivery);
+      if (!decision.ok) {
+        expect(decision.reason).toBe(invocation.gatewayReason);
+        expect(invocation.localAdmission).toBe("not-evaluated");
       }
     }
   });

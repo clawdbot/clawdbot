@@ -1204,7 +1204,6 @@ mod tests {
         expected_capabilities: Vec<String>,
         declared_commands: Vec<String>,
         expected_commands: Vec<String>,
-        approved_commands: Vec<String>,
         invocations: Vec<IntegrationInvocation>,
     }
 
@@ -1212,7 +1211,10 @@ mod tests {
     #[serde(rename_all = "camelCase")]
     struct IntegrationInvocation {
         command: String,
-        expected: String,
+        gateway_delivery: String,
+        gateway_reason: Option<String>,
+        local_admission: String,
+        expected: Option<String>,
         error_code: Option<String>,
         error_message: Option<String>,
     }
@@ -1226,15 +1228,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shared_catalog_and_admission_contract_matches_openclaw() {
+    async fn shared_authority_handoff_contract_matches_openclaw() {
         let fixture = integration_fixture();
-        assert_eq!(fixture.version, 1);
-        let approved = Arc::new(
+        assert_eq!(fixture.version, 2);
+        let local_denied = Arc::new(
             fixture
-                .approved_commands
-                .into_iter()
+                .invocations
+                .iter()
+                .filter(|invocation| invocation.local_admission == "deny")
+                .map(|invocation| invocation.command.clone())
                 .collect::<BTreeSet<_>>(),
         );
+        let admission_evaluations = Arc::new(AtomicUsize::new(0));
+        let admission_state = Arc::clone(&admission_evaluations);
         let handler_runs = Arc::new(AtomicUsize::new(0));
         let mut builder = CommandRuntime::builder();
         for capability in fixture.declared_capabilities {
@@ -1252,15 +1258,17 @@ mod tests {
         }
         let runtime = builder
             .admission_policy(move |context| {
-                let approved = Arc::clone(&approved);
+                let local_denied = Arc::clone(&local_denied);
+                let admission_evaluations = Arc::clone(&admission_state);
                 async move {
-                    if approved.contains(&context.invocation.command) {
-                        Ok(())
-                    } else {
+                    admission_evaluations.fetch_add(1, Ordering::SeqCst);
+                    if local_denied.contains(&context.invocation.command) {
                         Err(HandlerError::new(
-                            "COMMAND_NOT_APPROVED",
-                            "command is outside the current OpenClaw-approved surface",
+                            "LOCAL_POLICY_DENIED",
+                            "command is outside the embedding's current local policy",
                         ))
+                    } else {
+                        Ok(())
                     }
                 }
             })
@@ -1285,6 +1293,12 @@ mod tests {
         );
 
         for (index, contract) in fixture.invocations.into_iter().enumerate() {
+            if contract.gateway_delivery == "reject" {
+                assert_eq!(contract.local_admission, "not-evaluated");
+                assert!(contract.gateway_reason.is_some());
+                continue;
+            }
+            assert_eq!(contract.gateway_delivery, "deliver");
             let result = runtime
                 .evaluate(invocation(
                     &format!("fixture-{index}"),
@@ -1292,18 +1306,19 @@ mod tests {
                     Value::Null,
                 ))
                 .await;
-            match contract.expected.as_str() {
-                "allow" => assert!(matches!(result, InvocationResult::Success(_))),
-                "deny" => assert_eq!(
+            match contract.expected.as_deref() {
+                Some("success") => assert!(matches!(result, InvocationResult::Success(_))),
+                Some("failure") => assert_eq!(
                     result,
                     InvocationResult::failure(
                         contract.error_code.expect("denial code"),
                         contract.error_message.expect("denial message")
                     )
                 ),
-                other => panic!("unknown fixture outcome: {other}"),
+                other => panic!("unknown fixture outcome: {other:?}"),
             }
         }
+        assert_eq!(admission_evaluations.load(Ordering::SeqCst), 2);
         assert_eq!(handler_runs.load(Ordering::SeqCst), 1);
     }
 
