@@ -87,7 +87,11 @@ function fakeRuntime(config: unknown): PluginRuntime {
 
 type SentRequest = { url: string; auth?: string; payload: BeamMirrorUpload };
 
-function captureFetch(sent: SentRequest[], status = 200, onCancel?: () => void): typeof fetch {
+function captureFetch(
+  sent: SentRequest[],
+  status = 200,
+  onCancel?: () => void | Promise<void>,
+): typeof fetch {
   return (async (url: unknown, init?: RequestInit) => {
     const headers = (init?.headers ?? {}) as Record<string, string>;
     sent.push({
@@ -97,9 +101,7 @@ function captureFetch(sent: SentRequest[], status = 200, onCancel?: () => void):
     });
     const body = onCancel
       ? new ReadableStream<Uint8Array>({
-          cancel: () => {
-            onCancel();
-          },
+          cancel: onCancel,
         })
       : "{}";
     return new Response(body, { status });
@@ -244,6 +246,32 @@ describe("createBeamMirrorRunner", () => {
     });
     expect(parseBeamUpload(structuredClone(sent[0]?.payload)).ok).toBe(true);
     expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("keeps successful uploads successful when response cancellation rejects", async () => {
+    const sent: SentRequest[] = [];
+    const warnings: string[] = [];
+    const cancel = vi.fn(async () => {
+      throw new Error("cancel failed");
+    });
+    const catalog = fakeCatalog({
+      id: "claude",
+      sessions: [{ threadId: "t1", recencyAt: NOW - 60_000 }],
+    });
+    const runner = createBeamMirrorRunner({
+      runtime: fakeRuntime(mirrorConfig()),
+      logger: { warn: (message) => warnings.push(message), info: () => {} },
+      fetchFn: captureFetch(sent, 200, cancel),
+      now: () => NOW,
+      listCatalogs: () => [catalog],
+    });
+
+    await runner.tick();
+    await runner.tick();
+
+    expect(sent).toHaveLength(1);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(warnings).toEqual([]);
   });
 
   it("ignores idle sessions, node hosts, the beam catalog, and unlisted catalogs", async () => {
