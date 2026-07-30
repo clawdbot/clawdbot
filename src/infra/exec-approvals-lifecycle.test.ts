@@ -34,10 +34,18 @@ const mutationCases: Array<[string, string[]]> = [
     "systemctl -H host restart openclaw-gateway.service",
     ["systemctl", "-H", "host", "restart", "openclaw-gateway.service"],
   ],
+  [
+    "systemctl --job-mode replace restart openclaw-gateway.service",
+    ["systemctl", "--job-mode", "replace", "restart", "openclaw-gateway.service"],
+  ],
   ["service openclaw-gateway stop", ["service", "openclaw-gateway", "stop"]],
   ['schtasks /Run /TN "OpenClaw Gateway"', ["schtasks", "/Run", "/TN", "OpenClaw Gateway"]],
   ["pkill -TERM openclaw", ["pkill", "-TERM", "openclaw"]],
   ["kill -TERM $(pidof openclaw)", ["kill", "-TERM", "$(pidof openclaw)"]],
+  [
+    "kill $(systemctl show --property MainPID --value openclaw-gateway.service)",
+    ["kill", "$(systemctl show --property MainPID --value openclaw-gateway.service)"],
+  ],
   [
     "sudo systemctl restart openclaw-gateway.service",
     ["sudo", "systemctl", "restart", "openclaw-gateway.service"],
@@ -59,6 +67,7 @@ const mutationCases: Array<[string, string[]]> = [
   ],
   [`npx -c "openclaw gateway restart"`, ["npx", "-c", "openclaw gateway restart"]],
   ["npm exec -- openclaw gateway restart", ["npm", "exec", "--", "openclaw", "gateway", "restart"]],
+  ["npm install -g openclaw@latest", ["npm", "install", "-g", "openclaw@latest"]],
   [
     "npm --prefix /tmp exec -- openclaw gateway restart",
     ["npm", "--prefix", "/tmp", "exec", "--", "openclaw", "gateway", "restart"],
@@ -86,7 +95,12 @@ const mutationCases: Array<[string, string[]]> = [
     "env env env env env env env env openclaw gateway restart",
     ["env", "env", "env", "env", "env", "env", "env", "env", "openclaw", "gateway", "restart"],
   ],
+  ["xargs openclaw gateway", ["xargs", "openclaw", "gateway"]],
   [`echo "$(openclaw gateway restart)"`, ["echo", "$(openclaw gateway restart)"]],
+  [
+    String.raw`echo "$(printf '\'; openclaw gateway restart)"`,
+    ["echo", String.raw`$(printf '\'; openclaw gateway restart)`],
+  ],
   ["echo `openclaw gateway restart`", ["echo", "openclaw gateway restart"]],
 ];
 
@@ -117,6 +131,7 @@ const nonMutationCases: Array<[string, string[]]> = [
   ["pidof openclaw", ["pidof", "openclaw"]],
   ["pkill -0 openclaw", ["pkill", "-0", "openclaw"]],
   ["kill -s 0 $(pidof openclaw)", ["kill", "-s", "0", "$(pidof openclaw)"]],
+  ["kill --signal 0 $(pidof openclaw)", ["kill", "--signal", "0", "$(pidof openclaw)"]],
   ["echo openclaw gateway restart", ["echo", "openclaw", "gateway", "restart"]],
   [
     `echo 'Get-Service OpenClaw | Restart-Service'`,
@@ -189,5 +204,55 @@ describe("OpenClaw lifecycle exec approvals", () => {
         ],
       }),
     ).toBe(true);
+  });
+
+  it("expands known lifecycle environment references", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `systemctl "$ACTION" "$SERVICE"`,
+        env: {
+          ACTION: "restart",
+          SERVICE: "openclaw-gateway.service",
+        },
+        segments: [
+          {
+            raw: `systemctl "$ACTION" "$SERVICE"`,
+            argv: ["systemctl", "$ACTION", "$SERVICE"],
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("fails closed for partial lifecycle environments", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `systemctl "$ACTION" openclaw-gateway.service`,
+        env: {},
+        envComplete: false,
+        segments: [
+          {
+            raw: `systemctl "$ACTION" openclaw-gateway.service`,
+            argv: ["systemctl", "$ACTION", "openclaw-gateway.service"],
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps partial read-only service inspection non-blocking", () => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command: `systemctl status "$SERVICE"`,
+        env: {},
+        envComplete: false,
+        segments: [
+          {
+            raw: `systemctl status "$SERVICE"`,
+            argv: ["systemctl", "status", "$SERVICE"],
+          },
+        ],
+      }),
+    ).toBe(false);
   });
 });

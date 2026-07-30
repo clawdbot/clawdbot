@@ -80,6 +80,17 @@ function looksLikeUnresolvedLifecycleRunner(argv: readonly string[]): boolean {
   return text.includes("openclaw") && /\b(?:daemon|gateway|uninstall|update)\b/u.test(text);
 }
 
+function packageOperationMutatesOpenClaw(
+  argv: readonly string[],
+  subcommandIndex: number,
+): boolean {
+  const operation = normalizedToken(argv[subcommandIndex]);
+  if (!["add", "i", "install", "remove", "uninstall", "up", "update"].includes(operation)) {
+    return false;
+  }
+  return argv.slice(subcommandIndex + 1).some((token) => /^openclaw(?:@|$)/iu.test(token.trim()));
+}
+
 /** Resolve command argv launched by npm-compatible package runners. */
 export function resolveLifecyclePackageRunnerArgv(
   argv: readonly string[],
@@ -104,6 +115,9 @@ export function resolveLifecyclePackageRunnerArgv(
 
   const subcommandIndex = scanFirstPositional(argv, 1, PACKAGE_GLOBAL_OPTIONS_WITH_VALUE);
   const subcommand = normalizedToken(argv[subcommandIndex]);
+  if (packageOperationMutatesOpenClaw(argv, subcommandIndex)) {
+    return { kind: "approval-required" };
+  }
   if (executable === "npm" && ["exec", "x"].includes(subcommand)) {
     const inline = resolveInlineCommand(argv, subcommandIndex + 1);
     const resolved = inline ?? packageTarget(argv, subcommandIndex + 1);

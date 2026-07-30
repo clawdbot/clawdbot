@@ -2,6 +2,11 @@
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { resolveCarrierCommandArgv } from "./command-carriers.js";
 import { unwrapKnownDispatchWrapperInvocation } from "./dispatch-wrapper-resolution.js";
+import { resolveLifecycleXargsArgv } from "./exec-approvals-lifecycle-carriers.js";
+import {
+  expandLifecycleEnvironmentArgv,
+  unresolvedEnvironmentMayHideLifecycle,
+} from "./exec-approvals-lifecycle-env.js";
 import { resolveLifecyclePackageRunnerArgv } from "./exec-approvals-lifecycle-runners.js";
 import { extractShellSubstitutionCommands } from "./exec-approvals-lifecycle-substitutions.js";
 import type { ExecCommandSegment } from "./exec-command-analysis-types.js";
@@ -94,6 +99,7 @@ const SYSTEMCTL_OPTIONS_WITH_VALUE = new Set([
   "-t",
   "--host",
   "--image-policy",
+  "--job-mode",
   "--lines",
   "--machine",
   "--output",
@@ -289,7 +295,11 @@ function classifySystemctl(argv: readonly string[]): boolean {
   const actionIndex = scanFirstPositional(argv, 1, SYSTEMCTL_OPTIONS_WITH_VALUE);
   const action = normalizedToken(argv[actionIndex]);
   if (!SYSTEMCTL_MUTATIONS.has(action)) {
-    return false;
+    const concealedMutation = argv
+      .slice(actionIndex + 1)
+      .some((token) => SYSTEMCTL_MUTATIONS.has(normalizedToken(token)));
+    const optionBeforeAction = argv.slice(1, actionIndex).some((token) => token.startsWith("-"));
+    return optionBeforeAction && concealedMutation && argv.some(looksLikeOpenClaw);
   }
   if (action === "kill" && argvUsesSignalZero(argv)) {
     return false;
@@ -363,7 +373,10 @@ function classifyProcessMutation(
     ) {
       return false;
     }
-    return /\b(?:pgrep|pidof)\b[\s\S]{0,120}\bopenclaw\b/iu.test(raw);
+    return (
+      /\b(?:pgrep|pidof)\b[\s\S]{0,120}\bopenclaw\b/iu.test(raw) ||
+      /\$\([^)]*\bopenclaw\b[^)]*\)|`[^`]*\bopenclaw\b[^`]*`/iu.test(raw)
+    );
   }
   if (POWERSHELL_SERVICE_MUTATIONS.has(executable)) {
     return argv.slice(1).some(looksLikeOpenClaw);
@@ -394,6 +407,12 @@ function splitCommandText(command: string, delimiters: ReadonlySet<string>): str
   let parenDepth = 0;
   for (let index = 0; index < command.length; index += 1) {
     const char = command[index] ?? "";
+    if (quote === "'") {
+      if (char === "'") {
+        quote = null;
+      }
+      continue;
+    }
     if (escaped) {
       escaped = false;
       continue;
@@ -402,7 +421,7 @@ function splitCommandText(command: string, delimiters: ReadonlySet<string>): str
       escaped = true;
       continue;
     }
-    if (quote) {
+    if (quote === '"') {
       if (char === quote) {
         quote = null;
       }
@@ -580,6 +599,14 @@ function classifyArgv(
     });
   }
 
+  const xargs = resolveLifecycleXargsArgv(argv);
+  if (xargs.kind === "approval-required") {
+    return true;
+  }
+  if (xargs.kind === "argv") {
+    return classifyArgv(xargs.argv, xargs.argv.join(" "), depth + 1, shellContext);
+  }
+
   const packageRunner = resolveLifecyclePackageRunnerArgv(argv);
   if (packageRunner.kind === "approval-required") {
     return true;
@@ -613,6 +640,7 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
   envComplete?: boolean;
   segments: LifecycleSegment[];
 }): boolean {
+  const envComplete = params.envComplete ?? params.env !== undefined;
   if (
     commandHasPowerShellLifecyclePipeline(params.command) ||
     commandHasLifecycleSubstitution(params.command, 0)
@@ -639,7 +667,19 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
         return true;
       }
     }
-    if (candidates.some((argv) => classifyArgv(argv, segment.raw ?? params.command, 0))) {
+    if (
+      candidates.some((argv) => {
+        const expanded = expandLifecycleEnvironmentArgv({
+          argv,
+          env: params.env,
+          envComplete,
+        });
+        return (
+          (expanded.unresolved && unresolvedEnvironmentMayHideLifecycle(argv)) ||
+          classifyArgv(expanded.argv, segment.raw ?? params.command, 0)
+        );
+      })
+    ) {
       return true;
     }
   }

@@ -7,6 +7,12 @@ function findClosingParen(command: string, start: number): number | null {
   let escaped = false;
   for (let index = start; index < command.length; index += 1) {
     const char = command[index] ?? "";
+    if (quote === "'") {
+      if (char === "'") {
+        quote = null;
+      }
+      continue;
+    }
     if (escaped) {
       escaped = false;
       continue;
@@ -15,7 +21,7 @@ function findClosingParen(command: string, start: number): number | null {
       escaped = true;
       continue;
     }
-    if (quote) {
+    if (quote === '"') {
       if (char === quote) {
         quote = null;
       }
@@ -65,6 +71,12 @@ function extractAtDepth(command: string, depth: number): string[] {
   let escaped = false;
   for (let index = 0; index < command.length; index += 1) {
     const char = command[index] ?? "";
+    if (quote === "'") {
+      if (char === "'") {
+        quote = null;
+      }
+      continue;
+    }
     if (escaped) {
       escaped = false;
       continue;
@@ -73,8 +85,8 @@ function extractAtDepth(command: string, depth: number): string[] {
       escaped = true;
       continue;
     }
-    if (char === "'" && quote !== '"') {
-      quote = quote === "'" ? null : "'";
+    if (char === "'" && quote === null) {
+      quote = "'";
       continue;
     }
     if (char === '"' && quote !== "'") {
