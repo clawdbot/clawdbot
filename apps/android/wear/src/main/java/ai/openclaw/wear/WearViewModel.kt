@@ -555,19 +555,7 @@ internal class WearViewModel(
           if (!isCurrentControlRoute(phoneNodeId, routeGeneration, state)) {
             state
           } else {
-            state.copy(
-              connected = status.connected,
-              phoneNodeId = status.phoneNodeId,
-              activeAgentId = status.activeAgentId ?: state.activeAgentId,
-              selectedModelRef =
-                wearSelectedModelRef(
-                  state.selectedSession?.key,
-                  status.activeSessionKey,
-                  status.selectedModelRef ?: state.selectedModelRef,
-                ),
-              proxyCapabilities = status.capabilities,
-              realtimeTalk = if (enabled) state.realtimeTalk else WearRealtimeTalkSnapshot(),
-            )
+            applyWearGatewayControlStatus(state, status, enabled)
           }
         }
         refresh()
@@ -1218,6 +1206,26 @@ internal fun wearControlRouteIsCurrent(
 ): Boolean =
   requestedRouteGeneration == currentRouteGeneration &&
     currentState.phoneNodeId == requestedPhoneNodeId
+
+internal fun applyWearGatewayControlStatus(
+  state: WearUiState,
+  status: WearProxyStatus,
+  enabled: Boolean,
+): WearUiState =
+  state.copy(
+    controlBusy = false,
+    connected = status.connected,
+    phoneNodeId = status.phoneNodeId,
+    activeAgentId = status.activeAgentId ?: state.activeAgentId,
+    selectedModelRef =
+      wearSelectedModelRef(
+        state.selectedSession?.key,
+        status.activeSessionKey,
+        status.selectedModelRef ?: state.selectedModelRef,
+      ),
+    proxyCapabilities = status.capabilities,
+    realtimeTalk = if (enabled) state.realtimeTalk else WearRealtimeTalkSnapshot(),
+  )
 
 internal fun wearSnapshotSourcesMatch(
   firstPhoneNodeId: String,

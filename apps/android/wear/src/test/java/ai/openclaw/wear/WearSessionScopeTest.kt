@@ -1,5 +1,6 @@
 package ai.openclaw.wear
 
+import ai.openclaw.wear.shared.WearProxyCapability
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -181,6 +182,35 @@ class WearSessionScopeTest {
         currentRouteGeneration = 5,
       ),
     )
+  }
+
+  @Test
+  fun gatewayControlResponseClearsBusyWhenItAdoptsAnotherPhoneRoute() {
+    val updated =
+      applyWearGatewayControlStatus(
+        state =
+          WearUiState(
+            phoneNodeId = "phone-a",
+            controlBusy = true,
+            activeAgentId = "agent-a",
+          ),
+        status =
+          WearProxyStatus(
+            connected = true,
+            activeAgentId = "agent-b",
+            activeSessionKey = null,
+            selectedModelRef = null,
+            capabilities = setOf(WearProxyCapability.GatewayControls),
+            eventStreamId = null,
+            eventSequence = null,
+            phoneNodeId = "phone-b",
+          ),
+        enabled = true,
+      )
+
+    assertFalse(updated.controlBusy)
+    assertEquals("phone-b", updated.phoneNodeId)
+    assertEquals("agent-b", updated.activeAgentId)
   }
 
   @Test
