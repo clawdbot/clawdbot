@@ -142,6 +142,22 @@ export function buildRateLimitIdentityKey(namespace: string, identity: string): 
   return `${IDENTITY_RATE_LIMIT_KEY_PREFIX}${namespace}:${identity}`;
 }
 
+/**
+ * Preserve the prepared client identity for every pre-auth scope.
+ * Proxy-shaped loopback traffic is remote but has no trustworthy per-client IP,
+ * so it shares one non-exempt fail-safe bucket until proxy trust is configured.
+ */
+export function resolveAuthRateLimitClientIp(params: {
+  clientIp: string | undefined;
+  hasProxyHeaders: boolean;
+  isLocalClient: boolean;
+}): string | undefined {
+  if (params.hasProxyHeaders && !params.isLocalClient && isLoopbackAddress(params.clientIp)) {
+    return buildRateLimitIdentityKey("forwarded-loopback", params.clientIp);
+  }
+  return params.clientIp;
+}
+
 function resolvePruneIntervalMs(value: number | undefined): number {
   if (value === undefined) {
     return PRUNE_INTERVAL_MS;

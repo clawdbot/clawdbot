@@ -10,7 +10,7 @@ import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infr
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
-  buildRateLimitIdentityKey,
+  resolveAuthRateLimitClientIp,
   type AuthRateLimiter,
   type RateLimitCheckResult,
 } from "./auth-rate-limit.js";
@@ -121,16 +121,11 @@ function resolveGatewayAuthRequestContext(
     trustedProxies,
     params.allowRealIpFallback === true,
   );
-  // Forwarded requests that collapse to a loopback socket are not local clients.
-  // Use an opaque key so a missing proxy trust configuration cannot inherit the
-  // limiter's exemption for genuinely direct local callers.
-  const ip =
-    !localDirect &&
-    hasForwardedRequestHeaders(req) &&
-    resolvedIp !== undefined &&
-    isLoopbackAddress(resolvedIp)
-      ? buildRateLimitIdentityKey("forwarded-loopback", resolvedIp)
-      : resolvedIp;
+  const ip = resolveAuthRateLimitClientIp({
+    clientIp: resolvedIp,
+    hasProxyHeaders: hasForwardedRequestHeaders(req),
+    isLocalClient: localDirect,
+  });
 
   return {
     authSurface,
