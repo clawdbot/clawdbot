@@ -151,54 +151,110 @@ describe("applyEditsToNormalizedContent uniqueness", () => {
   });
 });
 
-describe("fuzzy edit — byte preservation on matched line", () => {
-  it("preserves unicode bytes outside the edited span when fuzzy matching", () => {
-    // Line has NBSP (U+00A0 between RETRY and MAX), fullwidth parens,
-    // fullwidth digit, halfwidth katakana, and em-dash — all outside
-    // the span being replaced.
+describe("fuzzy edit source-span mapping", () => {
+  it("preserves escaped Unicode bytes outside a fuzzy-matched span", () => {
     const content =
-      'export const RETRY MAX = 3; // 再試行（最大３回）ｱｲｳ — 設定\nexport const OTHER = 1;\n';
+      "export const RETRY\u00A0MAX = 3; // \u518D\u8A66\u884C\uFF08\u6700\u5927\uFF13\u56DE\uFF09\uFF71\uFF72\uFF73 \u2014 \u8A2D\u5B9A\n" +
+      "export const OTHER = 1;\n";
 
-    // oldText uses plain space instead of NBSP → triggers fuzzy match
-    const edits = [
-      { oldText: "export const RETRY MAX = 3;", newText: "export const RETRY_MAX = 5;" },
-    ];
-
-    const result = applyEditsPreservingLineEndings(content, edits, "config.ts");
-
-    // The replacement itself must be applied
-    expect(result.finalContent).toContain("RETRY_MAX = 5;");
-
-    // The comment must remain byte-identical (no NFKC normalization)
-    const originalComment = content.slice(content.indexOf("//"));
-    const afterComment = result.finalContent.slice(result.finalContent.indexOf("//"));
-    expect(afterComment).toBe(originalComment);
-
-    // The exact-match path on the same file must produce the same result
-    const exactContent =
-      'export const RETRY MAX = 3; // 再試行（最大３回）ｱｲｳ — 設定\nexport const OTHER = 1;\n';
-    const exactEdits = [
-      {
-        oldText: "export const RETRY MAX = 3;",
-        newText: "export const RETRY_MAX = 5;",
-      },
-    ];
-    const exactResult = applyEditsPreservingLineEndings(
-      exactContent,
-      exactEdits,
+    const result = applyEditsPreservingLineEndings(
+      content,
+      [{ oldText: "export const RETRY MAX = 3;", newText: "export const RETRY_MAX = 5;" }],
       "config.ts",
     );
-    expect(result.finalContent).toBe(exactResult.finalContent);
+
+    expect(result.finalContent).toBe(
+      "export const RETRY_MAX = 5; // \u518D\u8A66\u884C\uFF08\u6700\u5927\uFF13\u56DE\uFF09\uFF71\uFF72\uFF73 \u2014 \u8A2D\u5B9A\n" +
+        "export const OTHER = 1;\n",
+    );
   });
 
-  it("preserves smart quotes in comments during fuzzy edit", () => {
-    const content = 'let x = "hello"; // says "hello world" — nice\nlet y = 2;\n';
-    // Use straight quotes in oldText while the file has smart quotes
-    const edits = [{ oldText: 'let x = "hello";', newText: "let x = 'hi';" }];
-    const result = applyEditsPreservingLineEndings(content, edits, "test.ts");
+  it("maps smart-quote folds while preserving a smart-quote comment", () => {
+    const content =
+      "const label = \u201Chello\u201D; // keep \u201Ccomment\u201D \u2014 unchanged\n";
+    const result = applyEditsPreservingLineEndings(
+      content,
+      [{ oldText: 'const label = "hello";', newText: "const label = 'hi';" }],
+      "test.ts",
+    );
 
-    expect(result.finalContent).toContain("let x = 'hi';");
-    expect(result.finalContent).toContain('// says "hello world" — nice');
+    expect(result.finalContent).toBe(
+      "const label = 'hi'; // keep \u201Ccomment\u201D \u2014 unchanged\n",
+    );
+  });
+
+  it("allows a match that covers a complete NFKC expansion", () => {
+    const result = applyEditsPreservingLineEndings(
+      "const value = \uFB01;\n",
+      [{ oldText: "fi", newText: "pair" }],
+      "test.ts",
+    );
+
+    expect(result.finalContent).toBe("const value = pair;\n");
+  });
+
+  it("rejects a match ending inside an NFKC expansion", () => {
+    expect(() =>
+      applyEditsPreservingLineEndings(
+        "const value = \uFB01;\n",
+        [{ oldText: "f", newText: "x" }],
+        "test.ts",
+      ),
+    ).toThrow(/ambiguous Unicode-normalization or trimmed-whitespace boundary/);
+  });
+
+  it("maps a complete combining sequence and preserves supplementary characters", () => {
+    const content = "const caf\u0065\u0301 = 1; // \u{1F642}\n";
+    const result = applyEditsPreservingLineEndings(
+      content,
+      [{ oldText: "const caf\u00E9 = 1;", newText: "const cafe = 2;" }],
+      "test.ts",
+    );
+
+    expect(result.finalContent).toBe("const cafe = 2; // \u{1F642}\n");
+  });
+
+  it("preserves trimmed bytes at EOF", () => {
+    const result = applyEditsPreservingLineEndings(
+      "const value\u00A0= 1;  ",
+      [{ oldText: "const value = 1;", newText: "const value = 2;" }],
+      "test.ts",
+    );
+
+    expect(result.finalContent).toBe("const value = 2;  ");
+  });
+
+  it("keeps trim-folding behavior inside a complete fuzzy span", () => {
+    const result = applyEditsPreservingLineEndings(
+      "before\nfirst  \nsecond\nafter  \n",
+      [{ oldText: "first\nsecond", newText: "combined" }],
+      "test.ts",
+    );
+
+    expect(result.finalContent).toBe("before\ncombined\nafter  \n");
+  });
+
+  it("preserves CRLF while mapping a fuzzy Unicode span", () => {
+    const result = applyEditsPreservingLineEndings(
+      "const value\u00A0= 1;\r\nnext\r\n",
+      [{ oldText: "const value = 1;", newText: "const value = 2;" }],
+      "test.ts",
+    );
+
+    expect(result.finalContent).toBe("const value = 2;\r\nnext\r\n");
+  });
+
+  it("keeps exact and fuzzy replacements in original coordinates", () => {
+    const result = applyEditsPreservingLineEndings(
+      "const a\u00A0= 1;\nconst b = 2;\n",
+      [
+        { oldText: "const a = 1;", newText: "const a = 3;" },
+        { oldText: "const b = 2;", newText: "const b = 4;" },
+      ],
+      "test.ts",
+    );
+
+    expect(result.finalContent).toBe("const a = 3;\nconst b = 4;\n");
   });
 });
 
