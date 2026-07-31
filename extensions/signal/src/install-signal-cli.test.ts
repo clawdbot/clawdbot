@@ -1,4 +1,5 @@
 // Signal tests cover install signal cli plugin behavior.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -37,7 +38,9 @@ const {
   installSignalCli,
   installSignalCliFromRelease,
   looksLikeArchive,
+  parseSha256Digest,
   pickAsset,
+  verifyArchiveSha256,
 } = await import("./install-signal-cli.js");
 
 const SAMPLE_ASSETS: ReleaseAsset[] = [
@@ -473,5 +476,64 @@ describe("extractSignalCliArchive", () => {
       await fs.mkdir(extractDir, { recursive: true });
       await expectExtractedSignalCli(archivePath, extractDir);
     });
+  });
+});
+
+describe("signal-cli archive integrity", () => {
+  it("parses a well-formed sha256 digest", () => {
+    const hex = "a".repeat(64);
+    expect(parseSha256Digest(`sha256:${hex}`)).toBe(hex);
+    expect(parseSha256Digest(`sha256:${hex.toUpperCase()}`)).toBe(hex);
+  });
+
+  it("rejects malformed or absent digests", () => {
+    expect(parseSha256Digest(undefined)).toBeUndefined();
+    expect(parseSha256Digest("sha256:tooShort")).toBeUndefined();
+    expect(parseSha256Digest(`sha512:${"a".repeat(128)}`)).toBeUndefined();
+    expect(parseSha256Digest("not-a-digest")).toBeUndefined();
+  });
+
+  it("verifies an archive whose hash matches the digest", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "signal-digest-"));
+    try {
+      const archivePath = path.join(dir, "archive.tar.gz");
+      const content = "signal-cli-native-payload";
+      await fs.writeFile(archivePath, content, "utf-8");
+      const hash = createHash("sha256").update(content).digest("hex");
+      const result = await verifyArchiveSha256(archivePath, `sha256:${hash}`);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.hash).toBe(hash);
+      }
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed on a checksum mismatch", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "signal-digest-"));
+    try {
+      const archivePath = path.join(dir, "archive.tar.gz");
+      await fs.writeFile(archivePath, "tampered", "utf-8");
+      const result = await verifyArchiveSha256(archivePath, `sha256:${"0".repeat(64)}`);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("checksum mismatch");
+      }
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when no digest is published", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "signal-digest-"));
+    try {
+      const archivePath = path.join(dir, "archive.tar.gz");
+      await fs.writeFile(archivePath, "x", "utf-8");
+      const result = await verifyArchiveSha256(archivePath, undefined);
+      expect(result.ok).toBe(false);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });

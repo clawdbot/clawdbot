@@ -1,5 +1,6 @@
 // Signal plugin module implements install signal cli behavior.
-import { createWriteStream } from "node:fs";
+import { createHash } from "node:crypto";
+import { createReadStream, createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
@@ -17,11 +18,15 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 export type ReleaseAsset = {
   name?: string;
   browser_download_url?: string;
+  /** GitHub release-asset digest, e.g. `sha256:<hex>`. Used to verify the downloaded archive. */
+  digest?: string;
 };
 
 export type NamedAsset = {
   name: string;
   browser_download_url: string;
+  /** GitHub release-asset digest, e.g. `sha256:<hex>`. Used to verify the downloaded archive. */
+  digest?: string;
 };
 
 type ReleaseResponse = {
@@ -53,6 +58,43 @@ export async function extractSignalCliArchive(
 /** @internal Exported for testing. */
 export function looksLikeArchive(name: string): boolean {
   return name.endsWith(".tar.gz") || name.endsWith(".tgz") || name.endsWith(".zip");
+}
+
+/**
+ * Parse a GitHub release-asset digest (`sha256:<64 hex>`) into its lowercase hex hash.
+ * Returns `undefined` for absent/malformed digests so callers can fail closed.
+ * @internal Exported for testing.
+ */
+export function parseSha256Digest(digest: string | undefined): string | undefined {
+  if (!digest) {
+    return undefined;
+  }
+  const match = /^sha256:([0-9a-fA-F]{64})$/.exec(digest.trim());
+  return match ? match[1].toLowerCase() : undefined;
+}
+
+/**
+ * Stream-hashes the downloaded archive and compares it to the expected GitHub-published
+ * sha256 digest. Fail-closed: a missing or mismatched digest refuses to install.
+ * @internal Exported for testing.
+ */
+export async function verifyArchiveSha256(
+  archivePath: string,
+  digest: string | undefined,
+): Promise<{ ok: true; hash: string } | { ok: false; error: string }> {
+  const expected = parseSha256Digest(digest);
+  if (!expected) {
+    return { ok: false, error: "no sha256 digest published for the release asset" };
+  }
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(archivePath)) {
+    hash.update(chunk as Buffer);
+  }
+  const actual = hash.digest("hex");
+  if (actual !== expected) {
+    return { ok: false, error: `checksum mismatch: expected ${expected}, got ${actual}` };
+  }
+  return { ok: true, hash: actual };
 }
 
 function isNodeReadableStream(value: unknown): value is Readable {
@@ -331,6 +373,15 @@ export async function installSignalCliFromRelease(
 
   runtime.log(`Downloading signal-cli ${version} (${asset.name})…`);
   await downloadToFile(asset.browser_download_url, archivePath);
+
+  const verified = await verifyArchiveSha256(archivePath, asset.digest);
+  if (!verified.ok) {
+    return {
+      ok: false,
+      error: `signal-cli archive ${asset.name} failed integrity verification: ${verified.error}`,
+    };
+  }
+  runtime.log(`Verified signal-cli ${asset.name} (sha256 ${verified.hash.slice(0, 12)}…).`);
 
   const installRoot = path.join(CONFIG_DIR, "tools", "signal-cli", version);
   await fs.mkdir(installRoot, { recursive: true });
