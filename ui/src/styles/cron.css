@@ -425,16 +425,6 @@
   height: 12px;
 }
 
-.cron-table__footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-4);
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-  font-size: var(--control-ui-text-sm);
-}
-
 .cron-empty-state {
   padding: var(--space-6) var(--space-4);
   display: grid;
@@ -453,10 +443,6 @@
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   line-height: 1.45;
-}
-
-.cron-load-more {
-  align-self: flex-start;
 }
 
 /* ── Detail view ── */
