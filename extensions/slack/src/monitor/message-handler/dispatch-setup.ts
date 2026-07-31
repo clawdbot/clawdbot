@@ -20,6 +20,7 @@ import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/secur
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { formatSlackError } from "../../errors.js";
+import { getSlackRuntime } from "../../runtime.js";
 import { resolveSlackStreamingConfig } from "../../stream-mode.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
@@ -38,8 +39,6 @@ import type { PreparedSlackMessage } from "./types.js";
 
 // Slack expires thread status after two minutes. Refresh with a 30-second margin.
 const SLACK_THREAD_STATUS_KEEPALIVE_INTERVAL_MS = 90_000;
-// Match the default agent-run timeout so a hung turn cannot refresh status forever.
-const SLACK_TYPING_MAX_DURATION_MS = 600_000;
 
 export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   const { ctx, account, message, route } = prepared;
@@ -193,6 +192,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
 
   const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
   const typingReaction = ctx.typingReaction;
+  const typingMaxDurationMs = getSlackRuntime().agent.resolveAgentTimeoutMs({ cfg });
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg,
     agentId: route.agentId,
@@ -253,7 +253,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
         }
       },
       keepaliveIntervalMs: SLACK_THREAD_STATUS_KEEPALIVE_INTERVAL_MS,
-      maxDurationMs: SLACK_TYPING_MAX_DURATION_MS,
+      maxDurationMs: typingMaxDurationMs,
       onStartError: (err) => {
         logTypingFailure({
           log: (messageValue) => runtime.error?.(danger(messageValue)),

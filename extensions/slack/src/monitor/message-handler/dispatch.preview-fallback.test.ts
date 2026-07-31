@@ -30,6 +30,7 @@ const emitSlackMessageSentHooksMock = vi.fn(() => {});
 const reactSlackMessageMock = vi.fn(async () => {});
 const removeSlackReactionMock = vi.fn(async () => {});
 const logVerboseMock = vi.fn();
+const resolveAgentTimeoutMsMock = vi.fn(() => 48 * 60 * 60 * 1000);
 class TestSlackStreamNotDeliveredError extends Error {
   readonly pendingText: string;
   readonly slackCode: string;
@@ -869,6 +870,12 @@ vi.mock("../../actions.js", () => ({
   removeSlackReaction: removeSlackReactionMock,
 }));
 
+vi.mock("../../runtime.js", () => ({
+  getSlackRuntime: () => ({
+    agent: { resolveAgentTimeoutMs: resolveAgentTimeoutMsMock },
+  }),
+}));
+
 vi.mock("../../draft-stream.js", () => ({
   createSlackDraftStream: createSlackDraftStreamMock,
 }));
@@ -1111,6 +1118,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     reactSlackMessageMock.mockReset();
     removeSlackReactionMock.mockReset();
     logVerboseMock.mockReset();
+    resolveAgentTimeoutMsMock.mockReset().mockReturnValue(48 * 60 * 60 * 1000);
     getGlobalHookRunnerMock.mockReset().mockReturnValue(undefined);
     for (const value of Object.values(statusReactionControllerMock)) {
       value.mockClear();
@@ -1798,12 +1806,16 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
   });
 
-  it("refreshes native Slack status within its transport TTL instead of every typing tick", async () => {
-    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+  it("refreshes native Slack status within its transport TTL for the resolved run duration", async () => {
+    const cfg = { agents: { defaults: { timeoutSeconds: 7_200 } } };
+    resolveAgentTimeoutMsMock.mockReturnValueOnce(7_200_000);
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ cfg }));
 
     const typing = requireCapturedTyping();
     expect(typing.keepaliveIntervalMs).toBe(90_000);
-    expect(typing.maxDurationMs).toBe(600_000);
+    expect(typing.maxDurationMs).toBe(7_200_000);
+    expect(resolveAgentTimeoutMsMock).toHaveBeenCalledWith({ cfg });
   });
 
   it("keeps the typing reaction fallback when native Slack status fails", async () => {
