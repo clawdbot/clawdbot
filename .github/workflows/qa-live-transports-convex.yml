@@ -18,8 +18,23 @@ on:
         required: false
         default: false
         type: boolean
+      run_buzz:
+        description: Run the Buzz live lane
+        required: false
+        default: false
+        type: boolean
+      buzz_scenario:
+        description: Optional comma-separated Buzz scenario ids
+        required: false
+        default: ""
+        type: string
       run_matrix:
         description: Run the Matrix live lane
+        required: false
+        default: false
+        type: boolean
+      fail_fast:
+        description: Stop the Matrix QA lane after its first failed check or scenario
         required: false
         default: false
         type: boolean
@@ -49,6 +64,15 @@ on:
         description: Ref, tag, or SHA to run
         required: true
         default: main
+        type: string
+      run_buzz:
+        description: Run the Buzz live lane (requires a pooled Buzz credential)
+        required: false
+        default: false
+        type: boolean
+      buzz_scenario:
+        description: Optional comma-separated Buzz scenario ids
+        required: false
         type: string
       scenario:
         description: Optional comma-separated Telegram scenario ids
@@ -392,17 +416,25 @@ jobs:
         shell: bash
         env:
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          FAIL_FAST: ${{ inputs.fail_fast }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_LIVE_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -euo pipefail
 
           output_dir=".artifacts/qa-e2e/matrix-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "${output_dir}"
 
-          pnpm openclaw qa matrix \
+          matrix_args=(
             --repo-root . \
             --output-dir "${output_dir}" \
             --provider-mode mock-openai \
             --fast
+          )
+          if [[ "$FAIL_FAST" == "true" ]] && pnpm openclaw qa matrix --help 2>/dev/null | grep -F -q -- "--fail-fast"; then
+            matrix_args+=(--fail-fast)
+          fi
+          pnpm openclaw qa matrix "${matrix_args[@]}"
 
       - name: Upload Matrix QA artifacts
         id: upload_artifacts
@@ -411,6 +443,95 @@ jobs:
         with:
           name: ${{ inputs.expected_sha != '' && format('release-qa-live-matrix-{0}', inputs.expected_sha) || format('qa-live-matrix-{0}-{1}', github.run_id, github.run_attempt) }}
           path: .artifacts/qa-e2e/matrix-live-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: error
+
+  run_live_buzz:
+    name: Run Buzz live QA lane with Convex leases
+    needs: [authorize_actor, validate_selected_ref]
+    if: inputs.run_buzz
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 60
+    concurrency:
+      group: qa-live-buzz-shared
+      cancel-in-progress: false
+    environment: qa-live-shared
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+
+      - name: Validate required Buzz QA credential env
+        env:
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for key in OPENCLAW_QA_CONVEX_SITE_URL OPENCLAW_QA_CONVEX_SECRET_CI; do
+            if [[ -z "${!key:-}" ]]; then
+              echo "Missing required ${key}." >&2
+              exit 1
+            fi
+          done
+
+      - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=12288
+        run: pnpm build
+
+      - name: Run Buzz live lane
+        id: run_lane
+        shell: bash
+        env:
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
+          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
+          INPUT_SCENARIO: ${{ inputs.buzz_scenario || '' }}
+        run: |
+          set -euo pipefail
+
+          output_dir=".artifacts/qa-e2e/buzz-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          scenario_args=()
+
+          if [[ -n "${INPUT_SCENARIO// }" ]]; then
+            IFS=',' read -r -a raw_scenarios <<<"${INPUT_SCENARIO}"
+            for raw in "${raw_scenarios[@]}"; do
+              scenario="$(printf '%s' "${raw}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+              if [[ -n "${scenario}" ]]; then
+                scenario_args+=(--scenario "${scenario}")
+              fi
+            done
+          fi
+
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+
+          pnpm openclaw qa buzz \
+            --repo-root . \
+            --output-dir "${output_dir}" \
+            --provider-mode mock-openai \
+            --credential-source convex \
+            --credential-role ci \
+            "${scenario_args[@]}"
+
+      - name: Upload Buzz QA artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ inputs.expected_sha != '' && format('release-qa-live-buzz-{0}-{1}', inputs.expected_sha, github.run_attempt) || format('qa-live-buzz-{0}-{1}', github.run_id, github.run_attempt) }}
+          path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
           if-no-files-found: error
 

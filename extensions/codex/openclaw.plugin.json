@@ -28,6 +28,7 @@
     "onAgentHarnesses": ["codex"],
     "onCommands": ["codex"],
     "onConfigPaths": [
+      "plugins.entries.codex.config.appServer.transport",
       "plugins.entries.codex.config.sessionCatalog.enabled",
       "plugins.entries.codex.config.supervision.enabled"
     ]

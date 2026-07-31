@@ -715,6 +715,9 @@ jobs:
             --skip-qa \
             --startup-case default \
             --startup-case skipChannels \
+            --startup-case preparedRuntimeCatalogStall \
+            --startup-case preparedRuntimeScaleOne \
+            --startup-case preparedRuntimeScaleMany \
             --startup-case oneInternalHook \
             --startup-case allInternalHooks \
             --startup-case fiftyPlugins \

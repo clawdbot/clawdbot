@@ -558,6 +558,15 @@ function readRealtimeErrorEventId(error: unknown): string | undefined {
   return typeof eventId === "string" ? eventId : undefined;
 }
 
+function parsePlaybackMarkSequence(markName: string): number | undefined {
+  const match = /^audio-(\d+)$/u.exec(markName);
+  if (!match) {
+    return undefined;
+  }
+  const sequence = Number(match[1]);
+  return Number.isSafeInteger(sequence) && sequence > 0 ? sequence : undefined;
+}
+
 class OpenAIRealtimeMalformedAudioError extends Error {}
 
 function base64ToBuffer(b64: string): Buffer {
@@ -575,6 +584,8 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private static readonly MAX_RECONNECT_ATTEMPTS = 5;
   private static readonly BASE_RECONNECT_DELAY_MS = 1000;
   private static readonly CONNECT_TIMEOUT_MS = 10_000;
+  private static readonly MAX_PENDING_AUDIO_CHUNKS = 320;
+  private static readonly MAX_PENDING_AUDIO_BYTES = 1024 * 1024;
   readonly supportsToolResultContinuation = true;
   readonly supportsToolResultSuppression = true;
 
@@ -583,7 +594,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private connectPromise: Promise<void> | undefined;
   private readonly lifecycle = new OpenAIRealtimeVoiceLifecycle();
   private pendingAudio: Buffer[] = [];
-  private markQueue: string[] = [];
+  private pendingAudioBytes = 0;
+  private nextMarkSequence = 1;
+  private oldestOutstandingMarkSequence: number | null = null;
+  private latestOutstandingMarkSequence: number | null = null;
   private responseStartTimestamp: number | null = null;
   private responseActive = false;
   private responseCreateInFlight = false;
@@ -633,10 +647,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   sendAudio(audio: Buffer): void {
+    if (this.lifecycle.phase() === "terminal") {
+      return;
+    }
     if (!this.lifecycle.isReady() || this.ws?.readyState !== WebSocket.OPEN) {
-      if (this.pendingAudio.length < 320) {
-        this.pendingAudio.push(audio);
-      }
+      this.enqueuePendingAudio(audio);
       return;
     }
     this.sendEvent({
@@ -693,10 +708,28 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   acknowledgeMark(markName?: string): void {
-    const index = markName === undefined ? 0 : this.markQueue.indexOf(markName);
-    if (index >= 0) {
-      this.markQueue.splice(index, 1);
+    const oldest = this.oldestOutstandingMarkSequence;
+    const latest = this.latestOutstandingMarkSequence;
+    if (oldest === null || latest === null) {
+      return;
     }
+    const acknowledgedSequence =
+      markName === undefined ? oldest : parsePlaybackMarkSequence(markName);
+    if (
+      acknowledgedSequence === undefined ||
+      acknowledgedSequence < oldest ||
+      acknowledgedSequence > latest
+    ) {
+      return;
+    }
+    // Marks follow ordered playback. Reaching a named mark also acknowledges every
+    // earlier mark, while late acknowledgements from that prefix remain harmless.
+    if (acknowledgedSequence === latest) {
+      this.oldestOutstandingMarkSequence = null;
+      this.latestOutstandingMarkSequence = null;
+      return;
+    }
+    this.oldestOutstandingMarkSequence = acknowledgedSequence + 1;
   }
 
   close(): void {
@@ -704,6 +737,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (!connection || !this.lifecycle.cancel()) {
       return;
     }
+    this.resetTerminalState();
     const ws = this.ws;
     this.ws = null;
     ws?.close(1000, "Bridge closed");
@@ -1061,7 +1095,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         type: "session.reconnect.exhausted",
         detail: `reason=${reason} attempts=${OpenAIRealtimeVoiceBridge.MAX_RECONNECT_ATTEMPTS}`,
       });
-      this.lifecycle.failure(connection);
+      if (this.lifecycle.failure(connection)) {
+        this.resetTerminalState();
+      }
       this.notifyClose(connection, "error");
       return;
     }
@@ -1256,7 +1292,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       case "session.created":
         return;
 
-      case "session.updated":
+      case "session.updated": {
         if (!this.lifecycle.ready(connection)) {
           return;
         }
@@ -1272,10 +1308,13 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           this.sessionReadyFired = true;
           this.config.onReady?.();
         }
-        for (const chunk of this.pendingAudio.splice(0)) {
+        const pendingAudio = this.pendingAudio.splice(0);
+        this.pendingAudioBytes = 0;
+        for (const chunk of pendingAudio) {
           this.sendAudio(chunk);
         }
         return;
+      }
 
       case "response.created":
         this.responseActive = true;
@@ -1451,7 +1490,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     const shouldInterruptProvider =
       assistantItemId !== null &&
       ((responseStartTimestamp !== null &&
-        (this.markQueue.length > 0 || options?.audioPlaybackActive === true)) ||
+        (this.oldestOutstandingMarkSequence !== null || options?.audioPlaybackActive === true)) ||
         force);
     const audioEndMs = shouldInterruptProvider
       ? Math.max(
@@ -1492,7 +1531,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         `reason=barge-in audioEndMs=${audioEndMs}`,
       );
       this.config.onClearAudio("barge-in");
-      this.markQueue = [];
+      this.clearOutstandingMarks();
       this.lastAssistantItemId = null;
       this.responseStartTimestamp = null;
       return;
@@ -1576,7 +1615,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private resetRealtimeSessionState(): void {
-    this.markQueue = [];
+    this.clearOutstandingMarks();
     this.responseStartTimestamp = null;
     this.responseActive = false;
     this.responseCreateInFlight = false;
@@ -1591,6 +1630,27 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.deliveredToolCallKeys.clear();
   }
 
+  private enqueuePendingAudio(audio: Buffer): void {
+    if (
+      this.pendingAudio.length >= OpenAIRealtimeVoiceBridge.MAX_PENDING_AUDIO_CHUNKS ||
+      this.pendingAudioBytes + audio.byteLength > OpenAIRealtimeVoiceBridge.MAX_PENDING_AUDIO_BYTES
+    ) {
+      return;
+    }
+    this.pendingAudio.push(audio);
+    this.pendingAudioBytes += audio.byteLength;
+  }
+
+  private clearPendingAudio(): void {
+    this.pendingAudio = [];
+    this.pendingAudioBytes = 0;
+  }
+
+  private resetTerminalState(): void {
+    this.clearPendingAudio();
+    this.resetRealtimeSessionState();
+  }
+
   private failConnection(
     error: OpenAIRealtimeMalformedAudioError,
     ws: WebSocket,
@@ -1601,7 +1661,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
     this.terminalError = error;
     this.lifecycle.failure(connection);
-    this.resetRealtimeSessionState();
+    this.resetTerminalState();
     try {
       this.config.onError?.(error);
     } finally {
@@ -1621,13 +1681,24 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (!terminalOutcome) {
       return;
     }
+    this.resetTerminalState();
     this.config.onClose?.(terminalOutcome);
   }
 
   private sendMark(): void {
-    const markName = `audio-${Date.now()}`;
-    this.markQueue.push(markName);
+    const sequence = this.nextMarkSequence;
+    this.nextMarkSequence += 1;
+    if (this.oldestOutstandingMarkSequence === null) {
+      this.oldestOutstandingMarkSequence = sequence;
+    }
+    this.latestOutstandingMarkSequence = sequence;
+    const markName = `audio-${sequence}`;
     this.config.onMark?.(markName);
+  }
+
+  private clearOutstandingMarks(): void {
+    this.oldestOutstandingMarkSequence = null;
+    this.latestOutstandingMarkSequence = null;
   }
 
   private sendEvent(event: unknown, detail?: string): void {

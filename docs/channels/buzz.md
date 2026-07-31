@@ -338,6 +338,32 @@ openclaw message send \
 For a full round trip, have an allowed Buzz user mention the bot and confirm that
 OpenClaw replies in the room.
 
+### QA Lab round trip
+
+Source checkouts can exercise the production Buzz channel path with two
+dedicated test identities:
+
+```bash
+pnpm openclaw qa buzz \
+  --credential-file /secure/path/buzz-qa-credentials.json \
+  --provider-mode mock-openai
+```
+
+The command runs a real relay canary and mention-gating check while using the
+deterministic mock model. The private JSON credential
+file contains `relayUrl`, `roomId`, `driverPrivateKey`, and `sutPrivateKey`, plus
+optional `driverAuthTag` and `sutAuthTag` values for closed relays. Both test
+public keys must be room members, and the SUT public key must have the **Bot**
+role. A closed relay may require both public keys to be enrolled separately.
+Use `--credential-source convex` for pooled QA credentials.
+
+Use `wss://` for hosted relays. Plaintext `ws://` credential URLs are accepted
+only for loopback development relays.
+
+Never use a human owner or admin private key. Private keys and optional
+authorization values are parent-harness secrets and must not appear in logs,
+artifacts, screenshots, shell history, or source control.
+
 ## Rotate the bot identity
 
 Bot identity rotation requires admin approval for the new public key:

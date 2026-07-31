@@ -202,7 +202,7 @@ export function createDiagnosticsEventHandler(params: {
           recordSkillUsed(evt, metadata);
           return;
         case "exec.process.completed":
-          recordExecProcessCompleted(evt);
+          recordExecProcessCompleted(evt, metadata);
           break;
         case "exec.approval.followup_suppressed":
           break;

@@ -28,7 +28,7 @@ Each program specifies:
 3. **Approval gates** - what requires human sign-off before acting
 4. **Escalation rules** - when to stop and ask for help
 
-The agent loads these instructions every session via the workspace bootstrap files (see [Agent Workspace](/concepts/agent-workspace) for the full list of auto-injected files) and executes against them, combined with [cron jobs](/automation/cron-jobs) for time-based enforcement.
+The agent loads these instructions every session via the workspace bootstrap files (see [Agent Workspace](/concepts/agent-workspace) for the full list of auto-injected files) and executes against them, combined with [automations](/automation/cron-jobs) for time-based enforcement.
 
 <Tip>
 Put standing orders in `AGENTS.md` to guarantee they're loaded every session. The workspace bootstrap automatically injects `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`, and `MEMORY.md` - but not arbitrary files in subdirectories.
@@ -40,7 +40,7 @@ Put standing orders in `AGENTS.md` to guarantee they're loaded every session. Th
 ## Program: Weekly Status Report
 
 **Authority:** Compile data, generate report, deliver to stakeholders
-**Trigger:** Every Friday at 4 PM (enforced via cron job)
+**Trigger:** Every Friday at 4 PM (enforced via automation job)
 **Approval gate:** None for standard reports. Flag anomalies for human review.
 **Escalation:** If data source is unavailable or metrics look unusual (>2σ from norm)
 
@@ -59,22 +59,22 @@ Put standing orders in `AGENTS.md` to guarantee they're loaded every session. Th
 - Do not skip delivery if metrics look bad - report accurately
 ```
 
-## Standing orders plus cron jobs
+## Standing orders plus automations
 
-Standing orders define **what** the agent is authorized to do. [Cron jobs](/automation/cron-jobs) define **when** it happens. They work together:
+Standing orders define **what** the agent is authorized to do. [Automations](/automation/cron-jobs) define **when** it happens. They work together:
 
 ```text
 Standing Order: "You own the daily inbox triage"
     ↓
-Cron Job (8 AM daily): "Execute inbox triage per standing orders"
+Automation (8 AM daily): "Execute inbox triage per standing orders"
     ↓
 Agent: Reads standing orders → executes steps → reports results
 ```
 
-The cron job prompt should reference the standing order rather than duplicating it:
+The automation job prompt should reference the standing order rather than duplicating it (`openclaw automations`; `openclaw cron` remains an alias):
 
 ```bash
-openclaw cron add \
+openclaw automations add \
   --name daily-inbox-triage \
   --cron "0 8 * * 1-5" \
   --tz America/New_York \
@@ -219,7 +219,7 @@ Each program should have:
 - Start with narrow authority and expand as trust builds
 - Define explicit approval gates for high-risk actions
 - Include "What NOT to do" sections - boundaries matter as much as permissions
-- Combine with cron jobs for reliable time-based execution
+- Combine with automations for reliable time-based execution
 - Review agent logs weekly to verify standing orders are being followed
 - Update standing orders as your needs evolve - they're living documents
 
@@ -229,12 +229,12 @@ Each program should have:
 - Skip escalation rules - every program needs a "when to stop and ask" clause
 - Assume the agent will remember verbal instructions - put everything in the file
 - Mix concerns in a single program - separate programs for separate domains
-- Forget to enforce with cron jobs - standing orders without triggers become suggestions
+- Forget to enforce with automations - standing orders without triggers become suggestions
 
 ## Related
 
 - [Automation](/automation): all automation mechanisms at a glance.
-- [Cron jobs](/automation/cron-jobs): schedule enforcement for standing orders.
+- [Automations](/automation/cron-jobs): schedule enforcement for standing orders.
 - [Hooks](/automation/hooks): event-driven scripts for agent lifecycle events.
 - [Webhooks](/automation/cron-jobs#webhooks): inbound HTTP event triggers.
 - [Agent workspace](/concepts/agent-workspace): where standing orders live, including the full list of auto-injected bootstrap files (`AGENTS.md`, `SOUL.md`, etc.).

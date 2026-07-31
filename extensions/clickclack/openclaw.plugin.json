@@ -4,6 +4,65 @@
     "onStartup": false
   },
   "channels": ["clickclack"],
+  "channelConfigs": {
+    "clickclack": {
+      "label": "ClickClack",
+      "description": "ClickClack channel accounts and group activation policy.",
+      "schema": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "requireMention": { "type": "boolean" },
+          "mentionPatterns": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "groups": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "requireMention": { "type": "boolean" },
+                "mentionPatterns": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              }
+            }
+          },
+          "accounts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "requireMention": { "type": "boolean" },
+                "mentionPatterns": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "groups": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "properties": {
+                      "requireMention": { "type": "boolean" },
+                      "mentionPatterns": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
   "contracts": {
     "tools": ["discussion"]
   },

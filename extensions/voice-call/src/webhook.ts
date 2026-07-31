@@ -179,6 +179,7 @@ export class VoiceCallWebhookServer {
   private server: http.Server | null = null;
   private listeningUrl: string | null = null;
   private startPromise: Promise<string> | null = null;
+  private stopPromise: Promise<void> | null = null;
   private config: VoiceCallConfig;
   private manager: CallManager;
   private provider: VoiceCallProvider;
@@ -484,6 +485,10 @@ export class VoiceCallWebhookServer {
    * Idempotent: returns immediately if the server is already listening.
    */
   async start(): Promise<string> {
+    if (this.stopPromise) {
+      await this.stopPromise;
+    }
+
     const { port, bind, path: webhookPath } = this.config.serve;
     const streamPath = this.config.streaming.streamPath;
 
@@ -561,30 +566,62 @@ export class VoiceCallWebhookServer {
   /**
    * Stop the webhook server.
    */
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    if (this.stopPromise) {
+      return this.stopPromise;
+    }
+
+    const server = this.server;
+    const serverClosePromise = new Promise<void>((resolve, reject) => {
+      if (!server) {
+        resolve();
+        return;
+      }
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+    this.startPromise = null;
     for (const timer of this.pendingDisconnectHangups.values()) {
       clearTimeout(timer);
     }
     this.pendingDisconnectHangups.clear();
-    this.webhookInFlightLimiter.clear();
-    this.startPromise = null;
-
     if (this.stopStaleCallReaper) {
       this.stopStaleCallReaper();
       this.stopStaleCallReaper = null;
     }
-    return new Promise((resolve) => {
-      if (this.server) {
-        this.server.close(() => {
-          this.server = null;
-          this.listeningUrl = null;
-          resolve();
-        });
-      } else {
-        this.listeningUrl = null;
-        resolve();
+    this.webhookInFlightLimiter.clear();
+
+    this.stopPromise = (async () => {
+      const results = await Promise.allSettled([
+        serverClosePromise,
+        this.mediaStreamHandler?.close(serverClosePromise) ?? Promise.resolve(),
+        this.realtimeHandler?.close(serverClosePromise) ?? Promise.resolve(),
+      ]);
+
+      for (const timer of this.pendingDisconnectHangups.values()) {
+        clearTimeout(timer);
       }
+      this.pendingDisconnectHangups.clear();
+      if (this.server === server) {
+        this.server = null;
+      }
+      this.listeningUrl = null;
+
+      const failure = results.find(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (failure) {
+        throw failure.reason;
+      }
+    })().finally(() => {
+      this.stopPromise = null;
     });
+    return this.stopPromise;
   }
 
   private resolveListeningUrl(bind: string, webhookPath: string): string {

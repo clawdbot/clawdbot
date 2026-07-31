@@ -394,6 +394,7 @@ function runReleaseChecksSummary(params: {
       QA_LAB_PARITY_LANE_RELEASE_CHECKS_RESULT: "skipped",
       QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT: "skipped",
       QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT: "skipped",
+      QA_LIVE_BUZZ_RELEASE_CHECKS_RESULT: "skipped",
       QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT: "skipped",
       QA_LIVE_RELEASE_CHECKS_RESULT: "skipped",
       QA_LIVE_SLACK_RELEASE_CHECKS_RESULT: "skipped",
@@ -1812,7 +1813,7 @@ describe("package artifact reuse", () => {
       /suite_id: native-live-src-gateway-profiles-openai[\s\S]*?timeout_minutes: 60[\s\S]*?profiles: beta minimum stable full/u,
     );
     expect(workflow).toContain(
-      "command: OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.6-luna OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=180000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000",
+      "command: OPENCLAW_LIVE_GATEWAY_SETUP_TIMEOUT_MS=300000 OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.6-luna OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=180000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000",
     );
     expect(workflow).toContain(
       "OPENCLAW_LIVE_GATEWAY_MODELS=google/gemini-3.1-pro-preview node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
@@ -2587,9 +2588,10 @@ describe("package artifact reuse", () => {
     expect(releaseJob.if).toContain('contains(fromJSON(\'["all","qa","qa-live"]\')');
     expect(releaseJob.with).toMatchObject({
       expected_sha: "${{ needs.resolve_target.outputs.revision }}",
+      fail_fast: "${{ fromJSON(needs.resolve_target.outputs.fail_fast) }}",
       run_matrix: true,
     });
-    for (const lane of ["mock_parity", "telegram", "discord", "whatsapp", "slack"]) {
+    for (const lane of ["mock_parity", "buzz", "telegram", "discord", "whatsapp", "slack"]) {
       expect(releaseJob.with?.[`run_${lane}`]).toBeUndefined();
     }
     expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_mock_parity").if).toBe(
@@ -2607,6 +2609,7 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).not.toContain("Run QA Lab live Matrix lane");
     expect(releaseWorkflow).not.toContain("pnpm openclaw qa matrix");
     expect(qaWorkflow).toContain("pnpm openclaw qa matrix");
+    expect(qaWorkflow).toContain('if [[ "$FAIL_FAST" == "true" ]]');
     expect(qaWorkflow).toContain('trusted_reason="repository-branch"');
     expect(qaWorkflow).toContain('"${selected_revision}" != "${EXPECTED_SHA}"');
     expect(qaWorkflow).toContain("EXPECTED_SHA: ${{ inputs.expected_sha }}");
@@ -2633,10 +2636,37 @@ describe("package artifact reuse", () => {
     expect(matrixJob["continue-on-error"]).toBeUndefined();
     expect(matrixJob.strategy).toBeUndefined();
     expect(workflowStep(matrixJob, "Run Matrix live lane").env).toEqual({
+      FAIL_FAST: "${{ inputs.fail_fast }}",
+      OPENAI_API_KEY: "${{ secrets.OPENAI_API_KEY }}",
+      OPENCLAW_LIVE_OPENAI_KEY: "${{ secrets.OPENAI_API_KEY }}",
       OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1",
     });
     expect(releaseTelegramWorkflow).toContain(
       'echo "Telegram live lane failed on attempt ${attempt}; retrying once..." >&2',
+    );
+  });
+
+  it("routes release Buzz through the QA Lab selector", () => {
+    const releaseJob = workflowJob(RELEASE_CHECKS_WORKFLOW, "qa_live_buzz_release_checks");
+
+    expect(releaseJob.uses).toBe("./.github/workflows/qa-live-transports-convex.yml");
+    expect(releaseJob.secrets).toBeUndefined();
+    expect(releaseJob.permissions).toEqual({ contents: "read", "pull-requests": "read" });
+    expect(releaseJob.if).toContain('contains(fromJSON(\'["all","qa","qa-live"]\')');
+    expect(releaseJob.if).toContain("needs.resolve_target.outputs.qa_live_buzz_enabled == 'true'");
+    expect(releaseJob.with).toMatchObject({
+      buzz_scenario: "channel-canary,channel-mention-gating",
+      expected_sha: "${{ needs.resolve_target.outputs.revision }}",
+      run_buzz: true,
+    });
+    expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_buzz").if).toBe("inputs.run_buzz");
+    expect(
+      workflowStep(
+        workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_buzz"),
+        "Upload Buzz QA artifacts",
+      ).with?.name,
+    ).toBe(
+      "${{ inputs.expected_sha != '' && format('release-qa-live-buzz-{0}-{1}', inputs.expected_sha, github.run_attempt) || format('qa-live-buzz-{0}-{1}', github.run_id, github.run_attempt) }}",
     );
   });
 
@@ -2669,6 +2699,7 @@ describe("package artifact reuse", () => {
         "always() && steps.run_lane.outputs.output_dir != ''",
       ],
       ["run_live_matrix", "Upload Matrix QA artifacts", "always()"],
+      ["run_live_buzz", "Upload Buzz QA artifacts", "always()"],
       ["run_live_telegram", "Upload Telegram QA artifacts", "always()"],
       ["run_live_discord", "Upload Discord QA artifacts", "always()"],
       ["run_live_whatsapp", "Upload WhatsApp QA artifacts", "always()"],
@@ -2745,7 +2776,7 @@ describe("package artifact reuse", () => {
     expect(laneJob.strategy?.matrix?.lane).toContain('["core"]');
     const runtimePairRun = workflowStep(laneJob, "Run runtime-pair lane").run;
     expect(runtimePairRun).toContain('--runtime-pair-lane "$RUNTIME_PAIR_LANE"');
-    expect(runtimePairRun).toContain("--runtime-parity-tier standard,live-only");
+    expect(runtimePairRun).toContain("--runtime-parity-tier standard");
     expect(runtimePairRun).toContain("--runtime-parity-tier soak");
     expect(runtimePairRun).toContain("Frozen candidate cannot select runtime-pair lane");
     expect(workflowStep(laneJob, "Run runtime-pair lane")["continue-on-error"]).toBe(true);
@@ -3058,6 +3089,7 @@ describe("package artifact reuse", () => {
     expect(npmTelegramJob.if).not.toContain("inputs.rerun_group == 'all'");
     expect(dispatchStep.env).toEqual({
       CHILD_WORKFLOW_REF: "${{ github.ref_name }}",
+      FAIL_FAST: "${{ inputs.fail_fast }}",
       GH_TOKEN: "${{ github.token }}",
       PACKAGE_SPEC: "${{ inputs.npm_telegram_package_spec || inputs.release_package_spec }}",
       PARENT_WORKFLOW_SHA: "${{ github.sha }}",
@@ -3425,6 +3457,7 @@ describe("package artifact reuse", () => {
 
     const verifyStep = workflowStep(summary, "Verify release check results");
     expect(verifyStep.env).toMatchObject({
+      QA_LIVE_BUZZ_RELEASE_CHECKS_RESULT: "${{ needs.qa_live_buzz_release_checks.result }}",
       QA_LIVE_RELEASE_CHECKS_RESULT: "${{ needs.qa_live_release_checks.result }}",
       RELEASE_CHECK_RUN_ATTEMPT: "${{ github.run_attempt }}",
       RELEASE_CHECK_RUN_ID: "${{ github.run_id }}",
@@ -3448,6 +3481,7 @@ describe("package artifact reuse", () => {
       "::warning::${name} ended with ${result}; Tideclaw alpha treats non-package-safety release-check lanes as advisory.",
       "::error::${name} ended with ${result}",
       '"qa_live_release_checks=${QA_LIVE_RELEASE_CHECKS_RESULT}"',
+      '"qa_live_buzz_release_checks=${QA_LIVE_BUZZ_RELEASE_CHECKS_RESULT}"',
     ]);
     expect(verifyStep.run).not.toContain("qa_live_matrix_release_checks");
     expect(verifyStep.run).not.toContain(

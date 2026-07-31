@@ -251,6 +251,38 @@ two-party event loops that do not go through the shared inbound reply runner.
     });
     ```
 
+    `maxTokens` and `temperature` are advisory sampling hints. The selected
+    provider, CLI, or harness applies them when its transport exposes an
+    equivalent control and otherwise may ignore them. They do not weaken the
+    execution mode's isolation guarantees.
+
+    To require the configured agent runtime and a literal zero-tool model
+    surface, select isolated execution explicitly:
+
+    ```typescript
+    const result = await api.runtime.llm.complete({
+      messages: [{ role: "user", content: "Return one JSON value." }],
+      systemPrompt: "You are a JSON-only function.",
+      model: "openai/gpt-5.6-sol",
+      execution: {
+        mode: "isolated-agent-runtime",
+        authProfileId: "openai:work",
+        timeoutMs: 30_000,
+      },
+    });
+    ```
+
+    This mode accepts exactly one user message. Core derives the configured CLI
+    or harness owner, starts a fresh context, exposes no model-callable tools,
+    and never falls back to direct provider transport. Unsupported runtimes fail
+    before inference. `result.execution.owner` reports the selected owner;
+    token usage remains absent when a CLI cannot report it.
+
+    Completion failures expose a stable `code` on the thrown error. Isolated
+    callers can distinguish authorization, invalid isolated input, unsupported
+    or unavailable runtimes, aborts, timeouts, rejected output, and other
+    completion failures without matching message text.
+
     Provider orchestration can also acquire the configured local-service
     lifecycle before issuing an HTTP request:
 
@@ -297,7 +329,7 @@ two-party event loops that do not go through the shared inbound reply runner.
     `medium`; `max` and `ultra` become `max` when supported, otherwise `xhigh`.
 
     <Warning>
-    Model overrides require operator opt-in via `plugins.entries.<id>.llm.allowModelOverride: true` in config. Use `plugins.entries.<id>.llm.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets. Cross-agent completions require `plugins.entries.<id>.llm.allowAgentIdOverride: true`.
+    Model overrides require operator opt-in via `plugins.entries.<id>.llm.allowModelOverride: true` in config. `plugins.entries.<id>.llm.allowedModels` restricts those overrides; `plugins.entries.<id>.llm.allowedCompletionModels` separately restricts every completion, including host-resolved defaults. For direct completions, a `model@profile` override remains part of the authorized model override. Isolated `model@profile` overrides and `execution.authProfileId` require `plugins.entries.<id>.llm.allowAuthProfileOverride: true`. Cross-agent completions require `plugins.entries.<id>.llm.allowAgentIdOverride: true`.
     </Warning>
 
   </Accordion>

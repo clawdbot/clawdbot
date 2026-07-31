@@ -5,6 +5,7 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import {
@@ -63,7 +64,10 @@ function pickPluginMetadataEnv(env: NodeJS.ProcessEnv): Record<string, string> {
 }
 
 export function resolvePluginMetadataEnvFingerprint(env: NodeJS.ProcessEnv): string {
-  return hashJson(pickPluginMetadataEnv(env));
+  return hashJson({
+    env: pickPluginMetadataEnv(env),
+    installRoots: resolveActivePluginInstallRoots(env),
+  });
 }
 
 function throwReadonlyPluginMetadataMutation(): never {

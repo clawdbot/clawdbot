@@ -124,7 +124,7 @@ describe("resolveHeartbeatPromptForSystemPrompt", () => {
         agentId: "main",
         defaultAgentId: "main",
       }),
-    ).toContain("Recurring tasks are cron jobs");
+    ).toContain("Recurring tasks are automations");
   });
 
   it("does not inject the heartbeat section for non-default agents", () => {

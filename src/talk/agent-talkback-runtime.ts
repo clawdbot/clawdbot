@@ -7,6 +7,9 @@
  */
 import type { RuntimeLogger } from "../plugins/runtime/types-core.js";
 
+const MAX_PENDING_QUESTIONS = 32;
+const MAX_PENDING_QUESTION_CHARS = 32 * 1024;
+
 /** Text produced by a delegated voice consult. */
 export type RealtimeVoiceAgentTalkbackResult = {
   text: string;
@@ -48,9 +51,14 @@ export function createRealtimeVoiceAgentTalkbackQueue(
   params: RealtimeVoiceAgentTalkbackQueueParams,
 ): RealtimeVoiceAgentTalkbackQueue {
   let active = false;
+  let closed = false;
   let pendingQuestions: PendingQuestion[] = [];
+  let pendingQuestionChars = 0;
+  let overflowWarned = false;
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
   let activeAbortController: AbortController | undefined;
+
+  const shouldStop = () => closed || params.isStopped();
 
   const clearDebounceTimer = () => {
     if (!debounceTimer) {
@@ -60,15 +68,60 @@ export function createRealtimeVoiceAgentTalkbackQueue(
     debounceTimer = undefined;
   };
 
+  const appendPendingQuestion = (next: PendingQuestion): boolean => {
+    const current = pendingQuestions.at(-1);
+    const mergeWithCurrent = current !== undefined && Object.is(current.metadata, next.metadata);
+    const addedChars = next.question.length + (mergeWithCurrent ? 1 : 0);
+    const exceedsQuestionLimit =
+      !mergeWithCurrent && pendingQuestions.length >= MAX_PENDING_QUESTIONS;
+    const exceedsCharacterLimit = pendingQuestionChars + addedChars > MAX_PENDING_QUESTION_CHARS;
+    if (exceedsQuestionLimit || exceedsCharacterLimit) {
+      if (!overflowWarned) {
+        overflowWarned = true;
+        params.logger.warn(
+          `${params.logPrefix} consult queue full: droppedChars=${next.question.length} queued=${pendingQuestions.length} queuedChars=${pendingQuestionChars}`,
+        );
+      }
+      return false;
+    }
+    if (current && mergeWithCurrent) {
+      // Metadata identity represents the caller/context lane; merge only when the
+      // same lane produced adjacent fragments.
+      current.question = `${current.question}\n${next.question}`;
+    } else {
+      pendingQuestions.push(next);
+    }
+    pendingQuestionChars += addedChars;
+    return true;
+  };
+
+  const shiftPendingQuestion = (): PendingQuestion | undefined => {
+    const next = pendingQuestions.shift();
+    if (!next) {
+      return undefined;
+    }
+    pendingQuestionChars -= next.question.length;
+    if (pendingQuestions.length === 0) {
+      overflowWarned = false;
+    }
+    return next;
+  };
+
+  const clearPendingQuestions = () => {
+    pendingQuestions = [];
+    pendingQuestionChars = 0;
+    overflowWarned = false;
+  };
+
   const run = async (pending: PendingQuestion): Promise<void> => {
     const trimmed = pending.question.trim();
-    if (!trimmed || params.isStopped()) {
+    if (!trimmed || shouldStop()) {
       return;
     }
     if (active) {
       // Preserve order while avoiding concurrent consults; compatible metadata
-      // fragments are merged by appendPendingQuestion below.
-      appendPendingQuestion(pendingQuestions, {
+      // fragments are merged by appendPendingQuestion above.
+      appendPendingQuestion({
         question: trimmed,
         metadata: pending.metadata,
       });
@@ -83,7 +136,7 @@ export function createRealtimeVoiceAgentTalkbackQueue(
     let consultStartedAt: number | undefined;
     try {
       while (nextQuestion) {
-        if (params.isStopped()) {
+        if (shouldStop()) {
           return;
         }
         const currentQuestion = nextQuestion;
@@ -103,14 +156,14 @@ export function createRealtimeVoiceAgentTalkbackQueue(
         params.logger.info(
           `${params.logPrefix} consult done: elapsedMs=${Date.now() - consultStartedAt} answerChars=${text.length} queued=${pendingQuestions.length}`,
         );
-        if (!params.isStopped() && text) {
+        if (!shouldStop() && text) {
           params.deliver(text);
         }
-        nextQuestion = pendingQuestions.shift();
+        nextQuestion = shiftPendingQuestion();
       }
     } catch (error) {
       activeAbortController = undefined;
-      if (params.isStopped() || isAbortError(error)) {
+      if (shouldStop() || isAbortError(error)) {
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
@@ -120,59 +173,59 @@ export function createRealtimeVoiceAgentTalkbackQueue(
       params.deliver(params.fallbackText);
     } finally {
       active = false;
-      const queuedQuestion = pendingQuestions.shift();
-      if (queuedQuestion && !params.isStopped()) {
-        // Continue draining any questions queued while the active consult ran.
-        void run(queuedQuestion);
+      if (shouldStop()) {
+        clearPendingQuestions();
+      } else {
+        const queuedQuestion = shiftPendingQuestion();
+        if (queuedQuestion) {
+          // Continue draining any questions queued while the active consult ran.
+          void run(queuedQuestion);
+        }
       }
     }
   };
 
   return {
     close: () => {
+      if (closed) {
+        return;
+      }
+      closed = true;
       clearDebounceTimer();
-      pendingQuestions = [];
+      clearPendingQuestions();
       // Abort only the active consult; pending work has already been dropped.
       activeAbortController?.abort();
     },
     enqueue: (question, metadata) => {
       const trimmed = question.trim();
-      if (!trimmed || params.isStopped()) {
+      if (!trimmed || shouldStop()) {
         return;
       }
       if (active) {
-        appendPendingQuestion(pendingQuestions, { question: trimmed, metadata });
-        params.logger.info(
-          `${params.logPrefix} consult queued: chars=${trimmed.length} queued=${pendingQuestions.length}`,
-        );
+        if (appendPendingQuestion({ question: trimmed, metadata })) {
+          params.logger.info(
+            `${params.logPrefix} consult queued: chars=${trimmed.length} queued=${pendingQuestions.length}`,
+          );
+        }
         clearDebounceTimer();
         return;
       }
-      appendPendingQuestion(pendingQuestions, { question: trimmed, metadata });
+      if (!appendPendingQuestion({ question: trimmed, metadata })) {
+        return;
+      }
       clearDebounceTimer();
       // Debounce short transcript bursts so partial ASR fragments become a
       // single consult question instead of multiple back-to-back agent turns.
       debounceTimer = setTimeout(() => {
         debounceTimer = undefined;
-        const queuedQuestion = pendingQuestions.shift();
-        if (queuedQuestion && !params.isStopped()) {
+        const queuedQuestion = shiftPendingQuestion();
+        if (queuedQuestion && !shouldStop()) {
           void run(queuedQuestion);
         }
       }, params.debounceMs);
       debounceTimer.unref?.();
     },
   };
-}
-
-function appendPendingQuestion(queue: PendingQuestion[], next: PendingQuestion): void {
-  const current = queue.at(-1);
-  if (current && Object.is(current.metadata, next.metadata)) {
-    // Metadata identity represents the caller/context lane; merge only when the
-    // same lane produced adjacent fragments.
-    current.question = `${current.question}\n${next.question}`;
-    return;
-  }
-  queue.push(next);
 }
 
 function isAbortError(error: unknown): boolean {

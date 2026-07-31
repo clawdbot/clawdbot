@@ -350,3 +350,55 @@ describe("agent request Swarm preflight", () => {
     expect(respond).not.toHaveBeenCalled();
   });
 });
+
+describe("agent request restart recovery preflight", () => {
+  function runRestartRecoveryPreflight(backend: boolean, sourceTool: string) {
+    const respond = vi.fn();
+    const result = prepareAgentRequestPreflight({
+      params: {
+        message: "continue",
+        idempotencyKey: "restart-recovery-run",
+        forceRestartSafeTools: true,
+        forceCodeModeTools: true,
+        inputProvenance: {
+          kind: "internal_system",
+          sourceSessionKey: "agent:main:main",
+          sourceTool,
+        },
+      },
+      respond,
+      context: {
+        getRuntimeConfig: () => ({}),
+        dedupe: new Map(),
+      },
+      client: backend
+        ? { connect: { client: { mode: "backend" }, scopes: ["operator.write"] } }
+        : undefined,
+    } as never);
+    return { respond, result };
+  }
+
+  it("accepts the Code Mode override only for backend restart recovery", () => {
+    const accepted = runRestartRecoveryPreflight(true, "main_session_restart_recovery");
+
+    expect(accepted.result).toBeDefined();
+    expect(accepted.respond).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { backend: false, sourceTool: "main_session_restart_recovery" },
+    { backend: true, sourceTool: "other_internal_source" },
+  ])("rejects an untrusted Code Mode override", ({ backend, sourceTool }) => {
+    const rejected = runRestartRecoveryPreflight(backend, sourceTool);
+
+    expect(rejected.result).toBeUndefined();
+    expect(rejected.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: "forceCodeModeTools is reserved for main-session restart recovery.",
+      }),
+    );
+  });
+});

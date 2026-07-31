@@ -138,7 +138,14 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "cron",
-    description: "Manage cron jobs (via Gateway)",
+    description: "Manage automations (via Gateway)",
+    hasSubcommands: true,
+    machineOutput: ({ argv }) => isCronMachineOutput(argv),
+    parentDefaultHelp: true,
+  },
+  {
+    name: "automations",
+    description: "Manage automations (alias for cron)",
     hasSubcommands: true,
     machineOutput: ({ argv }) => isCronMachineOutput(argv),
     parentDefaultHelp: true,
