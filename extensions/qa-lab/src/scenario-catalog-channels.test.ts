@@ -79,6 +79,7 @@ describe("qa scenario catalog channel contracts", () => {
 
     expect(flow).toContain('"call":"startAgentRun"');
     expect(flow).not.toContain('"call":"runAgentPrompt"');
+    expect(flow).toContain('"taskTracking":false');
     expect(flow).toContain('"saveAs":"parentOutbound"');
     expect(flow).toContain("messages.slice(parentOutboundStartIndex)");
     expect(flow).not.toContain("waitForAgentHistoryReply");

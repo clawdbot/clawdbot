@@ -105,6 +105,7 @@ flow:
                                   ref: sessionKey
                                 message:
                                   ref: prompt
+                                taskTracking: false
                                 timeoutMs:
                                   expr: liveTurnTimeoutMs(env, 30000)
                           - call: waitForCondition
