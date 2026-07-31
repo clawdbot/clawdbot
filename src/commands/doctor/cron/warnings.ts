@@ -1,4 +1,5 @@
 // Doctor cron warnings for model overrides and stale WhatsApp crontab health scripts.
+import fs from "node:fs";
 import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { note } from "../../../../packages/terminal-core/src/note.js";
 import { normalizeChatChannelId } from "../../../channels/ids.js";
@@ -9,6 +10,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCronDeliveryPlan } from "../../../cron/delivery-plan.js";
 import type { CronJob } from "../../../cron/types.js";
 import { runExec } from "../../../process/exec.js";
+import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { shortenHomePath } from "../../../utils.js";
 
 type CrontabReader = () => Promise<{ stdout?: unknown; stderr?: unknown }>;
@@ -79,7 +81,15 @@ export function noteCronModelOverrides(params: {
   let overrideCount = 0;
   let mismatchCount = 0;
 
+  const cronStoreLabel =
+    params.storePath.endsWith(".json") && !fs.existsSync(params.storePath)
+      ? shortenHomePath(resolveOpenClawStateSqlitePath()) + " (SQLite)"
+      : shortenHomePath(params.storePath);
+
   for (const rawJob of params.jobs) {
+    if (rawJob.enabled === false) {
+      continue;
+    }
     const payload = getRecord(rawJob.payload);
     const kind = normalizeOptionalString(payload?.kind)?.toLowerCase();
     if (kind && kind !== "agentturn") {
@@ -108,7 +118,7 @@ export function noteCronModelOverrides(params: {
   }
 
   const lines = [
-    `Cron model overrides detected at ${shortenHomePath(params.storePath)}.`,
+    `Cron model overrides detected at ${cronStoreLabel}.`,
     `- ${pluralize(overrideCount, "job")} set \`payload.model\` and will not inherit \`agents.defaults.model\`${defaultModel ? ` (${defaultModel})` : ""}`,
     `- Provider namespaces: ${formatSortedCounts(providerCounts)}`,
   ];
