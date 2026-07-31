@@ -11,6 +11,8 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { Command } from "commander";
 import { buildBundleMcpToolsFromCatalog } from "../agents/agent-bundle-mcp-materialize.js";
+import { assignSafeServerNames } from "../agents/agent-bundle-mcp-names.js";
+import { loadSessionMcpConfig } from "../agents/agent-bundle-mcp-runtime-config.js";
 import { createSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
 import {
   buildMcpHttpFetch,
@@ -415,14 +417,10 @@ async function probeMcpServerIssue(params: {
   name: string;
   server: Record<string, unknown>;
 }): Promise<McpDoctorIssue | null> {
-  const runtime = createSessionMcpRuntime({
+  const runtime = createMcpProbeRuntime({
     sessionId: "openclaw-cli-mcp-doctor",
-    workspaceDir: process.cwd(),
-    cfg: buildMcpProbeConfig({
-      config: params.config,
-      servers: { [params.name]: params.server },
-    }),
-    manifestRegistry: { plugins: [] },
+    config: params.config,
+    servers: { [params.name]: params.server },
   });
   try {
     const result = formatMcpProbeResult(await runtime.getCatalog());
@@ -543,6 +541,28 @@ function buildMcpProbeConfig(params: {
   };
 }
 
+function createMcpProbeRuntime(params: {
+  sessionId: string;
+  config: OpenClawConfig;
+  servers: Record<string, Record<string, unknown>>;
+}) {
+  const workspaceDir = process.cwd();
+  const manifestRegistry = { plugins: [] };
+  const fullConfig = loadSessionMcpConfig({
+    workspaceDir,
+    cfg: params.config,
+    manifestRegistry,
+    logDiagnostics: false,
+  });
+  return createSessionMcpRuntime({
+    sessionId: params.sessionId,
+    workspaceDir,
+    cfg: buildMcpProbeConfig({ config: params.config, servers: params.servers }),
+    manifestRegistry,
+    safeServerNamesByServer: assignSafeServerNames(Object.keys(fullConfig.loaded.mcpServers)),
+  });
+}
+
 const DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS = 5_000;
 
 function applyMcpProbeInitializeTimeout(server: Record<string, unknown>): Record<string, unknown> {
@@ -594,11 +614,10 @@ async function probeMcpServersOrFail(params: {
       applyMcpProbeInitializeTimeout(server),
     ]),
   );
-  const runtime = createSessionMcpRuntime({
+  const runtime = createMcpProbeRuntime({
     sessionId: "openclaw-cli-mcp-probe",
-    workspaceDir: process.cwd(),
-    cfg: buildMcpProbeConfig({ config: params.config, servers: probeServers }),
-    manifestRegistry: { plugins: [] },
+    config: params.config,
+    servers: probeServers,
   });
   try {
     const result = formatMcpProbeResult(await runtime.getCatalog());
@@ -789,11 +808,10 @@ export function registerMcpCli(program: Command) {
           `MCP server "${name}" is disabled in ${loaded.path}. Run ${formatCliCommand(`openclaw mcp configure ${name} --enable`)} before probing it.`,
         );
       }
-      const runtime = createSessionMcpRuntime({
+      const runtime = createMcpProbeRuntime({
         sessionId: "openclaw-cli-mcp-probe",
-        workspaceDir: process.cwd(),
-        cfg: buildMcpProbeConfig({ config: loaded.config, servers }),
-        manifestRegistry: { plugins: [] },
+        config: loaded.config,
+        servers,
       });
       try {
         const result = formatMcpProbeResult(await runtime.getCatalog());

@@ -208,6 +208,7 @@ function serverAllowsUtilityTool(
     include: server.toolFilter?.include,
     exclude: server.toolFilter?.exclude,
     candidateNames: [operation, projectedName],
+    ambiguousIncludePatterns: new Set(server.ambiguousToolFilterIncludes ?? []),
   });
 }
 

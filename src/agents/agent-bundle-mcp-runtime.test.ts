@@ -1416,6 +1416,57 @@ describe("session MCP runtime", () => {
     }
   });
 
+  it("fails closed when an exact include identifies different raw and projected tools", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-ambiguous-tool-filter-");
+    const serverPath = path.join(tempDir, "ambiguous-tool-filter.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: { tools: {}, resources: {} },
+      tools: [
+        { name: "query", inputSchema: { type: "object", properties: {} } },
+        { name: "demo__query", inputSchema: { type: "object", properties: {} } },
+        {
+          name: "demo__resources_list",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+    });
+
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-ambiguous-filter",
+      workspaceDir: tempDir,
+      cfg: {
+        mcp: {
+          servers: {
+            demo: {
+              command: process.execPath,
+              args: [serverPath],
+              toolFilter: { include: ["demo__query", "demo__resources_list"] },
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools).toEqual([]);
+      expect(catalog.servers.demo?.toolCount).toBe(0);
+      expect(catalog.servers.demo?.tools?.filteredCount).toBe(3);
+      expect(catalog.servers.demo?.ambiguousToolFilterIncludes).toEqual([
+        "demo__query",
+        "demo__resources_list",
+      ]);
+      const materialized = await materializeBundleMcpToolsForRun({ runtime });
+      expect(materialized.tools).toEqual([]);
+      await materialized.dispose();
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("applies session tool denials to listed and synthetic MCP tools", async () => {
     const tempDir = tempDirTracker.make("bundle-mcp-session-deny-");
     const serverPath = path.join(tempDir, "session-deny.mjs");

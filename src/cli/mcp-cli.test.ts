@@ -1024,6 +1024,35 @@ describe("mcp cli", () => {
     });
   });
 
+  it.each([
+    { firstEnabled: true, expectedTool: "duck-data-2__ping" },
+    { firstEnabled: false, expectedTool: "duck-data__ping" },
+  ])(
+    "preserves full-runtime safe server names in a named probe (first collider enabled: $firstEnabled)",
+    async ({ firstEnabled, expectedTool }) => {
+      await withTempHome("openclaw-cli-mcp-home-", async () => {
+        const workspaceDir = await createWorkspace();
+        const serverPath = path.join(workspaceDir, "probe-server.mjs");
+        await writeProbeMcpServer(serverPath);
+        vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+        const server = { command: process.execPath, args: [serverPath] };
+
+        await runMcpCommand([
+          "mcp",
+          "set",
+          "duck:data",
+          JSON.stringify({ ...server, enabled: firstEnabled }),
+        ]);
+        await runMcpCommand(["mcp", "set", "duck-data", JSON.stringify(server)]);
+
+        mockLog.mockClear();
+        await runMcpCommand(["mcp", "probe", "duck-data", "--json"]);
+
+        expect(JSON.parse(lastLogLine()).tools).toEqual([expectedTool]);
+      });
+    },
+  );
+
   it("fails when removing an unknown MCP server", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async (home) => {
       const workspaceDir = await createWorkspace();

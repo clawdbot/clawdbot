@@ -50,6 +50,8 @@ export type McpServerCatalog = {
   };
   /** Provider-safe utility names assigned before filtering, matching `mcp probe` output. */
   projectedUtilityToolNames?: Partial<Record<McpUtilityToolOperation, string>>;
+  /** Exact includes ignored because they identify multiple advertised tools. */
+  ambiguousToolFilterIncludes?: string[];
   deniedToolNames?: string[];
 };
 

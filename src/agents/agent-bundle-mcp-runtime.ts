@@ -22,6 +22,7 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { mergeMcpToolCatalogs } from "./agent-bundle-mcp-combined.js";
 import {
+  findAmbiguousExactMcpToolFilterPatterns,
   isMcpToolAllowedByFilter,
   matchesAnyMcpToolFilterCandidate,
 } from "./agent-bundle-mcp-filter.js";
@@ -313,11 +314,13 @@ function getMcpToolSelection(rawServer: unknown): McpToolSelection {
 function shouldExposeMcpTool(
   selection: McpToolSelection,
   candidateNames: readonly string[],
+  ambiguousIncludePatterns?: ReadonlySet<string>,
 ): boolean {
   return isMcpToolAllowedByFilter({
     include: selection.include,
     exclude: selection.exclude,
     candidateNames,
+    ambiguousIncludePatterns,
   });
 }
 
@@ -847,27 +850,35 @@ export function createSessionMcpRuntime(params: {
                   toolNames: rawToolNames,
                   utilityNames: utilityOperations,
                 });
-                const candidateNamesForTool = (toolName: string): string[] => [
-                  toolName,
-                  ...(projectedNames.tools.get(toolName)
-                    ? [projectedNames.tools.get(toolName)!]
-                    : []),
-                ];
+                const candidateNamesForTool = (toolName: string): string[] => {
+                  const projectedName = projectedNames.tools.get(toolName);
+                  return projectedName ? [toolName, projectedName] : [toolName];
+                };
                 const includePatterns = selection.include ?? [];
-                const advertisedCandidateGroups = [
-                  ...rawToolNames.map(candidateNamesForTool),
-                  ...utilityOperations.map((operation) => [
-                    operation,
-                    ...(projectedNames.utilities.get(operation)
-                      ? [projectedNames.utilities.get(operation)!]
-                      : []),
-                  ]),
-                ];
+                const advertisedCandidateGroups = rawToolNames.map(candidateNamesForTool);
+                for (const operation of utilityOperations) {
+                  const projectedName = projectedNames.utilities.get(operation);
+                  advertisedCandidateGroups.push(
+                    projectedName ? [operation, projectedName] : [operation],
+                  );
+                }
+                const ambiguousIncludePatterns = findAmbiguousExactMcpToolFilterPatterns({
+                  patterns: includePatterns,
+                  candidateGroups: advertisedCandidateGroups,
+                });
+                if (ambiguousIncludePatterns.size > 0) {
+                  logWarn(
+                    `bundle-mcp: server "${serverName}": toolFilter exact include name(s) ${JSON.stringify([...ambiguousIncludePatterns].toSorted())} matched multiple advertised tools and were ignored to keep the allowlist fail-closed; use an unambiguous raw or projected name.`,
+                  );
+                }
+                const effectiveIncludePatterns = includePatterns.filter(
+                  (pattern) => !ambiguousIncludePatterns.has(pattern.trim()),
+                );
                 if (
                   includePatterns.length > 0 &&
                   advertisedCandidateGroups.length > 0 &&
                   !advertisedCandidateGroups.some((candidateNames) =>
-                    matchesAnyMcpToolFilterCandidate(includePatterns, candidateNames),
+                    matchesAnyMcpToolFilterCandidate(effectiveIncludePatterns, candidateNames),
                   )
                 ) {
                   const sampleNames = advertisedCandidateGroups[0]!;
@@ -880,7 +891,11 @@ export function createSessionMcpRuntime(params: {
                   denialMap && Object.hasOwn(denialMap, serverName) ? denialMap[serverName] : [],
                 );
                 const policyEligibleTools = listedTools.filter((tool) =>
-                  shouldExposeMcpTool(selection, candidateNamesForTool(tool.name.trim())),
+                  shouldExposeMcpTool(
+                    selection,
+                    candidateNamesForTool(tool.name.trim()),
+                    ambiguousIncludePatterns,
+                  ),
                 );
                 const exposedTools = policyEligibleTools.filter((tool) => {
                   const toolName = tool.name.trim();
@@ -918,6 +933,11 @@ export function createSessionMcpRuntime(params: {
                         projectedUtilityToolNames: Object.fromEntries(
                           projectedNames.utilities,
                         ) as Partial<Record<McpUtilityToolOperation, string>>,
+                      }
+                    : {}),
+                  ...(ambiguousIncludePatterns.size > 0
+                    ? {
+                        ambiguousToolFilterIncludes: [...ambiguousIncludePatterns].toSorted(),
                       }
                     : {}),
                   ...(deniedToolNames.size > 0
