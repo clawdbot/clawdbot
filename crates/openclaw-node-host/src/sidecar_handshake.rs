@@ -184,7 +184,7 @@ impl SidecarHandshake {
             })
             .map_err(SidecarHandshakeError::Frame)?;
         channel
-            .lower_frame_limit(negotiated.limits.max_frame_bytes)
+            .apply_negotiated_protocol(&negotiated)
             .map_err(SidecarHandshakeError::Negotiation)?;
         self.negotiated = Some(negotiated);
         self.state = SidecarHandshakeState::Authenticated;
@@ -207,7 +207,7 @@ impl SidecarHandshake {
             return Err(SidecarHandshakeError::SelectionMismatch);
         }
         channel
-            .lower_frame_limit(negotiated.limits.max_frame_bytes)
+            .apply_negotiated_protocol(&negotiated)
             .map_err(SidecarHandshakeError::Negotiation)?;
         self.negotiated = Some(negotiated);
         self.state = SidecarHandshakeState::Authenticated;
@@ -352,6 +352,14 @@ mod tests {
             SidecarProtocolSelection::from(runtime.negotiated().unwrap())
         );
         assert_eq!(supervisor.negotiated().unwrap().feature_bits, 0b0011);
+
+        let active = supervisor_channel.seal(&"active").unwrap();
+        assert_eq!(
+            u16::from_be_bytes(active[6..8].try_into().unwrap()),
+            supervisor.negotiated().unwrap().protocol_minor
+        );
+        assert_eq!(u64::from_be_bytes(active[17..25].try_into().unwrap()), 2);
+        assert_eq!(runtime_channel.open::<String>(&active).unwrap(), "active");
     }
 
     #[derive(Deserialize)]
@@ -593,8 +601,8 @@ mod tests {
     #[test]
     fn unencodable_initial_offer_is_terminal() {
         let mut supervisor =
-            SidecarHandshake::new(offer(SidecarPeerRole::Supervisor, 65, 0)).unwrap();
-        let mut supervisor_channel = channel(SidecarPeerRole::Supervisor, 65);
+            SidecarHandshake::new(offer(SidecarPeerRole::Supervisor, 128, 0)).unwrap();
+        let mut supervisor_channel = channel(SidecarPeerRole::Supervisor, 128);
         assert!(matches!(
             supervisor.start(&mut supervisor_channel),
             Err(SidecarHandshakeError::Frame(
