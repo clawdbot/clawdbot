@@ -22,6 +22,7 @@ import {
   getPendingSubmitDraft,
   type TuiPendingSubmit,
 } from "./tui-submit-state.js";
+import { createEditorSubmitHandler, createSubmitBurstCoalescer } from "./tui-submit.js";
 import type { SessionInfo } from "./tui-types.js";
 
 type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
@@ -200,7 +201,14 @@ function createHarness(params?: {
     sessionInfo: params?.sessionInfo ?? {},
   };
 
-  const { handleCommand, sendMessage, openSessionSelector } = createCommandHandlers({
+  const {
+    handleCommand,
+    sendMessage,
+    captureMessageAdmission,
+    resolveMessageAdmission,
+    reportBlockedMessageSubmit,
+    openSessionSelector,
+  } = createCommandHandlers({
     client: {
       sendChat,
       getGatewayStatus,
@@ -249,6 +257,9 @@ function createHarness(params?: {
   return {
     handleCommand,
     sendMessage,
+    captureMessageAdmission,
+    resolveMessageAdmission,
+    reportBlockedMessageSubmit,
     getGatewayStatus,
     listSessions,
     listModels,
@@ -1517,10 +1528,16 @@ describe("tui command handlers", () => {
           resolveCreate = resolve;
         }),
     );
-    const { handleCommand, sendMessage, sendChat, addSystem } = createHarness({ createSession });
+    const { handleCommand, sendMessage, resolveMessageAdmission, sendChat, addSystem } =
+      createHarness({ createSession });
 
     const creating = handleCommand("/new");
     await Promise.resolve();
+    expect(resolveMessageAdmission("must not reach parent")).toEqual({
+      status: "blocked",
+      reason: "session-transition",
+      command: "new",
+    });
     await sendMessage("must not reach parent");
     await handleCommand("/new");
 
@@ -1543,13 +1560,19 @@ describe("tui command handlers", () => {
     }>();
     const resetSession = vi.fn(() => deferred.promise);
     const applySessionMutationResult = vi.fn().mockReturnValue(true);
-    const { handleCommand, sendMessage, sendChat, addSystem } = createHarness({
-      resetSession,
-      applySessionMutationResult,
-    });
+    const { handleCommand, sendMessage, resolveMessageAdmission, sendChat, addSystem } =
+      createHarness({
+        resetSession,
+        applySessionMutationResult,
+      });
 
     const resetting = handleCommand("/reset");
     await vi.waitFor(() => expect(resetSession).toHaveBeenCalledOnce());
+    expect(resolveMessageAdmission("must not reach the resetting session")).toEqual({
+      status: "blocked",
+      reason: "session-transition",
+      command: "reset",
+    });
     await sendMessage("must not reach the resetting session");
     await handleCommand("/reset");
 
@@ -1564,6 +1587,87 @@ describe("tui command handlers", () => {
     });
     await resetting;
   });
+
+  it.each([
+    { command: "new", capture: "before" },
+    { command: "new", capture: "during" },
+    { command: "reset", capture: "before" },
+    { command: "reset", capture: "during" },
+  ] as const)(
+    "keeps a submit captured $capture /$command blocked across the transition epoch",
+    async ({ command, capture }) => {
+      vi.useFakeTimers();
+      try {
+        const transitionResult = createDeferred<{
+          ok: true;
+          key: string;
+          entry: { sessionId: string };
+        }>();
+        const createSession = vi.fn(() => transitionResult.promise);
+        const resetSession = vi.fn(() => transitionResult.promise);
+        const applySessionMutationResult = vi.fn().mockReturnValue(true);
+        const harness = createHarness({
+          createSession,
+          resetSession,
+          applySessionMutationResult,
+        });
+        const editor = {
+          getText: vi.fn(() => ""),
+          setText: vi.fn(),
+          addToHistory: vi.fn(),
+        };
+        const submit = createEditorSubmitHandler({
+          editor,
+          handleCommand: harness.handleCommand,
+          sendMessage: harness.sendMessage,
+          handleBangLine: vi.fn(),
+          onSubmitError: vi.fn(),
+          admitMessage: harness.resolveMessageAdmission,
+          onBlockedMessageSubmit: harness.reportBlockedMessageSubmit,
+        });
+        const bufferedSubmit = createSubmitBurstCoalescer({
+          submit,
+          captureSnapshot: harness.captureMessageAdmission,
+          enabled: true,
+          burstWindowMs: 50,
+        });
+
+        if (capture === "before") {
+          bufferedSubmit("must remain in the editor");
+        }
+        const transitioning = harness.handleCommand(`/${command}`);
+        await Promise.resolve();
+        expect(command === "new" ? createSession : resetSession).toHaveBeenCalledOnce();
+
+        if (capture === "during") {
+          bufferedSubmit("must remain in the editor");
+        }
+        transitionResult.resolve({
+          ok: true,
+          key: command === "new" ? "agent:main:tui-next" : "agent:main:main",
+          entry: { sessionId: `session-after-${command}` },
+        });
+        await transitioning;
+        expect(harness.captureMessageAdmission()).toEqual({
+          sessionTransition: null,
+          sessionTransitionEpoch: 2,
+        });
+        expect(harness.resolveMessageAdmission("live admission is clear")).toEqual({
+          status: "allowed",
+        });
+
+        vi.advanceTimersByTime(50);
+
+        expect(harness.sendChat).not.toHaveBeenCalled();
+        expect(editor.setText).toHaveBeenCalledWith("must remain in the editor");
+        expect(harness.addSystem).toHaveBeenCalledWith(
+          `session change in progress; wait for /${command} to finish`,
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("reloads history after /reset when the backend does not return a session entry", async () => {
     const loadHistory = vi.fn().mockResolvedValue(undefined);
