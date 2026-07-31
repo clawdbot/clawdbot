@@ -2387,6 +2387,87 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
+  it("waits for startup release while preserving the registration cutoff", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const releaseStartup = createDeferred();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        ...runningSessionEntry("pre-start-session"),
+        updatedAt: 1,
+      },
+    });
+    await writeTranscript(sessionsDir, "pre-start-session", [
+      { role: "user", content: "resume the interrupted work" },
+      { role: "toolResult", content: "done" },
+    ]);
+
+    const recovery = scheduleRestartAbortedMainSessionRecovery({
+      cfg: {},
+      delayMs: 0,
+      stateDir: tmpDir,
+      waitForStart: () => releaseStartup.promise,
+    });
+    await Promise.resolve();
+    expect(callGateway).not.toHaveBeenCalled();
+
+    const postRegistrationUpdatedAt = Date.now() + 60_000;
+    await writeStore(sessionsDir, {
+      ...readStore(storePath),
+      "agent:main:fresh": {
+        ...runningSessionEntry("post-start-session"),
+        updatedAt: postRegistrationUpdatedAt,
+      },
+    });
+    await writeTranscript(sessionsDir, "post-start-session", [
+      { role: "user", content: "new work from this gateway" },
+      { role: "toolResult", content: "done" },
+    ]);
+
+    releaseStartup.resolve();
+    await waitForFast(() => expect(callGateway).toHaveBeenCalledOnce());
+    await recovery.stop();
+
+    const store = readStore(storePath);
+    expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
+    expect(store["agent:main:fresh"]).toMatchObject({
+      sessionId: "post-start-session",
+      status: "running",
+    });
+    expect(store["agent:main:fresh"]?.abortedLastRun).toBeUndefined();
+  });
+
+  it("stops without waiting for an unresolved startup release", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const releaseStartup = createDeferred();
+    await writeMainSession({
+      sessionsDir,
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "interrupted response",
+        createdAt: Date.now(),
+      },
+    });
+
+    const recovery = scheduleRestartAbortedMainSessionRecovery({
+      cfg: {},
+      delayMs: 0,
+      stateDir: tmpDir,
+      waitForStart: () => releaseStartup.promise,
+    });
+    await recovery.stop();
+    releaseStartup.resolve();
+    await Promise.resolve();
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+      status: "running",
+      abortedLastRun: true,
+    });
+  });
+
   it("fences an in-flight startup recovery before its durable session claim", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");

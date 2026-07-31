@@ -1290,6 +1290,7 @@ export async function startGatewayPostAttachRuntime(
                 cfg: params.cfgAtStart,
                 delayMs: 0,
                 shouldContinue: () => params.isClosing?.() !== true,
+                waitForStart: params.waitForPostReadyWork,
                 gatewayRuntime: params.recoveryRuntime,
               });
             }
