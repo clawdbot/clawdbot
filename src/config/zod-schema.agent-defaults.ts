@@ -9,6 +9,7 @@ import {
   AgentModelPolicySchema,
   AgentModelSchema,
   AgentToolModelSchema,
+  AgentUsageBudgetSchema,
 } from "./zod-schema.agent-runtime.js";
 import {
   BlockStreamingChunkSchema,
@@ -80,6 +81,7 @@ export const AgentDefaultsSchema = z
     pdfMaxPages: z.number().int().positive().optional(),
     models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
     modelPolicy: AgentModelPolicySchema.optional(),
+    usageBudget: AgentUsageBudgetSchema,
     workspace: z.string().optional(),
     skills: z.array(z.string()).optional(),
     silentReply: SilentReplyPolicyConfigSchema.optional(),

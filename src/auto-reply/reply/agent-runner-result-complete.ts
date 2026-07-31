@@ -3,6 +3,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { hasConfiguredModelFallbacks, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import {
+  prepareAgentUsageBudgetWarningBestEffort,
+  requestAgentUsageBudgetRefreshBestEffort,
+} from "../../agents/usage-budget-warning.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -150,11 +154,18 @@ export async function completeReplyAgentRun(input: {
       prefixNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
     }
   }
+  const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";
+  if (!isHookBlockedRun) {
+    requestAgentUsageBudgetRefreshBestEffort({
+      cfg,
+      agentId: followupRun.run.agentId,
+      sessionFile: runResult.meta?.agentMeta?.sessionFile ?? followupRun.run.sessionFile,
+    });
+  }
   if (execution.abortReason) {
     return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
   }
   const prefixPayloads = [...prefixNotices];
-  const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";
   const rawUserText = isHookBlockedRun
     ? runResult.meta?.finalPromptText
     : (runResult.meta?.finalPromptText ?? (sessionCtx.commandText || sessionCtx.agentText));
@@ -292,6 +303,18 @@ export async function completeReplyAgentRun(input: {
   }
   if (responseUsageLine) {
     finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
+  }
+  if (!isHookBlockedRun && finalPayloads.length > 0) {
+    const warning = prepareAgentUsageBudgetWarningBestEffort({
+      cfg,
+      agentId: followupRun.run.agentId,
+      sessionFile: runResult.meta?.agentMeta?.sessionFile ?? followupRun.run.sessionFile,
+      chatType: sessionCtx.ChatType,
+      senderIsOwner: followupRun.run.senderIsOwner,
+    });
+    if (warning) {
+      finalPayloads = [...finalPayloads, { text: warning }];
+    }
   }
   if (isHookBlockedRun) {
     finalPayloads = markBeforeAgentRunBlockedPayloads(finalPayloads);

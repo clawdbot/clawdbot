@@ -20,7 +20,6 @@ import {
   isSilentOverflowProneModel,
 } from "../agent-settings.js";
 import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
-import { recordConfiguredModelSpendCall } from "../model-spend-alerts.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
@@ -287,8 +286,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             senderE164: params.senderE164,
             webSearchEnabled: params.toolOverrides?.webSearch !== false,
           });
-          // Standalone compaction sessions do not install the normal attempt stream guards.
-          // This wrapper is therefore their sole terminal accounting owner.
           session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
             session.agent.streamFn,
             {
@@ -303,23 +300,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               trace: compactionModelCallTrace,
               contentCapture: resolveDiagnosticModelContentCapturePolicy(params.config),
               nextCallId: nextDiagnosticModelCallId,
-              ...(params.config
-                ? {
-                    onTerminal: (event) => {
-                      try {
-                        recordConfiguredModelSpendCall({
-                          cfg: params.config,
-                          agentId: sessionAgentId,
-                          call: event,
-                        });
-                      } catch (accountingError) {
-                        log.warn(
-                          `model-spend compaction accounting failed: ${String(accountingError)}`,
-                        );
-                      }
-                    },
-                  }
-                : {}),
             },
           );
 

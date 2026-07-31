@@ -82,6 +82,13 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Per-agent model override policy. An explicit allow list replaces the default policy for this agent.",
   "agents.entries.*.modelPolicy.allow":
     'Allowed model override refs for this agent. Accepts aliases, full "provider/model" refs, and trailing prefix wildcards such as "provider/*" or "provider/namespace/*"; empty permits any model.',
+  "agents.defaults.usageBudget":
+    'Optional warning-only daily spend budget. Set action to "warn" to continue model calls while notifying configured owners; enforcement remains outside this mode.',
+  "agents.defaults.usageBudget.daily.usd":
+    "Daily USD warning interval. Warnings repeat at each crossed multiple and reset at 00:00 UTC.",
+  "agents.defaults.usageBudget.action": 'Currently supports "warn" only.',
+  "agents.entries.*.usageBudget":
+    "Per-agent warning budget override. Set enabled to false to disable an inherited default.",
   "agents.entries.*.models.*.agentRuntime":
     "Optional per-model runtime policy for this agent. Use this for agent-specific model exceptions instead of setting a whole-agent runtime.",
   "agents.entries.*.models.*.agentRuntime.id":

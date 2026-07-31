@@ -8,6 +8,10 @@ import {
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { hasDeliberateSilentTerminalReply } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
+import {
+  prepareAgentUsageBudgetWarningBestEffort,
+  requestAgentUsageBudgetRefreshBestEffort,
+} from "../../agents/usage-budget-warning.js";
 import { logVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
@@ -68,6 +72,14 @@ export function resolveFollowupDeliveryDecision(params: {
   opts?: InternalGetReplyOptions;
 }): FollowupDeliveryDecision {
   const { turn, execution, accounting, opts } = params;
+  requestAgentUsageBudgetRefreshBestEffort({
+    cfg: turn.config,
+    agentId: turn.queued.run.agentId,
+    sessionFile:
+      execution.outcome.kind === "settled"
+        ? (execution.outcome.result.meta?.agentMeta?.sessionFile ?? turn.queued.run.sessionFile)
+        : turn.queued.run.sessionFile,
+  });
   if (turn.sendPolicy === "deny") {
     return { kind: "suppress", reason: "send-policy" };
   }
@@ -297,6 +309,18 @@ export function resolveFollowupDeliveryDecision(params: {
     return explicitlyDeliverable.length > 0
       ? { kind: "deliver", payloads: explicitlyDeliverable, resolved: runtimeResolved }
       : { kind: "suppress", reason: "message-tool-only" };
+  }
+  if (payloads.length > 0) {
+    const warning = prepareAgentUsageBudgetWarningBestEffort({
+      cfg: turn.config,
+      agentId: turn.queued.run.agentId,
+      sessionFile: result.meta?.agentMeta?.sessionFile ?? turn.queued.run.sessionFile,
+      chatType: turn.queued.originatingChatType ?? turn.queued.run.chatType,
+      senderIsOwner: turn.queued.run.senderIsOwner,
+    });
+    if (warning) {
+      payloads = [...payloads, { text: warning }];
+    }
   }
   return payloads.length > 0
     ? { kind: "deliver", payloads, resolved: runtimeResolved }

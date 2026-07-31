@@ -104,6 +104,19 @@ export type AgentContextLimitsConfig = {
   postCompactionMaxChars?: number;
 };
 
+export type AgentUsageBudgetConfig =
+  | {
+      /** Disable an inherited warning budget for this agent. */
+      enabled: false;
+    }
+  | {
+      enabled?: true;
+      /** Warning-only daily USD threshold, reset at 00:00 UTC. */
+      daily: { usd: number };
+      /** Warn and continue; enforcement modes remain owned by #42475. */
+      action: "warn";
+    };
+
 export type AgentDefaultsConfig = {
   /** @deprecated Doctor-only legacy input. */
   imageGenerationModel?: AgentToolModelConfig;
@@ -152,6 +165,8 @@ export type AgentDefaultsConfig = {
   models?: Record<string, AgentModelEntryConfig>;
   /** Explicit model override policy. Empty or omitted allow permits any model. */
   modelPolicy?: AgentModelPolicyConfig;
+  /** Optional warning-only daily usage budget inherited by agents. */
+  usageBudget?: AgentUsageBudgetConfig;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
   workspace?: string;
   /** Optional default allowlist of skills for agents that do not set agents.entries.*.skills. */
