@@ -54,10 +54,16 @@ describe("ChatSessionRailState", () => {
     expect(state.mode(input())).toBe("pill");
     state.expand();
     expect(state.mode(input())).toBe("expanded");
+    expect(localStorage.getItem("openclaw.chat.observerHud.display")).toBe("card");
     state.collapse();
     expect(state.mode(input())).toBe("pill");
+    expect(localStorage.getItem("openclaw.chat.observerHud.display")).toBe("pill");
     state.hide();
     expect(state.mode(input())).toBe("restore-icon");
+    expect(localStorage.getItem("openclaw.chat.observerHud.display")).toBe("off");
+    state.show();
+    expect(state.mode(input())).toBe("pill");
+    expect(localStorage.getItem("openclaw.chat.observerHud.display")).toBe("pill");
   });
 
   it("opens digest-less from the restore icon and resets per session", () => {
@@ -65,8 +71,29 @@ describe("ChatSessionRailState", () => {
     const idle = { running: false, activeRunId: null, digest: null } as const;
     state.show();
     expect(state.mode(input(idle))).toBe("pill");
-    state.resetManualOpen();
+    state.resetTransientState();
     expect(state.mode(input(idle))).toBe("restore-icon");
+  });
+
+  it("keeps automatic expansion transient and rejects it while hidden", () => {
+    const pillState = new ChatSessionRailState("pill");
+    expect(pillState.expandTransiently()).toBe(true);
+    expect(pillState.mode(input())).toBe("expanded");
+    expect(localStorage.getItem("openclaw.chat.observerHud.display")).toBeNull();
+    pillState.collapse();
+    expect(pillState.mode(input())).toBe("pill");
+
+    const hiddenState = new ChatSessionRailState("off");
+    expect(hiddenState.expandTransiently()).toBe(false);
+    expect(hiddenState.mode(input())).toBe("restore-icon");
+  });
+
+  it("clears transient expansion when the session changes", () => {
+    const state = new ChatSessionRailState("pill");
+    expect(state.expandTransiently()).toBe(true);
+    expect(state.mode(input())).toBe("expanded");
+    state.resetTransientState();
+    expect(state.mode(input())).toBe("pill");
   });
 
   it("keeps a companion thread renderable without an observer digest", () => {
@@ -280,5 +307,42 @@ describe("ChatSessionRailElement", () => {
       ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await element.updateComplete;
     expect(element.querySelector(".chat-session-rail--pill")).not.toBeNull();
+  });
+
+  it("does not reopen or report visible after hide when an open request arrives", async () => {
+    const onVisibilityChange = vi.fn();
+    const element = await mount({ onVisibilityChange });
+
+    (element.querySelector(".chat-session-rail__hide") as HTMLButtonElement | null)?.click();
+    await element.updateComplete;
+    expect(element.querySelector(".chat-session-rail--restore")).not.toBeNull();
+    expect(localStorage.getItem("openclaw.chat.observerHud.display")).toBe("off");
+
+    onVisibilityChange.mockClear();
+    element.openRequest = 1;
+    await element.updateComplete;
+
+    expect(element.querySelector(".chat-session-rail--restore")).not.toBeNull();
+    expect(localStorage.getItem("openclaw.chat.observerHud.display")).toBe("off");
+    expect(onVisibilityChange).not.toHaveBeenCalled();
+  });
+
+  it("auto-opens from pill without persisting card and clears on session change", async () => {
+    localStorage.setItem("openclaw.chat.observerHud.display", "pill");
+    const onVisibilityChange = vi.fn();
+    const element = await mount({ onVisibilityChange });
+    expect(element.querySelector(".chat-session-rail--pill")).not.toBeNull();
+
+    element.openRequest = 1;
+    await element.updateComplete;
+    expect(element.querySelector(".chat-session-rail--expanded")).not.toBeNull();
+    expect(localStorage.getItem("openclaw.chat.observerHud.display")).toBe("pill");
+    expect(onVisibilityChange).toHaveBeenCalledOnce();
+    expect(onVisibilityChange).toHaveBeenLastCalledWith(true);
+
+    element.sessionKey = "agent:main:other";
+    await element.updateComplete;
+    expect(element.querySelector(".chat-session-rail--pill")).not.toBeNull();
+    expect(localStorage.getItem("openclaw.chat.observerHud.display")).toBe("pill");
   });
 });
