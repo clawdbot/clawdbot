@@ -316,11 +316,11 @@ describe("buildXaiRealtimeVoiceProvider", () => {
 
     bridge.sendAudio(Buffer.from([0x01]));
     bridge.sendUserMessage?.("queued before close");
-    bridge.submitToolResult("call-before-close", { ok: true });
+    void bridge.submitToolResult("call-before-close", { ok: true });
     bridge.close();
     bridge.sendAudio(Buffer.from([0x02]));
     bridge.sendUserMessage?.("late after close");
-    bridge.submitToolResult("call-after-close", { ok: true });
+    void bridge.submitToolResult("call-after-close", { ok: true });
 
     const { connecting, socket } = await openRealtimeBridge(bridge);
     await connecting;
