@@ -12,6 +12,135 @@ import {
 } from "./auto-reply-delivery.test-helpers.js";
 
 describe("deliverLineAutoReply HTTP recovery", () => {
+  const createHttpError = (status: number) =>
+    new HTTPFetchError(`${status} - provider rejected the request`, {
+      status,
+      statusText: "provider rejected the request",
+      headers: new Headers(),
+      body: "provider error",
+    });
+
+  it.each([
+    { label: "an actual LINE HTTP timeout", error: createHttpError(408) },
+    { label: "an actual LINE upstream failure", error: createHttpError(503) },
+    {
+      label: "a wrapped actual LINE upstream failure",
+      error: new Error("reply failed", { cause: createHttpError(502) }),
+    },
+    {
+      label: "an actual LINE upstream failure behind two SDK wrappers",
+      error: new Error("reply failed", {
+        cause: new Error("provider request failed", { cause: createHttpError(503) }),
+      }),
+    },
+    {
+      label: "an actual LINE upstream failure behind an SDK error property",
+      error: Object.assign(new Error("reply failed"), { error: createHttpError(503) }),
+    },
+    {
+      label: "an authoritative LINE upstream failure wrapping a pre-connect error",
+      error: Object.assign(createHttpError(503), {
+        cause: Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }),
+      }),
+    },
+    {
+      label: "a connection reset after dispatch",
+      error: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
+    },
+    {
+      label: "a request timeout after dispatch",
+      error: Object.assign(new Error("reply request timed out"), { code: "ETIMEDOUT" }),
+    },
+    {
+      label: "an undici response-body timeout",
+      error: Object.assign(new Error("response body timed out"), {
+        code: "UND_ERR_BODY_TIMEOUT",
+      }),
+    },
+    {
+      label: "an aborted request",
+      error: Object.assign(new Error("reply was aborted"), { name: "AbortError" }),
+    },
+    { label: "the actual undici fetch error", error: new TypeError("fetch failed") },
+    {
+      label: "a wrapped undici fetch error",
+      error: new Error("reply failed", { cause: new TypeError("fetch failed") }),
+    },
+  ])("does not replay a possibly accepted reply after $label", async ({ error }) => {
+    const onReplyError = vi.fn();
+    const replyMessageLine = vi.fn(async () => {
+      throw error;
+    });
+    const { deps, pushMessagesLine } = createDeps({
+      onReplyError,
+      replyMessageLine: replyMessageLine as LineAutoReplyDeps["replyMessageLine"],
+    });
+
+    await expect(
+      deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: { text: "do not duplicate this reply" },
+        lineData: {},
+        deps,
+      }),
+    ).rejects.toBe(error);
+    expect(replyMessageLine).toHaveBeenCalledOnce();
+    expect(onReplyError).not.toHaveBeenCalled();
+    expect(pushMessagesLine).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "an actual rejected LINE reply", error: createHttpError(400) },
+    {
+      label: "an actual rejected LINE reply behind two SDK wrappers",
+      error: new Error("reply failed", {
+        cause: new Error("provider request failed", { cause: createHttpError(400) }),
+      }),
+    },
+    { label: "an actual LINE reply rate-limit rejection", error: createHttpError(429) },
+    {
+      label: "a refused connection before request dispatch",
+      error: Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }),
+    },
+    {
+      label: "a wrapped DNS failure before request dispatch",
+      error: new TypeError("fetch failed", {
+        cause: Object.assign(new Error("getaddrinfo failed"), { code: "ENOTFOUND" }),
+      }),
+    },
+    { label: "a known local pre-dispatch failure", error: new Error("reply failed") },
+    { label: "a raw pre-dispatch parsing failure", error: new SyntaxError("invalid request") },
+  ])("keeps the push fallback after $label", async ({ error }) => {
+    const onReplyError = vi.fn();
+    const replyMessageLine = vi.fn(async () => {
+      throw error;
+    });
+    const { deps, pushMessagesLine } = createDeps({
+      onReplyError,
+      replyMessageLine: replyMessageLine as LineAutoReplyDeps["replyMessageLine"],
+    });
+
+    await expect(
+      deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: { text: "preserve the reply" },
+        lineData: {},
+        deps,
+      }),
+    ).resolves.toMatchObject({
+      status: "delivered",
+      replyTokenUsed: true,
+      visibleReplySent: true,
+    });
+    expect(replyMessageLine).toHaveBeenCalledOnce();
+    expect(onReplyError).toHaveBeenCalledExactlyOnceWith(error);
+    expect(pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
+      "line:user:1",
+      [{ type: "text", text: "preserve the reply" }],
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
+    );
+  });
+
   it("does not replay an accepted reply after local bookkeeping fails", async () => {
     const acceptedError = createChannelPartialDeliveryError(
       new Error("activity store unavailable"),
@@ -20,7 +149,9 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     const replyMessageLine = vi.fn(async () => {
       throw acceptedError;
     });
+    const onReplyError = vi.fn();
     const { deps, pushMessagesLine } = createDeps({
+      onReplyError,
       replyMessageLine: replyMessageLine as LineAutoReplyDeps["replyMessageLine"],
     });
 
@@ -38,6 +169,39 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       error: acceptedError,
     });
     expect(replyMessageLine).toHaveBeenCalledOnce();
+    expect(onReplyError).not.toHaveBeenCalled();
+    expect(pushMessagesLine).not.toHaveBeenCalled();
+  });
+
+  it("does not replay a successful reply when its provider response cannot be parsed", async () => {
+    const acceptedError = createChannelPartialDeliveryError(
+      new SyntaxError("Unexpected end of JSON input"),
+      { messageIds: [], visibleReplySent: true },
+    );
+    const onReplyError = vi.fn();
+    const replyMessageLine = vi.fn(async () => {
+      throw acceptedError;
+    });
+    const { deps, pushMessagesLine } = createDeps({
+      onReplyError,
+      replyMessageLine: replyMessageLine as LineAutoReplyDeps["replyMessageLine"],
+    });
+
+    await expect(
+      deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: { text: "accepted despite its malformed receipt" },
+        lineData: {},
+        deps,
+      }),
+    ).resolves.toMatchObject({
+      status: "partial",
+      replyTokenUsed: true,
+      visibleReplySent: true,
+      error: acceptedError,
+    });
+    expect(replyMessageLine).toHaveBeenCalledOnce();
+    expect(onReplyError).not.toHaveBeenCalled();
     expect(pushMessagesLine).not.toHaveBeenCalled();
   });
 
