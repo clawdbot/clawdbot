@@ -267,7 +267,7 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
         if (!value) {
           throw new Error("Together reference image is missing image data.");
         }
-        body.reference_images = [value];
+        body.media = { reference_images: [value] };
       }
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/videos`,
