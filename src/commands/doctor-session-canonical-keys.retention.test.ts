@@ -152,6 +152,11 @@ describe("doctor canonical session-key retention repair", () => {
           )
           .all(),
       ).toEqual([{ operation_id: "winner-operation", source_session_key: "agent:main:shared" }]);
+      expect(
+        sourceDatabase.db
+          .prepare("SELECT operation_id FROM conversation_deliveries ORDER BY operation_id")
+          .all(),
+      ).toEqual([]);
       const loserArchive = report.archivedTranscriptDirectories
         .flatMap((directory) =>
           fs

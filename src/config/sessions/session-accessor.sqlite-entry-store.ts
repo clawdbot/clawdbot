@@ -385,6 +385,10 @@ export function deleteSqliteSessionEntryRows(
     }
   }
   if (options.deleteOwnedWindows) {
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("conversation_deliveries").where("source_session_key", "=", sessionKey),
+    );
     deleteSessionNodeArtifacts(database, sessionKey);
     executeSqliteQuerySync(
       database.db,

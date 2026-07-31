@@ -246,4 +246,5 @@ export function setCanonicalSqliteSessionMainKey(
         }),
       ),
   );
+  validatedDatabases.delete(database.db);
 }
